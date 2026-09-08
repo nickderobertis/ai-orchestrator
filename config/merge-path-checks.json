@@ -245,6 +245,11 @@
         "pr-title": "pull-request"
       }
     },
+    "github.com/nickderobertis/printobserver": {
+      "branch": "main",
+      "note": "Its base branch declares no protection and no ruleset, so nothing GitHub runs can refuse a merge here. This identity publishes `change-auto` under `approvals: none`, so a change request opens and merges itself with no check and no reviewer between the branch and `main` — what verifies a change here is whatever the branch itself was proven against before publication.",
+      "checks": {}
+    },
     "github.com/nickderobertis/screencomp": {
       "branch": "main",
       "note": "Runs an llmlint job on every pull request but has never required it, so it is not a check that can refuse the merge and is not inventoried here.",
@@ -261,6 +266,13 @@
       "branch": "main",
       "note": "A local-direct identity opens no change request, so its merge path declares no required checks at all. Verification must instead come from an executable `pre-push` hook, but this repository has none today, so the coverage audit truthfully reports no merge-path coverage.",
       "checks": {}
+    },
+    "github.com/nickderobertis/vibe-stl": {
+      "branch": "main",
+      "checks": {
+        "design review (printability)": "tree-verdict",
+        "just check": "tree-verdict"
+      }
     },
     "github.com/petsinc/cd-chat-tool-call-challenge": {
       "branch": "main",

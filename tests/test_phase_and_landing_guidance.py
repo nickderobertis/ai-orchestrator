@@ -135,7 +135,7 @@ SQUASH_HALF_CLAIMS = (
     # naming the blob at the pinned release rather than to asserting one blob throughout.
     Claim(
         "the deciding module's identity is named",
-        "`23b7489c` at the pinned v0.19.2",
+        "`23b7489c` at v0.19.2 and at the\npinned v0.19.3",
     ),
     Claim(
         "the last tier can never say yes",
@@ -176,19 +176,19 @@ LANDING_RETRY_HALF_CLAIMS = (
 #: same date for a different measurement. A stamp is only evidence where it is
 #: attached to the claim it stamps.
 LANDING_MEASUREMENT_STAMP = "Re-measured {date} on the pinned onevcs {release}:"
-LANDING_MEASUREMENT_DATE = "2026-09-05"
+LANDING_MEASUREMENT_DATE = "2026-09-07"
 #: The ref the verb was actually asked about, so a later reader re-takes exactly the
 #: measurement rather than a similar one. Each adoption has needed a fresh one: a ref
 #: stops answering here within a cycle or two of landing, and a measurement nobody can
 #: re-take is not evidence, whatever it once showed.
-LANDING_MEASUREMENT_REF = "onevcs/s-ff9f80a40177"
+LANDING_MEASUREMENT_REF = "onevcs/s-235152ee5993"
 #: The landing commit this branch's work reached, which is what makes the answer below a
 #: repair rather than a reprieve: the tier that found it now names it instead of
 #: declining into a comparison that answered `no` over a change request that had merged.
 #: A commit rather than a change request, and named for what it is — the previous
 #: measurement's evidence was a change request URL and this one's is the commit the
 #: verb's own `decided by:` line prints.
-LANDING_MEASUREMENT_LANDING = "4f03130b46b94716dc115f3888e9bae32cf74c9d"
+LANDING_MEASUREMENT_LANDING = "cd78c1e5a9157507f7590f17fca30c4677fd2214"
 #: What that ref answered, verbatim. Quoted rather than paraphrased: the
 #: whole value of the sentence is that a reader can run the verb and compare.
 LANDING_MEASUREMENT_ANSWER = "`landed:\nin part`"
@@ -534,25 +534,25 @@ RECOVERABLE_SPLIT_CLAIMS = (
 #: reports one ref, this one reports a pair — so the two paragraphs cannot satisfy
 #: each other's gate.
 SPLIT_MEASUREMENT_STAMP = "**Re-measured {date} on the pinned onevcs {release}, over two landings"
-SPLIT_MEASUREMENT_DATE = "2026-09-05"
+SPLIT_MEASUREMENT_DATE = "2026-09-07"
 #: Both refs, because the whole measurement is a comparison: either alone is an
 #: anecdote about one workflow rather than evidence that the workflow is what decides.
 #:
-#: A third pair, and the churn is the point rather than an annoyance: each adoption's
+#: A fourth pair, and the churn is the point rather than an annoyance: each adoption's
 #: refs are pruned from every registered checkout within a cycle or two, so a passage
 #: that kept the old ones would be quoting a measurement nobody on this host can take.
-SPLIT_MEASUREMENT_REFS = ("onevcs/s-66a2a7717cf7", "onevcs/s-cb9964229280")
+SPLIT_MEASUREMENT_REFS = ("onevcs/s-de8ecb7f7454", "onevcs/s-396602b5c9d3")
 #: The change request the remote half landed through, for the reason the sibling
 #: measurement names one: without it the quoted answer reads as uncertainty rather
 #: than as the verb having lost a merge that happened.
-SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/191"
+SPLIT_MEASUREMENT_CHANGE_REQUEST = "https://github.com/nickderobertis/onepipeline/pull/184"
 #: What each half answered with no session record, verbatim, so a later reader
 #: re-takes this measurement rather than a similar one.
-#: The remote half is unmoved across three adoptions and is still the dangerous one; the
+#: The remote half is unmoved across four adoptions and is still the dangerous one; the
 #: `local-direct` half is quoted at the tier that decided it, which the trailer-prefix
 #: rewrite beside it in the same paragraph is what proves is really being read.
 SPLIT_MEASUREMENT_ANSWERS = (
-    "`decided by: a landing trailer on the base\n(8d92fade…)`",
+    "`decided by: a landing trailer on the base\n(459e6c9f…)`",
     "`landed: no`, `decided by:\ncontent comparison`",
 )
 #: The condition that separates the two answers. Without it the paragraph reports two

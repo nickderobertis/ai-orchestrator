@@ -151,12 +151,20 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: printobserver}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: screencomp}
     publication: change-auto
     approvals: none
 
   - match: {host: github.com, owner: nickderobertis, name: spanish-language-tutor}
     publication: local-direct
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: vibe-stl}
+    publication: change-auto
     approvals: none
 
   # The team repositories on this host, every one of them owned by `petsinc`.

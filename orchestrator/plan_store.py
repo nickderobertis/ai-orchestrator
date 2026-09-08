@@ -55,7 +55,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NewType
+from typing import Any, NamedTuple, NewType
 
 from orchestrator.project_store import frontmatter
 from orchestrator.root import REPO_ROOT
@@ -277,6 +277,9 @@ def paged(arguments: Sequence[str], kind: str) -> list[Any]:
     A repeated token is refused rather than followed, because a source that hands back a
     cursor that does not advance is one this would otherwise walk forever.
     """
+    #: The store's own JSON, held untyped only until it is validated below: what a
+    #: page holds is the store's contract rather than this module's, and narrowing it
+    #: here would state a second version of a shape the validator already decides.
     listed: list[Any] = []
     page: str | None = None
     seen_pages: set[str] = set()
@@ -459,6 +462,9 @@ class StoreDocument:
     metadata: Mapping[str, object]
     #: Where the store says this record is — a path for a directory, a link for a
     #: board — reported back rather than composed. `None` when the store reports none.
+    #: Untyped because its shape is the store's to choose and differs per plugin; this
+    #: module reports it onward rather than reading into it, so naming a shape here would
+    #: be a claim about somebody else's payload that nothing checks.
     location: Mapping[str, Any] | None
 
 
@@ -824,6 +830,15 @@ _METADATA_OPEN = re.compile(r"^metadata:\s*$")
 #: every review record unwritable after a run settled onto the plan it launched from.
 _METADATA_ENTRY = re.compile(r'^\s+(?:"(?P<quoted>[^"]*)"|(?P<plain>[A-Za-z_][A-Za-z0-9_.-]*)): \S')
 _INDENTED = re.compile(r"^\s+\S")
+#: An entry that opens a block: a key stating no value of its own, or stating only a
+#: block-scalar indicator, with its contents on the more-indented lines below it. The
+#: settlement write-back renders the pin and the record it projects onto a task the first
+#: way and the detail it records the second, so a plan that has ever settled holds both,
+#: and a writer that could not account for them refused every task of it.
+_METADATA_NEST = re.compile(
+    r'^(?P<indent>\s+)(?:"(?P<quoted>[^"]*)"|(?P<plain>[A-Za-z_][A-Za-z0-9_.-]*)):'
+    r"(?:\s*|\s+[|>][+-]?\d*\s*)$"
+)
 
 
 def _closing_fence(lines: Sequence[str]) -> int:
@@ -862,30 +877,89 @@ def write_metadata(document: Path, key: str, value: object) -> None:
     else:
         start = opened[0] + 1
         end = start
-        while end < closing and _INDENTED.match(lines[end]):
+        while end < closing and (_INDENTED.match(lines[end]) or not lines[end].strip()):
             end += 1
-        # The whole block is held to the one entry shape rather than only its leading
-        # run, because anything else in it is a line this cannot account for — and the
-        # cost of guessing is a second entry for a key already there, which is a
-        # duplicate YAML key rather than a visible failure.
-        unreadable = [line for line in lines[start:end] if not _METADATA_ENTRY.match(line)]
-        if unreadable:
-            raise OSError(
-                f"the record's `metadata` block holds a line this cannot edit around: "
-                f"{unreadable[0].strip()!r}; a review record is written beside entries of "
-                f'the form `"<key>": <json>`, so re-render the record'
-            )
-        held = [line for line in lines[start:end] if _entry_key(line) != key]
+        # A blank line is inside this block only while its content goes on past one, so
+        # the run of them the scan ended on belongs to whatever follows instead. Scanning
+        # over them at all is what a block scalar needs: the store renders a settled
+        # record's own prose as one, and a paragraph break in it is an ordinary blank line.
+        while end > start and not lines[end - 1].strip():
+            end -= 1
+        # The whole block is held to the entry shapes rather than only its leading run,
+        # because anything else in it is a line this cannot account for — and the cost of
+        # guessing is a second entry for a key already there, which is a duplicate YAML
+        # key rather than a visible failure.
+        grouped = _entries(lines[start:end])
+        held = [line for entry in grouped if entry.key != key for line in entry.lines]
         updated = [*lines[:start], *held, entry, *lines[end:]]
     _replace(document, "\n".join(updated))
 
 
-def _entry_key(line: str) -> str:
-    """The metadata key ``line`` states, which the caller has already matched."""
-    matched = _METADATA_ENTRY.match(line)
-    assert matched is not None
-    quoted = matched["quoted"]
-    return quoted if quoted is not None else matched["plain"]
+class _Entry(NamedTuple):
+    """One metadata entry: the key it states, and the lines it owns."""
+
+    key: str
+    lines: list[str]
+    #: Whether this entry's own line left its value to the lines beneath — stating
+    #: nothing after the colon, or only a block-scalar indicator — so what follows it
+    #: more deeply indented is its contents rather than an entry of its own.
+    opened_a_block: bool
+
+
+def _entries(block: Sequence[str]) -> list[_Entry]:
+    """``block``'s metadata entries, each with the lines it owns, refusing what it cannot read.
+
+    An entry is one line stating a key and a value, or a key opening a nested mapping
+    together with the more-indented lines beneath it. A line that is neither — a sequence
+    item, a key with a space before its colon — is one nothing here can account for, and
+    editing around it would leave a second entry for a key already present.
+    """
+    grouped: list[_Entry] = []
+    base: int | None = None
+    for line in block:
+        if not line.strip():
+            # A blank line stands for nothing on its own, so it is content of a block
+            # scalar something opened or it is a line nothing here can place. Reading one
+            # as the end of the block is what would insert a review record into the middle
+            # of a paragraph the write-back recorded.
+            if grouped and grouped[-1].opened_a_block:
+                grouped[-1].lines.append(line)
+                continue
+            raise OSError(
+                "the record's `metadata` block holds a blank line no entry above it "
+                "accounts for; a review record is written beside entries of the form "
+                '`"<key>": <json>`, so re-render the record'
+            )
+        indent = len(line) - len(line.lstrip())
+        if base is None:
+            base = indent
+        # Deeper than the entries themselves belongs to the entry above — but only where
+        # that entry opened a block. Beneath one that stated a value it is a line
+        # nothing here can account for, and swallowing it would edit around a shape this
+        # never read.
+        if indent > base and grouped and grouped[-1].opened_a_block:
+            grouped[-1].lines.append(line)
+            continue
+        # The nested shape is tried first: a block-scalar opener states a value the flat
+        # shape also matches, and reading it as one would refuse the lines it owns.
+        nested = _METADATA_NEST.match(line)
+        matched = nested or _METADATA_ENTRY.match(line)
+        # An entry of this block stands at the block's own indent, exactly. Deeper than
+        # that, and not the contents of a mapping something opened, it is a line nothing
+        # here can place — reading it as a sibling would move it up a level it was never
+        # at. Shallower is the same line at the other end: it sits outside the block its
+        # neighbours are in, and reading it as one of them would write this record at a
+        # depth that puts it somewhere else again.
+        if matched is None or indent != base:
+            raise OSError(
+                f"the record's `metadata` block holds a line this cannot edit around: "
+                f"{line.strip()!r}; a review record is written beside entries of "
+                f'the form `"<key>": <json>`, so re-render the record'
+            )
+        quoted = matched["quoted"]
+        key = quoted if quoted is not None else matched["plain"]
+        grouped.append(_Entry(key, [line], nested is not None))
+    return grouped
 
 
 def _replace(document: Path, content: str) -> None:

@@ -1003,12 +1003,14 @@ def _halves(sent: subprocess.CompletedProcess[str]) -> Halves:
 def test_the_answer_names_which_halves_the_envelope_it_staged_carried(
     replying: Replying,
 ) -> None:
-    """One `state` word cannot describe two halves, so the receipt says which were sent.
+    """What the envelope *carried*, which is a different question from what each half did.
 
-    An envelope may carry a verdict, edits, or both, and the engine answers one word for
-    the whole of it — `applied` for edits alone and `applied` again for a ruling sent
-    beside them. So the manager who most needs to know whether their ruling went out is
-    the one told least: the word they get back is the commands half's.
+    The engine's own `state` is still one word for the whole envelope — `applied` for
+    edits alone and `applied` again for a ruling sent beside them — and the release below
+    left it at that, which is what this field was added for. The adopted engine now says
+    what each carried half then *did*, in the `verdict` and `commands` keys the journey
+    below reads; this field stays because it answers the other half of the question, off
+    the staged bytes rather than off the engine's answer.
 
     What this recipe can prove on its own is the envelope it staged, so that is what it
     reports and all it reports. `verdict` says an answering half was there and `edits`
@@ -1076,22 +1078,29 @@ def test_the_answer_names_which_halves_the_envelope_it_staged_carried(
     assert _engine_receipt(both)["state"] == "applied", both.stdout
 
 
-def test_the_engines_own_receipt_for_both_halves_says_nothing_about_either(
+def test_the_engines_own_receipt_names_each_half_the_envelope_carried(
     replying: Replying,
 ) -> None:
     """This repository's account of the installed engine, driven against it.
 
     AGENTS.md, under "Answering on the channel", says an envelope carrying both halves is
-    queued as a verdict beside the edits it applies, and that the caller is not told which
-    half became what. Both clauses are asserted here rather than believed, because the
-    first is the reason a manager sends that shape and the second is the reason this
-    recipe reports the halves at all — and a paragraph that was true when it was written
-    is exactly the kind that goes on reading true after the engine has moved.
+    queued as a verdict beside the edits it applies, and that the adopted engine reports
+    what each carried half then did. Both clauses are asserted here rather than believed,
+    because the first is the reason a manager sends that shape and the second is what a
+    manager reads back off it — and a paragraph that was true when it was written is
+    exactly the kind that goes on reading true after the engine has moved.
 
     The queueing: the agent that asked reads the ruling back, and the run's own journal
-    records the edit. The silence: the engine's receipt for that envelope is the same two
-    fields, carrying the same `state` word, as its receipt for an envelope carrying edits
-    alone — so nothing in it can be telling the caller what became of the verdict.
+    records the edit. The reporting: the receipt carries one key per carried half beside
+    the `reply` and `state` it always carried, and **presence** is half of what it says —
+    an envelope carrying edits alone has no `verdict` key at all, which is a different
+    statement from a verdict that was carried and did nothing.
+
+    Asserted whole rather than as a floor, in both directions. A check that only required
+    `verdict` to be there would pass an engine that had started saying something else in
+    it, and one that only compared the two receipts would pass an engine that reported
+    both halves for an envelope carrying one. What fails here is either shape moving,
+    which is the prompt to re-read the paragraph in AGENTS.md that quotes them.
     """
     edits_only = _reply(replying, {"version": 2, "commands": [_note(WORK_NODE, "the base moved")]})
     assert edits_only.returncode == 0, f"the edit was refused:\n{edits_only.stderr}"
@@ -1125,17 +1134,20 @@ def test_the_engines_own_receipt_for_both_halves_says_nothing_about_either(
 
     receipt, alone = _engine_receipt(both), _engine_receipt(edits_only)
 
-    assert set(receipt) == set(alone) == {"reply", "state"}, (
-        f"the engine's own receipt has grown a field beside `reply` and `state`. If it "
-        f"now says what became of each half, that is better than what this recipe merges "
-        f"in — read it, and correct the account under 'Answering on the channel' in "
-        f"AGENTS.md to match: {receipt} against {alone}"
+    assert receipt == {
+        "reply": 0,
+        "state": "applied",
+        "verdict": "delivered",
+        "commands": "applied",
+    }, (
+        f"the engine's own receipt for an envelope carrying both halves is not the object "
+        f"AGENTS.md's 'Answering on the channel' quotes. Read what it answers now and "
+        f"correct that paragraph in the same change: {receipt}"
     )
-    assert receipt["state"] == alone["state"] == "applied", (
-        f"the engine answers a different word for an envelope carrying a verdict beside "
-        f"its edits than for one carrying edits alone, so it is telling the caller which "
-        f"half became what after all and AGENTS.md's account of it is stale: "
-        f"{receipt} against {alone}"
+    assert alone == {"reply": 0, "state": "applied", "commands": "applied"}, (
+        f"the engine's receipt for an envelope carrying edits alone is not the same object "
+        f"without the `verdict` key, so an absent key no longer means the half was never "
+        f"carried and that paragraph's reading of presence is stale: {alone}"
     )
 
 

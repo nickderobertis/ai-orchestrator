@@ -57,8 +57,21 @@
 ~/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site
 ~/.ai-orchestrator/repos/nickderobertis__notignored
 ~/.ai-orchestrator/repos/nickderobertis__onetaskgraph
+
+# `printobserver`, which this host both publishes and executes in. The first entry is
+# the publication checkout, spelled like every other entry in this block: a change is
+# published from it, and it is never worked in directly — only fast-forwarded once a
+# change has landed. The `-isolated` safety clone beside it is the execution checkout,
+# which is what a run cuts its private clone from and creates its task worktree in —
+# the same distinction `~/ai-orchestrator-isolated` makes above. Both resolve to one
+# identity from their own `origin`, so the rule matching `printobserver` covers the
+# pair.
+~/.ai-orchestrator/repos/nickderobertis__printobserver
+~/.ai-orchestrator/repos/nickderobertis__printobserver-isolated
+
 ~/.ai-orchestrator/repos/nickderobertis__screencomp
 ~/.ai-orchestrator/repos/nickderobertis__spanish-language-tutor
+~/.ai-orchestrator/repos/nickderobertis__vibe-stl
 ~/.ai-orchestrator/repos/petsinc__cd-chat-tool-call-challenge
 ~/.ai-orchestrator/repos/petsinc__referral-app
 ~/projects/notignored

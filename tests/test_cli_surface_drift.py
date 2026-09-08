@@ -43,8 +43,15 @@ from orchestrator.root import REPO_ROOT
 #: operator to type; adding a third is adding its name here.
 GATED_TOOLS = ("onevcs", "onepipeline")
 
-#: Directories holding no prose of this repository's own.
-NOT_OURS = ("node_modules", ".venv", ".nx", "dist", "scratch", ".git")
+#: Directories holding no prose of this repository's own. `.plans` and `runs` are both
+#: gitignored local stores — the plan-authoring root and the run journals — and what they
+#: hold is routinely prose *about another repository*, naming that repository's recipes,
+#: which this repository's justfile has no reason to define. A task record under
+#: `runs/*/writeback/` is a copy of a plan for whatever repository the run targeted.
+#: Reading either here failed every push made while such a record existed, and what it
+#: reported was correct prose held against the wrong tree. Neither is tracked, so neither
+#: is prose this repository ships.
+NOT_OURS = ("node_modules", ".venv", ".nx", "dist", "scratch", ".git", ".plans", "runs")
 
 #: A fenced code block, whose every line is a candidate invocation. The leading
 #: whitespace is load-bearing: `docs/host-setup.md` fences blocks inside list items,

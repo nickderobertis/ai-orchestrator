@@ -49,6 +49,11 @@ LOCAL_DIRECT = (
 #: installs of a published artifact, the pull request's own title, a hosted visual
 #: baseline — so its report is where a list rather than a single name is read.
 MANY_REMOTE_CHECKS = "github.com/nickderobertis/llmlint"
+#: A remote-publishing identity whose base branch declares no protection, so its
+#: inventory is present and empty. That pairing is the one an operator most needs
+#: told apart from an identity nobody inventoried at all: both have nothing to list,
+#: and only one of them is a gap to go and look at.
+EMPTY_REMOTE_INVENTORY = "github.com/nickderobertis/printobserver"
 
 #: The smallest declaration the filter accepts. Every refusal below is this document
 #: with exactly one thing wrong with it, so what each case demonstrates is that field
@@ -76,6 +81,7 @@ def registry(tmp_path_factory: pytest.TempPathFactory) -> Registry:
         "spanish-language-tutor",
         "nick-derobertis-site",
         "llmlint",
+        "printobserver",
     ):
         checkout = root / "checkouts.d" / name
         checkout.mkdir(parents=True)
@@ -202,6 +208,25 @@ def test_an_identity_with_several_remote_checks_names_every_one_of_them(
     assert report[1].startswith(f"{len(expected)} required checks on main"), report
     assert report[1].endswith("nothing on this host runs any of them:"), report
     assert sorted(line.split(" — ")[0] for line in report[2:]) == sorted(expected)
+
+
+def test_a_remote_identity_inventoried_with_no_required_checks_is_not_reported_unknown(
+    registry: Registry,
+) -> None:
+    """Present and empty, which is a different answer from absent — through the recipe.
+
+    `coverage unknown` is the verdict that sends somebody to go and look, so spending
+    it on an identity somebody already answered is how a real gap stops being noticed.
+    """
+    audited = repos(registry.home, "repos", "--audit-gate-coverage")
+
+    assert audited.returncode == 0, audited.stderr
+    report = coverage_lines(audited.stdout)[EMPTY_REMOTE_INVENTORY]
+    assert report == [
+        f"{report[0].split(' — ')[0]} — and config/merge-path-checks.json inventories "
+        "no required check on main, so nothing recorded here can refuse a merge"
+    ]
+    assert "coverage unknown" not in "\n".join(report), report
 
 
 def test_the_plain_listing_is_untouched(registry: Registry) -> None:

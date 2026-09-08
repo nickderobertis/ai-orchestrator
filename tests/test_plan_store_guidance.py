@@ -42,6 +42,7 @@ import re
 import pytest
 from plan_sources import read_default_sources, read_plan_sources
 from plan_store_pin import BLOCKED_BY, PACING_FLOOR, held_below_the_pacing_floor
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator.root import REPO_ROOT
 
@@ -314,4 +315,61 @@ def test_the_manager_document_says_which_landing_this_pin_does_not_carry() -> No
     assert "**is in force**, by merging" in text, (
         f"{MANAGER} has to say that fix is in force by merging; a landed fix left "
         "unclassified reads as one this host has failed to adopt"
+    )
+
+
+#: The crate whose source the two landings under "in force by merging" actually change,
+#: and the one this CLI must not be shipping if that classification is to hold. Named
+#: rather than derived: what is being gated is a claim about *this* crate, and a check
+#: that asked "does the binary carry every crate it declares" would answer a different
+#: question and pass while the classification silently stopped being true.
+LIVE_ONLY_CRATE = "onetaskgraph-live"
+#: A crate the archive does carry, so the absence above is read as an absence rather
+#: than as this measurement having stopped working. Without it a stripped binary, a
+#: changed build profile, or a `strings` that found nothing would all pass.
+SHIPPED_CRATE = "onetaskgraph-core"
+#: How a Rust binary spells the crate a compiled-in source file came from. Panic
+#: locations survive stripping, which is what makes this readable at all on the
+#: published artifact.
+CRATE_SOURCE_PATH = "crates/{crate}/src"
+
+
+def test_the_installed_plan_store_cli_ships_none_of_the_live_crate() -> None:
+    """The artifact half of "in force by merging", measured on the installed binary.
+
+    Two landings this document classifies that way — the gate-selection repair and the
+    startup-sweep repair — are ancestors of the adopted release, so `git tag --contains`
+    answers that the release carries them. The archive does not, and every check in this
+    repository that reads a pin passes either way, which is exactly the reading that sent
+    one dispatch looking for a bump nobody made.
+
+    So the classification is held to the artifact rather than to the ancestry. The only
+    compiled source either landing touches is `onetaskgraph-live`, which is a
+    dev-dependency of two crates and of nothing else, so the published CLI carries no
+    part of it — and the day that stops being true is the day both landings really are
+    adopted through this pin and the paragraph saying otherwise is wrong.
+
+    Both directions are asserted. A crate the binary *does* carry has to be found, or an
+    absence proves nothing: a stripped binary that embedded no paths at all would satisfy
+    a one-sided check while saying nothing about either landing.
+    """
+    assert ONETASKGRAPH_BIN.is_file(), (
+        f"this checkout's own onetaskgraph is missing at {ONETASKGRAPH_BIN} — run 'just bootstrap'"
+    )
+    compiled = ONETASKGRAPH_BIN.read_bytes()
+    shipped = CRATE_SOURCE_PATH.format(crate=SHIPPED_CRATE).encode()
+    live = CRATE_SOURCE_PATH.format(crate=LIVE_ONLY_CRATE).encode()
+
+    assert shipped in compiled, (
+        f"the installed plan-store CLI embeds no source path for {SHIPPED_CRATE}, so "
+        "this measurement can no longer tell a crate the archive omits from one it "
+        f"carries. Re-read how {ONETASKGRAPH_BIN} is built before trusting the "
+        "absence below"
+    )
+    assert live not in compiled, (
+        f"the installed plan-store CLI now carries {LIVE_ONLY_CRATE}, the crate holding "
+        "the only compiled source that the gate-selection and startup-sweep landings "
+        f"touch. {MANAGER} classifies both as in force by merging with no pin to move, "
+        "and that is now wrong: re-read the paragraph naming pull/433 and pull/538 "
+        "against what this release actually ships"
     )

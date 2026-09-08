@@ -83,6 +83,11 @@ POLICY_EXCEPTIONS = {
 #: `petsinc` repository quietly given `change-auto` pass.
 SIBLING_POLICY = ("change-auto", "none")
 
+#: The identity whose routing the journey below resolves. Spelled out rather than
+#: derived from the tracked files, so that what the journey claims to prove is stated
+#: independently of the configuration under test.
+PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
+
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
 
@@ -1039,6 +1044,106 @@ def test_work_preserved_before_the_adoption_is_still_recognized(tmp_path: Path) 
     assert reported(checked.stdout, "trailer_prefix") == "Orchestrator-"
 
 
+def test_a_publication_checkout_and_its_safety_clone_register_as_one_identity(
+    tmp_path: Path,
+) -> None:
+    """Two checkouts of one repository, through the real recipe, under one policy.
+
+    That the pair collapses to one identity is `onevcs`'s doing rather than the tracked
+    file's — it resolves an identity from a checkout's own `origin`, not from its path —
+    so it is driven rather than read: neither checkout can end up a notch wider than the
+    other.
+    """
+    origin = "https://github.com/nickderobertis/printobserver.git"
+    publication = checkout(tmp_path / "checkouts" / "nickderobertis__printobserver", origin)
+    execution = checkout(tmp_path / "checkouts" / "nickderobertis__printobserver-isolated", origin)
+    manifest = tmp_path / "checkouts.list"
+    manifest.write_text(f"{publication}\n{execution}\n", encoding="utf-8")
+    home = tmp_path / "home"
+
+    result = apply_registry(manifest, home)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    registry: RegistryDocument = json.loads((home / "registry.json").read_text(encoding="utf-8"))
+    identity = "github.com/nickderobertis/printobserver"
+    assert set(registry["identities"]) == {identity}
+    assert {record["path"] for record in registry["checkouts"].values()} == {
+        str(publication),
+        str(execution),
+    }
+
+    # Either alias `onevcs` derived from a directory name is a spelling a plan node may
+    # name, and both have to land on one identity and one policy: a safety clone resolving
+    # a notch wider is how work executed in one checkout comes to publish differently from
+    # work executed in the other.
+    for alias in ("nickderobertis__printobserver", "nickderobertis__printobserver-isolated"):
+        resolved = onevcs(home, "resolve", alias)
+        assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+        assert identity in resolved.stdout
+
+        checked = onevcs(home, "rules", "check", alias)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert reported(checked.stdout, "publication") == "change-auto"
+        assert reported(checked.stdout, "approvals") == "none"
+        assert reported(checked.stdout, "matched").startswith("rule ")
+
+
+def tracked_checkouts_of(repository: str) -> tuple[str, ...]:
+    """Every entry of the tracked checkout list that is a checkout of `repository`.
+
+    Read out of the file rather than restated beside it, because the tracked list is
+    half of what the journey below evaluates: an entry dropped from it is a checkout
+    this registration no longer has, and the count asserted there is what says so.
+    """
+    return tuple(
+        entry
+        for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines()
+        if (entry := line.partition("#")[0].strip()) and which_checkout(entry) == repository
+    )
+
+
+def test_the_tracked_registration_routes_printobserver_through_its_own_rule(
+    tmp_path: Path,
+) -> None:
+    """The tracked configuration alone, asked what it routes — nothing of this host's.
+
+    Routing is an answer a resolver gives rather than a field a file contains: first
+    match wins, so a rule reading exactly as intended proves nothing while a broader
+    one above it could be deciding instead. Asking a resolver on this host would prove
+    no more, since it answers out of a registry any earlier registration could have
+    filled, so the registry here is a scratch one holding only what these files install.
+    """
+    entries = tracked_checkouts_of("printobserver")
+    assert len(entries) == 2, entries
+
+    # The scratch checkouts stand in for this host's own clones, which a test may not
+    # register from; each keeps its listed directory name, because that name is what
+    # `onevcs` derives the alias a plan node would name it by.
+    origin = f"https://{PRINTOBSERVER}.git"
+    paths = [checkout(tmp_path / "checkouts" / Path(entry).name, origin) for entry in entries]
+    manifest = tmp_path / "checkouts.list"
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    home = tmp_path / "onevcs"
+
+    applied = apply_registry(manifest, home)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+
+    ruled = ruled_identities()
+    assert ruled.count(PRINTOBSERVER) == 1, ruled
+    host, owner, name = PRINTOBSERVER.split("/")
+    matched = f"{{host: {host}, owner: {owner}, name: {name}}}"
+    expected_rule = f"rule {ruled.index(PRINTOBSERVER) + 1} {matched}"
+
+    # The identity itself and either alias, because a lifecycle node names a checkout
+    # and a landing verb names the identity, and both have to reach the same rule.
+    for argument in (PRINTOBSERVER, *(Path(entry).name for entry in entries)):
+        checked = onevcs(home, "rules", "check", argument)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
+        assert reported(checked.stdout, "approvals") == "none", checked.stdout
+        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
+
+
 def test_a_checkout_this_host_does_not_have_is_skipped(tmp_path: Path) -> None:
     """A second machine holds a subset of these checkouts, and still registers it."""
     present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
@@ -1067,8 +1172,15 @@ def test_a_repository_no_rule_names_fails_the_apply(tmp_path: Path) -> None:
     assert "unlisted" in result.stderr
 
 
+#: The suffix a safety clone's directory carries, with the optional ordinal a host
+#: holding more than one of them appends. A safety clone is a second checkout of the
+#: repository it is named after — `~/ai-orchestrator-isolated` is a checkout of
+#: `ai-orchestrator` — so which repository it belongs to is the name without it.
+SAFETY_CLONE = re.compile(r"-isolated(-\d+)?$")
+
+
 def which_checkout(path: str) -> str:
-    """Which checkout a path names, whichever host's layout spelled it.
+    """Which repository a checkout path names, whichever host's layout spelled it.
 
     The hosts this list serves lay the same checkouts out differently — one keeps
     this repository's clones at the top of `$HOME` and the engine repositories under
@@ -1076,8 +1188,16 @@ def which_checkout(path: str) -> str:
     dispatcher clone the engines into `~/.ai-orchestrator/repos/<owner>__<name>` —
     so two spellings of one checkout agree on nothing but their last component, with
     that owner prefix removed. `onevcs` reads the same component to derive an alias.
+
+    A safety clone's suffix comes off too, because the repository it is a checkout of
+    is the one whose rule governs it: registration resolves an identity from the
+    checkout's own `origin`, so `<name>-isolated` and `<name>` are one identity and
+    one policy. The pre-adoption registry happens to name this repository's own
+    safety clones, which is why the caller below covered them without this; a
+    repository registered *since* has no such row, so its safety clone would read as
+    a checkout no rule names while the rule matching it sits in the file.
     """
-    return Path(path).name.rpartition("__")[2]
+    return SAFETY_CLONE.sub("", Path(path).name.rpartition("__")[2])
 
 
 def ruled_repositories() -> set[str]:
