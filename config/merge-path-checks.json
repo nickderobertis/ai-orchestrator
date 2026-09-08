@@ -247,8 +247,12 @@
     },
     "github.com/nickderobertis/printobserver": {
       "branch": "main",
-      "note": "Its base branch declares no protection and no ruleset, so nothing GitHub runs can refuse a merge here. This identity publishes `change-auto` under `approvals: none`, so a change request opens and merges itself with no check and no reviewer between the branch and `main` — what verifies a change here is whatever the branch itself was proven against before publication.",
-      "checks": {}
+      "note": "Its base branch declared no protection at all when this identity was registered, so this entry recorded that nothing GitHub ran could refuse a merge here. It requires the three below now, and they are what verifies a change: `change-auto` under `approvals: none` still puts no reviewer between the branch and `main`, so the required checks are the whole of the merge path. That repository's CI is being actively built out — this set moved twice in one afternoon, and its `llmlint` job runs on every pull request without being required — so read a disagreement here as its protection having moved again rather than as this entry having been wrong.",
+      "checks": {
+        "gate (linux-x86_64, ubuntu-24.04)": "tree-verdict",
+        "gate (linux-aarch64, ubuntu-24.04-arm)": "other-os",
+        "pr-title": "pull-request"
+      }
     },
     "github.com/nickderobertis/screencomp": {
       "branch": "main",

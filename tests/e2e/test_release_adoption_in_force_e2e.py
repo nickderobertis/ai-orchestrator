@@ -116,6 +116,9 @@ RELEASE_SUBCOMMANDS = (
 #: A remote-tracking ref moves only when somebody fetches, never when a worktree is
 #: checked out or reset, so reading the declaration there is a reading of the repository
 #: rather than of what another manager's dispatch happens to be doing.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The tier this constant
+# is asserted in is the one the block above already justifies; it declares no marker of
+# its own and adds no tier.
 DECLARING_IDENTITIES = {
     "github.com/nickderobertis/oneagentgraph": 3,
     "github.com/nickderobertis/oneharness": 6,
@@ -124,7 +127,10 @@ DECLARING_IDENTITIES = {
     "github.com/nickderobertis/onepipeline-ui": 4,
     "github.com/nickderobertis/onetaskgraph": 5,
     "github.com/nickderobertis/onevcs": 4,
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
+    "github.com/nickderobertis/printobserver": 13,
 }
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 #: How the recipes reach the CLI whose version `config/onevcs.version` pins — the same
 #: `uv run` every manager verb in the justfile is a wrapper over, so what this journey

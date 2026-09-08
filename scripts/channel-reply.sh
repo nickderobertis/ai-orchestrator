@@ -302,6 +302,53 @@ else
         "pipe the envelope in, or name a file after the run id"
 fi
 
+# An amendment is criteria — it replaces the binding text that becomes part of a node's
+# effective task, and that task is what the node's judge reads — so it is held to the
+# same bar a plan's acceptance criteria are held to, and this is the only place it can
+# be: an amendment reaches a node over this channel rather than through the plan store,
+# so `just check-plan` never sees one. The bar itself is `orchestrator/criteria_guard.py`'s
+# and none of it is restated here or in the module below; which of its questions apply to
+# an amendment is that module's own decision, written down where the questions are.
+#
+# **Asked before the rendezvous guard below**, which is the one thing about the order
+# that matters: that guard's refusal ends by telling a manager the commands may be
+# re-sent on their own, and re-sending a refused amendment is not what it means to say.
+#
+# `PYTHONPATH` is set rather than prepended to, exactly as `scripts/plan-check.sh` sets
+# it and for the same reason: an inherited value is a directory this interpreter would
+# import from, and an empty entry there means whatever directory a manager replied from.
+amend_status=0
+amend_said=$(PYTHONPATH="$root" "$python" -m orchestrator.amendment_check <"$staged") ||
+    amend_status=$?
+# A refusal names itself on stdout, so a non-zero status with nothing there is the check
+# having failed to run rather than a verdict about the envelope — the same distinction
+# the rendezvous guard below draws, in the same shape and for the same reason: read as a
+# refusal it would refuse a reply nothing had judged, with an empty reason where the
+# explanation belongs. A bare `python3` fallback makes that a real state rather than a
+# defensive one, and an interpreter dying with a status of its own can collide with a
+# refusal's, which is why the two are told apart by what was said rather than by which
+# status was returned.
+if [ "$amend_status" -ne 0 ] && [ -z "$amend_said" ]; then
+    fail "the amendment(s) in this reply to run $run could not be judged against the criteria bar: $python exited $amend_status with nothing to say for it" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+fi
+case "$amend_status" in
+    0) ;;
+    1)
+        fail "this reply to run $run carries an amendment a judge would hold its worker to as work — $amend_said" \
+            "nothing was sent, so no other command in this envelope was applied either; correct the amendment and send the whole envelope again"
+        ;;
+    *)
+        # Reachable only when the check itself could not run and said something anyway,
+        # which is a broken interpreter's own diagnostic on stdout rather than a verdict —
+        # so it is carried into the message rather than dropped: it is the only account of
+        # what actually failed, and a report naming the interpreter and its status alone
+        # leaves a manager with a refusal and no cause.
+        fail "the amendment(s) in this reply to run $run could not be judged against the criteria bar: $python exited $amend_status saying: $amend_said" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+        ;;
+esac
+
 # llmlint: ignore[boundary_inputs_validated] This is `onepipeline`'s own configured ledger root, not an input this recipe owns a policy for: it reaches only two lenient reads — a queue whose unreadability forwards the envelope, and a journal whose size is checked where it is taken — and never a command line. Validating it here would be a second opinion on the verb's own configuration, and a stricter one would refuse replies the verb accepts.
 runs_root="${!RUNS_ROOT_ENV:-$DEFAULT_RUNS_ROOT}"
 # Empty when the run is not a reference this can safely resolve a path from, which is
@@ -404,6 +451,23 @@ if [ "$status" -eq 0 ] || [ "$status" -eq 1 ]; then
         printf 'channel-reply: %s\n' \
             "what this reply carried, and what it did with its note(s), could not be read back: $python exited $report_status; the reply itself was sent, and the engine still recorded each note's fate on run $run's own journal — read it with 'just monitor $run'" >&2
     fi
+fi
+
+# What `queued` is still waiting for, which the receipt does not say. Exit 1 is the
+# verb's published word for an envelope it accepted and made durable and did **not**
+# reconcile: the engine's reply forks on the run's ownership lock, and when that lock is
+# held the commands sit in the durable queue until something drives the run and drains
+# them. `{"reply":1,"state":"queued"}` is all a manager is handed for that, and read
+# beside the exit-0 receipt it differs by one word — so the state a live run passes
+# through in a second and the state a run whose driver has died stays in forever are
+# indistinguishable from the answer alone.
+#
+# On stderr, because the verb's answer is the whole of this recipe's stdout, and after
+# the merge above so the receipt is printed with whatever it could still say about each
+# note. The exit status stays the verb's: this adds a sentence, not a verdict.
+if [ "$status" -eq 1 ]; then
+    printf 'channel-reply: %s\n' \
+        "run $run accepted these commands and made them durable, and nothing reconciled them: they stay queued until something is driving that run. If its driver is gone, attach a fresh one with 'just orchestrate --adopt $run'; either way read what became of them with 'just monitor $run' rather than sending this envelope again" >&2
 fi
 [ -z "$delegated" ] || printf '%s\n' "$delegated"
 exit "$status"

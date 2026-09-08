@@ -868,9 +868,9 @@ and all three were driven on this host's installed binaries rather than read off
 change request. **What changed under this adoption is the other half of that
 sentence**, and it changed without anybody configuring anything here: onevcs 0.16.x
 reads a target from the **repository's own** `release-targets.toml` as well as from the
-host's document, and seven of the twenty-one repositories registered here have since
+host's document, and eight of the twenty-one repositories registered here have since
 landed one — `oneagentgraph` (3 targets), `oneharness` (6), `onejudge` (3), `onepipeline` (3),
-`onepipeline-ui` (4), `onetaskgraph` (5), and `onevcs` (4). So a dependency landing in one
+`onepipeline-ui` (4), `onetaskgraph` (5), `onevcs` (4), and `printobserver` (13). So a dependency landing in one
 of *those* now has a release to await. That set is not a thing this host decides and it
 moves without warning: `onetaskgraph` joined it after the six above were counted, and what
 noticed was `tests/e2e/test_release_adoption_in_force_e2e.py` refusing the publication of
@@ -1036,6 +1036,26 @@ answer** and is folded into neither: reported as an unanswered probe it would re
 a broken tool, where the truth is a healthy wait on a colleague; reported as "not
 released" it would claim a probe answered when none ran.
 
+**Whether a release exists is read from the registry, and from nothing else.** That is
+the one durable rule for answering this question by hand, wherever it comes up — a node
+held under published adoption, a pin waiting on a sibling's landing, a manager deciding
+whether to launch. The registry is what a consumer installs from — crates.io for a
+crate, PyPI for a wheel, npm for a bundle — so it is the only thing that answers the
+question a consumer is actually asking, and asking it costs one request. Two other
+readings look like answers and are not. The first is a **verification workflow's
+conclusion**, which reports one verdict over three different jobs of work — gate the
+release, publish the artifacts, verify them afterwards — so a genuine post-publish
+failure, a pre-publish gate failure and ordinary noise are indistinguishable in it, and
+a red badge over a release that published perfectly well is the ordinary case rather
+than the odd one. The second is a **comparison of a tag against a registry**, and it is
+the worse of the two because it answers confidently in the wrong direction: the tag
+exists from the moment the release is cut and the artifact appears when the publish
+finishes, so every publication is a window in which that comparison reads work still in
+flight as work that failed. It called three publications failures in one afternoon here
+— the last of them from a watcher written *after* this rule had already been recorded,
+which is the evidence that the wording rather than the reader was the problem. So ask
+the registry for the version, and where it is not there yet, wait and ask it again.
+
 **What carries each half, and what was measured of it.** Read each pair below as *the
 release that carried the capability* and *the pin this host runs*, which stop being one
 number the moment an adoption moves past the release that introduced something — as
@@ -1124,7 +1144,7 @@ installed artifacts rather than against this paragraph: the CLI's verb group, wh
 answers for this repository, the `onevcs` the engine links, the loader's two refusals,
 and the read API behind the view.
 
-**So what remains is configuration, not adoption.** Seven of the repositories dispatched
+**So what remains is configuration, not adoption.** Eight of the repositories dispatched
 against from here now declare their own targets, so putting the mechanism to work no
 longer starts with declaring one: it is writing a plan whose node names `adoption:
 published` and a `consumes` naming one of those targets, and deciding whether this host
@@ -1933,7 +1953,7 @@ and is never a command.
 This is the most critical rule of the arrangement. Dispatched work runs for hours
 after the turn that launched it; with nothing watching, the project runs
 unsupervised and the user is in the dark. **The rule names one command — `just
-watch` (4 below) — and the five numbered properties beside it are what watching
+watch` (4 below) — and the six numbered properties beside it are what watching
 means and what that recipe owes.** It was an invariant satisfied by whatever loop
 each supervisor invented for as long as nothing had a command behind it, and every
 loop invented here went silent differently: one missed four destructive edits
@@ -1964,6 +1984,49 @@ and one question was asked three times, with every other indicator green through
    `just --list` and the recipe's own comment; `scripts/watch-run.sh` restates
    them in one place and `tests/test_watch_surface_drift.py` reconciles that
    restatement against the installed engine.
+
+   **Invoke that verb directly, and write no loop around it.** It blocks on
+   purpose: the waiting is the verb's, so a supervisor's turn is one `just watch`
+   rather than a `while` / `sleep` / `grep` loop re-asking a view every few
+   seconds. Every loop written here is a fresh chance to lose the invariant in a
+   new way, and each one lost it differently — one matched only success and was
+   silent through a crashloop, one filtered the unread-surface line and stayed
+   quiet through twenty-six queued updates, one matched `quota` across the
+   boundary rule 6 is about and called a healthy dispatch dead eleven seconds in,
+   and one polled `pgrep -f` on a pattern its own shell matched and waited
+   forever. Four loops, four different defects, and no fifth loop inherits a fix
+   for any of them: the properties above hold by construction inside the command
+   and by somebody's memory anywhere else. Where a watch would have to end on
+   something the verb does not return on, that is a missing terminal condition
+   worth reporting rather than a loop worth writing.
+
+   **The cursor is emitted for a caller as well as printed for a reader.** A watch
+   that returns before the run is over hands back the cursor the next one resumes
+   from, and it reaches you twice: as the sentence `— resume with 'just watch
+   <run-id> --cursor <cursor>'`, which is what a person copies, and as a line of
+   its own carrying `watch-cursor <cursor>` and nothing else, which is what a
+   caller reads —
+   `cursor=$(sed -n 's/^watch-cursor //p' watch.log | tail -n 1)`. Re-arm from the
+   second. Extracting the token out of the sentence takes the closing quote along
+   with it, and a watch re-armed with `c-42'` is refused and ends at a status that
+   is none of the four — the watch stopping rather than continuing, which is the
+   ending a supervisor is least likely to notice, and which cost forty-five minutes
+   of silence on a live thirteen-node run here while its driver died of a full
+   disk. `scripts/watch-run.sh --print-surface` names that word, and
+   `tests/test_watch_and_release_reading_guidance.py` reconciles it against this
+   paragraph.
+
+   **What you pipe a watch into decides whether you see any of it.** Every line is
+   written as it happens, so a watch redirected to a file, or read on a terminal,
+   fills as the run goes. Put it through a filter that block-buffers and nothing
+   arrives until the watch exits: measured here against a watch emitting one line a
+   second, `sed` and `awk` delivered nothing at all where the same watch redirected
+   to a file had already written three lines, and `tail` shows nothing by
+   construction because it is holding out for the end. `cat` and GNU `grep` pass
+   each line through as it arrives. **A buffered watch reads from outside exactly
+   like a healthy quiet run and exactly like a dead one** — the one distinction
+   this whole rule exists to keep — so redirect it to a file and read the file, or
+   make the filter line-buffer (`stdbuf -oL`, `sed -u`, `grep --line-buffered`).
 
    **Exactly one exception, and it is the one this recipe cannot serve:**
    supervising several runs at once, which is a shape a per-run watch has no
@@ -2005,6 +2068,23 @@ and one question was asked three times, with every other indicator green through
    reported in, so the first firing spends the correct instinct on nothing and the
    second weakens it. Rule 5 survives the cut, because that block is the last thing
    the view prints and the unread-surface line is above it.
+7. **Monitoring is critical for every dispatch, and a planning run is a dispatch.**
+   There is no class of launch this rule exempts: a planner runs for hours, spends
+   real quota, asks blocking questions on the run's own channel, and produces the
+   plan every later dispatch is written from, so a planning run going unwatched
+   costs what any other one does. It is the launch most likely to be left
+   unwatched, because it is the one that watches least of itself: `just plan` names
+   `--dag-graph off` deliberately — a planning run's plan is its own output, so
+   there is nothing yet for a monitor to compare the run against — so it attaches
+   no observer at all, and no drift finding, no monitor surface and no pacemaker
+   update will ever arrive from it. **What a supervisor owes a launch that attaches
+   no monitor of its own is the same thing it owes every other one, and there it is
+   the only thing looking**: `just watch` armed on that run before turning to
+   anything else, read to the end, and re-armed from its cursor when it returns
+   short of settlement. The absence is easy to miss precisely because it is
+   deliberate — an unwatched planning run and a healthy quiet one look identical
+   from here, which is the indistinguishability rule 2 is about, arriving by a
+   different route.
 
 ### Answering on the channel
 
@@ -2152,6 +2232,44 @@ earlier note's. The five words are `worker`, `supervisor`, `judged-with`, `queue
 next dispatch owing it, and under the default those two are the only ways an accepted
 note succeeds. Read `carried` as the case the incidents above were: the note is real,
 and nothing has read it yet.
+
+<!-- llmlint: ignore[instruction_layer_localized] This is manager guidance about two
+`just` recipes — what `just channel-reply` refuses and what `just check-plan` refuses —
+which is what this document is and what `orchestrator/AGENTS.md` deliberately is not:
+that file states the Python package's own conventions for somebody editing it, and no
+manager supervising a run reads it. -->
+**An amendment in that envelope is held to the criteria bar before any of it is sent,
+and this is the only place it can be.** An `amend` replaces the binding text that
+becomes part of a node's effective task, and that task is what the node's judge reads —
+so an amendment *is* criteria, written in the minute after you read a failure, which is
+far more pressure than a plan is ever written under. It reaches a node over this channel
+rather than through the plan store, so `just check-plan` never sees one, and it was the
+only criteria on this host that nothing checked. Five were written during one run and
+three cost a node each: *"the finished branch merges cleanly into its base and its
+change request's required checks pass"* names checks that run on the host after the
+agent step has ended, and *"do not re-research it"* and *"preserve that result as
+evidence and stop there"* each forbade the route that turned out to find the answer.
+Every one of them settled correct, committed, gate-green work as a task failure. `just
+channel-reply` now asks the bar's two questions of each `amend`'s text — does it state a
+property or a mechanism, and could the worker satisfy it from inside its own dispatch —
+and refuses the **whole** envelope before anything is sent, so a note riding beside a
+refused amendment applies no edit either and re-sending it alone still lands it. The bar
+is `orchestrator/criteria_guard.py`'s and is the same one `just check-plan` asks of a
+plan; which of its questions apply to an amendment, and why the rest do not, is written
+down beside the questions themselves. **Every refusal names the escape**, because it is
+the one a plan's criteria do not have: a correction the judge should have no opinion
+about is a `note`, which touches no acceptance criterion at all.
+
+**A reply the engine accepted and did not reconcile now says what it is still waiting
+for.** The engine's reply forks on the run's ownership lock, and with that lock held the
+commands are accepted, made durable, and **not** reconciled: they sit in the durable
+queue until something drives the run and drains them. `{"reply":1,"state":"queued"}` is
+the whole of what the receipt says about that, and beside the exit-0 answer it differs
+by one word — so the state a live run passes through in a second and the state a run
+whose driver has died stays in forever read the same. The recipe now says on stderr that
+they stay queued until something is driving the run, and names `just orchestrate --adopt
+<run-id>` as what attaches a driver to one whose own has gone. The exit status and the
+verb's own answer are untouched: this adds a sentence, not a verdict.
 
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** These are not alternatives: a `note` goes through the two-party delivery seam
@@ -2855,6 +2973,38 @@ own manifest demands, and its judge failed a green gate. State the property the 
 stood in for. And a task carrying **no review record for what it currently says** is
 refused outright, naming each such task and `just review-plan <source:project>`, which
 is what records one.
+
+**Two of its refusals are about where a node publishes rather than about its criteria**,
+and each is one a whole dispatch used to be paid for before anything said so. A
+lifecycle node's `title` becomes the subject `onevcs` publishes under and is never
+re-derived, so a destination whose own `commit-msg` hook refuses that subject refuses
+the branch once the work is finished: one node here lost finished, judge-passed work to
+a `refactor:` subject and its dependent was skipped for it. And a node carrying a
+non-empty `consumes` on an identity that resolves `local-direct` is awaiting a release
+target on a workflow that lands on the base itself and opens no change request, so it is
+unpublishable whatever its adoption mode says; another node ran an hour and thirty-six
+minutes before that was reported. Both are now refused before anything is dispatched,
+naming the node and what it would be refused for.
+
+**The title half takes its rule from the destination repository's own hook rather than
+from a copy of that repository's release-type policy held here**: the hook is found the
+way git finds it — through `core.hooksPath`, which is what a publication's disposable
+clone inherits from its lender — and it is **run**, against the subject the node would
+publish under. So a repository that changes which types it releases from changes what
+this refuses, with nothing here to keep in step, and the engine's own refusal at its
+loader agrees with this one by reading the same file rather than by either copying the
+other. The workflow half reads `onevcs rules check`, never `onevcs resolve`'s own
+`workflow` field: every identity on this host registers as `remote` while its rules
+resolve `local-direct`, so reading one for the other would answer the wrong thing for
+all of them.
+
+**What is refused is narrower than what is asked, deliberately.** A destination this
+host cannot resolve, one whose repository declares no `commit-msg` hook, and a workflow
+outside the four published `merge_policy` names are each passed over rather than
+refused — a plan is checked against repositories this checkout may never have seen, and
+refusing one for what this host cannot see would refuse plans that launch correctly
+today. That is the same trade every refusal above makes: written to miss rather than to
+refuse a sound node.
 
 **`just review-plan <source:project>` spends the judged turn that clears a plan's
 authored content**, reading each unreviewed task against `personas/planner.yaml`'s own
