@@ -247,10 +247,12 @@
     },
     "github.com/nickderobertis/printobserver": {
       "branch": "main",
-      "note": "Its base branch declared no protection at all when this identity was registered, so this entry recorded that nothing GitHub ran could refuse a merge here. It requires the three below now, and they are what verifies a change: `change-auto` under `approvals: none` still puts no reviewer between the branch and `main`, so the required checks are the whole of the merge path. That repository's CI is being actively built out — this set moved twice in one afternoon, and its `llmlint` job runs on every pull request without being required — so read a disagreement here as its protection having moved again rather than as this entry having been wrong.",
+      "note": "Its base branch declared no protection at all when this identity was registered, so this entry recorded that nothing GitHub ran could refuse a merge here. It requires the five below now, and they are what verifies a change: `change-auto` under `approvals: none` still puts no reviewer between the branch and `main`, so the required checks are the whole of the merge path. That repository's CI is being actively built out — this set moved twice in one afternoon, and its `llmlint` job has since become required as well — so read a disagreement here as its protection having moved again rather than as this entry having been wrong.",
       "checks": {
-        "gate (linux-x86_64, ubuntu-24.04)": "tree-verdict",
         "gate (linux-aarch64, ubuntu-24.04-arm)": "other-os",
+        "gate (linux-x86_64, ubuntu-24.04)": "tree-verdict",
+        "llmlint (linux-aarch64, ubuntu-24.04-arm)": "other-os",
+        "llmlint (linux-x86_64, ubuntu-24.04)": "tree-verdict",
         "pr-title": "pull-request"
       }
     },
