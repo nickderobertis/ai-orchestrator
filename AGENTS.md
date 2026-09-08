@@ -2139,6 +2139,44 @@ next dispatch owing it, and under the default those two are the only ways an acc
 note succeeds. Read `carried` as the case the incidents above were: the note is real,
 and nothing has read it yet.
 
+<!-- llmlint: ignore[instruction_layer_localized] This is manager guidance about two
+`just` recipes — what `just channel-reply` refuses and what `just check-plan` refuses —
+which is what this document is and what `orchestrator/AGENTS.md` deliberately is not:
+that file states the Python package's own conventions for somebody editing it, and no
+manager supervising a run reads it. -->
+**An amendment in that envelope is held to the criteria bar before any of it is sent,
+and this is the only place it can be.** An `amend` replaces the binding text that
+becomes part of a node's effective task, and that task is what the node's judge reads —
+so an amendment *is* criteria, written in the minute after you read a failure, which is
+far more pressure than a plan is ever written under. It reaches a node over this channel
+rather than through the plan store, so `just check-plan` never sees one, and it was the
+only criteria on this host that nothing checked. Five were written during one run and
+three cost a node each: *"the finished branch merges cleanly into its base and its
+change request's required checks pass"* names checks that run on the host after the
+agent step has ended, and *"do not re-research it"* and *"preserve that result as
+evidence and stop there"* each forbade the route that turned out to find the answer.
+Every one of them settled correct, committed, gate-green work as a task failure. `just
+channel-reply` now asks the bar's two questions of each `amend`'s text — does it state a
+property or a mechanism, and could the worker satisfy it from inside its own dispatch —
+and refuses the **whole** envelope before anything is sent, so a note riding beside a
+refused amendment applies no edit either and re-sending it alone still lands it. The bar
+is `orchestrator/criteria_guard.py`'s and is the same one `just check-plan` asks of a
+plan; which of its questions apply to an amendment, and why the rest do not, is written
+down beside the questions themselves. **Every refusal names the escape**, because it is
+the one a plan's criteria do not have: a correction the judge should have no opinion
+about is a `note`, which touches no acceptance criterion at all.
+
+**A reply the engine accepted and did not reconcile now says what it is still waiting
+for.** The engine's reply forks on the run's ownership lock, and with that lock held the
+commands are accepted, made durable, and **not** reconciled: they sit in the durable
+queue until something drives the run and drains them. `{"reply":1,"state":"queued"}` is
+the whole of what the receipt says about that, and beside the exit-0 answer it differs
+by one word — so the state a live run passes through in a second and the state a run
+whose driver has died stays in forever read the same. The recipe now says on stderr that
+they stay queued until something is driving the run, and names `just orchestrate --adopt
+<run-id>` as what attaches a driver to one whose own has gone. The exit status and the
+verb's own answer are untouched: this adds a sentence, not a verdict.
+
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** These are not alternatives: a `note` goes through the two-party delivery seam
   `oneagentgraph` publishes, which reaches whichever party is speaking and hands the
@@ -2809,6 +2847,38 @@ own manifest demands, and its judge failed a green gate. State the property the 
 stood in for. And a task carrying **no review record for what it currently says** is
 refused outright, naming each such task and `just review-plan <source:project>`, which
 is what records one.
+
+**Two of its refusals are about where a node publishes rather than about its criteria**,
+and each is one a whole dispatch used to be paid for before anything said so. A
+lifecycle node's `title` becomes the subject `onevcs` publishes under and is never
+re-derived, so a destination whose own `commit-msg` hook refuses that subject refuses
+the branch once the work is finished: one node here lost finished, judge-passed work to
+a `refactor:` subject and its dependent was skipped for it. And a node carrying a
+non-empty `consumes` on an identity that resolves `local-direct` is awaiting a release
+target on a workflow that lands on the base itself and opens no change request, so it is
+unpublishable whatever its adoption mode says; another node ran an hour and thirty-six
+minutes before that was reported. Both are now refused before anything is dispatched,
+naming the node and what it would be refused for.
+
+**The title half takes its rule from the destination repository's own hook rather than
+from a copy of that repository's release-type policy held here**: the hook is found the
+way git finds it — through `core.hooksPath`, which is what a publication's disposable
+clone inherits from its lender — and it is **run**, against the subject the node would
+publish under. So a repository that changes which types it releases from changes what
+this refuses, with nothing here to keep in step, and the engine's own refusal at its
+loader agrees with this one by reading the same file rather than by either copying the
+other. The workflow half reads `onevcs rules check`, never `onevcs resolve`'s own
+`workflow` field: every identity on this host registers as `remote` while its rules
+resolve `local-direct`, so reading one for the other would answer the wrong thing for
+all of them.
+
+**What is refused is narrower than what is asked, deliberately.** A destination this
+host cannot resolve, one whose repository declares no `commit-msg` hook, and a workflow
+outside the four published `merge_policy` names are each passed over rather than
+refused — a plan is checked against repositories this checkout may never have seen, and
+refusing one for what this host cannot see would refuse plans that launch correctly
+today. That is the same trade every refusal above makes: written to miss rather than to
+refuse a sound node.
 
 **`just review-plan <source:project>` spends the judged turn that clears a plan's
 authored content**, reading each unreviewed task against `personas/planner.yaml`'s own

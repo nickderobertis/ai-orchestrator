@@ -49,11 +49,26 @@ LOCAL_DIRECT = (
 #: installs of a published artifact, the pull request's own title, a hosted visual
 #: baseline — so its report is where a list rather than a single name is read.
 MANY_REMOTE_CHECKS = "github.com/nickderobertis/llmlint"
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `reads_checkouts` is
+# the edge here, and it is the widest one on purpose: this suite's subject is another
+# repository's live branch protection, which no `nx.json` key can name, so it runs in the
+# uncached `orchestrator:test-checkouts` and is never memoized at all. A project of its
+# own would give it a key and a memoized verdict about a repository that goes on changing
+# — which is the thing this suite exists to catch. This change moves one constant onto an
+# identity whose inventory is still empty.
 #: A remote-publishing identity whose base branch declares no protection, so its
 #: inventory is present and empty. That pairing is the one an operator most needs
 #: told apart from an identity nobody inventoried at all: both have nothing to list,
 #: and only one of them is a gap to go and look at.
-EMPTY_REMOTE_INVENTORY = "github.com/nickderobertis/printobserver"
+#:
+#: Which identity wears that shape is a fact about somebody else's branch protection and
+#: moves without warning — this was `printobserver` until its own `main` grew three
+#: required checks. The uncached `orchestrator:test-checkouts` tier is what notices, by
+#: asking GitHub and failing when `config/merge-path-checks.json` disagrees; read a
+#: failure here as this identity having grown one too, and move the constant onto another
+#: the inventory still records as empty.
+EMPTY_REMOTE_INVENTORY = "github.com/petsinc/cd-chat-tool-call-challenge"
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 #: The smallest declaration the filter accepts. Every refusal below is this document
 #: with exactly one thing wrong with it, so what each case demonstrates is that field
@@ -70,24 +85,35 @@ class Registry(NamedTuple):
     home: Path
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This suite predates
+# this change, and the `reads_checkouts` marker is not a narrower tier of a memoized one:
+# it moves a test out of every memoized tier into the uncached one, because its subject —
+# another repository's branch protection — is outside this workspace and no `nx.json` key
+# could name it. A project of its own would give it a key, which is the thing it must not
+# have. This change moves one constant in it, onto an identity whose inventory is still
+# empty.
 @pytest.fixture(scope="module")
 def registry(tmp_path_factory: pytest.TempPathFactory) -> Registry:
     """Registered by the real recipe: one identity per shape of answer the audit gives."""
     root = tmp_path_factory.mktemp("merge-path-audit")
     manifest = root / "checkouts"
     paths = []
-    for name in (
-        "ai-orchestrator",
-        "spanish-language-tutor",
-        "nick-derobertis-site",
-        "llmlint",
-        "printobserver",
+    for identity in (
+        "github.com/nickderobertis/ai-orchestrator",
+        "github.com/nickderobertis/spanish-language-tutor",
+        "github.com/nickderobertis/nick-derobertis-site",
+        MANY_REMOTE_CHECKS,
+        EMPTY_REMOTE_INVENTORY,
     ):
-        checkout = root / "checkouts.d" / name
+        checkout = root / "checkouts.d" / identity.rpartition("/")[2]
         checkout.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=checkout, check=True)
+        # The owner is part of the identity, so it is taken from the identity rather than
+        # composed: two of the repositories this host routes are not under one account,
+        # and a checkout registered under the wrong owner resolves a different identity
+        # and is reported as one nobody inventoried.
         subprocess.run(
-            ["git", "remote", "add", "origin", f"https://github.com/nickderobertis/{name}"],
+            ["git", "remote", "add", "origin", f"https://{identity}"],
             cwd=checkout,
             check=True,
         )
@@ -97,6 +123,9 @@ def registry(tmp_path_factory: pytest.TempPathFactory) -> Registry:
     applied = repos(home, "repos-apply", "--checkouts", str(manifest))
     assert applied.returncode == 0, applied.stdout + applied.stderr
     return Registry(home=home)
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def repos(home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:

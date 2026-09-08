@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -41,6 +42,7 @@ from criteria_examples import (
     STATES_THE_PROPERTY_INSTEAD,
 )
 from project_fixtures import project_from_plan, reviewed
+from scratch_identity import registered
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
@@ -1725,3 +1727,317 @@ def test_the_registered_check_run_with_no_project_names_the_command_shape(
     for refusal in refusals:
         assert refusal["field"] == "metadata", refusal
         assert "just review-plan <source>:<project>" in refusal["reason"], refusal
+
+
+#: A `commit-msg` hook of the shape a repository this host publishes to really carries:
+#: it reads the subject and nothing else, because `onevcs` runs one against a subject it
+#: is about to publish where no index, diff or branch exists. This one refuses a type its
+#: repository cuts no release from, which is the rule that cost a node here.
+COMMIT_MSG_HOOK = """#!/usr/bin/env bash
+set -euo pipefail
+subject=$(head -n 1 "$1")
+case "$subject" in
+    feat:*|fix:*|perf:*) exit 0 ;;
+esac
+echo "commit-msg: this repository does not release from '${subject%%:*}:'" >&2
+exit 1
+"""
+
+#: A destination this host has never registered, which is what most plans checked here
+#: name. Nothing about its title or its release targets is knowable, so nothing about it
+#: is refused — the property that keeps every plan launching today launching.
+UNRESOLVABLE = "https://github.com/nickderobertis/some-service"
+
+
+def _hooked(checkout: Path) -> Path:
+    """Install a real `commit-msg` hook in a real checkout, the way this repository does.
+
+    Through `core.hooksPath` and a tracked directory rather than `.git/hooks`, because
+    that is the arrangement a publication inherits: the disposable clone a publication
+    works in is given the lender's hooks path when it is cut.
+    """
+    hooks = checkout / ".githooks"
+    hooks.mkdir()
+    hook = hooks / "commit-msg"
+    hook.write_text(COMMIT_MSG_HOOK, encoding="utf-8")
+    hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+    subprocess.run(
+        ["git", "-C", str(checkout), "config", "core.hooksPath", ".githooks"],
+        check=True,
+        timeout=e2e_timeout(30),
+    )
+    return checkout
+
+
+def _publishing_plan(root: Path, *nodes: dict[str, object]) -> Path:
+    """A plan whose nodes land in repositories, in the shape the loader accepts."""
+    written = root / "publishing-plan.json"
+    written.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "goal": {"text": "Land the work"},
+                "name": "publication-guard-e2e",
+                "tasks": [
+                    {"persona": "engineer", "task": _task(STATES_ITS_BAR), **node} for node in nodes
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return written
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] `plan-tooling` **is** this
+# repository's host-tool project: every journey in it already spawns the installed
+# `onepipeline`, the `just` recipes, the registered check script and a real
+# `oneharness run`, which is why it was cut out of the orchestrator project at all. Its
+# `planToolingWorkspace` key covers what decides these answers — `uv.lock`, which pins
+# the `onevcs` they ask, and `scripts/**` and `config/**`, which are the recipes and
+# rules they drive — so a third project would split one cost across two edges rather
+# than putting a host-tool cost behind its own.
+def _in_registry(home: Path) -> dict[str, str]:
+    """The environment a launch would make this check in, pointed at a scratch registry.
+
+    Never this host's own: the identities a plan is checked against decide what this
+    recipe refuses, and a journey pointed at the real registry would both depend on
+    another repository's registration and answer differently the day somebody
+    re-registers one.
+    """
+    return {**os.environ, "ONEVCS_HOME": str(home)}
+
+
+def test_a_title_the_destinations_own_hook_refuses_is_refused_before_the_launch(
+    tmp_path: Path,
+) -> None:
+    """The two refusals a whole dispatch used to be paid for, through the real recipe.
+
+    A node's `title` becomes the subject `onevcs` publishes under and is never
+    re-derived, so a hook that refuses it refuses the branch after the work is finished;
+    one node here lost judge-passed work to a `refactor:` subject and its dependent was
+    skipped. And a node consuming a release target on an identity that opens no change
+    request is waiting on a publication that identity never makes.
+
+    Both in one plan, because both are refused in one read and a refusal that reported
+    only the first would send its author back for a second launch attempt. The hook is
+    **run** rather than restated, which is what keeps this refusal and the destination's
+    own rule from being two statements of one policy: nothing here knows which types
+    that repository releases from.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"])
+    _hooked(checkout)
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "landing", "title": "refactor: rename the reader", "repo": "service"},
+        {
+            "id": "consumer",
+            "title": "feat: adopt the release",
+            "repo": "service",
+            "deps": ["landing"],
+            "consumes": {"landing": "pypi"},
+        },
+    )
+
+    refused = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "landing: title:" in refused.stderr, refused.stderr
+    assert "'refactor: rename the reader'" in refused.stderr, refused.stderr
+    assert "does not release from 'refactor:'" in refused.stderr, refused.stderr
+    assert "consumer: consumes:" in refused.stderr, refused.stderr
+    assert "'local-direct'" in refused.stderr, refused.stderr
+    assert "opens no change request" in refused.stderr, refused.stderr
+
+
+def test_a_plan_this_host_would_publish_is_not_refused_for_where_it_lands(
+    tmp_path: Path,
+) -> None:
+    """Three passes in one read, which is the half that makes the refusals worth having.
+
+    A title the destination's own hook accepts; the same refused title against a
+    destination that declares no hook at all; and both of those against a destination
+    this host has never registered. The last two are the same answer — this host cannot
+    say — and refusing either would refuse plans that launch correctly today.
+    """
+    hooked, bare = registered(tmp_path / "registry", ["hooked", "bare"])
+    _hooked(hooked)
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "accepted", "title": "feat: add the reader", "repo": "hooked"},
+        {"id": "unhooked", "title": "refactor: rename the reader", "repo": "bare"},
+        {
+            "id": "unregistered",
+            "title": "refactor: rename it elsewhere",
+            "repo": UNRESOLVABLE,
+            "deps": ["accepted"],
+            "consumes": {"accepted": "pypi"},
+        },
+    )
+
+    accepted = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "3 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_both_paths_refuse_a_node_this_host_would_not_publish(tmp_path: Path) -> None:
+    """The publication refusals reach an engine with no `plan check` too, and agree.
+
+    The two paths refuse different amounts — only the engine's own loader makes the
+    structural refusals — but these are this repository's own, so they are the same
+    answer over the same plan whichever loader read it. What differs is how much of that
+    answer each can print: the verb renders every refusal, and the direct path raises the
+    first, which is why the assertion below is about the one they share rather than about
+    the count.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"])
+    _hooked(checkout)
+    plan = _publishing_plan(
+        tmp_path, {"id": "landing", "title": "refactor: rename it", "repo": "service"}
+    )
+    project = project_from_plan(plan)
+    registry = _in_registry(tmp_path / "registry" / "onevcs")
+
+    through = _check_project(project, environment=registry)
+    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
+    # engine carrying no `plan check`, which is a release older than that verb and so not
+    # an artifact this repository can install; `_older_engine` is the absence of that one
+    # verb and nothing else, for the reason stated where it is built. Everything else here
+    # is real — the recipe, the registered identity, and the destination's own hook.
+    directly = _check_project(
+        project,
+        environment=registry | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))},
+    )
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    assert through.returncode == 1, through.stdout + through.stderr
+    assert directly.returncode == 1, directly.stdout + directly.stderr
+    for refused in (through, directly):
+        assert "does not release from 'refactor:'" in refused.stderr, refused.stderr
+        assert "landing" in refused.stderr, refused.stderr
+
+
+def test_a_node_consuming_a_release_its_identity_really_publishes_is_not_refused(
+    tmp_path: Path,
+) -> None:
+    """The other side of the workflow question, against a real resolved policy.
+
+    `change-auto` opens a change request, so a node awaiting a release target on it is
+    waiting on a publication that identity really makes. The workflow is taken from
+    `onevcs rules check` rather than from `onevcs resolve`'s own `workflow` field, and
+    this registry is what proves the difference matters: the same identity registers as
+    `local` and resolves `change-auto`, so a reader of the wrong one would refuse this.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"], publication="change-auto")
+    _hooked(checkout)
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "landing", "title": "feat: land the library", "repo": "service"},
+        {
+            "id": "consumer",
+            "title": "feat: adopt the release",
+            "repo": "service",
+            "deps": ["landing"],
+            "consumes": {"landing": "pypi"},
+        },
+    )
+
+    accepted = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+#: Every way this host can have nothing to say about where a node publishes, as the
+#: `onevcs` that answers each one. Three different silences, and each has to end the same
+#: way: a verb that does not return, an answer this command cannot read, and a policy
+#: outside the four published `merge_policy` names.
+UNANSWERABLE = (
+    ("a verb that never returns", "import time\n\ntime.sleep(30)\n"),
+    ("an answer this host cannot read", "print('not the object this reads')\n"),
+    (
+        "a policy outside the published vocabulary",
+        # The checkout it names is this stand-in's own directory, which declares no hook:
+        # an unknown policy silences the release-target question and nothing else, so a
+        # destination whose hook *could* be read would still be ruled on for its title.
+        "import json, pathlib, sys\n"
+        "resolved = {\n"
+        "    'identity': 'local/service',\n"
+        "    'publication_checkout': str(pathlib.Path(__file__).parent),\n"
+        "}\n"
+        "print(json.dumps(resolved) if sys.argv[1] == 'resolve' else 'publication: brand-new')\n",
+    ),
+)
+
+
+@pytest.mark.parametrize("what,program", UNANSWERABLE, ids=lambda row: row)
+def test_a_destination_this_host_cannot_answer_for_refuses_nothing(
+    tmp_path: Path, what: str, program: str
+) -> None:
+    """A plan is checked against repositories this checkout may never have seen.
+
+    Each shape here is this host having nothing to say, and refusing a plan for what it
+    cannot see would refuse plans that launch correctly today — which is the failure this
+    whole check has to avoid more than it has to catch. The node it is driven with has a
+    title *and* a `consumes` that would both be refused if the destination could be read,
+    so an empty answer is the silence rather than an accident of the fixture.
+
+    Driven through `scripts/plan-check.sh` rather than through `just check-plan`, which is
+    the seam these shapes are reachable at: the recipe reaches the engine through
+    `uv run`, which puts this checkout's own `.venv/bin` at the front of the child's PATH,
+    so a stand-in `onevcs` never answers and a journey written against the recipe would
+    pass for the unregistered-repository reason instead of the one it names. This script
+    is what `onepipeline plan check` spawns, given the document that verb really hands it.
+    """
+    # llmlint: ignore-block[e2e_not_mocked] `onevcs` is the published CLI this check
+    # delegates its one question to, doubled at that boundary and nothing above it: a verb
+    # that hangs, an unreadable answer and a policy name no release has published cannot
+    # be produced by the real one on demand. The script, the module, the subprocess
+    # boundary between them and the plan document the verb writes are all real.
+    binary = tmp_path / "bin"
+    binary.mkdir(parents=True)
+    stand_in = binary / "onevcs"
+    stand_in.write_text(f"#!{sys.executable}\n{program}", encoding="utf-8")
+    stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR)
+    # llmlint: ignore-end[e2e_not_mocked]
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "landing", "title": "feat: land it", "repo": "service"},
+        {
+            "id": "consumer",
+            "title": "refactor: rename it",
+            "repo": "service",
+            "deps": ["landing"],
+            "consumes": {"landing": "pypi"},
+        },
+    )
+    project = reviewed(project_from_plan(plan))
+
+    # llmlint: ignore-block[tests_mirror_real_usage] This script *is* the interface these
+    # shapes are reachable through: `just check-plan` reaches the engine via `uv run`,
+    # which puts this checkout's `.venv/bin` at the front of the child's PATH, so a
+    # stand-in `onevcs` never answers it. What is spawned here is what `onepipeline plan
+    # check` spawns, on the document that verb really hands it.
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input=_loaded_plan(project, tmp_path),
+        env=os.environ | {"PATH": f"{binary}{os.pathsep}{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    assert json.loads(answered.stdout)["refusals"] == [], f"{what} refused: {answered.stdout}"
+    # llmlint: ignore-end[tests_mirror_real_usage]

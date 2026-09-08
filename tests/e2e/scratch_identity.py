@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -104,3 +105,59 @@ def _register(root: Path, identity: Identity) -> None:
         check=False,
     )
     assert applied.returncode == 0, f"repos-apply failed:\n{applied.stdout}\n{applied.stderr}"
+
+
+def rules_for(publication: str) -> str:
+    """A whole-registry policy naming ``publication`` for every identity in it.
+
+    One policy per registry rather than a rule per identity, because `onevcs`'s `path`
+    matcher answers a scratch registry's identities only through its catch-all — a
+    journey that needs two workflows uses two registries and two `ONEVCS_HOME`s, which
+    is what a run does anyway.
+    """
+    return RULES.replace("local-direct", publication)
+
+
+def registered(
+    root: Path, names: Sequence[str], *, publication: str = "local-direct"
+) -> tuple[Path, ...]:
+    """Seed one checkout per name in a scratch registry, and answer where each one is.
+
+    The registry is `root / "onevcs"`, which is the `ONEVCS_HOME` a caller exports; each
+    checkout is `root / name`, and the alias `onevcs` gives it is that directory name —
+    so a plan node naming it as its `repo` resolves the identity this seeded.
+
+    Its own origin per name, because two checkouts of one origin are two aliases of one
+    identity and share its whole policy: what a caller wants from several names is
+    several identities.
+    """
+    checkouts = []
+    for name in names:
+        origin = root / f"{name}-origin.git"
+        seed = root / f"{name}-seed"
+        git("init", "-q", "--bare", "-b", "main", str(origin))
+        git("init", "-q", "-b", "main", str(seed))
+        (seed / "README.md").write_text("seed\n", encoding="utf-8")
+        git("add", "-A", cwd=seed)
+        git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=seed)
+        git("remote", "add", "origin", str(origin), cwd=seed)
+        git("push", "-q", "origin", "main", cwd=seed)
+        git("clone", "-q", str(origin), str(root / name))
+        checkouts.append(root / name)
+    home = root / "onevcs"
+    home.mkdir(exist_ok=True)
+    manifest = root / "onevcs.checkouts"
+    manifest.write_text("".join(f"{path}\n" for path in checkouts), encoding="utf-8")
+    rules = root / "onevcs.rules.yml"
+    rules.write_text(rules_for(publication), encoding="utf-8")
+    applied = subprocess.run(
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEVCS_HOME": str(home)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert applied.returncode == 0, f"repos-apply failed:\n{applied.stdout}\n{applied.stderr}"
+    return tuple(checkouts)

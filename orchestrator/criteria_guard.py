@@ -83,7 +83,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from orchestrator import plan_review, plan_store
+from orchestrator import plan_review, plan_store, publication_guard
 from orchestrator.root import REPO_ROOT
 
 #: The operational text every dispatched task carries, and the one source a plan
@@ -456,6 +456,21 @@ OUT_OF_DISPATCH = (
     OutOfDispatch(re.compile(r"lands on master"), "lands on master"),
     OutOfDispatch(re.compile(r"lands on main"), "lands on main"),
     OutOfDispatch(re.compile(r"deploy"), "deploy"),
+    # The merge path's own verdict: those checks run on the host after publication, and
+    # the dispatch has ended before any of them start. It reached this list from an
+    # *amendment* rather than from a plan — :func:`check_amendment` quotes the one it
+    # cost — and a plan criterion of the same shape is the same unsatisfiable demand.
+    #
+    # Which is why it is an entry of this list rather than a pattern of the amendment
+    # check's own: every entry here is driven through the real `just check-plan` over a
+    # real plan by `tests/plan_tooling/test_check_plan_recipe_e2e.py`'s
+    # `test_a_criterion_resting_on_work_the_dispatch_cannot_do_is_refused`, which
+    # parametrizes over this tuple and refuses each entry's own `example` — so an entry
+    # added here is a plan-check journey with nothing to write.
+    OutOfDispatch(
+        re.compile(r"required checks?(?: \w+){0,2} (?:pass|passes|are green|is green|succeed)"),
+        "required checks pass",
+    ),
 )
 
 
@@ -651,6 +666,21 @@ def criteria_items(block: str) -> Iterator[str]:
         yield "\n".join(current)
 
 
+def _out_of_dispatch(block: str) -> re.Match[str] | None:
+    """The first thing ``block`` rests on that the worker's own dispatch never reaches.
+
+    One reader for both carriers of criteria — a node's ``## Acceptance criteria`` and
+    the amendment that overrides one — so :data:`OUT_OF_DISPATCH` is the single answer
+    to the question rather than a list each caller re-walks its own way.
+    """
+    lowered = block.lower()
+    for entry in OUT_OF_DISPATCH:
+        rests_on = entry.pattern.search(lowered)
+        if rests_on is not None:
+            return rests_on
+    return None
+
+
 def _prescribed(block: str) -> tuple[re.Match[str], Procedure] | tuple[None, None]:
     """The first procedure ``block`` prescribes in place of a property, and which one.
 
@@ -821,15 +851,13 @@ def check(task: str, node_id: str, bar: Bar) -> None:
     prose, block = _split(task)
 
     check_backticks_pair(block, node_id)
-    lowered = block.lower()
-    for entry in OUT_OF_DISPATCH:
-        rests_on = entry.pattern.search(lowered)
-        if rests_on is not None:
-            raise CriteriaError(
-                f"{node_id}: criteria name '{rests_on.group(0)}' — that is work the "
-                f"dispatch cannot do, so finished work fails against it. State the "
-                f"worker-side precondition instead."
-            )
+    rests_on = _out_of_dispatch(block)
+    if rests_on is not None:
+        raise CriteriaError(
+            f"{node_id}: criteria name '{rests_on.group(0)}' — that is work the "
+            f"dispatch cannot do, so finished work fails against it. State the "
+            f"worker-side precondition instead."
+        )
     deferred = DEFERRAL.search(block)
     if deferred:
         raise CriteriaError(
@@ -860,6 +888,68 @@ def check(task: str, node_id: str, bar: Bar) -> None:
         )
     check_changes_allowed(block, node_id, bar)
     check_demands(prose, block, node_id, bar)
+
+
+def check_amendment(text: str, where: str) -> None:
+    """Raise :class:`CriteriaError` if an amendment would be judged the way a criterion is.
+
+    An ``amend`` replaces the binding amendment that becomes part of a node's effective
+    task, and that task is what the node's judge reads — so an amendment *is* criteria,
+    written in the minute after a manager read a failure, which is far more pressure
+    than a plan is ever written under. Five were written during one run of this host and
+    three cost a node each: *"its change request's required checks pass"* names work that
+    happens after the agent step has ended; *"do not re-research it and do not rewrite
+    the comment whole"* and *"preserve that result as evidence and stop there"* each
+    prescribe a mechanism, and in both cases the route they forbade was the one that
+    found the answer. Every one of them settled correct, committed, gate-green work as a
+    task failure.
+
+    **Two of the bar's questions, and the rest are deliberately left out.** An amendment
+    is an overriding *correction* to a node's criteria rather than the whole bar, so a
+    question that only means something over a whole bar cannot be asked of one:
+
+    * :func:`check_demands` looks for a demand the resolved bar makes and the criteria
+      answer nowhere. The node's own criteria already answered it — `just check-plan`
+      refused the plan otherwise — and an amendment that had to restate every such
+      demand would be refused however it was written.
+    * :func:`check_changes_allowed` needs the node's resolved review bar, and a reply
+      envelope names a node id rather than a persona; nor does an amendment choose one.
+    * :data:`VERSION_LITERAL` refuses a number that perishes between a task being
+      written and its node being dispatched. An amendment binds the *next* dispatch of a
+      node the manager is watching, and the correction most often worth amending mid-run
+      is the one that names the release that just landed — so here the refusal would
+      block the ordinary case rather than the perishable one.
+    * :data:`DEFERRAL` and :data:`PHRASE` refuse a criterion whose content is somewhere
+      else or is a particular string. An amendment arrives composed onto the task it
+      corrects, so the prose it points at is right there, and a correction about wording
+      — a commit subject, a heading — is a legitimate thing to amend.
+
+    What is asked first is neither question but the precondition for both: an unclosed
+    backtick run makes every pattern below read inline code that was never written, and
+    the quote in the refusal then spans text its author wrote apart.
+
+    An amendment that names a mechanism or rests outside the dispatch has an escape that
+    a plan's criteria do not, and every refusal here says so: an observation belongs in a
+    ``note``, which touches no acceptance criterion at all.
+    """
+    check_backticks_pair(text, where)
+    rests_on = _out_of_dispatch(text)
+    if rests_on is not None:
+        raise CriteriaError(
+            f"{where}: it names '{rests_on.group(0)}' — that is work the dispatch cannot "
+            f"do, so this amendment holds the worker to state that arrives after it is "
+            f"gone. State the worker-side precondition instead, or send it as a `note`, "
+            f"which touches no acceptance criterion."
+        )
+    named, procedure = _prescribed(text)
+    if named is not None and procedure is not None:
+        raise CriteriaError(
+            f"{where}: it {procedure.why} ({_condensed(named.group(0))!r}). An amendment "
+            f"becomes part of the node's effective task, so a judge cannot tell a "
+            f"mechanism you preferred from a property the node owes. State the outcome "
+            f"the finished tree must carry, or send it as a `note`, which touches no "
+            f"acceptance criterion."
+        )
 
 
 def check_demands(prose: str, block: str, node_id: str, bar: Bar) -> None:
@@ -1027,12 +1117,19 @@ def _nodes(node: Mapping[str, Any], node_id: str) -> Iterator[Node]:
 
 
 def check_plan(plan: object) -> int:
-    """Check every dispatched node of ``plan``; return how many were checked."""
+    """Check every dispatched node of ``plan``; return how many were checked.
+
+    The criteria first and this host's publication policy after, which is the order the
+    two cost a plan's author: a criterion its own judge would fail on is a wrong bar
+    whatever repository it lands in, and where it lands is what
+    :mod:`orchestrator.publication_guard` then asks about.
+    """
     checked = 0
     for node in dispatched_nodes(plan):
         check(node.task, node.id, resolve_bar(node.persona))
         check_appendix(node.task, node.id)
         checked += 1
+    publication_guard.check_plan(plan)
     return checked
 
 
@@ -1105,7 +1202,7 @@ def check_directly(project: str) -> int:
         return 2
     try:
         checked = check_plan(plan)
-    except CriteriaError as exc:
+    except (CriteriaError, publication_guard.PublicationError) as exc:
         print(f"check-plan: {exc}", file=sys.stderr)
         return 1
     # tests/test_criteria_guard.py covers this, and no recipe journey can: the recipe

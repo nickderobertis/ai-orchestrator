@@ -739,6 +739,125 @@ def test_the_reply_recipe_ends_every_shape_that_is_not_a_guarded_reply(
         )
 
 
+#: Every amendment the criteria bar refuses, and the fragment its refusal quotes. One
+#: per question that bar asks of an amendment, because an amendment is criteria and the
+#: only place it can be held to that bar is here — it reaches a node over the channel
+#: rather than through the plan store, so `just check-plan` never sees one.
+REFUSED_AMENDMENTS = (
+    (
+        "state that arrives after the dispatch",
+        "The finished branch merges cleanly into its base and its change request's "
+        "required checks pass.",
+        "required checks pass",
+    ),
+    (
+        "a mechanism where a property belongs",
+        "Do not re-research it: run `just gate` and stop there.",
+        "names a `just` invocation",
+    ),
+    (
+        "a backtick run that never closes",
+        "Keep the `--json form, and just report what it says.",
+        "backtick run unclosed",
+    ),
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("what,text,quoted", REFUSED_AMENDMENTS, ids=lambda row: row)
+def test_the_reply_recipe_refuses_an_amendment_before_it_reaches_the_verb(
+    tmp_path: Path, what: str, text: str, quoted: str
+) -> None:
+    """Each question the bar asks of an amendment, driven where a manager meets it.
+
+    An `amend` replaces the binding text that becomes part of a node's effective task,
+    so it is criteria — and criteria written in the minute after a manager reads a
+    failure. What has to hold for every one of them is that the refusal happens **before
+    the verb**: nothing is sent, so no other command in the envelope is applied either,
+    and the trace the delegate would leave is not there.
+    """
+    checkout, trace = _checkout(tmp_path)
+    envelope = json.dumps({"version": 2, "commands": [{"op": "amend", "id": "work", "text": text}]})
+
+    result = _run(checkout, trace, "channel-reply", "run-1", stdin=envelope)
+
+    assert result.returncode != 0, f"{what} was sent anyway:\n{result.stdout}"
+    assert quoted in result.stderr, result.stderr
+    assert "nothing was sent" in result.stderr, result.stderr
+    assert not trace.exists(), f"{what} reached the published verb:\n{trace.read_text()}"
+
+
+@pytest.mark.reads_recipes
+def test_the_reply_recipe_sends_an_amendment_the_bar_takes(tmp_path: Path) -> None:
+    """The half that makes those refusals worth having, and the way this guard goes wrong.
+
+    A narrow guard widens quietly: an amendment stating what the finished tree must carry
+    is the ordinary case a manager sends all run long, and it has to reach the verb byte
+    for byte with nothing this recipe added to it.
+    """
+    checkout, trace = _checkout(tmp_path)
+    envelope = json.dumps(
+        {
+            "version": 2,
+            "commands": [
+                {
+                    "op": "amend",
+                    "id": "work",
+                    "text": "The finished tree carries an assertion whose subject is the "
+                    "behaviour this change adds.",
+                }
+            ],
+        }
+    )
+
+    result = _run(checkout, trace, "channel-reply", "run-1", stdin=envelope)
+
+    assert result.returncode == 0, result.stderr
+    reached = trace.read_text().splitlines()
+    assert reached and reached[0].startswith("uv run onepipeline reply"), reached
+
+
+#: A `python3` that refuses the amendment check with a diagnostic of its own on stdout
+#: and a status no refusal uses. The recipe tells a verdict from a broken helper by what
+#: was *said* rather than by which status came back — an interpreter dying with a status
+#: of its own can collide with a refusal's — so this is the shape that reaches the branch
+#: neither of those two rules covers.
+LOUD_BROKEN_INTERPRETER = """#!/usr/bin/env bash
+echo "python3: something this recipe must not read as a verdict"
+exit 4
+"""
+
+
+@pytest.mark.reads_recipes
+def test_an_amendment_check_that_fails_loudly_is_named_rather_than_read_as_a_verdict(
+    tmp_path: Path,
+) -> None:
+    """A helper that could not run must never be reported as the envelope's refusal.
+
+    The recipe reads a non-zero status with an empty stdout as a broken helper, so this
+    drives the other side of that: a helper that failed *and* said something. Reported as
+    the check having failed to run, with the toolchain repair named — and, either way,
+    the envelope does not go on unjudged.
+    """
+    checkout, trace = _checkout(tmp_path)
+    # llmlint: ignore[e2e_not_mocked] The recipe is real; a broken interpreter is the input.
+    broken = checkout / "bin" / "python3"
+    broken.write_text(LOUD_BROKEN_INTERPRETER)
+    broken.chmod(0o755)
+
+    result = _run(checkout, trace, "channel-reply", "run-1", stdin='{"completion":true}')
+
+    assert result.returncode != 0, f"an unjudged reply was sent anyway:\n{result.stdout}"
+    assert "could not be judged against the criteria bar" in result.stderr, result.stderr
+    assert "exited 4" in result.stderr, result.stderr
+    assert "something this recipe must not read as a verdict" in result.stderr, (
+        f"the interpreter's own account of what failed was dropped, so the manager holds "
+        f"a refusal with no cause in it:\n{result.stderr}"
+    )
+    assert "just bootstrap" in result.stderr, result.stderr
+    assert not trace.exists(), f"the reply reached the verb unjudged:\n{trace.read_text()}"
+
+
 #: A `python3` that refuses every call, for the one failure the guard cannot recover
 #: from. It stands on PATH in a checkout with no pinned interpreter beside it, which is
 #: what a half-restored checkout is.
@@ -1727,16 +1846,32 @@ def test_a_journal_the_recipe_cannot_read_is_said_rather_than_read_as_no_outcome
     )
 
 
-#: A `python3` that answers the guard and refuses the outcome read. The two are told
-#: apart by how many arguments each is given — the guard is handed a queue path and a
-#: token prefix, the reporter a journal, an offset and the verb's answer — so the
-#: envelope is judged and sent exactly as it would be, and only the read back fails.
-#: It stands on PATH in a checkout with no pinned interpreter beside it, which is what a
+#: A `python3` that refuses the outcome read and answers every other call, so the
+#: envelope is judged and sent exactly as it would be and only the read back fails. It
+#: stands on PATH in a checkout with no pinned interpreter beside it, which is what a
 #: half-restored checkout is.
+#:
+#: Keyed on the invocation that fails rather than on the ones that must not, because the
+#: recipe runs a helper per question it asks of an envelope and the set of them grows: it
+#: judges the amendments, judges the rendezvous, and only then reads each note's fate
+#: back. A stand-in that named the passing shapes would start refusing a new one the day
+#: a question was added, and this journey would fail about that instead of about its own
+#: subject. The outcome read is the one taking the journal, the offset and the verb's own
+#: answer beside the program — four arguments after `-c`, where no other call here has
+#: more than two.
 HALF_BROKEN_INTERPRETER = """#!/usr/bin/env bash
-if [ "$#" -eq 4 ]; then exit 0; fi
-exit 4
+if [ "$#" -eq 5 ]; then exit 4; fi
+exit 0
 """
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This suite predates
+# this change and is already behind a narrow edge — `recipeWorkspace`, which names the
+# recipes and scripts these journeys drive and nothing else of this repository — so an
+# unrelated orchestrator change does not pay for it. Moving the whole file into an Nx
+# project of its own is a workspace-graph change with its own key, its own conftest
+# routing and its own reason to exist; this change edits one stand-in constant inside it
+# and is not where that belongs.
 
 
 @pytest.mark.reads_recipes
@@ -1794,3 +1929,6 @@ def test_an_outcome_read_that_could_not_run_is_named_rather_than_passed_off_as_n
         f"the diagnostic names no way to read the outcome that was recorded anyway, so "
         f"the manager is told their read failed and nothing else:\n{result.stderr}"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

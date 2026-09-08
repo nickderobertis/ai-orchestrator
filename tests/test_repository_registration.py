@@ -263,6 +263,23 @@ RULE_BLOCK = (
 )
 
 
+def inventoried() -> dict[str, str]:
+    """What the tracked inventory says can refuse a merge here, and what each one is.
+
+    Read from the file rather than restated, because the answer is a fact about somebody
+    else's branch protection: the uncached tier reconciles this file against GitHub, so
+    a check added there is added here, and a test naming its own copy of the set would
+    then be asserting about a merge path that has moved.
+    """
+    declared = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))
+    checks: dict[str, str] = declared["identities"][IDENTITY]["checks"]
+    return checks
+
+
+#: What each classification means, in the words the audit prints beside a check.
+REASONS: dict[str, str] = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))["reasons"]
+
+
 def audit(stream: str) -> subprocess.CompletedProcess[str]:
     """The real merge-path audit filter, over a real audit and the tracked declaration.
 
@@ -431,20 +448,29 @@ def test_a_rule_carrying_a_field_beyond_the_policy_is_refused() -> None:
 
 
 def test_the_audit_classifies_this_identity_from_the_committed_inventory() -> None:
-    """The entry earns the answer it was written for: inventoried, with nothing to list.
+    """The entry earns the answer it was written for: inventoried, and listed by name.
 
-    An empty required-check set is the honest entry here — nothing has created a check
-    on that path yet — and the audit has to render it as a merge path it knows about
-    rather than as one nobody recorded.
+    This began as the other answer. When the repository was registered its base branch
+    declared no protection at all, and an empty required-check set was the honest entry
+    — which the audit rendered as a merge path it knows about and nothing can refuse.
+    That branch has since grown three, so what is asserted is the same property one
+    state further on: every check the tracked inventory records is named to the operator
+    with what that check *is*, and none of it reads as coverage nobody recorded.
+
+    Which of the two answers the entry earns is a fact about somebody else's branch
+    protection and moves without warning. The uncached tier is what notices — it asks
+    GitHub and fails when this file disagrees — so read a failure here as that having
+    happened rather than as this file having been wrong.
     """
     result = audit(audit_stream(IDENTITY))
 
     assert result.returncode == 0, result.stderr
-    assert (
-        "merge-path coverage: the host's required checks — and "
-        f"config/merge-path-checks.json inventories no required check on {BASE_BRANCH}, "
-        "so nothing recorded here can refuse a merge"
-    ) in result.stdout
+    assert "merge-path coverage: the host's required checks — not the whole merge path" in (
+        result.stdout
+    )
+    assert f"{len(inventoried())} required checks on {BASE_BRANCH}" in result.stdout, result.stdout
+    for required, reason in inventoried().items():
+        assert f"{required} — {REASONS[reason]}" in result.stdout, result.stdout
     assert "coverage unknown" not in result.stdout
 
 

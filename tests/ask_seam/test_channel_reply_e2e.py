@@ -1371,3 +1371,159 @@ def test_a_managers_score_for_the_monitors_watch_reaches_it_with_nothing_pending
         )
     finally:
         _reaped(serving)
+
+
+def _amend(node: str, text: str) -> dict[str, Any]:
+    """One `amend` command, which replaces the binding text of a node's effective task.
+
+    `dict[str, Any]` for the reason `_note` beside it is one: a command is a member of
+    `onepipeline reply`'s own open envelope schema, and these journeys compare what they
+    sent against what the run's journal recorded as committed — which is that same
+    untyped object read back.
+    """
+    return {"op": "amend", "id": node, "text": text}
+
+
+#: The amendment this refusal was written from, verbatim as it was sent during the run it
+#: cost. The checks it names run on the host after publication, so the agent step it
+#: binds has ended before any of them start — and it settled correct, committed,
+#: gate-green work as a task failure.
+UNSATISFIABLE_AMENDMENT = (
+    "The finished branch merges cleanly into its base and its change request's "
+    "required checks pass."
+)
+
+#: The same correction stated as what the finished tree must carry, which is what the
+#: refusal asks its author for.
+SOUND_AMENDMENT = (
+    "The finished tree carries an assertion whose subject is the behaviour this change "
+    "adds, so removing that behaviour fails it."
+)
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] Both of this journey's reads are ones
+# no user-facing command can make, for the reasons `_queue` and `_committed` state where
+# they are defined: reading a surface through `just channel-next` is what *consumes* it,
+# so a journey asking what the channel still holds has to read the file, and no operator
+# view renders an edit's **absence**, which is the whole of what a refusal has to prove.
+# Everything the refusal itself says is asserted off the recipe's own stderr and status.
+def test_an_amendment_a_judge_would_hold_its_worker_to_as_work_is_refused(
+    replying: Replying,
+) -> None:
+    """An amendment is criteria, and this is the only place it can be held to that bar.
+
+    It reaches a node over this channel rather than through the plan store, so `just
+    check-plan` never sees one — and until this ran it was the only criteria on this host
+    that nothing checked. Written in the minute after a manager reads a failure, which is
+    more pressure than a plan is ever written under.
+
+    Refused **whole**, with a `note` riding beside it, because a manager who steers and
+    corrects in one send must not have the steering half applied against a correction
+    that was declined: the run is left exactly as it was, and re-sending the note alone
+    still lands it.
+    """
+    riding = _note(WORK_NODE, "a note riding beside an amendment")
+    before = _queue(replying)
+
+    refused = _reply(
+        replying,
+        {"version": 2, "commands": [_amend(WORK_NODE, UNSATISFIABLE_AMENDMENT), riding]},
+    )
+
+    assert refused.returncode == REPLY_REFUSED, (
+        f"an envelope carrying an unsatisfiable amendment exited {refused.returncode} "
+        f"where a refusal is {REPLY_REFUSED}, so a judge was handed a bar its worker "
+        f"cannot clear:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "required checks pass" in refused.stderr, refused.stderr
+    assert "state that arrives after it is gone" in refused.stderr, refused.stderr
+    assert "nothing was sent" in refused.stderr, (
+        f"the refusal does not say the rest of the envelope went nowhere, which is what "
+        f"stops a manager assuming the note landed:\n{refused.stderr}"
+    )
+    assert _committed(replying) == [], (
+        "the envelope was refused and something in it reached the graph anyway"
+    )
+    assert _queue(replying) == before, "a refused reply changed what the channel is holding"
+
+    landed = _reply(replying, {"version": 2, "commands": [riding]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert riding in _committed(replying), "the note sent on its own did not land"
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] `_committed` reads the run's own journal
+# because that is where the engine records an accepted edit, and it is how every journey
+# in this module proves one reached the graph; see its definition. The recipe's answer and
+# status — which is what a manager sees — are asserted from the process result above it.
+def test_a_sound_amendment_is_sent_unchanged(replying: Replying) -> None:
+    """The half that makes the refusal worth having: a property reaches the graph.
+
+    A `note` is sent beside it and is *not* refused for naming a route, because the
+    refusal above offers that escape by name — an observation belongs in a note, which
+    touches no acceptance criterion at all, and a check that refused one too would be
+    refusing the correction it recommends.
+    """
+    amendment = _amend(WORK_NODE, SOUND_AMENDMENT)
+    observation = _note(WORK_NODE, "the gate on that branch was `just check` and it is green")
+
+    sent = _reply(replying, {"version": 2, "commands": [amendment, observation]})
+
+    assert sent.returncode == 0, f"a sound amendment was refused:\n{sent.stdout}{sent.stderr}"
+    committed = _committed(replying)
+    assert amendment in committed, (
+        f"the amendment did not reach the graph, so the bar the node's next dispatch is "
+        f"judged against is unchanged:\n{sent.stdout}"
+    )
+    assert observation in committed, "the note beside it was judged as though it were criteria"
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+def test_a_reply_nothing_reconciled_says_what_it_is_still_waiting_for(
+    dispatching: Dispatching,
+) -> None:
+    """`queued` and `applied` differ by one word, and the difference is the whole state.
+
+    The engine's reply forks on the run's ownership lock: with that lock held the
+    commands are accepted and made durable and **not** reconciled, and they sit in the
+    durable queue until something drives the run and drains them. Read from the receipt
+    alone, the state a live run passes through in a second and the state a run whose
+    driver has died stays in forever are the same object with one word changed.
+
+    The driver is suspended rather than killed, and it is this journey's own launch: no
+    process it did not start is signalled, and it is continued again in `finally`. That
+    is the one way to reach a state the engine publishes and no verb can ask for.
+    """
+    _dispatched(dispatching)
+    replying = _replying(dispatching)
+
+    # llmlint: ignore[tests_mirror_real_usage] A collaborator is suspended, not the recipe.
+    os.killpg(os.getpgid(dispatching.launch.pid), signal.SIGSTOP)
+    try:
+        held = _note(WORK_NODE, "a note the reconciler will not reach in time")
+        held["deliver"] = "next"
+
+        queued = _reply(replying, {"version": 2, "commands": [held]}, seconds=180)
+    finally:
+        os.killpg(os.getpgid(dispatching.launch.pid), signal.SIGCONT)
+
+    assert queued.returncode == REPLY_QUEUED and QUEUED in queued.stdout, (
+        f"this reply was reconciled after all, so the journey never reached the state it "
+        f"is about:\n{queued.stdout}{queued.stderr}"
+    )
+    assert "until something is driving that run" in queued.stderr, (
+        f"an accepted-but-unreconciled reply says nothing about what it is waiting for, "
+        f"so a manager reading 'queued' cannot tell it from 'applied':\n{queued.stderr}"
+    )
+    assert f"just orchestrate --adopt {replying.run}" in queued.stderr, (
+        f"the one thing a manager does about a run nothing is driving is not named, so "
+        f"the sentence reports a state without an action:\n{queued.stderr}"
+    )
+    assert queued.stdout.strip().startswith("{"), (
+        f"the verb's own answer is no longer the whole of this recipe's stdout:\n{queued.stdout}"
+    )
