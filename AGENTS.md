@@ -868,9 +868,9 @@ and all three were driven on this host's installed binaries rather than read off
 change request. **What changed under this adoption is the other half of that
 sentence**, and it changed without anybody configuring anything here: onevcs 0.16.x
 reads a target from the **repository's own** `release-targets.toml` as well as from the
-host's document, and seven of the twenty-one repositories registered here have since
+host's document, and eight of the twenty-one repositories registered here have since
 landed one — `oneagentgraph` (3 targets), `oneharness` (6), `onejudge` (3), `onepipeline` (3),
-`onepipeline-ui` (4), `onetaskgraph` (5), and `onevcs` (4). So a dependency landing in one
+`onepipeline-ui` (4), `onetaskgraph` (5), `onevcs` (4), and `printobserver` (13). So a dependency landing in one
 of *those* now has a release to await. That set is not a thing this host decides and it
 moves without warning: `onetaskgraph` joined it after the six above were counted, and what
 noticed was `tests/e2e/test_release_adoption_in_force_e2e.py` refusing the publication of
@@ -1144,7 +1144,7 @@ installed artifacts rather than against this paragraph: the CLI's verb group, wh
 answers for this repository, the `onevcs` the engine links, the loader's two refusals,
 and the read API behind the view.
 
-**So what remains is configuration, not adoption.** Seven of the repositories dispatched
+**So what remains is configuration, not adoption.** Eight of the repositories dispatched
 against from here now declare their own targets, so putting the mechanism to work no
 longer starts with declaring one: it is writing a plan whose node names `adoption:
 published` and a `consumes` naming one of those targets, and deciding whether this host
