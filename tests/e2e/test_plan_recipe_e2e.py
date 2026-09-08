@@ -1186,8 +1186,27 @@ def test_a_brief_filename_is_sanitized_into_the_run_id_the_engine_would_mint(
             "## Why\nThe view is blocked.\n\n## Acceptance criteria\n- Stated.\n",
             "'## What'",
         ),
+        (
+            "a longer heading standing in for a required one",
+            "## Whatever\nDecide the cursor.\n\n## Why\nThe view is blocked.\n"
+            "\n## Acceptance criteria\n- Stated.\n",
+            "'## What'",
+        ),
+        (
+            "the required heading only quoted in its own prose",
+            "## Whatever\nThis brief has no ## What section, deliberately.\n"
+            "\n## Why\nThe view is blocked.\n\n## Acceptance criteria\n- Stated.\n",
+            "'## What'",
+        ),
     ],
-    ids=("empty", "no-criteria", "no-why", "no-what"),
+    ids=(
+        "empty",
+        "no-criteria",
+        "no-why",
+        "no-what",
+        "no-what-under-a-longer-heading",
+        "no-what-but-quoted-in-prose",
+    ),
 )
 def test_a_brief_that_is_not_a_task_is_refused_before_a_planner_is_dispatched(
     tmp_path: Path, what: str, brief: str, names: str

@@ -155,13 +155,29 @@ plan_brief_is_a_task() {
     fi
     # Read once and matched in memory, rather than one `grep` of the file per section: a
     # brief is small, and a section reported missing has to mean the brief does not state
-    # it rather than that this could not tell. `case` is the same fixed-substring question
-    # `grep -qF` asked — a section heading holds no newline, so there is nothing a
-    # line-oriented search could match that a substring of the whole cannot.
+    # it rather than that this could not tell.
+    #
+    # Each heading is required to stand as a whole line rather than to appear anywhere in
+    # the prose, which a fixed-substring question over the whole file cannot ask. `## What`
+    # is a substring of `## Whatever` and of any sentence quoting it, so a brief that
+    # states the section nowhere passed on a longer heading or on its own commentary about
+    # the template — and the brief is the dispatched task, so what got through was a
+    # planner judged against a bar nobody wrote. Trailing whitespace and a CRLF ending are
+    # trimmed before the comparison because neither changes which heading a line is.
     content=$(plan_brief_content "$caller" "$brief") || return $?
+    local -A plan_brief_stated=()
+    local heading
+    while IFS= read -r heading; do
+        heading=${heading%$'\r'}
+        heading=${heading%"${heading##*[![:space:]]}"}
+        # A blank line trims to the empty string, which bash refuses as a subscript, and
+        # no required section is empty, so there is nothing to record for one.
+        [ -n "$heading" ] || continue
+        plan_brief_stated["$heading"]=1
+    done <<<"$content"
     for section in "${PLAN_REQUIRED_SECTIONS[@]}"; do
-        case "$content" in
-            *"$section"*) ;;
+        case "${plan_brief_stated["$section"]+stated}" in
+            stated) ;;
             *)
                 echo "$caller: the brief '$brief' states no '$section' section; a brief is the dispatched task, so write it in the '## What' / '## Why' / '## Acceptance criteria' template; the criteria are the planner's whole review bar" >&2
                 return 2
