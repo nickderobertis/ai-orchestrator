@@ -245,6 +245,11 @@
         "pr-title": "pull-request"
       }
     },
+    "github.com/nickderobertis/printobserver": {
+      "branch": "main",
+      "note": "Its base branch declares no protection and no ruleset, so nothing GitHub runs can refuse a merge here. This identity publishes `change-auto` under `approvals: none`, so a change request opens and merges itself with no check and no reviewer between the branch and `main` — what verifies a change here is whatever the branch itself was proven against before publication.",
+      "checks": {}
+    },
     "github.com/nickderobertis/screencomp": {
       "branch": "main",
       "note": "Runs an llmlint job on every pull request but has never required it, so it is not a check that can refuse the merge and is not inventoried here.",
