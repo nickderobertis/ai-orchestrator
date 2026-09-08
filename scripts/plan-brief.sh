@@ -102,12 +102,39 @@ half-applied left behind\". Here there is nothing to commit, and a clean \`git s
 the correct and complete outcome: what this dispatch writes to a gitignored path is the
 deliverable, and committing it would be the failure rather than the proof."
 
+# Echo the whole of the brief at ``$2``, or refuse it as a brief this launch cannot read.
+#
+# Every reader below goes through this rather than opening the brief for itself, because
+# the tools that would open it cannot be asked "was that the end of the file, or a failure
+# to read it?" and answer usefully. `grep` does distinguish the two — 1 for no match and 2
+# for a read error — but `if ! grep ...` collapses them, and bash's own `read` cannot
+# distinguish them at all: it answers a genuine end of file and a failed read alike with 1.
+# Either way a brief that became unreadable between one step and the next is reported as a
+# brief whose content is wrong — no `## What` section, no plan project — which sends its
+# author to rewrite a file that was never the problem.
+#
+# `cat` is what parts them: it exits non-zero when the path cannot be opened or a read
+# fails partway, and zero only at a genuine end of file. So a refusal from here is about
+# the file, and every refusal below it is about what the file says.
+#
+# $1 names the calling launcher so its diagnostics stay attributable.
+plan_brief_content() {
+    local caller=${1:?plan_brief_content: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
+    local brief=${2-} content status=0
+    content=$(cat -- "$brief") || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "$caller: the brief '$brief' could not be read; reading it failed with status $status rather than reaching the end of the file, so nothing here is a statement about what the brief says; check that the path is still a readable file this launch can open, then retry" >&2
+        return 2
+    fi
+    printf '%s' "$content"
+}
+
 # Refuse ``$2`` as a brief unless it is the dispatched task a planning flow can be made
 # from. $1 names the calling launcher so its diagnostics stay attributable.
 plan_brief_is_a_task() {
     local caller=${1:?plan_brief_is_a_task: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
     local brief=${2-}
-    local section
+    local section content
     if [ -z "$brief" ]; then
         echo "$caller: no brief was named; write the planner's brief as a markdown file in the '## What' / '## Why' / '## Acceptance criteria' template, then name it here" >&2
         return 2
@@ -126,11 +153,20 @@ plan_brief_is_a_task() {
         echo "$caller: the brief '$brief' is empty, so a dispatch would be given no task; write what to plan, why it matters, and what the plan has to satisfy, then retry" >&2
         return 2
     fi
+    # Read once and matched in memory, rather than one `grep` of the file per section: a
+    # brief is small, and a section reported missing has to mean the brief does not state
+    # it rather than that this could not tell. `case` is the same fixed-substring question
+    # `grep -qF` asked — a section heading holds no newline, so there is nothing a
+    # line-oriented search could match that a substring of the whole cannot.
+    content=$(plan_brief_content "$caller" "$brief") || return $?
     for section in "${PLAN_REQUIRED_SECTIONS[@]}"; do
-        if ! grep -qF -- "$section" "$brief"; then
-            echo "$caller: the brief '$brief' states no '$section' section; a brief is the dispatched task, so write it in the '## What' / '## Why' / '## Acceptance criteria' template; the criteria are the planner's whole review bar" >&2
-            return 2
-        fi
+        case "$content" in
+            *"$section"*) ;;
+            *)
+                echo "$caller: the brief '$brief' states no '$section' section; a brief is the dispatched task, so write it in the '## What' / '## Why' / '## Acceptance criteria' template; the criteria are the planner's whole review bar" >&2
+                return 2
+                ;;
+        esac
     done
 }
 
@@ -139,14 +175,21 @@ plan_brief_is_a_task() {
 # the earlier one silently points a later step at a plan its author may not have meant.
 plan_brief_project() {
     local caller=${1:?plan_brief_project: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
-    local brief=${2-} line declared=0 project=""
-    while IFS= read -r line || [ -n "$line" ]; do
+    local brief=${2-} line declared=0 project="" content
+    # Split from content this already holds rather than read straight off the file. The
+    # `|| [ -n "$line" ]` this replaces was there to catch a final line with no newline,
+    # and it caught a failed read as one too: `read` answers both with 1, so a brief whose
+    # read died partway was silently taken to have ended there and reported as declaring
+    # no plan project. The here-string is bash's own buffer, so every line it hands over
+    # is terminated and the loop ends at an end of file that is one.
+    content=$(plan_brief_content "$caller" "$brief") || return $?
+    while IFS= read -r line; do
         # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
         if [[ "$line" =~ $PLAN_PROJECT_DECLARATION ]]; then
             declared=$((declared + 1))
             project="${BASH_REMATCH[1]}"
         fi
-    done < "$brief"
+    done <<< "$content"
     if [ "$declared" -eq 0 ]; then
         echo "$caller: the brief '$brief' names no plan project, so nothing after the planner has a plan to read; add a line reading '$PLAN_PROJECT_LINE' naming the qualified project this plan is written to, or pass --no-design-doc to stop after the planner" >&2
         return 2
