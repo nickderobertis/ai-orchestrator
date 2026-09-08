@@ -39,6 +39,14 @@ back is one the store created — its origin metadata says so, and nothing here 
 **The destination is a second local store and never the live board.** A journey that wrote
 to the real `plans` board would be its own rate-limit burst and would leave a project
 behind on the store every other run of this repository reads.
+
+**Two flows run here, because naming a destination and naming none are two paths.** The
+first is driven with `--to`, which is what a caller finishing a plan into a store of their
+own types. The second names nothing at all, which is what an operator gets by typing the
+recipe and a brief — and there the destination is not read off a flag but resolved by
+`scripts/finish-plan.sh` running this repository's own code, so it is the one path through
+the handover no flag can stand in for. That second flow runs in a copy of this checkout,
+for the reason :func:`_the_board_is_a_directory` gives.
 """
 
 from __future__ import annotations
@@ -59,13 +67,14 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
+from nx_workspace import copy_working_tree
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import GIT_IDENTITY, Identity, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_review, plan_store
+from orchestrator import plan_copy, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
@@ -332,17 +341,22 @@ def _staged_draft(tmp_path: Path, stored: Stored) -> Path:
     return documents.parent
 
 
-def _tracks_the_store(identity: Identity) -> None:
-    """Give the seeded repository this checkout's own plan-store configuration.
+def _tracks_the_store(identity: Identity, configuration: Path) -> None:
+    """Give the seeded repository the plan-store configuration the flow runs under.
 
     A design-doc dispatch works in a worktree of the repository the plan is of and reaches
     the store the way anything in that worktree does: through the `onetaskgraph.yaml` that
     repository tracks. The seeded identity is a bare stub, so it carries none — and a
     dispatch there would have to be *told* where the plan store is, which is the one thing
     this journey must not tell it if the storing is to be the dispatch's own.
+
+    The file is the *running* checkout's rather than this one's, because the two are not
+    always the same file: the default-board flow below runs in a copy whose own
+    configuration is what answers for the source the recipe defaults to, and a dispatch
+    handed this checkout's copy would resolve that name somewhere else.
     """
     tracked = identity.execution / "onetaskgraph.yaml"
-    tracked.write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
+    tracked.write_bytes(configuration.read_bytes())
     git("add", "onetaskgraph.yaml", cwd=identity.execution)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: configure the plan store", cwd=identity.execution)
     git("push", "-q", "origin", "main", cwd=identity.execution)
@@ -351,10 +365,26 @@ def _tracks_the_store(identity: Identity) -> None:
     git("pull", "-q", "--ff-only", cwd=identity.publication)
 
 
-def _environment(tmp_path: Path, stored: Stored, destination: Path) -> dict[str, str]:
-    """The environment this flow runs in, against a registry, a runs root and a board of its own."""
+def _environment(
+    tmp_path: Path,
+    stored: Stored,
+    *,
+    destination: str,
+    declared_at: Path | None,
+    checkout: Path = REPO_ROOT,
+) -> dict[str, str]:
+    """The environment a flow runs in, against a registry, a runs root and a board of its own.
+
+    ``destination`` is the configured source the flow copies its plan into, and
+    ``declared_at`` is the directory this journey declares that source at through the
+    store's own environment layer — or `None` when the running checkout's own
+    `onetaskgraph.yaml` is what declares it. That second case is the whole of what the
+    default-board journey below is about: a source *this* layer declared would answer for
+    a name the recipe was told, and what is under test there is the name it resolves when
+    it is told none.
+    """
     identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
-    _tracks_the_store(identity)
+    _tracks_the_store(identity, checkout / "onetaskgraph.yaml")
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
@@ -374,12 +404,13 @@ def _environment(tmp_path: Path, stored: Stored, destination: Path) -> dict[str,
     # layer rather than through a `--set` flag: that layer is the one every part of the
     # flow sees — the copy, the location read after it, and this journey's own reads —
     # so all of them answer about one configuration.
-    environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN"] = "local-md"
-    environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT"] = str(destination)
+    if declared_at is not None:
+        environment[f"ONETASKGRAPH_SOURCES__{destination.upper()}__PLUGIN"] = "local-md"
+        environment[f"ONETASKGRAPH_SOURCES__{destination.upper()}__CONFIG__ROOT"] = str(declared_at)
     # `authoring` is in this list because both launches of this flow read their plan out
     # of it: a run whose plan store cannot see that source reads a project with no tasks.
     environment["ONETASKGRAPH_DEFAULT_SOURCES"] = (
-        f"{AUTHORING_SOURCE},{FIXTURE_SOURCE},{DESTINATION}"
+        f"{AUTHORING_SOURCE},{FIXTURE_SOURCE},{destination}"
     )
 
     authored = tmp_path / "authored-plan.json"
@@ -413,12 +444,15 @@ def _environment(tmp_path: Path, stored: Stored, destination: Path) -> dict[str,
 
 
 def _just(
-    *args: str, environment: dict[str, str], seconds: float = 600
+    *args: str,
+    environment: dict[str, str],
+    seconds: float = 600,
+    checkout: Path = REPO_ROOT,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one real recipe from this checkout."""
+    """Run one real recipe from ``checkout``, which is this one unless a journey copied it."""
     return subprocess.run(
         ["just", *args],
-        cwd=REPO_ROOT,
+        cwd=checkout,
         env=environment,
         text=True,
         capture_output=True,
@@ -460,7 +494,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
     # root when it is built, so an absent one is refused as a broken source rather than
     # populated — which would report a sound copy as a destination that refused it.
     destination.mkdir(parents=True)
-    environment = _environment(tmp_path, stored, destination)
+    environment = _environment(tmp_path, stored, destination=DESTINATION, declared_at=destination)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     turns = tmp_path / "turns.jsonl"
     environment[PROMPT_LOG_ENV] = str(turns)
@@ -786,4 +820,248 @@ def test_the_flow_reports_where_the_destination_holds_the_project_and_the_docume
     assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
         f"the flow never reported where the destination holds the document a person "
         f"reviews this plan as:\n{reported}"
+    )
+
+
+#: The source `scripts/finish-plan.sh` copies into when the caller names none, taken from
+#: the one place that states it rather than spelled a second time here. Naming it this way
+#: is what makes the journey below about the default rather than about the string `plans`.
+DEFAULT_BOARD = plan_copy.BOARD
+
+#: The default-board flow's own run, and the tail's derived from it.
+DEFAULT_RUN = RunId("plan-flow-default-e2e")
+DEFAULT_DESIGN_RUN = RunId(f"{DEFAULT_RUN}{DESIGN_RUN_SUFFIX}")
+
+#: What a journey building a copy of this checkout reads: everything git tracks, since
+#: that is what it copies and hands a real tool. So it stays in the whole-workspace tier
+#: rather than joining the narrow key this project's other journeys are memoized on.
+COPIES_THE_TRACKED_TREE = pytest.mark.reads_docs
+
+
+class Defaulted(NamedTuple):
+    """One whole `just plan` run that named no destination, and what it left behind."""
+
+    launch: subprocess.CompletedProcess[str]
+    stored: Stored
+    #: The directory the copied checkout calls :data:`DEFAULT_BOARD`.
+    board: Path
+    #: The checkout the flow ran in, so a read afterwards asks the same configuration.
+    checkout: Path
+    environment: dict[str, str]
+
+
+def _the_board_is_a_directory(checkout: Path, board: Path) -> None:
+    """Point ``checkout``'s own :data:`DEFAULT_BOARD` source at a directory.
+
+    The one substitution this journey makes, and it is the same one every other stand-in
+    here is: the live GitHub Projects board, which a test may not write to — a copy of a
+    plan-sized project is a burst of content-creating mutations that trips GitHub's
+    secondary rate limiter, and what it left behind would sit on the store every other
+    run of this repository reads.
+
+    Made in the *checkout's own configuration* rather than through the store's
+    environment layer, because that layer cannot do it and because doing it there would
+    prove the wrong thing. It cannot: a layered value merges into the file's, so a
+    `plugin` of `local-md` arrives beside the four `github-projects` keys and the source
+    is refused for them. And it would not be the default under test: a source this
+    journey declared is one it named, where what is being driven is the name the recipe
+    resolves when nobody names anything.
+
+    The block is located by the shape the tracked file has rather than by a pattern that
+    could match half of it, so a configuration that moved fails here — loudly, and before
+    a launch — instead of leaving this journey pointed at the real board.
+    """
+    configuration = checkout / "onetaskgraph.yaml"
+    lines = configuration.read_text(encoding="utf-8").splitlines()
+    opens = f"  {DEFAULT_BOARD}:"
+    assert opens in lines, (
+        f"{configuration} declares no {DEFAULT_BOARD!r} source opening {opens!r}, so this "
+        f"journey cannot point it at a directory and would drive a real board:\n" + "\n".join(lines)
+    )
+    start = lines.index(opens)
+    end = start + 1
+    while end < len(lines) and lines[end].startswith("    "):
+        end += 1
+    lines[start:end] = [opens, "    plugin: local-md", "    config:", f"      root: {board}"]
+    configuration.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _provisioned(checkout: Path) -> None:
+    """Give a copied checkout the toolchain a `SessionStart` hook would have given it.
+
+    Two halves, because this repository installs its tools in two ways. The published
+    CLIs are project dependencies, so `uv sync --locked` resolves exactly the releases
+    this checkout pins. The plan-store CLI is a release archive session setup installs
+    into `<root>/.venv/bin`, which a copy never fires the hook for — so the copy is given
+    the binary this checkout already pinned, and `scripts/onetaskgraph-install.sh`, which
+    every step of the flow runs, then finds its pin already installed and asks the
+    network nothing.
+    """
+    environment = dict(os.environ)
+    for named in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(named, None)
+    synced = subprocess.run(
+        ["uv", "sync", "--locked"],
+        cwd=checkout,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
+    shutil.copy2(ONETASKGRAPH_BIN, checkout / ".venv" / "bin" / ONETASKGRAPH_BIN.name)
+
+
+@pytest.fixture(scope="module")
+def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Defaulted:
+    """Drive one whole `just plan` flow that names no destination at all.
+
+    This is the flow an operator gets by typing the recipe and nothing else, and it is
+    the one path through `scripts/plan.sh`'s handover that no other journey reaches: the
+    tail is handed no `--to`, so what it copies into is whatever `orchestrator.plan_copy`
+    calls the board this repository plans against — resolved by that script running this
+    checkout's own code, rather than read off a flag.
+
+    It runs in a **copy** of this checkout for the reason
+    :func:`_the_board_is_a_directory` gives: that name has to answer to a directory, and
+    the only layer that can make it is the configuration the running checkout tracks.
+    Everything else is this checkout — its recipes, its scripts, its personas, its graphs
+    and its installed commands, copied file for file.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp_path = tmp_path_factory.mktemp("plan-flow-default")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    copy_working_tree(checkout)
+    board = tmp_path / "board"
+    # Created rather than left to the first write, for the reason the sibling fixture's
+    # is: a `local-md` source canonicalizes its root when it is built.
+    board.mkdir()
+    _the_board_is_a_directory(checkout, board)
+    _provisioned(checkout)
+
+    unique = f"test-{os.getpid()}-plan-flow-default"
+    stored = Stored(
+        project=unique,
+        qualified=f"{FIXTURE_SOURCE}:{unique}",
+        task_title="feat: page the node listing",
+        document=f"{unique}-document",
+        document_qualified=f"{FIXTURE_SOURCE}:{unique}-document",
+        document_path=FIXTURE_ROOT / "documents" / f"{unique}-document.md",
+    )
+    environment = _environment(
+        tmp_path, stored, destination=DEFAULT_BOARD, declared_at=None, checkout=checkout
+    )
+    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
+    environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(
+        "## What\nDecide the cursor's shape.\n\n"
+        f"Plan project: {stored.qualified}\n\n"
+        "## Why\nThe view cannot deep-link until it is settled.\n\n"
+        "## Acceptance criteria\n- The cursor's shape and its type are stated.\n",
+        encoding="utf-8",
+    )
+    try:
+        launch = _just(
+            "plan", str(brief), "--name", DEFAULT_RUN, environment=environment, checkout=checkout
+        )
+        assert launch.returncode == 0, f"the flow failed:\n{launch.stdout}\n{launch.stderr}"
+        return Defaulted(
+            launch=launch,
+            stored=stored,
+            board=board,
+            checkout=checkout,
+            environment=environment,
+        )
+    finally:
+        for ended in (DEFAULT_RUN, DEFAULT_DESIGN_RUN):
+            _just("stop", ended, environment=environment, seconds=60, checkout=checkout)
+
+
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("plan-flow")
+def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_plans_against(
+    default_board: Defaulted,
+) -> None:
+    """The default a caller gets by typing nothing, driven rather than read off a table.
+
+    A plan on that board and its one design document beside it are what a person opens,
+    so a handover that reached the tail without a destination and copied nowhere would
+    leave the flow reporting success over a board holding nothing.
+    """
+    landed = sorted(
+        str(one.relative_to(default_board.board)) for one in default_board.board.rglob("*.md")
+    )
+    project = default_board.stored.project
+    assert landed == [
+        f"documents/{default_board.stored.document}.md",
+        f"projects/{project}.md",
+        f"tasks/{project}/decide-the-cursor.md",
+    ], f"the flow left {landed} on the board it copies into when it is told none"
+
+
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("plan-flow")
+def test_a_flow_that_names_no_destination_reports_where_that_board_holds_both(
+    default_board: Defaulted,
+) -> None:
+    """And the two locations it ends on are that board's own answers.
+
+    The sibling above reads the records; this reads the report, which is all a supervisor
+    who typed `just plan <brief>` and nothing else is handed. Both locations are taken
+    back out of the store rather than composed here, for the reason the `--to` flow's own
+    reading of them is: a destination decides its own ids and where its records live.
+    """
+    reported = default_board.launch.stdout + default_board.launch.stderr
+    listed = _just(
+        "plans",
+        "project",
+        "list",
+        "--source",
+        DEFAULT_BOARD,
+        "--json",
+        environment=default_board.environment,
+        seconds=120,
+        checkout=default_board.checkout,
+    )
+    assert listed.returncode == 0, f"the board could not be read:\n{listed.stderr}"
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
+    # fields read below are narrowed at each subscript.
+    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
+    landed = [
+        one
+        for one in projects
+        if one["item"]["metadata"].get(ORIGIN_KEY) == default_board.stored.qualified
+    ]
+    assert landed, (
+        f"the board holds no project the store records as copied from "
+        f"{default_board.stored.qualified}; it holds {[one['id'] for one in projects]}"
+    )
+    assert f"holds the plan at {landed[0]['item']['location']['path']}" in reported, (
+        f"the flow never reported where the board it defaults to holds this plan:\n{reported}"
+    )
+
+    documents = _just(
+        "plans",
+        "document",
+        "list",
+        "--project",
+        landed[0]["id"],
+        "--json",
+        environment=default_board.environment,
+        seconds=120,
+        checkout=default_board.checkout,
+    )
+    assert documents.returncode == 0, f"the board could not be read:\n{documents.stderr}"
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
+    # fields read below are narrowed at each subscript.
+    held = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    assert len(held) == 1, f"the board holds {len(held)} documents of this plan: {held}"
+    assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
+        f"the flow never reported where the board it defaults to holds the document a "
+        f"person reviews this plan as:\n{reported}"
     )
