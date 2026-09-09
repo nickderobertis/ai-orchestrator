@@ -71,14 +71,17 @@ harnesses = [
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
-# Sol is the flagship tier of the GPT-5.6 family; name it explicitly so the tier
-# cannot drift under us.
+# Astra is the GPT-6 tier; name it explicitly so the tier cannot drift under us.
+# This side leads on Codex, so the model it names is the one that ordinarily does
+# the work rather than a fallback. It needs a codex CLI at 0.153.0 or newer: an
+# older one does not know this id, so the candidate refuses and the chain falls
+# through to Claude with the intent silently unmet.
 [harness.codex]
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 
 # The second Codex identity. See scripts/codex-alt-home.sh for the indirection.
 [harness.codex.variant.alternate]
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
 unset_env = ["OPENAI_API_KEY"]
 
