@@ -107,6 +107,33 @@ INLINE_OPTION_PROHIBITION = "reach for the inline `--message`"
 #: substituting form as a simplification without first contradicting it.
 SUBSTITUTION_REASON = "command substitution"
 
+#: What the monitor is told a dispatch *is*, which is the reading behind an echo claim.
+#: Three phrases rather than one sentence, because the finding this answers was grounded
+#: in exactly one of the three being unknown: a dispatch is two parties of one
+#: conversation, the stream labels both with one member and alternates the role, and a
+#: turn's instruction repeating the previous turn's output is that handoff.
+TWO_PARTIES = "A dispatch is two parties of one conversation"
+SAME_MEMBER_ALTERNATING_ROLE = {
+    MONITOR_MEMBER: "the **same member label**, with the **role** alternating",
+    "review": "one member label with the role alternating",
+}
+REPEATED_INSTRUCTION_IS_THE_HANDOFF = {
+    MONITOR_MEMBER: "repeats the previous turn's output word for word is the handoff",
+    "review": "repeats the previous turn's output is the handoff between them",
+}
+READ_BOTH_LABELS = {
+    MONITOR_MEMBER: "Read the member label and the role together before calling",
+    "review": "does not read the member label beside the role",
+}
+
+#: What that reading rule must not become. It is a rule about naming one finding
+#: correctly, and a monitor that read it as a reason to raise less would cost more than
+#: the wrong finding did — so both sides say so, and this is what holds them to it.
+STILL_RAISE_THE_ANOMALY = {
+    MONITOR_MEMBER: "That is a reading rule and not a narrowing",
+    "review": "an unexplained observation is still a finding",
+}
+
 #: The monitor's discipline on what a turn is allowed to say. Three halves now, because
 #: the reporting route and the liveness rule are separate claims and each has its own
 #: failure: prose reaches nobody, so a monitor told only to stop narrating would still
@@ -123,6 +150,15 @@ ALWAYS_SOME_OUTPUT = "**Always produce some output, on every turn"
 #: while the dispatch's own heartbeat was live.
 BOUND_RULE = "compared its elapsed time against a bound you located and can name"
 HEARTBEAT_RULE = "absence of events beside a live heartbeat as generation"
+
+#: The pacemaker's discipline on what it may call dead. Both halves again, and for the
+#: same reason the two above are separate: nine claims in one run that its driver had
+#: gone were refuted by that run's own records, and each half is one of the two things
+#: that would have caught them — showing the command and its output, which none of the
+#: nine did, and reading again before the verdict, which is what parts a momentary gap
+#: from a state.
+LIVENESS_EVIDENCE_RULE = "Quote the command you ran and that command's own output"
+LIVENESS_SECOND_READ_RULE = "read it a second time before you escalate to a terminal verdict"
 
 #: The structured route the monitor is told to report a finding through, and the two
 #: properties that make it different from every other op it may issue. Read out of the
@@ -696,6 +732,92 @@ def test_the_pacemaker_is_told_to_measure_a_bound_before_calling_anything_a_hang
         "the pacemaker is no longer told to read an absence of events beside a live "
         f"heartbeat as generation rather than as silence:\n{pacemaker_prompt}"
     )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Neither journey below
+# adds a launch to this tier: `pacemaker_prompt` and `monitored` are module-scoped and
+# both already existed, so each reads a second answer off a launch `tests/e2e` was
+# already spending, and `xdist_group` selects an xdist worker rather than a tier.
+# Re-homing `tests/e2e` into an Nx project of its own is a restructuring of that whole
+# tree and is enforcement configuration this change may not move in order to pass.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same two
+# journeys, same reason: what an edge of their own would spare is a launch neither of
+# them spends, since both take a module-scoped fixture that already existed.
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_pacemaker_is_told_to_show_the_reading_behind_a_liveness_verdict(
+    pacemaker_prompt: str,
+) -> None:
+    """Nothing is alive or dead until a command and its output say so, read twice.
+
+    The false-escalation shape the bound rule above cannot reach: an elapsed time is at
+    least a measurement, while a driver reported gone is a claim about a state with no
+    reading shown for it at all. Nine such claims came from this member in one run, none
+    quoting an output. What it cost was not a wrong action — the verb refuses to adopt a
+    run something is still driving — but a supervisor whose terminal verdicts a planner
+    learns to discount.
+
+    Read off the pacemaker's own prompt, for the reason the byte-carrying journey above
+    reads it there: `personas/check-in.yaml` reaches this member as a label and nothing
+    else, so the `task` is the only copy that is in force.
+    """
+    flat = _flat(pacemaker_prompt)
+
+    assert LIVENESS_EVIDENCE_RULE in flat, (
+        "the pacemaker may report something dead again without showing the command it "
+        f"ran or what that command answered:\n{pacemaker_prompt}"
+    )
+    assert LIVENESS_SECOND_READ_RULE in flat, (
+        "the pacemaker may escalate to a terminal verdict on one reading again, which "
+        f"cannot tell a momentary gap from a state:\n{pacemaker_prompt}"
+    )
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitor_is_told_what_a_dispatch_is_before_it_may_call_a_turn_an_echo(
+    monitored: Monitored,
+) -> None:
+    """The monitor watches two-party conversations and had no account of what one is.
+
+    It once read a handoff as a defect — a turn whose instruction was the previous
+    turn's report byte for byte at the same timestamp, filed as that report "echoed back
+    as fresh user input" — on a node whose six turn events all carried one member with
+    the role alternating. Nothing in its prompt said what a dispatch is.
+
+    Both sides, because a reading rule stated only to the agent is advice while one
+    stated only to the reviewer is enforced against an agent nobody told; and the
+    non-narrowing half on both, because the cheap wrong repair here is a monitor that
+    answers this by raising less.
+    """
+    agent = _flat(monitored.system)
+    review = _flat(monitored.review_bar)
+
+    assert TWO_PARTIES in agent, (
+        "the monitor is no longer told a dispatch is two parties of one conversation, "
+        f"so a handoff between them reads as a duplicate again:\n{monitored.system}"
+    )
+    for named, phrase in (
+        (
+            "that both parties carry one member label with the role alternating",
+            SAME_MEMBER_ALTERNATING_ROLE,
+        ),
+        (
+            "that a repeated instruction is the handoff between them",
+            REPEATED_INSTRUCTION_IS_THE_HANDOFF,
+        ),
+        ("to read both labels together before calling one an echo", READ_BOTH_LABELS),
+        ("that this narrows nothing it is asked to raise", STILL_RAISE_THE_ANOMALY),
+    ):
+        assert phrase[MONITOR_MEMBER] in agent, (
+            f"the monitor's effective prompt no longer says {named}:\n{monitored.system}"
+        )
+        assert phrase["review"] in review, (
+            f"the monitor's reviewing bar no longer says {named}, so the agent's own "
+            f"prompt is the only place it is stated:\n{monitored.review_bar}"
+        )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("supervisory-prompts")

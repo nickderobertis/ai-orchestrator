@@ -84,8 +84,9 @@ members:
   # over, so neither that file's `system_prompt` nor its `user.persona` reaches this
   # turn: the `task` below is the whole of what the model is given, and the persona
   # file is the catalog entry naming the role. That is why the reporting discipline
-  # this member is held to — the heredoc the update travels in, and the bound an
-  # elapsed time is compared against before anything is called a hang — is stated
+  # this member is held to — the heredoc the update travels in, the bound an
+  # elapsed time is compared against before anything is called a hang, and the command
+  # and output a liveness verdict is shown from — is stated
   # here and not only there. `tests/e2e/test_path_dispatched_personas_e2e.py` holds
   # the label-only arrangement and `tests/e2e/test_supervisory_prompt_discipline_e2e.py`
   # reads this task out of a real launch.
@@ -151,6 +152,18 @@ members:
       own at 360.068s. Report elapsed against the bound, or not at all; if you cannot
       find a bound, say that you could not find one rather than inferring a hang from
       elapsed time alone.
+
+      Show the reading behind any claim that something is alive or dead. Quote the
+      command you ran and that command's own output, and read it a second time before you
+      escalate to a terminal verdict — a driver, an observer or a dispatch called dead is
+      a claim about a state, and one read cannot tell a state from a gap. Nine such claims
+      in one run said that run's driver was gone; the engine had answered no such thing at
+      any of the nine moments, no stop was recorded, and each of that run's fourteen
+      launches carried a distinct driver process, so the record was never stale. Not one
+      of the nine quoted an output. What one of them did quote was a host-wide view, whose
+      seven entries called stale belonged to seven other runs. An unquoted verdict
+      establishes nothing however often it is repeated, and a supervisor whose terminal
+      verdicts are usually wrong has lost the instrument for the one that is real.
 
       Read an absence of events beside a live heartbeat as generation, not silence.
       The views print `alive Ns ago` for a streaming dispatch, and a model

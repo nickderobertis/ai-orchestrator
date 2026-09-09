@@ -4,8 +4,8 @@ project: health-endpoint
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
   orchestrator.design-approval:
-    approved_at: 2026-09-06T10:33:49.179824+00:00
-    key: 39fc71de845c6a2a67b50840b3dfa79f2fa6c2f4369ac4ab9695ab96502efafd
+    approved_at: 2026-09-09T04:37:50.813208+00:00
+    key: 87784f2be137cca6c4eda29d029cd43a873cf3e8474e323df8875e798a1460ad
 ---
 ## What
 

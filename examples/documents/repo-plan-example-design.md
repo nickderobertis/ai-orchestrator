@@ -4,8 +4,8 @@ project: repo-plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
   orchestrator.design-approval:
-    approved_at: 2026-09-06T10:33:49.417017+00:00
-    key: ec17e5a55f69d09f61f6982c6da7bde2ddb68c6955ee212ac232095ecf16550d
+    approved_at: 2026-09-09T04:37:51.002670+00:00
+    key: 05140407af447d79cd9a3f409e8e3e7eb13a192149efb814af28de8c5956f999
 ---
 ## What
 

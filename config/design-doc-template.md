@@ -5,6 +5,24 @@ stated. `personas/design-doc.yaml` names this path rather than carrying a second
 one question gets one answer, and a role that restated the shape would be a second
 answer for a writer to follow when the two drifted. Change the shape here.
 
+**One property below is lent to the dispatch's own task.** `scripts/finish-plan.sh` copies the
+block between the `composed-into-the-dispatch` markers verbatim into the design-doc node's
+acceptance criteria, so the requirement a plan across repositories turns on is in the text
+that dispatch is judged against rather than only behind a pointer to this file. This file
+is still the one source — those are its bytes, not a second copy of them — and a launch
+that cannot find the pair of markers refuses by name rather than composing nothing. Write
+the block so it reads as a criterion standing on its own: it is quoted somewhere this
+file's own layout is not there to be referred to. It is also the only place that property
+is written: the skeleton below describes each section without restating what the list
+above judges it on, so a property said twice here is a property that can drift here.
+
+**Changing this file leaves every approved design document unapproved.** `just
+approve-design` keys its record on a digest of the document's own content *and* of this
+file, so a plan already approved is refused at launch until somebody records the approval
+again. That is the gate working — an approval is of a document read against the bar in
+force when it was read, and moving the bar is exactly what nobody has read it against —
+so a change here is paid for in re-approvals rather than routed around.
+
 **Who it is for decides everything below.** The reader is a technical product manager
 with no depth of knowledge in this domain. They read this instead of the plan, and they
 have to be able to form an opinion from it: accept a contract, argue with an
@@ -26,6 +44,15 @@ accurate it is.
   actually being asked about: a stored shape, a published interface, a boundary between
   two pieces of code, a dependency taken on somebody else's release. Say what each one
   commits to and what reversing it would cost.
+<!-- composed-into-the-dispatch -->
+- **Where the plan spans more than one repository, the architecture names the repository
+  each piece lives in.** A reader who does not already hold that mapping cannot tell which
+  change lands where, which is the one thing the architecture exists to let them picture.
+  The planned-tasks table cannot carry it — that table's columns are fixed and its
+  location column is the task record's own — so the architecture is where it goes or it is
+  nowhere. A plan inside one repository says nothing, because there is nothing to tell
+  apart.
+<!-- end composed-into-the-dispatch -->
 - **It links out to the tasks and issues where the detail lives rather than restating
   them.** Restating a task's acceptance criteria here creates a second copy that goes
   stale the first time the task is amended. The planned-tasks table is where the linking

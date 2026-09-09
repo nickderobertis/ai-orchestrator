@@ -4,8 +4,8 @@ project: planner-brief-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:d9fc7226a615c542a1db86abed3a13c8e513ea11e9a287dac35edcbf8a94fa54
   orchestrator.design-approval:
-    approved_at: 2026-09-07T21:23:26.766841+00:00
-    key: 31ba5875f5441c646f1631841136b76861635004f708396441d34dcf2e03535b
+    approved_at: 2026-09-09T04:37:50.941914+00:00
+    key: 20b2887f321811def1eb9c1607d1517c032a0a85abbd3b8889d688c9c0a5efe0
 ---
 ## What
 

@@ -77,6 +77,16 @@ RULES = (
         graph="absence of events beside a live heartbeat as generation",
         persona="absence of events beside a live heartbeat as generation",
     ),
+    Rule(
+        name="a liveness claim shows the command it ran and that command's own output",
+        graph="Quote the command you ran and that command's own output",
+        persona="Quote the command you ran and that command's own output",
+    ),
+    Rule(
+        name="and is read a second time before it becomes a terminal verdict",
+        graph="read it a second time before you escalate to a terminal verdict",
+        persona="read it a second time before you escalate to a terminal verdict",
+    ),
 )
 
 

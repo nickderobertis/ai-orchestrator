@@ -4,8 +4,8 @@ project: scheduler-research
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:511628c22c97dd8b34beb643fd9f28514f5fb04c6aed6e0bbd4c9267edd81f53
   orchestrator.design-approval:
-    approved_at: 2026-09-06T10:33:49.500182+00:00
-    key: dabcf2b6633676ab7c42446d442acce7d3785aa312902271ae766304f9263473
+    approved_at: 2026-09-09T04:37:51.063906+00:00
+    key: da60f1787f5b832f9414888320a1a47109bb881c1b68cb2b26a0375a7ad796ec
 ---
 ## What
 

@@ -110,6 +110,21 @@ DESIGN_DOC_GRAPH="graphs/design-doc.yaml"
 #: path, and neither restates the file.
 DESIGN_DOC_TEMPLATE="config/design-doc-template.md"
 
+#: The pair of markers in that file bounding the block this flow lends the dispatch.
+#: One property is composed into the design-doc node's own acceptance criteria rather
+#: than left behind the pointer above, because a document written from the pointer alone
+#: kept missing it: a plan over four repositories named each piece by role and no
+#: repository at all. The template stays the single source — what is composed are its own
+#: bytes, read at launch — and a template this flow cannot find the pair in refuses the
+#: launch rather than composing a task with the requirement silently missing.
+DESIGN_DOC_LIFT_OPEN="<!-- composed-into-the-dispatch -->"
+DESIGN_DOC_LIFT_CLOSE="<!-- end composed-into-the-dispatch -->"
+
+#: Where those lifted bytes go in the task below. Named rather than spelled at the splice,
+#: because the splice reads it three times — twice to cut the instructions around it and
+#: once to count it — and three spellings of one placeholder is a typo that fills nothing.
+DESIGN_DOC_LIFT_PLACEHOLDER="@ARCHITECTURE@"
+
 #: The change-request subject that node opens under, composed on the same terms as the
 #: planner node's and with the same releasable type: `.githooks/commit-msg` refuses a
 #: `docs:` subject, and a publication that reached that hook would be refused from the
@@ -129,9 +144,10 @@ DEFAULT_DAG_GRAPH="off"
 DAG_GRAPH_FLAG="--dag-graph"
 
 #: What the design-doc node is told, appended after the brief as the rest of its task.
-#: `@PLAN_PROJECT@` and `@TEMPLATE@` are substituted below — placeholders rather than
-#: `printf` conversions, because each appears twice and a format string reused per
-#: argument is how a two-placeholder template comes out interleaved.
+#: `@PLAN_PROJECT@`, `@TEMPLATE@` and `@ARCHITECTURE@` are substituted below —
+#: placeholders rather than `printf` conversions, because two of them appear twice and a
+#: format string reused per argument is how a multi-placeholder template comes out
+#: interleaved.
 #:
 #: It opens by disowning the criteria above it, and that is the load-bearing sentence.
 #: The brief is the planner's, so its `## Acceptance criteria` state what the PLAN has to
@@ -142,6 +158,10 @@ DAG_GRAPH_FLAG="--dag-graph"
 #: What it does NOT do is restate the document: `config/design-doc-template.md` is the
 #: one statement of the shape, the reader, and every property the document is judged on,
 #: and a second copy here would be the copy a writer follows on the day the two drift.
+#: `@ARCHITECTURE@` is filled from that file's own bytes rather than typed here, which is
+#: why it is no exception to that; the lift itself is documented at the marker constants
+#: above. It lands among the criteria rather than in the prose because a criterion is what
+#: this dispatch's judge reads.
 DESIGN_DOC_INSTRUCTIONS="
 
 ## What this dispatch owes
@@ -169,8 +189,14 @@ the document, that file wins.
 
 ## Acceptance criteria for this dispatch
 
+One of these is quoted out of that template rather than written here, because that file
+is the one statement of what the document is judged on. It is the property a plan across
+repositories turns on, and it is in this task so that this dispatch is held to it here
+rather than only behind the pointer above.
+
 - One document exists, written to that template: its sections, in that file's order, and
   no others, satisfying every property it states of them.
+@ARCHITECTURE@
 - That document is stored as a document of that plan's own project, in the same plan
   store the plan itself is in, so a reader finds it beside the plan rather than in a
   directory only this dispatch knows about.
@@ -316,6 +342,67 @@ fi
 plan_project=$(plan_brief_project finish-plan "$brief") || exit "$UNRUNNABLE"
 plan_run_is_free finish-plan "$design_run" || exit "$UNRUNNABLE"
 
+# Lifted here and not lower down. Every refusal above is about the caller's own invocation,
+# which is what an operator can correct; everything below costs a store CLI install, a
+# judged review turn, a check and a launch. A checkout that cannot lift from this template
+# cannot compose the dispatch at all, so discovering it after the review is a turn spent
+# for nothing.
+template="$script_dir/../$DESIGN_DOC_TEMPLATE"
+# A regular file rather than anything readable: a directory at that path is readable, and
+# `awk` answers one with a read error and an exit status the branch below would then
+# report as a template lending no criterion — the wrong refusal, and the one whose repair
+# is to edit a file that is not there.
+{ [ -f "$template" ] && [ -r "$template" ]; } || fail "the design document's template is not readable as a file at '$template'" \
+    "run this recipe from a checkout that has $DESIGN_DOC_TEMPLATE, or pass --no-design-doc to launch the planner alone"
+# One open, one close, in that order, with a non-blank line between them. Counted rather
+# than merely seen: a second open, a stray close and an unclosed block each name a
+# different span from the one whoever edited that file meant, and each composes silently
+# if the check asks only whether a marker went past. So each exits with a status of its
+# own and is named on its own below — "no criterion between the markers" would send
+# whoever reads it looking for missing prose when what is there is a second block. Blank
+# lines inside the block are kept, so the criterion arrives as its author wrote it. The
+# statuses start past `awk`'s own fatal exit so a read that failed inside `awk` cannot be
+# reported as one of them.
+#
+# `|| lifted=$?` rather than reading `$?` on the next line: `set -e` ends the script on a
+# failed assignment, so a status read afterwards is a line this never reaches.
+lifted=0
+architecture=$(awk -v opened="$DESIGN_DOC_LIFT_OPEN" -v closed="$DESIGN_DOC_LIFT_CLOSE" '
+    $0 == opened { opens += 1; inside = 1; next }
+    $0 == closed { closes += 1; if (!inside) { stray = 1 }; inside = 0; next }
+    inside { print; if ($0 ~ /[^[:space:]]/) { lent = 1 } }
+    END {
+        if (opens == 0 && closes == 0) { exit 11 }
+        if (stray) { exit 12 }
+        if (inside) { exit 13 }
+        if (opens > 1 || closes > 1) { exit 14 }
+        if (!lent) { exit 15 }
+        exit 0
+    }
+' "$template") || lifted=$?
+case $lifted in
+    0) ;;
+    11) fail "$DESIGN_DOC_TEMPLATE carries neither '$DESIGN_DOC_LIFT_OPEN' nor '$DESIGN_DOC_LIFT_CLOSE', so it lends the design-doc dispatch no criterion" \
+        "put both markers back around the property that dispatch is to be held to in its own task, or pass --no-design-doc to launch the planner alone" ;;
+    12) fail "$DESIGN_DOC_TEMPLATE closes the lent block with '$DESIGN_DOC_LIFT_CLOSE' before any '$DESIGN_DOC_LIFT_OPEN' opens one" \
+        "put the opening marker above the property that dispatch is to be held to, or pass --no-design-doc to launch the planner alone" ;;
+    13) fail "$DESIGN_DOC_TEMPLATE opens the lent block with '$DESIGN_DOC_LIFT_OPEN' and never closes it, so the span it lends runs to the end of the file" \
+        "put '$DESIGN_DOC_LIFT_CLOSE' back below that property, or pass --no-design-doc to launch the planner alone" ;;
+    14) fail "$DESIGN_DOC_TEMPLATE carries more than one '$DESIGN_DOC_LIFT_OPEN' or '$DESIGN_DOC_LIFT_CLOSE', so more than one span claims to be the criterion" \
+        "leave one pair of markers, around the property that dispatch is to be held to, or pass --no-design-doc to launch the planner alone" ;;
+    15) fail "$DESIGN_DOC_TEMPLATE holds nothing but whitespace between '$DESIGN_DOC_LIFT_OPEN' and '$DESIGN_DOC_LIFT_CLOSE', so it lends the design-doc dispatch no criterion" \
+        "write the property that dispatch is to be held to between those markers, or pass --no-design-doc to launch the planner alone" ;;
+    # Every status above is one this flow assigns to a condition of the template, so it
+    # names that condition and the edit that repairs it. This one is any other status
+    # `awk` exited with, and the whole point of it is that this flow does not know what
+    # happened — 127 is no `awk` on `PATH` at all, 126 is one that is not executable, and
+    # a signal death is neither. Reporting those as a template that could not be read
+    # sends whoever hits one to edit a file that is very likely fine, so it says what it
+    # observed and names both places the fault can be instead of picking one.
+    *) fail "the criterion between '$DESIGN_DOC_LIFT_OPEN' and '$DESIGN_DOC_LIFT_CLOSE' could not be lifted from $DESIGN_DOC_TEMPLATE: awk exited $lifted, which is not a status this recipe assigns" \
+        "check that awk runs where this recipe is running and that $DESIGN_DOC_TEMPLATE is readable there — awk exits 127 when it is not on PATH and 126 when it is not executable — or pass --no-design-doc to launch the planner alone" ;;
+esac
+
 # The board this repository plans against when the caller names none, read from the one
 # place that states it rather than spelled a second time here: `just copy-plan` copies
 # into that same source by default, and two spellings of it is one flow copying into a
@@ -402,6 +489,27 @@ mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not
 
 design_instructions="${DESIGN_DOC_INSTRUCTIONS//@PLAN_PROJECT@/$plan_project}"
 design_instructions="${design_instructions//@TEMPLATE@/$DESIGN_DOC_TEMPLATE}"
+# `@ARCHITECTURE@` is spliced rather than substituted, because what fills it is somebody
+# else's bytes and has to arrive verbatim. A `//` replacement would not leave it so: bash
+# 5.2 enables `patsub_replacement`, which reads `&` in a *replacement* as the matched
+# pattern and `\` as an escape, so a block saying `read & write` would reach the dispatch
+# saying `read @ARCHITECTURE@ write` — the criterion this path exists to place in front of
+# the dispatch, corrupted silently, with the flow still composing and still launching.
+# Escaping the two is the wrong repair: correct only while `patsub_replacement` is on, and
+# double-escaping where it is off. Prefix and suffix removal interpret nothing, so the
+# splice is verbatim under either shell.
+#
+# The guard is what makes it total, since `%%` and `#` remove only the outermost match and
+# a second placeholder would be left unfilled. It counts by length rather than with a
+# tool so that the failure of the thing counting cannot arrive as the count: `grep -c`
+# counts lines rather than occurrences, and a `grep`ped count that finds none exits 1,
+# which `pipefail` and `set -e` turn into the end of the script.
+placeholder_free=${DESIGN_DOC_INSTRUCTIONS//"$DESIGN_DOC_LIFT_PLACEHOLDER"/}
+placeholder_count=$(( (${#DESIGN_DOC_INSTRUCTIONS} - ${#placeholder_free}) / ${#DESIGN_DOC_LIFT_PLACEHOLDER} ))
+[ "$placeholder_count" = "1" ] || fail \
+    "this recipe's design-doc instructions carry $placeholder_count '$DESIGN_DOC_LIFT_PLACEHOLDER' placeholders rather than exactly one, so the criterion lifted from $DESIGN_DOC_TEMPLATE would not reach the dispatched task whole" \
+    "leave exactly one '$DESIGN_DOC_LIFT_PLACEHOLDER' in DESIGN_DOC_INSTRUCTIONS in $(basename "$0"), where that criterion belongs"
+design_instructions="${design_instructions%%"$DESIGN_DOC_LIFT_PLACEHOLDER"*}$architecture${design_instructions#*"$DESIGN_DOC_LIFT_PLACEHOLDER"}"
 planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$DESIGN_DOC_NODE_ID\"]}"
 
 design_plan="$plan_directory/$design_run.md"

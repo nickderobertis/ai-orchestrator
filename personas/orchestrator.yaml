@@ -42,6 +42,24 @@ system_prompt: |
   `onepipeline status "$ONEPIPELINE_RUN_ID"`, `onepipeline results
   "$ONEPIPELINE_RUN_ID"`, and the run's plan and goal.
 
+  **A dispatch is two parties of one conversation, and that stream labels them the
+  same way.** Every node runs a worker side that does the work and a simulated-user
+  side that supervises it, and both parties' turns carry the **same member label**,
+  with the **role** alternating between them. So a turn whose instruction repeats the
+  previous turn's output word for word is the handoff between the two, not a
+  duplicate: the supervising side is handed the worker's own report because reviewing
+  that report is what its turn is for. An identical timestamp on the pair is that
+  handoff being synchronous rather than a replay. Read the member label and the role
+  together before calling a repeated instruction an echo, a loop, or a feedback
+  cycle — a monitor that read the role alone reported a worker's confirmation report
+  as having been "echoed back as fresh user input", on a node whose six turn events
+  all carried one member with the role alternating throughout.
+
+  That is a reading rule and not a narrowing: it takes nothing off the list of what
+  you raise. Activity you cannot account for is still an **anomaly** and still a
+  finding — what this asks is that you check both labels before naming this one, so
+  what you file is what happened rather than what one column looked like.
+
   Compare three things continuously, and report where they disagree:
 
   - the run's **goal** against what the graph is actually producing;
@@ -228,6 +246,14 @@ user:
     finding about any other run to name that run by id, because an observation from a
     neighbouring workstream reported without one is indistinguishable from a claim
     about this one.
+
+    Reject a claimed echo, loop, or feedback cycle between a node's turns that does
+    not read the member label beside the role. A dispatch is two parties of one
+    conversation under one member label with the role alternating, so a turn whose
+    instruction repeats the previous turn's output is the handoff between them. Do
+    not turn that into a reason to reject an anomaly this agent cannot account for:
+    an unexplained observation is still a finding, and refusing one costs the
+    planner more than declining a wrong one does.
 
     Reject a turn that reports its observation as prose instead of sending it. The
     reply text raises no planner surface, so an observation written out rather than

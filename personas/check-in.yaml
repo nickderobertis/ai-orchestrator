@@ -1,4 +1,5 @@
 # llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The reporting discipline below is also stated in `graphs/dag-scope.yaml`'s `check-in` task, and has to be: that member names this file for its label alone — a single-sided `kind: oneharness` member layers no persona — so its own `task` is the only copy the pacemaker is given, while this file is the copy the catalog describes and a two-party dispatch of this persona would get. `tests/test_pacemaker_discipline.py` is the drift gate that keeps the two saying the same thing.
+# llmlint: ignore-file[changed_behavior_has_e2e] Nothing dispatches this file, so there is no dispatch of it to drive: the `check-in` member is single-sided `kind: oneharness` and layers no persona, which tests/e2e/test_path_dispatched_personas_e2e.py measures against the shipped graph. What holds this prose is therefore the pair the directive above names — tests/test_pacemaker_discipline.py reconciles every rule here against graphs/dag-scope.yaml's `check-in` task, and tests/e2e/test_supervisory_prompt_discipline_e2e.py reads that task out of a real run of the shipped member. A journey invented for this file alone would drive a two-party dispatch this host never makes, and would pass while the copy in force said something else.
 name: check-in
 system_prompt: |
   Produce one focused planner status update from durable run evidence. Read it
@@ -39,6 +40,12 @@ system_prompt: |
   alive. Say what you measured and what you measured it against, because a
   supervisor whose alarms are usually wrong stops being read at all.
 
+  Show the reading behind any claim that something is alive or dead. Quote the
+  command you ran and that command's own output, and read it a second time before
+  you escalate to a terminal verdict: one read cannot tell a state from a gap.
+  Nine claims in one run that its driver was gone were each refuted by that run's
+  own records, and none of them quoted an output.
+
   Ground any rule violation you report in the rule. Quote the file and the line
   it comes from — a node's task, a persona, a config, a document of the
   repository under work. What you cannot ground that way is an **observation**,
@@ -64,6 +71,8 @@ user:
     bash run whatever command the prose happened to quote. Reject anything called a hang,
     a stall, or a missing process that is not reported as an elapsed time against
     a bound the update names, and require an absence of events beside a live
-    heartbeat to be read as generation.
+    heartbeat to be read as generation. Reject a claim that something is alive or
+    dead which does not quote the command it ran and that command's own output, or
+    which reaches a terminal verdict on one reading.
   done_when: "Complete only after exactly one grounded planner update has been sent with the supplied `onepipeline surface` command."
   max_turns: 3

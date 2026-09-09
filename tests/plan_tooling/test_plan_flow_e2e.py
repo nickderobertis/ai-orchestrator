@@ -160,6 +160,25 @@ NODE_LABEL = "node"
 #: dispatches apart at the stand-in: both run as `worker`, so the member cannot.
 DESIGN_TASK_MARKER = "## What this dispatch owes"
 
+#: The one statement of the document's shape, repository-relative inside this checkout —
+#: the dispatch works in a worktree of the repository the *plan* is of, so this is a file
+#: it is sent to by name rather than one it finds underfoot.
+DESIGN_TEMPLATE = "config/design-doc-template.md"
+
+#: Where that template's lent block ends. The marker's own bytes, because the probe below
+#: appends a line *inside* that block and a drifted copy would place it outside.
+LIFT_CLOSE = "<!-- end composed-into-the-dispatch -->"
+
+#: What the dispatched task has to require of the architecture: the condition, since a
+#: plan inside one repository is exempt, and the demand. Stated here rather than read out
+#: of the template, which is the assertion rather than a shortcut — a journey that built
+#: its expectation from that file would pass whatever the two said, including saying
+#: nothing to each other.
+ARCHITECTURE_NAMES_ITS_REPOSITORIES = "Where the plan spans more than one repository"
+ARCHITECTURE_NAMES_ITS_REPOSITORIES_DEMAND = (
+    "the architecture names the repository each piece lives in"
+)
+
 #: The source a design-doc dispatch drafts into before storing: one of its own, named on
 #: its own command line rather than in any tracked configuration, which is what an agent's
 #: scratch directory is. The plan store is the *destination*, and it is never named here —
@@ -211,12 +230,18 @@ class StandInNode(TypedDict):
     the shipped `engineer` bar make, because the flow this journey drives *checks* this
     plan before it writes a document about it: a stand-in plan that could not pass `just
     check-plan` would end the flow at that refusal rather than at anything under test.
+
+    `repo` is here because the plan this journey authors deliberately spans two
+    repositories: `render_plan_project` turns a `host/owner/name` value into the task
+    record's own `repositories`, which is what makes the stored plan a multi-repository
+    one rather than a single-repository one with two nodes.
     """
 
     id: str
     persona: str
     title: str
     task: str
+    repo: str
 
 
 class StandInPlan(TypedDict):
@@ -224,8 +249,8 @@ class StandInPlan(TypedDict):
 
     `render_plan_project` takes any mapping and copies unknown keys through, so an open
     dict would compile — but this is a document this journey composes in full, and the
-    fields it has to get right (a `schema_version` the loader accepts, one task with the
-    three fields the store renders) are exactly what a name for it makes checkable.
+    fields it has to get right (a `schema_version` the loader accepts, and tasks carrying
+    the fields the store renders) are exactly what a name for it makes checkable.
     """
 
     schema_version: int
@@ -240,8 +265,14 @@ class Stored(NamedTuple):
     #: The plan's native id inside the fixture source, and its qualified form.
     project: str
     qualified: str
-    #: The plan's one task, so the document has a row to point at.
+    #: The plan's two tasks, so the document has rows to point at.
     task_title: str
+    second_task_title: str
+    #: The repository each of those two tasks lands in. Two different ones, because the
+    #: architecture requirement this journey reads is conditional on a plan spanning more
+    #: than one — a plan inside one repository is the case the template exempts.
+    repository: str
+    second_repository: str
     #: The document's native id inside that source, its qualified form, and its file.
     document: str
     document_qualified: str
@@ -282,6 +313,7 @@ def _plan_records(stored: Stored) -> dict[str, str]:
                 "id": "decide-the-cursor",
                 "persona": "engineer",
                 "title": stored.task_title,
+                "repo": stored.repository,
                 "task": (
                     "## What\n\nAdd the paginated listing and the test that drives it.\n\n"
                     "## Why\n\nAn operator cannot see past the first screen of nodes.\n\n"
@@ -293,7 +325,23 @@ def _plan_records(stored: Stored) -> dict[str, str]:
                     "the tree as it finally stands.\n\n"
                     f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
                 ),
-            }
+            },
+            {
+                "id": "read-the-cursor",
+                "persona": "engineer",
+                "title": stored.second_task_title,
+                "repo": stored.second_repository,
+                "task": (
+                    "## What\n\nFollow the stated cursor from the browser view.\n\n"
+                    "## Why\n\nThe shape is worth nothing until something reads it.\n\n"
+                    "## Acceptance criteria\n\n"
+                    "- The view pages on the stated cursor and reports a rejected one.\n"
+                    "- A browser-level test drives both of those paths end to end.\n"
+                    "- Every claim the dispatch makes about the finished work is true of "
+                    "the tree as it finally stands.\n\n"
+                    f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
+                ),
+            },
         ],
     }
     return {
@@ -320,6 +368,8 @@ def _document(stored: Stored) -> str:
         "| Task | What it delivers | Depends on | Where it lives |\n"
         "| --- | --- | --- | --- |\n"
         f"| {stored.task_title} | the route | none | the store's own location |\n"
+        f"| {stored.second_task_title} | the view | {stored.task_title} | "
+        "the store's own location |\n"
     )
 
 
@@ -485,6 +535,9 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         project=unique,
         qualified=f"{FIXTURE_SOURCE}:{unique}",
         task_title="feat: page the node listing",
+        second_task_title="feat: follow the cursor from the view",
+        repository="github.com/nickderobertis/onepipeline",
+        second_repository="github.com/nickderobertis/onepipeline-ui",
         document=f"{unique}-document",
         document_qualified=f"{FIXTURE_SOURCE}:{unique}-document",
         document_path=FIXTURE_ROOT / "documents" / f"{unique}-document.md",
@@ -600,14 +653,22 @@ def test_the_plan_is_reviewed_before_the_dispatch_that_writes_its_document_start
     dispatch could start first and be reviewed afterwards fails here, because that
     ordering is the assertion rather than a side effect of it.
     """
-    (task,) = plan_store.read_tasks(planned.stored.qualified)
-    record = task.metadata.get(plan_review.RECORD_KEY)
-    assert isinstance(record, dict), (
-        f"the flow copied a plan whose task carries no review record at all: {task.metadata}"
-    )
-    stamped = record.get("reviewed_at")
-    assert isinstance(stamped, str), record
-    reviewed_at = datetime.fromisoformat(stamped)
+    tasks = plan_store.read_tasks(planned.stored.qualified)
+    assert tasks, f"the flow copied {planned.stored.qualified} with no tasks at all"
+    stamps = []
+    for task in tasks:
+        record = task.metadata.get(plan_review.RECORD_KEY)
+        assert isinstance(record, dict), (
+            f"the flow copied a plan whose task {task.node_id} carries no review record "
+            f"at all: {task.metadata}"
+        )
+        stamped = record.get("reviewed_at")
+        assert isinstance(stamped, str), record
+        stamps.append(datetime.fromisoformat(stamped))
+    # The last of them, because what has to precede the dispatch is the whole plan
+    # having been read: a document written after one task was reviewed and before the
+    # next describes content the review had not reached.
+    reviewed_at = max(stamps)
 
     dispatched = _timestamps(planned.design_journal, NODE_DISPATCHED, DESIGN_NODE)
     assert dispatched, (
@@ -673,6 +734,67 @@ def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Plan
         f"the design-doc dispatch was never given the plan {planned.stored.qualified}, so "
         f"it has no way to find what it is writing about:\n{dispatched[0]!r}"
     )
+
+
+@pytest.mark.xdist_group("plan-flow")
+def test_the_design_doc_dispatch_is_required_to_name_each_pieces_repository(
+    planned: Planned,
+) -> None:
+    """A plan across two repositories owes a reader which change lands where.
+
+    Read where the requirement is consumed, which is the dispatched task itself: the flow
+    lifts that criterion out of `config/design-doc-template.md` as it composes the task, so
+    the template stays the one statement of what the document is judged on while the
+    dispatch still meets the requirement in the text its judge reads. A pointer alone was
+    not that — the document that came back obeyed everything except the part nobody had put
+    in front of it, naming each piece by role and no repository at all.
+
+    So nothing here opens that template; asserting its own words back out of a real
+    launch's prompt is what keeps the two from agreeing by saying nothing to each other.
+    The plan is read back from the store too, because the requirement is conditional and a
+    journey spanning one repository would exercise the exempt case instead.
+    """
+    # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only place
+    # a dispatched task is observable; no published view carries it. The fake backend
+    # writes these records itself and `TurnRecord` states the schema it owns.
+    dispatched = [
+        turn["prompt"]
+        for turn in planned.turns
+        if _member(turn) == WORKER_MEMBER and DESIGN_TASK_MARKER in turn["prompt"]
+    ]
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    assert dispatched, (
+        "no dispatched turn carried the design-doc node's own task, so nothing here is "
+        "about that dispatch at all"
+    )
+
+    spanned = {
+        repository
+        for task in plan_store.read_tasks(planned.stored.qualified)
+        for repository in task.repositories
+    }
+    assert len(spanned) > 1, (
+        f"the plan this dispatch was given lands in {sorted(map(str, spanned))}, so it "
+        "does not span more than one repository and this journey is exercising the case "
+        "the requirement exempts rather than the case it is about"
+    )
+
+    for prompt in dispatched:
+        flat = " ".join(prompt.split())
+        assert DESIGN_TEMPLATE in flat, (
+            f"the design-doc dispatch was never sent to {DESIGN_TEMPLATE}, which is the "
+            f"one statement of the document's shape:\n{prompt!r}"
+        )
+        assert ARCHITECTURE_NAMES_ITS_REPOSITORIES in flat, (
+            "the design-doc dispatch's own task states no condition on a plan spanning "
+            "repositories, so a plan across two of them is dispatched under the same task "
+            f"as one inside a single repository:\n{prompt!r}"
+        )
+        assert ARCHITECTURE_NAMES_ITS_REPOSITORIES_DEMAND in flat, (
+            "the design-doc dispatch's own task never asks the architecture to name the "
+            "repository each piece lives in, so a reader of a plan across two of them "
+            f"cannot tell which change lands where:\n{prompt!r}"
+        )
 
 
 @pytest.mark.xdist_group("plan-flow")
@@ -756,6 +878,7 @@ def test_the_flow_leaves_the_plan_and_its_one_document_on_the_destination_it_was
         f"documents/{planned.stored.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",
+        f"tasks/{project}/read-the-cursor.md",
     ], f"the flow left {landed} on the destination"
 
 
@@ -828,6 +951,38 @@ def test_the_flow_reports_where_the_destination_holds_the_project_and_the_docume
 #: is what makes the journey below about the default rather than about the string `plans`.
 DEFAULT_BOARD = plan_copy.BOARD
 
+#: A criterion carrying the two characters a Bash `//` replacement does not leave alone,
+#: appended to the *copied* checkout's template so the flow lifts it like any other line.
+#: `&` and `\` rather than an arbitrary odd string, because those two are the whole of the
+#: hazard the splice in `scripts/finish-plan.sh` is written against; that site states why.
+#:
+#: Written into the template here rather than asserted of the shipped one, because a
+#: template author is who writes this in reality and what is under test is that *whatever*
+#: goes between those markers reaches the dispatch verbatim. The shipped criterion carries
+#: neither character today, which is why nothing caught this.
+LIFT_METACHARACTER_PROBE = (
+    "- A lifted criterion reaches the dispatch verbatim: read & write the c:\\plans path."
+)
+
+
+def _lends_a_criterion_carrying_metacharacters(checkout: Path) -> None:
+    """Append :data:`LIFT_METACHARACTER_PROBE` inside that checkout's own lent block.
+
+    Appended rather than substituted for the shipped criterion, so the sibling journey
+    reading the shipped requirement's own words out of a dispatched task keeps its
+    subject: both lines are lent, and each is read for a different property.
+    """
+    template = checkout / DESIGN_TEMPLATE
+    text = template.read_text(encoding="utf-8")
+    assert text.count(LIFT_CLOSE) == 1, (
+        f"the copied {DESIGN_TEMPLATE} carries {text.count(LIFT_CLOSE)} closing markers "
+        "rather than one, so this journey cannot say where the lent block ends"
+    )
+    template.write_text(
+        text.replace(LIFT_CLOSE, f"{LIFT_METACHARACTER_PROBE}\n{LIFT_CLOSE}"), encoding="utf-8"
+    )
+
+
 #: The default-board flow's own run, and the tail's derived from it.
 DEFAULT_RUN = RunId("plan-flow-default-e2e")
 DEFAULT_DESIGN_RUN = RunId(f"{DEFAULT_RUN}{DESIGN_RUN_SUFFIX}")
@@ -848,6 +1003,9 @@ class Defaulted(NamedTuple):
     #: The checkout the flow ran in, so a read afterwards asks the same configuration.
     checkout: Path
     environment: dict[str, str]
+    #: Every turn this flow's stand-in recorded, so what the design-doc dispatch was
+    #: really given is readable rather than inferred from the flow having succeeded.
+    turns: list[TurnRecord]
 
 
 def _the_board_is_a_directory(checkout: Path, board: Path) -> None:
@@ -940,6 +1098,7 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     # is: a `local-md` source canonicalizes its root when it is built.
     board.mkdir()
     _the_board_is_a_directory(checkout, board)
+    _lends_a_criterion_carrying_metacharacters(checkout)
     _provisioned(checkout)
 
     unique = f"test-{os.getpid()}-plan-flow-default"
@@ -947,6 +1106,9 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
         project=unique,
         qualified=f"{FIXTURE_SOURCE}:{unique}",
         task_title="feat: page the node listing",
+        second_task_title="feat: follow the cursor from the view",
+        repository="github.com/nickderobertis/onepipeline",
+        second_repository="github.com/nickderobertis/onepipeline-ui",
         document=f"{unique}-document",
         document_qualified=f"{FIXTURE_SOURCE}:{unique}-document",
         document_path=FIXTURE_ROOT / "documents" / f"{unique}-document.md",
@@ -976,10 +1138,59 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
             board=board,
             checkout=checkout,
             environment=environment,
+            # Cast rather than validated: `fake_backend.py` is this suite's own file and
+            # writes these records itself, so `TurnRecord` states a schema this repository
+            # owns both ends of rather than asserting anything about somebody else's.
+            turns=[
+                cast(TurnRecord, json.loads(line))
+                for line in Path(environment[PROMPT_LOG_ENV])
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ],
         )
     finally:
         for ended in (DEFAULT_RUN, DEFAULT_DESIGN_RUN):
             _just("stop", ended, environment=environment, seconds=60, checkout=checkout)
+
+
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("plan-flow")
+def test_a_lifted_criterion_reaches_the_dispatch_with_its_metacharacters_intact(
+    default_board: Defaulted,
+) -> None:
+    """Whatever a template author writes between those markers arrives verbatim.
+
+    A corrupted criterion is the one failure nothing downstream can catch: the flow still
+    composes, still launches, still succeeds, and the worker is judged against whatever
+    reached it. So this writes :data:`LIFT_METACHARACTER_PROBE` into the copied checkout's
+    own template and requires those literal bytes back out of the dispatched task. The
+    substitution hazard it guards against is stated at the splice in
+    `scripts/finish-plan.sh`.
+
+    Read where the criterion is consumed, and opening no template to build its
+    expectation, for the reason the sibling journey gives.
+    """
+    # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only place
+    # a dispatched task is observable; no published view carries it. The fake backend
+    # writes these records itself and `TurnRecord` states the schema it owns.
+    dispatched = [
+        turn["prompt"]
+        for turn in default_board.turns
+        if _member(turn) == WORKER_MEMBER and DESIGN_TASK_MARKER in turn["prompt"]
+    ]
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    assert dispatched, (
+        "no dispatched turn carried the design-doc node's own task, so nothing here is "
+        "about that dispatch at all"
+    )
+
+    for prompt in dispatched:
+        assert LIFT_METACHARACTER_PROBE in prompt, (
+            "the criterion this flow lifted out of the template did not reach the "
+            "dispatched task as it was written, so what the design-doc dispatch is "
+            f"judged against is not what the template says:\n{prompt!r}"
+        )
 
 
 @COPIES_THE_TRACKED_TREE
@@ -1001,6 +1212,7 @@ def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_
         f"documents/{default_board.stored.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",
+        f"tasks/{project}/read-the-cursor.md",
     ], f"the flow left {landed} on the board it copies into when it is told none"
 
 

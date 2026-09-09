@@ -4,8 +4,8 @@ project: tracked-release
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:f9a181fad4a495bf5f9042f736a807665321e8f64d5e8eb0eceae56c9c56a6a8
   orchestrator.design-approval:
-    approved_at: 2026-09-06T10:33:49.582708+00:00
-    key: d8561eead44d96ae5b86034dd874026bdeb7da288518cfd49b6ae46fe1f9b4a3
+    approved_at: 2026-09-09T04:37:51.125836+00:00
+    key: 29f538fced7c618193345dbc8f62d966105088fb2ad0bb1094ca0d63b7ad957b
 ---
 ## What
 

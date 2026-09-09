@@ -519,6 +519,13 @@ DELEGATIONS = (
 )
 
 
+#: Where `just finish-plan` reads the design document's template from, relative to the
+#: checkout it runs in. Stated here rather than read out of `scripts/finish-plan.sh`, for
+#: the reason every expectation in this suite is stated: a fixture that took its shape
+#: from its subject would build whatever the subject asked for and prove nothing about it.
+DESIGN_TEMPLATE = "config/design-doc-template.md"
+
+
 def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A checkout the real recipes run in, with `uv` traced and nothing else doubled."""
     checkout = tmp_path / "delegation"
@@ -536,6 +543,19 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)
         copied.chmod(0o755)
+    # The template `just finish-plan` lends its `design-doc` node a criterion out of and
+    # refuses the flow without. Written rather than copied, for the reason the brief below
+    # is, and with both markers because a template that lends nothing is refused by name.
+    # What the criterion *says* is `tests/plan_tooling/`'s to assert against a real
+    # dispatch; these journeys are about where a recipe lands and what it delegates.
+    template = checkout / DESIGN_TEMPLATE
+    template.write_text(
+        "# A template this journey states\n\n"
+        "<!-- composed-into-the-dispatch -->\n"
+        "- The criterion this flow lends its design-doc node.\n"
+        "<!-- end composed-into-the-dispatch -->\n",
+        encoding="utf-8",
+    )
     # The brief `just plan` reads. Written rather than copied from `examples/`: these
     # journeys are memoized on `recipeWorkspace`, which no document under `examples/`
     # is in, so reading one here would replay a verdict recorded before it changed.
