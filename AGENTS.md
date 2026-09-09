@@ -1324,6 +1324,30 @@ one-node project whose planning stamp names that one node — which keeps its ex
 the design-approval gate bounded to the launch that writes a document, while the plan
 project itself stays gated like any other.
 
+**The approval is recorded on the board because that is the copy the user read**, which is
+the half of this order most easily inverted. The flow reports where the board holds the
+plan and its design document, and that copy is what goes in front of the user; recording
+their approval against the local draft instead would attach it to a different artifact
+from the one they judged. So the copy comes before the approval, and the approval is the
+last thing anybody does before `just orchestrate`.
+
+**The root a plan is drafted in is one directory the launch names, rather than one each
+dispatch resolves for itself.** `onetaskgraph.yaml` roots the `authoring` source at
+the relative `.plans`, so every process resolves it against its own working directory —
+and a planning launch dispatches its planner into a worktree of its own, whose copy of that
+directory nothing outside the worktree reads and which is reclaimed with the worktree.
+What kept plans arriving where the manager looks was dispatched planners guessing the
+launching checkout's absolute path correctly; nothing configured that and nothing checked
+it. So the launch resolves that root once and exports it — under
+`ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT`, the plan store's own environment-layer
+spelling of the source's root setting — and every dispatch of the launch then reads the
+one directory. `scripts/plan-root-env.sh` is the one place that name and that value are
+composed, and each launch takes it before it writes the project it is about to launch —
+`just plan` before it dispatches a planner at all, so a checkout whose authoring source is
+not a writable root is refused up front rather than after an hour of planning has written
+a plan nothing will find, and `just finish-plan` before it writes the design-document
+project, which is after the review one step above it has already spent its judged turn.
+
 **No other order works, and the refusal that says so is correct rather than a defect to
 route around.** A review record is one entry of the task's *own Markdown document*, so a
 local Markdown source is the only kind anything can write one into — a board is not a
@@ -1672,13 +1696,15 @@ and is never a command.
    **What goes to the user is the design document, and their approval of it is
    what gates dispatch.** A plan is not a thing a person can usefully review, and
    walking them through it node by node is not review either — it is a reading of
-   the graph they have no way to argue with. The one short document a planning run
-   writes is what they can judge: what is being built and why, the architecture,
-   the contracts, the acceptance criteria, and the planned work as a table of
-   links, written for a technical reader with no depth in this domain. Put that
-   document in front of them, answer what they ask, and record what they decide
-   with `just approve-design <source>:<project>`. The approval **blocks the
-   dispatch**: nothing is launched until it is recorded, and `just orchestrate`
+   the graph they have no way to argue with. The one short document the flow's
+   second launch writes — from the plan *after* it has been reviewed — is what
+   they can judge: what is being built and why, the architecture, the contracts,
+   the acceptance criteria, and the planned work as a table of links, written for
+   a technical reader with no depth in this domain. Put the copy the flow
+   reported in front of them, since that is the artifact the approval is recorded
+   against; answer what they ask, and record what they decide with `just
+   approve-design <source>:<project>`. The approval **blocks the dispatch**:
+   nothing is launched until it is recorded, and `just orchestrate`
    refuses a plan whose design document is missing or unapproved — see [Approving
    the design document a plan is read
    as](docs/orchestration.md#approving-the-design-document-a-plan-is-read-as) for
@@ -2085,6 +2111,16 @@ and one question was asked three times, with every other indicator green through
    deliberate — an unwatched planning run and a healthy quiet one look identical
    from here, which is the indistinguishability rule 2 is about, arriving by a
    different route.
+
+   **`just plan` makes two such launches, and the second is the one a supervisor
+   forgets.** Its tail launches the design-document run once the review and the
+   check have passed, and that run names `--dag-graph off` for its own version of
+   the same reason — a one-node run that reads a finished plan and writes one
+   document has no frontier for a monitor to compare against a plan. So it is
+   owed a watch exactly as the planner is, and a supervisor who armed one on the
+   planner alone is blind for the whole of it. Both run ids are decided before
+   either launch is made, and each is printed with the `just channel-next <id>`
+   that answers that run's questions, so neither has to be guessed at.
 
 ### Answering on the channel
 
@@ -2656,9 +2692,10 @@ exists to prevent. The primary Claude identity is last everywhere:
   cheaper tier, because that file trades review depth for loop overhead across every
   dispatch on this host while this review *is* the deliverable's quality bar. Its own
   finite `timeout` is shorter than the writer's, since the turns are not the same size.
-  Nothing on this host launches under `graphs/design-doc.yaml` yet — a plan node names
-  it with `agent_graph` — so a run that names neither the graph nor
-  `../personas/design-doc.yaml` is unaffected by either file.
+  Both files are in force here: the design-document launch `just finish-plan` makes
+  carries one node naming `graphs/design-doc.yaml` as its `agent_graph`, so every design
+  document this host produces is written and reviewed under this pair. A run that names
+  neither the graph nor `../personas/design-doc.yaml` is unaffected by either file.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
   `scripts/llmlint-oneharness.sh`; the same supervisory order. It is **no longer
   codex-only**.

@@ -9,9 +9,9 @@
 # node-scope member: the same base config, the same `bypass` mode, and the task and the
 # persona still come from the node.
 #
-# Nothing here is wired into a launch. `just orchestrate` still attaches
-# `graphs/node-scope.yaml`, so a run reaches this document only through a node that
-# names it.
+# A run reaches this document only through a node that names it: `just orchestrate` still
+# attaches `graphs/node-scope.yaml`. The one launch that names it is the design-document
+# launch `scripts/finish-plan.sh` makes, whose single node carries it as `agent_graph`.
 #
 # Every ref below is relative to THIS file's directory, not the working directory.
 version: 1

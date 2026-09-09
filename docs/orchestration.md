@@ -69,9 +69,16 @@ just plan brief.md                       # the planner authors into `authoring`,
                                          # then reviews the plan, checks it, launches the
                                          # design document, copies both onto `plans`, and
                                          # reports where that board holds them
-just approve-design plans:<project>      # the user's approval of that document
+just approve-design plans:<project>      # the user's approval of the copy they read
 just orchestrate plans:<project>
 ```
+
+**The approval is a manager's own step, and it is recorded against the copy the user
+read.** The flow ends by reporting where the destination holds the plan and the design
+document it has just copied there; that copy is what goes in front of the user, and `just
+approve-design` records their decision on it. Recording one against the local draft
+instead would attach an approval to a different artifact from the one they judged, which
+is why the copy comes before the approval rather than after it.
 
 **`just finish-plan brief.md` is that tail on its own**, and is what an operator runs
 after editing a plan the planner authored: the edit leaves that task carrying no review
@@ -154,10 +161,12 @@ through the store's own `ONETASKGRAPH_` variables, both of which the whole comma
 
 The review record travels with the copy, because it is an ordinary entry of the task's
 metadata map and the copy carries that map; so `just check-plan plans:<project>` on what
-landed accepts it and spends no second judged turn. So does the design approval below,
-for the same reason and one record further out — which is why the copy carries the plan's
-**documents** as well as its tasks: the store's own `project copy` carries none, and a
-plan copied without its design document arrives on the board with nothing to approve.
+landed accepts it and spends no second judged turn. The design approval below travels the
+same way, one record further out — but in this flow it never has to, because it is
+recorded *after* the copy rather than before it. What the copy has to carry is the
+**document**: the store's own `project copy` carries none, and a plan copied without its
+design document arrives on the board with nothing for a person to read and so nothing to
+approve.
 `tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the copy itself for real —
 drafting, clearing, a trial run that writes nothing, the copy, the record read back off
 what landed, and the check over it — against a second local store rather than the live
@@ -185,12 +194,19 @@ dispatched.
 *What is recorded, and where.* One entry of the design document's own metadata map,
 holding a digest and the moment it was written. It goes onto the document in the plan
 store rather than into a file beside the plan, which is what makes it readable from
-whichever store the plan is held in — a directory of Markdown or a board — and what lets
-it travel with `just copy-plan` the way a review record travels with a task. It is
-*written* through `onetaskgraph document copy` rather than by editing a file, and that is
-the half that makes the sentence above true of a board as well as of a directory: the
-write goes through the store's own write side, so where a record can be written is the
-store's answer rather than this repository's. That is the difference from the plan-review
+whichever store the plan is held in — a directory of Markdown or a board. It is *written*
+through `onetaskgraph document copy` rather than by editing a file, and that is the half
+that makes the sentence above true of a board as well as of a directory: the write goes
+through the store's own write side, so where a record can be written is the store's answer
+rather than this repository's.
+
+**Being writable on a board is what lets the approval be recorded against the copy a
+person actually read.** The flow copies the plan and its document into the destination and
+reports where that destination holds them; the user reads the document there, and the
+approval goes onto that record rather than onto the draft it was copied from. The record
+does also travel with `just copy-plan`, the way a review record travels with a task, so an
+approval survives a later copy onward — but nothing in this flow depends on that, because
+nothing here is approved before it is copied. That is the difference from the plan-review
 record beside it, which is an entry of a task's own Markdown document and can therefore
 only ever be written into a directory.
 
@@ -230,17 +246,21 @@ document cannot be decided, so it is refused rather than guessed at.
 
 *The one exemption, and it is a **launch** rather than a project.* A planning launch is
 exempt, because its output *is* the plan and the document it will be reviewed as does not
-exist yet. It is exempt because `scripts/plan.sh` stamps that project as a planning
-project and the gate reads what the project says about itself — never because anything
-recognises its shape, so a hand-written project that happens to carry a planner node and
-a design-doc node is not exempt.
+exist yet. **This flow makes two of them**, and one rule covers both: the planner that
+writes the plan, and the one-node launch that writes the document — which is the launch
+producing the very thing an approval would be recorded against, so it can no more wait on
+one than the planner can. Each is exempt because the launcher that generated its project
+stamped that project as a planning project — `scripts/plan.sh` for the planner,
+`scripts/finish-plan.sh` for the document — and the gate reads what the project says about
+itself. Never because anything recognises its shape: a hand-written project carrying a
+node of either shape is not exempt.
 
 That stamp alone decided it once, and it was a hole: the plan a planner writes is stored
 in the planning project the launch created, so the plan's own nodes inherited an exemption
 granted to the project for life, and launching them dispatched real work with the design
 document approved by nobody. So the exemption is bounded by both halves of what it was
-written for — **the project holds exactly the nodes that launch dispatches**, which
-`scripts/plan.sh` names on the stamp itself, **and it holds no design document**, since
+written for — **the project holds exactly the nodes that launch dispatches**, which each
+launcher names on the stamp it writes, **and it holds no design document**, since
 once one exists there is something a person can read. Either half ending ends it, and the
 refusal says which one did rather than reading as the gate mis-firing on a planning
 project. *Exactly* is an agreement rather than a covering, and both directions of it end
@@ -266,7 +286,8 @@ plan nobody read past pass because a machine liked its wording.
 launch refused for want of an approval, the real recipe recording one, the same launch
 then reaching the engine, an edit to the document refusing it again, a planning launch
 reaching the engine with no document at all — and that same planning project refused once
-it holds the plan a planner wrote into it, or the document its design-doc node produced.
+it holds the plan a planner wrote into it, or the document a design-doc dispatch stored in
+it.
 
 ## What the write-back owns, and what a green run proves
 
@@ -371,20 +392,35 @@ checkout, and such a dispatch may write only to gitignored paths, may not commit
 may not leave the checkout on any branch but its base. Nothing enforces that, which
 is why the recipe says it on every launch that takes the flag.
 
-### The document a planning run also produces
+### The document the plan is read as, and the launch that writes it
 
-**A planning run writes two nodes, and the second one writes the document the plan is
-reviewed as.** A person cannot usefully review a plan node by node; what they can judge
-is one short document — what is being built and why, the architecture, the contracts, the
+**The document is written last, by a launch of its own, from a plan something has already
+reviewed.** A person cannot usefully review a plan node by node; what they can judge is
+one short document — what is being built and why, the architecture, the contracts, the
 acceptance criteria, and the planned work as a table of links, each row pointing at its
-task. So `just plan` writes a `design-doc` node depending on the planner node, dispatched
-under [`graphs/design-doc.yaml`](../graphs/design-doc.yaml) with
-[`personas/design-doc.yaml`](../personas/design-doc.yaml) named as a path, placed at the
-same publication repository and execution checkout the planner node is placed at. Its
-task is the brief unchanged, followed by its own instructions and its own acceptance
-criteria — which open by saying the criteria above them are the *plan's* rather than that
-dispatch's, because a judge holds a dispatch to every criterion it finds in its task and
-producing the plan was another node's job. What states the document itself is
+task. A document written before anything reviewed the plan describes content nobody read,
+which is what the review one step earlier exists to prevent, and a run cannot interject a
+review between its own nodes: a review record is written by this repository's own code and
+never by a dispatched agent. So the plan `just plan` writes is **one node**, and the
+document is a **second launch**, made by `scripts/finish-plan.sh` once the review and the
+check have passed.
+
+That second launch writes a one-node project of its own, stamped as the planning project
+it is and naming that one node, which is what keeps its exemption from the design-approval
+gate bounded to the launch that writes a document while the plan project stays gated like
+any other. Its node names [`graphs/design-doc.yaml`](../graphs/design-doc.yaml) as its
+`agent_graph` and [`personas/design-doc.yaml`](../personas/design-doc.yaml) as its persona
+— a path, because a bare `design-doc` resolves against the roles compiled into
+`oneagentgraph` and reads no file of this repository's — and it takes the publication
+repository and execution checkout the flow was given. It attaches no monitor either, for
+its own version of the reason the planning launch attaches none: a one-node run that reads
+a finished plan and writes one document has no frontier for a monitor to compare against a
+plan, and it is the last step of a flow rather than the work a flow supervises. So it is
+owed a watch for the same reason the planner is, and being the second such launch is what
+makes it the one a supervisor forgets. Its task is the brief unchanged, followed by its
+own instructions and its own acceptance criteria — which open by disowning the criteria
+above them, because those are the *plan's* and a judge holds a dispatch to every criterion
+it finds in its task. What states the document itself is
 [`config/design-doc-template.md`](../config/design-doc-template.md), and nothing restates
 it: the node's task names that path, the persona names that path, and the file is the one
 statement of the shape, the reader, and every property the document is judged on.
@@ -394,19 +430,21 @@ The dispatch reads the finished plan out of the store, stores what it wrote as a
 link where the store puts it on a website, a path where it puts it in a file on this
 machine. Storing it beside the plan rather than reporting it is the point: the reviewer
 finds it where the plan is, and follows the store's own answer rather than a path
-somebody composed.
+somebody composed. The flow then copies both into the destination and reports where *it*
+holds them, which is the copy a person reads and the copy their approval is recorded
+against.
 
 **A brief therefore names the plan's qualified project id**, on a line reading
 `Plan project: <source>:<project>`, and a brief without one is refused at the exit status
-a brief missing a required section is refused at. The second node has no other way to
-find the plan: nothing hands one node's output to a later node, and a plan written to a
-gitignored path in the planner's own worktree does not outlive the run. Nothing else in a
-brief is parsed — and a line that is *there* and unusable is refused as a bad value
+a brief missing a required section is refused at. The second launch has no other way to
+find the plan: nothing hands one launch's output to the next, and the tail is a separate
+process reading the store rather than a node scheduled behind the planner. Nothing else in
+a brief is parsed — and a line that is *there* and unusable is refused as a bad value
 rather than as an absence, because two declarations are ambiguous and a value naming a
 project in no store, reported as a missing line, sends a manager looking for a line that
-is already in front of them. `--no-design-doc` drops the node **and** the requirement —
-with nothing that reads the plan there is nothing that needs its id — and writes exactly
-the one-node project this recipe wrote before the second node existed.
+is already in front of them. `--no-design-doc` drops the requirement with the tail it
+belongs to: it stops the flow after the planner, so there is no second launch to read the
+plan and nothing that needs its id.
 
 The published CLIs do not know that split and nothing here renames them to it.
 Everywhere `onepipeline` and the recipes over it say *planner* — [the planner
@@ -536,8 +574,10 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   caller's own the same way: a planning run's output *is* the plan, so a monitor
   attached to one watches it for drift from a document that does not exist yet, and
   the journal, ownership row, surfaces, and DAG UI place it would otherwise be
-  credited with are all `onepipeline start`'s own. There is no environment variable
-  for either; the flag is the only way to move it.
+  credited with are all `onepipeline start`'s own. `just finish-plan` names `off` for
+  the same class of reason on the design-document launch it makes, so the planning flow
+  attaches a monitor to neither of its two runs. There is no environment variable for
+  any of them; the flag is the only way to move it.
 
   The document declares **schema 4**, for two fields. `check-in` carries its own
   `task`, which needs 3; that task opens with `{task}`, which `oneagentgraph`
