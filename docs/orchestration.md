@@ -2601,6 +2601,33 @@ whole lineages on `No conversation found`. The dead driver's log moves aside rat
 than being truncated — it is the evidence of how it died, and the first thing to
 read after adopting.
 
+**A dispatch outlives its driver, so a dead-driver verdict beside live dispatches is a
+recoverable state rather than lost work.** The driver is one process and every dispatch
+it made is another: they are forked to outlive the launch and are the engines' own to
+reap, which is why nothing here ever works around a kill with `nohup` by hand. So the
+ordinary shape of a driver that died mid-run is `just status` reporting `DRIVER DEAD`
+while `just host` still lists that run's nodes as live dispatches, recorded doing
+something seconds ago. Read the two together rather than reading the verdict alone:
+adopting the run attaches a fresh driver beside those dispatches and they keep the turns
+they are in, where treating the verdict as lost work throws away turns that are still
+running. The dispatches are also what a supervisor confirms it against — a node whose
+turn age keeps moving under a dead driver is the state this paragraph describes, and one
+that stopped is a different question.
+
+**What killed the driver is a separate reading from the driver being dead, and the
+cheapest of them is the disk.** A full disk kills a driver and the run then reports a
+dead driver, which is the same verdict a crash gives and reads as a crash to diagnose:
+that cost twenty minutes on a host whose filesystem had 1.3 GiB of 197 left with three
+dispatches building on it. The `disk` line `just status` prints above its provider block,
+and the same line on `just host`, is what parts the two before anything is diagnosed. It
+is a host-wide reading on a host several managers share, so read it and leave clearing
+space to whoever owns what is filling it.
+
+`tests/e2e/test_driver_death_is_recoverable_e2e.py` is what compares this statement
+against the installed engine rather than leaving it standing on its own: it drives both
+views over a run whose launch process is gone and whose dispatched process is alive, and
+fails when the engine stops answering the way this reads.
+
 ## Monitoring a live run
 
 `just runs` says how far each run has got and `just history-show` says everything
@@ -2671,6 +2698,38 @@ What that buys each view:
   carry that run's stamp, or that none do.
 * **`just host`** is the whole-host view, across every planner sharing it: per live
   dispatch, its owning session, run/node, role, turn age, and load contribution.
+
+Two readings beside those are this host's own rather than the engine's, added by
+`scripts/status.sh` and `scripts/host.sh` out of `scripts/supervision-readings.py`,
+because each is a fact about the machine a run happens to be on rather than about the
+run:
+
+* **Free space**, on both views, for each filesystem the run's working directories are
+  on — the runs root, and the `workspaces/` under `onevcs`'s state root where every
+  lifecycle worktree and per-run clone is cut. On `just status` it sits **above** the
+  provider block, which is where a supervisor's watch is told to cut this view, so a
+  reading below it would be one no watch following that guidance could see. It is
+  host-wide on a shared host: read it, and leave acting on it to whoever owns what is
+  filling the disk. What it answers is in
+  [Adopting a run whose driver died](#adopting-a-run-whose-driver-died).
+* **Every live rendezvous**, on `just host`: one line per process holding a question
+  open for a reply, naming the run the question is bound to and the dispatch it sits
+  under. A blocking surface produces no other signal until somebody reads it, so a live
+  `onepipeline channel serve` with nothing pending on the queue reads as a question
+  stuck below the queue — a stall a manager is supposed to break — when it is as likely
+  to be a passing journey of this repository's own suite, which stands up a real
+  rendezvous on a fixture run whose id expires by itself. Answering that one by hand
+  puts a manager's verdict into a test. A rendezvous bound to a run this runs root does
+  not hold is reported as exactly that rather than left out, because it is the one a
+  manager most needs to see. One rendezvous is one line: `uv run onepipeline channel
+  serve RUN` puts those argv words on the launcher as well as on the engine it execs
+  into, and counting processes would report one open question as several.
+
+Both additions are written beside what the published verb printed rather than into it:
+every line the engine gave is written back in order, for the reason
+`scripts/recoverable.sh` gives about rewriting another repository's report.
+`tests/e2e/test_supervision_readings_e2e.py` drives both recipes for real, against a
+real live rendezvous, and holds each of those properties.
 
 Both flags are *positive* claims and are made only where they can be proven. The
 node-level `UNDRIVEN` needs two things beyond "the registry saw nothing for this node":

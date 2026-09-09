@@ -111,6 +111,13 @@ WRAPPER_SCRIPTS = (
     # `just sweep` goes through this one, which composes the two published sweep
     # verbs and writes the trailer neither of them can.
     "sweep.sh",
+    # The two supervisory views go through these two, which pass the published view
+    # through untouched and add this host's own readings — free space, and every live
+    # rendezvous — beside it out of the filter below. A checkout without all three
+    # would delegate through a wrapper that cannot run.
+    "status.sh",
+    "host.sh",
+    "supervision-readings.py",
     # `just watch` goes through this one, which asks the installed engine whether it
     # has the verb at all and pipes its machine-readable form through the renderer
     # beside it — so a checkout without either would delegate through a wrapper that

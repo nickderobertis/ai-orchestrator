@@ -633,15 +633,19 @@ dag-ui-screens *args:
 telemetry-server *args:
     @./scripts/telemetry-server.sh "$@"
 
-# Show a run's live state: what is driving it, and what is running.
+# Show a run's live state: what is driving it, what is running, and what it is running
+# in. The free-space reading `scripts/status.sh` adds sits ABOVE the `providers:` line,
+# which is where a supervisor's watch is told to cut this view.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
-    @./scripts/onepipeline.sh status "$@"
+    @./scripts/status.sh "$@"
 
-# Show every live dispatch on this host, with its owner and load contribution.
+# Show every live dispatch on this host, with its owner and load contribution — and,
+# from `scripts/host.sh`, the free space they are running in and every live rendezvous
+# holding a question open, named with the run it is bound to.
 # llmlint: ignore[tool_output_is_signal] the requested per-dispatch host inventory is this viewing command's product.
 host *args:
-    @./scripts/onepipeline.sh host "$@"
+    @./scripts/host.sh "$@"
 
 # List every preserved-but-unpublished branch across the registered repository
 # identities and the command that lands each one.

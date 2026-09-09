@@ -3494,6 +3494,30 @@ run, node, harness, and turn age, above the run roots it could not read and why.
 Miscounting live dispatches from `ps`, and missing a judge turn wedged for nearly
 two hours, are what these replace.
 
+**Two readings on those views are this host's own rather than the engine's**, added by
+`scripts/status.sh` and `scripts/host.sh` out of `scripts/supervision-readings.py`,
+because each is a fact about the machine a run happens to be on rather than about the
+run. **Free space**, on both, for every filesystem the run's working directories are on
+— the runs root, and the `workspaces/` under `onevcs`'s state root where every lifecycle
+worktree is cut. On `just status` it sits **above** the `providers:` line, which is where
+the watch invariant below tells a supervisor to cut this view, so a reading below it
+would be one no watch following that guidance could see. It is host-wide on a host
+several managers share: **read it, and leave acting on it to whoever owns what is filling
+the disk.** It exists because nothing here reported it — a filesystem holding every
+worktree reached 100% with three dispatches building on it, the driver died of it, and
+the run reported a dead driver, which is the verdict a crash gives and cost twenty
+minutes of diagnosis. And **every live rendezvous**, on `just host`: one line per process
+holding a question open for a reply, naming the run it is bound to and the dispatch it
+sits under. A blocking surface produces no other signal until somebody reads it, so a
+live `onepipeline channel serve` with nothing pending reads as a question stuck below the
+queue — a stall a manager is supposed to break — when it is as likely to be a passing
+journey of this repository's own suite, which stands up a real rendezvous on a fixture
+run whose id expires by itself; answering that one by hand puts a manager's verdict into
+a test. One bound to a run this runs root does not hold is reported as exactly that
+rather than left out. Both are written *beside* what the published verb printed and
+never into it. `tests/e2e/test_supervision_readings_e2e.py` drives both recipes against
+a real live rendezvous and holds each of those properties.
+
 Two things this paragraph used to claim are **not** in force and should not be
 planned around: there is no `ORCHESTRATOR_AGENT_STATUS_DIR` stamp on a dispatched
 process — no engine on the adopted stack exports that variable, and only

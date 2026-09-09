@@ -31,8 +31,10 @@
       "{workspaceRoot}/tests/plan_root_variable.py",
       "{workspaceRoot}/tests/registered_checkouts.py",
       "{workspaceRoot}/tests/e2e/nx_workspace.py",
+      "{workspaceRoot}/tests/e2e/probe_run_root.py",
       "{workspaceRoot}/tests/e2e/test_base_freshness_e2e.py",
       "{workspaceRoot}/tests/e2e/test_delegated_recipes_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_supervision_readings_e2e.py",
       "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
       "{workspaceRoot}/tests/e2e/waits.py",
       "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py"
