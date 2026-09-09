@@ -26,16 +26,18 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
+from typing import NewType
 
 import pytest
-from project_fixtures import local_project, reviewed
+from project_fixtures import approved, local_project, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
+from orchestrator.project_store import frontmatter
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`; see
@@ -475,3 +477,122 @@ def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binar
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
     ], copy.stdout + copy.stderr
+
+
+#: Named rather than left a bare `str` so it cannot be interchanged with
+#: `plan_store.NodeId`, the other end of what a copy rewrites.
+ReportedLocation = NewType("ReportedLocation", str)
+
+
+def _reported_locations(project: str) -> dict[plan_store.NodeId, ReportedLocation]:
+    """Each task of ``project`` against the location its own store reports for it.
+
+    Read through the operator's own surface for `_stored_tasks`'s reason, and never
+    composed from a root and a name: where a record lives is the store's answer, and a
+    path assembled here would name nothing the moment a destination is a board.
+    """
+    # llmlint: ignore-block[modern_domain_modeling] Transient parsed JSON, narrowed here.
+    located: dict[plan_store.NodeId, ReportedLocation] = {}
+    for one in _stored_tasks(project):
+        metadata, location = one["metadata"], one["location"]
+        assert isinstance(metadata, dict) and isinstance(location, dict), one
+        node = plan_store.NodeId(str(metadata["onepipeline.id"]))
+        located[node] = ReportedLocation(str(location["path"]))
+    # llmlint: ignore-end[modern_domain_modeling]
+    return located
+
+
+def _write_design_document_pointing_at(
+    project: str, native: str, located: Mapping[plan_store.NodeId, ReportedLocation]
+) -> None:
+    """Overwrite ``project``'s design document with the planned-tasks table this is about.
+
+    One row per task, whose last column is that task's location **as its own store
+    reports it** — which is what `config/design-doc-template.md` asks a design document
+    for, and what a reference is: a literal occurrence of the exact location string a
+    source reported. Written the way `project_fixtures._designed` writes the document it
+    replaces, because the store exposes no verb that edits a document's content in place
+    and staging one through a copy is what the command under test is.
+    """
+    document = design_approval.design_document(project)
+    location = document.location
+    assert isinstance(location, dict), document
+    rows = "\n".join(f"| {node} | `{where}` |" for node, where in sorted(located.items()))
+    Path(str(location["path"])).write_text(
+        frontmatter(
+            {"title": document.title, "project": native},
+            "## Planned tasks\n\n| Task | Where it lives |\n| --- | --- |\n" + rows + "\n",
+        ),
+        encoding="utf-8",
+    )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is a
+# leaf project keyed on `planToolingWorkspace`, which is the edge this rule asks for. That
+# key names the trees these journeys drive, so narrowing it would memoize a verdict over a
+# tree that was never run.
+def test_a_copied_design_document_points_its_task_references_at_the_destination(
+    destination: Path,
+) -> None:
+    """A copied document's planned-tasks table locates each task on the destination.
+
+    Those cells used to hold the *drafting* store's absolute paths, dead for the only
+    reader the document exists for. Three readings share one copy because each would
+    otherwise pay for its own plan and review turn.
+    """
+    project = _project("copy-references", "route", "worker")
+    _, _, native = project.partition(":")
+    copied_id = f"{DESTINATION}:{native}"
+    drafted = _reported_locations(project)
+    _write_design_document_pointing_at(project, native, drafted)
+    # The document's authored content moved, so the approval keyed on it is recorded
+    # again — the fixture's own seam, and the state a plan reaches its board in.
+    approved(project)
+    # `reviewed` reaches this record the way an operator does — the real `just
+    # review-plan`, the real script, the real `oneharness` CLI and its response schema —
+    # and substitutes the paid provider process alone, this suite's one sanctioned double.
+    # llmlint: ignore[e2e_not_mocked] see the note above this line
+    reviewed(project)
+
+    # A destination holding no counterpart for either task: a trial writes nothing, so
+    # there is nothing to point at, the cells are left exactly as they are, and the copy
+    # says how many references it could not resolve rather than saying nothing.
+    blind = _just("copy-plan", project, "--to", DESTINATION, "--dry-run")
+    assert blind.returncode == 0, blind.stdout + blind.stderr
+    assert "references: 0 rewritten, 2 unresolved (0 ambiguous)" in blind.stdout, blind.stdout
+    assert _records(destination) == [], "a trial run wrote to the destination"
+
+    copy = _just("copy-plan", project, "--to", DESTINATION)
+    assert copy.returncode == 0, copy.stdout + copy.stderr
+    assert "references: 2 rewritten, 0 unresolved (0 ambiguous)" in copy.stdout, copy.stdout
+
+    # Every cell now holds the location the **destination** reports for that same task,
+    # and none of them the drafting store's. Both directions, because a document whose
+    # table had simply been dropped would satisfy the first on its own.
+    # llmlint: ignore-block[modern_domain_modeling] Transient parsed JSON, narrowed here.
+    landed = _reported_locations(copied_id)
+    assert set(landed) == set(drafted), landed
+    (document,) = _stored_documents(copied_id)
+    content = document["content"]
+    assert isinstance(content, str), document
+    for node, where in landed.items():
+        assert f"`{where}`" in content, f"{node} still points somewhere else: {content}"
+    for node, where in drafted.items():
+        assert where not in content, f"{node} still points at the drafting store: {content}"
+
+    # And a trial run over the destination that copy landed on answers the copy's own
+    # figures while writing nothing — proven against a mark only a write would remove.
+    location = document["location"]
+    assert isinstance(location, dict), document
+    marked = Path(str(location["path"]))
+    marked.write_text(marked.read_text(encoding="utf-8") + "\nnot rewritten\n", encoding="utf-8")
+    # llmlint: ignore-end[modern_domain_modeling]
+    trial = _just("copy-plan", project, "--to", DESTINATION, "--dry-run")
+    assert trial.returncode == 0, trial.stdout + trial.stderr
+    assert "references: 2 rewritten, 0 unresolved (0 ambiguous)" in trial.stdout, trial.stdout
+    assert marked.read_text(encoding="utf-8").endswith("not rewritten\n"), (
+        "a trial run wrote over the document it was only reporting on"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

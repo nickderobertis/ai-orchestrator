@@ -614,7 +614,7 @@ destination already held, which is what put that synthetic source on a settled p
 the first place; it is
 https://github.com/nickderobertis/onetaskgraph/issues/266, and the repair is
 https://github.com/nickderobertis/onetaskgraph/pull/252, carried by the adopted
-onetaskgraph 0.2.26. `orchestrator/plan_store.py` still recognises a record left under
+onetaskgraph 0.2.27. `orchestrator/plan_store.py` still recognises a record left under
 that source and says which engine wrote it, because a plan carried here from a host that
 ran one of those engines still carries the rewrite; the recogniser is about records, not
 about this host's pin.
@@ -654,12 +654,66 @@ the release archive of a program this host spawns. It answers which standalone p
 CLI is installed here; it says nothing about libraries compiled into the engine, and the
 engine wheel's bill of materials has no onetaskgraph entry to compare it with.
 
-**What the pin's own value buys this host is what a board read costs**, and it is named
-here because nothing beside a bare version string can say what a bump was for. The
-adopted onetaskgraph 0.2.26 carries three landings that cut it, and each is named by the
-change request that carried it rather than by whichever release happens to sit beside
-this one — a phrase of that shape is true only until the next bump, and every claim in
-this section was once written that way.
+<!-- llmlint: ignore[instruction_layer_localized] Which release this host adopts is a
+repo-wide constraint, which is what this document holds; subtree rules stay in
+`orchestrator/AGENTS.md`, `tests/AGENTS.md` and `tests/dag_ui/AGENTS.md`. -->
+**What the pin's own value buys this host is that a copied document's references point
+at the destination**, and it is named here because nothing beside a bare version string
+can say what a bump was for. The landing that cut the adopted release is
+https://github.com/nickderobertis/onetaskgraph/pull/774, and what it changes is the
+artifact this whole plan flow exists to produce: a design document ends with a table of
+the planned tasks, one row per task, whose last column locates each one, and a plan is
+drafted in a local Markdown store and copied onto a board for a person to approve. Every
+one of those cells used to arrive on the board still holding the absolute filesystem path
+under one checkout on one machine that the *drafting* store reported — dead for the only
+reader the document exists for, while the destination held an issue for each of those
+tasks the whole time. A copy now rewrites them to what the destination itself reports.
+
+**Read the bounds with the behaviour, because most of what this does not do looks like a
+defect from the outside.** Only a **document** is rewritten, and only its `content`: a
+project's or a task's own fields are carried across untouched, so a path in a *task* is
+still a path into the store it was drafted in. A reference is a literal occurrence of the
+exact location string a source reports for a record, and it becomes the string the
+destination reports for that record's counterpart — both ends read back out of the
+plugins rather than composed, which is the rule `orchestrator/plan_locations.py` already
+follows here. The referent set is the document's **own project**, so a reference to a
+record in another project is not recognised at all and cannot appear in the unresolved
+figure either. A correspondence is followed over **one recorded hop of ancestry** on each
+side, and a chain of two or more hops stays unresolved **permanently** rather than until
+some later release — only one origin is ever recorded and every hop overwrites it, so
+there is nothing left to chase. Where the correspondence is not confident — several
+destination records matching, or two referents reporting one source location — no record
+is chosen and the text is left byte-for-byte, which is stricter than the copy's own
+target matching and deliberately so: this edits prose a person will act on. And the
+machine rendering **omits a figure of zero** rather than writing a nought, so an absent
+`references_unresolved` reads back as none rather than as a field the copy forgot; the
+human rendering prints all three figures however they read.
+
+**The boundary this adoption does not cross is repair.** It points the references of
+documents copied from now on and touches nothing already on the board, so a plan copied
+up before this pin moved still holds the drafting store's paths and will go on holding
+them until it is copied again. That is a decision rather than an oversight: nothing here
+walks a destination looking for stale text to rewrite, and a plan whose design document
+is worth repairing is one worth re-copying.
+
+**Nothing in `orchestrator/plan_copy.py` moved for this, and that is the wrapper working
+rather than a step somebody skipped.** That command composes with the store's own `project
+copy` and `document copy` and lets each write straight to the caller's streams — it
+captures no output and reads none — so the copy's per-record report and the `references: N
+rewritten, M unresolved (K ambiguous)` line beneath it reach an operator exactly as the
+store writes them, with nothing here restating a figure it would then have to keep in
+step. `tests/plan_tooling/test_copy_plan_recipe_e2e.py`'s
+`test_a_copied_design_document_points_its_task_references_at_the_destination` is what
+re-takes all of it, driving `just copy-plan` between two real local Markdown stores over a
+document holding the source's own reported task locations: it reads the destination's copy
+back, and it drives the unresolved figure as well as the rewritten one, so the day this
+pin moves onto a release that stopped pointing them the check fails rather than this
+passage going on describing a copy nobody makes.
+
+**Three further landings sit beneath this pin and are what a board read costs**, named the
+same way and for the same reason — by the change request that carried each, rather than by
+whichever release happens to sit beside this one, a phrase of that shape being true only
+until the next bump.
 https://github.com/nickderobertis/onetaskgraph/pull/590 stops every document selecting the
 board's own built-in `Labels` field value; GitHub derives that field from the item's
 content, so an issue's labels arrive from the `labels` connection the same document
@@ -674,7 +728,7 @@ GitHub's hourly allowance and reconciles that figure against GitHub's own
 number somebody has to change rather than going unnoticed.
 
 **What those three are worth is measured in the adopted release's own source rather than
-here**, in `crates/onetaskgraph-github-projects/session-cost.md` at tag `v0.2.26`, which
+here**, in `crates/onetaskgraph-github-projects/session-cost.md` at tag `v0.2.27`, which
 is where the figures are re-taken and where its
 `a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` holds a session
 to them: one session's worst-case node count falls from 1,757,301 to 222,516 — the record
@@ -688,7 +742,7 @@ here — `just plans`, `just check-plan`, `just copy-plan` — sends those docum
 reduction is spent on every read this host makes rather than only by that repository's own
 credentialed lane.
 
-**Two earlier landings sit beneath this pin and go on being spent**, named the same way and
+**Two earlier landings sit beneath it too and go on being spent**, named the same way and
 for the same reason. https://github.com/nickderobertis/onetaskgraph/pull/397 refuses a copy
 whose source hands back a cursor that does not advance, or a page larger than the one that
 was asked for: `just copy-plan` is the one board command here that walks that path — it is
@@ -711,7 +765,7 @@ and that change touches no crate source: every path in it is CI configuration, t
 `AGENTS.md`. release-plz cut no release for it and correctly cannot, because there is no
 versioned artifact to bump. **A later release has since swept that commit into its own
 history without carrying anything of it, and telling those two apart is the whole of this
-paragraph.** `7bcac9fa` landed after `v0.2.21` and is an ancestor of `v0.2.26` — the tag this
+paragraph.** `7bcac9fa` landed after `v0.2.21` and is an ancestor of `v0.2.27` — the tag this
 pin now names — so `git tag --contains` answers that the fix is *in* the adopted release,
 while the archive that release publishes is the compiled CLI, which holds no CI
 configuration, no `justfile`, nothing under `scripts/` and no `project.json`, and so carries
@@ -739,15 +793,15 @@ https://github.com/nickderobertis/onetaskgraph/pull/538, merged as `51596716`, s
 repository's startup sweep touching a run in flight; of its seventeen paths the only
 compiled source is `crates/onetaskgraph-live/src/`, and the rest are two `project.json`
 files, a `session-cost.md`, test targets under `tests/`, and two scripts. Both are
-ancestors of `v0.2.26`, so `git tag --contains` answers that the adopted release carries
+ancestors of `v0.2.27`, so `git tag --contains` answers that the adopted release carries
 each of them — and **the archive that release publishes carries neither**.
 
 **That last clause is measured on the artifact rather than argued from the manifest**,
 because it is the half a reader is most likely to take on trust and the half the
 release-guarantee wording invites getting wrong. The published
-`onetaskgraph-v0.2.26-<target>.tar.gz` holds exactly **one** file, the compiled
+`onetaskgraph-v0.2.27-<target>.tar.gz` holds exactly **one** file, the compiled
 `onetaskgraph` binary, and the copy this checkout installed is byte-identical to it
-(`sha256 ce28b6d9…`) — no scripts, no CI configuration, no `justfile`, no `project.json`.
+(`sha256 de63ceca…`) — no scripts, no CI configuration, no `justfile`, no `project.json`.
 That binary embeds a source path for each crate compiled into it — `onetaskgraph-core`,
 `onetaskgraph-github-projects`, `onetaskgraph-in-memory`, `onetaskgraph-linear`,
 `onetaskgraph-local-md`, `onetaskgraph-plugin-api` and `onetaskgraph` itself — and
@@ -756,7 +810,7 @@ The producer's own bill of materials says the same without reading a binary at a
 that release is published as a PyPI wheel too, and the CycloneDX SBOM under its
 `dist-info/sboms/` declares six onetaskgraph crates — the six above minus the binary
 crate itself — and no `onetaskgraph-live`. The dependency graph says why and says it
-permanently: at `v0.2.26` the `onetaskgraph`
+permanently: at `v0.2.27` the `onetaskgraph`
 binary crate depends on `clap`, `onetaskgraph-core`, `onetaskgraph-plugin-api`, `serde`,
 `serde_json` and `tokio`, while `onetaskgraph-live` is declared by exactly two crates and
 under `[dev-dependencies]` in both, which is the only section it has ever been declared
@@ -1446,7 +1500,7 @@ own records, and the adopted onepipeline 0.23.0 is past the 0.20.0 that carries 
 `onetaskgraph`'s own half — a copy coming back to a destination no longer overwriting
 that destination's `onetaskgraph.origin`,
 https://github.com/nickderobertis/onetaskgraph/pull/252 — is carried by the adopted
-onetaskgraph 0.2.26. The two journeys that were exempt while the engine could not read
+onetaskgraph 0.2.27. The two journeys that were exempt while the engine could not read
 this store now run for real and pass, projecting a real settlement onto a real plan and
 reading it back afterwards. **What has not changed is that a green run proves nothing
 about the board**: the write-back is still best-effort and off the reconcile loop —
@@ -1489,7 +1543,7 @@ breakage above cheap while it lasts, which is why that breakage is worth accepti
 than waiting out.
 
 *The store half.* onetaskgraph https://github.com/nickderobertis/onetaskgraph/pull/173,
-carried by the adopted onetaskgraph 0.2.26: it reads GitHub's own limiter vocabulary out of
+carried by the adopted onetaskgraph 0.2.27: it reads GitHub's own limiter vocabulary out of
 a refusal's `message` rather than off its status, and it spaces a copy's content-creating
 mutations at 60000/80 ms — the fastest rate that cannot exceed GitHub's published
 per-minute ceiling. Before it, every release answered both refusals with one sentence —
@@ -3279,9 +3333,9 @@ which holds that lane's own fixtures, and number 2 *"AI Orchestrator"*, the plan
 updated ProjectV2 and wrote to whatever came back — so the moment the plans board became
 the more recently updated of the two, a credentialed write lane retargeted itself onto
 it with nothing said, and left a draft item there on 2026-08-27. **The adopted
-onetaskgraph 0.2.26 discovers nothing**, and it wants a third name: read from
+onetaskgraph 0.2.27 discovers nothing**, and it wants a third name: read from
 that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
-at tag `v0.2.26`, and the `tests/lane/mod.rs` beside it that file's `live_lane` decision
+at tag `v0.2.27`, and the `tests/lane/mod.rs` beside it that file's `live_lane` decision
 lives in — the board comes from
 `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
 comes from `GH_PROJECTS_REPOSITORY`, and an absent one of those **skips** the lane
@@ -3303,7 +3357,7 @@ own source at its own tag rather than to a reading taken here -->
 *The lane is no longer opt-in.* That test used to carry an `#[ignore]` whose reason sent
 the reader to that repository's own `test-live` recipe for `onetaskgraph-github-projects`,
 and a `live.yml` of its own under its `.github/workflows/`; that change request removed the
-attribute and deleted the workflow. At `v0.2.26` neither is there,
+attribute and deleted the workflow. At `v0.2.27` neither is there,
 and `crates/onetaskgraph-live/src/lib.rs`'s own header says every
 live journey in that workspace is *"an ordinary test in an ordinary `test` target,
 selected by the ordinary affected selection"*. So an ordinary test run of that repository
@@ -3312,7 +3366,7 @@ nomination matter more than it did rather than less.
 
 *A nomination that reaches a URL is held to GitHub's own grammar.* Before that same change
 request the lane accepted any `GH_PROJECTS_REPOSITORY` whose two halves were non-empty and
-whose name held no second `/`. At `v0.2.26` `is_login` and `is_repository_name` in that
+whose name held no second `/`. At `v0.2.27` `is_login` and `is_repository_name` in that
 `tests/lane/mod.rs` hold the
 owner to letters, digits and single inner hyphens within 39 characters, and the name to
 letters, digits, hyphens, underscores and dots within 100, refusing `.` and `..` outright
@@ -3346,7 +3400,7 @@ draws on, the remaining allowance minus that session's estimated cost is still a
 crate says it is on each budget's own scale — and a budget whose allowance could not be
 read never affords anything. That is the half of this release this host consumes without
 running it. What one session costs is `session-cost.md`'s to state and it is restated
-nowhere here: at `v0.2.26` its checked-in record `tests/fixtures/session-cost.txt` reads
+nowhere here: at `v0.2.27` its checked-in record `tests/fixtures/session-cost.txt` reads
 **100 requests** and a worst-case node count of **222,516**, the gate's own `GET
 /rate_limit` counted inside that rather than outside it, and the estimate the gate is sized
 from is **934 points** against the GraphQL budget and **5 requests** against the REST one.
@@ -3370,13 +3424,13 @@ either: on the release that discovered a board, a lane with no nomination looked
 like a lane with a correct one until somebody read which board it wrote to; on this one
 it looks exactly like a lane whose credential is absent.
 
-**The third of those names was pointed at the wrong repository until this adoption read it
+**The third of those names was pointed at the wrong repository until an adoption read it
 against the lane's own source, and it is corrected.** A launch here exports
 `GH_PROJECTS_OWNER=nickderobertis` and `GH_PROJECTS_NUMBER=1` — board 1, the nomination
 this paragraph asks for, which was right throughout — beside
 `GH_PROJECTS_REPOSITORY=nickderobertis/onetaskgraph`, the lane's own repository, which now
 matches what `ci.yml` in that repository's own `.github/workflows/` gives its
-credentialed run at `v0.2.26`. It
+credentialed run at `v0.2.27`. It
 read `nickderobertis/ai-orchestrator` — **this** repository — and that third name is where
 the lane creates its artifact as a real issue and deletes it again, so a lane run in this
 environment would have filed and swept issues here instead of there. It is worth recording
