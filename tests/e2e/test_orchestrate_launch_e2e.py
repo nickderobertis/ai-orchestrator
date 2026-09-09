@@ -2113,6 +2113,22 @@ STOPPED_WATCHING = (
 #: load would report a wedge that is not there.
 HANDBACK_SECONDS = 180.0
 
+# The observed run's first node is *dispatched* rather than settled in place, so the run
+# still has work while the observer completes the exchange this measurement reads; the
+# fixture docstring says why that window is needed. `expects_no_diff` is absent because
+# the launcher refuses it beside a persona.
+# llmlint: ignore-block[e2e_not_mocked] Only the paid provider is doubled here.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] That fake costs no turn.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] So it adds no tier to split.
+OBSERVED_DISPATCHED_NODE: PlanNode = {
+    "id": "watched",
+    "persona": "docs-writer",
+    "task": "Report without changing files.",
+}
+# llmlint: ignore-end[e2e_not_mocked]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
 
 class ObservedLaunch(NamedTuple):
     """One attached launch, observed from before its observer graph died until after.
@@ -2152,9 +2168,12 @@ def observed_launch(
     that file is resolved against its own directory, so a copy anywhere else resolves
     none of them.
 
-    Two nodes rather than one, so the run has work left while the monitor completes
-    the exchange this measurement reads. A journey that raced settlement would report
-    a missing export as a missing variable.
+    The first node is *dispatched* rather than settled in place, so the run has work
+    left while the monitor completes the exchange this measurement reads. Two nodes
+    alone do not buy that and the plan below says why: an undispatched pair settles in
+    about 50ms, well inside the observer's own. A journey that raced settlement would
+    report a missing export as a missing variable, and would ask neither question
+    below.
 
     The launch is driven as a process this fixture polls rather than as a call it
     waits on, and that is the whole shape of it. The installed engine hands back, but
@@ -2197,11 +2216,7 @@ def observed_launch(
                 "name": OBSERVED_RUN,
                 "concurrency": 1,
                 "tasks": [
-                    {
-                        "id": "watched",
-                        "task": "Report without changing files.",
-                        "expects_no_diff": True,
-                    },
+                    OBSERVED_DISPATCHED_NODE,
                     {
                         "id": "watched-again",
                         "task": "Report without changing files.",
