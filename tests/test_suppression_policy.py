@@ -68,12 +68,69 @@ POLICY = (
     Part(
         "the disclosure",
         re.compile(
-            r"[Ee]very\s+suppression\s+standing\s+in\s+the\s+finished\s+tree\s+is\s+listed",
+            r"suppression\s+your\s+own\s+diff\s+writes[^*]*?standing\s+over\s+a\s+line\s+"
+            r"that\s+diff\s+changes",
             re.IGNORECASE,
         ),
-        "every suppression left in the finished tree is listed in the completion report",
+        "which suppressions the completion report accounts for: the ones this diff "
+        "writes, and the ones already standing over a line it changes",
+    ),
+    Part(
+        "how each of those two is decided",
+        re.compile(
+            r"decided\s+from\s+the\s+diff\s+alone:\s+a\s+directive\s+line\s+inside\s+it,"
+            r"\s+or\s+a\s+changed\s+line\s+inside\s+the\s+region\s+a\s+directive\s+covers",
+            re.IGNORECASE,
+        ),
+        "that both halves are read off the diff: a directive line in it, or a changed "
+        "line inside the region some directive covers",
+    ),
+    Part(
+        "the file-scoped carve-out",
+        re.compile(
+            r"file-scoped\s+directive\s+is\s+outside\s+both\s+unless\s+your\s+diff\s+"
+            r"writes\s+the\s+directive\s+itself",
+            re.IGNORECASE,
+        ),
+        "that a file-scoped directive is owed only when the diff writes the directive "
+        "itself, its region being every line of the file",
+    ),
+    Part(
+        "the disclosure's other edge",
+        re.compile(
+            r"elsewhere\s+in\s+the\s+tree\s+are\s+not\s+yours\s+to\s+inventory",
+            re.IGNORECASE,
+        ),
+        "that suppressions elsewhere in the tree are not this dispatch's to inventory",
     ),
 )
+
+#: The disclosure sentence this replaced, verbatim. Kept here rather than in the
+#: appendix, which quoting itself would put the ambiguous sentence back before a judge.
+SUPERSEDED_DISCLOSURE_SENTENCE = (
+    "Every suppression standing in the finished tree\n"
+    "is listed in your completion report, with its site and its reason, so the manager "
+    "reads\nwhat you left rather than discovering it.\n"
+)
+
+#: The reading this policy may not go back to, held absent: the clause that stood there,
+#: reaching every directive in the repository beside a purpose clause about one dispatch.
+ONE_READING_ONLY = re.compile(
+    r"[Ee]very\s+suppression\s+standing\s+in\s+the\s+finished\s+tree", re.IGNORECASE
+)
+
+#: The scope word that replaced it and did not decide either, held absent for the same
+#: reason. *Site* reads two ways over a file-scoped directive, whose region is every line
+#: of a file: a change editing one paragraph of `AGENTS.md` has left four of them standing
+#: at a site it touched, or has touched none of their sites at all, and the first worker to
+#: apply the sentence could not tell which. It is held separately from
+#: :data:`ONE_READING_ONLY` because it is a different sentence with the same defect, and a
+#: check that recognised only the first would pass this one straight back in.
+UNDECIDED_SITE_SCOPE = re.compile(r"left\s+standing\s+at\s+a\s+site\s+it\s+touched", re.I)
+
+#: A file-scoped directive, in the comment syntaxes the documents this policy governs use.
+#: Its region is the whole file, which is what makes it the case the carve-out decides.
+FILE_SCOPED = re.compile(r"llmlint:\s*ignore-file\[(?P<rule>[^\]]+)\]")
 
 #: The words a *statement* of this policy cannot avoid, as opposed to a pointer at one,
 #: as `(label, the pattern that finds it)`. Patterns rather than substrings because
@@ -130,6 +187,57 @@ def test_the_appendix_states_the_whole_suppression_policy(part: Part) -> None:
         f"{APPENDIX} no longer says {part.means}. It is the one source of this policy, "
         "and a part missing from it is a part a worker and its judge will each supply "
         "for themselves"
+    )
+
+
+def test_the_disclosure_leaves_a_compliant_worker_and_an_adversarial_judge_one_reading() -> None:
+    """The scope is stated because the sentence it replaced could be read two ways.
+
+    So it is held in both directions, and the superseded sentence is held **absent**: a
+    document saying both is the two-readings problem with an extra paragraph.
+    """
+    assert ONE_READING_ONLY.search(SUPERSEDED_DISCLOSURE_SENTENCE), (
+        "this check no longer recognises the sentence it was written for, so it would "
+        f"pass that wording straight back into {APPENDIX}:\n"
+        f"{SUPERSEDED_DISCLOSURE_SENTENCE}"
+    )
+    appendix = _document(str(APPENDIX))
+    ambiguous = ONE_READING_ONLY.search(appendix)
+    assert ambiguous is None, (
+        f"{APPENDIX} demands an account of {ambiguous.group(0)!r} again. That reads on "
+        "every suppression in the repository, which is several hundred of them and none "
+        "of them this dispatch's; say which ones a change owes an account of"
+    )
+    undecided = UNDECIDED_SITE_SCOPE.search(appendix)
+    assert undecided is None, (
+        f"{APPENDIX} scopes the account to {undecided.group(0)!r} again. A site is not "
+        "one thing over a file-scoped directive, whose region is every line of its file, "
+        "so that wording leaves a worker and a judge free to land in different places on "
+        "the case this repository's own documents present"
+    )
+
+
+def test_the_file_scoped_carve_out_decides_a_case_these_documents_really_present() -> None:
+    """The carve-out is held against the files it is about, not against a hypothetical.
+
+    A rule for a case nothing presents is a rule nobody reads, and the reason paragraph
+    in the appendix cites this one by name: `AGENTS.md` carries file-scoped directives at
+    its head, and a change that edits a paragraph of it changes a line every one of them
+    covers. So the appendix has to answer that case, and the file has to still be the
+    case it answers — the day these directives go, the citation is describing a file that
+    no longer reads that way.
+    """
+    guidance = _document(GUIDANCE_DOCUMENT)
+    covering = FILE_SCOPED.findall(guidance)
+    assert covering, (
+        f"{GUIDANCE_DOCUMENT} carries no file-scoped directive, so {APPENDIX}'s reason "
+        "for scoping the account by line cites a file that no longer presents the case; "
+        "re-take the reason against a document that does, or drop it"
+    )
+    assert f"at the head of `{GUIDANCE_DOCUMENT}`" in _document(str(APPENDIX)), (
+        f"{APPENDIX} no longer names {GUIDANCE_DOCUMENT} as the file whose file-scoped "
+        f"directives the scope had to decide, and it carries {len(covering)} of them; "
+        "without the case, the carve-out reads as a rule about nothing"
     )
 
 

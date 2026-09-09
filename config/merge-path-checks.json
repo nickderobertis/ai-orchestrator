@@ -247,12 +247,11 @@
     },
     "github.com/nickderobertis/printobserver": {
       "branch": "main",
-      "note": "Its base branch declared no protection at all when this identity was registered, so this entry recorded that nothing GitHub ran could refuse a merge here. It requires the five below now, and they are what verifies a change: `change-auto` under `approvals: none` still puts no reviewer between the branch and `main`, so the required checks are the whole of the merge path. That repository's CI is being actively built out — this set moved twice in one afternoon, and its `llmlint` job has since become required as well — so read a disagreement here as its protection having moved again rather than as this entry having been wrong.",
+      "note": "Its base branch declared no protection at all when this identity was registered, so this entry recorded that nothing GitHub ran could refuse a merge here. It requires the four below now, and they are what verifies a change: `change-auto` under `approvals: none` still puts no reviewer between the branch and `main`, so the required checks are the whole of the merge path. That repository's CI is being actively built out, and this entry has been re-read twice against it: the set moved twice in one afternoon and its `llmlint` job became required, and since then the `gate` matrix's display name has dropped the runner label it carried — `gate (linux-x86_64, ubuntu-24.04)` is now `gate (linux-x86_64)` — while `llmlint` has collapsed from a per-platform pair to the single job that workflow's own comment says it should be, a second cell over a text diff being a second verdict on one thing. Neither move changed what any of them judges. So read a disagreement here as its protection having moved again rather than as this entry having been wrong.",
       "checks": {
-        "gate (linux-aarch64, ubuntu-24.04-arm)": "other-os",
-        "gate (linux-x86_64, ubuntu-24.04)": "tree-verdict",
-        "llmlint (linux-aarch64, ubuntu-24.04-arm)": "other-os",
-        "llmlint (linux-x86_64, ubuntu-24.04)": "tree-verdict",
+        "gate (linux-aarch64)": "other-os",
+        "gate (linux-x86_64)": "tree-verdict",
+        "llmlint": "tree-verdict",
         "pr-title": "pull-request"
       }
     },
@@ -275,9 +274,11 @@
     },
     "github.com/nickderobertis/vibe-stl": {
       "branch": "main",
+      "note": "Three required checks, two of which are one gate split in two, which is why both read `tree-verdict`. `just check` passes `--exclude=<the bottle-sleeves trade study project>` on every one of its per-target Nx invocations, so it no longer reaches that project at all; `trade study tier` is the only thing that does, and it runs the same targets the gate used to run over it — format-check, lint, typecheck, test — in the gate's own order, with `set -e` making any of them fail the check. It was split out because those parameter-deciding searches take about 41 minutes and were holding the merge window open on `check`'s critical path, cancelling the required printability review; that is a scheduling reason and not a change in what it judges, so it is the verdict on the tree for one project exactly as `just check` is for the rest.",
       "checks": {
         "design review (printability)": "tree-verdict",
-        "just check": "tree-verdict"
+        "just check": "tree-verdict",
+        "trade study tier": "tree-verdict"
       }
     },
     "github.com/petsinc/cd-chat-tool-call-challenge": {

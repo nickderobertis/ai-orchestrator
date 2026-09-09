@@ -29,18 +29,12 @@ node's own `## Acceptance criteria` to state, which `AGENTS.md` gives the plan's
 One tail is deliberately kept, and `config/onejudge.base.yaml` records beside the clause
 why it is not the next thing to remove.
 
-The preamble half below is a different guard on the same file: a dispatch with no
-tracked change is told the truth, and one that changed something is not let off.
-
-That half moved once and is now read the same way the completion bar is — for what it
-says, and for the demand it may not make again. It used to order every dispatch to run
-the project's complete verification at closeout, independently of its task, so removing
-that instruction from the operational appendix alone would have left it in force and the
-change would not have landed. What replaced it is the checks that exercise the change,
-with the project's full bar named as something that runs downstream; what it keeps is
-everything that clause was the only enforcement of — the deterministic tier before each
-commit, the refusal to bypass a pre-commit or pre-push hook, and a failing check
-iterated on alone.
+The preamble half below is a guard about **which document** states a thing rather than
+about what this one says. Dispatch policy — which checks a dispatch runs, and when its
+work is done — has one source, `config/dispatch-appendix.md`, the only copy a worker and
+its judge read together. So what is held below is that policy's absence, the one clause
+that stays and the scope that makes it sayable, the pointer that keeps "states nothing"
+from reading as "nothing is owed", and that no statement of it stands in both files.
 
 `tests/e2e/test_orchestrate_launch_e2e.py` proves what this file cannot — that these
 clauses are what a real launch hands a real worker and its real judge — from a launch
@@ -51,15 +45,20 @@ test here is what the words demand, not whether they arrive.
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 import pytest
 from shared_dispatch_bar import (
     BASE_CONFIG,
+    appendix_text,
     judge_persona_default,
+    phrases_in_both,
     shared_agent_preamble,
     shared_completion_bar,
 )
-from test_dispatch_appendix import DOWNSTREAM, WIDE_BAR, sentence_around
+from test_dispatch_appendix import WIDE_BAR
+
+from orchestrator.criteria_guard import APPENDIX, CRITERIA_HEADING
 
 #: The whole shared completion bar, so that changing it is a change to this file too.
 #: What is left of it is the task's own criteria plus one clause about the tree the
@@ -162,68 +161,132 @@ def test_the_base_config_states_no_judge_persona_at_all() -> None:
     )
 
 
-#: The two sentences of the shared preamble that say what a dispatch with no tracked
-#: change does instead, each located by the condition it hangs on. Naming the condition
-#: rather than the sentence is what keeps these from becoming a copy of the prose: a
-#: sentence that stopped naming its condition would be an unguarded permission, and is
-#: not found here.
-NO_TRACKED_CHANGE_ALLOWANCES = (
-    "If you changed nothing tracked in the repository",
-    "when you touched none",
+class Policy(NamedTuple):
+    """One check-selection policy the shared preamble may not state."""
+
+    #: What it is, for the test id and the failure message.
+    name: str
+    #: The demand it cannot be made without, rather than the sentence it was.
+    stated_by: re.Pattern[str]
+
+
+#: Every policy about which checks a dispatch runs that this preamble has stated, held
+#: **absent**. On the demand rather than the wording: a re-added policy is worded fresh.
+CHECK_SELECTION_POLICY = (
+    Policy(
+        "rerunning the deterministic checks only for a change to code",
+        re.compile(r"only\s+when\s+a\s+fix\s+touched\s+code|rather\s+than\s+prose", re.I),
+    ),
+    Policy(
+        "the project's deterministic tier before every commit",
+        re.compile(r"deterministic\s+(?:check\s+)?tier|deterministic\s+checks?", re.I),
+    ),
+    Policy(
+        "which checks the acceptance criteria name",
+        re.compile(r"run\s+the\s+checks\s+your\s+acceptance\s+criteria\s+name", re.I),
+    ),
+    Policy(
+        "a ban on reporting success from inspection",
+        re.compile(r"on\s+inspection\s+alone", re.IGNORECASE),
+    ),
+    Policy(
+        "which checks a change earns",
+        re.compile(r"checks?\s+that\s+exercise\s+what\s+you\s+changed", re.IGNORECASE),
+    ),
+    Policy(
+        "how far to narrow a failing check",
+        re.compile(r"narrowest\s+scope|iterate\s+against\s+that\s+check", re.IGNORECASE),
+    ),
+    Policy(
+        "the refusal to bypass a hook",
+        re.compile(r"pre-commit\s+or\s+pre-push|--no-verify", re.IGNORECASE),
+    ),
+    Policy(
+        "what a dispatch that changed nothing tracked owes",
+        re.compile(r"changed\s+nothing\s+tracked|complete\s+without\s+them", re.IGNORECASE),
+    ),
 )
 
-#: What the preamble demands of a dispatch that did change something, with every
-#: allowance above struck out. Each of these was there before the allowances were, and
-#: none of them may become reachable through one.
-DEMANDS_OF_A_DISPATCH_THAT_CHANGED_SOMETHING = (
-    "run only the checks that exercise what you changed",
-    "iterate against that check alone, at the narrowest scope it supports",
-    "Work is not done while a check you ran is failing",
-    "bypassing the project's pre-commit or pre-push verification is not an acceptable "
-    "response to a slow or failing check",
-    "Never rely on the harness to commit for you or leave finished work uncommitted",
+#: The one thing the preamble may still say about a check, and the scope that makes it
+#: sayable. Unscoped it read on every test in the repository, including ones failing for
+#: the host's own reasons and ones the branch never touched.
+COMPLETION_CLAUSE = re.compile(
+    r"[Ww]ork\s+is\s+not\s+done\s+while\s+a\s+check\s+you\s+ran(?P<scope>[^.]*?)\s+is\s+failing"
 )
+CLAUSE_SCOPE = re.compile(r"bears\s+on\s+what\s+you\s+changed", re.IGNORECASE)
+
+#: Where the preamble sends a reader for the policy it no longer states. Without it a
+#: worker told nothing about checks concludes nothing is owed, which is the instruction
+#: coming back through the worker's own judgment rather than through this file.
+POINTS_AT_THE_TASK = re.compile(r"##\s+Additional\s+info")
 
 
-def _preamble_sentence_allowing(condition: str) -> str:
-    """The one sentence of the shared preamble that hangs on a no-change condition."""
-    flowing = " ".join(shared_agent_preamble().split())
-    parts = flowing.split(". ")
-    sentences = [
-        part if index == len(parts) - 1 else f"{part}." for index, part in enumerate(parts)
-    ]
-    allowing = [sentence for sentence in sentences if condition in sentence]
-    assert len(allowing) == 1, (
-        f"{BASE_CONFIG}'s `system_prompt` states {len(allowing)} sentence(s) hanging on "
-        f"{condition!r}; exactly one is what makes an allowance for a dispatch that changed "
-        "nothing separable from what every dispatch is told"
-    )
-    return allowing[0]
+@pytest.mark.parametrize("policy", CHECK_SELECTION_POLICY, ids=lambda row: row.name)
+def test_the_preamble_states_no_policy_about_which_checks_a_dispatch_runs(policy: Policy) -> None:
+    """Which checks a dispatch owes has one source, and this file is not it.
 
-
-def _preamble_binding_on_a_dispatch_that_changed_something() -> str:
-    """The shared preamble with every no-tracked-change allowance struck out.
-
-    Whole sentences, so an allowance that smuggled a relaxation in beside itself goes
-    with it: what is left is what a dispatch that changed code reads, and it has to be
-    the whole standing bar on its own.
+    One of these was not merely duplicated but false here: *rerun the deterministic
+    checks only when a fix touched code rather than prose*, in a repository whose product
+    is its tracked prose and whose documentation tier `tests/conftest.py` enforces.
     """
-    binding = " ".join(shared_agent_preamble().split())
-    for condition in NO_TRACKED_CHANGE_ALLOWANCES:
-        binding = binding.replace(_preamble_sentence_allowing(condition), "")
-    return binding
+    preamble = " ".join(shared_agent_preamble().split())
+    found = policy.stated_by.search(preamble)
+    assert found is None, (
+        f"{BASE_CONFIG}'s `system_prompt` states {policy.name} again ({found.group(0)!r}). "
+        "Which checks a dispatch runs is `config/dispatch-appendix.md`'s to say — the "
+        "one copy a worker and its judge read together — and two copies of it have "
+        f"already disagreed:\n{preamble}"
+    )
 
 
-#: What a project-wide bar is spelled as, what makes a mention of one a statement about
-#: who runs it, and how a mention is cut down to the sentence it sits in — all three
-#: imported from the appendix's own guard rather than restated. The preamble and the
-#: operational notes are two halves of what one dispatch reads, so a bar this file
-#: admitted and that one refused would be a contradiction handed to a worker, exactly
-#: like the one the appendix used to contain.
+def test_the_preamble_sends_a_reader_to_the_one_place_that_does_state_them() -> None:
+    """Stating nothing is not the same as saying nothing, and the difference costs work.
 
-#: The demand this clause used to make, in the wordings a re-added one would take. Held
-#: as phrases rather than as stems because the preamble legitimately uses every stem
-#: inside them: it is the one clause here that names checks at all.
+    A worker handed a standing bar that never mentions checks concludes they are nobody's
+    and runs whatever it judges best, which is the removed policy returning through its
+    own judgment. So the preamble names where the policy is instead: the operational
+    notes under the task's own `## Additional info`, which is `config/dispatch-appendix.md`
+    verbatim, with the node's `## Acceptance criteria` stating what they have to show.
+    """
+    preamble = " ".join(shared_agent_preamble().split())
+    assert POINTS_AT_THE_TASK.search(preamble), (
+        f"{BASE_CONFIG}'s `system_prompt` states no check policy and names nowhere that "
+        "does. A worker reads that as no checks being owed, or supplies its own list:\n"
+        f"{preamble}"
+    )
+    assert CRITERIA_HEADING in preamble, (
+        f"{BASE_CONFIG}'s `system_prompt` points at the operational notes without naming "
+        f"{CRITERIA_HEADING}, which is what says what those checks have to show:\n"
+        f"{preamble}"
+    )
+
+
+def test_the_preamble_scopes_its_one_completion_clause_to_the_change() -> None:
+    """The clause a judge reads about a red check, held to the scope it needs.
+
+    Unscoped it reaches every test in the repository, including ones failing for the
+    host's own reasons, which no worker can clear beside the appendix's commit-as-you-go
+    rule. The scope is what makes the two one instruction.
+    """
+    preamble = " ".join(shared_agent_preamble().split())
+    clause = COMPLETION_CLAUSE.search(preamble)
+    assert clause is not None, (
+        f"{BASE_CONFIG}'s `system_prompt` no longer says that work is not done while a "
+        "check it ran is failing. That is the one demand about checks this file makes, "
+        f"and nothing else states it:\n{preamble}"
+    )
+    assert CLAUSE_SCOPE.search(clause["scope"]), (
+        f"{BASE_CONFIG}'s `system_prompt` states that clause as {clause.group(0)!r}, "
+        "which reads on every check in the repository. Scope it to a check that bears on "
+        "what this dispatch changed"
+    )
+
+
+#: A project-wide verification demanded of every dispatch, in the wordings a re-added one
+#: would take. Held as phrases rather than as stems because a preamble that named checks
+#: at all used every stem inside them; kept as a constant because
+#: `tests/e2e/test_persona_review_bar_e2e.py` reads a *persona's* delivered bar for the
+#: same demand, and one vocabulary in two files is how those two answers stay one answer.
 NO_PROJECT_WIDE_DEMAND = (
     "complete verification",
     "full verification",
@@ -234,89 +297,72 @@ NO_PROJECT_WIDE_DEMAND = (
 )
 
 
-@pytest.mark.parametrize("phrase", NO_PROJECT_WIDE_DEMAND)
-def test_the_preamble_demands_no_project_wide_verification_of_every_dispatch(
-    phrase: str,
-) -> None:
-    """The removed demand, held gone by the way it would be worded rather than by one line.
+def test_the_preamble_names_no_repository_wide_bar_at_all() -> None:
+    """With no check policy left here, naming that bar has nothing to qualify.
 
-    This clause reached every dispatch whatever its task said, which is why the appendix
-    could not remove the instruction on its own. A re-added one would be worded fresh, so
-    what is checked is the phrasing such a demand cannot avoid: a verification named as
-    complete, or a run placed at closeout.
-    """
-    preamble = " ".join(shared_agent_preamble().split())
-    assert phrase.lower() not in preamble.lower(), (
-        f"{BASE_CONFIG}'s `system_prompt` demands {phrase!r} of every dispatch again. "
-        "That demand is what cost twenty to forty minutes a dispatch to learn what the "
-        "merge path reports anyway; what a dispatch owes is the checks that exercise its "
-        f"own change:\n{preamble}"
-    )
-
-
-def test_the_preamble_names_a_project_wide_bar_only_as_something_run_downstream() -> None:
-    """The positive half: the wide bar is somebody else's, and the clause says whose.
-
-    Without it, a worker told to run less concludes the rest is nobody's and runs it
-    anyway — which is the instruction returning through the worker's own judgment rather
-    than through this file.
+    A regex and a phrase list, because they fail differently and a re-added demand is
+    worded fresh: the regex catches a bar named complete, full, whole or entire, and the
+    phrases catch wordings naming no bar at all — `at closeout` in particular.
     """
     preamble = shared_agent_preamble()
-    mentions = list(WIDE_BAR.finditer(preamble))
-    assert mentions, (
-        f"{BASE_CONFIG}'s `system_prompt` no longer says a project-wide bar exists at "
-        "all, so nothing tells a dispatch who runs what it was told not to"
+    named = WIDE_BAR.search(preamble)
+    assert named is None, (
+        f"{BASE_CONFIG}'s `system_prompt` names {named.group(0)!r}. Whose that bar is, "
+        "and when it runs, is stated where a dispatch is told what it does owe"
     )
-    for mention in mentions:
-        sentence = sentence_around(preamble, mention.start())
-        assert any(marker in sentence.lower() for marker in DOWNSTREAM), (
-            f"{BASE_CONFIG}'s `system_prompt` names {mention.group(0)!r} in a sentence "
-            f"that does not say it runs downstream ({sentence!r}), so it reads as this "
-            "dispatch's to run"
+    for phrase in NO_PROJECT_WIDE_DEMAND:
+        assert phrase.lower() not in preamble.lower(), (
+            f"{BASE_CONFIG}'s `system_prompt` demands {phrase!r} of every dispatch again. "
+            "That demand is what cost twenty to forty minutes a dispatch to learn what "
+            "the merge path reports anyway; what a dispatch owes is the checks that "
+            f"exercise its own change:\n{preamble}"
         )
 
 
-def test_the_preamble_still_holds_a_dispatch_that_changed_something_to_every_demand() -> None:
-    """No allowance for a document-producing dispatch is reachable by one that changed code.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes a
+# test between two targets of the project that already owns it, rather than standing in
+# for a project. Both cases below read `config/dispatch-appendix.md`, which collection
+# refuses without the marker.
+@pytest.mark.reads_docs
+def test_no_statement_of_dispatch_policy_stands_in_both_files() -> None:
+    """The structural half: one policy, one document, and a gate rather than a rule.
 
-    Demonstrated by removing every sentence that hangs on having changed nothing and
-    reading what is left, which is what a dispatch that changed something is bound by.
-    This excludes the rewording that reads as permission — moving the demand to run the
-    checks that exercise the change, "work is not done while a check you ran is failing",
-    the narrowed iteration, the refusal to bypass a pre-commit or pre-push hook, or
-    "never leave finished work uncommitted" inside a sentence that a dispatch with a diff
-    could also apply to itself, or softening any of them into something optional for
-    everyone.
+    `AGENTS.md` has said since the suppression incident that this policy has one source
+    and that it is `config/dispatch-appendix.md`; nothing checked it. Compared as a worker
+    meets them: this preamble as a system prompt, the appendix as its task's
+    `## Additional info`.
     """
-    binding = _preamble_binding_on_a_dispatch_that_changed_something()
-    for demand in DEMANDS_OF_A_DISPATCH_THAT_CHANGED_SOMETHING:
-        assert demand in binding, (
-            f"{BASE_CONFIG}'s `system_prompt` no longer demands {demand!r} of a dispatch "
-            f"that changed something; it survives only inside an allowance for one that did "
-            f"not, or is gone:\n{binding}"
-        )
+    shared = phrases_in_both(shared_agent_preamble(), appendix_text())
+    assert not shared, (
+        f"{BASE_CONFIG}'s `system_prompt` and {APPENDIX} both state:\n"
+        + "\n".join(f"  {run!r}" for run in shared)
+        + f"\nDispatch policy has one source and it is {APPENDIX}; delete the copy here "
+        "or state it there alone"
+    )
 
 
-def test_the_preamble_tells_a_dispatch_with_no_tracked_change_something_true() -> None:
-    """The allowances exist, and each says what IS true of a document-producing dispatch.
+@pytest.mark.reads_docs
+def test_a_policy_sentence_standing_in_both_files_fails_that_gate() -> None:
+    """The gate proven to catch what it is for, on the real files rather than on fixtures.
 
-    The other direction of the same guard: an allowance that named its condition but
-    demanded the checks anyway would leave the preamble as false for that dispatch as it
-    was before. So each sentence is read back for what it permits — closing out with no
-    checks over code that was never changed, and a clean `git status` being a complete
-    outcome rather than a reason to author a file nobody asked for.
+    Two documents that happen to agree today pass whether the gate discriminates or not,
+    so a real appendix sentence is planted into the real preamble and the gate asked
+    again.
     """
-    closeout = _preamble_sentence_allowing(NO_TRACKED_CHANGE_ALLOWANCES[0])
-    assert "complete without them" in closeout, (
-        f"{BASE_CONFIG}'s `system_prompt` names the no-tracked-change condition at "
-        f"closeout without saying such a dispatch is complete:\n{closeout}"
+    appendix = appendix_text()
+    copied = "take the narrowest scope each one supports"
+    assert copied in appendix, (
+        f"{APPENDIX} no longer states {copied!r}, so this gate is being proven against a "
+        "sentence that is not in it; plant one this file really carries"
     )
-    assert "never because running them is slow or inconvenient" in closeout, (
-        f"{BASE_CONFIG}'s `system_prompt` lets closeout be skipped without saying what "
-        f"may not decide it, so any dispatch can reach the allowance:\n{closeout}"
+
+    planted = f"{shared_agent_preamble()}\n  - Pick those checks from your change, and {copied}."
+    caught = phrases_in_both(planted, appendix)
+    assert any(copied in run for run in caught), (
+        f"the gate over {BASE_CONFIG} and {APPENDIX} passed a preamble carrying "
+        f"{copied!r} verbatim out of the appendix, so it would not have caught the "
+        f"duplication it exists for; it reported {caught}"
     )
-    committing = _preamble_sentence_allowing(NO_TRACKED_CHANGE_ALLOWANCES[1])
-    assert "correct and complete outcome" in committing, (
-        f"{BASE_CONFIG}'s `system_prompt` no longer tells a dispatch that touched no "
-        f"tracked file that having nothing to commit is a correct outcome:\n{committing}"
-    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

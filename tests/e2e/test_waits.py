@@ -22,8 +22,10 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from waits import install_default_bounds, timeout, until
@@ -170,7 +172,10 @@ SLEEPS = [sys.executable, "-c", "import time; time.sleep(30)"]
 #: killed call had produced. Computed by the child rather than written in its argv,
 #: because the command line is in the diagnosis too: a literal would satisfy an
 #: assertion about captured output without any output having been captured, which is a
-#: mistake this case made before it was written this way.
+#: mistake this case made before it was written this way. That guard is what still
+#: separates the two halves of that assertion now that one of them supplies this text
+#: itself — the argv below carries `0xDEADBEEF`, and only a wrapper that put the
+#: capture into its diagnosis can put `3735928559` there.
 SAID_BEFORE_SLEEPING = str(0xDEADBEEF)
 SAYS_THEN_SLEEPS = [
     sys.executable,
@@ -199,10 +204,68 @@ def bounded() -> Iterator[float]:
         unwind()
 
 
+# llmlint: ignore-block[e2e_not_mocked] Only CPython's kill decision is stood in for, for
+# the reason the docstring below gives; the bound itself is real.
+# llmlint: ignore-block[tests_mirror_real_usage] Same site, same reason.
+@contextmanager
+def killed_having_written(said: str) -> Iterator[None]:
+    """Run this suite's bound over a boundary that answers as a killed call really does.
+
+    `subprocess.run` raises `TimeoutExpired` carrying whatever the child had written
+    before the kill, as `str` for a `text=True` caller, and what the bound does with that
+    capture is the subject here.
+
+    This is the one site in the file that answers at the boundary rather than across it,
+    because which call CPython kills is the one part of this that cannot be made
+    deterministic: a real child has to start, import, write and flush inside the bound,
+    which is 0.01-0.02s on a quiet host and longer than the bound on a publication gate
+    running four xdist workers beside live dispatches. That gate is the one place losing
+    costs a publication, and it lost one — 1453 cases passed beside this one and the push
+    was refused.
+
+    Installed *over* whatever is currently bound rather than beside it, and unwound in
+    the order it was laid down, so the fixture's own bound is what the caller gets back.
+    """
+    replaced = subprocess.run
+
+    # `Any` for the same reason `waits.py`'s own three wrappers take it: this stands in
+    # for a call whose signature is overloaded on what the caller asked for — text or
+    # bytes, captured or not — and narrowing it here would refuse the callers the real
+    # one accepts, which is every unbounded `subprocess.run` in this suite.
+    def killed(*arguments: Any, **keywords: Any) -> Any:
+        raise subprocess.TimeoutExpired(
+            cmd=arguments[0], timeout=keywords["timeout"], output=said, stderr=""
+        )
+
+    # Rebinding the module attribute is the whole mechanism, as it is in
+    # `install_default_bounds`; the ignore is because `subprocess.run` is typed as the
+    # overloaded function, not because either assignment is unsound.
+    subprocess.run = killed  # type: ignore[assignment]
+    unwind = install_default_bounds(BOUND_SECONDS)
+    try:
+        yield
+    finally:
+        unwind()
+        subprocess.run = replaced  # type: ignore[assignment]
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
 def test_a_command_this_suite_runs_with_no_bound_of_its_own_is_given_one(
     bounded: float,
 ) -> None:
-    """The two hundred call sites that state no timeout, answered in one place."""
+    """The two hundred call sites that state no timeout, answered in one place.
+
+    Two halves, proved in different ways because they are provable in different ways —
+    and one of them was proved by a race for as long as they were one assertion. That the
+    bound *fires* is arithmetic against a real child: the command sleeps for half a minute
+    against a twentieth of a second, so no load lets it finish first and none makes the
+    bound expire late. That the expiry *carries what the killed command had written* is
+    not, so it is driven at the boundary the bound wraps instead; `killed_having_written`
+    says why. Both halves hold on a loaded host as well as an idle one.
+    """
     started = time.monotonic()
 
     with pytest.raises(AssertionError) as expired:
@@ -218,13 +281,24 @@ def test_a_command_this_suite_runs_with_no_bound_of_its_own_is_given_one(
         f"the expiry does not name the command that was run, so a reader cannot tell "
         f"which of a journey's calls stopped:\n{said}"
     )
-    assert SAID_BEFORE_SLEEPING in said, (
-        f"the expiry does not carry what the command had produced before it was killed, "
-        f"which is the whole of its last observed state:\n{said}"
-    )
     assert took < 30, (
         f"the call ran for {took:.1f}s against a {bounded}s bound, so it was waited out "
         f"rather than bounded — the command it ran sleeps for 30s"
+    )
+
+    # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] The call is the
+    # ordinary unbounded one; `killed_having_written` says what is stood in for and why.
+    with killed_having_written(SAID_BEFORE_SLEEPING), pytest.raises(AssertionError) as carried:
+        subprocess.run(SAYS_THEN_SLEEPS, capture_output=True, text=True, check=False)
+    # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+
+    reported = str(carried.value)
+    assert SAID_BEFORE_SLEEPING in reported, (
+        f"the expiry does not carry what the command had produced before it was killed, "
+        f"which is the whole of its last observed state. The capture was handed to the "
+        f"bound and did not reach its diagnosis; nothing else in this message could put "
+        f"{SAID_BEFORE_SLEEPING} there, since the command line spells it "
+        f"`0xDEADBEEF`:\n{reported}"
     )
 
 

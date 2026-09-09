@@ -986,6 +986,12 @@ def check_appendix(task: str, node_id: str) -> None:
     removed. That is not hypothetical: the buried cheap-loop rule cost one node about
     84 minutes after it had already been written down, and the sentinel that waited on
     two of the complete gate's three parts failed another for running them separately.
+
+    It follows that **editing that file invalidates this check for every plan already
+    authored**, which is expected rather than a defect in either. A plan is checked and
+    launched against the appendix of its day; a plan authored afterwards carries the new
+    text, and one authored before is refused here until its tasks are rebuilt from the
+    current file — which is what the refusal already says to do.
     """
     current = (REPO_ROOT / APPENDIX).read_text(encoding="utf-8").strip()
     if current not in task:

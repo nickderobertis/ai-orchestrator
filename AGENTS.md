@@ -3859,6 +3859,24 @@ as that reading allowed, and had its finished work failed by a judge reading ano
 dispatched task carries, so it is the only copy a worker and its judge read together.
 Read the policy there, and amend it there.
 
+<!-- llmlint: ignore[instruction_layer_localized] The rule's ground is that this repository has no CODEOWNERS routing ownership reviews; `.github/CODEOWNERS` reads `* @nickderobertis`, and the diff excludes it from the judged set. The layering holds on its merits: which of two shared documents states dispatch policy is repo-wide, so it belongs to the root document, while project-specific rules stay in `orchestrator/AGENTS.md` and `tests/AGENTS.md`. -->
+**That rule is now the whole of dispatch policy's rather than one topic's, and a check
+holds it rather than a convention.** Which checks a dispatch runs, and when its work is
+done, are [`config/dispatch-appendix.md`](config/dispatch-appendix.md)'s to state on the
+same ground: `config/onejudge.base.yaml`'s shared preamble carried them too, and the two
+came apart on three readings in one window — it demanded the project's deterministic tier
+before every commit where the appendix tells a worker to pick from its own change; it told
+every dispatch to rerun the deterministic checks only for a change to code rather than
+prose, in a repository whose product is its tracked prose and whose documentation tier a
+prose edit then broke; and its completion clause reached every check in the repository
+rather than the ones bearing on the change, so finished work standing beside a red nobody
+caused could satisfy one document or the other but not both. Three nodes were failed on
+those three readings, each with correct, committed, green work in front of the judge.
+`tests/test_shared_dispatch_bar.py` refuses a statement of that policy standing in both
+files, so the two can no longer disagree in silence; the preamble now says only that a
+check bearing on what this dispatch changed must not be left failing, and points at the
+task's own `## Additional info` for the rest.
+
 The judge behind that tier is non-deterministic, so the run itself is cached: `just
 lint-llm-diff` resolves the base ref to a commit and runs the cached Nx
 `workspace:lint-llm-diff` target (the root `project.json` — the check spans the

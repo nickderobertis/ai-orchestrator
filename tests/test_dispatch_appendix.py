@@ -63,6 +63,11 @@ reason: it rested on this repository's e2e configs binding fixed ports, live e2e
 allocates through `_free_port()` instead, and two managers' judged tiers ran concurrently
 on 2026-08-24 and both completed.
 
+Two rules moved *into* this file rather than out of it, because dispatch policy has one
+source and it is this file: what a dispatch that changed nothing tracked owes, and when a
+piece's checks are run. The removal side is `tests/test_shared_dispatch_bar.py`'s. A
+third is new to both — a process must finish inside the turn that started it.
+
 `tests/test_criteria_guard.py` proves the guard that reads this file; here the subject
 is the file itself, which is why these belong to the tier keyed on this repository's
 prose. `tests/e2e/test_dispatched_operational_notes_e2e.py` is the other half and reads
@@ -280,6 +285,27 @@ SCRATCH_CONTRACT = (
     re.compile(r"not\s+removed\s+while\s+it\s+runs", re.IGNORECASE),
 )
 
+#: What a dispatch that changed nothing tracked owes, which is none of the checks above.
+#: Held on what it permits, not only on the condition it names.
+NO_TRACKED_CHANGE = re.compile(r"changed\s+nothing\s+tracked\s+owes", re.IGNORECASE)
+COMPLETE_WITHOUT_THEM = re.compile(r"you\s+are\s+complete\s+without\s+them", re.IGNORECASE)
+NOT_BECAUSE_IT_IS_SLOW = re.compile(
+    r"never\s+because\s+running\s+them\s+is\s+slow\s+or\s+inconvenient", re.IGNORECASE
+)
+NOTHING_TO_COMMIT_IS_COMPLETE = re.compile(r"correct\s+and\s+complete\s+outcome", re.IGNORECASE)
+
+#: A process outliving the turn that launched it. Three parts, each separately
+#: actionable: the rule, why the launch gives no sign of the loss, and what to do instead.
+FINISHES_INSIDE_ITS_TURN = re.compile(
+    r"must\s+finish\s+inside\s+the\s+turn\s+that\s+started\s+it", re.IGNORECASE
+)
+THE_LAUNCH_LOOKS_FINE = re.compile(
+    r"because\s+it\s+succeeded\s+and\s+the\s+turn\s+then\s+ended\s+normally", re.IGNORECASE
+)
+WAIT_INSIDE_THE_TURN = re.compile(
+    r"wait\s+out\s+its\s+sentinel\s+before\s+your\s+turn\s+ends", re.IGNORECASE
+)
+
 #: Committing as the work goes, held on the consequence rather than on the instruction:
 #: "commit often" is advice a worker weighs, and "what is uncommitted is what nothing
 #: recovers" is a fact about this host that decides it.
@@ -287,6 +313,11 @@ COMMIT_EACH_PIECE = re.compile(
     r"[Cc]ommit\s+a\s+coherent\s+working\s+piece\s+the\s+moment\s+it\s+works"
 )
 UNCOMMITTED_IS_LOST = re.compile(r"dirty\s+worktree\s+does\s+not\s+survive", re.IGNORECASE)
+#: When the checks a piece needs are run. The removed preamble demanded a *tier* before
+#: every commit; what survives is the timing, attached to the checks this file selects.
+CHECKED_BEFORE_COMMITTED = re.compile(
+    r"run\s+before\s+it\s+is\s+committed\s+rather\s+than\s+after", re.IGNORECASE
+)
 
 #: Asking rather than stopping, and the seam it is asked over. The seam is named
 #: because a worker told to "ask its manager" with no mechanism has been told to write
@@ -809,6 +840,13 @@ def test_the_appendix_tells_a_worker_to_commit_each_piece_as_it_works(appendix: 
         f"{APPENDIX} asks for commits without saying what an uncommitted tree costs. The "
         "instruction is weighed against tidiness unless the consequence is beside it"
     )
+    assert CHECKED_BEFORE_COMMITTED.search(appendix), (
+        f"{APPENDIX} no longer says when the checks a piece needs are run. "
+        "`config/onejudge.base.yaml` demanded the project's deterministic tier before "
+        "every commit, which named a tier where it meant a time and contradicted the "
+        "scoping rule this file opens with; the timing is what survives that removal, "
+        "and without it 'the moment it works' is a commit nobody has evidence for"
+    )
 
 
 def test_the_appendix_tells_a_worker_to_ask_rather_than_stop(appendix: str) -> None:
@@ -883,3 +921,58 @@ def test_the_appendix_is_still_the_one_source_a_task_appendix_is_built_from(
     check_appendix(f"## What\nSomething.\n\n{appendix.strip()}\n", "carrying-it")
     with pytest.raises(CriteriaError, match="current operational appendix"):
         check_appendix("## What\nSomething.\n", "carrying-none")
+
+
+def test_the_appendix_says_what_a_dispatch_that_changed_nothing_tracked_owes(
+    appendix: str,
+) -> None:
+    """The allowance for a document-producing dispatch, in the file that selects checks.
+
+    Held on what it *permits* as well as on the condition it names: one that named the
+    condition and demanded the checks anyway would leave the file as false for that
+    dispatch as saying nothing does. And on what may not decide it, since without that
+    clause every dispatch can reach the allowance.
+    """
+    for stated, missing in (
+        (NO_TRACKED_CHANGE, "what a dispatch that changed nothing tracked owes"),
+        (COMPLETE_WITHOUT_THEM, "that such a dispatch is complete without those checks"),
+        (NOT_BECAUSE_IT_IS_SLOW, "what may not decide that a dispatch is one of those"),
+        (
+            NOTHING_TO_COMMIT_IS_COMPLETE,
+            "that having nothing to commit is then a correct outcome rather than a "
+            "problem to solve by writing a file nobody asked for",
+        ),
+    ):
+        assert stated.search(appendix), (
+            f"{APPENDIX} no longer says {missing}. A dispatch whose deliverable is a "
+            "document reads the selection rule above as owing checks it cannot run, and "
+            "one has already been failed against that"
+        )
+
+
+def test_the_appendix_says_a_process_must_finish_inside_the_turn_that_started_it(
+    appendix: str,
+) -> None:
+    """The turn boundary, which this file taught backgrounding across without naming.
+
+    Held in three parts because each is separately actionable: the rule alone reads as
+    style advice, the reason the launch looks fine is what stops a worker trusting a
+    successful background launch, and one talked out of carrying a process across needs
+    telling what to do with a slow check instead.
+    """
+    for stated, missing in (
+        (FINISHES_INSIDE_ITS_TURN, "that a process must finish inside the turn that started it"),
+        (
+            THE_LAUNCH_LOOKS_FINE,
+            "why the loss is invisible: the launch succeeded and the turn then ended normally",
+        ),
+        (
+            WAIT_INSIDE_THE_TURN,
+            "what to do with a slow check instead of carrying it across a turn boundary",
+        ),
+    ):
+        assert stated.search(appendix), (
+            f"{APPENDIX} no longer says {missing}. This file teaches backgrounding as the "
+            "way to wait on a slow command, and a worker that reads only that ends its "
+            "turn with the run still going and nothing to show for it"
+        )

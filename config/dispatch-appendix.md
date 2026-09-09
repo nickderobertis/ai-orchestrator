@@ -20,6 +20,13 @@ you reached for it because it was the widest thing available. When a check you r
 reports something, fix that and run **that check** again; nothing here asks you to re-run
 its neighbours to confirm, and a wider tier cannot re-check a finding it never made.
 
+**A dispatch that changed nothing tracked owes none of them.** When your deliverable is a
+document, a report, or an answer, there is no changed code for those checks to exercise
+and you are complete without them — decide that from what the repository shows, never
+because running them is slow or inconvenient. `git status` reporting nothing to commit is
+then a correct and complete outcome, not a problem to solve by writing a file nobody
+asked for.
+
 **Never signal a process you did not identify by PID, and a PID you got from a pattern is
 still a pattern kill.** Several managers share this host, and their dispatches, drivers,
 publications and test servers run under the same few binary names — `just`, `node`,
@@ -78,6 +85,19 @@ that invocation can write:
 
     ( just test > /tmp/check.$$.log 2>&1; echo $? > /tmp/check.$$.exit ) &
     until [ -f /tmp/check.$$.exit ]; do sleep 20; done
+
+**A process must finish inside the turn that started it.** Backgrounding is how you wait
+on a slow command *within* one turn, which is why the launch and the wait sit together in
+that example — both halves belong to the same turn. What does not survive is a background
+process left running when the turn ends: nothing carries it across, and the launch gives
+you no sign of that, because it succeeded and the turn then ended normally. The loss
+shows up a turn later as a sentinel that never appeared and a recipe terminated by
+signal, with the whole run to pay for again. It bites hardest where it is most tempting,
+because a worker reaches for backgrounding exactly when a command is slow enough to
+threaten the turn — here the judged lint tier and a whole test tier, which are the two
+runs a node most needs to have made. So run a slow check in the foreground, or background
+it and wait out its sentinel before your turn ends; never end a turn intending to read a
+result on the next one.
 
 **To ask whether a process is running at all, match the executable, not the command line.**
 `pgrep -x onepipeline` matches process *names* exactly — the binary, not its arguments — so
@@ -142,14 +162,37 @@ or misapplied, say so with evidence rather than editing it.
 **One suppression policy, and this is the whole of it.** A site-scoped `ignore` directive
 is permitted where the rule is genuinely misapplied at that site **and** the directive
 carries a substantive reason saying why. What is forbidden is silencing a finding you
-have not answered so that a count moves. Every suppression standing in the finished tree
-is listed in your completion report, with its site and its reason, so the manager reads
-what you left rather than discovering it. `AGENTS.md` states no suppression policy of its
-own and points here, because this file is what your judge reads beside your task: while
-that document said it twice, one dispatch added four site-scoped ignores each carrying a
-substantive reason and was failed for *"the task's categorical instruction never to
-suppress a rule"* — work that was correct under one of this repository's own readings and
-refused under the other.
+have not answered so that a count moves. What you owe an account of is **every
+suppression your own diff writes — added, moved or rewritten — and every one already
+standing over a line that diff changes** — each with its site and its reason, in your
+completion report, so the manager reads what you left rather than discovering it. Both
+halves are decided from the diff alone: a directive line inside it, or a changed line
+inside the region a directive covers. A file-scoped directive is outside both unless your
+diff writes the directive itself — its region is every line of the file, so counting it
+would make this file's own header a debt of every change that edits a word of it.
+Suppressions elsewhere in the tree are not yours to inventory: this repository carries several hundred standing directives, and
+a list of them would be longer than the report is read under while saying nothing about
+the change under review.
+
+That scope is stated because the sentence it replaces read two ways at once: its first
+clause reached every directive anywhere in the repository, while its second — *so the
+manager reads what you left* — was about this dispatch's own work, in the same breath. A
+node was failed on the wider reading for not accounting for suppressions it had never
+touched, on a tree whose every target had just run from cold and come back green; it cost
+a third dispatch of a run's final node. The reading above is the one the purpose clause
+and the scale both support, and it is written so that a worker complying with it and a
+judge reading it adversarially land in the same place. It says which lines rather than which sites for the same
+reason: *site* was itself readable two ways, and the first worker to apply the sentence
+could not decide whether the file-scoped directives at the head of `AGENTS.md` were
+owed by a change that edits one of its paragraphs. Apply that same test to whatever
+replaces it: read it as a worker trying to comply and as a judge looking for a way to
+refuse, and if the two can land in different places it is not one source yet.
+
+`AGENTS.md` states no suppression policy of its own and points here, because this file is
+what your judge reads beside your task: while that document said it twice, one
+dispatch added four site-scoped ignores each carrying a substantive reason and was failed
+for *"the task's categorical instruction never to suppress a rule"* — work that was
+correct under one of this repository's own readings and refused under the other.
 
 **`--no-verify` is not an acceptable response to a slow or inconvenient hook.** The hooks
 are this repository's enforcement point — there is no CI — so bypassing one commits work
@@ -165,6 +208,9 @@ commit in front of you, and the answer is to fix the commit.
 survive this dispatch: what is uncommitted when your last turn ends is what nothing
 recovers — not a retry, not a recovery verb, not a manager reading the branch. So each
 piece is its own commit as you finish it, rather than one commit held back to the end.
+*The moment it works* is the moment you have seen it work: the checks that piece needs
+are run before it is committed rather than after, so that each commit is one you have
+evidence for.
 
 **Ask rather than stop.** When you cannot proceed without a decision that is not yours —
 a frozen contract you would have to amend, a goal that reads two ways, a constraint you

@@ -13,6 +13,10 @@ built-in role exactly as by a path into `personas/` — so anything stated there
 dispatch, and a reader that returned its value would invite a caller to assert something
 arrives that cannot.
 
+The appendix is read here too, though it is no field of this file: it is the other half
+of what one dispatch is handed, and :func:`phrases_in_both` compares the two. That lives
+beside the readers rather than inside one test because both files' guards ask it.
+
 Read with a reader written for this shape rather than with a YAML library: the
 workspace installs none, and adding a parser as a dependency to read three blocks of a
 file this repository writes is a worse trade. That reader is
@@ -24,12 +28,23 @@ second copy of the parsing for the two of them to disagree over.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from orchestrator.criteria_guard import LITERAL_HEADERS, block_scalar, field
+from orchestrator.criteria_guard import APPENDIX, LITERAL_HEADERS, block_scalar, field
 from orchestrator.root import REPO_ROOT
 
 BASE_CONFIG = Path("config") / "onejudge.base.yaml"
+
+
+def appendix_text() -> str:
+    """`config/dispatch-appendix.md`, as a dispatched task carries it.
+
+    Read here beside the base config's own fields because the one gate that needs
+    both compares them: dispatch policy has one source, and knowing whether a
+    statement stands in both files means holding both documents at once.
+    """
+    return (REPO_ROOT / APPENDIX).read_text(encoding="utf-8")
 
 
 def _block_scalar(key: str) -> tuple[str, str]:
@@ -87,3 +102,47 @@ def shared_agent_preamble() -> str:
     )
     assert preamble, f"{BASE_CONFIG} states an empty shared agent preamble"
     return preamble
+
+
+#: Consecutive words that make a shared run a restatement rather than ordinary English.
+#: Measured, not chosen: the longest run these two documents share incidentally is four.
+POLICY_PHRASE_WORDS = 6
+
+
+def _words(document: str) -> list[str]:
+    """``document`` as bare lowercase words, with Markdown and YAML shape dropped.
+
+    Emphasis and backticks go first: one file bolds a sentence the other writes plain.
+    """
+    return re.sub(r"[^0-9A-Za-z$/.-]+", " ", re.sub(r"[`*_>#]", " ", document)).lower().split()
+
+
+def phrases_in_both(first: str, second: str, *, words: int = POLICY_PHRASE_WORDS) -> list[str]:
+    """Every maximal run of ``words`` or more consecutive words standing in both documents.
+
+    Maximal, so a copied sentence is reported once rather than as every window inside it.
+    Only exact runs are found: a rule reworded from memory shares none, which is what the
+    named-demand guards in `tests/test_shared_dispatch_bar.py` cover instead.
+    """
+    left = _words(first)
+    right = f" {' '.join(_words(second))} "
+
+    def occurs(run: list[str]) -> bool:
+        # Padded on both sides so a run cannot match inside a longer word: without it
+        # `a check` is found in `aa check`, and the gate reports a hit that is not one.
+        return f" {' '.join(run)} " in right
+
+    runs: list[str] = []
+    for start in range(len(left) - words + 1):
+        if not occurs(left[start : start + words]):
+            continue
+        end = start + words
+        while end < len(left) and occurs(left[start : end + 1]):
+            end += 1
+        runs.append(" ".join(left[start:end]))
+    return [
+        run
+        for index, run in enumerate(runs)
+        if not any(run in other for other in runs[:index])
+        and not any(run != other and run in other for other in runs[index + 1 :])
+    ]
