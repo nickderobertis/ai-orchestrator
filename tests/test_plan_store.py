@@ -437,6 +437,33 @@ def test_the_rendering_this_host_produces_is_one_this_writer_can_edit(
     assert "onepipeline.id" in written
 
 
+def test_one_writer_renders_the_entry_both_of_this_repositorys_writers_produce(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two ways a record here gains a metadata entry write one line, not two alike.
+
+    A record is written whole by `orchestrator/project_store.py` and edited in place by
+    this module, and the second used to carry its own copy of the rendering. The copies
+    were identical, which is what made them a hazard rather than a bug: the reader beside
+    them accounts for the shapes it meets one at a time, so a writer that drifted would
+    produce records only the other writer could read — and nothing would say so until a
+    review record could not be edited into a plan.
+
+    Reconciled against the producer rather than a replica of it, exactly as the test above
+    is: what this compares is the line each writer actually emits for one key and one
+    value, so a second rendering reintroduced anywhere fails here.
+    """
+    document = _written(tmp_path, monkeypatch, "---\ntitle: t\n---\n\nbody\n")
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    edited = document.read_text(encoding="utf-8").splitlines()
+    whole = project_store.frontmatter(
+        {"title": "t", "metadata": {"orchestrator.plan-review": {"key": "abc"}}}, "body"
+    ).splitlines()
+    entry = project_store.metadata_entry("orchestrator.plan-review", {"key": "abc"})
+    assert entry in edited, edited
+    assert entry in whole, whole
+
+
 def test_a_block_the_plan_store_rendered_itself_is_editable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -516,6 +543,136 @@ def test_a_nested_entry_the_write_back_projected_is_kept_whole(
     assert "  a.nested.entry:\n    inner: value\n" in written
     assert "  another.nested.entry:\n    first: one\n    second: two\n" in written
     assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+def test_an_entry_whose_value_is_a_block_sequence_is_kept_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The third way an entry leaves its value below it, and the one that is not indented.
+
+    YAML lets a block sequence stand at its own key's indent rather than beneath it, and
+    the plan store's renderer takes that option — so a stepped node's `onepipeline.steps:`
+    opens a block whose `- id: …` items sit *level* with the entries around them, where a
+    writer placing a line by indentation alone cannot tell one from an entry.
+
+    The fixture is authored here for the reason the nested-entry test above gives, and the
+    producer-backed gate over it — the store's own copy verb, rendering a real stepped node
+    — is `tests/plan_tooling/test_plan_store_record_shapes_e2e.py`.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.id: landing\n"
+        "  onepipeline.steps:\n"
+        "  - id: build\n"
+        "    persona: engineer\n"
+        "    task: |\n"
+        "      ## What\n"
+        "\n"
+        "      Add the route.\n"
+        "  - id: prove\n"
+        "    persona: engineer\n"
+        "  onepipeline.persona: engineer\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert "  onepipeline.steps:\n  - id: build\n    persona: engineer\n" in written
+    assert "      ## What\n\n      Add the route.\n  - id: prove\n" in written
+    # The entry after the sequence is still seen as an entry rather than swallowed by it.
+    assert "  onepipeline.persona: engineer" in written
+    assert "  onepipeline.id: landing" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+def test_a_blank_line_before_a_keys_indentless_items_leaves_them_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank line says nothing about whose the lines below a key are.
+
+    Which matters where it stands here: an indentless sequence is told from a mapping by
+    the first line below the key, so a blank one taken for that line would refuse a
+    record YAML accepts — and the record it would refuse is a stepped node, the shape
+    that made a sequence readable at all.
+    """
+    document = _written(
+        tmp_path,
+        monkeypatch,
+        "---\nmetadata:\n"
+        "  onepipeline.steps:\n"
+        "\n"
+        "  - id: build\n"
+        "    persona: engineer\n"
+        "  onepipeline.persona: engineer\n"
+        "---\n\nbody\n",
+    )
+    plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    written = document.read_text(encoding="utf-8")
+    assert "  onepipeline.steps:\n\n  - id: build\n    persona: engineer\n" in written
+    assert "  onepipeline.persona: engineer" in written
+    assert '  "orchestrator.plan-review": {"key": "abc"}' in written
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param("  onepipeline.id: landing\n  - id: build\n", id="after-a-valued-entry"),
+        pytest.param("  - id: build\n", id="opening-the-block"),
+    ],
+)
+def test_a_sequence_item_nothing_opened_a_block_for_is_still_refused(
+    block: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reading a sequence item is conditional on an entry above having opened a block.
+
+    Which is the whole of what keeps the shape above from widening this writer: a `- `
+    line is the one shape whose position says nothing about whose it is, so with nothing
+    open it is the unplaceable line it always was. Editing around one would leave a second
+    entry for a key already present, which a reader resolves differently from the writer.
+    """
+    document = _written(tmp_path, monkeypatch, f"---\nmetadata:\n{block}---\n\nbody\n")
+    with pytest.raises(OSError, match="cannot edit around"):
+        plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param(
+            "  prose: |\n    hello\n  - id: stray\n",
+            id="beside-a-block-scalars-text",
+        ),
+        pytest.param(
+            "  mapping:\n    child: value\n  - id: stray\n",
+            id="beside-a-mappings-entries",
+        ),
+        pytest.param(
+            "  mapping:\n\n    child: value\n  - id: stray\n",
+            id="beside-a-mappings-entries-past-a-blank-line",
+        ),
+    ],
+)
+def test_a_sequence_item_beside_a_block_that_is_not_a_sequence_is_refused(
+    block: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening a block is not on its own what makes a `- ` line level with the key its own.
+
+    A key that states nothing after its colon and a key that states a block-scalar
+    indicator both leave their value below, so both read as having opened a block — but a
+    scalar's contents are text and a mapping's are its entries, and neither takes items.
+    A `- ` line beside either is the unplaceable line it always was, and reading it as
+    content of the block above would swallow a line this writer never accounted for.
+
+    Each record is refused whole and byte-for-byte, which is the property this writer
+    exists to hold: the alternative to refusing a shape it cannot read is editing around
+    it, and what that leaves is a second entry for a key already present.
+    """
+    record = f"---\nmetadata:\n{block}---\n\nbody\n"
+    document = _written(tmp_path, monkeypatch, record)
+    with pytest.raises(OSError, match="cannot edit around"):
+        plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    assert document.read_text(encoding="utf-8") == record
 
 
 def test_an_entry_whose_value_is_a_block_scalar_keeps_its_lines(
@@ -641,6 +798,14 @@ def test_an_entry_further_down_the_block_is_replaced_rather_than_duplicated(
 
 
 #: One document as the store reports it, in the fields the reader narrows to.
+#:
+#: **The labels are the store's canonical `{id, name, color}`**, which is the frozen
+#: plugin contract every plugin constructs — not the `LabelInput` sugar an author types
+#: into a record, which admits a bare string and is normalised away on read.
+#: `tests/plan_tooling/test_plan_store_record_shapes_e2e.py` takes both from the installed
+#: store, and the reason this fixture states the canonical one is that the reader was
+#: written against the sugar: every labelled document was refused, and a fixture in the
+#: sugar's shape is what let that stand.
 DOCUMENT = {
     "id": "demo:demo-design",
     "item": {
@@ -648,7 +813,7 @@ DOCUMENT = {
         "title": "Design: demo",
         "content": "## What\n\nA route.\n",
         "project": "demo",
-        "labels": ["design"],
+        "labels": [{"id": "design", "name": "design", "color": "ff0000"}],
         "repositories": [],
         "metadata": {"onetaskgraph.origin": "drafted:demo-design"},
         "location": {"path": "/test/documents/demo-design.md"},
@@ -687,6 +852,41 @@ def test_every_page_of_a_projects_documents_is_read(monkeypatch: pytest.MonkeyPa
     assert documents[0].metadata == {"onetaskgraph.origin": "drafted:demo-design"}
 
 
+def test_a_label_is_read_by_name_whichever_shape_the_store_answers_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical mapping and the bare string, held to one answer.
+
+    The store answers the mapping and only the mapping today, and the bare string is
+    accepted because a reader that took only what it happens to see would be the same
+    mistake pointing the other way — this repository stages a record's labels back as
+    names, so it would refuse its own write.
+
+    Only the name is kept, which is what makes the round trip a decision rather than a
+    loss nobody stated: a colour read and not written back would be a field the write
+    silently dropped.
+    """
+    mapped = dict(DOCUMENT["item"])
+    bare = dict(DOCUMENT["item"], labels=["design", "second"])
+    monkeypatch.setattr(
+        plan_store,
+        "store_json",
+        _listing(
+            {
+                "items": [
+                    {"id": "demo:mapped", "item": mapped},
+                    {"id": "demo:bare", "item": bare},
+                ],
+                "next": None,
+            }
+        ),
+    )
+    assert [one.labels for one in plan_store.read_documents("demo:demo")] == [
+        ["design"],
+        ["design", "second"],
+    ]
+
+
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
@@ -705,7 +905,23 @@ def test_every_page_of_a_projects_documents_is_read(monkeypatch: pytest.MonkeyPa
         ),
         (
             {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "labels": "no"}}]},
-            "labels that are not",
+            "labels that are not a list",
+        ),
+        # A label is a name or an object naming one — the store's own canonical `{id,
+        # name, color}` and the bare string its input sugar also admits. Anything else is
+        # a label this reader cannot name, and a reader that fell back to `str()` would
+        # carry a rendering of somebody else's payload into a record it writes back.
+        (
+            {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "labels": [1]}}]},
+            "neither a name nor an object naming one",
+        ),
+        (
+            {
+                "items": [
+                    {"id": "demo:x", "item": {"id": "x", "title": "t", "labels": [{"id": "x"}]}}
+                ]
+            },
+            "neither a name nor an object naming one",
         ),
         (
             {"items": [{"id": "demo:x", "item": {"id": "x", "title": "t", "repositories": [1]}}]},

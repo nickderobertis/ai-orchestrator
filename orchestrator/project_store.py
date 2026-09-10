@@ -41,6 +41,20 @@ def _slug(value: str) -> str:
     return rendered
 
 
+def metadata_entry(key: str, value: object) -> str:
+    """One entry of a record's `metadata` block, in the one shape this repository writes.
+
+    Public, and the **only** renderer of that line, because the shape read and the shape
+    written have to be one answer. Two existed: this rendering, reached whenever
+    :func:`frontmatter` writes a whole record, and a copy of it in
+    `orchestrator/plan_store.py`, reached when a review record is edited into a record
+    that already exists. They were identical, which is what made them a hazard rather than
+    a bug — the reader beside them accounts for the shapes it meets one by one, and a
+    writer that drifted from it would produce records only the other writer could read.
+    """
+    return f"  {json.dumps(key)}: {json.dumps(value)}"
+
+
 def frontmatter(fields: Mapping[str, object], body: str) -> str:
     """One local Markdown record: its frontmatter fields, then its body.
 
@@ -49,14 +63,15 @@ def frontmatter(fields: Mapping[str, object], body: str) -> str:
     a document through it on its way back into whichever store the plan is held in, and
     a staged record that read back differently from a written one would make the record
     depend on which of the two produced it.
+
+    A mapping-valued field is written as a block of :func:`metadata_entry` lines — the
+    one such field a record here carries is its `metadata`.
     """
     lines = ["---"]
     for key, value in fields.items():
         if isinstance(value, dict):
             lines.append(f"{key}:")
-            lines.extend(
-                f"  {json.dumps(name)}: {json.dumps(held)}" for name, held in value.items()
-            )
+            lines.extend(metadata_entry(name, held) for name, held in value.items())
         else:
             lines.append(f"{key}: {json.dumps(value)}")
     return "\n".join([*lines, "---", "", body.rstrip(), ""])

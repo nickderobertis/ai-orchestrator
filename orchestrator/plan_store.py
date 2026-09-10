@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, NewType
 
-from orchestrator.project_store import frontmatter
+from orchestrator.project_store import frontmatter, metadata_entry
 from orchestrator.root import REPO_ROOT
 
 #: The standalone plan-store CLI this host spawns. `config/onetaskgraph.version` pins
@@ -480,7 +480,48 @@ def read_documents(project: str) -> list[StoreDocument]:
     return [_document(item) for item in listed]
 
 
-# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.
+# llmlint: ignore[suppressions_justified] A label is one of two open shapes; each is named
+# or refused.
+def _label_names(document_id: str, labels: object) -> list[str]:
+    """``labels`` as the names a reader here holds them by, refusing a shape it cannot name.
+
+    **This reads the store's answer rather than an author's frontmatter, and the two are
+    not the same shape.** A label is one canonical type on the way out — `{id, name,
+    color}`, the plugin contract every plugin constructs — while the sugar an author types
+    into a local record is a `LabelInput`, which admits a bare string as well and is
+    normalised on read. This reader was written against what is *typed*, so a document
+    carrying any label at all was refused as *"labels that are not a list of strings"*, and
+    a plan whose design document carried one could be neither approved nor copied.
+
+    Both are accepted, because the second costs nothing and a reader that took only the
+    canonical mapping would be the same mistake pointing the other way — a store that
+    answered a bare string, or a record staged by :func:`write_document_metadata`, would
+    then be the shape it refused.
+
+    The name and nothing else: it is what identifies a label to a person, it is the one
+    field every variant carries, and it is what this writes back. A colour read and not
+    written back would be a field the write silently dropped; a colour neither read nor
+    written is one this never claimed to keep.
+    """
+    if not isinstance(labels, list):
+        raise OSError(f"document {document_id} has labels that are not a list")
+    named: list[str] = []
+    for label in labels:
+        match label:
+            case str():
+                named.append(label)
+            case {"name": str(name)}:
+                named.append(name)
+            case _:
+                raise OSError(
+                    f"document {document_id} has a label that is neither a name nor an "
+                    f"object naming one: {label!r}"
+                )
+    return named
+
+
+# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked
+# here or by the reader it is handed to.
 def _document(item: object) -> StoreDocument:
     """One listed document, validated down to the fields a record is keyed and staged from.
 
@@ -513,8 +554,7 @@ def _document(item: object) -> StoreDocument:
         raise OSError(f"document {item['id']} has non-string content")
     if project is not None and not isinstance(project, str):
         raise OSError(f"document {item['id']} has a non-string project")
-    if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
-        raise OSError(f"document {item['id']} has labels that are not a list of strings")
+    label_names = _label_names(item["id"], labels)
     if not isinstance(repositories, list) or not all(
         isinstance(repository, str) for repository in repositories
     ):
@@ -528,7 +568,7 @@ def _document(item: object) -> StoreDocument:
         title=title,
         content=content or "",
         project=project,
-        labels=labels,
+        labels=label_names,
         repositories=repositories,
         metadata=metadata,
         location=location,
@@ -837,8 +877,15 @@ _INDENTED = re.compile(r"^\s+\S")
 #: and a writer that could not account for them refused every task of it.
 _METADATA_NEST = re.compile(
     r'^(?P<indent>\s+)(?:"(?P<quoted>[^"]*)"|(?P<plain>[A-Za-z_][A-Za-z0-9_.-]*)):'
-    r"(?:\s*|\s+[|>][+-]?\d*\s*)$"
+    r"(?:\s*|\s+(?P<scalar>[|>][+-]?\d*)\s*)$"
 )
+#: One item of a block sequence. YAML lets a sequence stand at its own key's indent
+#: rather than below it, and the plan store's renderer takes that option — so
+#: `onepipeline.steps:` opens a block whose items sit *level* with the entries around
+#: them. It is the one shape here whose indentation does not say whose it is, which is
+#: why matching this is never on its own enough to place a line: see
+#: :meth:`_Entry.admits_indentless_sequence`.
+_METADATA_SEQUENCE = re.compile(r"^\s+-(?: |$)")
 
 
 def _closing_fence(lines: Sequence[str]) -> int:
@@ -854,13 +901,14 @@ def _closing_fence(lines: Sequence[str]) -> int:
 def write_metadata(document: Path, key: str, value: object) -> None:
     """Set one namespaced metadata entry of ``document``, leaving everything else alone.
 
-    The entry is rendered the way `orchestrator/project_store.py` renders every other
-    one — a JSON-quoted key and a JSON value, two spaces in — so a record this writes
-    and a record that module wrote read back identically.
+    The entry is rendered by `orchestrator/project_store.py`'s
+    :func:`~orchestrator.project_store.metadata_entry`, which is the one renderer of that
+    line, so a record this writes and a record that module wrote read back identically —
+    and cannot come apart later, which a second copy of the rendering here could.
     """
     lines = document.read_text(encoding="utf-8").split("\n")
     closing = _closing_fence(lines)
-    entry = f"  {json.dumps(key)}: {json.dumps(value)}"
+    entry = metadata_entry(key, value)
     opened = [index for index in range(1, closing) if _METADATA_OPEN.match(lines[index])]
     if len(opened) > 1:
         raise OSError(
@@ -900,19 +948,50 @@ class _Entry(NamedTuple):
 
     key: str
     lines: list[str]
-    #: Whether this entry's own line left its value to the lines beneath — stating
-    #: nothing after the colon, or only a block-scalar indicator — so what follows it
-    #: more deeply indented is its contents rather than an entry of its own.
+    #: Whether this entry's own line left its value to the lines below — stating
+    #: nothing after the colon, or only a block-scalar indicator — so what follows it is
+    #: its contents rather than an entry of its own. *Below* rather than *indented*
+    #: because a block sequence stands at its own key's indent: the lines an entry owns
+    #: are the more-indented ones and the sequence items level with it.
     opened_a_block: bool
+    #: Whether that block is a block *scalar* — the key stated a `|` or `>` indicator, so
+    #: its value is text, always written past its indent. Held apart from
+    #: :attr:`opened_a_block` because the two shapes that open a block differ in exactly
+    #: one way that matters here: a scalar has no items.
+    block_scalar: bool
+
+    def admits_indentless_sequence(self, base: int) -> bool:
+        """Whether a `- ` line at ``base`` could still be an item of this entry's block.
+
+        Opening a block is not on its own what makes such a line this entry's, and reading
+        it as though it were is how a malformed record would be edited around rather than
+        refused. A key that states a block-scalar indicator leaves text below it, and text
+        has no items. A key that states nothing takes either shape, and the first line
+        below it is what says which: at ``base`` it is the indentless sequence YAML
+        permits, and deeper it is a mapping or an indented sequence — whose neighbour back
+        at ``base`` is a line nothing here can place rather than a second item.
+
+        Undecided while nothing is below the key yet, which is where an indentless
+        sequence begins and so the one state that has to admit one.
+        """
+        if self.block_scalar:
+            return False
+        for line in self.lines[1:]:
+            if line.strip():
+                return len(line) - len(line.lstrip()) == base
+        return True
 
 
 def _entries(block: Sequence[str]) -> list[_Entry]:
     """``block``'s metadata entries, each with the lines it owns, refusing what it cannot read.
 
-    An entry is one line stating a key and a value, or a key opening a nested mapping
-    together with the more-indented lines beneath it. A line that is neither — a sequence
-    item, a key with a space before its colon — is one nothing here can account for, and
-    editing around it would leave a second entry for a key already present.
+    An entry is one line stating a key and a value, or a key opening a block together
+    with the lines below that belong to it — the more-indented ones, and the items of a
+    block sequence, which YAML writes at the opening key's own indent. A line that is
+    neither — a `- ` item standing beside a block scalar's text, beside a mapping's own
+    entries, or with nothing open at all; a key with a space before its colon — is one
+    nothing here can account for, and editing around it would leave a second entry for a
+    key already present.
     """
     grouped: list[_Entry] = []
     base: int | None = None
@@ -940,6 +1019,22 @@ def _entries(block: Sequence[str]) -> list[_Entry]:
         if indent > base and grouped and grouped[-1].opened_a_block:
             grouped[-1].lines.append(line)
             continue
+        # A sequence item standing at the block's own indent belongs to the entry above
+        # for the same reason and under a narrower condition: a block sequence is written
+        # at its key's indent rather than below it, so this is the one shape whose
+        # position says nothing about whose it is. It is read as content only where an
+        # entry above opened a block *that takes items* — with nothing open, and beside a
+        # block scalar's text or a mapping's entries, a `- ` line is the unplaceable line
+        # it always was, and is refused below.
+        if (
+            indent == base
+            and grouped
+            and grouped[-1].opened_a_block
+            and grouped[-1].admits_indentless_sequence(base)
+            and _METADATA_SEQUENCE.match(line)
+        ):
+            grouped[-1].lines.append(line)
+            continue
         # The nested shape is tried first: a block-scalar opener states a value the flat
         # shape also matches, and reading it as one would refuse the lines it owns.
         nested = _METADATA_NEST.match(line)
@@ -958,7 +1053,8 @@ def _entries(block: Sequence[str]) -> list[_Entry]:
             )
         quoted = matched["quoted"]
         key = quoted if quoted is not None else matched["plain"]
-        grouped.append(_Entry(key, [line], nested is not None))
+        scalar = nested["scalar"] if nested is not None else None
+        grouped.append(_Entry(key, [line], nested is not None, scalar is not None))
     return grouped
 
 
