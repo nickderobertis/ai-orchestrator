@@ -176,6 +176,10 @@ rules:
     publication: change-open
     approvals: required
 
+  - match: {host: github.com, owner: petsinc, name: hellopatient}
+    publication: change-open
+    approvals: required
+
   - match: {host: github.com, owner: petsinc, name: org-apps}
     publication: change-open
     approvals: required

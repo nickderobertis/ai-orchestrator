@@ -67,6 +67,7 @@ POLICY_EXCEPTIONS = {
     "github.com/nickderobertis/ai-orchestrator": ("local-direct", "none"),
     "github.com/nickderobertis/spanish-language-tutor": ("local-direct", "none"),
     "github.com/petsinc/cd-chat-tool-call-challenge": ("change-open", "required"),
+    "github.com/petsinc/hellopatient": ("change-open", "required"),
     "github.com/petsinc/org-apps": ("change-open", "required"),
     "github.com/petsinc/referral-app": ("change-open", "required"),
 }
@@ -87,6 +88,11 @@ SIBLING_POLICY = ("change-auto", "none")
 #: derived from the tracked files, so that what the journey claims to prove is stated
 #: independently of the configuration under test.
 PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
+#: The team identity whose routing the second such journey resolves, spelled out for
+#: the same reason. It is the one whose rule a resolver cannot be taken on trust for:
+#: `default:` resolves the reviewed pair too, so a policy read alone would answer
+#: identically whether the rule matched or nothing did.
+HELLOPATIENT: RepoIdentity = "github.com/petsinc/hellopatient"
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -382,35 +388,81 @@ def test_local_direct_repositories_publish_locally(ruled: Path, identity: str) -
     assert reported(checked.stdout, "approvals") == "none"
 
 
+class ProtectionRoute(NamedTuple):
+    """One place GitHub keeps what a branch requires, and how to reduce its answer."""
+
+    #: The `gh api` route, with `{repository}` and `{branch}` left to fill in.
+    route: str
+    #: The `--jq` that reduces that route's answer to one bare context per line.
+    reduction: str
+
+
+#: The two places GitHub keeps "what must pass before this branch will take a merge",
+#: as the route to ask and the `--jq` that reduces its answer to bare contexts. Classic
+#: branch protection is one and a repository ruleset is the other; a repository may use
+#: either, both, or neither, and the endpoints do not report each other. Asking one
+#: alone is why this gate is read at all — a branch whose checks are declared only by a
+#: ruleset answers the protection route `Branch not protected`, so every check it really
+#: requires reads as required by nothing, and the inventory that would pass is the empty
+#: one. That is the omission this file's own declaration refuses: *nothing is claimed by
+#: omission*. `petsinc/hellopatient` is this host's first such identity.
+PROTECTION_ROUTES: tuple[ProtectionRoute, ...] = (
+    ProtectionRoute(
+        route="repos/{repository}/branches/{branch}/protection",
+        reduction="[.required_status_checks.contexts // []] | flatten | .[]",
+    ),
+    ProtectionRoute(
+        route="repos/{repository}/rules/branches/{branch}",
+        reduction='[.[] | select(.type == "required_status_checks")'
+        " | .parameters.required_status_checks[].context] | .[]",
+    ),
+)
+
+
 def required_checks(key: RepoIdentity) -> tuple[frozenset[str], str | None]:
     """What GitHub really requires to merge into an identity's base branch.
 
     Asked of the API rather than of a workflow file, because a workflow job is not a
     required check: `llmlint` and `screencomp` both run one on every pull request and
     require neither, and a gate reproducing those would verify something that cannot
-    refuse a merge. Returns the contexts, or the reason they could not be read.
+    refuse a merge. Every route above is asked and their answers unioned, because a
+    check that can refuse this merge is required whichever of the two declares it.
+    Returns the contexts, or the reason they could not be read.
+
+    One read failing is the whole identity unread rather than the other route's answer
+    on its own: a half-read identity is the partial verification the gate below refuses
+    to let a green stand for, and here it would be invisible — the surviving route
+    answers perfectly well, and what it omits is exactly what nobody asked about.
     """
     repository = key.partition("/")[2]
     branch = MERGE_PATHS[key].branch
-    probe = subprocess.run(
-        [
-            "gh",
-            "api",
-            f"repos/{repository}/branches/{branch}/protection",
-            "--jq",
-            "[.required_status_checks.contexts // []] | flatten | .[]",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if probe.returncode == 0:
-        return frozenset(probe.stdout.split("\n")) - {""}, None
-    # An unprotected branch is an answer, not an outage: nothing is required there.
-    if "Branch not protected" in probe.stderr:
-        return frozenset(), None
-    diagnostic = (probe.stderr or probe.stdout).strip()
-    return frozenset(), diagnostic.splitlines()[-1] if diagnostic else "gh reported no diagnostic"
+    contexts: set[str] = set()
+    for source in PROTECTION_ROUTES:
+        probe = subprocess.run(
+            [
+                "gh",
+                "api",
+                source.route.format(repository=repository, branch=branch),
+                "--jq",
+                source.reduction,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            contexts |= set(probe.stdout.split("\n")) - {""}
+            continue
+        # An unprotected branch is an answer, not an outage: nothing is required there.
+        # It is the ordinary answer for a repository that declares its checks the other
+        # way, so it may not stop the remaining routes being asked.
+        if "Branch not protected" in probe.stderr:
+            continue
+        diagnostic = (probe.stderr or probe.stdout).strip()
+        return frozenset(), (
+            diagnostic.splitlines()[-1] if diagnostic else "gh reported no diagnostic"
+        )
+    return frozenset(contexts), None
 
 
 #: How this gate names an identity it could not read while it could read others. A
@@ -437,6 +489,18 @@ def unread_report(key: RepoIdentity, diagnostic: str) -> str:
     )
 
 
+# Both findings these answer are that this tier is selected by a marker inside the broad
+# `orchestrator` project rather than owned by an Nx project of its own.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is
+# not a narrower key inside a memoized tier: it moves this test out of every memoized
+# tier into the uncached `orchestrator:test-checkouts`, because its subject — what other
+# repositories require to merge — is outside this workspace and no `nx.json` glob hashes
+# it. A project of its own would give this gate a key, and the docstring below is about a
+# memoized green replaying across the very drift it exists to catch.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
+# reason: a narrow project edge is what earns a memo, and this tier must not have one.
+# `tests/conftest.py`'s checkout guard states that reasoning where it enforces the
+# marker, and every `reads_checkouts` test in this repository is tiered this way for it.
 @pytest.mark.reads_checkouts
 def test_the_declared_required_checks_match_each_repositorys_branch_protection() -> None:
     """The drift gate: the declaration, against the merge paths that own the fact.
@@ -507,6 +571,9 @@ def test_the_declared_required_checks_match_each_repositorys_branch_protection()
         ]
     )
 
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 GATE = test_the_declared_required_checks_match_each_repositorys_branch_protection.__name__
 #: What the substituted `gh` says before the line carrying its reason, so the journey
@@ -1141,6 +1208,56 @@ def test_the_tracked_registration_routes_printobserver_through_its_own_rule(
         assert checked.returncode == 0, checked.stdout + checked.stderr
         assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
         assert reported(checked.stdout, "approvals") == "none", checked.stdout
+        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
+
+
+def test_the_tracked_registration_routes_hellopatient_through_its_own_rule(
+    tmp_path: Path,
+) -> None:
+    """The team half of the journey above: the tracked entry, and the rule it reaches.
+
+    A team identity is where reading the resolved policy alone proves the least. Its
+    rule and `default:` resolve the same `change-open` / `approvals: required` pair, so
+    a policy read answers identically whether the rule matched or the checkout fell
+    through to the fallthrough — and a checkout that falls through is one
+    `just repos-apply` refuses rather than registers, which is a routing install broken
+    for every other manager on this host rather than one repository publishing wrongly.
+    So what is asserted here is the rule that decided, by its position in the file.
+
+    Its listed checkout is registered by the real recipe rather than read out of the
+    file, because that entry is what makes `onevcs` resolve the alias a lifecycle node
+    would name it by: an identity ruled but unlisted has no checkout to publish from.
+    """
+    entries = tracked_checkouts_of("hellopatient")
+    assert len(entries) == 1, entries
+
+    # A scratch checkout under the listed directory name, standing in for this host's
+    # own clone for the reason the journey above uses one: registering from the real
+    # checkout would write the shared registry live dispatches resolve through.
+    origin = f"https://{HELLOPATIENT}.git"
+    path = checkout(tmp_path / "checkouts" / Path(entries[0]).name, origin)
+    manifest = tmp_path / "checkouts.list"
+    manifest.write_text(f"{path}\n", encoding="utf-8")
+    home = tmp_path / "onevcs"
+
+    applied = apply_registry(manifest, home)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+
+    registry: RegistryDocument = json.loads((home / "registry.json").read_text(encoding="utf-8"))
+    assert set(registry["identities"]) == {HELLOPATIENT}
+
+    ruled = ruled_identities()
+    assert ruled.count(HELLOPATIENT) == 1, ruled
+    host, owner, name = HELLOPATIENT.split("/")
+    expected_rule = (
+        f"rule {ruled.index(HELLOPATIENT) + 1} {{host: {host}, owner: {owner}, name: {name}}}"
+    )
+
+    for argument in (HELLOPATIENT, Path(entries[0]).name):
+        checked = onevcs(home, "rules", "check", argument)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert reported(checked.stdout, "publication") == "change-open", checked.stdout
+        assert reported(checked.stdout, "approvals") == "required", checked.stdout
         assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
 
 

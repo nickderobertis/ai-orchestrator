@@ -286,6 +286,13 @@
       "note": "Its base branch declares no protection and no ruleset, so nothing GitHub runs can refuse a merge here. What is left is this identity's publication policy: `change-open` opens an ordinary ready-for-review change request and `approvals: required` keeps a reviewer in the path, so the approval is the whole of what can refuse a change.",
       "checks": {}
     },
+    "github.com/petsinc/hellopatient": {
+      "branch": "main",
+      "checks": {
+        "API Integration Tests": "tree-verdict",
+        "Lint and Test": "tree-verdict"
+      }
+    },
     "github.com/petsinc/org-apps": {
       "branch": "main",
       "checks": {
