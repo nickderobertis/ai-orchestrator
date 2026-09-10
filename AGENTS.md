@@ -3078,20 +3078,45 @@ carries a persona, a repository, or any other execution field.
 **`just check-plan <source:project>` reads a project against the bar each node will
 actually be judged against**, and is the cheap read to make before launching one. It
 refuses a node whose `## Acceptance criteria` name a procedure instead of a property,
-and one whose criteria are silent about a demand its resolved bar — or its own
-`## Additional info` — makes of it. Both are how correct, gate-green work gets failed
-on procedure rather than on its work: the judge reads a demand nobody wrote as a
-criterion and supplies its own reading of it, the node settles `failed`, and its
-dependents never schedule. Two things it does are worth knowing before trusting or
-arguing with it. It resolves a node's `persona` the way a dispatch does — a bare name
+and one whose criteria rest on something the dispatch cannot reach — the branch
+publishing, the merge path's own verdict, or a **release somebody else has to cut**.
+Each is how correct, gate-green work gets failed on procedure rather than on its work:
+the judge reads a criterion no worker could satisfy, the node settles `failed`, and its
+dependents never schedule. **What it stopped refusing is as worth knowing as what it
+refuses**, because a manager who remembers the old list will write around rules that are
+no longer there: a **version literal** and a criterion **silent about a demand its own
+bar makes** are both the judged tier's now, for the reasons under `just review-plan`
+below. Two things it does are worth knowing before trusting or arguing with it. It
+resolves a node's `persona` the way a dispatch does — a bare name
 is a role compiled into the `oneagentgraph` **`onepipeline` links**, not the pinned
 `oneagentgraph` CLI and not `personas/` — so a name nothing ships is refused here
-instead of costing a scheduled node, and a demand it reports is one the run's own
-judge will make. And it holds every task to `config/dispatch-appendix.md`, this host's
+instead of costing a scheduled node, and the bar it resolves a node against is the bar
+the run's own judge is given. And it holds every task to `config/dispatch-appendix.md`, this host's
 **one source** for the operational text a task's `## Additional info` carries: that
 text was gitignored scratch propagated by copy-paste, which is why it contradicted
 itself about the complete gate for long enough to fail a node. Rebuild a task's
-appendix from that file rather than from an older builder's copy.
+appendix from that file rather than from an older builder's copy — and note **where the
+refusal now sends you**, because the party that has to act on it is the planner and the
+planner is not standing here. It names the absolute path on this host *and*
+`$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT`, which every `just plan` launch hands its
+dispatch; a path relative to this checkout named a file a planner working in another
+repository's worktree cannot open, so one such planner was refused by a message pointing
+at nothing it could read and a manager appended the text by hand.
+`personas/planner.yaml` says the same thing from the planner's side, which is the only
+copy that travels.
+
+**A node's criteria are the block its own `## Acceptance criteria` heading opens**, and
+nothing else — prose that merely names that heading, in inline code or mid-sentence,
+neither begins the block nor ends it. Located by the first occurrence of that text
+anywhere, a task whose earlier prose mentioned the heading had its block begin at that
+mention and end at the next heading after it, which left every criterion it actually
+stated in the prose half where no rule read it. The loud half of that is a refusal
+quoting a span from prose; the quiet half is a task whose criteria go **unexamined** by
+the one tier standing between a bad criterion and a failed dispatch, which reads exactly
+like a sound plan. A task that opens that heading twice as a heading is refused by name
+rather than guessed at, for the reason a record opening `metadata` twice is: the judge is
+handed the whole task and reads both blocks, so a reader that picked either would be
+checking one while the dispatch is judged against the other.
 
 **It also refuses the one pairing no wording of the criteria rescues**: a resolved bar
 that forbids the dispatch changing project files, under criteria that require a
@@ -3120,17 +3145,26 @@ is a reading verb — read, quote, cite, follow the shape of — is the opposite
 Launch the plan whose criterion is precise, and treat the refusal as the check being
 wrong about a sound node rather than as a wording to soften.
 
-**Two more refusals are about criteria nothing has reviewed rather than criteria a bar
-disagrees with.** A criterion never carries a **version literal** — a release number, a
-dependency version — because that number perishes between the task being written and
-its node being dispatched, and the criterion then fails finished work for doing the
-right thing. That one is deterministic *because* a judge would pass it: the criterion
-that shipped required a lockfile to resolve a sibling to an exact version, the sibling
-published a newer one in between, the worker resolved the newest as that repository's
-own manifest demands, and its judge failed a green gate. State the property the version
-stood in for. And a task carrying **no review record for what it currently says** is
-refused outright, naming each such task and `just review-plan <source:project>`, which
-is what records one.
+**A criterion resting on somebody else's released artifact is refused here**, and it is
+the one shape that moved *into* this tier rather than out of it. Whether a release exists,
+or carries a named change, is not a fact about the finished tree under any wording, and
+establishing it means going and reading another repository — so it sits beside the merge
+path's own verdict rather than being left to a judged turn. One such criterion required a
+pin to name a plan-store release carrying two fixes that no release archive can carry; the
+worker correctly determined it could not be satisfied, and the node was killed and settled
+by hand while the rest of its work was complete and landed. The refusal says what to write
+instead, which is the corresponding-content shape `personas/planner.yaml` already admits:
+what this node's own committed content must carry, plus the check that later compares it
+against the registry, stating that check's result is not this node's bar. It is written to
+**miss** rather than to over-refuse, the way every refusal here is — `the release notes
+contain the change` and `the package exists in the lockfile` name a release and rest on
+the tree, and neither is touched. **`just channel-reply` does not ask it of an
+amendment**, and that exemption is deliberate: an amendment binds the next dispatch of a
+node its author is watching, so naming the release that has just landed is the correction
+most worth amending mid-run.
+
+**And a task carrying no review record for what it currently says** is refused outright,
+naming each such task and `just review-plan <source:project>`, which is what records one.
 
 **Two of its refusals are about where a node publishes rather than about its criteria**,
 and each is one a whole dispatch used to be paid for before anything said so. A
@@ -3196,6 +3230,24 @@ invalidates every record granted under the previous one, exactly as
 `scripts/llmlint-fingerprint.sh` invalidates a cached verdict when the judge
 configuration moves.
 
+**Three questions are this turn's rather than the deterministic tier's, and two of them
+moved here after the two tiers were found refusing each other's required wording.**
+*Whether a number is the right number*: a version literal perishes between a task being
+written and its node being dispatched, but a release already published is exactly what a
+criterion should pin to and a node whose whole job is adopting one has that number as its
+subject — one verdict holds all of that where a matcher could only refuse the shape. It
+had to: one review prescribed pinning the immutable version and the deterministic rule
+then refused it outright. *Whether the criteria answer a demand their own bar or their own
+`## Additional info` makes*, judged **by meaning rather than by phrase** — a review refused
+a criterion for pinning a spelling while the deterministic tier refused the same task for
+lacking a literal phrase its criteria stated across three sentences without using those
+words, and because the review key is over the task's own content, inserting words to
+satisfy the matcher bought another judged turn. Three judged rounds on real plans went
+that way. And *whether a node whose criteria describe work that changes no repository
+file declares `expects_no_diff`*: such a node produces an empty branch and the engine
+takes an empty branch on into change-request drafting, and deciding it from prose is
+judgment — which is why it is asked here and not beside the matchers that failed.
+
 <!-- llmlint: ignore[instruction_layer_localized] The finding's own ground is that "the repository has no CODEOWNERS file routing ownership reviews"; `.github/CODEOWNERS` exists and reads `* @nickderobertis`, and that path is inside this rule's own file scope. It is absent from the judged set only because this change does not touch it, so the rule is answered from a diff that cannot see the file it asks for. The other half the rule tests is satisfied on its merits: `just review-plan` is a repo-wide operator command, which is what the root document is for, and the project-specific rules stay in `orchestrator/AGENTS.md` and `tests/AGENTS.md`. -->
 **One verdict now reports every criterion it refuses, and reading a refusal as one line
 per *task* is what to un-learn.** The verdict contract carried a single `reason` until
@@ -3207,9 +3259,10 @@ single criterion. A finding **is** a refused criterion, so the schema admits a r
 only carrying at least one and a pass only carrying none, and `just review-plan` prints
 one line per finding with a summary counting criteria and tasks separately. Read the
 first number as what to correct and the second as how much of the plan is unreviewed.
-Two of the shapes those rounds were made of are now refused deterministically, before a
-turn is spent — a criterion demanding an assertion be observed failing before it passes,
-and a publication with a word between the copula and the participle — and
+Three of the shapes those rounds were made of are now refused deterministically, before a
+turn is spent — a criterion demanding an assertion be observed failing before it passes, a
+publication with a word between the copula and the participle, and a criterion resting on
+somebody else's released artifact — and
 [`docs/plan-review-refusals.md`](docs/plan-review-refusals.md) is the whole recorded
 corpus that was read, classified, with the false refusal named for every shape left to
 the judge. **That schema is one of the files hashed into every review key**, so this
@@ -3219,13 +3272,26 @@ now says, and `just review-plan <source:project>` re-reviews them at one judged 
 apiece, picking up where a stopped run left off.
 
 **What the key covers is chosen, not incidental.** It is the authored content — the
-title, the body prose, the node's `kind`, the persona, and the dependencies — and nothing
+title, the body prose, the node's `kind`, the persona, the dependencies, and whether the
+node declares `expects_no_diff` — and nothing
 a settlement write-back owns. `status` in particular is not in it: the engine projects each
 settlement back onto the plan it was launched from, so a key over the whole record would
 go stale the first time a node ran and the gate would refuse every plan that had ever
 been launched. Covering exactly the authored content buys the other half of that too — a
 write-back that overwrote authored prose invalidates the record rather than leaving a
-pass standing over content nobody read.
+pass standing over content nobody read. `expects_no_diff` is in it for the reason `kind`
+is: it decides which question the reviewer was asked, so a pass granted while it was
+absent says nothing about the same node once it is there.
+
+**It is a key over what a task demands rather than over its bytes**, which is the other
+half of the same choice. Re-indenting a block, closing up a run of blank lines, or
+re-spacing a line alters no demand a reviewer read, and charging a judged turn for one is
+this gate costing something for nothing — which the two tiers that used to refuse each
+other's wording made routine. The normalization stops where it stops on purpose, because
+a key that survives a changed demand is worse than the cost it saves: each line is
+collapsed within itself and lines are **never joined**, since a bullet is how one
+criterion is separated from the next, so re-wrapping a paragraph at a different width
+still invalidates the record and so does every change to a word.
 
 **A lifecycle node states that content somewhere else, and reaching it is the whole of
 why "authored content" is the rule rather than a list of four fields.** A node that runs
@@ -3356,6 +3422,21 @@ the adopted release routes a reply by the halves it carries, so a commands-only
 envelope stays on the command path and never reaches a reader waiting for a verdict.
 A question is answered with `just channel-next` and `just
 channel-reply`, which the launch prints.
+
+**A planning launch puts one thing more in that environment: the operational appendix
+itself.** `just plan` exports `ORCHESTRATOR_DISPATCH_APPENDIX_TEXT` holding
+`config/dispatch-appendix.md`'s text — the text rather than a path, which is the whole
+point. Every dispatched node's task has to carry that block verbatim or `just check-plan`
+refuses it, the party that copies it in is the **planner**, and a planner works in a
+worktree of its own while the tracked file lives in the launching checkout: so a path
+names a file that planner cannot open, and the refusal it then met named that same path,
+which is how a manager came to append the appendix to a plan by hand.
+`scripts/dispatch-appendix-env.sh` is its one source and composes neither half — it asks
+`orchestrator/criteria_guard.py` for the name and for the text, so what a dispatch is
+handed is byte-for-byte what the check demands as a substring rather than a second
+rendering of the same file. `personas/planner.yaml` is where a planner is told the
+variable exists, which is the only copy of that instruction that travels out of this
+checkout.
 
 **Those same launch verbs put this checkout's own credentials in that environment**,
 read from a gitignored `.env` at the repository root — the first of them is

@@ -9,11 +9,17 @@ form added here is therefore exercised at both, which is the property a second c
 this list would quietly lose — and the gap that copy would leave is the branch nobody
 thought to write down twice.
 
-Two of the four tuples are refusals and two are acceptances, and the pairing is the
-point rather than an accident of grouping. Every widening here is bounded by the same
-measurement the corpus states: no task that passed review is newly refused. So a
-detector's branches and the sound criteria of its own shape are read together, and a
-widening that bought its catch with a false refusal fails on the tuple beside it.
+The tuples come in pairs — a shape's refusals, then the sound criteria of that same
+shape — and the pairing is the point rather than an accident of grouping. Every widening
+here is bounded by the same measurement the corpus states: no task that passed review is
+newly refused. So a detector's branches and the sound criteria of its own shape are read
+together, and a widening that bought its catch with a false refusal fails on the tuple
+beside it.
+
+`RELEASED_ELSEWHERE` is the one pair with no corpus behind it, and it is labelled as
+coverage for the reason `PUBLICATION_COPULAS` is: the corpus stores a fragment per
+refusal and never the criterion, so a fixture written after the cutoff can be evidence of
+what the detector does and not of what a judged turn was paid for.
 """
 
 from __future__ import annotations
@@ -87,4 +93,33 @@ PUBLICATION_IN_PROSE = (
     "- This dispatch publishes nothing and pushes nothing.",
     "- The record names which verb lands a finished branch, and says publication is the"
     " lifecycle's.",
+)
+
+#: A criterion whose truth is a fact about somebody else's **released artifact** rather
+#: than about the finished tree: that it exists, or that it carries a named change.
+#: Establishing either means going and reading another repository, which is why these are
+#: refused beside the merge path's own verdict rather than left to the judged turn. The
+#: first is the incident's own shape — a pin required to name a release carrying two fixes
+#: no release archive can carry, which killed a node whose other work was already landed.
+RELEASED_ELSEWHERE = (
+    "- `config/onetaskgraph.version` names a release that carries both of those fixes.",
+    "- The pin names a plan-store release containing the two landed repairs.",
+    "- The lockfile resolves a version that includes the session-clone repair.",
+    "- The wheel this pin names exists on the registry.",
+    "- The crate is available on crates.io before this node settles.",
+)
+
+#: What that pair must not swallow, and it is a longer list than the refusals because the
+#: words are ordinary ones. Every entry names a release, a version, or a package while
+#: resting on the finished tree alone — including the corresponding-content shape the
+#: refusal itself recommends, which names the later comparison rather than requiring it.
+#: A widening that started refusing one of these would be refusing its own correction.
+RELEASED_ELSEWHERE_IN_PROSE = (
+    "- `docs/pins.md` records which release carries each fix and what would bring it due.",
+    "- The `orchestrator` package contains the module the route is served from.",
+    "- The release notes contain the change this node makes.",
+    "- The record names the release the pin would move to, and the check that later"
+    " compares the two says whether it landed; that check's result is not this node's bar.",
+    "- The pin reads whatever release its own requirement admits, and a check reconciles the two.",
+    "- The package exists in the lockfile, with the hash the workspace resolved.",
 )

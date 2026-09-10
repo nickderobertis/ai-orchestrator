@@ -289,5 +289,9 @@ the two the bar makes of every implementation dispatch:
   evidence for it — is **true of the tree as it finally stands**.
 
 Criteria state properties of the finished tree; the commands that produce them belong in
-this section. `just check-plan <source:project>` refuses a task whose criteria omit a demand its
-resolved review bar — or this appendix — makes of it.
+this section. Whether the criteria answer every demand their own bar — or this appendix —
+makes of them is read by `just review-plan <source:project>`, which spends a judged turn
+on it and judges it by meaning: criteria that state a demand in their own words answer it,
+and no criterion is refused for failing to use a particular phrase. Nothing reads it
+deterministically any more, because the phrase matching that did refused wordings the same
+review had just asked for.

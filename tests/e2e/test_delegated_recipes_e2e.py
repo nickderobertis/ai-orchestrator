@@ -89,6 +89,10 @@ WRAPPER_SCRIPTS = (
     # environment below rather than discovered, which keeps that resolution — and the
     # project the launch writes — inside this throwaway checkout.
     "plan-root-env.sh",
+    # And the operational appendix every dispatched task must carry, which `just plan`
+    # hands its planner as text rather than as a path into a checkout that planner cannot
+    # see. It reads `config/dispatch-appendix.md`, which `_checkout` copies beside it.
+    "dispatch-appendix-env.sh",
     # `just channel-reply` goes through this one, which forwards the caller's own
     # arguments and refuses only an envelope the run's pending blocking question
     # cannot use; the rule it judges by is the wrapper's own, in the helper beside it.
@@ -532,6 +536,11 @@ DELEGATIONS = (
 #: from its subject would build whatever the subject asked for and prove nothing about it.
 DESIGN_TEMPLATE = "config/design-doc-template.md"
 
+#: The operational appendix `just plan` hands its dispatch, spelled here for the reason
+#: the template above is: this suite states what a runnable checkout holds rather than
+#: asking its subject.
+DISPATCH_APPENDIX = "config/dispatch-appendix.md"
+
 
 def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A checkout the real recipes run in, with `uv` traced and nothing else doubled."""
@@ -546,6 +555,15 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copy2(ROOT / "config/read-api.address", checkout / "config/read-api.address")
     # `just repos --audit-gate-coverage` reads this to say what its answer leaves out.
     shutil.copy2(ROOT / "config/merge-path-checks.json", checkout / "config/merge-path-checks.json")
+    # The operational appendix `just plan` hands its dispatch. Written rather than copied,
+    # for the reason the template below is: what a launch does with it — that it exports
+    # the text and refuses a checkout carrying none — is this suite's subject, and what
+    # the appendix *says* is `tests/test_dispatch_appendix.py`'s. Copying the tracked one
+    # would also put these journeys outside the recipe key that memoizes them.
+    (checkout / DISPATCH_APPENDIX).write_text(
+        "## Additional info\n\n### Operational notes\n\nWork the branch and report.\n",
+        encoding="utf-8",
+    )
     for name in WRAPPER_SCRIPTS:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)

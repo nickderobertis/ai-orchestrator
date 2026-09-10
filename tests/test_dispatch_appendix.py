@@ -600,8 +600,10 @@ def test_the_appendix_asks_for_the_bar_to_be_stated_as_criteria(appendix: str) -
     Two branches were failed by demands nobody wrote down: end-to-end proof, which the
     built-in `engineer` bar makes of every implementation dispatch, and a final
     completion report, which is in neither the task nor the shared clause. Asking for
-    both here is what makes `just check-plan` refuse a task that omits them — the guard
-    enforces a demand where it is made, and this file is one of the two places it reads.
+    both here is what gives `just review-plan`'s judged turn something to read the
+    criteria against — this file is one of the two places a demand is made, and whether
+    the criteria answer it is judged by meaning rather than by the phrase matching that
+    used to ask it deterministically and refused wordings the same review had asked for.
 
     The second demand is asked for as the *property* rather than as the artifact, and this
     reads the section that asks rather than the whole file for that reason: both wordings

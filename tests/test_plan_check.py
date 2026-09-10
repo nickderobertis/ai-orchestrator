@@ -18,6 +18,7 @@ import os
 import subprocess
 
 import pytest
+from criteria_examples import RELEASED_ELSEWHERE
 
 from orchestrator import criteria_guard, plan_check, plan_review, plan_store
 
@@ -79,16 +80,22 @@ def test_a_reviewed_and_complete_plan_earns_no_refusal() -> None:
     assert plan_check.dispatched(document) == 1
 
 
-def test_a_node_whose_criteria_omit_a_demand_is_refused_against_its_task() -> None:
-    """The demand is the synthetic appendix's own, which is what makes it attributable."""
-    silent = "\n".join(line for line in COMPLETE.splitlines() if "claim" not in line)
-    (refusal,) = plan_check.refusals(_document(_reviewed(_node(task=_task(silent)))), "s:p")
+def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_task() -> None:
+    """A criteria refusal arrives on the `task` field, whatever the criteria did wrong.
+
+    Driven over a criterion about somebody else's released artifact because that is a
+    refusal this tier makes rather than one it hands on: a version literal and criteria
+    silent about a demand their bar makes are the judged turn's now, so a plug-in journey
+    written over either would be measuring a refusal nothing here can make.
+    """
+    outside = f"{COMPLETE}\n{RELEASED_ELSEWHERE[0]}"
+    (refusal,) = plan_check.refusals(_document(_reviewed(_node(task=_task(outside)))), "s:p")
 
     assert refusal["node"] == "route"
     assert refusal["field"] == "task"
     # The node id is the refusal's own field, so the reason does not open with it again.
     assert not refusal["reason"].startswith("route: ")
-    assert "an account of this dispatch's own work" in refusal["reason"]
+    assert "the dispatch cannot do" in refusal["reason"]
 
 
 def test_a_node_whose_persona_cannot_resolve_is_refused_against_its_persona() -> None:

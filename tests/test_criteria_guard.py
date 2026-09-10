@@ -34,21 +34,24 @@ from criteria_examples import (
     PUBLICATION_IN_PROSE,
     PUBLISHED_WITH_A_WORD_IN_THE_WAY,
     RED_BEFORE_GREEN,
+    RELEASED_ELSEWHERE,
+    RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
 
 from orchestrator import criteria_guard, plan_check, plan_review, plan_store
 from orchestrator.criteria_guard import (
+    APPENDIX_ENV,
     CRITERIA_HEADING,
     Bar,
     CriteriaError,
+    appendix_text,
     block_scalar,
     builtin_persona,
     builtin_persona_names,
     check,
     check_appendix,
     check_changes_allowed,
-    check_demands,
     check_directly,
     check_plan,
     criteria_block,
@@ -410,6 +413,88 @@ def test_the_criteria_block_stops_at_the_next_heading_of_any_depth() -> None:
     assert criteria_block(_task("- One thing.")).strip() == "- One thing."
 
 
+#: A task whose prose *names* the acceptance-criteria heading before opening it. The node
+#: whose job is to document this tier writes exactly this, and so does any task quoting
+#: the heading mid-sentence.
+NAMES_THE_HEADING_IN_PROSE = (
+    "## What\n\nEvery demand this node is held to is stated in its "
+    f"`{CRITERIA_HEADING}`, never only in the prose around it.\n\n"
+    "## Why\n\nThe user asked for it.\n\n"
+    f"{CRITERIA_HEADING}\n\n- `just gate` is green.\n\n{APPENDIX}"
+)
+
+
+def test_prose_that_merely_names_the_heading_neither_opens_nor_closes_the_block() -> None:
+    """The block is the one the heading *opens*, and both halves of getting that wrong fail.
+
+    Located by the first occurrence of the heading's text anywhere, this task's block
+    began at the mention inside `## What` and ended at `## Why` — so the criterion the
+    node actually states sat in the half no rule read. The quiet half is the dangerous
+    one: the refusal below is loud, while a task whose every criterion goes unexamined
+    looks exactly like a sound plan.
+    """
+    assert criteria_block(NAMES_THE_HEADING_IN_PROSE).strip() == "- `just gate` is green."
+
+    with pytest.raises(CriteriaError, match="`just` invocation"):
+        check(NAMES_THE_HEADING_IN_PROSE, "probe", NOTHING_DEMANDED)
+
+
+def test_a_task_that_opens_that_heading_twice_is_refused_by_name() -> None:
+    """Which block states the node's bar cannot be decided from such a task.
+
+    The judge is handed the whole task and reads both, so a reader here that picked
+    either would be checking one while the dispatch is judged against the other. Naming
+    the ambiguity is the same answer `orchestrator/plan_store.py` gives a record that
+    opens `metadata` twice.
+    """
+    twice = f"{_task('- The thing is done.')}\n{CRITERIA_HEADING}\n\n- `just gate` is green.\n"
+
+    with pytest.raises(CriteriaError) as refused:
+        check(twice, "probe", NOTHING_DEMANDED)
+
+    reported = str(refused.value)
+    assert f"opens {CRITERIA_HEADING!r} 2 times" in reported, reported
+    assert "Leave one block of criteria" in reported, reported
+
+
+#: A heading that *starts with* the criteria heading's text and is a different heading:
+#: the section a task documenting this tier writes to show what criteria look like.
+LONGER_HEADING = f"{CRITERIA_HEADING} examples"
+
+
+def test_a_longer_heading_that_starts_with_that_text_is_a_different_heading() -> None:
+    """Opening the block is the whole heading, not a line that begins with one.
+
+    Read as a prefix, `## Acceptance criteria examples` fails both of the ways prose
+    naming the heading did, one step further out. Beside the real heading it made a
+    sound task read as opening its criteria twice, and the node was refused for stating
+    them once. Alone it was the quiet half again: the block silently became the one
+    *that* heading opens, so every line the tier examined was something no criterion had
+    ever claimed.
+    """
+    beside = (
+        "## What\n\nDo the thing.\n\n"
+        f"{LONGER_HEADING}\n\nThey are stated as properties.\n\n"
+        "## Why\n\nThe user asked for it.\n\n"
+        f"{CRITERIA_HEADING}\n\n- The thing is done.\n\n{APPENDIX}"
+    )
+
+    assert criteria_block(beside).strip() == "- The thing is done."
+    check(beside, "probe", NOTHING_DEMANDED)
+
+    alone = f"## What\n\nDo the thing.\n\n{LONGER_HEADING}\n\n- A criterion reads like this.\n"
+
+    with pytest.raises(CriteriaError, match=f"no {CRITERIA_HEADING!r} section"):
+        criteria_block(alone)
+
+
+def test_trailing_whitespace_is_not_part_of_the_heading_a_reader_sees() -> None:
+    """It opens the block, because whitespace nobody can see decides nothing here."""
+    padded = _task("- The thing is done.").replace(CRITERIA_HEADING, f"{CRITERIA_HEADING}  ")
+
+    assert criteria_block(padded).strip() == "- The thing is done."
+
+
 #: This repository's own plan-reading recipes, named as the nouns a criterion about the
 #: plan tooling has to be able to name. A `just` invocation is exempt only where the
 #: recipe it names reads, reviews, or launches a plan: none of those is a check a worker
@@ -494,56 +579,46 @@ def test_a_criterion_naming_a_procedure_or_an_absent_event_is_refused(
         check(_task(criterion), "probe", NOTHING_DEMANDED)
 
 
-def test_a_demand_the_resolved_bar_makes_must_be_stated_as_a_criterion() -> None:
-    """The failure this guard was added for, at its own boundary.
+#: A bar and a task that each demand end-to-end proof of a node whose criteria never
+#: mention it. Both carriers, because a demand reaches a judge from either and this tier
+#: used to answer both: the bar a persona resolves to, and the operational notes the
+#: task's own `## Additional info` carries.
+SILENT_ABOUT_A_DEMAND = (
+    pytest.param(
+        Bar("the built-in role", "Do not accept done until it is proven end to end."),
+        APPENDIX,
+        id="the-bars-demand",
+    ),
+    pytest.param(
+        NOTHING_DEMANDED,
+        "## Additional info\n\nProve the change end to end before you settle.\n",
+        id="the-tasks-own-demand",
+    ),
+)
 
-    A node whose criteria never mention end-to-end proof is still judged by a bar
-    that demands it, so the judge imports the demand and applies its own reading —
-    and a branch that was correct and gate-green was failed exactly that way.
+
+@pytest.mark.parametrize(("bar", "additional"), SILENT_ABOUT_A_DEMAND)
+def test_a_demand_the_criteria_are_silent_about_is_left_to_the_judged_tier(
+    bar: Bar, additional: str
+) -> None:
+    """This tier stopped matching phrases, and both carriers of a demand go with it.
+
+    Refusing criteria for *not saying* something is a question about meaning, and asking
+    it here by pattern made the two tiers refuse each other's required wording: a review
+    refused a criterion for pinning a spelling while this check refused the same task for
+    lacking a literal phrase its criteria stated across three sentences of their own. The
+    demand itself is unchanged — `personas/planner.yaml` still asks for it and
+    `orchestrator/plan_review.py`'s judged turn is now what reads whether the criteria
+    answer it, by meaning.
     """
-    bar = Bar("the built-in role", "Do not accept done until it is proven end to end.")
-
-    with pytest.raises(CriteriaError) as refused:
-        check(_task("- The thing is done.\n- A report names the evidence."), "probe", bar)
-
-    assert "the built-in role demands proof end to end" in str(refused.value)
-    assert "State it as a criterion" in str(refused.value)
+    check(_task("- The thing is done.\n- A report names the evidence.", additional), "probe", bar)
 
 
-def test_a_demand_made_outside_the_criteria_block_is_refused_the_same_way() -> None:
-    """The guard's old blind spot: it read the criteria against nothing but themselves.
+def test_a_criterion_answering_a_demand_in_its_own_words_is_accepted_too(appendix: Path) -> None:
+    """The other side of that: nothing here rules on the wording either way.
 
-    The demand that failed a node was in `## Additional info`, where the operational
-    appendix lands — so a check that only ever looked inside `## Acceptance criteria`
-    could not see the thing the judge was about to hold the worker to.
-    """
-    with pytest.raises(CriteriaError) as refused:
-        check(
-            _task(
-                "- The thing is done.\n- A report names the evidence.",
-                additional="## Additional info\n\nProve the change end to end before you settle.\n",
-            ),
-            "probe",
-            NOTHING_DEMANDED,
-        )
-
-    assert "this task's own `Additional info`" in str(refused.value)
-    assert "proof end to end" in str(refused.value)
-
-
-def test_a_demand_made_in_prose_under_no_heading_is_still_located() -> None:
-    """The message says where the demand was made, including when nothing titles it."""
-    with pytest.raises(CriteriaError, match="its opening prose"):
-        check_demands(
-            "Prove it end to end.", "- The thing is done.\n- Report it.", "probe", NOTHING_DEMANDED
-        )
-
-
-def test_a_bar_that_demands_nothing_leaves_the_criteria_alone(appendix: Path) -> None:
-    """The guard adds no demand of its own; it only refuses one that goes unanswered.
-
-    Read through `check_plan`, whose count is the observable answer: a check that only
-    declined to raise would pass just as well if it had stopped looking.
+    Read through `check_plan`, whose count is the observable answer — a check that only
+    declined to raise would pass just as well if it had stopped looking at all.
     """
     quiet = _task("- The thing is done.", additional="## Additional info\n\nNothing is asked.\n")
     appendix.write_text("## Additional info\n\nNothing is asked.\n", encoding="utf-8")
@@ -563,51 +638,52 @@ def test_criteria_that_answer_every_demand_are_accepted(appendix: Path) -> None:
         pytest.param(REPORTS_BY_THE_WITHDRAWN_WORDING, id="the-withdrawn-ordering"),
     ],
 )
-def test_the_reporting_demand_is_answered_by_the_property_and_by_the_old_wording(
+def test_a_node_under_the_real_role_is_accepted_whichever_wording_it_reports_in(
     appendix: Path, criteria: str
 ) -> None:
-    """Either wording answers it, which is the whole of what the narrowing changed.
+    """Both wordings reach a dispatch, under the bar the engine binary really ships.
 
-    The demand used to be answered only by criteria that named a *report*, so a node
-    stating the property this host now asks for — every claim about the finished work
-    true of the tree as it finally stands — was refused for not carrying an artifact
-    nobody wanted. The withdrawn wording still passes, because plans written before this
-    change say it that way and refusing them would strand correct work.
+    Kept as a pair after the phrase matching moved to the judged tier, because the pair
+    is what says this tier rules on neither: the property this host asks for — every
+    claim about the finished work true of the tree as it finally stands — and the older
+    wording that names a report, which plans written before that narrowing still carry.
     """
     assert check_plan(_plan(persona="engineer", task=_task(criteria))) == 1
 
 
-def test_the_reporting_demand_no_longer_asks_for_a_final_report_artifact() -> None:
-    """What a node whose criteria are silent is actually told to write.
-
-    The remedy is the only place a plan's author learns what the demand wants, so it is
-    what decides whether the next plan states an ordering of the dispatch's outputs or a
-    property of the finished tree. The ordering is unsatisfiable — the conversation does
-    not end when the worker reports — and it failed six nodes of one run in a night with
-    complete committed work and no acceptance criterion unmet.
-    """
-    bar = Bar("the built-in role", "Require the worker to report what it verified.")
-
-    with pytest.raises(CriteriaError) as refused:
-        check(
-            _task("- The thing is done.\n- A journey proves it end to end."),
-            "probe",
-            bar,
-        )
-
-    reported = str(refused.value)
-    assert "an account of this dispatch's own work" in reported, reported
-    assert "true of the tree as it finally stands" in reported, reported
-    for withdrawn in ("last thing", "closes with", "final report", "reported afresh"):
-        assert withdrawn not in reported, reported
-
-
 def test_a_task_rebuilt_from_a_stale_appendix_is_refused(appendix: Path) -> None:
-    """A builder cloned before an appendix fix reintroduces the wording it removed."""
+    """A builder cloned before an appendix fix reintroduces the wording it removed.
+
+    The refusal names two places the appendix can be had, and both are openable from
+    where the party that has to act stands: the variable every planning launch hands its
+    dispatch, and an absolute path on this host. It named a path relative to this
+    checkout, which a planner working in another repository's worktree cannot open at
+    all — so the planner that met this refusal was told to read a file that does not
+    exist from there, and a manager appended the text by hand instead.
+    """
     appendix.write_text(APPENDIX + "\nA rule that was added since.\n", encoding="utf-8")
 
-    with pytest.raises(CriteriaError, match="current operational appendix"):
+    with pytest.raises(CriteriaError) as refused:
         check_appendix(_task(COMPLETE), "probe")
+
+    reported = str(refused.value)
+    assert "current operational appendix" in reported, reported
+    assert f"${APPENDIX_ENV}" in reported, reported
+    assert str(appendix) in reported, reported
+
+
+def test_the_text_a_task_must_carry_is_the_text_the_launch_hands_over(appendix: Path) -> None:
+    """One reader for both ends of that requirement, which is what makes it answerable.
+
+    `scripts/dispatch-appendix-env.sh` exports what this function answers, so what a
+    planning dispatch is handed is byte-for-byte what the check demands as a substring
+    rather than a second rendering of the same file — which is how the two come to differ
+    by a trailing newline nobody can see.
+    """
+    appendix.write_text(f"\n\n{APPENDIX}\n\n", encoding="utf-8")
+
+    assert appendix_text() == APPENDIX.strip()
+    check_appendix(_task(COMPLETE, additional=appendix_text()), "probe")
 
 
 def test_only_the_nodes_that_dispatch_an_agent_are_checked() -> None:
@@ -684,10 +760,9 @@ def test_the_command_accepts_a_plan_that_states_its_bar(
 def test_the_command_refuses_a_plan_that_does_not(
     appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    refused = _task(f"{RELEASED_ELSEWHERE[0]}\n{COMPLETE}")
     monkeypatch.setattr(
-        plan_store,
-        "read_project",
-        lambda _: (_plan(persona="engineer", task=_task("- The thing is done.")), []),
+        plan_store, "read_project", lambda _: (_plan(persona="engineer", task=refused), [])
     )
 
     assert check_directly("authoring:incomplete") == 1
@@ -984,38 +1059,56 @@ def test_the_command_reports_a_checkout_that_cannot_answer_what_the_review_bar_i
         "- The pin reads v0.16.3.",
         "- The manifest requires >= 1.2.",
         "- The adopted release is 2.0.0-rc.1.",
+        "- The lockfile resolves the sibling to the newest release its requirement admits.",
+        "- Line coverage stays at 100%.",
     ],
-    ids=["three-part", "prefixed", "operator", "prerelease"],
+    ids=["three-part", "prefixed", "operator", "prerelease", "property", "percentage"],
 )
-def test_criteria_may_not_carry_a_version_literal(criterion: str) -> None:
-    """The number is well-formed and it perishes; the property it stands in for does not.
+def test_whether_a_number_is_the_right_number_is_left_to_the_judged_tier(criterion: str) -> None:
+    """A version literal is no longer refused here, and the correction is not either.
 
-    This node shipped: a criterion required a lockfile to resolve a sibling to an exact
-    version, the sibling published a newer one between the task being written and the
-    node being dispatched, the worker resolved the newest as that repository's own
-    manifest demands, and the judge failed finished, gate-green work for doing the right
-    thing. A judge reading the number would most likely have passed it.
+    Both sides of that are one case now, which is the point: this tier could tell a
+    number from a percentage and never which number was right, so it refused the shape
+    while the judged turn refused the judgement — and one review prescribed pinning an
+    immutable version, which this rule then refused outright. What replaced it is one
+    verdict holding both considerations at once, in `orchestrator/plan_review.py`'s
+    prompt, where a release already published is admitted as an anchor and a floor a
+    later publication overtakes is not.
     """
-    with pytest.raises(CriteriaError, match="version literal"):
+    check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+
+@pytest.mark.parametrize("criterion", RELEASED_ELSEWHERE, ids=range(len(RELEASED_ELSEWHERE)))
+def test_a_criterion_about_somebody_elses_released_artifact_is_refused(criterion: str) -> None:
+    """What stays deterministic is whether the criterion's truth is outside the tree at all.
+
+    Whether a release exists, or carries a named change, is not a fact about the finished
+    tree in any wording, and establishing it means going and reading another repository.
+    One such criterion required a pin to name a plan-store release carrying two fixes no
+    release archive can carry; the worker correctly determined it could not be satisfied,
+    and the node was killed and settled by hand with the rest of its work landed.
+    """
+    with pytest.raises(CriteriaError) as refused:
         check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+
+    reported = str(refused.value)
+    assert "the dispatch cannot do" in reported, reported
+    assert "state what this node's own committed content must carry" in reported, reported
+    assert "not this node's bar" in reported, reported
 
 
 @pytest.mark.parametrize(
-    "criterion",
-    [
-        "- The lockfile resolves the sibling to the newest release its requirement admits.",
-        "- Line coverage stays at 100%.",
-        "- The suite runs across 4 xdist workers.",
-        "- The plan declares schema version 3.",
-    ],
-    ids=["property", "percentage", "count", "schema"],
+    "criterion", RELEASED_ELSEWHERE_IN_PROSE, ids=range(len(RELEASED_ELSEWHERE_IN_PROSE))
 )
-def test_a_criterion_naming_the_property_instead_is_accepted(criterion: str) -> None:
-    """The refusal is written to miss rather than to over-refuse: no bare `<n>.<n>`.
+def test_a_criterion_naming_a_release_while_resting_on_the_tree_is_accepted(
+    criterion: str,
+) -> None:
+    """The bound that widening is bought under, including its own recommended correction.
 
-    An unprefixed two-component number is a duration, a percentage, or a schema version
-    far more often than it is a release, and a false refusal here blocks correct work
-    and gets worked around — which is worse than the gap.
+    Every one of these names a release, a version, or a package and rests on the finished
+    tree alone — and one of them is the corresponding-content shape the refusal above
+    tells its author to write instead, which a detector that refused it would be refusing
+    its own remedy for.
     """
     check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
 

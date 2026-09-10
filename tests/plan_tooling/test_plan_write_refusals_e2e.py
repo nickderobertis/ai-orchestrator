@@ -30,6 +30,7 @@ import plan_root_variable
 import pytest
 from waits import timeout as e2e_timeout
 
+from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
 
 #: The brief these journeys launch from. Written here rather than read from `examples/`,
@@ -86,6 +87,12 @@ def _detached_recipe(tmp_path: Path) -> Path:
     recipe writes its project under the root that resolves to, so a copy the store cannot
     be read in is a copy that cannot write a plan at all.
 
+    The **operational appendix** is the third, and it is a file rather than a resolution:
+    a planning launch hands its dispatch that text, so a copy without it is refused for
+    that instead of for the write these journeys are about. It is carried as the file
+    beside the helper that reads it, because what the launch exports has to be
+    byte-for-byte what `just check-plan` then demands of every task.
+
     The root the copy resolves is its own `.plans`, which is what makes these journeys
     about a checkout rather than about this one.
     """
@@ -101,10 +108,14 @@ def _detached_recipe(tmp_path: Path) -> Path:
         "ask-manager-env.sh",
         "ask-manager.sh",
         "plan-root-env.sh",
+        "dispatch-appendix-env.sh",
     ):
         copied = scripts / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)
+    appendix = checkout / APPENDIX
+    appendix.parent.mkdir(parents=True, exist_ok=True)
+    appendix.write_bytes((REPO_ROOT / APPENDIX).read_bytes())
     # The package without its prose: what the resolution imports is code, and these
     # journeys belong to a tier whose key drops markdown, so copying a document would be
     # reading one.
@@ -115,6 +126,74 @@ def _detached_recipe(tmp_path: Path) -> Path:
     )
     shutil.copy(REPO_ROOT / "onetaskgraph.yaml", checkout)
     return scripts / "plan.sh"
+
+
+# Named for what they damage rather than for how, because the design-document template
+# further down this module is damaged the same two ways and names its own rewriters
+# `_emptied` and `_blanked`. An unqualified `_emptied` here is a name this module binds
+# twice: the tuple below captures whichever definition it was collected under, so the
+# journeys go on passing while asserting about the wrong file the moment either moves.
+def _emptied_appendix(appendix: Path) -> None:
+    appendix.write_text("   \n\n", encoding="utf-8")
+
+
+def _absent_appendix(appendix: Path) -> None:
+    appendix.unlink()
+
+
+#: The two shapes a checkout's operational appendix goes wrong in, and the sentence each
+#: is refused with. They are different branches of the helper — one is the read failing
+#: outright, the other is a read that succeeded and answered nothing — so a journey over
+#: either alone leaves the other free to exit through a bare shell error naming a file the
+#: operator never asked about.
+UNUSABLE_APPENDIX = (
+    pytest.param(_emptied_appendix, "appendix read back as empty", id="empty"),
+    pytest.param(_absent_appendix, "could not be read", id="absent"),
+)
+
+
+@pytest.mark.parametrize(("break_it", "said"), UNUSABLE_APPENDIX)
+def test_a_launch_whose_appendix_is_unusable_writes_nothing(
+    tmp_path: Path, break_it: Callable[[Path], None], said: str
+) -> None:
+    """An unusable appendix is refused rather than handed over, and the empty one is worse.
+
+    What a launch exports is what `just check-plan` then demands of every task as a
+    substring — and every string contains the empty one, so an appendix that read back
+    empty would not merely leave a planner with nothing to copy: it would make that check
+    accept any task at all, silently, for every plan authored afterwards. An appendix that
+    cannot be read at all is the louder half and still has to name the file rather than
+    exit through a traceback. Either way the recipe writes no plan.
+
+    Driven by breaking the file in a checkout of this journey's own, because the tracked
+    one is neither empty nor missing and both refusals are about what a half-restored
+    checkout looks like.
+    """
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    recipe = _detached_recipe(tmp_path)
+    break_it(recipe.parent.parent / APPENDIX)
+    root = tmp_path / "plans"
+    working = tmp_path / "working"
+    working.mkdir()
+
+    refused = subprocess.run(  # noqa: S603 - the real script, over a checkout with no appendix
+        [str(recipe), str(brief)],
+        cwd=working,
+        env=_environment(root),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert said in refused.stderr, refused.stderr
+    assert "config/dispatch-appendix.md" in refused.stderr, refused.stderr
+    assert "Traceback" not in refused.stderr, refused.stderr
+    assert not (root / "projects").exists(), (
+        "a plan was written for a launch whose dispatches would carry no operational notes"
+    )
 
 
 def test_a_plan_directory_that_cannot_be_created_is_refused_before_the_launch(

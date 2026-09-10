@@ -127,10 +127,16 @@ NOTHING_DEMANDED = Bar("a bar that demands nothing", "Accept it when it is done.
     (
         (
             "The pin moves to the release carrying that fix, at version 0.19.3 or past it.",
-            "a version literal perishes over the days a plan waits to be dispatched, "
-            "where an amendment binds the next dispatch of a node its author is "
-            "watching — and naming the release that just landed is the correction most "
-            "worth amending mid-run",
+            "a criterion resting on somebody else's released artifact is a plan's author "
+            "asking for a fact nobody in the dispatch can establish, where an amendment "
+            "binds the next dispatch of a node its author is watching — and naming the "
+            "release that has just landed is the correction most worth amending mid-run",
+        ),
+        (
+            "The wheel this pin names exists on the registry.",
+            "the other half of the same entry pair: the existence of a released artifact "
+            "is not a property of any finished tree, while a manager amending mid-run is "
+            "reading a registry the work has already reached",
         ),
         (
             "Give an honest justification of the shape described above.",
@@ -154,10 +160,12 @@ def test_a_question_a_whole_bar_asks_is_not_asked_of_an_amendment(text: str, why
     refusing a manager mid-run, and one quietly dropped from the plan check would stop
     refusing a plan, and only the pair catches either.
 
-    The one question no single text can show is :data:`~orchestrator.criteria_guard.DEMANDS`,
-    which refuses criteria for being *silent* about something the bar demands. What shows
-    it is every sound amendment here passing while stating neither of the two demands
-    every dispatched node's criteria must state.
+    The first text is the one to read twice, because what refuses it moved: the version
+    literal in it is no longer refused anywhere deterministically, and what the plan check
+    now names is `the release carrying` — an entry of
+    :data:`~orchestrator.criteria_guard.OUT_OF_DISPATCH` whose ``of_an_amendment`` is
+    false. So this tuple is still the same pair of facts about the same text, reached
+    through a different rule, which is what keeps it evidence rather than a coincidence.
     """
     task = f"## What\n\nx\n\n## Why\n\ny\n\n{CRITERIA_HEADING}\n\n- {text}\n"
     with pytest.raises(CriteriaError):

@@ -128,10 +128,17 @@ STATES_ITS_BAR = (
     "finally stands."
 )
 
-#: The same criteria with the end-to-end demand dropped, which is what `just check-plan`
-#: refuses: the shipped bar demands a node's behaviour be proven by driving it, and a
-#: criterion list silent about that is one whose judge supplies its own reading.
-SILENT_ABOUT_ITS_BAR = "- The route accepts every request it is given."
+#: The same criteria with one that `just check-plan` refuses: it rests on somebody else's
+#: released artifact, which is not a fact about the finished tree in any wording and which
+#: one node already paid for — the worker correctly determined it could not be satisfied,
+#: and the node was killed by hand with the rest of its work landed. Criteria *silent*
+#: about a demand their bar makes used to stand here, and no longer refuse at all: whether
+#: criteria answer a demand is judged by `just review-plan`'s turn, by meaning, because
+#: matching the phrase here refused wordings the same review had asked for.
+UNLAUNCHABLE = (
+    f"{STATES_ITS_BAR}\n"
+    "- `config/onetaskgraph.version` names a release that carries both of those fixes."
+)
 
 #: What the scripted reviewer answers. The refusal carries **two** findings, because one
 #: is the shape the verdict contract was widened away from: a reviewer that saw two
@@ -660,7 +667,7 @@ def test_a_plan_the_pre_launch_check_refuses_costs_no_document_dispatch(
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     bench = _bench(tmp_path, oneharness_bin, PASSES)
-    drafted = _draft("finish-plan-unlaunchable", criteria=SILENT_ABOUT_ITS_BAR)
+    drafted = _draft("finish-plan-unlaunchable", criteria=UNLAUNCHABLE)
     named = RunId("finish-plan-e2e-check-refused")
     brief = _brief(tmp_path, drafted)
 

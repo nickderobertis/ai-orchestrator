@@ -39,6 +39,8 @@ from criteria_examples import (
     PUBLICATION_IN_PROSE,
     PUBLISHED_WITH_A_WORD_IN_THE_WAY,
     RED_BEFORE_GREEN,
+    RELEASED_ELSEWHERE,
+    RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
 from project_fixtures import project_from_plan, reviewed
@@ -46,7 +48,7 @@ from scratch_identity import registered
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
-from orchestrator.criteria_guard import APPENDIX, OUT_OF_DISPATCH, OutOfDispatch
+from orchestrator.criteria_guard import APPENDIX, APPENDIX_ENV, OUT_OF_DISPATCH, OutOfDispatch
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`, rather than a marker tier of the
@@ -93,8 +95,12 @@ STATES_ITS_BAR_AS_AN_ACCOUNT = (
 #: stack that demand comes from the appendix rather than from the role: oneagentgraph
 #: 0.3.5 holds a dispatch to what it can prove from inside its own run, so the shipped
 #: `engineer` bar asks for the change to be "proven at the level this run can reach"
-#: and no longer says "end to end" at all. Which is the guard working as designed —
-#: it enforces a demand only where it is really made.
+#: and no longer says "end to end" at all.
+#:
+#: **It reaches a dispatch now**, and that is this tier's doing rather than the shape
+#: having become sound: whether the criteria answer a demand their own bar makes is
+#: judged by `just review-plan`'s turn, by meaning, because the matcher that asked it
+#: here refused wordings the same review had just asked for.
 OMITS_A_DEMAND = (
     "- The route accepts a valid request and rejects an invalid one.\n"
     "- Every claim the dispatch makes about the finished work is true of the tree as "
@@ -112,6 +118,14 @@ OMITS_A_DEMAND_THE_ROLE_MAKES = (
     "- The route accepts a valid request and rejects an invalid one.\n"
     "- A request-level test drives the route end to end and covers both paths."
 )
+
+
+#: The same node carrying a criterion about somebody else's released artifact, which is a
+#: refusal this tier makes on its own account rather than one it hands to a judged turn.
+#: Two journeys below need one: each drives a path where a refusal's *shape* is the
+#: subject — one loader against another, and the registered check's own JSON answer — so
+#: what the criteria did wrong has to be something those paths can still be refused for.
+RESTS_ON_A_RELEASE = f"{STATES_ITS_BAR}\n{RELEASED_ELSEWHERE[0]}"
 
 
 def _plan(root: Path, criteria: str) -> Path:
@@ -448,6 +462,34 @@ def test_a_plan_whose_node_states_its_bar_is_accepted(tmp_path: Path, criteria: 
     assert "1 dispatched node(s)" in checked.stdout, checked.stdout
 
 
+def test_a_section_whose_heading_merely_starts_with_the_criteria_heading_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """A different heading that begins with the same words, driven through the recipe.
+
+    A node documenting this tier writes `## Acceptance criteria examples`, and reading
+    it as a second opening of the criteria heading refused the node for stating its
+    criteria exactly once. It is at the recipe boundary because that is where a plan's
+    author meets the refusal, and because the accepting half is the half a matcher
+    reaching too far turns into a plan nobody can launch.
+    """
+    plan = _plan(tmp_path, STATES_ITS_BAR)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    node = document["tasks"][0]
+    node["task"] = node["task"].replace(
+        "## Acceptance criteria\n",
+        "## Acceptance criteria examples\n\nThey are stated as properties of the tree.\n\n"
+        "## Acceptance criteria\n",
+        1,
+    )
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    checked = _check_plan(plan)
+
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "1 dispatched node(s)" in checked.stdout, checked.stdout
+
+
 def test_a_task_with_no_acceptance_criteria_at_all_is_refused(tmp_path: Path) -> None:
     """A node with no criteria has no bar of its own, so it is judged entirely on the
     role's — which is the whole failure this guard exists to catch, at its extreme."""
@@ -511,45 +553,37 @@ def test_check_plan_reads_every_page_of_a_multi_page_project(tmp_path: Path) -> 
     assert "0 dispatched node(s)" in checked.stdout
 
 
-def test_a_plan_whose_node_omits_a_demand_it_will_be_held_to_is_refused(tmp_path: Path) -> None:
-    """The refusal, at the seam and for the reason it exists.
+@pytest.mark.parametrize(
+    "criteria",
+    (
+        pytest.param(OMITS_A_DEMAND, id="the-appendixs-own-demand"),
+        pytest.param(OMITS_A_DEMAND_THE_ROLE_MAKES, id="the-shipped-roles-demand"),
+    ),
+)
+def test_a_node_silent_about_a_demand_reaches_a_dispatch_from_here(
+    tmp_path: Path, criteria: str
+) -> None:
+    """Both carriers of a demand, and both now left to the judged turn, through the recipe.
 
-    The message has to carry both halves for the plan's author to act on it: which
-    demand went unanswered, and where it is made — here the appendix this repository
-    tracks and every node's task carries, which is where the end-to-end demand lives
-    on the adopted stack. The section it names moved with the complete gate: the
-    operational notes used to demand that the gate chain run "end to end in one
-    command", and with that instruction gone the demand a node is held to is the one
-    the appendix's own closing section makes of every implementation dispatch.
+    These were two refusals here: a demand the tracked appendix makes of every
+    implementation dispatch, and one the role lifted out of the engine binary makes. Both
+    were asked by matching a phrase, and matching a phrase is what made the two tiers
+    refuse each other's required wording — a review refused a criterion for pinning a
+    spelling while this tier refused the same task for lacking a literal phrase its
+    criteria stated across three sentences of their own, and the review key being over the
+    task's own content meant inserting words to satisfy the matcher bought another judged
+    turn. So the demand is unchanged and the tier that reads it moved: `just review-plan`
+    asks whether the criteria answer it, by meaning.
+
+    Driven at the recipe rather than only in the unit tier because this is an
+    *acceptance* now, and an acceptance is the half a regression hides in: a matcher
+    quietly reintroduced here refuses a plan an operator has no way to correct, since the
+    wording it would demand is the wording the review would refuse.
     """
-    refused = _check_plan(_plan(tmp_path, OMITS_A_DEMAND))
+    accepted = _check_plan(_plan(tmp_path, criteria))
 
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    reported = refused.stderr
-    assert "route:" in reported, reported
-    assert "proof end to end" in reported, reported
-    assert "State the bar in" in reported, reported
-    assert "State it as a criterion" in reported, reported
-
-
-def test_a_demand_the_shipped_role_makes_is_refused_against_that_role(tmp_path: Path) -> None:
-    """The other half of the same seam: a demand that comes from the engine binary.
-
-    This is the reading the guard exists to make and the one this repository has
-    already lost a dispatch to getting wrong — the bar in force is the role compiled
-    into the `oneagentgraph` the adopted `onepipeline` links, never a file in
-    `personas/` and never the CLI pinned beside it. A refusal that named the wrong
-    source would send a plan's author to edit something that decides nothing.
-    """
-    refused = _check_plan(_plan(tmp_path, OMITS_A_DEMAND_THE_ROLE_MAKES))
-
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    reported = refused.stderr
-    assert "route:" in reported, reported
-    assert "an account of this dispatch's own work" in reported, reported
-    assert "true of the tree as it finally stands" in reported, reported
-    assert "engineer" in reported and "onepipeline" in reported, reported
-    assert "State it as a criterion" in reported, reported
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
 @pytest.mark.parametrize("entry", OUT_OF_DISPATCH, ids=[one.example for one in OUT_OF_DISPATCH])
@@ -634,6 +668,108 @@ def test_the_sound_criteria_of_both_widened_shapes_still_reach_a_dispatch(
     assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
+@pytest.mark.parametrize("criterion", RELEASED_ELSEWHERE, ids=range(len(RELEASED_ELSEWHERE)))
+def test_a_criterion_about_somebody_elses_released_artifact_is_refused_through_the_recipe(
+    tmp_path: Path, criterion: str
+) -> None:
+    """The shape that moved *into* this tier, at the surface an operator meets a refusal.
+
+    Whether a release exists, or carries a named change, is not a fact about the finished
+    tree under any wording, and establishing it means going and reading another
+    repository. One such criterion required a pin to name a plan-store release carrying
+    two fixes no release archive can carry; the worker correctly determined it could not
+    be satisfied, and the node was killed and settled by hand with the rest of its work
+    complete and landed.
+
+    The refusal has to carry the correction as well as the complaint, because the
+    correction is the one an author cannot derive: a release is not a property of the
+    tree, so there is no worker-side precondition to state and what is left is the
+    corresponding-content shape `personas/planner.yaml` admits.
+    """
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}"))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "the dispatch cannot do" in refused.stderr, refused.stderr
+    assert "state what this node's own committed content must carry" in refused.stderr, (
+        refused.stderr
+    )
+    assert "not this node's bar" in refused.stderr, refused.stderr
+
+
+@pytest.mark.parametrize(
+    "criterion", RELEASED_ELSEWHERE_IN_PROSE, ids=range(len(RELEASED_ELSEWHERE_IN_PROSE))
+)
+def test_a_criterion_naming_a_release_while_resting_on_the_tree_reaches_a_dispatch(
+    tmp_path: Path, criterion: str
+) -> None:
+    """The bound that widening is bought under, paid at the same surface.
+
+    Every one of these names a release, a version, or a package and rests on the finished
+    tree alone — and one of them is the corresponding-content correction the refusal above
+    tells its author to write, which a widening that refused it would be refusing its own
+    remedy for.
+    """
+    accepted = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}"))
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_the_criteria_a_node_is_read_on_are_the_ones_its_own_heading_opens(
+    tmp_path: Path,
+) -> None:
+    """Prose that merely names the heading neither begins the block nor ends it.
+
+    Located by the first occurrence of that text anywhere, this plan's block began at the
+    mention inside `## What` and ended at `## Why`, which left the criteria the node
+    actually states in the half no rule read. Both halves of that fail and the quiet one
+    is the dangerous one, so both are driven here: the `just gate` criterion the node
+    really states is refused, and — the half a green return cannot show on its own — the
+    refusal is about *that* criterion rather than about a span lifted out of the prose.
+    """
+    unclosed = "- A plan carrying `onepipeline.deps for an in-plan edge is refused."
+    plan = _plan(tmp_path, unclosed)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    document["tasks"][0]["task"] = document["tasks"][0]["task"].replace(
+        "## What\n\nAdd the route and the test that drives it.",
+        "## What\n\nEvery demand this node is held to is stated in its "
+        "`## Acceptance criteria`, never only in the prose around it.",
+    )
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    refused = _check_plan(plan)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "backtick run unclosed" in refused.stderr, refused.stderr
+    # The criterion the refusal quotes is the one the heading opens, which is the half a
+    # non-zero exit cannot show: read from the mention in `## What` instead, the block
+    # would have been the prose between it and `## Why` — where this criterion is not,
+    # and where nothing is refusable at all.
+    assert unclosed.removeprefix("- ") in refused.stderr, refused.stderr
+
+
+def test_a_task_that_opens_the_criteria_heading_twice_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    """Which block states the node's bar cannot be decided from such a task.
+
+    The judge is handed the whole task and reads both, so a reader here that picked either
+    would be checking one while the dispatch is judged against the other — and naming the
+    ambiguity is the same answer this repository's plan store gives a record that opens
+    `metadata` twice.
+    """
+    plan = _plan(tmp_path, STATES_ITS_BAR)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    document["tasks"][0]["task"] += "\n## Acceptance criteria\n\n- `just gate` is green.\n"
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    refused = _check_plan(plan)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "opens '## Acceptance criteria' 2 times" in refused.stderr, refused.stderr
+    assert "Leave one block of criteria" in refused.stderr, refused.stderr
+
+
 @pytest.mark.parametrize(
     ("criterion", "reason"),
     (
@@ -693,25 +829,29 @@ def test_a_lifecycle_node_is_read_through_its_steps_rather_than_as_one_node(
     assert "2 dispatched node(s)" in checked.stdout, checked.stdout
 
 
-def test_a_node_that_never_says_what_it_reports_is_refused(tmp_path: Path) -> None:
-    """The second demand nobody wrote down, refused at the seam.
+def test_a_node_that_never_says_what_it_reports_reaches_a_dispatch_from_here(
+    tmp_path: Path,
+) -> None:
+    """The second demand nobody wrote down, and the tier that reads it now.
 
-    A branch was failed for never having "provided a final verified completion
-    report" — a demand in neither its task nor the shared clause. The bar and the
-    appendix both ask a worker to report; a node whose criteria never say anything about
-    what it claims of the finished work leaves the judge to decide what that meant. What
-    the refusal asks for is the property rather than that artifact: the ordering demand
-    that once answered this failed six nodes with complete, committed, green work.
+    A branch was failed for never having "provided a final verified completion report" —
+    a demand in neither its task nor the shared clause. The bar and the appendix both ask
+    a worker to report, and a node whose criteria say nothing about what it claims of the
+    finished work leaves the judge to decide what that meant. This tier answered that by
+    matching a phrase, which is what made it and the judged turn refuse each other's
+    required wording, so the question moved rather than the demand: `just review-plan`
+    reads whether the criteria answer it, by meaning.
+
+    Driven as an acceptance because an acceptance is where a regression hides — a matcher
+    quietly put back here refuses a plan whose only correction is a wording the review
+    would then refuse.
     """
     silent = "\n".join(line for line in STATES_ITS_BAR.splitlines() if "claim" not in line)
 
-    refused = _check_plan(_plan(tmp_path, silent))
+    accepted = _check_plan(_plan(tmp_path, silent))
 
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "an account of this dispatch's own work" in refused.stderr, refused.stderr
-    assert "true of the tree as it finally stands" in refused.stderr, refused.stderr
-    for withdrawn in ("last thing", "closes with", "final report", "reported afresh"):
-        assert withdrawn not in refused.stderr, refused.stderr
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
 def test_a_node_naming_a_persona_no_dispatch_could_resolve_is_refused(tmp_path: Path) -> None:
@@ -760,14 +900,22 @@ def test_a_persona_named_by_path_resolves_through_the_recipe(tmp_path: Path) -> 
     below drives. `tests/test_criteria_guard.py` is what covers that resolution, and
     the reason it is worth keeping there is that this repository does not own the rule
     that makes it unreachable.
+
+    The refusing half is driven over a criterion this tier still refuses on its own
+    account, rather than over one its bar decides: the demand matching that used to
+    answer here is the judged turn's now, and a refusal about the criterion alone would
+    say nothing about which persona resolved. What it shows instead is that a path
+    persona neither makes the checks fall over nor stops them refusing — which is the
+    whole of what a plan carrying this shape needs from them.
     """
     accepted = _check_plan(_with_node(_plan(tmp_path, STATES_ITS_BAR), persona=PERSONA_BY_PATH))
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
-    refused = _check_plan(_with_node(_plan(tmp_path, OMITS_A_DEMAND), persona=PERSONA_BY_PATH))
+    outside = f"{STATES_ITS_BAR}\n{RELEASED_ELSEWHERE[0]}"
+    refused = _check_plan(_with_node(_plan(tmp_path, outside), persona=PERSONA_BY_PATH))
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "proof end to end" in refused.stderr, refused.stderr
+    assert "the dispatch cannot do" in refused.stderr, refused.stderr
 
 
 @pytest.mark.parametrize(
@@ -853,28 +1001,34 @@ def test_a_persona_file_stating_no_review_bar_is_refused(
     assert "states neither `user.persona` nor `user.done_when`" in refused.stderr, refused.stderr
 
 
-def test_a_persona_that_replaces_the_shared_bar_is_the_only_bar_in_force(
+def test_a_persona_that_replaces_the_shared_bar_is_read_as_the_bar_in_force(
     tmp_path: Path, drafted_persona: Drafted
 ) -> None:
-    """`user.done_when_replaces_base` drops the shared clause, and the guard follows it.
+    """A file declaring `user.done_when_replaces_base` is composed and read through the recipe.
 
-    Proven by what the refusal names: the demand comes from this file, and the node's
-    criteria answer everything the shared clause would have asked for — so a guard
-    still composing the base bar would have accepted.
+    What a real project can show is the *source* a refusal names: the clause comes from
+    this drafted file, reached as a path relative to `graphs/`, so the bar in force is
+    that file's own rather than anything in the base config. Whether the shared clause
+    was dropped or merged is no longer observable at the recipe — the only reader of a
+    composed bar left here is the file-modification conflict, and the base config forbids
+    no change — so `tests/test_criteria_guard.py::`
+    `test_a_role_that_replaces_the_base_bar_stands_in_for_it` is what isolates the
+    replacement itself, over a base config it can write.
     """
     drafted_persona.file.write_text(
         "name: standalone\nuser:\n  persona: |\n    Only mine.\n"
-        "  done_when: 'the change is proven end to end by a soak run'\n"
+        "  done_when: 'the answer is given and no project files were changed'\n"
         "  done_when_replaces_base: true\n",
         encoding="utf-8",
     )
-    silent = "\n".join(line for line in STATES_ITS_BAR.splitlines() if "end to end" not in line)
+    editing = f"{STATES_ITS_BAR}\n- `docs/routes.md` gains the route's own section."
 
-    refused = _check_plan(_with_node(_plan(tmp_path, silent), persona=drafted_persona.ref))
+    refused = _check_plan(_with_node(_plan(tmp_path, editing), persona=drafted_persona.ref))
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "scratch/personas" in refused.stderr, refused.stderr
-    assert "proof end to end" in refused.stderr, refused.stderr
+    assert "no project files were changed" in refused.stderr, refused.stderr
+    assert "docs/routes.md" in refused.stderr, refused.stderr
 
 
 def test_a_task_rebuilt_from_a_stale_appendix_is_refused(tmp_path: Path) -> None:
@@ -904,6 +1058,12 @@ def test_a_task_rebuilt_from_a_stale_appendix_is_refused(tmp_path: Path) -> None
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "current operational appendix" in refused.stderr, refused.stderr
+    # And where it sends the party that has to act, which is the planner rather than
+    # whoever is reading this: the variable every `just plan` launch hands its dispatch,
+    # and an absolute path on this host. It named a path relative to this checkout, which
+    # a planner working in another repository's worktree cannot open at all.
+    assert f"${APPENDIX_ENV}" in refused.stderr, refused.stderr
+    assert str(REPO_ROOT / APPENDIX) in refused.stderr, refused.stderr
 
 
 def test_a_plan_that_cannot_be_read_is_not_reported_as_a_refusal(tmp_path: Path) -> None:
@@ -1365,7 +1525,7 @@ def _older_engine(root: Path) -> Path:
     ("criteria", "code"),
     (
         pytest.param(STATES_ITS_BAR, 0, id="accepted"),
-        pytest.param(OMITS_A_DEMAND, 1, id="refused"),
+        pytest.param(RESTS_ON_A_RELEASE, 1, id="refused"),
     ),
 )
 def test_both_paths_reach_the_same_verdict_on_one_plan(
@@ -1393,8 +1553,8 @@ def test_both_paths_reach_the_same_verdict_on_one_plan(
         assert "1 dispatched node(s)" in through.stdout, through.stdout
         assert "1 dispatched node(s)" in directly.stdout, directly.stdout
     else:
-        assert "proof end to end" in through.stderr, through.stderr
-        assert "proof end to end" in directly.stderr, directly.stderr
+        assert "the dispatch cannot do" in through.stderr, through.stderr
+        assert "the dispatch cannot do" in directly.stderr, directly.stderr
         # Through the verb the refusal names the check that made it; directly there is
         # only one loader, so there is no source to name.
         assert "check-plan: scripts/plan-check.sh: route: task: " in through.stderr, through.stderr
@@ -1431,7 +1591,7 @@ def _loaded_plan(project: str, root: Path) -> str:
     ("criteria", "refuses"),
     (
         pytest.param(STATES_ITS_BAR, False, id="accepting"),
-        pytest.param(OMITS_A_DEMAND, True, id="refusing"),
+        pytest.param(RESTS_ON_A_RELEASE, True, id="refusing"),
     ),
 )
 def test_the_registered_check_answers_a_plan_document_on_its_own_stdin(
@@ -1465,7 +1625,7 @@ def test_the_registered_check_answers_a_plan_document_on_its_own_stdin(
         (refusal,) = answer["refusals"]
         assert refusal["node"] == "route", refusal
         assert refusal["field"] == "task", refusal
-        assert "proof end to end" in refusal["reason"], refusal
+        assert "the dispatch cannot do" in refusal["reason"], refusal
 
 
 def test_the_registered_check_does_not_import_from_an_inherited_module_path(

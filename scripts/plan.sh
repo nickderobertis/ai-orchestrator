@@ -20,6 +20,11 @@
 #     taken rather than by predicting what will be minted. **Both** of this flow's run
 #     ids are refused that way, here, before anything is launched: the tail below runs a
 #     second launch, and an hour of planning must not end at a name collision.
+#   * **The operational appendix is exported into the launch environment**, as text
+#     rather than as a path. Every dispatched task must carry it verbatim and the
+#     planner is what copies it in, but a planner works in a worktree of its own while
+#     the tracked file lives here — so a path names a file it cannot open, and the
+#     refusal it then meets named that same path.
 #   * **`ORCHESTRATOR_ASK_MANAGER` is exported into the launch environment**, holding
 #     the path of `scripts/ask-manager.sh`, which is how the dispatched planner stops
 #     and asks rather than guessing at a decision fork. A launch that dropped it would
@@ -339,6 +344,9 @@ export_ask_manager plan || exit "$?"
 # shellcheck source=scripts/plan-root-env.sh
 load plan-root-env.sh
 export_plan_authoring_root plan || exit "$?"
+# shellcheck source=scripts/dispatch-appendix-env.sh
+load dispatch-appendix-env.sh
+export_dispatch_appendix plan || exit "$?"
 
 # The root the helper above resolved, which is where this launch writes its project and
 # where everything downstream of it then looks: `onepipeline start` below, the review

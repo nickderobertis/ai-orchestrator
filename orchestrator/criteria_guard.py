@@ -18,32 +18,37 @@ procedure. Four nodes have been lost that way in this host's history:
 * one required a lockfile to resolve a sibling to an exact version. The sibling
   published a newer one between the task being written and the node being dispatched,
   the worker resolved the newest as that repository's own manifest demands, and the
-  judge failed finished, gate-green work for doing the right thing. That is what
-  :data:`VERSION_LITERAL` refuses, and it belongs to this deterministic tier rather
-  than to a review bar precisely because a judge reading the number would most likely
-  have *passed* it — the criterion was well-formed, just perishable.
+  judge failed finished, gate-green work for doing the right thing.
 
-The first pair, and the version literal, are what the criteria checks below refuse.
-The second pair is what :func:`resolve_bar` and :data:`DEMANDS` refuse: a demand
-that will be made of this node has to be *stated* as a criterion, so the judge checks
-a criterion the author wrote instead of one it reconstructed.
+The first pair is what the criteria checks below refuse. The second pair and the
+version literal are not, and where each question is asked is the line this module is
+now drawn along. **Whether a criterion's truth turns on something outside the
+dispatch is structural**, so it stays here. **Whether a number is the right number,
+and whether the criteria answer a demand their own bar makes, need judgment**, so
+:mod:`orchestrator.plan_review`'s judged turn asks them instead — one verdict that can
+hold both considerations at once.
 
-What that reporting demand *asks for* has since been narrowed, and the narrowing is
-the point rather than a softening. It used to require the criteria to say that the
-dispatch produces a final report as its last artifact, which the conversational shape
-of a dispatch makes unsatisfiable: the conversation does not end when the worker
-reports, the supervisor keeps asking, and answering well means running things — so
-every good answer invalidated the report and only restating it in full complied. Six
-nodes of one run settled ``task-failed`` on that ordering in one night, each with
-complete committed work, a green deterministic tier, and no acceptance criterion found
-unmet. What :data:`DEMANDS` asks for instead is the property that ordering was serving
-— every claim the dispatch makes about the finished work is true of the tree as it
-finally stands — which a criterion can state and a worker can satisfy either by
-restating the report or by a correct delta in the turn that changed something. A
-*false* claim still fails on its merits; that is the judge's to rule on, not this
-tier's.
+Holding proxies for those two here cost three judged rounds on real plans, because the
+tiers refused each other's required wording rather than adding up. One review
+prescribed its own remedy — pin the immutable version in the criteria — which the
+version-literal rule then refused outright. Another refused a criterion for pinning a
+spelling in place of a property, while this tier refused the same task for lacking a
+literal phrase its criteria stated across three sentences without using those words;
+and because a review record is keyed on the task's own content, inserting words to
+satisfy a matcher invalidated the record and bought another judged turn.
 
-A third shape is worse than either, because no wording of the criteria rescues it:
+One shape reaches further outside the dispatch than any of those and is refused here
+for exactly that reason: a criterion asserting that somebody else's **released
+artifact** exists, or that it carries a named change. Whether a release exists is not a
+fact about the finished tree at all, and establishing it means going and reading
+another repository. One such criterion required a pin to name a plan-store release
+carrying two fixes that no release archive can carry; the worker correctly determined
+it could not be satisfied, and the node was killed and settled by hand with the rest of
+its work complete and landed. It is an entry of :data:`OUT_OF_DISPATCH` beside the
+merge path's own verdict, and it is one of the two this module does **not** ask of an
+amendment — :func:`check_amendment` says why.
+
+One shape is worse than any of them, because no wording of the criteria rescues it:
 a bar that forbids the dispatch changing project files, under a task that requires
 one to change. The judge is then *required* to fail the work the task is *required*
 to produce. Three nodes of one plan named ``persona: researcher`` while their tasks
@@ -91,6 +96,15 @@ from orchestrator.root import REPO_ROOT
 #: which is how it came to contradict itself for long enough to fail a node.
 APPENDIX = Path("config") / "dispatch-appendix.md"
 
+#: The environment variable a planning launch hands that text over in, and the one place
+#: that name is composed — `scripts/dispatch-appendix-env.sh` asks this module for both
+#: the name and the value rather than spelling either. The party required to copy the
+#: appendix into every task is the planner, which works in a worktree of its own while
+#: the tracked file above lives in the launching checkout: naming it by a path relative
+#: to this checkout told that planner to open a file that does not exist from where it
+#: stands, and a manager ended up appending the text by hand.
+APPENDIX_ENV = "ORCHESTRATOR_DISPATCH_APPENDIX_TEXT"
+
 #: The shared review contract and completion criterion every dispatch is judged
 #: against, whichever role it names.
 BASE_CONFIG = Path("config") / "onejudge.base.yaml"
@@ -116,15 +130,6 @@ class Bar(NamedTuple):
     #: The review contract and completion criteria the judge is handed, as one blob
     #: to search: what matters here is which demands it makes, not their structure.
     text: str
-
-
-class Demand(NamedTuple):
-    """One demand a bar or a task's own prose makes, and how a criterion states it."""
-
-    name: str
-    made_by: re.Pattern[str]
-    stated_by: re.Pattern[str]
-    remedy: str
 
 
 #: Every block-scalar header a field may open with. `>` folds its newlines to
@@ -429,6 +434,24 @@ def _joined(*parts: str | None) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
+#: What a criterion resting outside the dispatch is told to do instead. The default,
+#: because for every shape but one the correction is the same: say what has to be true
+#: on the worker's side of the event.
+STATE_THE_PRECONDITION = "State the worker-side precondition instead."
+
+#: And what a criterion about somebody else's released artifact is told instead. A
+#: release is not a fact about the finished tree, so there is no worker-side
+#: precondition to state: what is left is the content this node commits, plus the check
+#: that later compares it against the registry — the corresponding-content shape
+#: `personas/planner.yaml` admits for exactly this case.
+STATE_WHAT_THE_TREE_CARRIES = (
+    "A release is not a property of the finished tree, so state what this node's own "
+    "committed content must carry — the pin, the declaration, the record — and name the "
+    "check that later compares it against the registry, saying that check's result is "
+    "not this node's bar."
+)
+
+
 class OutOfDispatch(NamedTuple):
     """One way a criterion rests on state the worker's own dispatch does not reach."""
 
@@ -436,6 +459,12 @@ class OutOfDispatch(NamedTuple):
     #: A criterion fragment this matches whole, so the journey that drives every entry
     #: has one to drive and the refusal it reads quotes exactly this.
     example: str
+    #: What the criterion's author is told to write instead.
+    remedy: str = STATE_THE_PRECONDITION
+    #: Whether :func:`check_amendment` asks this of an amendment too. False only where
+    #: the ordinary mid-run correction is the very thing the entry refuses; the reason
+    #: per entry is beside it.
+    of_an_amendment: bool = True
 
 
 # Work the dispatch cannot perform: it happens after the worker settles. Patterns rather
@@ -470,6 +499,38 @@ OUT_OF_DISPATCH = (
     OutOfDispatch(
         re.compile(r"required checks?(?: \w+){0,2} (?:pass|passes|are green|is green|succeed)"),
         "required checks pass",
+    ),
+    # Somebody else's released artifact, asserted to carry a named change. The incident
+    # is in this module's docstring: a pin was required to name a release carrying two
+    # fixes no release archive can carry, and the node was killed by hand with the rest
+    # of its work landed. Anchored on a determiner so the artifact noun is the head of
+    # its own phrase — "the release notes contain the change" names a file in the tree
+    # and is left alone, where a bare `release .* contains` would refuse it. `package`
+    # and `bundle` are deliberately not nouns here: a Python package and a built bundle
+    # are both ordinary in-tree subjects, and this check refuses a plan outright.
+    OutOfDispatch(
+        re.compile(
+            r"\b(?:an|a|the|that|this|some|any)\b(?: [\w.+-]+){0,2}? "
+            r"(?:release|version|wheel|crate|distribution|artifact|archive)s? "
+            r"(?:that (?:contains?|carr(?:y|ies)|includes?)"
+            r"|contain(?:s|ing)|carr(?:ies|ying)|includ(?:es|ing))\b"
+        ),
+        "a release that contains",
+        remedy=STATE_WHAT_THE_TREE_CARRIES,
+        of_an_amendment=False,
+    ),
+    # And asserted simply to be there. Keyed on the **locus** rather than on the artifact
+    # noun, because "the package exists in the lockfile" is a property of the finished
+    # tree and `exists on the registry` can be nothing else. Registries are named rather
+    # than generalized for the same reason.
+    OutOfDispatch(
+        re.compile(
+            r"\b(?:exists?|is available|are available|is present|shows up|appears) "
+            r"(?:on|in|at) (?:the )?(?:registry|crates\.io|pypi|npm|index|upstream)\b"
+        ),
+        "exists on the registry",
+        remedy=STATE_WHAT_THE_TREE_CARRIES,
+        of_an_amendment=False,
     ),
 )
 
@@ -549,42 +610,6 @@ DEFERRAL = re.compile(
 # A demand for a particular string rather than a particular property. The worker can
 # satisfy the property and still be failed on the spelling.
 PHRASE = re.compile(r"\b(verbatim|word for word|the exact (?:phrase|wording|words))\b", re.I)
-
-# A release number written into a criterion; the incident it refuses is in this
-# module's docstring. Three shapes, and no bare `<n>.<n>`: an unprefixed two-component
-# number is a duration, a percentage, or a schema version far more often than it is a
-# release, and a false refusal here blocks correct work.
-VERSION_LITERAL = re.compile(
-    r"\bv?\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.-]+)?\b"
-    r"|\bv\d+\.\d+\b"
-    r"|[><=~^!]=?\s*\d+\.\d+\b"
-)
-
-#: Demands whose absence from the criteria has already failed finished work. Each is
-#: enforced only where it is actually made — in the resolved bar, or in the task's
-#: own prose outside the criteria — so a role that stops making one stops requiring
-#: it here, and nothing has to be re-stated when an upstream bar moves.
-DEMANDS = (
-    Demand(
-        "proof end to end",
-        re.compile(r"\bend[- ]to[- ]end\b", re.I),
-        re.compile(r"\bend[- ]to[- ]end\b", re.I),
-        "name the test or journey that proves this node's behavior end to end",
-    ),
-    # Named for the demand the bar makes, and matched only for silence about it: this
-    # pattern asks whether the criteria speak to what the dispatch reports at all, never
-    # whether what they promise is true. Ruling on a claim is the judge's work over a
-    # finished tree, and a pattern that tried it would refuse the wording plans written
-    # before this demand narrowed still state it in.
-    Demand(
-        "an account of this dispatch's own work",
-        re.compile(r"\b(?:report|surfac)\w*", re.I),
-        re.compile(r"\b(?:report|claim|account)\w*", re.I),
-        "say that what the dispatch reports about the finished work — what it verified "
-        "and the evidence for it — is true of the tree as it finally stands",
-    ),
-)
-
 
 #: How a review bar says this dispatch may not change the repository. Matched against
 #: the *resolved* bar rather than against a persona name, so a role whose wording
@@ -666,19 +691,29 @@ def criteria_items(block: str) -> Iterator[str]:
         yield "\n".join(current)
 
 
-def _out_of_dispatch(block: str) -> re.Match[str] | None:
+def _out_of_dispatch(
+    block: str, *, of_an_amendment: bool = False
+) -> tuple[re.Match[str], OutOfDispatch] | tuple[None, None]:
     """The first thing ``block`` rests on that the worker's own dispatch never reaches.
 
     One reader for both carriers of criteria — a node's ``## Acceptance criteria`` and
     the amendment that overrides one — so :data:`OUT_OF_DISPATCH` is the single answer
-    to the question rather than a list each caller re-walks its own way.
+    to the question rather than a list each caller re-walks its own way. Which entries
+    that answer is taken over is the carrier's: an amendment is asked only the entries
+    whose refusal means the same thing mid-run, which is a field of each entry rather
+    than a second list.
+
+    The entry is returned beside its match because the correction differs by shape, the
+    way :func:`_prescribed` returns its procedure.
     """
     lowered = block.lower()
     for entry in OUT_OF_DISPATCH:
+        if of_an_amendment and not entry.of_an_amendment:
+            continue
         rests_on = entry.pattern.search(lowered)
         if rests_on is not None:
-            return rests_on
-    return None
+            return rests_on, entry
+    return None, None
 
 
 def _prescribed(block: str) -> tuple[re.Match[str], Procedure] | tuple[None, None]:
@@ -818,45 +853,65 @@ def check_changes_allowed(block: str, node_id: str, bar: Bar) -> None:
         )
 
 
+#: Where a task **opens** its acceptance criteria: the heading spelled at the start of
+#: a line, rather than wherever that text happens to occur. Prose that merely names the
+#: heading — inside inline code, or mid-sentence — is not the block, and reading it as
+#: one began the block at that mention and ended it at the next heading after it, which
+#: left every criterion the node actually stated sitting in the prose half. Both halves
+#: of that fail, and the quiet one is the dangerous one: the loud half is a refusal
+#: quoting a span from prose, and the quiet half is a task whose every criterion goes
+#: unexamined by the one tier standing between a bad criterion and a failed dispatch.
+#:
+#: It is the **whole** heading rather than a line that starts with one, which is the
+#: same distinction one step further out. `## Acceptance criteria examples` is a
+#: different heading opening a different section, and reading it as this one fails both
+#: of those ways again: beside the real heading it made a sound task read as opening its
+#: criteria twice and refused it, and *alone* it silently handed back the block that
+#: heading opens — every line of it something no criterion ever claimed. Trailing
+#: whitespace is not part of the spelling, because it is not part of what a reader sees.
+OPENS_CRITERIA = re.compile(rf"^{re.escape(CRITERIA_HEADING)}[ \t]*$", re.MULTILINE)
+
+#: Where that block ends: the next heading of any depth, located the same way. The
+#: operational appendix is spelled `### ...`, so matching only `## ` swept it into the
+#: criteria block and made the guard fire on commands that were never criteria.
+CLOSES_CRITERIA = re.compile(r"^#{2,}\s", re.MULTILINE)
+
+
 def criteria_block(task: str) -> str:
-    """The task's ``## Acceptance criteria`` block, and nothing after it."""
-    return _split(task)[1]
+    """The block ``task``'s acceptance-criteria heading opens, and nothing after it.
 
-
-def _split(task: str) -> tuple[str, str]:
-    """The task's prose outside its criteria block, and the criteria block itself."""
-    start = task.find(CRITERIA_HEADING)
-    if start < 0:
+    A task that opens that heading **more than once** is refused by name rather than
+    read. Which of two blocks states the node's bar cannot be decided from such a task:
+    the judge is handed the whole task and reads both, so a reader here that picked
+    either would be checking one while the dispatch is judged against the other. That is
+    the same answer `orchestrator/plan_store.py` gives a record opening `metadata` twice
+    — a block this cannot identify unambiguously is better refused than guessed at.
+    """
+    opens = list(OPENS_CRITERIA.finditer(task))
+    if not opens:
         raise CriteriaError(f"no {CRITERIA_HEADING!r} section")
-    opened = start + len(CRITERIA_HEADING)
-    # Stop at the next heading of any depth. The operational appendix is spelled
-    # `### ...`, so matching only `\n## ` swept it into the criteria block and made
-    # the guard fire on commands that were never criteria.
-    ends = re.search(r"\n#{2,}\s", task[opened:])
-    stops = len(task) if ends is None else opened + ends.start()
-    return task[:start] + task[stops:], task[opened:stops]
-
-
-_HEADING = re.compile(r"^#{2,}\s+(?P<title>.+)$", re.MULTILINE)
-
-
-def _section_of(prose: str, at: int) -> str:
-    """The heading ``at`` falls under, for an error that says where a demand is made."""
-    headings = [found for found in _HEADING.finditer(prose) if found.start() < at]
-    return f"`{headings[-1]['title'].strip()}`" if headings else "its opening prose"
+    if len(opens) > 1:
+        raise CriteriaError(
+            f"the task opens {CRITERIA_HEADING!r} {len(opens)} times, so which block "
+            f"states this node's bar cannot be read from it — a judge is handed the whole "
+            f"task and reads both. Leave one block of criteria, and say whatever else that "
+            f"heading was introducing in prose that does not open it."
+        )
+    opened = opens[0].end()
+    ends = CLOSES_CRITERIA.search(task, opened)
+    return task[opened : len(task) if ends is None else ends.start()]
 
 
 def check(task: str, node_id: str, bar: Bar) -> None:
     """Raise :class:`CriteriaError` if ``task`` would be judged on something it omits."""
-    prose, block = _split(task)
+    block = criteria_block(task)
 
     check_backticks_pair(block, node_id)
-    rests_on = _out_of_dispatch(block)
-    if rests_on is not None:
+    rests_on, outside = _out_of_dispatch(block)
+    if rests_on is not None and outside is not None:
         raise CriteriaError(
             f"{node_id}: criteria name '{rests_on.group(0)}' — that is work the "
-            f"dispatch cannot do, so finished work fails against it. State the "
-            f"worker-side precondition instead."
+            f"dispatch cannot do, so finished work fails against it. {outside.remedy}"
         )
     deferred = DEFERRAL.search(block)
     if deferred:
@@ -872,14 +927,6 @@ def check(task: str, node_id: str, bar: Bar) -> None:
             f"than a particular property. Ask for the content in '## Additional info'; "
             f"criteria state what must be true of the tree."
         )
-    pinned = VERSION_LITERAL.search(block)
-    if pinned:
-        raise CriteriaError(
-            f"{node_id}: criteria name a version literal ({pinned.group(0).strip()!r}). A "
-            f"release published between this task being written and its node being "
-            f"dispatched makes finished work fail against it. State the property that "
-            f"version stands in for instead."
-        )
     named, procedure = _prescribed(block)
     if named is not None and procedure is not None:
         raise CriteriaError(
@@ -887,7 +934,6 @@ def check(task: str, node_id: str, bar: Bar) -> None:
             f"{procedure.remedy}"
         )
     check_changes_allowed(block, node_id, bar)
-    check_demands(prose, block, node_id, bar)
 
 
 def check_amendment(text: str, where: str) -> None:
@@ -908,17 +954,15 @@ def check_amendment(text: str, where: str) -> None:
     is an overriding *correction* to a node's criteria rather than the whole bar, so a
     question that only means something over a whole bar cannot be asked of one:
 
-    * :func:`check_demands` looks for a demand the resolved bar makes and the criteria
-      answer nowhere. The node's own criteria already answered it — `just check-plan`
-      refused the plan otherwise — and an amendment that had to restate every such
-      demand would be refused however it was written.
     * :func:`check_changes_allowed` needs the node's resolved review bar, and a reply
       envelope names a node id rather than a persona; nor does an amendment choose one.
-    * :data:`VERSION_LITERAL` refuses a number that perishes between a task being
-      written and its node being dispatched. An amendment binds the *next* dispatch of a
-      node the manager is watching, and the correction most often worth amending mid-run
-      is the one that names the release that just landed — so here the refusal would
-      block the ordinary case rather than the perishable one.
+    * The two :data:`OUT_OF_DISPATCH` entries about somebody else's released artifact
+      are skipped, which is what their ``of_an_amendment`` says. An amendment binds the
+      *next* dispatch of a node the manager is watching, and the correction most often
+      worth amending mid-run is the one naming the release that has just landed — so
+      here those two would refuse the ordinary case rather than the unreachable one.
+      Every other entry is asked, because a base branch and a merge path are no nearer
+      to a mid-run dispatch than they were to the plan's author.
     * :data:`DEFERRAL` and :data:`PHRASE` refuse a criterion whose content is somewhere
       else or is a particular string. An amendment arrives composed onto the task it
       corrects, so the prose it points at is right there, and a correction about wording
@@ -933,13 +977,13 @@ def check_amendment(text: str, where: str) -> None:
     ``note``, which touches no acceptance criterion at all.
     """
     check_backticks_pair(text, where)
-    rests_on = _out_of_dispatch(text)
-    if rests_on is not None:
+    rests_on, outside = _out_of_dispatch(text, of_an_amendment=True)
+    if rests_on is not None and outside is not None:
         raise CriteriaError(
             f"{where}: it names '{rests_on.group(0)}' — that is work the dispatch cannot "
             f"do, so this amendment holds the worker to state that arrives after it is "
-            f"gone. State the worker-side precondition instead, or send it as a `note`, "
-            f"which touches no acceptance criterion."
+            f"gone. {outside.remedy} Or send it as a `note`, which touches no acceptance "
+            f"criterion."
         )
     named, procedure = _prescribed(text)
     if named is not None and procedure is not None:
@@ -952,30 +996,16 @@ def check_amendment(text: str, where: str) -> None:
         )
 
 
-def check_demands(prose: str, block: str, node_id: str, bar: Bar) -> None:
-    """Raise :class:`CriteriaError` for a demand this node is held to but does not state.
+def appendix_text() -> str:
+    """The appendix exactly as a task has to carry it: one contiguous stripped block.
 
-    The demand is looked for where it will actually be made: in the resolved review
-    bar, and in the task's own prose outside the criteria — the appendix a task
-    carries lives there, and a demand it makes is one the judge reads and the
-    criteria never answer.
+    One reader for both ends of that requirement, which is what makes it answerable from
+    where a planner stands. :func:`check_appendix` demands this text as a substring, and
+    `scripts/dispatch-appendix-env.sh` exports *this* text under :data:`APPENDIX_ENV`, so
+    what a planning dispatch is handed is byte-for-byte what the check requires rather
+    than a second rendering of the same file.
     """
-    for demand in DEMANDS:
-        if demand.stated_by.search(block):
-            continue
-        if demand.made_by.search(bar.text):
-            where = bar.source
-        else:
-            made = demand.made_by.search(prose)
-            if made is None:
-                continue
-            where = f"this task's own {_section_of(prose, made.start())}"
-        raise CriteriaError(
-            f"{node_id}: {where} demands {demand.name}, and the criteria are silent about "
-            f"it — so the judge imports the demand and applies its own reading of it, "
-            f"which has already failed finished work. State it as a criterion: "
-            f"{demand.remedy}."
-        )
+    return (REPO_ROOT / APPENDIX).read_text(encoding="utf-8").strip()
 
 
 def check_appendix(task: str, node_id: str) -> None:
@@ -993,11 +1023,12 @@ def check_appendix(task: str, node_id: str) -> None:
     text, and one authored before is refused here until its tasks are rebuilt from the
     current file — which is what the refusal already says to do.
     """
-    current = (REPO_ROOT / APPENDIX).read_text(encoding="utf-8").strip()
-    if current not in task:
+    if appendix_text() not in task:
         raise CriteriaError(
             f"{node_id}: task does not carry the current operational appendix. Rebuild it "
-            f"from {APPENDIX} rather than from an older builder's copy."
+            f"from the text in ${APPENDIX_ENV}, which every planning launch hands its "
+            f"dispatch, or from {REPO_ROOT / APPENDIX} on this host — rather than from an "
+            f"older builder's copy."
         )
 
 

@@ -107,15 +107,64 @@ detector for it would risk. The four that carry most of the weight:
 * **`procedure` (65 left).** Past the red-before-green idiom the shape is ordinary
   prose. The general form keys on `is run` / `has been run`, which appears in 22 tasks
   that passed review and 23 that were refused.
-* **`perishable` (35 left).** `VERSION_LITERAL` already refuses the spelled-out number.
-  Refusing what is left — `the newest release it could take` — would refuse the exact
-  criterion `tests/test_criteria_guard.py` holds up as the *correct* replacement for a
-  version literal.
+* **`perishable` (35 left).** A deterministic rule refused the spelled-out number when
+  this was measured. Refusing what is left — `the newest release it could take` — would
+  refuse the exact criterion `tests/test_criteria_guard.py` held up as the *correct*
+  replacement for a version literal. The whole shape is the judge's now; see [Two of
+  these detectors have since moved to the judged tier](#two-of-these-detectors-have-since-moved-to-the-judged-tier).
 
 Every one of those is the trade `orchestrator/criteria_guard.py` already states: this
 check refuses a plan outright, so it is written to **miss** a criterion that names its
 subject in prose rather than to refuse a sound one, because a false refusal blocks
 correct work and gets worked around.
+
+## Two of these detectors have since moved to the judged tier
+
+Everything above is dated to its own cutoff, and two of the detectors it counts against
+are no longer in `orchestrator/criteria_guard.py` at all: the **version literal**, and
+the **phrase matching** that refused criteria for being silent about a demand their own
+bar makes. Read an `already-caught` entry refused by either of those as one the judged
+turn now owns again — the classification records what the detectors did on the base
+commit this corpus was captured against, and nothing re-decides it.
+
+They moved because the two tiers were refusing each other's required wording rather than
+adding up, which cost three judged rounds on real plans. One review prescribed its own
+remedy — pin the immutable version — and the deterministic rule then refused it outright.
+Another refused a criterion for pinning a spelling in place of a property while the
+deterministic rule refused the same task for lacking a literal phrase the criterion stated
+across three sentences without using those words; and because a review record is keyed on
+the task's own authored content, inserting words to satisfy a matcher invalidated the
+record and bought another judged turn.
+
+**A third rule was named for the same move and turns out not to exist.** The case for
+moving these described the deterministic tier as also refusing a *superlative* — a
+criterion pinning "the newest", "the best", "the most recent" — and it never did: the
+example given was the judged tier refusing a superlative and the deterministic tier
+refusing the immutable version offered in its place, which is the version-literal rule
+above wearing a second description. Nothing was relocated for it, nothing was deleted, and
+this paragraph is here so the next reader does not go looking for the rule that moved.
+`perishable` is the shape both halves of that example fall in.
+
+The line the split now follows is whether the rule needs judgment. *Whether a criterion's
+truth turns on an event outside the dispatch* does not, and stays deterministic. *Whether
+a number is the right number*, and *whether the criteria answer a demand by meaning
+rather than by phrase*, do, and one verdict can hold both considerations at once where two
+tiers could only compound. A third question joined them for the same reason: whether a
+node whose criteria describe work that changes no repository file declares
+`expects_no_diff`, which is a reading of prose.
+
+**One shape moved the other way**, out of `outside-dispatch`'s left-to-the-judge pile and
+into the deterministic list: a criterion asserting that somebody else's **released
+artifact** exists, or that it carries a named change. That is not a fact about the finished
+tree under any wording, and establishing it means going and reading another repository. One
+such criterion required a pin to name a plan-store release carrying two fixes that no
+release archive can carry; the worker correctly determined it could not be satisfied, and
+the node was killed and settled by hand while the rest of its work was complete and landed.
+It is bounded the way every widening above is — `tests/criteria_examples.py`'s
+`RELEASED_ELSEWHERE_IN_PROSE` holds the sound criteria of the same shape, including the
+corresponding-content correction the refusal itself recommends — and it is labelled
+coverage rather than corpus evidence, because the corpus stores a fragment per refusal and
+never the criterion it came from.
 
 ## What this change costs an operator
 

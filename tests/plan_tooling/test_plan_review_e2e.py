@@ -607,6 +607,90 @@ def test_editing_a_lifecycle_steps_persona_invalidates_the_record(tmp_path: Path
     assert "route" in refused.stderr, refused.stderr
 
 
+def test_declaring_that_a_node_expects_no_diff_invalidates_its_record(tmp_path: Path) -> None:
+    """The key covers that field, because it decides which question the reviewer was asked.
+
+    A node whose work is an external side effect changes no file, and the engine takes the
+    empty branch that leaves on into change-request drafting unless the node declares
+    this. So the judged turn asks whether criteria describing no-change work are declared
+    that way — which makes a pass granted while the field was absent a pass over a
+    different question from the one the node now poses. Driven the way an operator adds the
+    field: by editing the stored record.
+
+    The edit **replaces** the persona rather than standing the field beside it, because
+    the engine's own loader refuses a node carrying both — "expects_no_diff settles
+    without a dispatch, so it takes no persona or turn budget" — so a project holding the
+    two together is one no launch and no check can read at all. Isolating this field from
+    the persona in the key is therefore `tests/test_plan_review.py`'s to do; what a real
+    project can show is that declaring it invalidates the record.
+    """
+    project = _project("review-no-diff")
+    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    assert _just("check-plan", project).returncode == 0
+
+    document = _document(project)
+    written = document.read_text(encoding="utf-8")
+    reviewed_as = '  "onepipeline.persona": "engineer"'
+    assert reviewed_as in written, written
+    document.write_text(
+        written.replace(reviewed_as, f'  "{plan_review.EXPECTS_NO_DIFF}": true'),
+        encoding="utf-8",
+    )
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no review record" in refused.stderr, refused.stderr
+    assert "route" in refused.stderr, refused.stderr
+
+
+#: Two edits to one criterion's line: one that re-spaces it and one that rewords it. The
+#: pair is what the key is held to — a record that survived the rewording would be the
+#: whole of what this gate exists to prevent, and one that died on the re-spacing charges
+#: a judged turn for a change no reviewer could have ruled on.
+RESPACED = (
+    "- The route accepts a valid request and rejects an invalid one.",
+    "  - The route  accepts a valid request and rejects an invalid one.",
+)
+REWORDED = (
+    "- The route accepts a valid request and rejects an invalid one.",
+    "- The route accepts every request it is given.",
+)
+
+
+@pytest.mark.parametrize(
+    ("edit", "holds"),
+    (
+        pytest.param(RESPACED, True, id="re-spaced-and-re-indented"),
+        pytest.param(REWORDED, False, id="reworded"),
+    ),
+)
+def test_the_record_is_keyed_on_what_a_criterion_demands_rather_than_on_its_bytes(
+    tmp_path: Path, edit: tuple[str, str], holds: bool
+) -> None:
+    """Both directions through the real recipes, because only the pair means anything.
+
+    The key is over what a task demands. Re-indenting a criterion and closing up the
+    spaces inside it alter no demand a reviewer read, and charging a judged turn for one is
+    this gate costing something for nothing — which the two tiers that used to refuse each
+    other's wording made routine. A reworded criterion is a different demand and still
+    invalidates the record, which is the half no saving may be bought at.
+    """
+    project = _project(f"review-bytes-{'held' if holds else 'moved'}")
+    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    assert _just("check-plan", project).returncode == 0
+
+    document = _document(project)
+    written = document.read_text(encoding="utf-8")
+    before, after = edit
+    assert written.count(before) == 1, written
+    document.write_text(written.replace(before, after), encoding="utf-8")
+
+    checked = _just("check-plan", project)
+    assert checked.returncode == (0 if holds else 1), checked.stdout + checked.stderr
+    if not holds:
+        assert "no review record" in checked.stderr, checked.stderr
+
+
 def test_a_change_outside_the_authored_content_leaves_the_record_standing(
     tmp_path: Path,
 ) -> None:
@@ -768,55 +852,58 @@ def test_moving_the_review_bar_invalidates_every_record_granted_under_it(
     assert still.returncode == 0, still.stdout + still.stderr
 
 
-#: Every shape a criterion can name a release in, and the literal each one is refused
-#: by. All of them are driven, because they are alternations of one pattern and a shape
-#: only the unit tests reach is one a plan can carry into a dispatch. The last two are
-#: the prerelease and build suffixes a pinned dependency actually wears, which is the
-#: spelling an operator writing the perishable criterion is most likely to reach for.
-VERSION_LITERALS = (
-    ("- The lockfile resolves the sibling to 0.15.4.", "0.15.4"),
-    ("- The pin reads v0.16.", "v0.16"),
-    ("- The manifest requires >= 1.2.", ">= 1.2"),
-    ("- The lockfile resolves the sibling to 1.2.3-rc.1.", "1.2.3-rc.1"),
-    ("- The pin reads 2.0.0+build.5.", "2.0.0+build.5"),
+#: A criterion pinning an exact release, and the one pinning the property that number
+#: stood in for. Both are here because the pair is the point: this host used to refuse the
+#: first deterministically and prescribe the second, and the two tiers then refused each
+#: other — one review's own remedy was to pin the immutable version, which the
+#: deterministic rule refused outright.
+VERSION_LITERAL = "- The lockfile resolves the sibling to 0.15.4."
+THE_PROPERTY_IT_STOOD_FOR = (
+    "- The lockfile resolves the sibling to the newest release its requirement admits."
 )
 
 
-@pytest.mark.parametrize(("criterion", "literal"), VERSION_LITERALS, ids=lambda one: str(one))
-def test_a_criterion_carrying_a_version_literal_is_refused(
-    tmp_path: Path, criterion: str, literal: str
+@pytest.mark.parametrize(
+    ("criterion", "name"),
+    (
+        pytest.param(VERSION_LITERAL, "literal", id="a-version-literal"),
+        pytest.param(THE_PROPERTY_IT_STOOD_FOR, "property", id="the-property-it-stood-for"),
+    ),
+)
+def test_whether_a_number_is_the_right_number_is_the_judged_turns_to_decide(
+    tmp_path: Path, criterion: str, name: str
 ) -> None:
-    """The second error's own shape, refused deterministically before any turn is spent.
+    """Both wordings reach the reviewer, and the reviewer is the only thing that reads them.
 
-    That criterion required a lockfile to resolve a sibling to an exact version; the
-    sibling published a newer one between the task being written and the node being
-    dispatched. A judge reading the number would most likely have passed it — it was
-    well-formed, just perishable — which is why this belongs to the deterministic tier.
+    The deterministic rule refused the first and was the only tier asking, which is how a
+    review came to prescribe a remedy the check beside it refused. So what is driven here
+    is the whole seam in the order an operator meets it: `just check-plan` refuses
+    neither, the judged turn is *shown* the criterion and the question about perishable
+    facts, and the recorded pass then clears the plan.
+
+    The reviewer's own verdict is scripted, because what a real model answers about a
+    number is not this repository's to assert — what is this repository's is that the
+    question and the criterion both reach the turn that decides.
     """
-    refused = _just(
-        "check-plan",
-        _project(
-            f"review-version-{literal}",
-            f"{criterion}\n"
-            "- A journey drives the resolution end to end.\n"
-            "- The dispatch closes with a completion report naming its evidence.",
-        ),
-    )
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "version literal" in refused.stderr, refused.stderr
-    assert literal in refused.stderr, refused.stderr
-    assert _launches(tmp_path) == 0, "a deterministic refusal spent a provider turn"
-
-
-def test_the_property_that_version_stood_in_for_is_accepted(tmp_path: Path) -> None:
-    """The correction the refusal asks for, accepted through the same real recipe."""
     project = _project(
-        "review-property",
-        "- The lockfile resolves the sibling to the newest release its requirement admits.\n"
+        f"review-number-{name}",
+        f"{criterion}\n"
         "- A journey drives the resolution end to end.\n"
-        "- The dispatch closes with a completion report naming its evidence.",
+        "- Every claim the dispatch makes about the finished work is true of the tree as "
+        "it finally stands.",
     )
-    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    prompts = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+    assert _launches(tmp_path) == 1, "the judged turn was not spent on this criterion"
+
+    (given,) = prompts.read_text(encoding="utf-8").splitlines()
+    turn = " ".join(json.loads(given)["prompt"].split())
+    assert criterion.removeprefix("- ") in turn, turn
+    assert "This turn is the only thing that asks about a version literal" in turn, turn
 
     accepted = _just("check-plan", project)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr

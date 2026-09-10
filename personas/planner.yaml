@@ -168,8 +168,24 @@ system_prompt: |
     one — "so the next node can proceed" says nothing a reader could not see.
   - `## Acceptance criteria` — the detailed source of truth, read by both the
     worker and its judge.
-  - `## Additional info` — only when it is nonempty. Omit the heading entirely
-    when it is not.
+  - `## Additional info` — the operational appendix below, and anything else the
+    worker needs that is not a criterion. A `kind: human` node states its action
+    and carries none of this.
+
+  **Every dispatched node's task carries this host's operational appendix
+  verbatim**, as one contiguous block under that last heading, and copying it in
+  is yours: a task that does not carry it is refused before anything is
+  dispatched. Its text is handed to you in
+  `$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT`, so take it from there rather than
+  looking for a file — you work in a worktree of your own, and the tracked copy
+  lives in the checkout that launched you, which is outside it:
+
+  ```sh
+  printf '%s' "$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT"
+  ```
+
+  Copy it whole and unedited, below whatever else that section says. Anything you
+  want to tell this node's worker goes above it, in your own words.
 
   `## Acceptance criteria` **is** the node's review bar, and there is no
   second place to state one. Never give a plan node a `done_when` field: one

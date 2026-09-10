@@ -34,6 +34,19 @@ runs in a worktree of its own, nothing it writes below that directory is tracked
 no branch it produces can carry a record back here. There is no recipe, flag, or
 documented step by which a dispatch writes one either.
 
+**Three questions are asked here rather than deterministically, and which tier asks a
+question is decided by whether it needs judgment.** Whether a number is the right
+number, and whether the criteria answer a demand their own bar makes, both do — and
+`orchestrator/criteria_guard.py` held proxies for them until three judged rounds on real
+plans were spent with the two tiers refusing each other's required wording: one review
+prescribed pinning an immutable version and the deterministic rule refused it, and
+another refused a criterion for pinning a spelling while the deterministic rule refused
+the same task for lacking a literal phrase its criteria stated in three sentences of
+their own. One verdict can hold both considerations at once; two tiers compound rather
+than add. The third is whether a node whose criteria describe work that changes no file
+declares `expects_no_diff`, which is a reading of prose and so belongs here for the same
+reason.
+
 **A record is read from any source and written into a local Markdown one**, which is the
 asymmetry to know before reaching for :func:`review`. A record travels in the open
 metadata map a task already carries, so :func:`recorded` answers for a board task exactly
@@ -49,6 +62,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -142,6 +156,32 @@ a node whose whole job is adopting a named release — is the property itself ra
 a stand-in for one, so that number belongs in its criteria and there is nothing behind
 it to ask for instead. Refuse a version literal only where the task's subject is
 something else and the number is standing in for a property that outlives it.
+
+This turn is the only thing that asks about a version literal. No deterministic check
+refuses one any more, so a number you ask for here is a number the plan may carry: the
+two tiers used to refuse each other's required wording, and an author sent back to pin
+an immutable version was then refused for pinning it.
+
+Two demands are made of every implementation dispatch on this host: that the behaviour
+the node adds is proven end to end by a test or journey driving the real interface, and
+that every claim the dispatch makes about the finished work is true of the tree as it
+finally stands. A task's own `## Additional info` and the review bar its persona
+resolves to are where those are made, and a judge that finds the criteria silent about
+one of them imports it and applies its own reading — which has already failed finished,
+green work. So refuse criteria that leave a demand their own task or their own bar makes
+unanswered. Judge that by **meaning rather than by wording**: criteria stating the
+demand in their own words answer it in full, and no criterion is ever refused for
+failing to use a particular phrase.
+
+Ask one further thing of a task whose criteria describe work that changes no file in the
+repository — an external side effect, a read, a measurement reported back and nothing
+else. Such a node produces an empty branch, and an empty branch goes on into
+change-request drafting unless the node declares `expects_no_diff`. So where the
+criteria describe work with no repository change in it and that field is not declared
+above, refuse the criterion that describes the no-change work and say which field is
+missing; where it *is* declared, that is the right shape for such a node and is not a
+defect. Read this off the criteria rather than the prose around them, and leave alone a
+task whose criteria do require a file to change.
 
 For each acceptance criterion, name to yourself the fixture, input, or repository state
 that would make it fail. A criterion with no such state is decorative: it reads as
@@ -269,6 +309,15 @@ KIND = "onepipeline.kind"
 #: The one value :data:`KIND` takes. An agent node says it is one by carrying no `kind`.
 HUMAN = "human"
 
+#: Where a node declares that it expects to change no file of the repository. Authored,
+#: and keyed for the reason :data:`KIND` is: it decides which question the reviewer was
+#: asked. A node whose work is an external side effect produces an empty branch, and the
+#: engine takes an empty branch on into change-request drafting unless this says not to —
+#: so criteria describing no-change work are sound beside this field and a defect without
+#: it, and a record granted while it was absent says nothing about the node once it is
+#: there.
+EXPECTS_NO_DIFF = "onepipeline.expects_no_diff"
+
 #: Where a lifecycle node states its steps. A node that runs several agent steps on one
 #: branch states its prose and its persona once per step rather than in `task` and
 #: `persona`, so for that node this — and not `content` — is where its authored content
@@ -281,7 +330,9 @@ class AuthoredStep(TypedDict):
 
     Narrowed rather than carried whole so that a field the engine adds to a step later
     does not invalidate a review of content nobody moved — the same reason the key over
-    a task covers its authored fields rather than its whole record.
+    a task covers its authored fields rather than its whole record. Each of the three is
+    read for its meaning, exactly as the fields beside them are; see
+    :func:`meaning_bearing`.
     """
 
     id: object
@@ -303,24 +354,114 @@ def authored_steps(task: StoreTask) -> list[AuthoredStep] | None:
     if not isinstance(held, list) or not all(isinstance(step, Mapping) for step in held):
         return None
     return [
-        AuthoredStep(id=step.get("id"), persona=step.get("persona"), task=step.get("task"))
+        AuthoredStep(
+            id=meaning_bearing(step.get("id")),
+            persona=meaning_bearing(step.get("persona")),
+            task=meaning_bearing(step.get("task")),
+        )
         for step in held
     ]
+
+
+#: An inline-code span: a run of backticks, whatever it holds, and the same run closing
+#: it. Whitespace *inside* one is part of the demand rather than the cosmetics around it
+#: — a criterion about a parser that accepts `a b` as one field is a different criterion
+#: from one about `a  b` — so this is the boundary :func:`meaning_bearing` collapses up
+#: to and never across. A backtick run that never closes on its line matches nothing and
+#: leaves that line prose, which is what it already was; criteria carrying one are
+#: refused by `orchestrator.criteria_guard.check_backticks_pair` before they reach here.
+INLINE_CODE = re.compile(r"(`+).*?\1")
+
+#: Where a fenced block opens or closes. The same rule as above over a whole run of
+#: lines: indentation inside a fence is the demand — re-indent a YAML sample or a Python
+#: body and it means something else — where indentation of prose is the cosmetic edit
+#: this key exists to absorb. So the lines a fence encloses are carried through byte for
+#: byte, the fence lines with them.
+FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
+
+
+def _collapsed_outside_code(line: str) -> str:
+    """``line`` with its runs of whitespace collapsed, except inside an inline-code span.
+
+    Whitespace at a span's edge is collapsed rather than dropped, because whether there
+    was any is itself part of the demand: ``a `b``` and ``a`b``` are two different
+    strings, and a normalization that closed the gap would hash them alike.
+    """
+    collapsed: list[str] = []
+    at = 0
+    for span in INLINE_CODE.finditer(line):
+        collapsed.append(re.sub(r"\s+", " ", line[at : span.start()]))
+        collapsed.append(span.group(0))
+        at = span.end()
+    collapsed.append(re.sub(r"\s+", " ", line[at:]))
+    return "".join(collapsed).strip()
+
+
+def _meaning_bearing_lines(text: str) -> list[str]:
+    """``text``'s lines, each collapsed, and each line a fence encloses left untouched."""
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        opened = FENCE.match(line)
+        if fence is None:
+            if opened is None:
+                lines.append(_collapsed_outside_code(line))
+                continue
+            fence = opened.group("fence")
+        elif opened is not None and opened.group("fence")[0] == fence[0]:
+            if len(opened.group("fence")) >= len(fence):
+                fence = None
+        lines.append(line)
+    return lines
+
+
+def meaning_bearing(value: object) -> object:
+    """``value`` with the whitespace a reviewer could not have ruled on taken out of it.
+
+    The key is over what a task **demands**, not over its bytes. Re-indenting a block,
+    trimming trailing whitespace, or closing up a run of blank lines alters no demand a
+    reviewer read, and charging a judged turn for one is how this gate comes to cost
+    something for nothing — the two tiers that used to refuse each other's wording made
+    exactly that edit necessary.
+
+    The normalization stops where it stops on purpose, because a key that survives a
+    changed demand is worse than the cost it saves. Each line is collapsed **within
+    itself** and lines are never joined: bullets are how criteria are separated, so
+    merging them would let one criterion and two hash alike. So re-wrapping a paragraph
+    at a different width still invalidates the record, and every change to a word still
+    does. Anything that is not a string is passed through untouched, which is what keeps
+    `kind`, `deps` and an unreadable `steps` answering exactly as they did.
+
+    **It stops at code, too, and that boundary is the one worth stating.** Whitespace is
+    cosmetic in prose and load-bearing in a literal: a criterion naming `a  b` demands a
+    different string from one naming `a b`, and a fenced sample re-indented is a
+    different sample. Collapsing those hashed a changed demand to its old key, which is
+    a review record standing over content nobody read — the one failure this whole gate
+    exists to prevent, arriving through the machinery meant to make it cheap. So an
+    inline-code span and every line a fence encloses are carried through byte for byte.
+    """
+    if not isinstance(value, str):
+        return value
+    lines = _meaning_bearing_lines(value)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip("\n")
 
 
 def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     """The digest ``task``'s current authored content, reviewed under ``bar``, hashes to.
 
     **Exactly the authored fields, and the bar.** The title, the body prose, the
-    persona, the dependencies, and — for a lifecycle node, which states its prose and
-    its persona once per `steps` entry rather than in `task` and `persona` — the
-    authored half of each of those steps. Nothing a settlement write-back owns is here.
-    `status` in particular is not: the engine projects each settlement back onto the
-    plan it was launched from, so a whole-record key would go stale the first time a
-    node ran and this gate would refuse every plan that had ever been launched. Covering
-    exactly the authored content buys the other half of that too — a write-back that
-    overwrote authored prose invalidates the record rather than leaving a pass standing
-    over content nobody read.
+    persona, the dependencies, whether the node declares it expects no diff, and — for a
+    lifecycle node, which states its prose and its persona once per `steps` entry rather
+    than in `task` and `persona` — the authored half of each of those steps. Nothing a
+    settlement write-back owns is here. `status` in particular is not: the engine
+    projects each settlement back onto the plan it was launched from, so a whole-record
+    key would go stale the first time a node ran and this gate would refuse every plan
+    that had ever been launched. Covering exactly the authored content buys the other
+    half of that too — a write-back that overwrote authored prose invalidates the record
+    rather than leaving a pass standing over content nobody read.
+
+    Each of those fields is read for its **meaning** rather than for its bytes;
+    :func:`meaning_bearing` says exactly how far that reaches and why it stops there.
 
     One field a plan also carries is deliberately outside it, and what that costs is
     worth knowing rather than discovering: a task **retargeted at another repository**
@@ -329,12 +470,14 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     authored = {
         "bar": bar,
         "deps": sorted(task.deps),
+        "expects_no_diff": task.metadata.get(EXPECTS_NO_DIFF),
         "kind": task.metadata.get(KIND),
         "persona": task.metadata.get(PERSONA),
         "steps": authored_steps(task),
         "task": task.content,
         "title": task.title,
     }
+    authored = {field: meaning_bearing(value) for field, value in authored.items()}
     rendered = json.dumps(authored, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return ReviewKey(hashlib.sha256(rendered.encode("utf-8")).hexdigest())
 
@@ -518,6 +661,7 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
     authored = {
         "title": task.title,
         "depends_on": sorted(task.deps),
+        "expects_no_diff": task.metadata.get(EXPECTS_NO_DIFF),
         "kind": task.metadata.get(KIND),
         "persona": task.metadata.get(PERSONA),
     }

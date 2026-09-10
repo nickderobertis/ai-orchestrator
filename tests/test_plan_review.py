@@ -92,7 +92,8 @@ def _recorded(task: StoreTask, key: str) -> StoreTask:
 
 
 def test_the_key_changes_with_every_authored_field() -> None:
-    """The fields the record covers: title, prose, kind, persona, deps, and a step's own two."""
+    """The fields the record covers: title, prose, kind, persona, deps, whether the node
+    expects no diff, and a step's own three."""
     base = plan_review.review_key(_task(), BAR)
     moved = {
         "title": _task(title="feat: add another route"),
@@ -100,9 +101,155 @@ def test_the_key_changes_with_every_authored_field() -> None:
         "kind": _task(metadata={"onepipeline.id": "route", "onepipeline.kind": "human"}),
         "persona": _task(metadata={"onepipeline.id": "route", "onepipeline.persona": "reviewer"}),
         "deps": _task(deps=("design",)),
+        "expects_no_diff": _task(
+            metadata={
+                "onepipeline.id": "route",
+                "onepipeline.persona": "engineer",
+                "onepipeline.expects_no_diff": True,
+            }
+        ),
     }
     for field, task in moved.items():
         assert plan_review.review_key(task, BAR) != base, field
+
+
+#: One change to what a criterion demands, and four that alter no demand at all. The pair
+#: is what the key is held to: a key surviving a changed demand is worse than the cost it
+#: saves, and one that charges a judged turn for re-indenting prose costs something for
+#: nothing. The re-wrap is deliberately on the *invalidating* side — lines are never
+#: joined, because a bullet is how one criterion is separated from the next.
+CRITERIA = "## Acceptance criteria\n\n- The route rejects an invalid request.\n- It is logged.\n"
+MEANS_SOMETHING_ELSE = (
+    CRITERIA.replace("rejects", "accepts"),
+    CRITERIA.replace("- It is logged.\n", ""),
+    CRITERIA.replace("invalid request.\n", "invalid\n  request.\n"),
+)
+MEANS_THE_SAME = (
+    CRITERIA.replace("- The route", "   - The route"),
+    CRITERIA.replace("an invalid", "an  invalid"),
+    CRITERIA.replace("criteria\n\n", "criteria\n\n\n\n"),
+    CRITERIA.replace("logged.\n", "logged.   \n"),
+)
+
+
+@pytest.mark.parametrize("content", MEANS_SOMETHING_ELSE, ids=range(len(MEANS_SOMETHING_ELSE)))
+def test_a_change_to_what_a_criterion_demands_invalidates_the_record(content: str) -> None:
+    """The half the normalization may never cost, stated first because it is the binding one.
+
+    A word changed, a criterion dropped, and a paragraph re-wrapped are all outside what
+    a reviewer could have ruled on without reading again. The re-wrap is here rather than
+    below it on purpose: collapsing newlines as well as spaces would let one criterion and
+    two hash alike, so lines are never joined and a re-wrap is read as a change.
+    """
+    assert plan_review.review_key(_task(content=content), BAR) != plan_review.review_key(
+        _task(content=CRITERIA), BAR
+    )
+
+
+@pytest.mark.parametrize("content", MEANS_THE_SAME, ids=range(len(MEANS_THE_SAME)))
+def test_a_change_that_alters_no_demand_leaves_the_record_standing(content: str) -> None:
+    """Re-indenting, re-spacing, a blank-line run, trailing whitespace: no demand moved.
+
+    The key is over what a task demands rather than over its bytes, and a judged turn
+    charged for one of these is this gate costing something for nothing — which the two
+    tiers that used to refuse each other's wording made routine.
+    """
+    assert plan_review.review_key(_task(content=content), BAR) == plan_review.review_key(
+        _task(content=CRITERIA), BAR
+    )
+
+
+#: The same pair one level in, where the collapse had no business reaching. Whitespace is
+#: cosmetic in prose and load-bearing in a literal, so each of these is a demand a
+#: reviewer would have had to read again — and each hashed to the unedited key.
+LITERAL = (
+    "## Acceptance criteria\n\n"
+    "- The parser accepts `a b` as one field.\n"
+    "- The sample it is given reads:\n\n"
+    "```yaml\n"
+    "route:\n"
+    "  method: GET\n"
+    "```\n"
+)
+MEANS_SOMETHING_ELSE_IN_CODE = (
+    LITERAL.replace("`a b`", "`a  b`"),
+    LITERAL.replace("  method", "    method"),
+    LITERAL.replace("accepts `a b`", "accepts`a b`"),
+)
+
+
+@pytest.mark.parametrize(
+    "content", MEANS_SOMETHING_ELSE_IN_CODE, ids=range(len(MEANS_SOMETHING_ELSE_IN_CODE))
+)
+def test_whitespace_a_literal_depends_on_invalidates_the_record(content: str) -> None:
+    """The collapse stops at code, because a literal is where whitespace is the demand.
+
+    `a b` and `a  b` are two different fields for the parser these criteria are about,
+    and a YAML sample re-indented is a different sample. Collapsing either hashed a
+    changed demand to its old key — a review record standing over content nobody read,
+    which is the one failure this gate exists to prevent, arriving through the machinery
+    that makes it cheap. The third case is the span's own edge: whether there was a
+    space before a literal is part of it too, so the boundary is collapsed and never
+    closed up.
+    """
+    assert plan_review.review_key(_task(content=content), BAR) != plan_review.review_key(
+        _task(content=LITERAL), BAR
+    )
+
+
+def test_a_fence_closes_only_on_one_at_least_as_long_as_itself() -> None:
+    """A task documenting a fenced block nests one, and the inner one must not end it.
+
+    The nodes of this repository write exactly that — the appendix and the task template
+    are markdown, so a criterion about them shows a fence inside a fence. Closing on the
+    inner one would end the block early and hand every line after it back to the
+    collapse, which is the same lost demand one level in.
+    """
+    nested = (
+        "## Acceptance criteria\n\n"
+        "- The task it is given reads:\n\n"
+        "````markdown\n"
+        "```yaml\n"
+        "route:\n"
+        "  method: GET\n"
+        "```\n"
+        "````\n"
+    )
+
+    assert plan_review.review_key(
+        _task(content=nested.replace("  method", "    method")), BAR
+    ) != plan_review.review_key(_task(content=nested), BAR)
+
+
+def test_prose_around_a_literal_still_costs_no_judged_turn() -> None:
+    """The other half of the pair: stopping at code buys back none of the cosmetic edits.
+
+    Asserted beside the test above because a boundary that absorbed the prose too would
+    pass it while charging for every re-indent, which is the cost this normalization
+    exists to remove.
+    """
+    respaced = LITERAL.replace("- The parser  accepts", "- The parser accepts").replace(
+        "- The parser accepts", "   - The parser   accepts"
+    )
+
+    assert plan_review.review_key(_task(content=respaced), BAR) == plan_review.review_key(
+        _task(content=LITERAL), BAR
+    )
+
+
+def test_a_steps_own_prose_is_read_for_its_meaning_too() -> None:
+    """A lifecycle node's criteria *are* its steps' prose, so the normalization reaches them.
+
+    Asserted in both directions for the reason the pair above is: a step read byte-wise
+    charges for a reflow, and a step not read at all leaves a record standing over
+    criteria somebody rewrote.
+    """
+    reflowed = [{**STEPS[0], "task": "Add   the route.\n"}, STEPS[1]]
+    reworded = [{**STEPS[0], "task": "Add the other route.\n"}, STEPS[1]]
+    base = plan_review.review_key(_stepped(STEPS), BAR)
+
+    assert plan_review.review_key(_stepped(reflowed), BAR) == base
+    assert plan_review.review_key(_stepped(reworded), BAR) != base
 
 
 #: One lifecycle node's steps, and the same steps with one authored field of one step
@@ -263,6 +410,32 @@ def test_the_human_kind_is_the_one_the_criteria_guard_reads() -> None:
     """
     assert plan_review.HUMAN == criteria_guard.HUMAN
     assert plan_review.KIND == "onepipeline.kind"
+
+
+def test_the_reviewer_is_asked_the_three_questions_that_moved_here() -> None:
+    """What this tier now owns, asked of the prompt that is the only place it is asked.
+
+    Each of the three needs judgment, and each was a deterministic proxy until the two
+    tiers were found refusing each other's required wording: whether a number is the
+    right number, whether the criteria answer a demand their own bar makes — judged by
+    meaning, never by phrase — and whether a node whose criteria describe work that
+    changes no file declares `expects_no_diff`. `bar_fingerprint` covers the prompt, so
+    this is about what the wording *says* rather than about it having moved.
+    """
+    # Flattened, because the prompt is hard-wrapped prose: a phrase longer than one of
+    # its lines would otherwise be absent from a prompt that says it.
+    asked = " ".join(plan_review.REVIEW_PROMPT.split())
+    field = plan_review.EXPECTS_NO_DIFF.removeprefix("onepipeline.")
+
+    for question in (
+        "This turn is the only thing that asks about a version literal",
+        "No deterministic check refuses one any more",
+        "refuse criteria that leave a demand their own task or their own bar makes unanswered",
+        "by **meaning rather than by wording**",
+        "criteria describe work that changes no file in the repository",
+        f"unless the node declares `{field}`",
+    ):
+        assert question in asked, question
 
 
 def test_the_reviewer_is_told_what_to_hold_a_human_node_to() -> None:
@@ -851,6 +1024,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
         "content": "sentinel-body-prose",
         "kind": "sentinel-kind",
         "persona": "sentinel-persona",
+        "expects_no_diff": "sentinel-expects-no-diff",
         "deps": "sentinel-dependency",
         "step id": "sentinel-step-id",
         "step prose": "sentinel-step-task",
@@ -867,6 +1041,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
             "onepipeline.id": "route",
             "onepipeline.kind": sentinels["kind"],
             "onepipeline.persona": sentinels["persona"],
+            "onepipeline.expects_no_diff": sentinels["expects_no_diff"],
             "onepipeline.steps": [
                 {
                     "id": sentinels["step id"],
