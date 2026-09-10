@@ -299,8 +299,25 @@ def test_the_copy_and_the_check_name_the_same_unreviewed_tasks(destination: Path
     assert copy.returncode == 1, copy.stdout + copy.stderr
     assert "worker" in copy.stderr, copy.stderr
     assert "route" not in copy.stderr, "the copy named a task the check does not"
-    assert "worker" in checked.stderr and "route" not in checked.stderr, checked.stderr
+    named = _named_by_the_review_gate(checked.stderr)
+    assert "worker" in named and "route" not in named, checked.stderr
     assert _records(destination) == [], "an unreviewed task did not stop the copy"
+
+
+#: What `just check-plan` prefixes its own findings with. Every other line on that
+#: descriptor belongs to somebody else: the engine's loader reports what it could not
+#: check and why — a repository this host has not registered, for one — and names the
+#: nodes it reported it about, which is a different sentence about a different question.
+#: Reading the whole stream for a node id conflates the two, and did: the loader grew a
+#: policy check whose "could not ask" line names every node in the plan, and an assertion
+#: that a task was *not* named as unreviewed started failing on a line that had not said
+#: it was.
+REVIEW_GATE_PREFIX = "check-plan: scripts/plan-check.sh:"
+
+
+def _named_by_the_review_gate(reported: str) -> str:
+    """The lines `just check-plan`'s own registered check wrote, and nothing else."""
+    return "\n".join(line for line in reported.splitlines() if line.startswith(REVIEW_GATE_PREFIX))
 
 
 def test_a_destination_that_refuses_is_a_different_answer_from_an_unreviewed_plan(

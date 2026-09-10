@@ -1818,17 +1818,60 @@ def test_a_title_the_destinations_own_hook_refuses_is_refused_before_the_launch(
     skipped. And a node consuming a release target on an identity that opens no change
     request is waiting on a publication that identity never makes.
 
-    Both in one plan, because both are refused in one read and a refusal that reported
-    only the first would send its author back for a second launch attempt. The hook is
-    **run** rather than restated, which is what keeps this refusal and the destination's
-    own rule from being two statements of one policy: nothing here knows which types
-    that repository releases from.
+    The hook is **run** rather than restated, which is what keeps this refusal and the
+    destination's own rule from being two statements of one policy: nothing here knows
+    which types that repository releases from.
+
+    **The loader is what refuses it now, and the plan carries one defect rather than
+    two.** These used to be one plan carrying both, on the ground that both were refused
+    in one read by this repository's own registered check. The adopted engine's loader
+    makes both refusals itself, and a loader refusal leaves no loaded plan to hand the
+    registered checks — which then do not run at all. So the source is asserted as well
+    as the sentence: a refusal to correct in the engine and one to correct here are
+    corrected in different places, and a check that did not run is not one that passed.
     """
     (checkout,) = registered(tmp_path / "registry", ["service"])
     _hooked(checkout)
     plan = _publishing_plan(
         tmp_path,
         {"id": "landing", "title": "refactor: rename the reader", "repo": "service"},
+    )
+
+    refused = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "landing: title:" in refused.stderr, refused.stderr
+    assert "refactor: rename the reader" in refused.stderr, refused.stderr
+    # The hook's own words, relayed rather than restated: what this refuses is whatever
+    # that repository's hook refuses, and nothing here knows which types it releases from.
+    assert "does not release from 'refactor:'" in refused.stderr, refused.stderr
+    assert "check-plan: engine:" in refused.stderr, refused.stderr
+    assert "it did not run" in refused.stderr, refused.stderr
+
+
+def test_a_node_consuming_a_release_its_identity_never_publishes_is_refused_at_the_loader(
+    tmp_path: Path,
+) -> None:
+    """The other refusal a whole dispatch was paid for, and which side now makes it.
+
+    A node consuming a release target on an identity that opens no change request is
+    waiting on a publication that identity never makes — one ran an hour and thirty-six
+    minutes before anything said so. This repository refused it before the engine did;
+    the adopted engine's loader refuses it itself, which is strictly better, because a
+    refusal the loader makes is one `onepipeline start` makes too rather than one a
+    pre-launch read has to remember.
+
+    Driven beside the title journey above rather than folded into it: each is refused on
+    its own, and a plan carrying both would prove only that whichever the loader reached
+    first still fires.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"])
+    _hooked(checkout)
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "landing", "title": "feat: add the reader", "repo": "service"},
         {
             "id": "consumer",
             "title": "feat: adopt the release",
@@ -1843,12 +1886,15 @@ def test_a_title_the_destinations_own_hook_refuses_is_refused_before_the_launch(
     )
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "landing: title:" in refused.stderr, refused.stderr
-    assert "'refactor: rename the reader'" in refused.stderr, refused.stderr
-    assert "does not release from 'refactor:'" in refused.stderr, refused.stderr
     assert "consumer: consumes:" in refused.stderr, refused.stderr
-    assert "'local-direct'" in refused.stderr, refused.stderr
+    assert "local-direct" in refused.stderr, refused.stderr
     assert "opens no change request" in refused.stderr, refused.stderr
+    # Which side refused it, and what that left undone. Both are what a reader of this
+    # output has to be able to tell: an engine refusal and a registered check's refusal
+    # are corrected in different places, and a check that did not run is not a check
+    # that passed.
+    assert "check-plan: engine:" in refused.stderr, refused.stderr
+    assert "it did not run" in refused.stderr, refused.stderr
 
 
 def test_a_plan_this_host_would_publish_is_not_refused_for_where_it_lands(

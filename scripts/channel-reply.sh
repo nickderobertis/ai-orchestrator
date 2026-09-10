@@ -422,10 +422,13 @@ fi
 status=0
 delegated=$("$delegate" reply "$run" <"$staged") || status=$?
 
-# Merged for an envelope the verb accepted — exit 0, applied, and exit 1, accepted and
-# durable but not reconciled in time — and for neither of those is the receipt alone an
-# answer about which halves went out or about the note. A refusal sent nothing, so there
-# is nothing to merge and nothing extra is printed.
+# Merged for an envelope the verb accepted, and for none it refused: for an acceptance
+# the receipt alone is no answer about which halves went out or about the note, and a
+# refusal sent nothing, so there is nothing to merge and nothing extra is printed.
+#
+# Both `0` and `1` count as acceptance because the verb has spelled it both ways, and
+# reading the one it no longer writes costs nothing. Which acceptance it was is the
+# receipt's to say, below.
 #
 # The journal path is passed however it resolved, empty included: which halves the
 # envelope carried is read off the staged bytes and needs no journal, so a run reference
@@ -453,21 +456,37 @@ if [ "$status" -eq 0 ] || [ "$status" -eq 1 ]; then
     fi
 fi
 
-# What `queued` is still waiting for, which the receipt does not say. Exit 1 is the
-# verb's published word for an envelope it accepted and made durable and did **not**
-# reconcile: the engine's reply forks on the run's ownership lock, and when that lock is
-# held the commands sit in the durable queue until something drives the run and drains
-# them. `{"reply":1,"state":"queued"}` is all a manager is handed for that, and read
-# beside the exit-0 receipt it differs by one word — so the state a live run passes
-# through in a second and the state a run whose driver has died stays in forever are
-# indistinguishable from the answer alone.
+# What `queued` is still waiting for, which the receipt does not say. The engine's reply
+# forks on the run's ownership lock, and when that lock is held the commands sit in the
+# durable queue until something drives the run and drains them. `"state":"queued"` is
+# all a manager is handed for that, and read beside the `"state":"applied"` receipt it
+# differs by one word — so the state a live run passes through in a second and the state
+# a run whose driver has died stays in forever are indistinguishable from the answer
+# alone.
 #
-# On stderr, because the verb's answer is the whole of this recipe's stdout, and after
-# the merge above so the receipt is printed with whatever it could still say about each
-# note. The exit status stays the verb's: this adds a sentence, not a verdict.
-if [ "$status" -eq 1 ]; then
-    printf 'channel-reply: %s\n' \
-        "run $run accepted these commands and made them durable, and nothing reconciled them: they stay queued until something is driving that run. If its driver is gone, attach a fresh one with 'just orchestrate --adopt $run'; either way read what became of them with 'just monitor $run' rather than sending this envelope again" >&2
-fi
+# **Keyed on the receipt and never on the exit status**, which this branch used to be:
+# the engine has since given a queued envelope the same status as an applied one, so a
+# status-keyed branch would go silent on the release that made this sentence worth most.
+#
+# On stderr, after the merge above, and the verb's own exit status is untouched.
+#
+# llmlint: ignore-block[boundary_inputs_validated] Block-scoped because the pattern is
+# the half being matched on and a line-scoped directive reaches only the `case` line.
+# What is read is the verb's own receipt, for one word, to decide whether to print one
+# sentence of advice on stderr. Nothing is executed, parsed, or passed on from it, and
+# the whole failure mode of a match on bytes that were not a receipt is that advice
+# printed where it was not wanted — against a state that goes unreported if this is
+# keyed on anything the engine has since renumbered. A parse here would be a second
+# reader of a document `REPORT_PROGRAM` above already reads properly, and its own
+# failure mode would be the advice going missing, which is the defect this exists
+# against.
+case "$delegated" in
+    *'"state":"queued"'* | *'"state": "queued"'*)
+        # llmlint: ignore[tool_output_is_signal] This is a second line beside a *successful* receipt, deliberately and for one state only. `queued` and `applied` are one word apart in the receipt and the engine gives them the same exit status, so a caller that read only the success has been told nothing about a run whose driver has died and will stay in this state forever. The line names that state and the verb that ends it, and it is printed for no other outcome — silence here is the defect it exists to prevent, and it was the defect until the status stopped telling the two apart.
+        printf 'channel-reply: %s\n' \
+            "run $run accepted these commands and made them durable, and nothing reconciled them: they stay queued until something is driving that run. If its driver is gone, attach a fresh one with 'just orchestrate --adopt $run'; either way read what became of them with 'just monitor $run' rather than sending this envelope again" >&2
+        ;;
+esac
+# llmlint: ignore-end[boundary_inputs_validated]
 [ -z "$delegated" ] || printf '%s\n' "$delegated"
 exit "$status"

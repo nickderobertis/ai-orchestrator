@@ -13,7 +13,7 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.23.0**
+that source on every `just check` rather than restated: **`onepipeline` v0.26.1**
 (`config/onepipeline.version`) and
 the **`onevcs` 0.19.3** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
@@ -23,7 +23,7 @@ this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.23.0
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.26.1
 and 0.19.3. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
@@ -561,7 +561,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.23.0 and is refused **by its own name**, at every schema version and on a live
+v0.26.1 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -792,7 +792,7 @@ failed.
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
 2026-08-27 against the installed onepipeline 0.16.3 binary (which its SBOM and
 embedded crate paths both identified as linking onevcs 0.15.4) and re-read against the
-adopted onepipeline 0.23.0 / onevcs 0.19.3 pair, every follow-up shape
+adopted onepipeline 0.26.1 / onevcs 0.19.3 pair, every follow-up shape
 keeps the workstream's publication base:
 
 | Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
@@ -1337,7 +1337,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.23.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.26.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1414,7 +1414,7 @@ goes when the session does.
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
 `onevcs` 0.19.3 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.23.0 settles the node that
+… which cannot land while it is one"*, and `onepipeline` v0.26.1 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached only once the last step has settled and the publication
 starts, and reached then only because a release the node adopted early has not happened
@@ -1520,6 +1520,7 @@ runs/<run-id>/plan.json      the plan as launched, preserved exactly
 runs/<run-id>/events.jsonl   the authoritative merged three-stream journal
 runs/<run-id>/result.json    rewritten whenever a driver closes out
 runs/<run-id>/summary.json   the row a listing renders, folded as the journal is written
+runs/<run-id>/checkpoint.json where a reader resumes a fold from instead of replaying
 runs/<run-id>/owner.lock     the single-writer ownership lock
 runs/<run-id>/driver.log     a detached driver's own output
 runs/<run-id>/channel/       the planner channel's transport state
@@ -1540,6 +1541,16 @@ run a listing most needs to be right about, and it costs O(1) per record rather 
 pass. A run recorded before the document existed, or one whose summary is stale against
 the journal's length or mtime, is folded once and cached instead; neither path answers
 differently, because the same derivation runs over both.
+
+`checkpoint.json` is the second derived record, and it answers the same problem one
+level down: a reader that needs a run's *state* rather than a listing's row folded the
+whole journal to get it, which on the journals this host really holds is seventeen to
+twenty-six seconds a read — and the blocking watch verb re-reads that state on every
+tick, so an unbounded wait built on it would be a fresh instance of the silence that
+verb exists to end. A reader resumes its fold from the checkpoint and folds only what
+was appended after it. Both derived records are the run's own and are thrown away with
+it, and neither is a source: delete either and the next read folds the journal and
+writes it again, which is why nothing here treats one as evidence about a run.
 
 The plan mapping is preserved exactly and the result is the command's JSON payload.
 Journal appends and result writes are atomic, and a second process cannot drive the
@@ -2035,7 +2046,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.23.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.26.1 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

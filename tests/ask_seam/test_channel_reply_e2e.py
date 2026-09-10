@@ -1225,8 +1225,16 @@ def _dispatched(dispatching: Dispatching) -> None:
 #: note's outcome is not recorded yet, and it is the engine's own word for it.
 QUEUED = "queued"
 
-#: The exit status that goes with it: accepted, durable, unreconciled.
-REPLY_QUEUED = 1
+#: The exit status that goes with it: accepted, durable, unreconciled — which is **`0`**,
+#: the same status an applied envelope gets. It was `1` until the engine ruled that a
+#: non-zero status from this verb is a rejection to correct and that a queued envelope is
+#: neither rejected nor to be sent again, leaving `1` to mean what it means everywhere
+#: else in that binary: a run that has not settled.
+#:
+#: So the status no longer tells the two apart, and every assertion below reads
+#: `state` — the receipt's own word, which is the half that survived the renumbering and
+#: the half `scripts/channel-reply.sh` keys its advice on.
+REPLY_QUEUED = 0
 
 
 def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlier_notes(
@@ -1236,9 +1244,9 @@ def test_a_note_whose_outcome_is_not_recorded_yet_is_never_reported_as_an_earlie
 
     Two notes on one run. The first is committed and its outcome recorded. The second is
     sent with the run's own driver suspended, so the engine accepts it, makes it durable,
-    and answers `{"reply":1,"state":"queued"}` — the published exit-1 state, and the whole
-    of the window in which an outcome is not yet there. The journal then holds exactly one
-    note disposition, and it is the *first* note's.
+    and answers a receipt whose `state` is `queued` — the published accepted-and-durable
+    state, and the whole of the window in which an outcome is not yet there. The journal
+    then holds exactly one note disposition, and it is the *first* note's.
 
     A recipe reading the newest outcome, the last, or the only one reports that one and
     tells the manager their second note reached a dispatch. This one has to report that

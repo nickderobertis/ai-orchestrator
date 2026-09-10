@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.23.0. The whole of that reasoning —
+onepipeline 0.26.1. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.23.0. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.26.1. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,13 +323,13 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.23.0; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.26.1; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
 **A projection that keeps failing is now spaced rather than hammered.** onepipeline
 https://github.com/nickderobertis/onepipeline/pull/176, in force on the adopted
-onepipeline 0.23.0, backs a failing write-back off from a prompt first retry to a one-minute ceiling
+onepipeline 0.26.1, backs a failing write-back off from a prompt first retry to a one-minute ceiling
 instead of retrying about four times a second, resets that schedule once it recovers, and
 still retries until the projection lands; closeout still attempts the terminal projection,
 and stopping or settling stays prompt during a long backoff. The reason is GitHub's
@@ -462,7 +462,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.23.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.26.1 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -586,7 +586,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.23.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.26.1 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -909,7 +909,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.23.0 in the judge command's own environment on a real
+  measured against onepipeline 0.26.1 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -1124,7 +1124,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.23.0 answers
+a real run on onepipeline 0.26.1 answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
@@ -1169,7 +1169,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.23.0**, composed where the
+node dispatch of a run carries it as of onepipeline 0.26.1**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -1592,9 +1592,13 @@ awaits a reply.
 The raw reply schema remains available for edits and automation. A continuing
 reply is `{"completion":false,"message":"what to do next","reason":"why"}`;
 an approval is `{"completion":true,"reason":"what was verified"}`. Either may
-also contain `"version":2` plus a `"commands"` array using the operations below.
-That version is the engine's own `REPLY_ENVELOPE_VERSION`, and it reads **2** since
-the manager-note collapse removed `context` from the envelope.
+also contain `"version":3` plus a `"commands"` array using the operations below.
+That version is the engine's own `REPLY_ENVELOPE_VERSION`, and it reads **3** since
+`settle` grew the optional `landing` above; it read **2** from the manager-note
+collapse that removed `context` from the envelope until then. The move is additive
+and the engine still reads an envelope at the version before it, so a caller that
+sends `2` is accepted and simply cannot name a landing — which is why the examples
+below name the current one rather than the oldest that still works.
 The convenience recipes construct the common forms: `channel-approve` sends a
 completed verdict, `channel-reject` sends a continuing verdict whose reason and
 message are the supplied text, and `channel-continue` sends the same continuing
@@ -1629,11 +1633,11 @@ Stated to the model on both sides of each member, in
 
 ### Live graph edits
 
-Send a version-1 edit envelope to `channel-reply`:
+Send an edit envelope to `channel-reply`, at the version the reply schema above names:
 
 ```sh
 just channel-reply RUN <<'JSON'
-{"version":2,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
+{"version":3,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
 JSON
 ```
 
@@ -1651,7 +1655,7 @@ The accepted commands are:
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
 | `note` | `id`; `addressee`: `worker`, `supervisor` or `both`; `text`; optional `criterion`; optional `deliver`: `live` or `next`; optional `persist` | The **one** manager-note op. Deliver one note into the node's dispatch, to whichever party of it is speaking, with the other party receiving it in that party's response — and, where no turn took it, carry it to the node's next dispatch. `deliver` decides whether live delivery is attempted and `persist` decides whether the note is composed into the node's next dispatch; they are two axes rather than one, and neither answers the other's question. A `criterion` it carries enters the acceptance criteria the judge of the conversation it reached decides against; it binds that conversation and not the node's stored bar, so `amend` is still the op for a ruling that has to survive a re-dispatch. `addressee` is required and never guessed — a judge handed an update to the *worker's* task must not take the worker's job on. Blank `text` is refused, an `id` naming a node the graph cannot reach is refused, and so is a note that would reach nobody, each naming which it is. See [Carried planner context](#carried-planner-context) for the four `deliver`/`persist` combinations and the dispositions the op answers with. |
 | `amend` | `id`; `text` | Replace the binding amendment that becomes part of the node's effective task for its next and later dispatches. Blank text and a node already settled `done` are refused. |
-| `settle` | `id`; `outcome`: `done` or `failed`; `evidence` | Settle a node at what an operator can see it reached, from evidence this run never observed — the case being a change that merged while the node's own record read `failed`. It mutates no edge and moves no lineage: the node keeps its id and its dependents, and only its recorded state moves, which is the thing that was wrong. `evidence` is required and never blank, and is journalled as the reason the node is in the state it is. A settle that changes nothing is refused as a duplicate; a node that settled *something else* is exactly what it is for, and the earlier settlement stays in the journal beside it. |
+| `settle` | `id`; `outcome`: `done` or `failed`; `evidence`; optional `landing` | Settle a node at what an operator can see it reached, from evidence this run never observed — the case being a change that merged while the node's own record read `failed`. It mutates no edge and moves no lineage: the node keeps its id and its dependents, and only its recorded state moves, which is the thing that was wrong. `evidence` is required and never blank, and is journalled as the reason the node is in the state it is. A settle that changes nothing is refused as a duplicate; a node that settled *something else* is exactly what it is for, and the earlier settlement stays in the journal beside it. `landing` names **where the work landed** — the commit its change reached its base at, or the change request a person reads it in, either being a spelling `onevcs` resolves — and is what release correlation joins a release to this node by. It is optional and an envelope without it records exactly what such a settlement always recorded; present and unusable is refused rather than recorded, because the value is handed straight to the sibling as the reference a release is measured against. Nothing else reads it: the views, `results` and the status write-back learn no stated landing, so a settle leaves them exactly as they were. |
 | `finding` | `message`; optional `id`, `blocking` | Raise what the author saw as a planner surface of kind `finding`. Compiles to a `finding-raised` operation and mutates no graph. `message` may not be empty; `id`, when given, must name a node the run has and files the surface against that workstream; `blocking` defaults to false. |
 
 #### Who issued an edit, and what that bounds
@@ -1695,14 +1699,14 @@ A command-only envelope gets a synthesized continuing verdict. Commands can
 instead accompany either legacy verdict, for example:
 
 ```json
-{"completion":false,"message":"apply the replacement and continue","reason":"the failed node is retryable","version":2,"commands":[{"op":"retry","id":"failed","node":{"id":"retry","task":"No diff","expects_no_diff":true}}]}
+{"completion":false,"message":"apply the replacement and continue","reason":"the failed node is retryable","version":3,"commands":[{"op":"retry","id":"failed","node":{"id":"retry","task":"No diff","expects_no_diff":true}}]}
 ```
 
 `complete` is the versioned equivalent of a completion verdict and may share an
 envelope with graph edits:
 
 ```json
-{"version":2,"commands":[{"op":"complete","reason":"publication and follow-up triage verified"}]}
+{"version":3,"commands":[{"op":"complete","reason":"publication and follow-up triage verified"}]}
 ```
 
 Completion is decoupled from scheduling: the reconciler journals it for audit
@@ -1861,7 +1865,7 @@ separately again when this host could not ask.
 dispatches it through normal adoption:
 
 ```json
-{"version":2,"commands":[{"op":"requeue","id":"sweep","amend":{"max_turns":32}}]}
+{"version":3,"commands":[{"op":"requeue","id":"sweep","amend":{"max_turns":32}}]}
 ```
 
 An `amend` mapping is merged onto the node before it is redispatched, which is where
@@ -2886,7 +2890,7 @@ After doing a reported action, attest it explicitly, over the live channel:
 
 ```sh
 just channel-reply RUN <<'JSON'
-{"version":2,"commands":[{"op":"attest","ref":"HUMAN_ID"},{"op":"attest","ref":"NODE_ID/STEP_ID"}]}
+{"version":3,"commands":[{"op":"attest","ref":"HUMAN_ID"},{"op":"attest","ref":"NODE_ID/STEP_ID"}]}
 JSON
 ```
 
@@ -3002,7 +3006,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.23.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.26.1 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

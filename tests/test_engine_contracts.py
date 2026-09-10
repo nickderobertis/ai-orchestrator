@@ -106,8 +106,21 @@ CONSTANT_SETTLEMENTS = re.compile(
 #: definition rather than at each call. Both halves are read — the calls for the
 #: words, the definition for the status they settle under — because a helper that
 #: was re-pointed at another status would otherwise drift silently.
-FAILED_HELPER = re.compile(r"\bfailed\(\s*&?node(?:\.id)?[^,]*,\s*\"([a-z][a-z-]*)\"\s*\)")
-FAILED_HELPER_CONSTANT = re.compile(r"\bfailed\(\s*&?node(?:\.id)?[^,]*,\s*([A-Z][A-Z_]*)\s*\)")
+#:
+#: **The first argument is read as a binding rather than as the word `node`**, and the
+#: difference has already cost a reading. These patterns required it to be spelled
+#: `node`, and the engine now passes `id` at three of its settlement sites — so
+#: `failed(id, NO_AGENT_PROGRESS)` went unseen and the gate reported a pairing the
+#: prose had *invented*, on a settlement the engine writes to this day. A gate that
+#: names a true row as a fiction is worse than one that misses it: the repair it asks
+#: for is deleting the row. What identifies the site is the helper's own two-argument
+#: shape — this crate's other `failed` takes one argument and a qualified path — so
+#: that is what is anchored on, and the set it reads at the release before this change
+#: is unchanged by the widening.
+#: The node argument, however this crate happens to bind it at the call.
+FAILED_HELPER_NODE = r"\bfailed\(\s*&?[a-z_][a-z_0-9]*(?:\.id)?\s*,\s*"
+FAILED_HELPER = re.compile(FAILED_HELPER_NODE + r"\"([a-z][a-z-]*)\"\s*\)")
+FAILED_HELPER_CONSTANT = re.compile(FAILED_HELPER_NODE + r"([A-Z][A-Z_]*)\s*\)")
 OUTCOME_CONSTANT = re.compile(r"pub const ([A-Z][A-Z_]*): &(?:'static )?str = \"([a-z][a-z-]*)\";")
 FAILED_HELPER_STATUS = re.compile(
     r"fn failed\(\s*node:\s*&str,\s*outcome:\s*&str\s*\)[^{]*\{\s*"
@@ -2243,3 +2256,88 @@ def test_the_built_run_root_states_the_values_the_engine_owns(
             "The field is still named what the engine names it, so nothing else here "
             "would notice"
         )
+
+
+#: The derived record the engine writes when a **reader** folds a run's state, declared
+#: on `RunPaths` beside the run's own records. Its name is restated in two places here
+#: that no other gate reads — the ignore rule that keeps it out of this repository's own
+#: tree, and the journey that holds the reading views to leaving a run's record alone —
+#: so the engine's declaration is what both are compared against.
+CHECKPOINT_DECLARATION = re.compile(
+    r"fn checkpoint\(&self\) -> PathBuf \{\s*self\.dir\.join\(\"([a-z._]+)\"\)"
+)
+
+
+class Restatement(NamedTuple):
+    """One place this repository writes down a filename the engine owns."""
+
+    #: Where it is written, relative to the repository root.
+    path: Path
+    #: What reads it back out of that file.
+    reads: re.Pattern[str]
+    #: What it is doing there, for a failure that has to say what stopped working.
+    what: str
+
+
+CHECKPOINT_RESTATEMENTS = (
+    Restatement(
+        path=Path(".gitignore"),
+        reads=re.compile(r"^/tests/fixtures/\*\*/([a-z._]+)$", re.MULTILINE),
+        what="the rule that keeps a reader's checkpoint out of this repository's own tree",
+    ),
+    Restatement(
+        path=Path("tests/e2e/test_supervision_readings_e2e.py"),
+        reads=re.compile(r"DERIVED_BY_A_READER = frozenset\(\{\"([a-z._]+)\"\}\)"),
+        what="the record the reading views are allowed to leave behind",
+    ),
+)
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is
+# not a narrower key inside a memoized tier: it moves this test out of every memoized
+# tier into the uncached `orchestrator:test-checkouts`, because its subject — the
+# adopted engine's own source, in a checkout `config/onevcs.checkouts` registers — is
+# outside this workspace and no `nx.json` glob hashes it. That target declares
+# `cache: false` and no `inputs`, so it runs over every project every time; a project
+# of its own is what would give it an affected edge to be skipped by and a key to be
+# replayed from, across the very engine upgrade this module exists to catch.
+# `tests/conftest.py`'s checkout guard states that reasoning where it enforces the
+# marker, and every `reads_checkouts` test in this repository is tiered this way for it.
+@pytest.mark.parametrize("restatement", CHECKPOINT_RESTATEMENTS, ids=lambda row: row.path.name)
+def test_the_checkpoint_a_reader_writes_is_named_what_the_engine_names_it(
+    restatement: Restatement,
+) -> None:
+    """A filename this repository keeps out of its tree is the one the engine writes.
+
+    The adopted engine folds a run's state from a checkpoint rather than replaying its
+    journal, and a *reader* writes it — so `just status` over the recorded runs this
+    suite drives leaves one behind, and without the ignore rule every such read dirties
+    the working tree and moves the Nx key those fixtures are part of. Both restatements
+    are inert if the engine renames the file: the ignore stops matching and the journey
+    starts excluding a name nothing writes, and neither says so. The engine's own
+    declaration is what closes that.
+
+    `docs/repo-lifecycle.md`'s ledger listing carries the third restatement and is
+    reconciled by the run-ledger vocabulary above, which reads the same `RunPaths`.
+    """
+    declared = CHECKPOINT_DECLARATION.search(_source(ONEPIPELINE, "ledger.rs"))
+    assert declared is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares a fold checkpoint on "
+        "`RunPaths` where this gate reads it, so the two restatements below are "
+        "reconciled against nothing; re-read `ledger.rs` and correct all three"
+    )
+
+    path = REPO_ROOT / restatement.path
+    stated = restatement.reads.search(path.read_text(encoding="utf-8"))
+    assert stated is not None, (
+        f"{restatement.path} no longer states {restatement.what} where this gate reads "
+        "it, so the name is restated somewhere this does not check — or not at all, "
+        "which for the ignore rule means every read of a recorded run dirties this tree"
+    )
+    assert stated.group(1) == declared.group(1), (
+        f"{restatement.path} names {restatement.what} {stated.group(1)!r} while "
+        f"onepipeline {ONEPIPELINE.ref} writes {declared.group(1)!r}"
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

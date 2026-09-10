@@ -26,16 +26,34 @@ naming a condition and the status it is returning for it in one place. So each t
 condition this host can drive the verb into is driven, and the pair it answers with is
 compared against this repository's table for equality.
 
-**Two of the four cannot be produced against a static runs root, and they are declared
-rather than skipped.** `surface-waiting` and `elapsed` are answers about a run that is
-*live* — one with a blocking surface waiting, one still being driven when the wait runs
-out — and the engine proves liveness from the driving process itself rather than from the
-ledger, which is why a run root with a forged lock still answers `nothing-driving`.
-Forging a driver to reach them would be a fixture asserting this repository's own guess at
-what the engine inspects. They are named in `UNDRIVABLE_CONDITIONS` with that reason, the
-declaration is asserted to be exactly those two, and the wrapper's own branching on all
-four is held end to end by `tests/e2e/test_watch_recipe_e2e.py`, which doubles the verb
-precisely because no real run can be made to produce all four on demand.
+**The `--until` vocabulary is reconciled by handing every value to the parser**, which
+is the only place it can be: the verb declares the conditions in its own source and puts
+none of them in `--help`, so a read of the help would reconcile this repository's list
+against nothing. Each condition the wrapper offers is therefore given to the installed
+verb over a recorded run, and the refusal an unrecognised one gets — the verb naming the
+vocabulary it does have — is what this fails on. The one value that is a *shape* rather
+than a word, `node=<ID>`, is driven with a node the recorded run's own graph holds, and
+beside it the two refusals a selector makes about a run are driven as well: a node the
+graph does not hold, and — for the wait that has no bound — that the verb takes the
+spelling this repository puts in front of an operator.
+
+**Three of the terminal conditions cannot be produced against a static runs root, and
+they are declared rather than skipped.** `surface-waiting`, `elapsed` and `node-settled`
+are all answers about a run that is *live* — one with a blocking surface waiting, one
+still being driven when the wait runs out, one with a node settling while another holds
+the graph incomplete — and the engine proves liveness from the driving process itself
+rather than from the ledger, which is why a run root with a forged lock still answers
+`nothing-driving`. Forging a driver to reach them would be a fixture asserting this
+repository's own guess at what the engine inspects. They are named in
+`UNDRIVABLE_CONDITIONS` with that reason and the declaration is asserted to be exactly
+those three.
+
+What *does* drive them is a run rather than a fixture:
+`tests/e2e/test_watch_selector_e2e.py` launches one, holds it live, and takes all three
+against the installed engine — which is where they belong, since a static runs root is
+this module's subject and a launch is not. The wrapper's own branching on every ending is
+held beside that by `tests/e2e/test_watch_recipe_e2e.py`, which doubles the verb because
+no single run can be made to produce them all on demand.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] The
 marker is this repository's tier mechanism rather than a shortcut around one: it runs
@@ -75,6 +93,41 @@ RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 #: a terminal condition observable off a run that is not going to change again.
 READ_ONCE = "0"
 
+#: The recorded run whose graph holds several nodes, one of which settled — so a
+#: condition naming that node is answered rather than refused, and a condition naming
+#: one the graph does not hold is refused for exactly the reason under test. Its settled
+#: node settled `failed`, which matters: the verb refuses a wait for a node that settled
+#: `done` behind the cursor, because nothing dispatches such a node again.
+NAMED_NODE_RUN = "triage-by-root-cause-2"
+#: The node of that run this repository names when it drives the shape. Read back out of
+#: the recorded run's own plan below rather than trusted, so a fixture edited under this
+#: module fails here rather than turning the reconciliation into an assertion about a
+#: node nothing holds.
+NAMED_NODE = "basis"
+#: A node no recorded run holds, for the refusal that names the ids the graph does hold.
+ABSENT_NODE = "no-such-node-in-this-graph"
+#: What the shape in the wrapper's own vocabulary stands in for. Substituted with a node
+#: the recorded run holds before the shape is driven, so what is reconciled stays the
+#: spelling rather than whether a particular id exists.
+NODE_ID_PLACEHOLDER = "<ID>"
+#: A recorded run that settled, for the wait with no bound: it returns on the first pass
+#: whatever the wait says, which is what makes an unbounded spelling drivable at all.
+SETTLED_RUN = "gate-parity-2"
+
+
+#: What tells an accepted value from a refused one, without reading either's words. A
+#: condition or a wait the verb takes leaves it reading the run and returning a terminal
+#: record; one it refuses is answered at the command line and writes none. That is the
+#: comparison rather than a phrase, because the two refusals this drives have been
+#: worded two different ways by two releases of the same verb — clap's `invalid value
+#: '…' for '--until <CONDITION>'` and the parser's own `'…' is not a condition this verb
+#: returns on` — and a check keyed on either sentence passes vacuously against a build
+#: that writes the other. Which is not hypothetical: keyed on the second, this module
+#: passed against an engine that refused every one of these.
+def _took_it(answered: subprocess.CompletedProcess[str]) -> bool:
+    """Whether the verb accepted this command line and went on to read the run."""
+    return terminal_record(answered.stdout) is not None
+
 
 class Terminal(NamedTuple):
     """One ending the verb reported, as the verb's own record spells it."""
@@ -85,16 +138,33 @@ class Terminal(NamedTuple):
     exit: int
 
 
-#: The two conditions no static runs root can produce, and why. Both are answers about a
-#: run that is **live** — one with a blocking surface waiting to be answered, one still
+#: The conditions no static runs root can produce, and why. Two of them are answers about
+#: a run that is **live** — one with a blocking surface waiting to be answered, one still
 #: being driven when the wait runs out — and the engine proves a run is being driven from
 #: the driving process rather than from anything in the ledger: a run root carrying a
 #: forged `owner.lock` naming a live process still answers `nothing-driving`. A fixture
 #: that got past that would be asserting this repository's own guess at what the engine
-#: inspects, which is the opposite of a reconciliation. They are declared here so the set
-#: cannot quietly grow, and the wrapper's branching on all four is held end to end by
-#: `tests/e2e/test_watch_recipe_e2e.py`, which doubles the verb for exactly this reason.
-UNDRIVABLE_CONDITIONS = frozenset({"surface-waiting", "elapsed"})
+#: inspects, which is the opposite of a reconciliation.
+#:
+#: **The third is undrivable for a sharper reason, and it is one worth knowing.** A node
+#: settling is not a state a recorded run lacks — every run here has one. Two endings are
+#: checked before any condition a caller named and can be neither asked for nor skipped:
+#: a complete graph answers `settled`, and a run nothing is driving answers
+#: `nothing-driving`, because they are "facts *about* the run where a settlement is a
+#: fact *within* one" and a settlement read out of a run nobody is driving is not the
+#: thing to act on. A recorded run is by definition undriven, so one of those two answers
+#: every wait over one, whatever `--until` it was given — which is what makes a node
+#: condition safe to ask for and what puts this ending out of reach here.
+#:
+#: Deliberately not a fourth rung above it: a waiting surface ends a wait only when
+#: `surface` was asked for, so it does not outrank a node condition asked for on its own.
+#: `tests/e2e/test_watch_selector_e2e.py` launches a run and drives both halves of that
+#: rather than asserting either from the source.
+#:
+#: They are declared here so the set cannot quietly grow, and the wrapper's branching on
+#: every ending is held end to end by `tests/e2e/test_watch_recipe_e2e.py`, which doubles
+#: the verb for exactly this reason.
+UNDRIVABLE_CONDITIONS = frozenset({"surface-waiting", "elapsed", "node-settled"})
 
 
 def _engine_pin() -> str:
@@ -113,6 +183,19 @@ def _engine_pin() -> str:
 def _restated_options() -> frozenset[str]:
     """Every option `scripts/watch-run.sh` passes through to the verb."""
     return frozenset(name for kind, name in _restatement() if kind == "option")
+
+
+def _restated_conditions() -> tuple[str, ...]:
+    """Every `--until` condition `scripts/watch-run.sh` offers an operator."""
+    return tuple(rest for kind, rest in _restatement() if kind == "until")
+
+
+def _restated_unbounded_wait() -> str:
+    """The spelling the wrapper offers for a wait with no bound at all."""
+    for kind, rest in _restatement():
+        if kind == "timeout-unbounded":
+            return rest
+    raise AssertionError("the wrapper's surface names no unbounded wait")
 
 
 def _restated_statuses() -> dict[int, str]:
@@ -179,40 +262,87 @@ def terminal_record(stdout: str) -> Terminal | None:
     return None
 
 
+def _driven(run: str, *arguments: str, timeout: float = 120) -> subprocess.CompletedProcess[str]:
+    """The installed verb, run over one recorded run and given nothing else.
+
+    The runs root is the checked-in one rather than this host's, so what the engine is
+    asked is fixed by this tree. The wait is bounded by the caller's own `timeout` as
+    well as by whatever the command line says, because one of the things driven below
+    is the spelling that means *no* bound: a build that took it and then blocked would
+    otherwise wedge this tier rather than fail it.
+    """
+    return subprocess.run(
+        [str(ENGINE), *WATCH, run, *arguments],
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(RECORDED_RUNS)},
+    )
+
+
+def _ending(run: str, *arguments: str) -> Terminal:
+    """The ending the verb reported for one invocation, checked against its own status."""
+    answered = _driven(run, *arguments, "--timeout", READ_ONCE)
+    spelled = " ".join(arguments)
+    reported = terminal_record(answered.stdout)
+    assert reported is not None, (
+        f"`onepipeline {WATCH[0]} {run} {spelled}` wrote no terminal record on standard "
+        f"output, so what it ended on cannot be read from it. It exited "
+        f"{answered.returncode} and said:\n{answered.stderr}"
+    )
+    assert reported.exit == answered.returncode, (
+        f"`onepipeline {WATCH[0]} {run} {spelled}` reported `exit: {reported.exit}` in "
+        f"its own terminal record and exited {answered.returncode}. A caller branches on "
+        "the status, so a record that disagrees with it is worse than no record"
+    )
+    return reported
+
+
+#: The conditions each recorded run is driven under, as the arguments that select them.
+#: The default — no `--until` at all — is what a caller that predates the selector gets.
+#: The second asks for a node condition as well, and is driven not because it produces a
+#: new ending here — the note on `UNDRIVABLE_CONDITIONS` says why it cannot — but because
+#: what it must not do is *change* one: a selector that suppressed `nothing-driving` on
+#: the run it was asked about would be the silence this verb exists to end, and reading
+#: the same pairing under both is what says it does not.
+DRIVEN_SELECTIONS: tuple[tuple[str, ...], ...] = ((), ("--until", "node-settled"))
+
+
 def _observed() -> dict[str, Terminal]:
-    """Every terminal condition the installed verb can be driven into here, by run.
+    """Every terminal condition the installed verb can be driven into here.
 
     Driven rather than read out of the verb's help, which documents no status table at
     all: the pairing lives in the verb's own terminal record, which is the engine naming
     a condition and the status it returns for it in one place.
+
+    Keyed by the invocation rather than by the run, because one run answers differently
+    under different selectors — which is the whole of what the selector is — and a
+    reader of a failure needs to know which invocation answered what.
     """
     found: dict[str, Terminal] = {}
     for run in _recorded_runs():
-        answered = subprocess.run(
-            [str(ENGINE), *WATCH, run, "--timeout", READ_ONCE],
-            text=True,
-            capture_output=True,
-            timeout=120,
-            check=False,
-            env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(RECORDED_RUNS)},
-        )
-        reported = terminal_record(answered.stdout)
-        assert reported is not None, (
-            f"`onepipeline {WATCH[0]} {run}` wrote no terminal record on standard "
-            f"output, so what it ended on cannot be read from it. It exited "
-            f"{answered.returncode} and said:\n{answered.stderr}"
-        )
-        assert reported.exit == answered.returncode, (
-            f"`onepipeline {WATCH[0]} {run}` reported `exit: {reported.exit}` in its own "
-            f"terminal record and exited {answered.returncode}. A caller branches on the "
-            "status, so a record that disagrees with it is worse than no record"
-        )
-        found[run] = reported
+        for selection in DRIVEN_SELECTIONS:
+            answered = _driven(run, *selection, "--timeout", READ_ONCE)
+            # An invocation that wrote no terminal record ended at the command line
+            # rather than on a condition: the verb does not read this selector at all,
+            # or this run cannot answer it — every node of it settled `done`, or it
+            # holds none. Neither is a pairing to reconcile, and the condition is
+            # reconciled off whichever recorded run does answer it. The check below on
+            # the declared set is what fails when *no* run can.
+            if not _took_it(answered):
+                continue
+            found[" ".join((run, *selection))] = _ending(run, *selection)
     return found
 
 
 def disagreements(restated: dict[int, str], observed: dict[str, Terminal]) -> list[str]:
     """Every place this repository's status table and the verb's own answers disagree.
+
+    `observed` is keyed by the invocation that produced each ending — the run and the
+    conditions it was driven under — because one run answers differently under different
+    selectors, and a failure that named only the run would leave a reader unable to
+    reproduce it.
 
     Compared for **equality** on the condition's name rather than by looking for the
     wrapper's words inside the verb's prose. The wrapper names each condition with the
@@ -221,18 +351,18 @@ def disagreements(restated: dict[int, str], observed: dict[str, Terminal]) -> li
     catches and a prose search does not.
     """
     found: list[str] = []
-    for run, reported in sorted(observed.items()):
+    for invocation, reported in sorted(observed.items()):
         named = restated.get(reported.exit)
         if named is None:
             found.append(
                 f"the verb answered `{reported.condition}` at exit status "
-                f"{reported.exit} on run {run!r}, and this repository branches on no "
+                f"{reported.exit} on `{invocation}`, and this repository branches on no "
                 f"such status"
             )
         elif named != reported.condition:
             found.append(
                 f"the verb answered `{reported.condition}` at exit status "
-                f"{reported.exit} on run {run!r}, and this repository calls status "
+                f"{reported.exit} on `{invocation}`, and this repository calls status "
                 f"{reported.exit} `{named}`"
             )
     return found
@@ -278,6 +408,110 @@ def test_every_status_the_verb_returns_is_paired_with_the_condition_this_reposit
         "disagree:\n"
         + "\n".join(f"  - {entry}" for entry in disagreed)
         + f"\nReconcile the wrapper's restatement with the engine adopted at {_engine_pin()}"
+    )
+
+
+def test_the_node_this_module_names_is_one_the_recorded_run_actually_holds() -> None:
+    """The shape is driven with a real id, so the fixture is read rather than trusted.
+
+    A recorded run edited under this module would otherwise turn the reconciliation
+    below into an assertion about a node nothing holds: the verb would refuse it for
+    naming a node the graph does not have, that refusal is not the vocabulary refusal
+    the check watches for, and the check would pass having proved nothing.
+    """
+    plan = json.loads((RECORDED_RUNS / NAMED_NODE_RUN / "plan.json").read_text(encoding="utf-8"))
+    ids = [task.get("id") for task in plan.get("tasks", [])]
+
+    assert NAMED_NODE in ids, (
+        f"the recorded run {NAMED_NODE_RUN!r} no longer holds a node named "
+        f"{NAMED_NODE!r}; it holds {ids}. Name one of those, or the condition shape "
+        "below is driven against a node the graph does not hold"
+    )
+    assert ABSENT_NODE not in ids
+
+
+@pytest.mark.reads_checkouts
+@pytest.mark.parametrize("condition", _restated_conditions())
+def test_every_until_condition_this_repository_offers_is_one_the_verb_reads(
+    condition: str,
+) -> None:
+    """A condition this host tells a supervisor to type is one the parser accepts.
+
+    Driven rather than read out of `--help`, which names no condition at all: the verb
+    declares its vocabulary in its own source and renders `--until` with a placeholder,
+    so the only thing that can answer whether a spelling is read is the parser. Its
+    refusal names the whole vocabulary it does have, which is what a failure here hands
+    an adopter.
+
+    The one entry that is a shape rather than a word is driven with a node the recorded
+    run's own graph holds, so what is under test stays the *spelling* rather than
+    whether some particular id exists. And acceptance is read off the verb *reading the
+    run* rather than off the absence of a refusal sentence, for the reason `_took_it`
+    gives: two releases of this verb have refused the same value in two different words.
+    """
+    spelled = condition.replace(NODE_ID_PLACEHOLDER, NAMED_NODE)
+
+    answered = _driven(NAMED_NODE_RUN, "--until", spelled, "--timeout", READ_ONCE)
+
+    assert _took_it(answered), (
+        f"`{WRAPPER.name}` offers `--until {condition}`, and the pinned onepipeline's "
+        f"`{WATCH[0]}` verb did not read the run under it — it exited "
+        f"{answered.returncode} saying: {answered.stderr.strip()}. Reconcile the "
+        f"wrapper's vocabulary with the engine adopted at {_engine_pin()}, or an "
+        "operator following this repository's own usage line is refused by a verb they "
+        "did not think they were arguing with"
+    )
+
+
+@pytest.mark.reads_checkouts
+def test_a_condition_naming_a_node_the_run_does_not_hold_is_refused_by_the_verb() -> None:
+    """The refusal that makes the vocabulary check above mean something.
+
+    A parser that read every string as a node would accept the shape whatever followed
+    it, and the check above would then pass against a verb that validated nothing. So
+    the other side is driven too: a node this run's graph does not hold is refused,
+    naming that node and the ids the graph does hold, before anything is streamed.
+    """
+    answered = _driven(NAMED_NODE_RUN, "--until", f"node={ABSENT_NODE}", "--timeout", READ_ONCE)
+
+    assert not _took_it(answered), (
+        f"`onepipeline {WATCH[0]} {NAMED_NODE_RUN} --until node={ABSENT_NODE}` read the "
+        "run anyway, so the conditions this wrapper passes through are validated "
+        f"against nothing. Reconcile with the engine adopted at {_engine_pin()}"
+    )
+    assert ABSENT_NODE in answered.stderr and NAMED_NODE in answered.stderr, (
+        f"the verb refused `--until node={ABSENT_NODE}` without naming both that node "
+        f"and the ids run {NAMED_NODE_RUN!r} does hold, so a supervisor cannot correct "
+        f"the command from the refusal: {answered.stderr.strip()}"
+    )
+
+
+@pytest.mark.reads_checkouts
+def test_the_unbounded_wait_this_repository_offers_is_one_the_verb_takes() -> None:
+    """`--timeout none` is a spelling this wrapper puts in front of an operator.
+
+    It is the value that lets a supervisor write no loop at all, and it is distinct from
+    the `0` whose published meaning is to read the run once and return — so a wrapper
+    offering a spelling the verb dropped would compose a watch refused before it watched
+    anything. Driven over a run that has settled, which returns on the first pass
+    whatever the wait is, and under a bound of this module's own so a build that took the
+    value and then blocked fails here rather than wedging the tier.
+    """
+    unbounded = _restated_unbounded_wait()
+
+    answered = _driven(SETTLED_RUN, "--timeout", unbounded, timeout=120)
+
+    assert _took_it(answered), (
+        f"`{WRAPPER.name}` offers `--timeout {unbounded}`, and the pinned onepipeline's "
+        f"`{WATCH[0]}` verb did not read the run under it — it exited "
+        f"{answered.returncode} saying: {answered.stderr.strip()}. Reconcile with the "
+        f"engine adopted at {_engine_pin()}"
+    )
+    reported = terminal_record(answered.stdout)
+    assert reported is not None and reported.exit == answered.returncode, (
+        f"`onepipeline {WATCH[0]} {SETTLED_RUN} --timeout {unbounded}` did not report a "
+        f"terminal condition it agrees with. It exited {answered.returncode} and "
+        f"said:\n{answered.stderr}"
     )
 
 
@@ -354,6 +588,6 @@ def test_the_reconciliation_names_a_swapped_and_an_unknown_exit_status() -> None
 
     unknown = {"run-7": Terminal(condition="interrupted", exit=7)}
     assert disagreements(restated, unknown) == [
-        "the verb answered `interrupted` at exit status 7 on run 'run-7', and this "
+        "the verb answered `interrupted` at exit status 7 on `run-7`, and this "
         "repository branches on no such status"
     ]

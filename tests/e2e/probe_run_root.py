@@ -107,7 +107,7 @@ def run_root(root: Path, run: str, *, dispatch_pid: int | None = None) -> Path:
     )
     journal = [
         {
-            "v": 1,
+            "v": 2,
             "ts": "2026-01-01T00:00:00.000Z",
             "stream": "supervision-readings-e2e",
             "seq": 0,
@@ -117,7 +117,7 @@ def run_root(root: Path, run: str, *, dispatch_pid: int | None = None) -> Path:
             "payload": {"plan": plan},
         },
         {
-            "v": 1,
+            "v": 2,
             "ts": "2026-01-01T00:00:01.000Z",
             "stream": "supervision-readings-e2e",
             "seq": 1,

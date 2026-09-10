@@ -1637,6 +1637,98 @@ if [ -n "${JOURNAL_APPEND:-}" ]; then cat -- "$JOURNAL_APPEND" >>"$JOURNAL_FILE"
 printf '%s\\n' '{"reply":0,"state":"applied"}'
 """
 
+#: A `uv` whose reply is **accepted and still queued**, at whichever exit status the
+#: journey names. Both halves are the point. The engine's word for that state has always
+#: been the receipt's `state`, and the status beside it has been spelled two ways: `1`
+#: while a queued envelope shared its status with nothing else, and `0` since the engine
+#: ruled that a non-zero status from this verb is a rejection to correct. So the recipe's
+#: advice cannot be keyed on the status, and this double is what says it is not.
+QUEUEING_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv %s\n' "$*" >>"$TRACE_FILE"
+if [ ! -t 0 ]; then cat >/dev/null; fi
+printf '%s\n' '{"reply":'"${FAKE_REPLY_STATUS:-0}"',"state":"queued","commands":"queued"}'
+exit "${FAKE_REPLY_STATUS:-0}"
+"""
+
+
+class QueuedStatus(NamedTuple):
+    """One status a queued receipt has arrived at, and what that status was."""
+
+    status: int
+    #: For the failure message, so a reader knows which release's spelling failed.
+    what: str
+
+
+#: Both spellings, driven as rows rather than as one number so neither is what this
+#: journey is about.
+QUEUED_STATUSES = (
+    QueuedStatus(0, "the status the engine gives an accepted envelope it has not reconciled"),
+    QueuedStatus(1, "the status it gave that envelope before a non-zero one meant a rejection"),
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("arrival", QUEUED_STATUSES, ids=lambda row: str(row.status))
+def test_a_queued_reply_is_told_what_it_waits_for_whatever_status_it_arrives_at(
+    tmp_path: Path, arrival: QueuedStatus
+) -> None:
+    """The one sentence that tells `queued` from `applied`, read off the word not the number.
+
+    `queued` and `applied` differ by one word in the receipt, and the difference is the
+    whole state: a live run passes through the first in a second, and a run whose driver
+    has died stays in it forever. This recipe's job is to say which of those a manager is
+    looking at and what to do about it, and it used to decide that from the exit status —
+    which the engine has since changed under it, on the ground that a non-zero status from
+    this verb is a rejection to correct.
+
+    A branch still keyed on the number would simply stop firing: the advice would vanish
+    on the release that made it most worth printing, and silently, because a queued reply
+    at exit 0 reads exactly like an applied one. So both statuses are driven against the
+    same receipt, and the sentence is owed under each.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(QUEUEING_UV)
+
+    result = _run(
+        checkout,
+        trace,
+        "channel-reply",
+        "run-1",
+        stdin='{"completion":true,"reason":"read"}',
+        env={"FAKE_REPLY_STATUS": str(arrival.status)},
+    )
+
+    assert result.returncode == arrival.status, f"{result.stdout}{result.stderr}"
+    assert "they stay queued until something is driving that run" in result.stderr, (
+        f"a reply the engine reported {arrival.what} said nothing about what it is "
+        f"waiting for, so a manager cannot tell it from an applied one:\n{result.stderr}"
+    )
+    assert "just orchestrate --adopt run-1" in result.stderr, (
+        f"the sentence reports a state without the action that answers it:\n{result.stderr}"
+    )
+    assert _verb_answer(result)["state"] == "queued", (
+        f"the verb's own answer is no longer the whole of this recipe's stdout:\n{result.stdout}"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_an_applied_reply_is_not_told_it_is_waiting_for_anything(tmp_path: Path) -> None:
+    """The other side, so the sentence above is about `queued` rather than about replying.
+
+    An advice line printed on every acceptance is one a manager stops reading, and it
+    would be worse than none: the state it is about is the one they have to act on.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(JOURNALLING_UV)
+
+    result = _run(checkout, trace, "channel-reply", "run-1", stdin='{"completion":true}')
+
+    assert result.returncode == 0, f"{result.stdout}{result.stderr}"
+    assert _verb_answer(result)["state"] == "applied"
+    assert "they stay queued" not in result.stderr, result.stderr
+
+
 #: The run every row below replies to, and where its journal lives under the checkout.
 JOURNALLED_RUN = "run-1"
 

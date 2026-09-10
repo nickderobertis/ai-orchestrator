@@ -1098,6 +1098,11 @@ class CandidatePlan(TypedDict, total=False):
     schema_version: int
     goal: Goal
     name: str
+    #: How many of its nodes the engine may have in flight at once. Named here because
+    #: it is one of the published schema's own fields and a journey that needs two nodes
+    #: running together has no other way to ask for it — `tests/e2e/test_watch_selector_e2e.py`
+    #: is one, since the ending it drives exists only while a second node is still working.
+    concurrency: int
     tasks: list[PlanNode]
 
 

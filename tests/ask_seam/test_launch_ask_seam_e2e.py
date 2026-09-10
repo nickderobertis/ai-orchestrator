@@ -867,11 +867,46 @@ def orchestrate_adopted(tmp_path_factory: pytest.TempPathFactory, oneharness_bin
     try:
         assert launched.returncode == 0, f"the launch failed:\n{launched.stdout}{launched.stderr}"
         _attest(run, "gate", environment)
-        adopted = just("orchestrate", "--adopt", run, environment=environment, seconds=300)
-        assert adopted.returncode == 0, f"the adoption failed:\n{adopted.stdout}{adopted.stderr}"
+        _adopt(run, environment)
         return Dispatch(run=run, worker=_await_dispatch(turns), asked=None, environment=environment)
     finally:
         just("stop", run, environment=environment, seconds=60)
+
+
+def _adopt(run: RunId, environment: dict[str, str], *, seconds: float = 300) -> None:
+    """Attach a fresh driver to a run, once the outgoing one has let go of it.
+
+    `--adopt` is for a run nothing is driving, and it refuses one that still is. The
+    launch above detached a driver and the attestation above that gave it something to
+    do, so which of the two holds the run at any instant is a race this journey has no
+    say in — and the adopted engine widened the window, because a driver on its way out
+    now drains the run's command queue **before** releasing ownership rather than after.
+
+    Retried rather than slept past, and on that refusal alone: any other failure is a
+    real one and is raised with what the adoption said. The wait is what a manager does
+    at a terminal for the same reason, which is why this is a poll rather than a stop —
+    stopping the run first would establish the precondition by ending the very driver
+    whose handover this journey is about.
+    """
+    limit = deadline(seconds)
+    refused = ""
+    while time.monotonic() < limit:
+        # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The journey this
+        # helper serves is a real orchestration launch and is already behind its own
+        # edge: `tests/ask_seam/` is an Nx project of its own, keyed on
+        # `askSeamWorkspace`, which exists precisely so an unrelated edit does not pay
+        # for these launches. That key covers the configuration, scripts, personas,
+        # graphs and orchestrator code these launches really read, so narrowing it would
+        # leave the tier replaying a green across a change one of them exercises — the
+        # failure the split was made to end. This change adds no journey and moves none;
+        # it makes an existing one wait for a precondition the adopted engine made racy.
+        adopted = just("orchestrate", "--adopt", run, environment=environment, seconds=300)
+        if adopted.returncode == 0:
+            return
+        refused = adopted.stdout + adopted.stderr
+        assert "is still being driven" in refused, f"the adoption failed:\n{refused}"
+        time.sleep(1.0)
+    raise AssertionError(f"run {run} was still being driven after {seconds}s:\n{refused}")
 
 
 def _attest(

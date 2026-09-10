@@ -19,8 +19,8 @@ ENGINE_PIN="config/onepipeline.version"
 
 # What this wrapper exits with when it cannot do its job at all: no run named, no verb
 # to delegate to, or — the one that matters most — a machine-readable stream it could
-# not read. It is deliberately none of the four terminal conditions below, because the
-# whole point of those four is that a caller branches on them, and a status that could
+# not read. It is deliberately none of the terminal conditions below, because the
+# whole point of those is that a caller branches on them, and a status that could
 # mean either "the run settled" or "this watch could not tell" is worth nothing.
 EXIT_CANNOT_WATCH=2
 
@@ -53,24 +53,49 @@ fi
 # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` is the gate over this table, and it reconciles it against the installed engine's own `watch --help` on every uncached run.
 WATCH_OPTIONS=(--timeout --tick-interval --cursor --until --filter --all)
 
-# Every terminal condition, as `status:name:phrase`. Four of them, each with its own
+# Every terminal condition, as `status:name:phrase`. Five of them, each with its own
 # exit status so a caller branches on the status rather than on prose. `3` is the
 # status the engine already assigns to "nothing is driving this run"; `1` and `2` are
-# already spoken for as its queued and refused, so the two remaining conditions take
-# the free statuses above them.
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` drives the installed verb into every condition a static runs root can produce and compares the pairing against these rows. Two of the four cannot be: `surface-waiting` and `elapsed` are answers about a *live* run, and the engine proves liveness from the driving process rather than from the ledger, so a run root carrying a forged lock still answers `nothing-driving` — a fixture that got past that would assert this repository's guess at what the engine inspects, which is not a reconciliation. Those two are declared in that module's `UNDRIVABLE_CONDITIONS`, the declaration is asserted to be exactly them in both directions so the set cannot quietly grow, and `tests/e2e/test_watch_recipe_e2e.py` holds this wrapper's branching on all four.
+# already spoken for as its queued and refused, so the remaining conditions take the
+# free statuses above them.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` drives the installed verb into every condition a static runs root can produce and compares the pairing against these rows. Three of the five cannot be: `surface-waiting`, `elapsed` and `node-settled` are all answers about a *live* run, and the engine proves liveness from the driving process rather than from the ledger, so a run root carrying a forged lock still answers `nothing-driving` — a fixture that got past that would assert this repository's guess at what the engine inspects, which is not a reconciliation. Those three are declared in that module's `UNDRIVABLE_CONDITIONS`, the declaration is asserted to be exactly them in both directions so the set cannot quietly grow; `tests/e2e/test_watch_selector_e2e.py` drives all three against the installed engine over a run it launches, and `tests/e2e/test_watch_recipe_e2e.py` holds this wrapper's branching on all of them.
 # Each name is the engine's **own** word for the condition, as its terminal record
 # spells it, so the gate below compares the two for equality rather than reading one
 # for the other. Its own phrasing is what a caller sees.
+#
+# `node-settled` is the one a caller only ever meets by asking for it: it is what the
+# two selectors below that name nodes return on, and the terminal record beside it
+# carries *which* node — which the engine renders into its own phrase, so this
+# wrapper's summary line names the condition and the stream above it names the node.
 WATCH_CONDITIONS=(
   "0:settled:the run settled"
   "3:nothing-driving:nothing is driving this run — the state to intervene in"
   "4:surface-waiting:a blocking planner surface is waiting to be answered"
   "5:elapsed:the wait elapsed with the run still live"
+  "6:node-settled:a node this wait was told to return on settled"
 )
 
-# The gate's input rather than an operator's: one row per option and per status, and the
-# word the cursor is emitted under, read by `tests/test_watch_surface_drift.py` and
+# Every condition a caller may hand `--until`, as the engine spells it. This is the
+# vocabulary a supervisor types rather than the endings above — the two overlap and are
+# not the same list, because `surface` is a condition to ask for and `surface-waiting`
+# is the ending it produces, and `node=<ID>` is a shape rather than a word.
+#
+# It is restated here for one reason: this repository's own refusals tell an operator
+# what to type, and a wrapper that names a condition the engine dropped sends them into
+# a refusal from a verb they did not think they were arguing with.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] `tests/test_watch_surface_drift.py` hands every one of these to the installed verb over a real run and fails on the refusal an unrecognised condition gets, so this table is reconciled against the engine's own parser rather than against a copy of its help.
+WATCH_UNTIL=(surface settled nothing-driving node-settled "node=<ID>")
+
+# The wait that has no bound at all, distinct from the `0` whose published meaning is to
+# read the run once and return. Named here because both values reach an operator through
+# this wrapper's own usage lines, and a wrapper offering a spelling the engine does not
+# take would compose a watch refused before it watched anything.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Reconciled by the same module, which hands this value to the installed verb over a real run and requires it to be accepted rather than refused as a wait the verb cannot take.
+WATCH_TIMEOUT_UNBOUNDED=none
+
+# The gate's input rather than an operator's: one row per option, per `--until`
+# condition and per status, the wait that has no bound, and the word the cursor is
+# emitted under, read by `tests/test_watch_surface_drift.py` and
 # `tests/test_watch_and_release_reading_guidance.py`. Every row here is one of those
 # readers' rather than an operator's, and this is not a mode anybody watches a run with.
 # llmlint: ignore[tool_output_is_signal] a table of rows is what the reader of this asked for; one line could not carry it.
@@ -80,7 +105,11 @@ print_surface() {
   echo "pin $ENGINE_PIN"
   # llmlint: ignore[tool_output_is_signal] The same table and the same reason as the directive above this function, restated because a line-scoped directive does not reach the function body: this row is a gate's input rather than a line anybody watches a run with.
   echo "cursor-prefix $CURSOR_PREFIX"
+  # llmlint: ignore[tool_output_is_signal] The same table and the same reason as the two directives above: this row is a gate's input rather than a line anybody watches a run with, and `--print-surface` is not a mode anybody watches a run in.
+  echo "timeout-unbounded $WATCH_TIMEOUT_UNBOUNDED"
   for option in "${WATCH_OPTIONS[@]}"; do echo "option $option"; done
+  # llmlint: ignore[tool_output_is_signal] One row per `--until` condition, for the same reader and the same reason as every other row this function writes: the drift gate compares this list against the installed parser, and a list cannot be one line.
+  for entry in "${WATCH_UNTIL[@]}"; do echo "until $entry"; done
   for entry in "${WATCH_CONDITIONS[@]}"; do
     local rest=${entry#*:}
     echo "status ${entry%%:*} ${rest%%:*}"
@@ -105,7 +134,7 @@ if [ "${1:-}" = --print-surface ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-  echo "watch: name the run to watch: just watch <run-id> [--timeout SECONDS] [--tick-interval SECONDS] [--cursor CURSOR] [--until surface|settled] [--filter SPEC | --all]" >&2
+  echo "watch: name the run to watch: just watch <run-id> [--timeout SECONDS|none] [--tick-interval SECONDS] [--cursor CURSOR] [--until CONDITION]... [--filter SPEC | --all]" >&2
   exit "$EXIT_CANNOT_WATCH"
 fi
 
@@ -135,7 +164,7 @@ for argument in "$@"; do
 done
 
 if [ -z "$run" ]; then
-  echo "watch: these arguments name no run to watch, only options. Name the run first: just watch <run-id> [--timeout SECONDS] [--tick-interval SECONDS] [--cursor CURSOR] [--until surface|settled] [--filter SPEC | --all]" >&2
+  echo "watch: these arguments name no run to watch, only options. Name the run first: just watch <run-id> [--timeout SECONDS|none] [--tick-interval SECONDS] [--cursor CURSOR] [--until CONDITION]... [--filter SPEC | --all]" >&2
   exit "$EXIT_CANNOT_WATCH"
 fi
 if ! [[ "$run" =~ ^[A-Za-z0-9._:+/=-]{1,256}$ ]]; then
@@ -197,7 +226,7 @@ if ! cursor_file=$(mktemp); then
 fi
 # `|| true` because this runs on the way out: a trap command that fails is a trap that
 # can replace the terminal status this command chose with one of its own, and which of
-# the four conditions ended the watch is the whole of what a caller branches on.
+# the terminal conditions ended the watch is the whole of what a caller branches on.
 trap 'rm -f "$cursor_file" || true' EXIT
 
 set +e
@@ -212,7 +241,7 @@ set -e
 engine_status=${statuses[0]}
 render_status=${statuses[1]}
 
-# **An unreadable stream is a failure, and never one of the four conditions.** The
+# **An unreadable stream is a failure, and never one of the terminal conditions.** The
 # whole of what this wrapper knows about a run comes from two things the verb produced
 # together — its machine-readable stream and its exit status — and a stream this could
 # not read is a stream whose events, heartbeats and unread-surface counts never reached
@@ -249,13 +278,13 @@ if [ -n "$cursor" ]; then
   resume=" — resume with 'just watch ${run:-<run-id>} --cursor $cursor'"
 fi
 
-# One summary line past the stream already written: which of the four terminal
+# One summary line past the stream already written: which of the terminal
 # conditions ended the watch, and the command that resumes from where it stopped.
 # llmlint: ignore[tool_output_is_signal] Reducing this away would leave a caller with an exit status and no statement of what happened, and the resume command with nowhere to be printed.
 if phrase=$(phrase_for "$engine_status"); then
   echo "watch: ${run:-the run}: $phrase$resume"
 else
-  echo "watch: ${run:-the run}: the watch verb ended at exit status $engine_status, which is none of its four terminal conditions — 1 and 2 are the engine's own queued and refused. Read the run with 'just status ${run:-<run-id>}' to see where it stands$resume" >&2
+  echo "watch: ${run:-the run}: the watch verb ended at exit status $engine_status, which is none of the terminal conditions it returns on — 1 and 2 are the engine's own queued and refused. Read the run with 'just status ${run:-<run-id>}' to see where it stands$resume" >&2
 fi
 
 exit "$engine_status"

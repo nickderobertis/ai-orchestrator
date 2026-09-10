@@ -795,24 +795,55 @@ def test_a_refused_view_is_still_a_refusal_with_no_reading_beside_it(probe: Prob
     )
 
 
+#: The one thing a *reading* verb may now leave behind: the fold checkpoint the engine
+#: resumes a read from instead of replaying a run's whole journal. It is derived, it is
+#: the run's own and goes when the run does, and deleting it costs nothing but the next
+#: read's time — so a view that writes one has not changed the run's record of itself,
+#: which is the property this journey is about and the reason these views are safe beside
+#: live work.
+#:
+#: Named rather than the assertion loosened: everything else under a run root is a
+#: record, and a view that touched one of those would still fail here. That distinction
+#: is what the engine's own arrival made necessary — before the checkpoint existed, "read
+#: nothing, write nothing" and "leave the record alone" were the same sentence.
+DERIVED_BY_A_READER = frozenset({"checkpoint.json"})
+
+
 @pytest.mark.reads_recipes
-def test_neither_view_writes_into_the_run_it_reports_on(probe: Probe) -> None:
-    """Both views stay read-only, which is what makes them safe beside live work."""
+def test_neither_view_changes_the_run_s_own_record_of_itself(probe: Probe) -> None:
+    """Both views leave the run's record alone, which is what makes them safe beside live work."""
     before = _fingerprint(probe.root)
 
     assert _view("status", probe.run, runs_root=probe.root).returncode == 0
     assert _view("host", runs_root=probe.root).returncode == 0
 
     assert _fingerprint(probe.root) == before, (
-        "these views are read-only and are run beside live work; something under the runs "
-        "root changed while they were reporting on it"
+        "these views are run beside live work and must leave the run's own record of "
+        "itself exactly as they found it; something under the runs root that is not a "
+        f"derived {'/'.join(sorted(DERIVED_BY_A_READER))} changed while they reported on it"
+    )
+    # The other half, and what keeps the exclusion above from being vacuous: the engine
+    # really does write that record when a reader folds a run's state, so a build that
+    # stopped writing it — or renamed it — fails here rather than leaving this journey
+    # quietly comparing everything again and proving a property nobody had to hold. What
+    # the *name* is reconciled against is the engine's own declaration, in
+    # `tests/test_engine_contracts.py`, which reads it off `RunPaths`.
+    left = {path.name for path in probe.root.rglob("*") if path.is_file()}
+    assert left & DERIVED_BY_A_READER, (
+        f"reading this run left no {'/'.join(sorted(DERIVED_BY_A_READER))} behind, so "
+        "the exclusion above is excluding nothing and this journey is no longer about "
+        "the distinction it was written for"
     )
 
 
 def _fingerprint(root: Path) -> dict[str, bytes]:
-    """Every file under a runs root, by path and by content."""
+    """Every recorded file under a runs root, by path and by content.
+
+    The derived records a reader may write are left out by name, so what this compares
+    is the run's own record of itself rather than the caches built over it.
+    """
     return {
         str(path.relative_to(root)): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file()
+        if path.is_file() and path.name not in DERIVED_BY_A_READER
     }

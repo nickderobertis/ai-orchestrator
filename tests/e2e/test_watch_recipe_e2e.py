@@ -840,21 +840,25 @@ def test_a_cursor_that_is_not_an_opaque_token_is_refused_rather_than_handed_back
 
 
 @pytest.mark.reads_recipes
-def test_an_exit_status_that_is_none_of_the_four_conditions_is_reported_as_that(
+def test_an_exit_status_that_is_none_of_the_conditions_is_reported_as_that(
     tmp_path: Path,
 ) -> None:
     """The engine's own refusals are neither hidden nor dressed up as an ending.
 
     `1` and `2` are the engine's queued and refused and belong to no terminal condition,
     so a watch that met one says which status it met and hands it back unchanged — a
-    caller branching on the four is then told plainly that it got none of them.
+    caller branching on the endings is then told plainly that it got none of them.
+
+    The sentence deliberately counts nothing. It used to say "none of its four", and the
+    release that gave the verb a fifth ending left the wrapper right and this assertion
+    wrong about a number neither of them is really about.
     """
     checkout, trace = _checkout(tmp_path)
 
     result = _watch(checkout, trace, RUN, stream=STREAM, exit_status=1)
 
     assert result.returncode == 1
-    assert "ended at exit status 1, which is none of its four terminal conditions" in result.stderr
+    assert "ended at exit status 1, which is none of the terminal conditions" in result.stderr
     # The stream's own words are rendered faithfully whatever they say, so it is this
     # wrapper's summary — the only line that claims an ending — that must claim none.
     summary = [line for line in result.stderr.splitlines() if line.startswith("watch: ")]

@@ -12,6 +12,7 @@ planning launch attaches, and the per-record flush the buffering account rests o
 
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import NamedTuple
 
@@ -102,9 +103,39 @@ REQUIRED_CLAIMS = (
         "Extracting the token out of the sentence takes the closing quote along with it",
     ),
     Claim(
+        # The count in that sentence is deliberately not quoted here.
+        # `test_the_endings_the_passage_counts_are_the_ones_the_wrapper_has` reads it out
+        # of the passage and reconciles it against the wrapper, so a number in this claim
+        # would be a second copy of it — and the one that goes stale silently, because a
+        # claim is satisfied by the sentence being *there*.
         "and where the watch re-armed with it ends",
         WATCH_SECTION,
-        "ends at a status that is none of the four",
+        "the watch stopping rather than continuing",
+    ),
+    Claim(
+        "what the wait can be told to return on",
+        WATCH_SECTION,
+        "**`--until` is how you say what the wait is for",
+    ),
+    Claim(
+        "every value is checked when the command is invoked",
+        WATCH_SECTION,
+        "every one is checked when the command is invoked",
+    ),
+    Claim(
+        "a node the graph does not hold is refused up front",
+        WATCH_SECTION,
+        "refused up front — naming the ids the graph does hold",
+    ),
+    Claim(
+        "the wait can have no bound at all",
+        WATCH_SECTION,
+        "`--timeout none` does not bound the wait at all",
+    ),
+    Claim(
+        "and that is a different value from reading once",
+        WATCH_SECTION,
+        "a different value from `--timeout 0`, whose meaning is unchanged",
     ),
     Claim(
         "what a piped watch depends on",
@@ -315,22 +346,62 @@ def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_wrapper_emits() 
     )
 
 
+#: How the passage spells a small count, so the number it writes can be read back. Only
+#: as far as the endings this verb could plausibly grow; a count past that is a document
+#: this gate should fail on rather than quietly understand.
+COUNTED = {
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+}
+
+#: Where the passage states that count. Both sentences name it, and both are read: one
+#: is what a caller branching on the statuses is told, and the other is what a supervisor
+#: reading a mangled cursor's ending is told.
+COUNTS_THE_ENDINGS = (
+    re.compile(r"returns on one of (\w+) terminal\s+conditions"),
+    re.compile(r"ends at a status that\s+is none of the (\w+)"),
+)
+
+
 def test_the_endings_the_passage_counts_are_the_ones_the_wrapper_has() -> None:
     """ "None of the four" is a number, and the wrapper is what decides it.
 
-    The passage tells a supervisor that a watch re-armed with a mangled cursor ends at a
-    status that is none of the four terminal conditions. A wrapper that grew a fifth
-    would leave that sentence miscounting the endings a caller branches on, which is the
-    one thing about this verb a caller is asked to rely on.
+    The passage tells a supervisor how many terminal conditions a watch returns on, and
+    that a watch re-armed with a mangled cursor ends at a status that is none of them. A
+    wrapper that grew one more would leave both sentences miscounting the endings a
+    caller branches on, which is the one thing about this verb a caller is asked to rely
+    on.
+
+    **The count is read out of the passage rather than written here**, and that is the
+    repair this check needed rather than a new number. It asserted `4` as a literal, so
+    the release that gave the verb a fifth ending failed it with a demand to *re-count
+    the passage* — which is right — and would have gone on passing had somebody moved
+    only the literal. Reading both sides means the gate says the same thing at any count
+    the verb reaches, and says it about the document rather than about itself.
     """
     conditions = [row.rest for row in _surface_rows() if row.kind == "status"]
+    passage = _flat(_region(WATCH_SECTION))
 
-    assert len(conditions) == 4, (
-        f"{WRAPPER.name} now branches on {len(conditions)} terminal conditions "
-        f"({[name.split(' ', 1)[-1] for name in conditions]}), and {MANAGER} counts four. "
-        "Re-count the passage, or a supervisor is told about endings the command no "
-        "longer has"
-    )
+    for spelling in COUNTS_THE_ENDINGS:
+        written = spelling.search(passage)
+        assert written is not None, (
+            f"{MANAGER} no longer counts the terminal conditions where this gate reads "
+            f"it ({spelling.pattern!r}), so the count a caller branches on is "
+            "reconciled against nothing"
+        )
+        counted = COUNTED.get(written.group(1))
+        assert counted == len(conditions), (
+            f"{WRAPPER.name} branches on {len(conditions)} terminal conditions "
+            f"({[name.split(' ', 1)[-1] for name in conditions]}), and {MANAGER} says "
+            f"{written.group(0)!r}. Re-count the passage, or a supervisor is told about "
+            "endings the command does not have"
+        )
 
 
 def test_the_planning_launch_really_attaches_no_monitor_of_its_own() -> None:
