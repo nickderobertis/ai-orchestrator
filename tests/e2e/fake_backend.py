@@ -75,6 +75,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import TypedDict
 
 #: The real CLI every invocation is delegated to. Named rather than discovered:
 #: this file *is* `oneharness` as far as the run is concerned, so resolving the
@@ -226,6 +227,22 @@ RUN_ON_MARKER_ENV = "FAKE_BACKEND_RUN_ON_MARKER"
 #: dispatched worker and a dag-scope monitor reach the same branch below, so a
 #: journey wanting only the worker delayed launches with no observer graph.
 AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
+
+
+class RecordedTurn(TypedDict):
+    """One turn this backend records when `PROMPT_LOG_ENV` names a sink.
+
+    Declared here, beside the only thing that writes it, so a reader imports this rather
+    than restating it: the fields below and the `json.dumps` that persists them are one
+    declaration, and adding a field cannot leave a reader describing the old shape.
+    """
+
+    config: str | None
+    cwd: str | None
+    prompt: str
+    system: str | None
+    environment: dict[str, str | None]
+    scripted_answer: str | None
 
 
 def _flag(argv: list[str], name: str) -> str | None:
@@ -437,19 +454,15 @@ def main(argv: list[str]) -> int:
     if prompt_log := os.environ.get(PROMPT_LOG_ENV):
         named = [key for key in os.environ.get(ENVIRONMENT_KEYS_ENV, "").split(",") if key]
         with Path(prompt_log).open("a", encoding="utf-8") as recorded:
-            recorded.write(
-                json.dumps(
-                    {
-                        "config": config,
-                        "cwd": _flag(argv, CWD_FLAG),
-                        "prompt": prompt,
-                        "system": system,
-                        "environment": {key: os.environ.get(key) for key in named},
-                        "scripted_answer": scripted_answer,
-                    }
-                )
-                + "\n"
-            )
+            turn: RecordedTurn = {
+                "config": config,
+                "cwd": _flag(argv, CWD_FLAG),
+                "prompt": prompt,
+                "system": system,
+                "environment": {key: os.environ.get(key) for key in named},
+                "scripted_answer": scripted_answer,
+            }
+            recorded.write(json.dumps(turn) + "\n")
     if config and Path(config).name == JUDGE_CONFIG_NAME:
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))

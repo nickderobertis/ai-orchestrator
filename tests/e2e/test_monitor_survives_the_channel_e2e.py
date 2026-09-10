@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, cast
 
 import pytest
-from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV
+from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV, RecordedTurn
 from project_fixtures import project_from_plan
 
 # The launch environment has one source and it is the module that owns the launch
@@ -288,6 +288,22 @@ def _supervision_state(
     )
 
 
+def _recorded_turn(line: str) -> RecordedTurn | None:
+    """One recorded turn, or `None` for a line the backend has not finished flushing.
+
+    The backend appends while `until` polls, so a read can land mid-flush and see a
+    record cut in half. Dropping that line beats raising on it: the next poll sees the
+    same record whole.
+    """
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    # `json.loads` answers `Any`, and the shape is the single `json.dumps` of the literal
+    # in `fake_backend.py` that wrote the line.
+    return cast("RecordedTurn", record)
+
+
 def _monitor_prompts(prompt_log: Path) -> list[str]:
     """Every prompt the monitor's AGENT side has been given so far, oldest first.
 
@@ -304,7 +320,11 @@ def _monitor_prompts(prompt_log: Path) -> list[str]:
     # only if the filter recognised the envelope, answered onejudge with something it
     # could act on, and the member then took another turn.
     # llmlint: ignore[tests_mirror_real_usage] No operator view carries a turn's prompt.
-    recorded = [json.loads(line) for line in prompt_log.read_text("utf-8").splitlines()]
+    recorded = [
+        record
+        for line in prompt_log.read_text("utf-8").splitlines()
+        if (record := _recorded_turn(line))
+    ]
     return [
         turn["prompt"]
         for turn in recorded

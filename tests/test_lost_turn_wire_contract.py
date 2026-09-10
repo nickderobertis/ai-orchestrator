@@ -38,6 +38,11 @@ codex looked like when it was recorded, which for a drift gate is the one thing 
 than no gate. Hence the module marker: this runs in the uncached tier.
 """
 
+# The finding these answer is about which Nx project owns this file, so it is the file
+# that is suppressed and a project split that would resolve it.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+
 from __future__ import annotations
 
 import ast
@@ -131,9 +136,9 @@ def codex_bin() -> str:
 
 
 @pytest.fixture(scope="session")
-def unreachable_codex_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A codex home whose model endpoint is closed and whose credentials are nobody's."""
-    return lost_turn_producer.unreachable_home(tmp_path_factory.mktemp("codex-home"))
+def refusing_codex_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A codex home whose model endpoint refuses every turn and whose credentials are nobody's."""
+    return lost_turn_producer.refusing_home(tmp_path_factory.mktemp("codex-home"))
 
 
 @pytest.fixture(scope="session")
@@ -141,21 +146,21 @@ def lost_turn(
     tmp_path_factory: pytest.TempPathFactory,
     oneharness_bin: str,
     codex_bin: str,
-    unreachable_codex_home: Path,
+    refusing_codex_home: Path,
 ) -> LostTurn:
     """A turn the real producer lost, captured through the real oneharness."""
     return lost_turn_producer.capture(
-        oneharness_bin, codex_bin, unreachable_codex_home, tmp_path_factory.mktemp("lost-turn")
+        oneharness_bin, codex_bin, refusing_codex_home, tmp_path_factory.mktemp("lost-turn")
     )
 
 
 @pytest.fixture(scope="session")
 def producer_schema(
-    tmp_path_factory: pytest.TempPathFactory, codex_bin: str, unreachable_codex_home: Path
+    tmp_path_factory: pytest.TempPathFactory, codex_bin: str, refusing_codex_home: Path
 ) -> dict[str, Any]:
     """codex's own generated protocol schema: what the producer says it emits."""
     return lost_turn_producer.protocol_schema(
-        codex_bin, unreachable_codex_home, tmp_path_factory.mktemp("protocol-schema")
+        codex_bin, refusing_codex_home, tmp_path_factory.mktemp("protocol-schema")
     )
 
 
@@ -314,3 +319,7 @@ def test_the_producers_own_schema_still_declares_the_wire_shape_the_filter_reads
         for variant in producer_schema["ServerNotification"]["oneOf"]
     }
     assert routed[FAILURE_NOTIFICATION].endswith("/ErrorNotification"), routed[FAILURE_NOTIFICATION]
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
