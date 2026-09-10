@@ -1452,10 +1452,20 @@ def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arm
 
     asking = _ask(asked, "Should the listing be paginated?", window=ANSWERED_WINDOW_SECONDS)
     manager = PersistentManager(
-        asked.run, asked.environment, lambda token: ruling(f"{ANSWER} {token}")
+        asked.run,
+        asked.environment,
+        lambda token: ruling(f"{ANSWER} {token}"),
+        # Outlast the window this ask gives the wrapper. The default patience expires
+        # first, and a manager who has stopped leaves the wrapper waiting out a window
+        # nobody will fill: `_finish` then kills it with nothing on either pipe, and the
+        # journey reports that it timed out rather than anything about its subject.
+        seconds=MANAGER_PATIENCE_SECONDS * 3,
     )
 
-    status, out, err = _finish(asking, manager=manager)
+    # Long enough for the wrapper to reach its OWN refusal, for the reason the
+    # misrouted-edit journey gives its guard the same shape: a guard that fires first
+    # replaces the wrapper's diagnosis with silence.
+    status, out, err = _finish(asking, seconds=MANAGER_PATIENCE_SECONDS * 2 + 60, manager=manager)
     manager.stop()
     manager.checked(asker_said=err)
 
@@ -2380,9 +2390,13 @@ def test_a_run_whose_channel_keeps_answering_other_readers_is_given_up_on(asked:
         asked.environment,
         lambda _token: ruling("this answers a different question"),
         send=reply_unguarded,
+        # Outlast the wrapper's window, for the reason the journey above states: this one
+        # drives the wrapper to its attempt bound, and a manager who stops part-way
+        # leaves it waiting rather than re-asking.
+        seconds=MANAGER_PATIENCE_SECONDS * 3,
     )
 
-    status, out, err = _finish(asking, manager=manager)
+    status, out, err = _finish(asking, seconds=MANAGER_PATIENCE_SECONDS * 2 + 60, manager=manager)
     manager.stop()
     manager.checked(asker_said=err)
 
