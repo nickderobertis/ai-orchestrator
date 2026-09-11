@@ -924,7 +924,7 @@ sentence**, and it changed without anybody configuring anything here: onevcs 0.1
 reads a target from the **repository's own** `release-targets.toml` as well as from the
 host's document, and eight of the twenty-one repositories registered here have since
 landed one — `oneagentgraph` (3 targets), `oneharness` (6), `onejudge` (3), `onepipeline` (3),
-`onepipeline-ui` (4), `onetaskgraph` (5), `onevcs` (4), and `printobserver` (13). So a dependency landing in one
+`onepipeline-ui` (4), `onetaskgraph` (5), `onevcs` (4), and `printobserver` (18). So a dependency landing in one
 of *those* now has a release to await. That set is not a thing this host decides and it
 moves without warning: `onetaskgraph` joined it after the six above were counted, and what
 noticed was `tests/e2e/test_release_adoption_in_force_e2e.py` refusing the publication of

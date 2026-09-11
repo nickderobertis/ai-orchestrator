@@ -589,7 +589,14 @@ def test_two_filesystems_are_two_readings_and_one_is_one(probe: Probe) -> None:
     line naming both when they are one — because two lines for one device would read as
     two answers about two resources.
     """
-    shared = _view("host", runs_root=probe.root)
+    # The one-filesystem half is arranged rather than assumed: a state root beside the
+    # probe's own runs root is on that root's filesystem by construction, where the
+    # host's default `~/.onevcs` need not be — pytest's temporary root and `$HOME` are
+    # two devices on the host this was first taken on, and reading them as one made
+    # this journey a claim about a host's mounts rather than about the reading.
+    beside = probe.root.parent / "onevcs-home"
+    beside.mkdir()
+    shared = _view("host", runs_root=probe.root, env={"ONEVCS_HOME": str(beside)})
     assert shared.returncode == 0, shared.stderr
     one = [line for line in shared.stdout.splitlines() if line.startswith(f"{DISK} ")]
     assert len(one) == 1 and "and the lifecycle worktrees under" in one[0], (
