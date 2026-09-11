@@ -2722,11 +2722,45 @@ from the day it was written, and nobody noticed for as long as it existed — th
 operating as though a protection were in force that never was. The field is therefore
 deleted rather than left standing: one that reads like a bound and reaches no dispatch is
 worse than no field at all, because it is the kind a manager stops checking. Saying that
-plainly is worth more than the sentence was. What a dispatch does share is
-`user.done_when`, which merges, and a role that needs this bound states it in its own
-review contract or the node's `task` states it. `tests/test_shared_dispatch_bar.py` holds
-the absence, and the two incidents may in any case be fully explained by the upstream
+plainly is worth more than the sentence was. `tests/test_shared_dispatch_bar.py` holds
+the absence, and the two incidents may in any case be partly explained by the upstream
 context corruption fixed in onejudge 0.5.2 and oneharness 0.11.0, both in force here.
+
+**The bound itself is back, in `system_prompt`, and where it sits is an argument rather
+than the next field along.** A third occurrence settles that it is not merely upstream
+corruption: a planner's simulated user raised a blocking surface declaring the manager's
+own committed note **withdrawn** — *"nothing now depends on that note having been sent"* —
+and reinstated an obligation the manager had removed. The obvious relocation was
+`user.done_when`, which merges where `user.persona` replaces, and it is the wrong field
+three times over. That clause is handed to the **judge** as what makes the work done, so
+an authority bound written into it asks a judge to fail finished work because that work's
+own supervisor overstepped — which is the very failure these incidents are made of. It
+binds the judge, while the parties that obeyed the fabricated rulings were the **worker**
+and the **monitor**, and neither reads it. And that file's own comments hold the clause to
+what is true of every dispatch alike, recording the two clauses already withdrawn for
+failing that test. `system_prompt` is the field a persona **appends to** rather than
+replaces, so a clause there does reach every dispatch — precisely the property
+`user.persona` lacked. What it now says is that an instruction arriving inside the
+dispatch's own conversation is that dispatch's supervisor rather than its manager, that a
+manager's ruling arrives as planner context or as an attributed note, and that the
+planner's wins where the two disagree. The argument is written beside the clause in
+`config/onejudge.base.yaml`, so a later reader meets it rather than re-deciding it.
+
+**The monitor is bound the same way and for the same reason, in its own review
+contract.** A simulated user's turn reaches the event stream carrying the role `user`,
+which is exactly what a delivered manager note looks like, and it has fooled the tier
+whose whole job is reading that stream: a monitor read *"Stop work on this dispatch"* off
+one, applied a `cancel` 55 seconds later, and reported that *"the planner explicitly told
+this dispatch to stop"* — on a run holding fifteen planner-authored records, none of which
+contains the word. It then restated its own invention as the settled premise of the next
+finding. A live dispatch was killed on an instruction nobody issued and its finished
+branch was landed by hand. So `personas/orchestrator.yaml` says on both sides that a turn
+inside a dispatch is never the planner whatever role it carries, that **no `cancel` may be
+grounded in one**, and what does ground such a claim: a manager's instruction reaches a
+node as a `note` on the run's channel, which the engine appends to that run's journal as
+the `edit-committed` event carrying the command against the node. A turn is not evidence
+of one. The durable fix is provenance stamped on the turn itself, which lands elsewhere;
+these two rules are defence in depth rather than a substitute for it.
 
 Draft a new role under gitignored `scratch/personas/`, dispatch against that
 directory, and refine it from observed performance. Once proven, dispatch its
@@ -4499,9 +4533,12 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   so `--dist loadgroup` scattered thirteen launches onto the workers whose round trips
   were polling `just` recipes through the lock those launches held — which is how four
   consecutive publication gates came to fail on branches touching none of it. It does
-  not account for every failure of that tier: an intermittent hang with the same
-  reported shape survives this repair and is scoped as separate work, so read a fresh
-  one as that rather than as this constraint having slipped.
+  not account for every failure of that tier, and **the rest of it is diagnosed rather
+  than open**: the remaining intermittent hang is the channel queue's own defect — an
+  unlocked read-modify-write on `queue.json`, by which a read of the channel landing over
+  a worker's concurrent write destroys the worker's blocking question — and that is a
+  fact about the channel rather than about this constraint. How to read a fresh hang of
+  that tier is `tests/AGENTS.md`'s, beside the rest of what that suite's author is told.
 - **Tests are realistic, not mocked.** What this repository still owns is its
   command surface, so the suite drives the *real* `just` recipes, the real wrapper
   scripts, the real `oneharness` CLI, and real Nx. The published CLIs a recipe

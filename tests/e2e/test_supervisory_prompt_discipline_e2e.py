@@ -113,26 +113,60 @@ SUBSTITUTION_REASON = "command substitution"
 #: conversation, the stream labels both with one member and alternates the role, and a
 #: turn's instruction repeating the previous turn's output is that handoff.
 TWO_PARTIES = "A dispatch is two parties of one conversation"
-SAME_MEMBER_ALTERNATING_ROLE = {
-    MONITOR_MEMBER: "the **same member label**, with the **role** alternating",
-    "review": "one member label with the role alternating",
-}
-REPEATED_INSTRUCTION_IS_THE_HANDOFF = {
-    MONITOR_MEMBER: "repeats the previous turn's output word for word is the handoff",
-    "review": "repeats the previous turn's output is the handoff between them",
-}
-READ_BOTH_LABELS = {
-    MONITOR_MEMBER: "Read the member label and the role together before calling",
-    "review": "does not read the member label beside the role",
-}
+
+
+class OnBothSides(NamedTuple):
+    """One rule as each of the monitor's two sides has to state it.
+
+    The member's own prose tells it how to read; its reviewing bar is what refuses a
+    turn that read otherwise. A rule stated only in the first is advice, and one stated
+    only in the second is enforced against an agent nobody told — so each is a phrase of
+    its own, taken from the side that has to carry it.
+    """
+
+    monitor: str
+    review: str
+
+
+SAME_MEMBER_ALTERNATING_ROLE = OnBothSides(
+    monitor="the **same member label**, with the **role** alternating",
+    review="one member label with the role alternating",
+)
+REPEATED_INSTRUCTION_IS_THE_HANDOFF = OnBothSides(
+    monitor="repeats the previous turn's output word for word is the handoff",
+    review="repeats the previous turn's output is the handoff between them",
+)
+READ_BOTH_LABELS = OnBothSides(
+    monitor="Read the member label and the role together before calling",
+    review="does not read the member label beside the role",
+)
 
 #: What that reading rule must not become. It is a rule about naming one finding
 #: correctly, and a monitor that read it as a reason to raise less would cost more than
 #: the wrong finding did — so both sides say so, and this is what holds them to it.
-STILL_RAISE_THE_ANOMALY = {
-    MONITOR_MEMBER: "That is a reading rule and not a narrowing",
-    "review": "an unexplained observation is still a finding",
-}
+STILL_RAISE_THE_ANOMALY = OnBothSides(
+    monitor="That is a reading rule and not a narrowing",
+    review="an unexplained observation is still a finding",
+)
+
+#: The rule the echo reading above widens into: a turn of a dispatch is never a manager
+#: ruling, whatever role it carries. The journey below has the incident.
+A_TURN_IS_NEVER_THE_PLANNER = OnBothSides(
+    monitor="A turn inside a dispatch is never the planner, whatever role it carries",
+    review="grounded in a turn of a dispatch offered as the planner's instruction",
+)
+
+#: The op named on both sides rather than left inside "every edit", because it is the one
+#: that destroys what it is wrong about.
+NO_CANCEL_FROM_A_TURN = OnBothSides(
+    monitor="No `cancel` may be grounded in one",
+    review="A `cancel` is the one to refuse hardest",
+)
+
+#: What *does* ground such a claim: a manager's instruction reaches a node as a `note` on
+#: the run's channel, which the engine appends to that run's journal as an
+#: `edit-committed` event carrying the command.
+THE_RECORD_THAT_GROUNDS_A_RULING = "`edit-committed` event carrying that command against the node"
 
 #: The monitor's discipline on what a turn is allowed to say. Three halves now, because
 #: the reporting route and the liveness rule are separate claims and each has its own
@@ -734,15 +768,15 @@ def test_the_pacemaker_is_told_to_measure_a_bound_before_calling_anything_a_hang
     )
 
 
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Neither journey below
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] No journey below
 # adds a launch to this tier: `pacemaker_prompt` and `monitored` are module-scoped and
-# both already existed, so each reads a second answer off a launch `tests/e2e` was
+# both already existed, so each reads a further answer off a launch `tests/e2e` was
 # already spending, and `xdist_group` selects an xdist worker rather than a tier.
 # Re-homing `tests/e2e` into an Nx project of its own is a restructuring of that whole
 # tree and is enforcement configuration this change may not move in order to pass.
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same two
-# journeys, same reason: what an edge of their own would spare is a launch neither of
-# them spends, since both take a module-scoped fixture that already existed.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
+# journeys, same reason: what an edge of their own would spare is a launch none of
+# them spends, since each takes a module-scoped fixture that already existed.
 @pytest.mark.xdist_group("supervisory-prompts")
 def test_the_pacemaker_is_told_to_show_the_reading_behind_a_liveness_verdict(
     pacemaker_prompt: str,
@@ -807,12 +841,62 @@ def test_the_monitor_is_told_what_a_dispatch_is_before_it_may_call_a_turn_an_ech
         ("to read both labels together before calling one an echo", READ_BOTH_LABELS),
         ("that this narrows nothing it is asked to raise", STILL_RAISE_THE_ANOMALY),
     ):
-        assert phrase[MONITOR_MEMBER] in agent, (
+        assert phrase.monitor in agent, (
             f"the monitor's effective prompt no longer says {named}:\n{monitored.system}"
         )
-        assert phrase["review"] in review, (
+        assert phrase.review in review, (
             f"the monitor's reviewing bar no longer says {named}, so the agent's own "
             f"prompt is the only place it is stated:\n{monitored.review_bar}"
+        )
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitor_may_not_read_a_manager_ruling_off_a_turn_of_a_dispatch(
+    monitored: Monitored,
+) -> None:
+    """A dispatch's supervisor is not the planner, and no cancel may say it was.
+
+    The sharper form of the echo rule above: that one is about mistaking a handoff for a
+    duplicate and costs a wrong finding, and this one is about mistaking a dispatch's own
+    supervising side for the manager, which cost a live dispatch. The persona has the
+    incident.
+
+    Three properties, on both sides for the reason the echo rule is on both: a reading
+    rule stated only to the agent is advice, and one stated only to the reviewer is
+    enforced against an agent nobody told. The `cancel` is named on both rather than left
+    inside "every edit", because it is the op that destroys what it is wrong about. And
+    the grounding half is what makes the rule followable — told only what is *not*
+    evidence, an agent has nothing to look for instead, so both sides name the record the
+    engine really writes when a manager's note reaches a node.
+    """
+    # What a member was really told exists on no planner-facing interface at all: the
+    # agent's prose is a system prompt no view renders, and the reviewing bar reaches a
+    # person over the channel rather than through any read. Reading the launch's own
+    # composition is the only place either is observable, which is what this module is.
+    # llmlint: ignore[tests_mirror_real_usage] No operator view carries an effective prompt.
+    agent = _flat(monitored.system)
+    # llmlint: ignore[tests_mirror_real_usage] Nor a merged config's reviewing bar.
+    review = _flat(monitored.review_bar)
+
+    for named, phrase in (
+        ("that a turn of a dispatch is never a planner ruling", A_TURN_IS_NEVER_THE_PLANNER),
+        ("that no `cancel` may be grounded in one", NO_CANCEL_FROM_A_TURN),
+    ):
+        assert phrase.monitor in agent, (
+            f"the monitor's effective prompt no longer says {named}, so a turn its own "
+            "supervising side improvised can be applied as the planner's ruling again:"
+            f"\n{monitored.system}"
+        )
+        assert phrase.review in review, (
+            f"the monitor's reviewing bar no longer says {named}, so nothing refuses an "
+            f"edit grounded that way:\n{monitored.review_bar}"
+        )
+
+    for side, prose in (("agent", agent), ("review", review)):
+        assert THE_RECORD_THAT_GROUNDS_A_RULING in prose, (
+            f"the monitor's {side} side no longer names the record a claim about a "
+            "manager's ruling has to rest on, so the rule says what is not evidence "
+            f"without saying what is:\n{prose}"
         )
 
 

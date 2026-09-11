@@ -57,6 +57,18 @@ three places to drift apart; a project whose rules are its own gets its own file
   another project's tier: the directory decides which project pays, and a marker only
   decides which of that project's keys the payment is memoized on.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
+- **A hang of the `ask-seam` tier is one of two diagnosed things, and the queue tells
+  them apart.** Its journeys spend real launches and then wait on `uv run` through the
+  exclusive lock those launches hold on `<root>/.venv`, so `SHARED_TOOLCHAIN_GROUP` in
+  `tests/e2e/nx_workspace.py` keeps the writers of that lock and the readers waiting on
+  it on one xdist worker — scattered, they failed four consecutive publication gates on
+  branches touching none of it. What that constraint does not account for is the
+  channel queue's own defect: a read of the channel is an unlocked read-modify-write on
+  `runs/<run-id>/channel/queue.json`, and one landing over a worker's concurrent write
+  permanently destroys the worker's blocking question, which is then indistinguishable
+  from a worker still waiting for an answer.
+  So read a fresh hang of that shape as that defect rather than as the group constraint
+  having slipped, and read the queue before re-diagnosing it.
 - **A shared stand-in is reached through `project_fixtures.helper`, never through a
   test module's own `__file__`.** A module that derives the path itself names a file
   relative to wherever it currently sits, so moving it substitutes a path this
