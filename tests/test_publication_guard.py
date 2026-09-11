@@ -85,17 +85,22 @@ def _onevcs(
     monkeypatch: pytest.MonkeyPatch,
     *,
     answers: dict[str, tuple[Path, str]],
+    origins: dict[str, str] | None = None,
 ) -> None:
     """Put a stand-in `onevcs` on PATH answering for exactly the repositories named.
 
     The two verbs answer as the real one does: `resolve` a JSON object naming the
-    identity and the publication checkout, `rules check` its line-oriented report whose
-    `publication:` line is the policy. Anything else exits 2, which is what the real one
-    does for a repository this host has not registered.
+    identity and the publication checkout — and the identity's `origin`, for each
+    repository ``origins`` names one for — and `rules check` its line-oriented report
+    whose `publication:` line is the policy. Anything else exits 2, which is what the
+    real one does for a repository this host has not registered.
     """
     resolved = {
         repo: [
-            json.dumps({"identity": f"local/{repo}", "publication_checkout": str(checkout)}),
+            json.dumps(
+                {"identity": f"local/{repo}", "publication_checkout": str(checkout)}
+                | ({"origin": origins[repo]} if origins and repo in origins else {})
+            ),
             f"repo: {repo}\nidentity: local/{repo}\npublication: {workflow} (from rule 1)\n",
         ]
         for repo, (checkout, workflow) in answers.items()
@@ -353,7 +358,7 @@ def test_a_workflow_outside_the_published_vocabulary_decides_nothing(
     _onevcs(tmp_path, monkeypatch, answers={"service": (_checkout(tmp_path), "something-new")})
 
     assert destination("service") == Destination(
-        "local/service", tmp_path / "publication", workflow=None
+        "local/service", tmp_path / "publication", workflow=None, origin=None
     )
     assert refusals(_plan(consumes={"library": "pypi"})) == []
     assert [one.field for one in refusals(_plan(title="chore: tidy"))] == ["title"]
@@ -559,6 +564,123 @@ def test_a_node_wrong_in_two_ways_is_told_about_both(
 
     assert sorted(one.field for one in found) == ["consumes", "title"], found
     assert {one.node for one in found} == {"work"}, found
+
+
+#: A hosted repository's origin, in the shape `onevcs resolve` answers it and the task
+#: record's own `repositories` holds it.
+HOSTED = "github.com/acme/service"
+
+#: The metadata the store's record carries when a plan wrote its repository on the
+#: reserved key rather than in `repositories`. The loaded plan carries it verbatim beside
+#: the resolved `repo`, which is the only way the two spellings can be told apart.
+ON_THE_RESERVED_KEY = {"onepipeline.id": "work", "onepipeline.repo": "service"}
+
+
+def test_a_hosted_repository_named_on_the_reserved_key_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record shape that files every task's issue in the orchestrator's repository.
+
+    The engine puts a node's repository in the record's own `repositories` and keeps
+    `onepipeline.repo` for an identity that list cannot hold; a hosted identity named by
+    alias on the key reaches the plan store with `repositories` empty. The refusal names
+    the node, what it wrote, and the origin to write instead.
+    """
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+        origins={"service": HOSTED},
+    )
+
+    found = refusals(_plan(metadata=ON_THE_RESERVED_KEY))
+
+    assert [(one.node, one.field) for one in found] == [("work", "repo")]
+    assert "'service'" in found[0].reason, found[0].reason
+    assert f'repositories: ["{HOSTED}"]' in found[0].reason, found[0].reason
+    assert "onepipeline.repo" in found[0].reason, found[0].reason
+
+
+def test_the_same_repository_named_in_repositories_is_not_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The corrected shape: the loader reads `repo` from the list, and the key is absent."""
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={HOSTED: (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+        origins={HOSTED: HOSTED},
+    )
+
+    assert refusals(_plan(repo=HOSTED, metadata={"onepipeline.id": "work"})) == []
+
+
+def test_a_path_origin_on_the_reserved_key_is_the_case_the_key_exists_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local checkout `onevcs` knows by its path is not a value `repositories` holds.
+
+    Every scratch identity this repository's own journeys register resolves this way,
+    and a refusal here would refuse every one of them.
+    """
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+        origins={"service": str(tmp_path / "service-origin")},
+    )
+
+    assert refusals(_plan(metadata=ON_THE_RESERVED_KEY)) == []
+
+
+def test_an_answer_naming_no_origin_decides_nothing_about_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read leniently: the two refusals that need only the checkout are still made."""
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+    )
+
+    found = refusals(_plan(title="refactor: rename it", metadata=ON_THE_RESERVED_KEY))
+
+    assert [one.field for one in found] == ["title"], found
+
+
+@pytest.mark.parametrize(
+    ("written", "origin", "recorded"),
+    (
+        pytest.param("https://github.com/acme/service.git", None, HOSTED, id="a-clone-url"),
+        pytest.param(HOSTED, None, HOSTED, id="the-origin-itself"),
+        pytest.param("service", HOSTED, HOSTED, id="an-alias-of-a-hosted-identity"),
+        pytest.param("service", "/srv/service-origin", "service", id="an-alias-of-a-local-one"),
+        pytest.param("service", None, "service", id="an-alias-onevcs-answers-no-origin-for"),
+        pytest.param("elsewhere", None, "elsewhere", id="a-value-onevcs-cannot-resolve"),
+    ),
+)
+def test_what_a_flows_own_node_records_is_the_origin_wherever_there_is_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    written: str,
+    origin: str | None,
+    recorded: str,
+) -> None:
+    """`record_repository` is what puts `repositories` on the plan flow's own records.
+
+    A hosted spelling is normalized without asking anything; an alias is asked of
+    `onevcs`, and answered as the origin when that origin is one `repositories` can hold.
+    A path origin and a value nothing resolves are answered as written — the first is
+    what the reserved key is for, and the second is not this host's to rewrite.
+    """
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+        origins={} if origin is None else {"service": origin},
+    )
+
+    assert publication_guard.record_repository(written) == recorded
 
 
 def test_a_verb_that_does_not_return_is_bounded_rather_than_waited_on(

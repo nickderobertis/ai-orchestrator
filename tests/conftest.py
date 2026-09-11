@@ -18,7 +18,7 @@ import io
 import os
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -187,11 +187,18 @@ def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def git(*args: str, cwd: str | Path | None = None) -> str:
-    """Run a real git command in a test, failing loudly; return stdout."""
+def git(*args: str, cwd: str | Path | None = None, env: Mapping[str, str] | None = None) -> str:
+    """Run a real git command in a test, failing loudly; return stdout.
+
+    ``env`` is laid over the process environment rather than replacing it: what a caller
+    has to add is one name — the fake `ssh` a hosted scratch identity's origin is served
+    through — and a git run with nothing else of the environment would find no `HOME`,
+    no `PATH`, and no committer.
+    """
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd is not None else None,
+        env=None if env is None else {**os.environ, **env},
         text=True,
         capture_output=True,
     )

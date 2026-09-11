@@ -33,6 +33,36 @@ class PlanDocument(TypedDict):
 #: no plan declared.
 ENGINE_PREFIX = "onepipeline."
 
+#: The shape of a normalized origin — `host/owner/name` — which is the one value a task
+#: record's top-level `repositories` list can hold. The scheme and a `.git` suffix are
+#: what a clone URL carries beyond it, so both are dropped before the shape is asked.
+#: `onevcs` files a hosted repository under exactly this key, and its `resolve` answers
+#: an identity's `origin` in it, so what this recognizes is what that CLI would answer.
+#: Reconciled against both owners rather than trusted:
+#: `tests/plan_tooling/test_check_plan_recipe_e2e.py` registers a real hosted scratch
+#: identity, writes a record through this shape, and reads the node's `repo` back out of
+#: the installed engine's own loader equal to the origin the installed `onevcs` answers.
+#: Each segment is held to the characters a host name, an owner and a repository name
+#: are made of, because the value is promoted into a record other programs then read:
+#: whitespace, a query string or a control character in a segment is not an origin.
+_HOSTED_ORIGIN = re.compile(r"[A-Za-z0-9.-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+_CLONE_SCHEME = re.compile(r"^https?://")
+
+
+def hosted_origin(repo: str) -> str | None:
+    """``repo`` as the normalized origin `repositories` can hold, or ``None``.
+
+    ``None`` for every other spelling of a repository — a registered alias, an absolute
+    path, an scp-like clone URL — because none of them is a value that list holds: the
+    engine reads a node's ``repo`` from that list's first entry and reserves the
+    ``onepipeline.repo`` key for an identity a normalized origin cannot name, which is a
+    local checkout `onevcs` knows by its path. This is the one place that shape is
+    decided, and :mod:`orchestrator.publication_guard` asks it of what `onevcs` answers
+    so the record a plan writes and the record `just check-plan` refuses agree.
+    """
+    normalized = _CLONE_SCHEME.sub("", repo).removesuffix(".git")
+    return normalized if _HOSTED_ORIGIN.fullmatch(normalized) else None
+
 
 def _slug(value: str) -> str:
     rendered = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
@@ -168,9 +198,13 @@ def render_plan_project(
         if repo is not None:
             if not isinstance(repo, str):
                 raise ValueError(f"generated task {node_id!r} has a non-string repository")
-            normalized = re.sub(r"^https?://", "", repo).removesuffix(".git")
-            if re.fullmatch(r"[A-Za-z0-9.-]+/[^/]+/[^/]+", normalized):
-                fields["repositories"] = [normalized]
+            # The contract's two shapes, decided by one reader: a normalized origin is
+            # the record's own `repositories`, and anything else travels on the reserved
+            # `onepipeline.repo` key, which is what the engine keeps for an identity
+            # that list cannot hold.
+            hosted = hosted_origin(repo)
+            if hosted is not None:
+                fields["repositories"] = [hosted]
             else:
                 node["repo"] = repo
         if deps:

@@ -31,7 +31,7 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NamedTuple, NewType, cast
+from typing import Any, NamedTuple, NewType, TypedDict, cast
 
 import pytest
 from conftest import git
@@ -39,7 +39,7 @@ from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import GIT_IDENTITY, Identity, seeded
+from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_review, plan_store
@@ -269,8 +269,8 @@ def _tracks_the_store(identity: Identity) -> None:
     tracked.write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
     git("add", "onetaskgraph.yaml", cwd=identity.execution)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: configure the plan store", cwd=identity.execution)
-    git("push", "-q", "origin", "main", cwd=identity.execution)
-    git("pull", "-q", "--ff-only", cwd=identity.publication)
+    git("push", "-q", "origin", "main", cwd=identity.execution, env=identity.environment)
+    git("pull", "-q", "--ff-only", cwd=identity.publication, env=identity.environment)
 
 
 class Bench(NamedTuple):
@@ -284,7 +284,12 @@ class Bench(NamedTuple):
 
 def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
     """The environment a flow runs in, against a registry, a runs root and a board of its own."""
-    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
+    identity = seeded(
+        tmp_path,
+        publication=PUBLICATION_ALIAS,
+        execution=EXECUTION_ALIAS,
+        origin=PLANNING_FLOW_ORIGIN,
+    )
     _tracks_the_store(identity)
     destination = tmp_path / "board"
     # Created rather than left to the first write: a `local-md` source canonicalizes its
@@ -296,6 +301,7 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEVCS_HOME"] = str(identity.home)
+    environment.update(identity.environment)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
@@ -397,6 +403,18 @@ def _stop(bench: Bench, *runs: str) -> None:
             tasks.rmdir()
 
 
+class StoredTask(TypedDict):
+    """One task as `onetaskgraph task list` reports it, in the two fields this suite reads.
+
+    `repositories` is the record's own top-level field — where a hosted repository is
+    named, as its normalized origin — and `metadata` is the map the reserved
+    `onepipeline.repo` key would sit in if the record still named it there.
+    """
+
+    repositories: list[str]
+    metadata: dict[str, object]
+
+
 class Finished(NamedTuple):
     """One whole `just finish-plan` run, and everything read back off it."""
 
@@ -404,6 +422,40 @@ class Finished(NamedTuple):
     drafted: Drafted
     bench: Bench
     run: RunId
+    #: The design-document node's task as the store reports it — its `repositories` and
+    #: its metadata — read before the fixture takes the project back.
+    design_task: StoredTask
+
+
+def _design_task(bench: Bench, run: RunId) -> StoredTask:
+    """The one task of the design-document project the tail wrote, as the store reports it.
+
+    Through the plan-store CLI rather than off the file, because the settlement write-back
+    rewrites a record in the store's own spelling once the run has settled; what the
+    store *reports* is the contract. `onetaskgraph` owns the answer; the cast says so, and
+    the subscripts fail loudly on a record without the two fields.
+    """
+    listed = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "list",
+            "--source",
+            AUTHORING_SOURCE,
+            "--project",
+            f"{run}{DESIGN_RUN_SUFFIX}",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert listed.returncode == 0, f"the store could not list the design project:\n{listed.stderr}"
+    (task,) = [record["item"] for record in json.loads(listed.stdout)["items"]]
+    return cast(StoredTask, task)
 
 
 #: The flow this module's one successful run is named by, and the run its tail launches.
@@ -436,7 +488,13 @@ def finished(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> F
             environment=bench.environment,
         )
         assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
-        return Finished(finish=finish, drafted=drafted, bench=bench, run=RUN)
+        return Finished(
+            finish=finish,
+            drafted=drafted,
+            bench=bench,
+            run=RUN,
+            design_task=_design_task(bench, RUN),
+        )
     finally:
         _stop(bench, f"{RUN}{DESIGN_RUN_SUFFIX}")
 
@@ -562,6 +620,24 @@ def test_the_tail_reports_the_two_locations_the_destination_itself_answers(
     assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
         reported
     )
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_the_design_document_node_names_this_repository_in_its_records_own_field(
+    finished: Finished,
+) -> None:
+    """The tail's node names its repository once, in `repositories`, as the normalized origin.
+
+    Launched with its defaults, so what is read is the record the recipe writes when
+    nobody tells it anything: the origin the flow's default names, in the record's own
+    top-level field, and nothing on the reserved `onepipeline.repo` key. That key is what
+    every plan this host wrote used to carry an alias on, which left every task issue of
+    a plan filed in this repository rather than the one the work changed.
+    """
+    assert finished.design_task["repositories"] == [PLANNING_FLOW_ORIGIN], finished.design_task
+    metadata = finished.design_task["metadata"]
+    assert "onepipeline.repo" not in metadata, metadata
+    assert metadata["onepipeline.execution_checkout"] == EXECUTION_ALIAS, metadata
 
 
 @pytest.mark.xdist_group("finish-plan")
@@ -979,9 +1055,12 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
         assert f"--name {named}" in reported, (
             f"the handover drops the name this flow's runs are derived from:\n{reported}"
         )
-        assert f"--repo {PUBLICATION_ALIAS} --execution-checkout {EXECUTION_ALIAS}" in reported, (
-            f"the handover drops the placement this launch resolved:\n{reported}"
-        )
+        # The placement as this launch *resolved* it: the repository by the normalized
+        # origin its record carries rather than by the alias the default names, so the
+        # tail is handed the value it would resolve to anyway.
+        assert (
+            f"--repo {PLANNING_FLOW_ORIGIN} --execution-checkout {EXECUTION_ALIAS}" in reported
+        ), f"the handover drops the placement this launch resolved:\n{reported}"
         assert f"--to {DESTINATION}" in reported, (
             f"the handover drops the destination this launch was given:\n{reported}"
         )

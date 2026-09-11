@@ -1180,7 +1180,15 @@ from both the release and `CHANGELOG`.
 ## Lifecycle nodes in the tracked graph
 
 A lifecycle node is an `agent` node in a plan with a `repo` and either a
-`persona`+`task` or a `steps` workstream. The `Node` schema is
+`persona`+`task` or a `steps` workstream. In the plan store that `repo` is the first
+entry of the task record's own `repositories` list — a hosted repository's normalized
+origin, `host/owner/name` — and the reserved `onepipeline.repo` key carries it only for
+an identity that list cannot hold, a local checkout named by its absolute path; the two
+are never written together. The `repo` shown in the plan documents on this page is the
+loaded node's field, which the engine reads from either. `onevcs` is handed that value
+verbatim, so among several registered checkouts of one identity the origin form selects
+the one whose alias sorts first; `tests/test_registry_resolution.py` holds this host's
+checkouts to that order. The `Node` schema is
 `deny_unknown_fields`, so what it may carry is a closed list —
 `id`, `kind`, `task`, `amendment`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
 `context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,

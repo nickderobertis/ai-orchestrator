@@ -43,11 +43,13 @@ import os
 import re
 import shutil
 import subprocess
+from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, cast
 
 import plan_root_variable
 import pytest
+from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -726,46 +728,139 @@ GENERATED_TASKS = (
 )
 
 
+class Placement(NamedTuple):
+    """Where one generated node's record says its dispatch works, in the record's terms."""
+
+    #: The record's own top-level `repositories`: the normalized origin of a hosted
+    #: repository, and empty for one that list cannot hold.
+    repositories: tuple[str, ...]
+    #: What the reserved `onepipeline.repo` key carries, which is a local checkout's
+    #: alias and never a hosted repository's — or `None` when the key is absent.
+    reserved: str | None
+    #: The registered execution checkout, which has no field of its own to move into and
+    #: stays an alias on `onepipeline.execution_checkout`.
+    execution: str | None
+
+
+class Registry(StrEnum):
+    """Which scratch pair a shape's `--repo` is resolved against."""
+
+    #: This repository's own pair, under the origin the recipe defaults to.
+    HOSTED = "hosted"
+    #: A pair whose identity is the bare origin's own path.
+    LOCAL = "local"
+
+
 class NodeShape(NamedTuple):
     """One way of asking for a planner, and the placement the node it writes has to have."""
 
     what: str
     #: What the caller types after the brief.
     arguments: tuple[str, ...]
-    #: The `repo` and `execution_checkout` the one node must carry, or `None` for the
-    #: direct shape, which carries neither.
-    placement: tuple[str, str] | None
+    #: The placement the one node must carry, or `None` for the direct shape, which
+    #: carries neither a repository nor an execution checkout.
+    placement: Placement | None
     #: What the launch has to say about where this planner works. A manager reading the
     #: receipt is the one who decides what their brief may ask it to leave behind, and
     #: for the direct shape it is the only place the constraints are put in front of
     #: them at the moment they apply.
     says: str
+    #: The scratch pair the shape's `--repo` is resolved against, or `None` for a shape
+    #: naming none.
+    registry: Registry | None
 
 
-#: The two shapes, and the defaults. A planner works in a worktree cut from the
-#: registered safety clone unless a caller asks otherwise, because the alternative is
-#: the shared canonical checkout — where one cut a branch, committed, and left it
-#: checked out, failing a publication and destroying a manager's plan files.
+#: The alias `just plan` resolves this repository's origin to, and the safety clone
+#: beside it, as this host registers them. The hosted-alias shape below types the alias
+#: an operator reads off `just repos`, and the record still has to carry the origin.
+THIS_REPOSITORY = "ai-orchestrator"
+THIS_REPOSITORY_EXECUTION = "ai-orchestrator-isolated"
+
+#: A pair whose identity a normalized origin cannot hold, which is the one case the
+#: reserved key exists for — and what every scratch identity a journey registers is.
+LOCAL = "other"
+LOCAL_EXECUTION = "other-isolated"
+
+#: How the recipe places its node when nobody tells it anything, and when told this
+#: repository's alias: the same record either way, naming the origin in `repositories`.
+DEFAULT_PLACEMENT = Placement((PLANNING_FLOW_ORIGIN,), None, THIS_REPOSITORY_EXECUTION)
+
+#: The shapes, and the defaults. A planner works in a worktree cut from the registered
+#: safety clone unless a caller asks otherwise, because the alternative is the shared
+#: canonical checkout — where one cut a branch, committed, and left it checked out,
+#: failing a publication and destroying a manager's plan files. Which *record* the
+#: repository becomes is the contract's: a hosted repository is named once, in the
+#: record's own `repositories`, as its normalized origin — whether the caller typed the
+#: origin or the alias `onevcs` resolves to it — and only an identity that list cannot
+#: hold travels on `onepipeline.repo`.
 NODE_SHAPES = (
     NodeShape(
         "the default",
         (),
-        ("ai-orchestrator", "ai-orchestrator-isolated"),
-        "worktree cut from 'ai-orchestrator-isolated'",
+        DEFAULT_PLACEMENT,
+        f"worktree cut from '{THIS_REPOSITORY_EXECUTION}'",
+        Registry.HOSTED,
     ),
     NodeShape(
-        "a named pair",
-        ("--repo", "other", "--execution-checkout", "other-isolated"),
-        ("other", "other-isolated"),
-        "worktree cut from 'other-isolated'",
+        "this repository by its alias",
+        ("--repo", THIS_REPOSITORY, "--execution-checkout", THIS_REPOSITORY_EXECUTION),
+        DEFAULT_PLACEMENT,
+        f"worktree cut from '{THIS_REPOSITORY_EXECUTION}'",
+        Registry.HOSTED,
+    ),
+    NodeShape(
+        "a local pair",
+        ("--repo", LOCAL, "--execution-checkout", LOCAL_EXECUTION),
+        Placement((), LOCAL, LOCAL_EXECUTION),
+        f"worktree cut from '{LOCAL_EXECUTION}'",
+        Registry.LOCAL,
     ),
     NodeShape(
         "--direct",
         ("--direct",),
         None,
         "may write only to gitignored paths, may not commit, and may not leave the base branch",
+        None,
     ),
 )
+
+
+def _placed(task_record: str) -> Placement | None:
+    """Where one generated record says its dispatch works, read off the record itself."""
+    repositories = re.search(r"^repositories: (\[.*\])$", task_record, re.MULTILINE)
+    reserved = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
+    execution = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
+    if repositories is None and reserved is None:
+        return None
+    return Placement(
+        tuple(json.loads(repositories.group(1))) if repositories else (),
+        reserved.group(1) if reserved else None,
+        execution.group(1) if execution else None,
+    )
+
+
+def _registry(tmp_path: Path, registry: Registry | None) -> dict[str, str]:
+    """A scratch registry holding the pair ``registry`` names, as an environment.
+
+    Never this host's, for the reason every launching journey gives: what `--repo`
+    resolves to is decided by the registry it is asked of, and a journey pointed at the
+    real one would answer differently the day somebody re-registers a checkout here.
+    """
+    match registry:
+        case None:
+            return {}
+        case Registry.HOSTED:
+            seeded_pair = seeded(
+                tmp_path / "registry",
+                publication=THIS_REPOSITORY,
+                execution=THIS_REPOSITORY_EXECUTION,
+                origin=PLANNING_FLOW_ORIGIN,
+            )
+        case Registry.LOCAL:
+            seeded_pair = seeded(
+                tmp_path / "registry", publication=LOCAL, execution=LOCAL_EXECUTION
+            )
+    return {"ONEVCS_HOME": str(seeded_pair.home), **seeded_pair.environment}
 
 
 @pytest.mark.reads_recipes
@@ -786,21 +881,22 @@ def test_the_plan_recipe_writes_the_node_shape_it_was_asked_for(
     one of them somewhere else would put half a planning flow in the shared canonical
     checkout this repository forbids authoring in — and the two are written by two
     launches now, which is exactly the seam a placement can be dropped at.
+
+    The registry each shape resolves `--repo` against is a scratch one seeded for it,
+    because the record depends on what the registry answers: a hosted identity's alias
+    becomes its origin in `repositories`, and a local identity's alias stays on the
+    reserved key. `tests/e2e/test_delegated_recipes_e2e.py` doubles `uv` and nothing
+    else, so `onevcs` here is the installed one asking a real registry.
     """
     checkout, trace = _checkout(tmp_path)
+    registry = _registry(tmp_path, shape.registry)
 
-    result = _run(checkout, trace, "plan", BRIEF, *shape.arguments)
+    result = _run(checkout, trace, "plan", BRIEF, *shape.arguments, env=registry)
 
     assert result.returncode == 0, result.stderr
     for generated in GENERATED_TASKS:
         task_record = (checkout / generated).read_text(encoding="utf-8")
-        repo_match = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
-        execution_match = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
-        placed = (
-            None
-            if repo_match is None
-            else (repo_match.group(1), execution_match.group(1) if execution_match else None)
-        )
+        placed = _placed(task_record)
         assert placed == shape.placement, (
             f"`just plan {' '.join(shape.arguments)}` wrote {generated} placed at {placed}, "
             f"so that dispatch would work somewhere other than {shape.placement}: "

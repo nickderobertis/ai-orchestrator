@@ -82,6 +82,12 @@ def _task(criteria: str = STATES_ITS_BAR) -> str:
     )
 
 
+#: The hosted repository every node here names, as its record's own `repositories`
+#: holds it: the record renderer turns the clone URL `_node` writes into this normalized
+#: origin, and the copy has to carry the field to the destination byte for byte.
+REPOSITORY = "github.com/nickderobertis/some-service"
+
+
 # Neither of these two is a domain object modelled as a dict: they are one JSON
 # **document** built to be serialized on the next line and handed to the store CLI as an
 # argument, which is a wire payload rather than a type this suite reasons in. The typed
@@ -97,7 +103,7 @@ def _node(node_id: str) -> dict[str, str]:
     return {
         "id": node_id,
         "persona": "engineer",
-        "repo": "https://github.com/nickderobertis/some-service",
+        "repo": f"https://{REPOSITORY}",
         "title": f"feat: add the {node_id}",
         "task": _task(),
     }
@@ -243,6 +249,14 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     # looking at the landed task would see.
     (landed,) = _stored_tasks(copied_id)
     assert plan_review.RECORD_KEY in landed["metadata"], landed["metadata"]
+
+    # So did the repository the task names, in the record's own top-level `repositories`
+    # rather than on the reserved `onepipeline.repo` key: that field is what the engine
+    # reads a node's `repo` from and what a store files the task's issue by, and a copy
+    # that dropped it would land every task of a plan in the destination's own
+    # repository — which is the shape every plan this host wrote used to arrive in.
+    assert landed["repositories"] == [REPOSITORY], landed
+    assert "onepipeline.repo" not in landed["metadata"], landed["metadata"]
 
     # So did the approval of the document this plan is read as, and for the same reason:
     # it is an ordinary entry of the record's own metadata map. That is what makes the

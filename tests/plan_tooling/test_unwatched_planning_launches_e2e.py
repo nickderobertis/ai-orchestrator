@@ -49,7 +49,7 @@ import pytest
 from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
-from scratch_identity import seeded
+from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.criteria_guard import APPENDIX
@@ -162,7 +162,12 @@ def _plan_project(native: str) -> str:
 
 def _flow(tmp_path: Path, oneharness_bin: str) -> Flow:
     """The environment one planning flow runs in, against stores and a registry of its own."""
-    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
+    identity = seeded(
+        tmp_path,
+        publication=PUBLICATION_ALIAS,
+        execution=EXECUTION_ALIAS,
+        origin=PLANNING_FLOW_ORIGIN,
+    )
     destination = tmp_path / "board"
     # Created rather than left to the first write: a `local-md` source canonicalizes its
     # root when it is built, so an absent one is refused as a broken source.
@@ -172,6 +177,7 @@ def _flow(tmp_path: Path, oneharness_bin: str) -> Flow:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEVCS_HOME"] = str(identity.home)
+    environment.update(identity.environment)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     # The real CLI the stand-in delegates every turn to: without it the stand-in cannot
     # answer at all, and a dispatch that fails outright settles the run this journey has

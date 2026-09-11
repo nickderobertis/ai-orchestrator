@@ -71,7 +71,7 @@ from nx_workspace import copy_working_tree
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import GIT_IDENTITY, Identity, seeded
+from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_copy, plan_review, plan_store
@@ -409,10 +409,10 @@ def _tracks_the_store(identity: Identity, configuration: Path) -> None:
     tracked.write_bytes(configuration.read_bytes())
     git("add", "onetaskgraph.yaml", cwd=identity.execution)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: configure the plan store", cwd=identity.execution)
-    git("push", "-q", "origin", "main", cwd=identity.execution)
+    git("push", "-q", "origin", "main", cwd=identity.execution, env=identity.environment)
     # The publication checkout is a clone of the same origin and must be clean at the base
     # before a dispatch, so it is brought along rather than left a commit behind.
-    git("pull", "-q", "--ff-only", cwd=identity.publication)
+    git("pull", "-q", "--ff-only", cwd=identity.publication, env=identity.environment)
 
 
 def _environment(
@@ -433,13 +433,19 @@ def _environment(
     a name the recipe was told, and what is under test there is the name it resolves when
     it is told none.
     """
-    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
+    identity = seeded(
+        tmp_path,
+        publication=PUBLICATION_ALIAS,
+        execution=EXECUTION_ALIAS,
+        origin=PLANNING_FLOW_ORIGIN,
+    )
     _tracks_the_store(identity, checkout / "onetaskgraph.yaml")
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEVCS_HOME"] = str(identity.home)
+    environment.update(identity.environment)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)

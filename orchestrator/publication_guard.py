@@ -19,6 +19,17 @@ what keeps the two agreeing is that **both read the destination repository's own
 rather than a copy of that repository's release-type policy — this module runs it, so
 there is nothing here to keep in step with the rule.
 
+A third shape is refused for what it does to the *record* rather than to the branch: a
+node naming a GitHub-hosted repository on the reserved ``onepipeline.repo`` key. The
+engine's contract puts a node's repository in the task record's own top-level
+``repositories`` list as one normalized origin, and keeps that key for an identity such a
+list cannot hold — a local checkout `onevcs` knows by its absolute path. A record naming
+a hosted identity by its alias instead reaches the plan store with ``repositories``
+empty, so the board files the task's issue in the orchestrator's own repository rather
+than the one the work changes, where nobody reading that repository finds it. Which of
+the two an identity is comes from `onevcs resolve`'s ``origin`` — a normalized origin or
+a path — and is asked of the same registry the dispatch will resolve it through.
+
 **What is refused is narrower than what is checked, deliberately.** A node whose
 destination this host cannot resolve, one whose repository declares no ``commit-msg``
 hook, and one whose workflow is a word this module does not know are each passed over
@@ -45,6 +56,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, NewType
 
 from orchestrator.plan_store import NodeId
+from orchestrator.project_store import hosted_origin
 
 #: The version-control CLI that owns the registry, the rules file, and every answer this
 #: module asks of them. Resolved on the path rather than named absolutely, exactly as
@@ -53,6 +65,13 @@ ONEVCS = "onevcs"
 
 #: The one `kind` a plan states, whose nodes carry no execution fields at all.
 HUMAN = "human"
+
+#: The metadata key the engine reserves for a repository `repositories` cannot hold. A
+#: record naming one both ways is the engine's own refusal; what this module refuses is
+#: the key carrying a value that list *could* hold. The name is held to the installed
+#: engine by `tests/plan_tooling/test_check_plan_recipe_e2e.py`, whose structural journey
+#: writes this key beside `repositories` and reads the loader's own refusal of the pair.
+RESERVED_REPO_KEY = "onepipeline.repo"
 
 #: A repository identity, which is what a policy belongs to: an alias is one of several
 #: spellings of it, and a checkout path is a directory that happens to hold one.
@@ -119,6 +138,26 @@ class PublicationError(ValueError):
     """A plan node this host's publication policy would refuse after the dispatch."""
 
 
+class Resolved(NamedTuple):
+    """One repository as `onevcs resolve` answers for it.
+
+    The three fields this module reads out of that verb's JSON, narrowed where they are
+    read. Held to the installed `onevcs` rather than to this declaration: the check-plan
+    journeys in `tests/plan_tooling/test_check_plan_recipe_e2e.py` and the reads-checkouts
+    tier in `tests/test_publication_guard.py` ask the real verb about real scratch
+    identities and assert on what comes back through these fields.
+    """
+
+    #: The repository identity, which is what a refusal names.
+    identity: RepoIdentity
+    #: The publication checkout, which is where the destination's own hook is read from.
+    checkout: Path
+    #: The origin the identity was registered from: a normalized `host/owner/name` for a
+    #: hosted repository, an absolute path for a local one. ``None`` when the answer
+    #: carried none, which nothing here reads as either.
+    origin: str | None
+
+
 class Destination(NamedTuple):
     """Where one node's work lands, as this host resolves it."""
 
@@ -129,6 +168,8 @@ class Destination(NamedTuple):
     #: The publication policy the rules file resolves for that identity, or ``None``
     #: when it answered something outside the published vocabulary.
     workflow: Workflow | None
+    #: The identity's origin, as :class:`Resolved` carries it.
+    origin: str | None
 
 
 class Node(NamedTuple):
@@ -140,6 +181,11 @@ class Node(NamedTuple):
     #: Whether it names any release target to consume. The targets themselves are only
     #: rendered into the refusal, so the mapping is kept as it was written.
     consumes: Mapping[str, Any]
+    #: What the record wrote on the reserved ``onepipeline.repo`` key, or ``None`` when
+    #: its repository came from ``repositories``. The loaded plan carries the store's
+    #: metadata map verbatim beside the resolved ``repo``, which is the only way to tell
+    #: the two spellings apart once the engine has read both to one field.
+    reserved: str | None
 
 
 def publishing_nodes(plan: object) -> Iterator[Node]:
@@ -168,11 +214,16 @@ def publishing_nodes(plan: object) -> Iterator[Node]:
                 node_id and title and repo
             ):
                 consumes = task.get("consumes")
+                metadata = task.get("metadata")
+                reserved = (
+                    metadata.get(RESERVED_REPO_KEY) if isinstance(metadata, Mapping) else None
+                )
                 yield Node(
                     NodeId(node_id),
                     title,
                     repo,
                     consumes if isinstance(consumes, Mapping) else {},
+                    reserved if isinstance(reserved, str) and reserved else None,
                 )
             case _:
                 continue
@@ -202,6 +253,66 @@ def _asked(arguments: list[str]) -> str | None:
     return asked.stdout if asked.returncode == 0 else None
 
 
+def resolve(repo: str) -> Resolved | None:
+    """What `onevcs resolve` answers for ``repo``, or ``None`` when it cannot answer.
+
+    ``resolve`` says which identity a node's ``repo`` names, which checkout a landing
+    fast-forwards, and which origin the identity was registered from, as JSON. The
+    origin is read leniently — absent is ``None`` rather than a refusal of the whole
+    answer — because the two refusals that need only the checkout are worth making on an
+    answer that carries nothing else.
+    """
+    resolved = _asked(["resolve", repo])
+    if resolved is None:
+        return None
+    try:
+        # llmlint: ignore[boundary_inputs_validated] `onevcs resolve`'s own JSON answer;
+        # every field taken out of it is narrowed on the lines below.
+        answer = json.loads(resolved)
+    except ValueError:
+        return None
+    match answer:
+        case {"identity": str(identity), "publication_checkout": str(checkout)} if (
+            identity and checkout
+        ):
+            pass
+        case _:
+            return None
+    origin = answer.get("origin")
+    return Resolved(
+        RepoIdentity(identity),
+        Path(checkout),
+        origin if isinstance(origin, str) and origin else None,
+    )
+
+
+def record_repository(repo: str) -> str:
+    """What a node's ``repo`` carries so its record names the repository as the contract keeps it.
+
+    The normalized origin whenever there is one to name — spelled that way already, or
+    resolved to one by `onevcs` from an alias, a clone URL, or a checkout path — because
+    that is the value the record's own ``repositories`` list holds and the engine reads
+    a node's repository from. Anything `onevcs` resolves to a path origin, and anything
+    it cannot resolve at all, is answered as written: the first is the one case the
+    reserved ``onepipeline.repo`` key exists for, and the second is not this host's to
+    rewrite. `scripts/plan-brief.sh` asks this of every ``--repo`` a planning flow is
+    given, which is how that flow's own records come to carry the field.
+    """
+    hosted = hosted_origin(repo)
+    if hosted is not None:
+        return hosted
+    resolved = resolve(repo)
+    # llmlint: ignore-block[boundary_inputs_validated] The value passed through is the
+    # operator's own `--repo` as typed, and the launch is what rules on it: a repository
+    # the registry cannot resolve is refused by name when the plan loads, before anything
+    # is dispatched. Rewriting or refusing it here would hide what was typed from the
+    # refusal that names it.
+    if resolved is None or resolved.origin is None:
+        return repo
+    return hosted_origin(resolved.origin) or repo
+    # llmlint: ignore-end[boundary_inputs_validated]
+
+
 def destination(repo: str) -> Destination | None:
     """Where ``repo``'s work lands, or ``None`` when this host cannot resolve it.
 
@@ -213,28 +324,16 @@ def destination(repo: str) -> Destination | None:
     routing, and reading one for the other here would answer `local-direct` for every
     identity on this host as `remote`.
     """
-    resolved = _asked(["resolve", repo])
+    resolved = resolve(repo)
     if resolved is None:
         return None
-    try:
-        # llmlint: ignore[boundary_inputs_validated] `onevcs resolve`'s own JSON answer;
-        # both fields taken out of it are narrowed on the next two lines.
-        answer = json.loads(resolved)
-    except ValueError:
-        return None
-    match answer:
-        case {"identity": str(identity), "publication_checkout": str(checkout)} if (
-            identity and checkout
-        ):
-            pass
-        case _:
-            return None
     reported = _asked(["rules", "check", repo])
     stated = None if reported is None else _PUBLICATION.search(reported)
     return Destination(
-        RepoIdentity(identity),
-        Path(checkout),
+        resolved.identity,
+        resolved.checkout,
         None if stated is None else Workflow.known(stated["workflow"]),
+        resolved.origin,
     )
 
 
@@ -372,10 +471,34 @@ def _consumes_refusal(node: Node, where: Destination) -> Refusal | None:
     )
 
 
+def _reserved_key_refusal(node: Node, where: Destination) -> Refusal | None:
+    """Whether this node names a hosted repository on the key reserved for a local one."""
+    if node.reserved is None or where.origin is None:
+        return None
+    origin = hosted_origin(where.origin)
+    if origin is None:
+        return None
+    return Refusal(
+        node=node.id,
+        field="repo",
+        reason=(
+            f"this node names {node.reserved!r} on the reserved `{RESERVED_REPO_KEY}` key, "
+            f"and `onevcs` resolves that identity to the normalized origin {origin!r} — a "
+            f"value the task record's own top-level `repositories` list holds, and the one "
+            f"the engine reads a node's repository from. A record that names it by alias "
+            f"instead reaches the plan store with `repositories` empty, which files the "
+            f"task's issue in the orchestrator's own repository rather than the one this "
+            f"work changes. Write `repositories: [{json.dumps(origin)}]` and drop "
+            f"`{RESERVED_REPO_KEY}`, which is reserved for an identity a normalized origin "
+            f"cannot hold: a local checkout `onevcs` knows by its absolute path."
+        ),
+    )
+
+
 def refusals(plan: object) -> list[Refusal]:
     """Everything this host's publication policy would refuse about ``plan``.
 
-    Everything, rather than the first thing about each node: the two are independent
+    Everything, rather than the first thing about each node: the three are independent
     fields with independent corrections, and a node told only about its title would be
     retitled, re-checked, and refused again for what it consumes. A plan's author reads
     one report and makes one pass.
@@ -394,7 +517,11 @@ def refusals(plan: object) -> list[Refusal]:
             continue
         found.extend(
             refused
-            for refused in (_consumes_refusal(node, where), _title_refusal(node, where))
+            for refused in (
+                _reserved_key_refusal(node, where),
+                _consumes_refusal(node, where),
+                _title_refusal(node, where),
+            )
             if refused is not None
         )
     return found

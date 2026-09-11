@@ -63,7 +63,7 @@ from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import PersistentManager, just, ruling
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import GIT_IDENTITY, seeded
+from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -956,7 +956,7 @@ def _attest(
     raise AssertionError(f"run {run}'s '{reference}' never became attestable:\n{refusal}")
 
 
-def _carrying_the_plan_store_configuration(execution: Path) -> None:
+def _carrying_the_plan_store_configuration(identity: Identity) -> None:
     """Give the checkout a planner's worktree is cut from this repository's store document.
 
     A real planning launch executes in a clone of this repository, so the worktree its
@@ -970,10 +970,11 @@ def _carrying_the_plan_store_configuration(execution: Path) -> None:
     Committed and pushed, because the session that cuts the worktree clones this checkout
     and takes its base from the origin they share.
     """
+    execution = identity.execution
     (execution / "onetaskgraph.yaml").write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
     git("add", "-A", cwd=execution)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: carry the plan store configuration", cwd=execution)
-    git("push", "-q", "origin", "main", cwd=execution)
+    git("push", "-q", "origin", "main", cwd=execution, env=identity.environment)
 
 
 def _planned(
@@ -1008,9 +1009,15 @@ def _planned(
     # this host's, whose registry a session reclaims run roots under. Seeded under those
     # two alias names rather than overridden per launch: what these journeys drive is
     # the recipe as an operator types it, and a `--repo` here would be proving a flag.
-    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
-    _carrying_the_plan_store_configuration(identity.execution)
+    identity = seeded(
+        tmp_path,
+        publication=PUBLICATION_ALIAS,
+        execution=EXECUTION_ALIAS,
+        origin=PLANNING_FLOW_ORIGIN,
+    )
+    _carrying_the_plan_store_configuration(identity)
     environment["ONEVCS_HOME"] = str(identity.home)
+    environment.update(identity.environment)
     if root is not None:
         environment[PLAN_ROOT.name] = str(root)
     # Held rather than only written, because the wait below is on these very paths: the

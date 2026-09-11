@@ -73,12 +73,34 @@ PLAN_DEFAULT_RUNS_ROOT="runs"
 PLAN_RUN_ID_ENV="ONEPIPELINE_RUN_ID"
 
 #: The publication repository a flow's nodes carry, and the registered safety clone their
-#: worktrees are cut from. Aliases rather than paths, because `onevcs` resolves an alias
-#: through its own registry and the two hosts this repository dispatches from lay these
-#: checkouts out differently — `config/onevcs.checkouts` is where each one's path is
-#: declared, and where a host that has neither is already accounted for.
-PLAN_DEFAULT_PUBLICATION_REPO="ai-orchestrator"
+#: worktrees are cut from. Neither is a path, because `onevcs` resolves both through its
+#: own registry and the two hosts this repository dispatches from lay these checkouts out
+#: differently — `config/onevcs.checkouts` is where each one's path is declared, and where
+#: a host that has neither is already accounted for.
+#:
+#: The repository is its **normalized origin** and the execution checkout an **alias**,
+#: and the difference is the record each becomes. A task record names its repository in
+#: its own top-level `repositories` list, as one `host/owner/name`, which is where the
+#: engine reads a node's `repo` from and what the plan store files the task's issue by;
+#: the reserved `onepipeline.repo` key is kept for an identity that list cannot hold — a
+#: local checkout `onevcs` knows by its absolute path. `execution_checkout` has no such
+#: field and stays the alias `onevcs session open --execution-checkout` takes.
+PLAN_DEFAULT_PUBLICATION_REPO="github.com/nickderobertis/ai-orchestrator"
 PLAN_DEFAULT_EXECUTION_CHECKOUT="ai-orchestrator-isolated"
+
+#: What turns whatever `--repo` was given into the value the node's record carries:
+#: the identity's normalized origin wherever `onevcs` resolves it to one, and the value
+#: as written otherwise. `orchestrator.publication_guard.record_repository` is the one
+#: reader of that rule, shared with `just check-plan`, which refuses a hosted identity
+#: written on the reserved key — so a flow that resolved it differently would write a
+#: record its own pre-launch check refuses.
+PLAN_REPO_RECORD_PROGRAM='
+import sys
+
+from orchestrator.publication_guard import record_repository
+
+sys.stdout.write(record_repository(sys.argv[1]))
+'
 
 #: What a `--direct` dispatch is told, appended to the brief as part of its own task.
 #: Stated as the placement plus the one clause it is exempt from, in that order: a
@@ -222,6 +244,26 @@ plan_brief_project() {
     printf '%s' "$project"
 }
 
+# Echo the value a flow's node carries as its `repo`, given the caller's ``$3`` as typed.
+#
+# `--repo` takes an alias or an origin, and the record has to carry the origin wherever
+# there is one: `onevcs resolve` is what says which an alias names, and the interpreter at
+# ``$2`` is what asks it. A value `onevcs` cannot resolve passes through as written — it
+# is the launch that then refuses it, naming the registry — and so does one whose origin
+# is a path, which is the one identity the reserved `onepipeline.repo` key exists for.
+# $1 names the calling launcher so its diagnostics stay attributable.
+plan_repo_record_value() {
+    local caller=${1:?plan_repo_record_value: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
+    local python=${2-} repo=${3-} recorded
+    # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned interpreter cannot import this checkout's own package, which is a broken toolchain rather than a launch shape; `just bootstrap` is the repair and every plan journey runs on a working one.
+    # llmlint: ignore[tool_output_is_signal] The substitution captures stdout alone, so the interpreter's own diagnostic — a missing binary, an import error, a traceback — has already reached stderr whole by the time this line names the step that failed and its repair.
+    if ! recorded=$("$python" -c "$PLAN_REPO_RECORD_PROGRAM" "$repo"); then
+        echo "$caller: could not resolve the repository '$repo' this plan's nodes publish to; restore the pinned toolchain with 'just bootstrap', then retry" >&2
+        return 2
+    fi
+    printf '%s' "$recorded"
+}
+
 # Echo the run name a flow over ``$3`` runs under, given the caller's ``$2`` or nothing.
 # Derived from the brief's filename rather than from its prose: a manager renaming the
 # brief is deliberate, and a heading is not.
@@ -346,7 +388,7 @@ plan_options_parse() {
                 ;;
             --repo)
                 if [ $# -lt 2 ] || [ -z "$2" ]; then
-                    echo "$caller: --repo was given no value; name the checkout this plan's branch publishes from, or omit it for '$PLAN_DEFAULT_PUBLICATION_REPO'" >&2
+                    echo "$caller: --repo was given no value; name the repository this plan's branch publishes to, as a registered alias or its origin, or omit it for '$PLAN_DEFAULT_PUBLICATION_REPO'" >&2
                     return 2
                 fi
                 PLAN_OPT_REPO="$2"
@@ -355,7 +397,7 @@ plan_options_parse() {
             --repo=*)
                 PLAN_OPT_REPO="${1#--repo=}"
                 if [ -z "$PLAN_OPT_REPO" ]; then
-                    echo "$caller: --repo was given no value; name the checkout this plan's branch publishes from, or omit it for '$PLAN_DEFAULT_PUBLICATION_REPO'" >&2
+                    echo "$caller: --repo was given no value; name the repository this plan's branch publishes to, as a registered alias or its origin, or omit it for '$PLAN_DEFAULT_PUBLICATION_REPO'" >&2
                     return 2
                 fi
                 shift

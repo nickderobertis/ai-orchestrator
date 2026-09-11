@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch a planner on a manager-written brief and finish the plan it writes: `just plan
-# <BRIEF.md> [--name NAME] [--max-turns N] [--to SOURCE] [--repo ALIAS]
+# <BRIEF.md> [--name NAME] [--max-turns N] [--to SOURCE] [--repo ALIAS|ORIGIN]
 # [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]`.
 #
 # The manager's job is writing the brief and reviewing what comes back, not
@@ -247,7 +247,7 @@ fail() {
 }
 
 usage() {
-    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--to SOURCE] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
+    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--to SOURCE] [--repo ALIAS|ORIGIN] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -285,6 +285,13 @@ fi
 shift
 
 plan_options_parse plan "$@" || exit 2
+# The record carries the repository's normalized origin wherever `onevcs` resolves one,
+# so `--repo` may be typed as the alias `just repos` lists and the node still names its
+# repository in the record's own `repositories`. Resolved once here and handed on to the
+# tail already resolved, which asks the same question and gets the same answer.
+if [ -n "$PLAN_OPT_REPO" ]; then
+    PLAN_OPT_REPO=$(plan_repo_record_value plan "$python" "$PLAN_OPT_REPO") || exit 2
+fi
 if [ -n "$PLAN_OPT_MAX_TURNS" ]; then
     [[ "$PLAN_OPT_MAX_TURNS" =~ ^[1-9][0-9]*$ ]] || fail "--max-turns is '$PLAN_OPT_MAX_TURNS', which is not a positive whole number of turns" \
         "give it a count like 40, or omit it for the persona's own budget"

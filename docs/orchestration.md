@@ -1993,6 +1993,20 @@ the final assessment and stop rather than wait.
 | Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree and publish through the repository's merge-path gate and registered policy. Dispatch refuses identities without an executable pre-push hook or required PR checks. |
 | Human | `kind: human`, `task`; no persona or execution fields | Record an action only an external person or outside system can perform. Planner review, acceptance, validation, and integration happen through live channel edits, not a human node. |
 
+**`repo` is the loaded node's field; the stored task record spells it as
+`repositories`.** A GitHub-hosted target repository is named once, in the record's own
+top-level `repositories` list, as exactly one normalized origin
+(`repositories: ["github.com/nickderobertis/oneharness"]`), and the engine reads the
+node's `repo` from that list's first entry — that field is also what the plan store
+files the task's issue by, so a record with it empty lands its issue in the store's own
+repository. The reserved `onepipeline.repo` metadata key is written only for an identity a
+normalized origin cannot hold — a local checkout `onevcs` knows by its absolute path —
+and never beside a non-empty `repositories`; the engine refuses a record naming both, and
+`just check-plan` refuses a hosted identity written on the key, naming the origin to
+write instead. `onepipeline.execution_checkout` stays a registered alias. The rule is
+onepipeline's, stated in its `docs/contract.md`; `personas/planner.yaml` carries it to
+the planner with one example of each shape.
+
 An agent or lifecycle node may also carry `context`: one planner note,
 rendered after the task prose as a `## Planner context` section stating that it
 reports observed state and adds no acceptance criteria. A workstream renders it

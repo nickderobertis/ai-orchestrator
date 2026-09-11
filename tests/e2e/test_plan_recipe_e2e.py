@@ -24,6 +24,21 @@ the only proof that a generated plan is launchable is a launch. These journeys m
 one, through the real recipe, the real `scripts/plan.sh`, the real
 `scripts/onepipeline.sh`, the real driver, and the real `graphs/` agent graphs.
 `tests/e2e/fake_backend.py` stands in for the paid model alone.
+
+llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] The
+finding these answer is about which Nx project owns this file, and that is a property of
+the whole module rather than of any one journey in it. This module sits in the root
+`orchestrator` project's tiers — `orchestrator:test` for most of it, `orchestrator:test-docs`
+for the two `reads_docs` journeys — and that placement predates every change made here.
+`AGENTS.md` records which suites were split out of that project and why, `plan-tooling`
+among them; a change to a journey here moves no test between tiers, and re-homing this
+module is test selection over the `tests/e2e` tree rather than anything a journey does.
+The `xdist_group` markers are what they are everywhere in this suite — a worker under
+`--dist loadgroup`, so a module-scoped fixture that spends a real launch is not run
+twice — and never a tier.
+
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The same finding under a
+third name, answered the same way: the edge is the module's placement, not any journey's.
 """
 
 from __future__ import annotations
@@ -45,7 +60,8 @@ from fake_backend import (
     PROMPT_LOG_ENV,
 )
 from project_fixtures import read_project_plan
-from scratch_identity import seeded
+from published_tools import ONETASKGRAPH_BIN
+from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from shared_dispatch_bar import shared_completion_bar
 from waits import timeout as e2e_timeout
 
@@ -88,6 +104,37 @@ def _project_record(project: str) -> Path:
     return PLAN_DIRECTORY / "projects" / f"{project}.md"
 
 
+def _stored_task(project: str, node_id: str) -> StoredTask:
+    """The one task of ``project`` called ``node_id``, as the store itself reports it.
+
+    Through the plan-store CLI rather than by reading the file, because the settlement
+    write-back rewrites a record in the store's own spelling once the run has settled —
+    so what a byte of the file says is the store's business, and what the store *reports*
+    is the contract. `onetaskgraph` owns the answer; the cast says so.
+    """
+    listed = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "list",
+            "--source",
+            "authoring",
+            "--project",
+            project,
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert listed.returncode == 0, f"the store could not list {project}:\n{listed.stderr}"
+    items = [record["item"] for record in json.loads(listed.stdout)["items"]]
+    (task,) = [item for item in items if item["metadata"].get("onepipeline.id") == node_id]
+    return cast(StoredTask, task)
+
+
 def _remove_project(project: str) -> None:
     _project_record(project).unlink(missing_ok=True)
     tasks = PLAN_DIRECTORY / "tasks" / project
@@ -99,10 +146,11 @@ def _remove_project(project: str) -> None:
 
 #: The two checkouts the generated node names, as `scripts/plan.sh` defaults them: this
 #: repository's publication checkout and the registered safety clone a planner's
-#: worktree is cut from. Every journey here seeds its own pair under these names, so the
-#: recipe's own defaults resolve — against a scratch registry, never this host's.
-#: Pointing one of these launches at the real registry would have it clone, cut a
-#: worktree, and reclaim run roots in the directories live dispatches are working in.
+#: worktree is cut from. Every journey here seeds its own pair under these names, and
+#: under the hosted origin the recipe's default names — `PLANNING_FLOW_ORIGIN` — so the
+#: recipe's own defaults resolve against a scratch registry, never this host's. Pointing
+#: one of these launches at the real registry would have it clone, cut a worktree, and
+#: reclaim run roots in the directories live dispatches are working in.
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
@@ -199,6 +247,11 @@ class Planned(NamedTuple):
     listed: str
     #: The project record the recipe wrote, read before the fixture removes it again.
     project_record: str
+    #: The planner node's task as the store reports it — its `repositories` list and its
+    #: metadata map — read the same way. It is where the repository the node names is a
+    #: *record*, which the loaded plan no longer shows: the engine reads both spellings
+    #: back to one `repo`.
+    stored_task: StoredTask
 
 
 class PlanNode(TypedDict, total=False):
@@ -221,6 +274,13 @@ class PlanNode(TypedDict, total=False):
     repo: str
     execution_checkout: str
     done_when: str
+
+
+class StoredTask(TypedDict):
+    """One task as `onetaskgraph task list` reports it, in the two fields this reads."""
+
+    repositories: list[str]
+    metadata: dict[str, object]
 
 
 class PlanDocument(TypedDict):
@@ -250,12 +310,18 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     proving a flag instead. Seeded for every launch, refusals included, because the one
     thing none of them may do is reach this host's own registry.
     """
-    identity = seeded(tmp_path, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS)
+    identity = seeded(
+        tmp_path,
+        publication=PUBLICATION_ALIAS,
+        execution=EXECUTION_ALIAS,
+        origin=PLANNING_FLOW_ORIGIN,
+    )
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEVCS_HOME"] = str(identity.home)
+    environment.update(identity.environment)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
@@ -354,6 +420,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
             run_root=Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN,
             listed=listing.stdout + listing.stderr,
             project_record=generated.read_text(encoding="utf-8"),
+            stored_task=_stored_task(RUN, PLANNER_NODE),
         )
     finally:
         _just("stop", RUN, environment=environment, seconds=60)
@@ -431,6 +498,12 @@ def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
     publication at its last step and destroyed the manager's own plan files. `done_when`
     is still asserted absent for its own reason — the loader refuses a node carrying
     one, so a generated plan with it could never be launched at all.
+
+    The repository is the **normalized origin** of this repository, read back from the
+    loaded plan's `repo` — which the engine takes from the record's own `repositories` —
+    and the record is asserted beside it: the field is there, and the reserved
+    `onepipeline.repo` key is not. An alias on that key is what left every task issue of
+    a plan filed in this repository rather than the one the work changed.
     """
     plan = planned.plan
     assert plan["schema_version"] == 3, plan
@@ -448,8 +521,8 @@ def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
         f"compiled into the tool and this repository's file is never read"
     )
     assert node["max_turns"] == TURN_BUDGET, node
-    assert node.get("repo") == PUBLICATION_ALIAS, (
-        f"the planner node names {node.get('repo')!r} as its publication checkout; with "
+    assert node.get("repo") == PLANNING_FLOW_ORIGIN, (
+        f"the planner node names {node.get('repo')!r} as its publication repository; with "
         f"none it is a direct node working in the shared canonical checkout: {node}"
     )
     assert node.get("execution_checkout") == EXECUTION_ALIAS, (
@@ -457,6 +530,13 @@ def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
         f"checkout, so its worktree is not cut from the safety clone: {node}"
     )
     assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
+    assert planned.stored_task["repositories"] == [PLANNING_FLOW_ORIGIN], (
+        f"the task record does not name the repository in its own `repositories`, so the "
+        f"plan store would file its issue in the source's repository: {planned.stored_task}"
+    )
+    assert "onepipeline.repo" not in planned.stored_task["metadata"], (
+        f"the task record still names its repository on the reserved key: {planned.stored_task}"
+    )
 
 
 @pytest.mark.xdist_group("plan-recipe")
@@ -579,15 +659,6 @@ def test_the_launch_prints_the_command_that_answers_this_planners_questions(
     )
 
 
-# The finding these answer is about which Nx project owns this file, and that is a
-# property of the `tests/e2e` tree rather than of the two journeys below: `AGENTS.md`
-# records which suites were split out of the broad tier and why, this change moves no
-# test between tiers, and re-homing that tree is test selection rather than anything
-# here. The `xdist_group` on the second is what it is everywhere in this suite — a
-# worker under `--dist loadgroup`, so a module-scoped fixture that spends a real
-# launch is not run twice — and never a tier.
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
 @pytest.mark.xdist_group("plan-recipe")
 def test_the_project_a_planning_launch_writes_says_it_is_a_planning_project(
     planned: Planned,
@@ -674,10 +745,6 @@ def test_a_planning_run_records_itself_with_no_observer_watching_it(planned: Pla
         f"`just runs --mine` does not name run {RUN}, so it has no ownership row the "
         f"launching session can act on:\n{planned.listed}"
     )
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 class Observer(NamedTuple):

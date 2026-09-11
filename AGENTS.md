@@ -4490,13 +4490,23 @@ project work with a single-node plan rather than doing it directly; only the
 slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
 
+<!-- llmlint: ignore[instruction_layer_localized] This repository *is* the project this
+rule names: how a change to it is dispatched, and which registered checkout it publishes
+through, is a repo-wide constraint on every agent working here, which is what the root
+document holds. The nested `orchestrator/AGENTS.md` and `tests/AGENTS.md` carry the
+rules of their own subtrees and neither dispatches anything. -->
 **Self-dispatch rule (this repo).** Never author working-tree changes in the shared
 canonical checkout: concurrent orchestrators use it and direct edits race them.
 Every change — including plans, personas, docs, and `AGENTS.md` — must be dispatched
 into an isolated worktree cut from the registered `ai-orchestrator-isolated`
-safety clone, with the canonical checkout retained as the node's `repo` publication
-repository and only fast-forwarded after integration. Set `execution_checkout` on
-each lifecycle node of the plan rather than passing a top-level flag.
+safety clone, with the canonical checkout retained as the node's publication
+repository and only fast-forwarded after integration. A node names this repository
+once, in its task record's own `repositories` as the normalized origin
+`github.com/nickderobertis/ai-orchestrator` — never by alias on `onepipeline.repo` —
+and `onevcs` resolves that origin to the canonical checkout because its alias sorts
+first among the checkouts registered here, which `tests/test_registry_resolution.py`
+holds. Set `execution_checkout` on each lifecycle node of the plan rather than passing
+a top-level flag; it stays the registered alias.
 This does not restrict the narrow direct git operations above on finished
 dispatched work. Confirm `git config core.bare` is `false` before trusting a
 self-dispatch result.

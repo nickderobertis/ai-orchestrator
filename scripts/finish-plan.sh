@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Finish a plan a planner has authored: `just finish-plan <BRIEF.md> [--to SOURCE]
-# [--name NAME] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc]
+# [--name NAME] [--repo ALIAS|ORIGIN] [--execution-checkout ALIAS] [--direct] [--no-design-doc]
 # [<onepipeline start flags>]`.
 #
 # This is the tail of the planning flow and its one implementation. `just plan` runs the
@@ -280,7 +280,7 @@ recipe() {
 }
 
 usage() {
-    echo "usage: just finish-plan <brief.md> [--to SOURCE] [--name NAME] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
+    echo "usage: just finish-plan <brief.md> [--to SOURCE] [--name NAME] [--repo ALIAS|ORIGIN] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -317,6 +317,12 @@ fi
 shift
 
 plan_options_parse finish-plan "$@" || exit "$UNRUNNABLE"
+# The design-document node names its repository the way the planner node did: by its
+# normalized origin wherever `onevcs` resolves one, for the reason `scripts/plan-brief.sh`
+# gives beside the default.
+if [ -n "$PLAN_OPT_REPO" ]; then
+    PLAN_OPT_REPO=$(plan_repo_record_value finish-plan "$python" "$PLAN_OPT_REPO") || exit "$UNRUNNABLE"
+fi
 # The one option of the shared grammar this entry point does not own. Refused by name
 # rather than forwarded to a verb that has never heard of it: the design-document node
 # takes its persona's own budget, because a document is one read and one write rather

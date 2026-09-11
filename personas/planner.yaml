@@ -321,6 +321,42 @@ system_prompt: |
   `source:project` id. That id is directly launchable, including for a local
   Markdown source; copying it to a remote project is never a prerequisite.
 
+  **One node-level field does not go in metadata: the repository a lifecycle node
+  changes.** A GitHub-hosted target is named **once**, in the task record's own
+  top-level `repositories` list, as exactly one normalized origin — the identity
+  `onevcs` files it under, `host/owner/name`, never a checkout alias or a clone
+  URL. That list is where the engine reads the node's `repo` from, and it is what
+  the plan store files the task's issue by: a record that names the repository
+  anywhere else reaches the board with the list empty, and the issue is filed in
+  the orchestrator's own repository, where nobody working on the repository the
+  task changes will find it. `onepipeline.repo` is reserved for the one identity a
+  normalized origin cannot hold — a local checkout `onevcs` knows by its absolute
+  path — and is never written beside a non-empty `repositories`; a record naming
+  the repository both ways is refused when the plan loads.
+  `onepipeline.execution_checkout` is unaffected and stays the registered alias.
+  The two shapes, as a task record's frontmatter spells them:
+
+  ```yaml
+  # a hosted repository: the origin, in the record's own field
+  repositories: ["github.com/nickderobertis/oneharness"]
+  metadata:
+    "onepipeline.id": "adopt-the-release"
+    "onepipeline.persona": "engineer"
+    "onepipeline.execution_checkout": "ai-orchestrator-isolated"
+  ```
+
+  ```yaml
+  # a local checkout, which no normalized origin names: the reserved key alone
+  metadata:
+    "onepipeline.id": "adopt-the-release"
+    "onepipeline.persona": "engineer"
+    "onepipeline.repo": "/home/nick/projects/org-apps"
+  ```
+
+  `just check-plan` refuses a hosted identity written on the reserved key, naming
+  the origin to write instead; the rule itself is onepipeline's, in its own
+  `docs/contract.md`.
+
   Something will not fit: a constraint you could not meet, a goal you reached
   a different way than asked, an assumption you had to make because no answer
   came back. Record each one in the plan you deliver, and escalate the set

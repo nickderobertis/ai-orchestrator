@@ -44,7 +44,7 @@ from criteria_examples import (
     STATES_THE_PROPERTY_INSTEAD,
 )
 from project_fixtures import project_from_plan, reviewed
-from scratch_identity import registered
+from scratch_identity import registered, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
@@ -2088,6 +2088,122 @@ def test_a_plan_this_host_would_publish_is_not_refused_for_where_it_lands(
 
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "3 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+#: A hosted scratch identity, as `onevcs` files it: the value the record's own
+#: `repositories` holds for it, and the alias `just repos` would list it under.
+HOSTED_SERVICE = "github.com/scratchowner/service"
+HOSTED_ALIAS = "service"
+
+
+def _hosted_registry(root: Path) -> dict[str, str]:
+    """A scratch registry holding one hosted identity, as the environment a check runs in.
+
+    Seeded under a hosted origin rather than a path, because the question these journeys
+    ask is which of the two `onevcs resolve` answers for an alias — and every identity
+    `registered` seeds resolves to a path, which is the case the reserved key exists for.
+    """
+    identity = seeded(
+        root, publication=HOSTED_ALIAS, execution=f"{HOSTED_ALIAS}-isolated", origin=HOSTED_SERVICE
+    )
+    return {**_in_registry(identity.home), **identity.environment}
+
+
+def test_a_hosted_repository_named_on_the_reserved_key_is_refused_naming_the_origin(
+    tmp_path: Path,
+) -> None:
+    """The record shape that filed every task issue of a plan in this repository.
+
+    A node's repository belongs in the task record's own `repositories`, as one
+    normalized origin; `onepipeline.repo` is reserved for an identity that list cannot
+    hold. Every plan this host's planners wrote put a checkout alias on the key, so every
+    record reached the board with `repositories` empty and every issue landed in the
+    orchestrator's own repository. The refusal names the node, what it wrote, and the
+    origin to write instead — and it is this repository's registered check that makes it,
+    not the engine, because which of the two an alias names is a fact of this host's
+    registry rather than of the plan's structure.
+    """
+    plan = _publishing_plan(
+        tmp_path, {"id": "landing", "title": "feat: land the reader", "repo": HOSTED_ALIAS}
+    )
+
+    refused = _check_project(project_from_plan(plan), environment=_hosted_registry(tmp_path))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: scripts/plan-check.sh: landing: repo:" in refused.stderr, refused.stderr
+    assert f"'{HOSTED_ALIAS}'" in refused.stderr, refused.stderr
+    assert f'repositories: ["{HOSTED_SERVICE}"]' in refused.stderr, refused.stderr
+    assert "onepipeline.repo" in refused.stderr, refused.stderr
+
+
+def test_the_same_node_rewritten_with_the_origin_in_repositories_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """The correction the refusal above asks for, driven to acceptance.
+
+    The record renderer puts a `host/owner/name` `repo` into the record's `repositories`
+    and writes no `onepipeline.repo`, and the engine's own loader reads the node's `repo`
+    back out of that list — which is asserted from the plan document the verb hands this
+    repository's check, so what is read is what the loader loaded rather than what the
+    record says. A record naming the repository both ways is the engine's own refusal,
+    which the structural journey above holds.
+    """
+    plan = _publishing_plan(
+        tmp_path, {"id": "landing", "title": "feat: land the reader", "repo": HOSTED_SERVICE}
+    )
+    project = project_from_plan(plan)
+    registry = _hosted_registry(tmp_path)
+
+    accepted = _check_project(project, environment=registry)
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+    (loaded,) = json.loads(_loaded_plan(project, tmp_path))["tasks"]
+    assert loaded["repo"] == HOSTED_SERVICE, loaded
+    assert "onepipeline.repo" not in loaded["metadata"], loaded
+
+
+def test_a_local_identity_on_the_reserved_key_is_the_case_the_key_exists_for(
+    tmp_path: Path,
+) -> None:
+    """An identity whose origin is a path is not a value `repositories` can hold.
+
+    Every scratch identity this repository's own journeys register resolves this way, so
+    a check that refused it would refuse every one of them — and a real local checkout
+    `onevcs` knows by its absolute path has nowhere else to be named.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"])
+    plan = _publishing_plan(
+        tmp_path, {"id": "landing", "title": "feat: land the reader", "repo": "service"}
+    )
+
+    accepted = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+    assert checkout.is_dir()
+
+
+def test_a_value_this_host_cannot_resolve_earns_no_refusal_about_the_key(
+    tmp_path: Path,
+) -> None:
+    """Nothing about an alias this registry does not hold is knowable, so nothing is refused.
+
+    Written to miss rather than to over-refuse, for the reason the title check passes
+    over a destination this host cannot see: a plan is checked against repositories this
+    checkout may never have registered, and refusing one for that would refuse plans that
+    launch correctly today.
+    """
+    plan = _publishing_plan(
+        tmp_path, {"id": "landing", "title": "feat: land the reader", "repo": "nobody__service"}
+    )
+
+    accepted = _check_project(project_from_plan(plan), environment=_hosted_registry(tmp_path))
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
 def test_both_paths_refuse_a_node_this_host_would_not_publish(tmp_path: Path) -> None:
