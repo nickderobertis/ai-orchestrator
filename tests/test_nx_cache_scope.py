@@ -63,6 +63,8 @@ from nx_inputs import (
     RECIPE_WORKSPACE,
     SELECTED_TARGETS,
     UNCONDITIONAL_TARGETS,
+    UNWATCHED_ROOT,
+    UNWATCHED_SCOPED,
     covers,
     named_input_globs,
     repository_relative_globs,
@@ -829,20 +831,22 @@ def _collected(selection: list[str]) -> set[str]:
 
 
 #: Every tier that runs part of this suite, as the file and target that declares it.
-#: Nine, across five projects, and every one of them is a target of the project whose
+#: Ten, across six projects, and every one of them is a target of the project whose
 #: directory holds the tests it collects: the `plan-tooling` project owns the host-tool
 #: journeys over the plan surface in two targets — one keyed on what they read, one on
 #: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
 #: owns the host-tool journeys over the ask seam in one, the `dag-ui` project owns the
 #: journeys over this repository's composition of the Observatory in one, the
 #: `plan-store-install` project owns the journeys that race real installs for a real lock
-#: in one, and the orchestrator project owns the rest in four.
+#: in one, the `unwatched` project owns the journeys over the verb a `Stop` hook reads
+#: and the hook itself in one, and the orchestrator project owns the rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
     (f"{ASK_SEAM_ROOT}/project.json", ASK_SEAM_SCOPED),
     (f"{DAG_UI_ROOT}/project.json", DAG_UI_SCOPED),
     (f"{PLAN_STORE_INSTALL_ROOT}/project.json", PLAN_STORE_INSTALL_SCOPED),
+    (f"{UNWATCHED_ROOT}/project.json", UNWATCHED_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),

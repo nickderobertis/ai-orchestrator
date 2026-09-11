@@ -27,48 +27,45 @@ Conventions for this repo's tests.
   documentation edit replay a stale verdict. The autouse guard in `conftest.py`
   fails such a test; mark it `@pytest.mark.reads_docs` and it runs in the
   whole-workspace target of the project that owns it.
-<!-- llmlint: ignore-block[instruction_layer_localized] One rule true of all three
-projects, stated once. A nested file per project would state it three times and give it
-three places to drift apart; a project whose rules are its own gets its own file, and
+<!-- llmlint: ignore-block[instruction_layer_localized] One rule true of all four
+projects, stated once. A nested file per project would state it four times and give it
+four places to drift apart; a project whose rules are its own gets its own file, and
 `tests/dag_ui/AGENTS.md` is that. -->
-- **A host-tool journey belongs to its own project.** There are three, each selected by
-  directory rather than by marker: `tests/plan_tooling/` is `plan-tooling`, over the
-  plan surface, and `tests/ask_seam/` is `ask-seam`, over the seam a dispatched agent
-  asks its manager through. `ask-seam` has one target rather than two, because nothing
-  there reads this repository's prose; `askSeamWorkspace` is its key, and a prose read
-  there fails in `conftest.py` instead of being routed to a target that does not exist.
-  `tests/plan_store_install/` is `plan-store-install`, over the provisioning that
-  installs the pinned plan-store CLI into a checkout's own `.venv/bin`, with only the
-  archive fetch doubled; its key `planStoreInstallWorkspace` is the narrowest of the
-  three, naming `config/onetaskgraph.version` and the two scripts that read it, because
-  what it proves is what a moved pin installs rather than anything a plan does.
-  The rest of this note is written about `plan-tooling` and is true of all three:
-  `tests/plan_tooling/` is the Nx project `plan-tooling`, selected by directory
-  rather than by marker: a journey there spawns the installed `onepipeline`, the
-  `just` recipes, the registered check script and a real `oneharness run` — up to a
-  whole launch driven to settlement — which is
-  a different cost from the Python suite and is answered by a different set of
-  files. `planToolingWorkspace` in `nx.json` is that set and `conftest.py` holds
-  these tests to it, exactly as it holds the recipe tier to its own. It declares no
-  Python distribution: this repository is one uv workspace with one `pyproject.toml`
-  and one `uv.lock`, and this is an Nx target over a directory of it. A journey that
-  builds a **copy** of this checkout reads everything git tracks, so it is keyed on the
-  whole workspace instead — but by a target of *this* project, never by handing it to
+- **A host-tool journey belongs to its own project, selected by directory rather than
+  by marker.** A journey that spawns the installed `onepipeline`, the `just` recipes, a
+  real `oneharness run` or a whole launch costs what a host tool costs and is answered by
+  a different set of files from the Python suite beside it, and `nx affected` can only
+  tell two costs apart where they are two projects. So `tests/plan_tooling/`,
+  `tests/ask_seam/`, `tests/unwatched/` and `tests/plan_store_install/` are each a
+  project of their own, each keyed in `nx.json` on the files its journeys read and held
+  to that key by `conftest.py` exactly as the recipe tier is held to its own;
+  `tests/nx_inputs.py` says beside each key what it names and why. None declares a
+  Python distribution: this repository is one uv workspace with one `pyproject.toml` and
+  one `uv.lock`, and each is an Nx target over a directory of it. A journey that builds a
+  **copy** of this checkout reads everything git tracks, so it is keyed on the whole
+  workspace — by a `reads_docs` target of *its own* project, never by handing it to
   another project's tier: the directory decides which project pays, and a marker only
-  decides which of that project's keys the payment is memoized on.
+  decides which of that project's keys the payment is memoized on. A project with no
+  such second target fails a prose read in `conftest.py` instead of routing it.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
+<!-- llmlint: ignore-block[no_redundant_instruction_pointers] The pointer below is to
+one subsection rather than to the document: `agents_md_durable_and_terse` holds this
+file to the durable constraint and sends a dropped question's signature and evidence
+to a linked diagnostic document, and a reader of this bullet cannot find that
+subsection from the root advertising `docs/orchestration.md` as a whole. -->
 - **A hang of the `ask-seam` tier is one of two diagnosed things, and the queue tells
   them apart.** Its journeys spend real launches and then wait on `uv run` through the
   exclusive lock those launches hold on `<root>/.venv`, so `SHARED_TOOLCHAIN_GROUP` in
   `tests/e2e/nx_workspace.py` keeps the writers of that lock and the readers waiting on
-  it on one xdist worker — scattered, they failed four consecutive publication gates on
-  branches touching none of it. What that constraint does not account for is the
-  channel queue's own defect: a read of the channel is an unlocked read-modify-write on
-  `runs/<run-id>/channel/queue.json`, and one landing over a worker's concurrent write
-  permanently destroys the worker's blocking question, which is then indistinguishable
-  from a worker still waiting for an answer.
-  So read a fresh hang of that shape as that defect rather than as the group constraint
-  having slipped, and read the queue before re-diagnosing it.
+  it on one xdist worker. What that constraint does not account for is the channel
+  queue's own defect — an unlocked read-modify-write on `runs/<run-id>/channel/queue.json`
+  by which a read of the channel landing over a worker's concurrent write destroys the
+  worker's blocking question — and that is the engine's to fix rather than a constraint
+  this suite can declare. So read a fresh hang of that shape by opening the queue before
+  re-diagnosing the group constraint; what a dropped question leaves behind, and what is
+  and is not established about its cause, is in [A question that was raised and then
+  dropped](../docs/orchestration.md#a-question-that-was-raised-and-then-dropped).
+<!-- llmlint: ignore-end[no_redundant_instruction_pointers] -->
 - **A shared stand-in is reached through `project_fixtures.helper`, never through a
   test module's own `__file__`.** A module that derives the path itself names a file
   relative to wherever it currently sits, so moving it substitutes a path this

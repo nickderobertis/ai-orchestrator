@@ -593,6 +593,24 @@ history-show *args:
 monitor *args:
     @./scripts/onepipeline.sh monitor "$@"
 
+# Which of this session's runs has nothing watching it: `just unwatched [--session ID]`.
+#
+# The read behind the `Stop` hook `.claude/settings.json` registers, offered as a
+# command so an operator can ask the same question by hand. One line per reported
+# run on standard output, nothing at all when there is nothing to report, and
+# every run whose evidence could not be resolved on standard error — where it
+# changes no status.
+#
+# It goes through the wrapper every other view does, because ownership is a
+# comparison and a reader that did not identify itself matches no run. The hook
+# deliberately does not: it reaches the binary directly, so that a turn does not
+# end behind this checkout's project-environment lock. Its exit status is the
+# whole of what a caller branches on and is carried back unchanged — `6` says a
+# run this session owns is unwatched.
+# llmlint: ignore[tool_output_is_signal] one line per unwatched run is what this viewing command is run to produce, and it is the text the hook puts in front of a manager.
+unwatched *args:
+    @./scripts/onepipeline.sh unwatched "$@"
+
 # Watch one run until something a supervisor has to act on happens: `just watch
 # <run-id> [OPTIONS]`. AGENTS.md's watch rule states what a watch owes and why this
 # exists rather than a loop over `just monitor`.

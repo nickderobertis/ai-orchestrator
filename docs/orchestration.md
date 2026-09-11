@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.26.1. The whole of that reasoning —
+onepipeline 0.27.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.26.1. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.27.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,13 +323,13 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.26.1; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.27.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
 **A projection that keeps failing is now spaced rather than hammered.** onepipeline
 https://github.com/nickderobertis/onepipeline/pull/176, in force on the adopted
-onepipeline 0.26.1, backs a failing write-back off from a prompt first retry to a one-minute ceiling
+onepipeline 0.27.0, backs a failing write-back off from a prompt first retry to a one-minute ceiling
 instead of retrying about four times a second, resets that schedule once it recovers, and
 still retries until the projection lands; closeout still attempts the terminal projection,
 and stopping or settling stays prompt during a long backoff. The reason is GitHub's
@@ -462,7 +462,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.26.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.27.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -586,7 +586,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.26.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.27.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -909,7 +909,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.26.1 in the judge command's own environment on a real
+  measured against onepipeline 0.27.0 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -1124,7 +1124,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.26.1 answers
+a real run on onepipeline 0.27.0 answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
@@ -1169,7 +1169,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.26.1**, composed where the
+node dispatch of a run carries it as of onepipeline 0.27.0**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -1331,6 +1331,33 @@ seconds, and `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it.
 
 `scripts/ask-manager.sh` states each of those checks against what measured it, and
 `tests/ask_seam/test_ask_manager_e2e.py` drives every one against a real run's channel.
+
+#### A question that was raised and then dropped
+
+One more defect of that crate reaches this seam, and it is the one a hang of
+`tests/ask_seam/` is read for. `runs/<run-id>/channel/queue.json` is read-modify-written
+by every read of the channel — `onepipeline next`, which `just channel-next` calls — and
+by the process that writes a surface into it, with nothing serialising the pair. A read
+that lands over a worker's concurrent write rewrites the queue from the state the reader
+loaded, which never held the surface, so the worker's blocking question is gone from the
+queue while everything else records that it was asked. The asking wrapper then waits its
+whole reply window for a question nothing will ever hand out, and from outside that reads
+exactly like a worker still waiting for an answer.
+
+**Its signature is three records under one run disagreeing**, and the queue is the one to
+open first: `surfaces.jsonl` holds the surface, the run's journal recorded it queued, and
+`queue.json` reads `next_id: 0` — last written by a process that never saw it. That pair,
+a journal entry for the surface beside a queue that has never numbered one, is this
+defect and nothing else; a queue that holds the surface is a question still waiting for
+its answer, which is the ordinary case and the one `just channel-next` resolves.
+
+**What makes it fire is not established, and inconclusive is the recorded answer.** It
+reproduces under a single serial pytest process, so it needs no second one; it has not
+been reproduced with this checkout's `.venv` lock provably free, so lock contention is
+not excluded either. Neither cross-target concurrency nor contention is therefore the
+cause on the evidence, and nothing here should be read as naming one. The race is the
+engine's: the repair is to serialise the queue's read-modify-write in that crate, and
+this repository cannot make it short of doubling the verb its journeys exist to prove.
 
 ### Read profiles
 
@@ -2745,6 +2772,69 @@ the liveness verdict. Every other uncertainty resolves toward "still working",
 and a view that can observe nothing reports exactly what it reported before any of
 this existed.
 
+### Asking what nothing is watching
+
+`just unwatched` reports which of this session's runs has nothing watching it. It is
+the read behind the `Stop` hook `.claude/settings.json` registers, offered as a command
+so an operator can ask the same question by hand; AGENTS.md's watch rule is what the
+hook enforces, and this is what it asks.
+
+```sh
+just unwatched                    # this session's runs, from the ownership environment
+just unwatched --session ID       # somebody else's session, named
+```
+
+**Two streams and a status, and the status is the whole of what a caller branches on.**
+One line per reported run on standard output — the run id, its standing word, why
+nothing is watching it, and the watch that would — and nothing at all when there is
+nothing to report. Everything the verb could not resolve goes on standard error, where
+it changes no status: a run whose evidence could not be read is neither an unwatched
+run nor a reason to refuse the question that was asked about the others. `6` says at
+least one owned run is unwatched; `0` says none is; a refusal is neither and says so.
+The recipe carries that status back unchanged.
+
+**What is reported is what was proven, and every unknown resolves toward unwatched.**
+A run is kept out only by a *current* summary document saying it stopped or its graph
+converged — a document behind the journal beside it is what a run still recording looks
+like, so it proves nothing, and neither does one declaring a schema this build has
+moved past. A watcher record naming another host, another run, a pid this host has
+proved is gone, a pid that is now some other process, or one nothing here can decide is
+in each case not a live watch. The record is written by the `watch` verb itself and
+removed on a clean exit, so nothing stands between a watcher dying and its run reading
+unwatched — no heartbeat, no expiry, no cleanup step, because the deaths that matter
+have no clean exit.
+
+**The hook is the consuming half and reads that one number.** It takes the session off
+the Stop payload the harness hands it and never out of its own environment: this
+repository's settings file is tracked, so every dispatched claude-code worker inherits
+the hook and every dispatch inherits its manager's launcher session, and a hook that
+read the environment would block every worker's turn on its manager's unwatched runs.
+On `6` it records what it is about to block on and writes one JSON object —
+`{"decision": "block", "reason": …}`, the reason being the verb's own standard-output
+lines — and exits 0. On `0` it writes nothing on either stream and exits 0. On every
+other outcome — no binary, a verb it could not run, one past its bound, a status that is
+neither `0` nor `6`, a `6` naming no run, or a hook that never reached the verb because
+its own Python half or an interpreter to run it was missing, or because that half ran
+and ended on a status it never chooses without answering — it writes
+`{"systemMessage": …}` saying the turn ends unguarded and why, names `just unwatched` as
+the read to make by hand, and exits 0: nothing there is evidence that a run is unwatched,
+so nothing there blocks, and nothing there is evidence that every run is watched, so
+nothing there is silent. The last two of those are the shell wrapper's own and are
+constant strings rather than composed ones, which is why the wrapper may write them at
+all: the two-file split keeps untrusted data out of hand-composed JSON, and a fixed
+diagnostic carries none. A
+continuation of a block it already made is answered against what that block said:
+the same runs end the turn silently, and different ones block again, so the condition
+rather than a count is what ends it. **A block it cannot record is a block it does not
+make**: a continuation could then never tell an unchanged condition from a moved one and
+would block again for ever. Where its own record cannot be written, or cannot be read
+back on a continuation, it writes `{"systemMessage": …}` instead — a warning the harness
+shows the person, naming the unwatched runs and why the hook stood aside — and the turn
+ends. Only a positively reported run blocks; nothing the hook could not obtain does. It
+reaches the binary through this checkout's `.venv/bin` and then the search path rather
+than through `uv run`, because `uv` takes an exclusive lock on the project environment
+and this runs at the end of every turn.
+
 ### Preserved work that has not been published
 
 `just recoverable` lists every branch across the registered repository identities that
@@ -3006,7 +3096,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.26.1 rather than restating it independently.
+declaration as it stands in onepipeline 0.27.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

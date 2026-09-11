@@ -88,6 +88,8 @@ from nx_inputs import (
     PLAN_STORE_INSTALL_SCOPED,
     RECIPE_SCOPED,
     SELECTED_TARGETS,
+    UNWATCHED_PROJECT,
+    UNWATCHED_SCOPED,
     covers,
     matches,
     repository_relative_globs,
@@ -637,6 +639,7 @@ SKIPPABLE_TIERS = frozenset(
         (ASK_SEAM_PROJECT, ASK_SEAM_SCOPED),
         (DAG_UI_PROJECT, DAG_UI_SCOPED),
         (PLAN_STORE_INSTALL_PROJECT, PLAN_STORE_INSTALL_SCOPED),
+        (UNWATCHED_PROJECT, UNWATCHED_SCOPED),
     }
 )
 

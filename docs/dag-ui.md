@@ -69,8 +69,8 @@ reader is answering rather than assuming it.
 
 **Today they differ the other way round from the way they used to, and the reading to
 carry is that neither number constrains the other**: the adopted `onepipeline-ui` 0.7.2
-statically links onepipeline 0.19.0 while `config/onepipeline.version` reads 0.26.1, so
-the reader answers runs through an engine four minor releases behind the CLI a dispatch
+statically links onepipeline 0.19.0 while `config/onepipeline.version` reads 0.27.0, so
+the reader answers runs through an engine eight minor releases behind the CLI a dispatch
 runs.
 It was the reverse for two adoptions — the engine pin was held at 0.18.4 for a
 settlement write-back defect that had nothing to do with reading runs, and the

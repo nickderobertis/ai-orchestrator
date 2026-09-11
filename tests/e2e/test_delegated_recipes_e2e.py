@@ -380,6 +380,11 @@ DELEGATIONS = (
     Delegation("stop", ("run-1", "--force"), "uv run onepipeline stop run-1 --force"),
     Delegation("runs", ("--mine",), "uv run onepipeline runs --mine"),
     Delegation("status", ("run-1",), "uv run onepipeline status run-1"),
+    Delegation(
+        "unwatched",
+        ("--session", "manager-1"),
+        "uv run onepipeline unwatched --session manager-1",
+    ),
     Delegation("host", (), "uv run onepipeline host"),
     Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
     # The watch recipe reads the engine's own command list before it delegates, so an

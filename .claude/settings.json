@@ -11,6 +11,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/stop-unwatched-guard.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   },
   "permissions": {
@@ -34,6 +45,7 @@
     "Bash(just telemetry:*)",
             "Bash(just replan:*)",
       "Bash(just runs:*)",
+      "Bash(just unwatched:*)",
       "Bash(just monitor:*)",
       "Bash(just status:*)",
       "Bash(just recoverable:*)",

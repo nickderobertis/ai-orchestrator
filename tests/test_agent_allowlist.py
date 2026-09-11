@@ -14,11 +14,19 @@ import json
 from orchestrator.root import REPO_ROOT
 
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
+#: The checked-in script the `Stop` hook runs, named relative to this checkout the way
+#: the registration names it — through `$CLAUDE_PROJECT_DIR`, which is what makes one
+#: registration work from every worktree of this repository.
+STOP_HOOK = "scripts/stop-unwatched-guard.sh"
 REQUIRED = (
     "Bash(just monitor:*)",
     "Bash(just repos:*)",
     "Bash(just runs:*)",
     "Bash(just status:*)",
+    # The read behind the `Stop` hook below, offered as a command: a manager whose turn
+    # was refused reads the same answer by hand rather than approving it afresh each
+    # session.
+    "Bash(just unwatched:*)",
     "Bash(just results:*)",
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",
@@ -56,3 +64,40 @@ def test_allowlist_covers_the_orchestrator_and_planner_command_surface() -> None
 
 def test_allowlist_grants_no_blanket_wildcard() -> None:
     assert not BLANKET.intersection(_allowed())
+
+
+def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
+    """AGENTS.md's watch rule names this hook as what enforces its first property.
+
+    Registered beside the `SessionStart` hook already there and running the checked-in
+    script rather than an inline command, for the reason that hook is written that way:
+    what the hook does is a file in this repository, reviewed and tested like everything
+    else here, and a command line in a settings file is neither. The bound is its own
+    because the hook has one of its own — it gives the verb a shorter one and, when that
+    runs out, ends the turn with a warning that it went unguarded — so this is the outer
+    bound the harness enforces past it.
+    """
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    hooks = settings["hooks"]
+    assert "SessionStart" in hooks, "the session-setup hook is gone, so this is not that file"
+    registered = hooks.get("Stop")
+    assert registered, "no Stop hook is registered, so nothing asks what is unwatched"
+    commands = [
+        command["command"]
+        for matcher in registered
+        for command in matcher["hooks"]
+        if command["type"] == "command"
+    ]
+    assert any(STOP_HOOK in command for command in commands), (
+        f"no registered Stop hook runs {STOP_HOOK}: {commands}"
+    )
+    assert (REPO_ROOT / STOP_HOOK).is_file(), f"{STOP_HOOK} is registered and is not there"
+    bounds = [
+        command.get("timeout")
+        for matcher in registered
+        for command in matcher["hooks"]
+        if STOP_HOOK in command.get("command", "")
+    ]
+    assert all(isinstance(bound, int) and bound > 0 for bound in bounds), (
+        f"the Stop hook is registered without a bound of its own: {bounds}"
+    )

@@ -41,6 +41,21 @@ ASK_SEAM_WORKSPACE = "askSeamWorkspace"
 #: lock and install a real release archive over and over, so every glob wider than the
 #: two scripts and the one pin they actually read makes an unrelated edit pay for that.
 PLAN_STORE_INSTALL_WORKSPACE = "planStoreInstallWorkspace"
+
+#: The key the `unwatched` project's one tier is memoized on, and it names files rather
+#: than trees for the reason `planStoreInstallWorkspace` does: these journeys arm real
+#: watches, kill real processes, hold this checkout's project-environment lock and spend
+#: three real launches, so every path in the key that they never read makes an unrelated
+#: edit pay for all of that. What they read was measured rather than guessed — the whole
+#: tier traced under `strace -f -e trace=openat,execve`, its opened paths intersected
+#: with what git tracks — and the key is that set: the hook and the recipe it is the
+#: consuming half of, every pin in `config/` (which engine answers, and what session
+#: setup would install), the launch machinery a `just orchestrate` reaches through
+#: `scripts/onepipeline.sh`, the two graphs and two harness configs the engine reads at
+#: launch, and the modules the tests import. The conftest guard holds the in-process
+#: half of that to this key; the subprocess half is the trace, so a launch path that
+#: starts reading a new file is a re-take of it rather than a glob to widen.
+UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
 #: `just telemetry-server` drive and read — those two recipes and the scripts they
 #: reach, the address both resolve each other through, the pins that decide which
@@ -141,6 +156,21 @@ PLAN_STORE_INSTALL_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 PLAN_STORE_INSTALL_ROOT = "tests/plan_store_install"
+
+#: The project whose test target owns the journeys over `onepipeline unwatched` and the
+#: `Stop` hook that reads it — the real hook script, the real recipe, the installed engine
+#: they ask, and the launch shapes whose runs it has to name. A project of its own for the
+#: reason `plan-tooling`, `ask-seam` and `dag-ui` are: a watch armed for real, a process
+#: killed and left unreaped, this checkout's own project-environment lock held, and three
+#: real launches are a cost `nx affected` can only keep off an unrelated edit where it is a
+#: separate project. It declares no Python distribution either, for the same reason.
+UNWATCHED_PROJECT = "unwatched"
+#: That project's one test target. One rather than two, as `ask-seam` has one: nothing here
+#: reads this repository's prose.
+UNWATCHED_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore. Path-selected, as
+#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+UNWATCHED_ROOT = "tests/unwatched"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

@@ -415,7 +415,7 @@ pinned branch instead of cutting a second one on the same name, and **continue**
 pinned branch nothing holds — opening the worktree at that branch's tip and
 merging the base into it — rather than refusing the pin. Both are what let a retry
 reach the work its predecessor stranded. **What carries that fix into a
-plan node is the adopted onepipeline 0.26.1**, never `config/onevcs.version`:
+plan node is the adopted onepipeline 0.27.0**, never `config/onevcs.version`:
 onepipeline links onevcs, oneagentgraph, and onejudge as Rust libraries, so a
 dispatch runs the copy that release resolved, while `config/onevcs.version` pins
 the onevcs *CLI* the manager verbs run — `publish-branch`, `recoverable`,
@@ -447,11 +447,11 @@ repository's prose to it. Both were re-taken on this host's installed artifacts 
 2026-09-09 and agree line for line.
 
 **Read the locks after that measurement, and in this order.** `git show
-v0.26.1:Cargo.lock`, at the tag of the release actually *installed*, is
+v0.27.0:Cargo.lock`, at the tag of the release actually *installed*, is
 corroboration that should agree — and here it does more than agree, because at this tag
 the requirement and the lock **can** be told apart again and the lock is what decided.
 onepipeline's requirement is
-`onevcs = "0.19.2"` at v0.26.1 and its lock still resolves onevcs 0.19.3, refreshed by
+`onevcs = "0.19.2"` at v0.27.0 and its lock still resolves onevcs 0.19.3, refreshed by
 the currency landing this adoption is here for and unmoved since; that requirement is a
 caret one, so it permitted 0.19.3 all along and was never the constraint. **So the
 session-clone repair reaches a dispatch by the resolution rather than by the
@@ -474,7 +474,7 @@ installed binary is measured first rather than last. The fourth requirement is t
 that moved an earlier adoption: `oneharness-core = "0.8"` at v0.14.0 became `"0.12"` at
 v0.14.2, which is the whole mechanism behind the two-version split collapsing —
 onepipeline's own workspace was holding a core four minors behind the one its dependents
-resolved — and it is still `"0.12"` at v0.26.1.
+resolved — and it is still `"0.12"` at v0.27.0.
 `origin/main`'s
 lock answers a different question — what the *next* release would link — and is
 evidence about this host only by coincidence. The ordering matters because a lock
@@ -572,10 +572,10 @@ narrower guarantee than it sounds and worth stating exactly: it makes the two
 
 ### Why the read API's linked engine is behind the engine pin
 
-`config/onepipeline.version` reads **0.26.1** while `config/onepipeline-ui.version`
+`config/onepipeline.version` reads **0.27.0** while `config/onepipeline-ui.version`
 reads **0.7.2**, and the read API that release ships statically links **onepipeline
-0.19.0** — so the reader answers runs through an engine two releases behind the CLI a
-dispatch runs. That is ordinary rather than deliberate, and it is written down because
+0.19.0** — so the reader answers runs through an engine eight minor releases behind the
+CLI a dispatch runs. That is ordinary rather than deliberate, and it is written down because
 the same two numbers used to describe the opposite arrangement: this host held the
 engine pin *below* the read API's linked engine for two defects, and the section that
 explained the hold stood here.
@@ -590,7 +590,7 @@ could not be read back once any run of it had settled
 launch whose *observer graph* had died never returned, wedging the launcher and the
 frontier with it (https://github.com/nickderobertis/onepipeline/issues/188).
 https://github.com/nickderobertis/onepipeline/pull/191 fixes both and is carried by
-onepipeline **0.20.0**; the adopted 0.26.1 is past it.
+onepipeline **0.20.0**; the adopted 0.27.0 is past it.
 
 **What says so here is behaviour rather than either issue's state**, which is the half
 worth keeping: both issues are still open upstream, and neither was the evidence. The
@@ -623,7 +623,7 @@ about this host's pin.
 which pin governs a **dispatch**, and a read API governs no dispatch at all: it carries
 its own copy of the engine and answers `/healthz` with it —
 `{"status":"ok","onepipeline_version":"0.19.0"}` on the installed wheel, while
-`onepipeline --version` answers `0.26.1`. Everything in
+`onepipeline --version` answers `0.27.0`. Everything in
 [`docs/dag-ui.md`](docs/dag-ui.md) is measured on the reader's own engine, and the two
 move independently by design.
 
@@ -1050,7 +1050,7 @@ two different sentences.** The producer half is the version-control CLI's:
 `config/onevcs.version` reads 0.19.3, at or past the release carrying
 https://github.com/nickderobertis/onevcs/pull/123, which is what lets a
 `release-targets.toml` declare an instruction at all. The rendering half is the engine
-CLI's: `config/onepipeline.version` reads 0.26.1, at or past the release carrying
+CLI's: `config/onepipeline.version` reads 0.27.0, at or past the release carrying
 https://github.com/nickderobertis/onepipeline/pull/174, which is what puts a rendered
 instruction into the block and the note. Configuration is the other question entirely.
 This host declares no `releases.yml`, so it overrides no producer's instruction and
@@ -1121,7 +1121,7 @@ both of the first two now have. The release-targets surface — those four verbs
 links is past it too, so a dispatch resolves a release over the surface as well. The
 adoption modes merged as https://github.com/nickderobertis/onepipeline/pull/113 and are
 carried by the **engine CLI** at onepipeline 0.13.0, the first release cut after it;
-`config/onepipeline.version` reads 0.26.1, past that floor too. Those two carrying
+`config/onepipeline.version` reads 0.27.0, past that floor too. Those two carrying
 numbers are equal and are about different tools; nothing here should be read off the
 number alone. The two **pins** beside them are not equal: they carried one number for
 the two adoptions ending 2026-08-24, parted at the one on 2026-08-25, and have moved
@@ -1162,7 +1162,7 @@ producer half, which is why the same verb against an `onepipeline` checkout answ
 `declaration: declared: 3 target(s)` and lists `crate`, `pypi`, and `npm`. That surface
 runs end to end here rather than merely loading: `onevcs release latest <onepipeline>
 --target pypi` runs the release probe that repository
-checks in beside its own declaration and answers `released: 0.26.1`, which is the
+checks in beside its own declaration and answers `released: 0.27.0`, which is the
 release this change adopts. Those three — the verb group, what it answers for this
 repository, and the probe — were re-driven on 2026-09-07 on the pinned onevcs 0.19.3.
 **A producer declaration is read at the publication checkout's base, so a checkout left
@@ -1317,7 +1317,7 @@ cannot hide the session series, and the paced read that picks up a settled node'
 releases — arrived in **onepipeline 0.14.0**
 (https://github.com/nickderobertis/onepipeline/pull/117). Both floors are behind this
 host: `config/onevcs.version` reads 0.19.3 and
-`config/onepipeline.version` reads 0.26.1, and the adopted engine links onevcs
+`config/onepipeline.version` reads 0.27.0, and the adopted engine links onevcs
 0.19.3, so a dispatch resolves a phase over the same release the manager verbs do.
 **Those two numbers are not one number**, which they were for the two adoptions ending
 2026-08-24 and have not been since — read each with the tool beside it. What
@@ -1433,7 +1433,7 @@ is named relatively. The two defects:
 - onepipeline's settlement write-back **renamed a destination project to its own native
   identifier and wrote no labels**, degrading the record it projected onto. Fixed in
   https://github.com/nickderobertis/onepipeline/pull/149 and carried by the adopted
-  onepipeline 0.26.1.
+  onepipeline 0.27.0.
 
 Both are measured rather than assumed, on this host and against the real board with two
 projects on it, and both halves were re-taken on 2026-08-29 with a throwaway second project
@@ -1499,7 +1499,7 @@ so this host held the engine pin at 0.18.4 through that release rather than take
 
 **The hold is over and the projections land.**
 https://github.com/nickderobertis/onepipeline/pull/191 keeps the write-back off a plan's
-own records, and the adopted onepipeline 0.26.1 is past the 0.20.0 that carries it;
+own records, and the adopted onepipeline 0.27.0 is past the 0.20.0 that carries it;
 `onetaskgraph`'s own half — a copy coming back to a destination no longer overwriting
 that destination's `onetaskgraph.origin`,
 https://github.com/nickderobertis/onetaskgraph/pull/252 — is carried by the adopted
@@ -1538,7 +1538,7 @@ was then told the wrong thing about it. Two repairs answer that, in two reposito
 this adoption brings in both.
 
 *The engine half.* onepipeline https://github.com/nickderobertis/onepipeline/pull/176,
-carried by onepipeline 0.18.4 and kept by the adopted 0.26.1, stops the settlement write-back retrying a
+carried by onepipeline 0.18.4 and kept by the adopted 0.27.0, stops the settlement write-back retrying a
 refused projection about four times a second and backs it off from a prompt first retry to
 a one-minute ceiling, resetting after a recovery. That retry rate was itself holding the
 board under the pressure the limiter was refusing — and it is what makes the projection
@@ -2232,6 +2232,62 @@ and one question was asked three times, with every other indicator green through
    either launch is made, and each is printed with the `just channel-next <id>`
    that answers that run's questions, so neither has to be guessed at.
 
+**Property 1 is now enforced by the harness rather than by memory, and it is the one
+property on this list a manager can no longer simply forget.** `.claude/settings.json`
+registers a `Stop` hook — `scripts/stop-unwatched-guard.sh` — that fires before a turn
+of this session ends and asks `onepipeline unwatched` about the session the harness
+hands it on standard input. That verb keeps the runs whose launch record names the
+session, and reports the ones it has **proven** nothing is watching, one line per run
+and a status of its own. On that status the hook refuses the stop and puts the verb's
+own lines in front of the model, so a manager who turned to something else without
+arming a watch is told which runs, and told before the turn is over. On `0` the turn
+ends with nothing written on either stream. **Every other ending refuses nothing and
+says so**: a binary the hook cannot find, a verb it cannot run, one that ran past its
+bound, and a status it cannot use each end the turn with one warning to you — *this
+turn ends unguarded*, naming the cause and `just unwatched` as the read to make by
+hand. Neither loud nor silent, deliberately. A `Stop` hook that *refused* a turn on an
+ordinary host condition would be the one a manager then turns off, which is why none
+of those blocks; and a hook that went quiet on one would be worse than no hook at all,
+because you would go on believing every run you own was covered while nothing was
+asking, where an absent guard is at least visible as an absence. Only a payload the
+hook cannot read is silent, since it names no session to say anything about.
+
+**What a manager does when it blocks is arm the watch it forgot**: `just watch
+<run-id>` on each run the reason names, read to the end and re-armed from its cursor,
+which is what property 1 already asks for. Then end the turn. The block clears because
+the *condition* cleared and never because the hook was answered twice — a continuation
+whose verb reports the same runs as the block it came from ends the turn silently, so a
+manager who has genuinely re-armed is not asked again, and no session can be held open
+by this hook without the condition changing. **Nor on an answer it could not obtain**:
+only a run the verb has positively reported blocks, and only once the hook has recorded
+that it did. Where it cannot keep that record — a state root it may not write, a record
+it cannot read back on a continuation — it says so to you as a warning, naming the runs
+and the reason, and lets the turn end. That is the watcher record's own rule pointed the
+other way, and the direction is the whole point: for *reporting* a run every unknown
+resolves toward reporting it, because being wrong there costs one re-armed watch; for
+*blocking*, the irreversible act is the block, because it holds your own session.
+
+**Three consequences to expect rather than to diagnose.** A run nothing is driving is
+unwatched by this reading and blocks until it is adopted, stopped, or watched — a dead
+driver is exactly the state property 2 says a watch must emit on, so the hook is
+consistent with that rule rather than an exception to it. A run started before this
+landed reads unwatched until it is watched again, whatever version its stored summary
+document is at: a document declaring an earlier build's schema says its fields are that
+build's to mean, which settles nothing about whether the run stopped. And a run whose
+settlement this host can no longer decide — one whose summary document is absent or
+cannot be read at all — is named on the verb's standard error, changes no status, and
+blocks nothing, because an answer that could not be obtained is not an answer and must
+never be the one that either silences a run or holds a turn open.
+
+**It asks about the session the payload names and never the one in its environment**,
+which is what makes it silent inside a dispatch. That settings file is tracked, so
+every dispatched claude-code worker in this repository inherits this hook, and every
+dispatch inherits its manager's launcher session — a hook that read the environment
+would block every worker's turn on its manager's unwatched runs, where the worker's own
+session owns no run at all. `just unwatched` is the same read as a command, for asking
+by hand; what it reports and what each ending means is
+[in the orchestration doc](docs/orchestration.md#asking-what-nothing-is-watching).
+
 ### Answering on the channel
 
 Two measured channel defects make reply discipline part of the job rather than a
@@ -2293,7 +2349,7 @@ detail:
   the run had not handed out, and the ask blocked for its whole reply window and was
   killed with nothing on either pipe. Nothing raised a surface and nothing failed a
   node, because a question that never arrives looks exactly like an agent that never
-  had one. onepipeline 0.23.0 repairs it, and the adopted 0.26.1 is past that: a surface carries the **asker**
+  had one. onepipeline 0.23.0 repairs it, and the adopted 0.27.0 is past that: a surface carries the **asker**
   its session named — `ONEPIPELINE_CHANNEL_ASKER`, which the engine composes for every
   dispatch it makes — and the next session of that same asker takes back everything an
   earlier one left marked, in place, without handing a read surface out twice. A
@@ -2440,8 +2496,8 @@ caller's: this adds a sentence, not a verdict.
   [Carried planner context](docs/orchestration.md#carried-planner-context).
 
 After `just orchestrate`, the manager uses **only** `just channel-next`, `just
-channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
-`just status` views. `channel-reply` carries both legacy verdicts and [versioned
+channel-reply`, `just stop`, `just watch`, and the read-only `just monitor` / `just
+runs` / `just status` / `just unwatched` views. `channel-reply` carries both legacy verdicts and [versioned
 live edits](docs/orchestration.md#live-graph-edits). There is no verb that advances
 a run, so there is nothing left for the manager to drive: the engine reconciles
 continuously and two writers would race the ledger lock anyway.
@@ -2469,7 +2525,7 @@ the run was being driven while a node whose dependency had settled sat `ready �
 for dispatch` and was never dispatched, so none of the three return paths was ever
 reached. It was https://github.com/nickderobertis/onepipeline/issues/188, and
 https://github.com/nickderobertis/onepipeline/pull/191 repaired it in onepipeline
-0.20.0; the adopted 0.26.1 is past that, and the return path is asserted rather than
+0.20.0; the adopted 0.27.0 is past that, and the return path is asserted rather than
 assumed.
 `tests/e2e/test_orchestrate_launch_e2e.py::test_an_attached_launch_hands_back_once_its_observer_graph_has_died`
 is what holds it, against **whatever engine is installed** and from the engine's own
@@ -2529,7 +2585,7 @@ the graph and `oneagentgraph` gives it to every member that claims none, so a me
 whose job is not the run-level task must state its own — and must interpolate the
 composed one back in, because that composed task is this graph's own way of naming
 the run. The environment names it too, as `ONEPIPELINE_RUN_ID` — measured against
-onepipeline 0.26.1 on a real launch and gated in `tests/e2e/` — but that is a
+onepipeline 0.27.0 on a real launch and gated in `tests/e2e/` — but that is a
 per-release export rather than a contract, so members here are written against
 `{task}`. Never let this one reach `onepipeline
 reply`; live edits belong to the `monitor` member, which stays for the whole run,
@@ -3433,7 +3489,7 @@ decision fork: `just orchestrate` attached, detached, and adopted, `just plan`, 
 `just finish-plan` its tail is.
 The wrapper is half of that seam and the run it asks on is the other half — it reads
 `ONEPIPELINE_RUN_ID` and refuses rather than guessing at one — and **every node
-dispatch of a run carries it as of onepipeline 0.26.1**, composed where the dispatch
+dispatch of a run carries it as of onepipeline 0.27.0**, composed where the dispatch
 is made. That is a statement about the release in force and **not** about where the
 behaviour arrived: `executor::dispatch_env` composes the pair, and it has done so
 since onepipeline **0.8.1** (https://github.com/nickderobertis/onepipeline/pull/76).
@@ -3739,7 +3795,7 @@ timeline spans — `rollup` spans labelled `agent_role: orchestrator` — but a 
 measured here carried none, and the bounded local capture that used to back-fill
 them exists nowhere on the adopted stack; see [Seeing the supervisory
 tier](docs/telemetry.md#seeing-the-supervisory-tier). Both views also say when they
-cannot fully answer: on the adopted onepipeline 0.26.1 a run whose journal does not hold
+cannot fully answer: on the adopted onepipeline 0.27.0 a run whose journal does not hold
 every record whole prints `journal: … — this run's record of itself is incomplete`, which
 is the one line that makes the rest unprovable, so read it before acting on a node
 those views show as never settled. It used to be said only on the driver's stderr,
@@ -3795,7 +3851,7 @@ measurement's own output verbatim. Three reads reach them: `just monitor <run-id
 their own.
 
 **What `just transcript` renders on the release this host has is the calls *and*
-their outputs.** Re-measured on the adopted onepipeline 0.26.1 against the same
+their outputs.** Re-measured on the adopted onepipeline 0.27.0 against the same
 recorded run this used to be measured on, which is what closed a defect a manager
 had to be warned about here: each turn prints one `tool_call` line per call, carrying
 the tool's name and the argument string its producer recorded, and one `tool_result`
@@ -4329,7 +4385,10 @@ routed. What that split does *not* buy is scheduling: `--dist loadgroup` seriali
 one pytest process, so the constraint holding the toolchain writers and the
 deadline-based channel journeys apart no longer covers them once they are two Nx
 targets — as it already did not cover `orchestrator:test` against
-`orchestrator:test-recipes`, which holds writers of its own.
+`orchestrator:test-recipes`, which holds writers of its own. `unwatched:test` is a
+third such target, so the same holds of it against either of the other two. What a
+hang of the `ask-seam` tier leaves behind, and what is and is not established about its
+cause, is written where that suite's author reads it, in `tests/AGENTS.md`.
 `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
 scripts it builds its two worktrees from. A documentation edit stops charging for
 the whole suite. Where no key would be right the tier is **uncached** instead:
@@ -4363,7 +4422,7 @@ template-shaped body, validated against `config/pr-author-body.schema.json` — 
 that states its own `body` publishes with that. Drafting never blocks publication
 and never retries: a draft that cannot run warns on the node and the change
 request opens with **no body**, which is also what a launch naming no drafting
-graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.26.1
+graph does. Those two are not the same thing to read, and on the adopted onepipeline 0.27.0
 they no longer look it: a drafting dispatch that was configured, attempted, and
 produced nothing records `body-not-drafted` against the node with which of
 `dispatch-failed` / `schema-refused` / `no-body` it was, and `just results` carries

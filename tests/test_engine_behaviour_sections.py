@@ -162,12 +162,16 @@ ENGINE_BEHAVIOUR_SECTIONS = (
         heading="### Never let dispatched work run unwatched",
         states=(
             "what the engine's blocking watch verb returns on, the conditions it "
-            "accepts, and the cursor it hands back"
+            "accepts, the cursor it hands back, and what its `unwatched` verb reports, "
+            "excludes and leaves undecided"
         ),
         held_by=(
             "tests/test_watch_and_release_reading_guidance.py",
             "tests/test_watch_surface_drift.py",
             "tests/e2e/test_watch_selector_e2e.py",
+            "tests/unwatched/test_unwatched_and_stop_hook_e2e.py",
+            "tests/unwatched/test_unwatched_launch_shapes_e2e.py",
+            "tests/plan_tooling/test_unwatched_planning_launches_e2e.py",
         ),
     ),
     Section(

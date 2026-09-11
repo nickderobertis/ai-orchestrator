@@ -59,13 +59,38 @@ def run_name() -> str:
     return f"probe-{uuid.uuid4().hex[:12]}"
 
 
-def run_root(root: Path, run: str, *, dispatch_pid: int | None = None) -> Path:
-    """One run root the engine will read: a launch nothing is driving, and one node.
+#: The session a built run belongs to when a caller names none.
+#:
+#: A default rather than a required argument, because the two journeys this builder was
+#: written for are about what the views say of the *machine* and never about who owns a
+#: run: they read a root nobody else's session names, and naming one per journey would
+#: put an ownership decision in front of every caller that has none to make.
+DEFAULT_SESSION = "supervision-readings-e2e"
+
+
+def run_root(
+    root: Path,
+    run: str,
+    *,
+    dispatch_pid: int | None = None,
+    session: str = DEFAULT_SESSION,
+    driver_pid: int | None = None,
+) -> Path:
+    """One run root the engine will read: a launch, and one node.
 
     The launch names a process that does not exist, which is what makes the run read
     `DRIVER DEAD`. When `dispatch_pid` is given, the dispatch registry names a process
     that *does*, which is the pairing the guidance about adopting a dead driver is
     written from and the one no recorded run can carry.
+
+    `session` is who owns the run, which is what every ownership-scoped read compares
+    against — `runs --mine`, `stop`'s refusal, and `unwatched`'s whole question of which
+    runs to ask about. `driver_pid` inverts the paragraph above: the launch then names a
+    live process **and its kernel start time**, so the run reads as one something is
+    driving, which is the only state a blocking watch can be armed on. Both halves are
+    required for that — a pid alone is a pid the kernel may have handed round again, and
+    a stamp that is not the one this host reports is a positive statement that the
+    process is somebody else's.
     """
     directory = root / run
     directory.mkdir(parents=True)
@@ -92,12 +117,18 @@ def run_root(root: Path, run: str, *, dispatch_pid: int | None = None) -> Path:
                 "dir": str(directory),
                 "graph": "off",
                 "launcher": "claude-code",
-                "session": "supervision-readings-e2e",
+                "session": session,
                 # No process has this id: the kernel's own ceiling is below it, so the
-                # run reads as one nothing is driving without racing a real pid.
-                "pid": 2**31 - 1,
+                # run reads as one nothing is driving without racing a real pid. A
+                # caller that named a live driver gets that process instead, stamped
+                # with the start time this host reports for it.
+                "pid": driver_pid if driver_pid is not None else 2**31 - 1,
                 "host": socket.gethostname(),
-                "started": time.ctime(),
+                "started": (
+                    f"linux-proc-stat:{_started(driver_pid)}"
+                    if driver_pid is not None
+                    else time.ctime()
+                ),
                 "started_at": "2026-01-01T00:00:00.000Z",
                 "heartbeat_interval": 1800,
                 "adoptions": 0,

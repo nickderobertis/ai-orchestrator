@@ -1,6 +1,6 @@
 """The engine this host pins carries every engine-side fix of the supervision-window plan.
 
-Eight of that plan's nodes landed in `onepipeline` rather than here, and none of them is
+Nine of that plan's nodes landed in `onepipeline` rather than here, and none of them is
 in force on this host until `config/onepipeline.version` names a release whose history
 contains it. The pin is one number, and a number says nothing about *which* landings it
 carries: release-plz cuts a release from whatever is on the base when it cuts it, so a
@@ -14,11 +14,11 @@ release note: a note is written by whoever wrote it, and what decides whether a 
 a release is whether the commit is an ancestor of that release's tag.
 
 **What this cannot say is whether a row is complete.** Nothing here knows the plan; the
-rows are what the run that made them recorded, node by node, and a ninth engine node
+rows are what the run that made them recorded, node by node, and a tenth engine node
 nobody added would go unnoticed. That is the same gap `tests/test_dated_claims.py`
 records about the test a paragraph names, and the reviewer reading the plan beside this
 table is the judge of it. What it *can* say — and what no reader can hold in their head —
-is that this release carries all eight of these rather than five of them.
+is that this release carries all nine of these rather than five of them.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] This
 repository runs one Nx project and splits its tiers by pytest marker over four `nx.json`
@@ -112,6 +112,15 @@ LANDINGS = (
         change_request=223,
         commit="0d01f56",
         did="guarantee a handed-off edit is applied, and date the surface it hands out",
+    ),
+    Landing(
+        node="engine-5",
+        change_request=225,
+        commit="4cd9c52",
+        did=(
+            "serve run listings from the summary document, and report which owned runs "
+            "nothing watches"
+        ),
     ),
 )
 

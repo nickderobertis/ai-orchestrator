@@ -1542,6 +1542,18 @@ def test_the_run_root_lease_requires_the_state_onevcs_writes_for_an_open_session
 #: cut at is this function's own formatting and nothing on this side of the seam.
 STATUS_VIEW = re.compile(r"pub fn status\(.*?\n\}\n", re.DOTALL)
 
+#: The helper that view writes a run's own block through, and the call by which it does.
+#:
+#: Two functions rather than one because the engine split them, and reading only the
+#: first is how this gate came to report the unread-surface line as *gone* from a view
+#: that still prints it: the composition moved into the helper while the call stayed
+#: where it was. So the line is looked for where it is written, and the *ordering* the
+#: watch rule depends on is read from where that helper is called — which is the fact
+#: that decides it either way, since the helper's own text says nothing about what is
+#: rendered after it.
+STATUS_RUN_LINES = re.compile(r"fn status_run_lines\(.*?\n\}\n", re.DOTALL)
+STATUS_RUN_LINES_CALL = "status_run_lines("
+
 #: The line the embedded provider health report opens with, exactly as the view writes
 #: it — two leading spaces included, because the cut is anchored (`/^  providers:/`) and
 #: a re-indent would leave it matching nothing while reading like it still works.
@@ -1556,6 +1568,21 @@ UNREAD_SURFACE_LINE = '"  {} planner update(s) waiting'
 #: so a reworded instruction and this gate cannot come to be about different sed
 #: programs.
 HEALTH_BLOCK_CUT = "sed '/^  providers:/,$d'"
+
+
+def _status_run_lines() -> str:
+    """The helper the status view writes a run's own block through, as source.
+
+    Its own function rather than a second search at each site, because three gates read
+    it and a view split across two functions is exactly the shape that drifts one site at
+    a time.
+    """
+    found = STATUS_RUN_LINES.search(_source(ONEPIPELINE, "views.rs"))
+    assert found is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer composes a run's own status block in "
+        "`status_run_lines`, so nothing here can read the lines that block prints"
+    )
+    return found.group(0)
 
 
 def test_the_watch_cuts_the_status_view_where_the_health_report_really_starts() -> None:
@@ -1585,11 +1612,16 @@ def test_the_watch_cuts_the_status_view_where_the_health_report_really_starts() 
         f"{HEALTH_BLOCK_OPENER!r}, so {MANAGER.name}'s {HEALTH_BLOCK_CUT!r} cuts nothing "
         "and a watch over that view is grepping the host's report for the run's words"
     )
-    unread = composed.find(UNREAD_SURFACE_LINE)
-    assert unread != -1, (
+    assert UNREAD_SURFACE_LINE in _status_run_lines(), (
         f"onepipeline {ONEPIPELINE.ref}'s status view no longer prints the unread-surface "
         f"line, which {MANAGER.name} makes a HARD REQUIREMENT of every watch; the rule now "
         "rests on `runs` alone and this gate can no longer say the cut keeps it"
+    )
+    unread = composed.find(STATUS_RUN_LINES_CALL)
+    assert unread != -1, (
+        f"onepipeline {ONEPIPELINE.ref}'s status view no longer writes a run's own block "
+        f"through {STATUS_RUN_LINES_CALL!r}, so nothing here can say whether the line that "
+        "helper prints lands above the health report or below it"
     )
     assert unread < opener, (
         f"onepipeline {ONEPIPELINE.ref} now prints the health report above the "
@@ -2152,7 +2184,7 @@ def test_the_readings_indent_as_the_engine_indents_a_runs_block() -> None:
         f"onepipeline {ONEPIPELINE.ref} no longer composes its status view where this "
         "gate reads it, so nothing here can say how deep a run's block is indented"
     )
-    composed = view.group(0)
+    composed = f"{view.group(0)}{_status_run_lines()}"
     depths = set()
     for literal in (HEALTH_BLOCK_OPENER, UNREAD_SURFACE_LINE):
         assert literal in composed, (
