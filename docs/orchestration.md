@@ -2885,13 +2885,18 @@ The recipe carries that status back unchanged.
 **What is reported is what was proven, and every unknown resolves toward unwatched.**
 A run is kept out only by a *current* summary document saying it stopped or its graph
 converged — a document behind the journal beside it is what a run still recording looks
-like, so it proves nothing, and neither does one declaring a schema this build has
-moved past. A watcher record naming another host, another run, a pid this host has
-proved is gone, a pid that is now some other process, or one nothing here can decide is
-in each case not a live watch. The record is written by the `watch` verb itself and
-removed on a clean exit, so nothing stands between a watcher dying and its run reading
-unwatched — no heartbeat, no expiry, no cleanup step, because the deaths that matter
-have no clean exit.
+like, so it proves nothing. One declaring a schema this build has moved past is the
+previous release's document, not an unreadable one: the verb folds it once through the
+listing's own reader, rewrites it at this build's schema, and decides it as any other —
+a settled run excluded, a run still recording reported — because reporting such a
+document unread refused the manager's turn after every run the previous binary had
+settled, at every schema bump (the engine's 0.28.1 release;
+`tests/unwatched/test_unwatched_and_stop_hook_e2e.py` holds both halves). A watcher
+record naming another host, another run, a pid this host has proved is gone, a pid that
+is now some other process, or one nothing here can decide is in each case not a live
+watch. The record is written by the `watch` verb itself and removed on a clean exit, so
+nothing stands between a watcher dying and its run reading unwatched — no heartbeat, no
+expiry, no cleanup step, because the deaths that matter have no clean exit.
 
 **The hook is the consuming half and reads that one number.** It takes the session off
 the Stop payload the harness hands it and never out of its own environment: this
