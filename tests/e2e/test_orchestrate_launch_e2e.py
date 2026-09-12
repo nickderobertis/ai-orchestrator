@@ -2600,19 +2600,38 @@ def test_the_graphs_declared_version_is_one_that_expands_the_task_placeholder(
     )
 
 
-#: Every Claude identity the pacemaker's chain names, read from that chain: these are
-#: the candidates `ONEHARNESS_BIN_CLAUDE_CODE` would leave resolving to the real
-#: `claude` — the seam keys on a harness id and reaches no variant — so an identity
-#: added to the config has to be covered here rather than escaping the guard silently.
-UNINTENDED_CLAUDE_IDENTITIES = tuple(
+#: Which provider binary each harness family's identities resolve to, so an identity is
+#: checked against the stand-in its own family would reach rather than against `claude`
+#: for both. Two families rather than one, because covering only Claude is what left
+#: every `codex` variant of a chain resolving the real binary.
+PROVIDER_BINARIES = {"claude-code": "claude", "codex": "codex"}
+
+#: How a journey declares the stand-in for a family's bare harness id. The seam keys on
+#: that id and reaches no variant, which is why the guard reads the same variable.
+SCRIPTED_PROVIDER_ENV = {
+    "claude-code": "ONEHARNESS_BIN_CLAUDE_CODE",
+    "codex": "ONEHARNESS_BIN_CODEX",
+}
+
+#: Where `tests/e2e/fake_codex.py` records each prompt it was handed, which is what
+#: says the stand-in really took a turn rather than the guard having refused quietly.
+CODEX_PROMPT_LOG = "FAKE_CODEX_PROMPT_LOG"
+
+#: Every identity of the pacemaker's chain that `ONEHARNESS_BIN_*` cannot reach, read
+#: from that chain. The seam keys on a harness **id**, so it covers a bare one and no
+#: variant of it — which is exactly the set that would otherwise resolve to a real
+#: provider, and why an identity added to the config has to be covered here rather than
+#: escaping the guard silently. Both families, because covering `claude-code`'s variants
+#: alone left `codex:alternate` resolving the real binary.
+UNINTENDED_PAID_IDENTITIES = tuple(
     identity
     for identity in harness_routing(REPO_ROOT / "oneharness.check-in.toml")["harnesses"]
-    if identity.startswith("claude-code")
+    if ":" in identity and identity.partition(":")[0] in PROVIDER_BINARIES
 )
 
 
-@pytest.mark.parametrize("identity", UNINTENDED_CLAUDE_IDENTITIES)
-def test_a_turn_routed_to_a_paid_claude_identity_fails_naming_the_provider_it_reached(
+@pytest.mark.parametrize("identity", UNINTENDED_PAID_IDENTITIES)
+def test_a_turn_routed_to_a_paid_identity_fails_naming_the_provider_it_reached(
     tmp_path: Path, oneharness_bin: str, identity: str
 ) -> None:
     """Reaching an unintended provider is a loud refusal, not a quiet charge.
@@ -2620,14 +2639,23 @@ def test_a_turn_routed_to_a_paid_claude_identity_fails_naming_the_provider_it_re
     A real chain can select a real identity, and on a provisioned host a billed turn
     reads exactly like a free one from a journey's assertions. Each identity is driven
     on its own because `fallback` stops at the first candidate that runs, so one launch
-    would prove only the first of the three.
+    would prove only the first of them.
     """
     environment = _environment(tmp_path, oneharness_bin)
     environment["ONEHARNESS_HARNESSES"] = identity
+    family = identity.partition(":")[0]
+    binary = PROVIDER_BINARIES[family]
+    # The stand-in this launch declared for that family's *bare* id, dropped: the guard
+    # hands a variant on to a declared stand-in rather than refusing it, because
+    # `ONEHARNESS_BIN_*` reaches no variant and a journey that scripted its provider
+    # should not be refused the moment its chain moves past the first candidate. What is
+    # under test here is the other case — a family this run scripted nothing for — so
+    # the declaration is removed rather than worked around.
+    environment.pop(SCRIPTED_PROVIDER_ENV[family], None)
 
-    assert shutil.which("claude", path=environment["PATH"]) == str(
-        PAID_PROVIDER_GUARD / "claude"
-    ), "a launch environment here resolves `claude` to something other than the guard"
+    assert shutil.which(binary, path=environment["PATH"]) == str(PAID_PROVIDER_GUARD / binary), (
+        f"a launch environment here resolves `{binary}` to something other than the guard"
+    )
 
     ran = subprocess.run(
         [
@@ -2661,19 +2689,20 @@ def test_a_turn_routed_to_a_paid_claude_identity_fails_naming_the_provider_it_re
     )
 
 
-def test_the_paid_provider_guard_answers_an_abbreviated_version_probe() -> None:
+@pytest.mark.parametrize("binary", sorted(set(PROVIDER_BINARIES.values())))
+def test_the_paid_provider_guard_answers_an_abbreviated_version_probe(binary: str) -> None:
     """`-v` is answered as a probe, not refused as a turn.
 
     `oneharness` decides a candidate is installed by probing the binary it resolved,
-    and a `claude` that fails that probe is classified as not installed and skipped —
-    which leaves the journey above passing while proving nothing about routing. The
-    guard accepts the abbreviated spelling for exactly that reason, and nothing else
-    reaches that branch, so it is driven here through the `claude` that `PATH`
-    resolves to: that symlink is the whole seam this stand-in reaches a run through.
+    and a provider binary that fails that probe is classified as not installed and
+    skipped — which leaves the journey above passing while proving nothing about
+    routing. The guard accepts the abbreviated spelling for exactly that reason, and
+    nothing else reaches that branch, so it is driven here through each entry `PATH`
+    resolves to: those symlinks are the whole seam this stand-in reaches a run through.
     """
-    resolved = shutil.which("claude", path=str(PAID_PROVIDER_GUARD))
-    assert resolved == str(PAID_PROVIDER_GUARD / "claude"), (
-        f"the guard directory resolves `claude` to {resolved}, so this would probe "
+    resolved = shutil.which(binary, path=str(PAID_PROVIDER_GUARD))
+    assert resolved == str(PAID_PROVIDER_GUARD / binary), (
+        f"the guard directory resolves `{binary}` to {resolved}, so this would probe "
         f"something other than the stand-in"
     )
 
@@ -4011,3 +4040,165 @@ def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
     assert KILLED not in stream.stdout, (
         f"a dispatch that ended inside the grace period was reported killed:\n{stream.stdout}"
     )
+
+
+def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declared(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The other side of the refusal above, and the reason the guard is not a wall.
+
+    `ONEHARNESS_BIN_*` keys on a harness **id** and reaches no variant, so a journey that
+    scripted its provider is scripted for the first candidate of a chain and for none of
+    the rest. Every chain here names five. Without this the guard would refuse the second
+    candidate onwards, and a journey whose subject is something else entirely would fail
+    on a provider it had already stood in for.
+
+    Only a stand-in inside this repository's tests is ever handed a turn — the check that
+    keeps this from being a hole in the guard rather than a door through it.
+    """
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment = _environment(tmp_path, oneharness_bin)
+    environment["ONEHARNESS_HARNESSES"] = "codex:alternate"
+    assert environment[SCRIPTED_PROVIDER_ENV["codex"]] == str(FAKE_CODEX), (
+        "this launch declares no codex stand-in, so there is nothing for the guard to "
+        "hand a variant on to and this journey would prove the refusal instead"
+    )
+    environment[CODEX_PROMPT_LOG] = str(tmp_path / "prompts.jsonl")
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps(["the stand-in answered"])
+
+    ran = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / "oneharness.check-in.toml"),
+            "--prompt",
+            "a turn this journey scripted",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    # oneharness owns this report's schema; only the fields the claim rests on are read.
+    attempted = json.loads(ran.stdout)["results"][-1]
+    assert attempted["harness_id"] == "codex:alternate", attempted
+    assert REFUSAL not in attempted.get("stderr", ""), (
+        f"the guard refused a variant of a family this journey had already scripted, "
+        f"which is the failure that would break every launch journey here: {attempted}"
+    )
+    assert Path(environment[CODEX_PROMPT_LOG]).exists(), (
+        f"the declared stand-in never took the turn, so the guard neither refused nor "
+        f"handed it on: {attempted}"
+    )
+
+
+def _guard_sandbox(tmp_path: Path, harness: str) -> Path:
+    """The real guard, in a mirrored layout so its stand-in root is a writable one.
+
+    The file is this repository's own, byte for byte, executed as `harness`'s provider
+    binary through a symlink exactly as the entries of `tests/e2e/no-paid-provider/`
+    are. Only the *location* stands in, because the property under test is about paths
+    that resolve outside the root — and the real root is the checkout, which a journey
+    must not write a symlink into.
+    """
+    mirrored = tmp_path / "tests" / "e2e"
+    (mirrored / "no-paid-provider").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "tests" / "e2e" / "no_paid_provider.py", mirrored)
+    invoked = mirrored / "no-paid-provider" / PROVIDER_BINARIES[harness]
+    invoked.symlink_to(Path("..") / "no_paid_provider.py")
+    return invoked
+
+
+@pytest.mark.parametrize("harness", sorted(PROVIDER_BINARIES))
+def test_the_guard_hands_either_family_on_to_a_stand_in_inside_the_suite(
+    tmp_path: Path, harness: str
+) -> None:
+    """The forwarding half, per family, driven at the guard itself.
+
+    The journey above drives it through a real `oneharness` chain for Codex, which is
+    the family with a scripted provider to hand on to. The guard keys its forwarding on
+    the *invoked* name and reads a different variable per family, so the Claude path is
+    a branch of its own and one family's success says nothing about the other's — which
+    is how covering `claude` alone once left every `codex` variant reaching the real
+    binary. So each family's binary is invoked as a provider would be, with a stand-in
+    inside the suite, and has to hand the turn's own arguments on to it.
+    """
+    invoked = _guard_sandbox(tmp_path, harness)
+    reached = tmp_path / "reached"
+    stand_in = invoked.parent.parent / "a-scripted-stand-in"
+    stand_in.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(reached)!r}).write_text(' '.join(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    stand_in.chmod(0o755)
+
+    ran = subprocess.run(
+        [str(invoked), "a", "turn this journey scripted"],
+        env={**os.environ, SCRIPTED_PROVIDER_ENV[harness]: str(stand_in)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert ran.returncode == 0, (
+        f"the {PROVIDER_BINARIES[harness]} guard refused a stand-in declared inside the "
+        f"suite, which would fail every journey that scripted this family:\n{ran.stderr}"
+    )
+    assert reached.exists(), f"the declared stand-in never took the turn:\n{ran.stderr}"
+    assert reached.read_text(encoding="utf-8") == "a turn this journey scripted", (
+        "the guard handed the turn on without the arguments it was invoked with"
+    )
+
+
+@pytest.mark.parametrize("harness", sorted(PROVIDER_BINARIES))
+@pytest.mark.parametrize("through_a_symlink", [False, True], ids=["named", "symlinked"])
+def test_the_guard_refuses_a_stand_in_that_resolves_outside_the_suite(
+    tmp_path: Path, through_a_symlink: bool, harness: str
+) -> None:
+    """The check that makes the guard a door rather than a hole, both ways round.
+
+    A journey names its own stand-in, so the variable is input — and the one thing this
+    file exists to prevent is a turn reaching a provider somebody is billed for. A path
+    outside the suite was already refused. A *symlink* under the suite pointing outside it
+    was not: the containment check was lexical, so it read as contained and the guard
+    exec'd whatever it pointed at, which is the real provider wearing an in-tree name.
+    Per family, because the guard reads a different variable for each.
+    """
+    invoked = _guard_sandbox(tmp_path, harness)
+    reached = tmp_path / "reached"
+    outside = tmp_path / "a-paid-provider"
+    outside.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib\n"
+        f"pathlib.Path({str(reached)!r}).write_text('spent')\n",
+        encoding="utf-8",
+    )
+    outside.chmod(0o755)
+    named = outside
+    if through_a_symlink:
+        # Lexically inside the stand-in root, and resolving straight back out of it.
+        named = invoked.parent.parent / "looks-like-ours"
+        named.symlink_to(outside)
+
+    ran = subprocess.run(
+        [str(invoked), "a turn this journey never scripted"],
+        env={**os.environ, SCRIPTED_PROVIDER_ENV[harness]: str(named)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert not reached.exists(), (
+        f"the guard executed a binary that resolves outside the suite, which is exactly "
+        f"the paid turn it exists to refuse:\n{ran.stderr}"
+    )
+    assert ran.returncode != 0, ran.stdout + ran.stderr
+    assert "is outside this repository's tests" in ran.stderr, ran.stderr

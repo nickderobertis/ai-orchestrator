@@ -321,13 +321,25 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain.
 **Every role names the same five identities** — `claude-code:alternate`,
-`claude-code:alternate2`, `codex`, `codex:alternate`, `claude-code:primary` — and
-the roles differ only in the order they try them. The worker order is that list as
+`claude-code:alternate2`, `codex:primary`, `codex:alternate`, `claude-code:primary` —
+and the roles differ only in the order they try them. The worker order is that list as
 written: both alternate Claude subscriptions first, because the personas are tuned
 against that model tier, then Codex, then the primary Claude identity as the last
 resort. A variant is a named per-harness preset selected as `<harness>:<variant>`;
 it composes the base harness settings with child-only model, environment, and
 credential routing.
+
+**Every identity in every chain is a variant, and that is a requirement rather than a
+style.** `unset_env`, `env_from` and `env_file` are declarable on a variant only, and a
+top-level or per-harness `env` can only *set* a name — it cannot remove one and cannot
+map one out of the parent process. So a chain naming a bare harness id carries one
+candidate no per-identity environment rule can reach, which is why the first Codex
+identity is `codex:primary` rather than `codex`: the board credential this host masks
+and the runtime directory it repoints would otherwise have covered four candidates out
+of five, and the fifth is the one reached once the subscriptions ahead of it are
+spent. That variant declares no `unset_env` for `CODEX_HOME` on purpose — that value is
+ambient configuration a developer may export, and this is the identity that honours
+it — so the account behind it, and its position in every chain, are what they were.
 `scripts/claude-alt-config-dir.sh` is the one source of BOTH alternate config
 directories: it derives `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt`
 and `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` as `$HOME/.claude-alt2` unless the caller
@@ -1364,8 +1376,13 @@ member (this repository's `check-in` pacemaker) runs its turn through the onehar
 *library* on a thread of the graph process, so that variable never reaches it, and the
 member would otherwise have gone straight to a paid subscription. What is still a
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
-at `tests/e2e/fake_codex.py` — every config in this repository names `codex` first, so
-pinning that identity's binary is what keeps a suite run off a subscription. The two
+at `tests/e2e/fake_codex.py` — pinning that identity's binary is what keeps a suite run
+off a subscription. That pin reaches the bare harness id and no variant of it, and every
+identity in every chain here is now a variant, so what a journey's chain actually
+selects is `codex:primary` and the pin never sees it: the stand-in reaches those
+candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
+very binary this variable names and refuses anything named outside this repository's
+tests. The two
 do not collide: re-measured against the adopted oneharness 0.12.1, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the

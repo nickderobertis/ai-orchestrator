@@ -44,7 +44,7 @@ history_labels = { role = "agent" }
 # once everything ahead of it is exhausted.
 # llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
@@ -59,6 +59,11 @@ harnesses = [
 # older one does not know this id, so the candidate refuses and the chain falls
 # through to Claude with the intent silently unmet.
 [harness.codex]
+model = "gpt-6-astra"
+
+# A variant rather than the bare `codex`, so the environment rules below reach it; no
+# `unset_env` for `CODEX_HOME`, which this identity honours. AGENTS.md says why.
+[harness.codex.variant.primary]
 model = "gpt-6-astra"
 
 # The second Codex identity. See scripts/codex-alt-home.sh for the indirection.

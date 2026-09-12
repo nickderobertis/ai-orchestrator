@@ -76,31 +76,27 @@ else
     exit 1
 fi
 
-# Takes the install lock of the checkout at $1 and holds it for the rest of this
-# process: the descriptor is the shell's, so it outlives this function.
-take_install_lock() {
-    local lock_dir="$1/.logs" lock_file fd
-    lock_file="$lock_dir/workspace-install.lock"
-    if ! { mkdir -p "$lock_dir" && chmod 700 "$lock_dir"; }; then
-        echo "workspace-install: cannot prepare '$lock_dir' for the install lock; repair its parent permissions and retry" >&2
-        exit 1
-    fi
-    # Guarded, not assumed: bash reports a failed `exec` redirection rather than
-    # taking the shell down with it, so a lock file that turned unreadable between
-    # `mkdir` and here still gets a diagnostic that names the path instead of a
-    # silent death. Creation and the descriptor are separate steps because `<`
-    # alone will not create the file.
-    if ! : >>"$lock_file" || ! exec {fd}<"$lock_file"; then
-        echo "workspace-install: cannot open the install lock at '$lock_file'; repair its permissions and retry" >&2
-        exit 1
-    fi
-    if ! flock "$fd"; then
-        echo "workspace-install: cannot serialize the locked install; retry once no other install is running" >&2
-        exit 1
-    fi
+# The lock itself — preparing `.logs`, securing it, holding the descriptors — is
+# `scripts/install-lock.sh`'s, shared with `scripts/onetaskgraph-install.sh` so that
+# neither installer can be hardened without the other. What stays here is *which*
+# checkout's lock to take.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being readable between the resolution at the head of this file and here; no journey can produce that without racing the filesystem the test itself runs on.
+lock_helper="$script_dir/install-lock.sh"
+if [ ! -f "$lock_helper" ] || [ ! -r "$lock_helper" ]; then
+    echo "workspace-install: required helper is not a readable regular file: $lock_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 1
+fi
+# shellcheck source=scripts/install-lock.sh
+. "$lock_helper" || {
+    echo "workspace-install: required helper $lock_helper could not be loaded; it is readable but did not load — restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 1
 }
+if ! command -v install_lock_take >/dev/null 2>&1; then
+    echo "workspace-install: helper $lock_helper loaded but defines no install_lock_take; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 1
+fi
 
-take_install_lock "$tree_root"
+install_lock_take workspace-install "$tree_root" workspace-install.lock || exit 1
 # A forced run over a link into another checkout's tree changes which tree the
 # path names mid-run: the link's target before it discards the link, a tree of
 # this checkout's own after. One lock cannot cover that. The tree's lock, taken
@@ -110,8 +106,10 @@ take_install_lock "$tree_root"
 # Compared physically, since `$repo_root` is the caller's spelling of a path the
 # tree's root was resolved with `pwd -P`: one directory under two spellings is
 # one lock file, and a second `flock` on it would wait on this process forever.
+# The helper holds the second lock on a descriptor pair of its own, so taking it
+# releases nothing the first is holding.
 if [[ "$force" == true && "$tree_root" != "$(CDPATH='' cd -P -- "$repo_root" && pwd -P)" ]]; then
-    take_install_lock "$repo_root"
+    install_lock_take workspace-install "$repo_root" workspace-install.lock || exit 1
 fi
 # What a forced run adds, now that the ordinary one already reconciles: distrust
 # the installed tree itself. `just bootstrap` is its caller, and a clone it runs

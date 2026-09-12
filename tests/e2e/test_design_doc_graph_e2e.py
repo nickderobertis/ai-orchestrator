@@ -63,7 +63,7 @@ WORKER_MEMBER = "worker"
 #: role that omitted one would lose that quota entirely once everything ahead of it was
 #: exhausted, and both end on the primary Claude identity, which is last everywhere.
 WRITER_CHAIN = (
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
@@ -72,7 +72,7 @@ WRITER_CHAIN = (
 REVIEWER_CHAIN = (
     "claude-code:alternate",
     "claude-code:alternate2",
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:primary",
 )

@@ -52,6 +52,21 @@ if ! . "$script_dir/claude-alt-config-dir.sh"; then
     exit 2
 fi
 resolve_claude_alt_config_dir "review-plan" || exit $?
+# And the board credential, for the same reason one directory over: this reads the plan
+# out of whatever source its id names, a board included, and this checkout supplies that
+# credential from its own gitignored `.env`. Only the launch verbs read that file until
+# now, so a review of a project held on the board refused with the store's own `missing
+# or empty` on a host that had it configured.
+if [ ! -f "$script_dir/credentials-env.sh" ] || [ ! -r "$script_dir/credentials-env.sh" ]; then
+    echo "review-plan: required helper is not a readable regular file: $script_dir/credentials-env.sh; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/credentials-env.sh
+if ! . "$script_dir/credentials-env.sh"; then
+    echo "review-plan: $script_dir/credentials-env.sh is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+export_host_credentials "review-plan" || exit $?
 
 if [ "$#" -ne 1 ] || [ -z "$1" ] || [ "${1#-}" != "$1" ] || [ "${1#*:}" = "$1" ]; then
     echo "review-plan: expected exactly one qualified plan project and nothing else, got: $*" >&2

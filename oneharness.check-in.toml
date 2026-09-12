@@ -49,7 +49,7 @@ history_labels = { role = "agent" }
 # than ahead of the workers it is reporting about.
 # llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
@@ -63,11 +63,22 @@ harnesses = [
 [harness.codex]
 model = "gpt-5.6-sol"
 
+# A variant rather than the bare `codex`, so the environment rules below reach it; no
+# `unset_env` for `CODEX_HOME`, which this identity honours. AGENTS.md says why.
+[harness.codex.variant.primary]
+model = "gpt-5.6-sol"
+# The board credential is the plan store's and this role never reaches the store, so
+# it stops here rather than travelling to the provider. The board *nomination* is left
+# travelling on purpose: a live lane handed the owner, number and repository but no
+# token skips and says why, where one handed nothing cannot tell a misconfigured lane
+# from a deliberate one.
+unset_env = ["GH_PROJECTS_TOKEN"]
+
 # The second Codex identity. See scripts/codex-alt-home.sh for the indirection.
 [harness.codex.variant.alternate]
 model = "gpt-5.6-sol"
 env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
-unset_env = ["OPENAI_API_KEY"]
+unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN"]
 
 [harness.claude-code]
 # IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
@@ -85,6 +96,7 @@ unset_env = [
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
 ]
 
 [harness.claude-code.variant.alternate2]
@@ -95,6 +107,7 @@ unset_env = [
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
 ]
 
 # The last resort: Claude's default config directory, with every higher-precedence
@@ -107,6 +120,7 @@ unset_env = [
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
 ]
 
 # Inspect the effective, fully layered config (and where each value came from)

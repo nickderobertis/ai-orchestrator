@@ -21,9 +21,13 @@ refusal rather than a slower merge.
 """
 
 # The finding these answer is about which Nx project owns this file, so it is the file
-# that is suppressed and a project split that would resolve it.
+# that is suppressed and a project split that would resolve it. The third is the same
+# question asked of a shell suite, which these are not: they are pytest journeys over
+# the same recipes and scripts, and the xdist group is what holds them off the toolchain
+# lock.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+# llmlint: ignore-block[shell_test_tiers_stay_split] see above
 
 from __future__ import annotations
 
@@ -41,10 +45,17 @@ from typing import NamedTuple
 
 import pytest
 from harness_indirections import established_indirections
+from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
+
+#: Every journey here reaches its tool through `uv run`, which waits on the exclusive
+#: lock `uv` holds on this checkout's `.venv` while another journey re-provisions it.
+#: The constant rather than a string, because `--dist loadgroup` co-locates only tests
+#: sharing one group *name*, and the writers name this one.
+pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 
 #: The branch under test, in the shape a dispatch leaves behind.
 FINISHED_BRANCH = "claude/finished-work"
@@ -165,6 +176,11 @@ class Publication(NamedTuple):
     #: `None` where this repository states no subject policy. Outside the checkout, so
     #: reading it cannot be confused with the branch's own content.
     subjects_seen: Path | None = None
+    #: Where the substituted provider records each launch it was asked to make. A
+    #: `local-direct` landing must draft nothing, and this is what says so: the file is
+    #: written by the stand-in on its first turn, so its absence is the absence of a turn
+    #: rather than the absence of a body.
+    drafting_attempts: Path | None = None
 
 
 class OpenedChange(NamedTuple):
@@ -312,9 +328,31 @@ def _publication(
     (home / "rules.yml").write_text(policy, encoding="utf-8")
     environment = dict(os.environ)
     environment["ONEVCS_HOME"] = str(home)
+    # The paid provider is substituted here exactly as it is for the hosted identity
+    # below, and for a sharper reason: these journeys must reach it **never**, and an
+    # environment that named no stand-in could not tell "drafted nothing" from "drafted
+    # against a real subscription". It was the second: with the drafting turn live one
+    # of these ran 10m25s into its own 720-second bound, and 2m10s with the provider
+    # substituted. Both halves are needed — `ONEHARNESS_BIN_*` keys on a harness id and
+    # reaches no variant, and `PATH` is the one seam every variant of every family
+    # shares.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # And the identities that seam cannot reach; see `no_paid_provider`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    # An answer it would give if it were ever asked, so a journey that reached it fails
+    # on the attempt below rather than on a stand-in with nothing to say.
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps({"body": DRAFTED_BODY})])
+    attempts = tmp_path / "launches"
+    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(attempts)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(tmp_path / "prompts.jsonl")
+    # Keeps this journey's harness history out of the host's.
+    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment.update(established_indirections(INDIRECTION_CALLER))
     registered = _just("register-repo", str(checkout), environment=environment)
     assert registered.returncode == 0, registered.stderr + registered.stdout
-    return Publication(checkout, origin, environment, subjects_seen)
+    return Publication(checkout, origin, environment, subjects_seen, attempts)
 
 
 def _write_pre_push(seed: Path, body: str) -> None:
@@ -454,6 +492,96 @@ def test_publish_branch_lands_a_complete_branch_on_its_base(tmp_path: Path) -> N
     # to find the work afterwards.
     landed = _git("rev-parse", BASE, cwd=publication.origin).strip()
     assert landed in published.stdout, published.stdout
+
+
+@pytest.mark.parametrize(
+    ("recipe", "branch", "prepare"),
+    [
+        pytest.param("publish-branch", FINISHED_BRANCH, _finished_branch, id="publish-branch"),
+        pytest.param("repo-recover", INCOMPLETE_BRANCH, _incomplete_branch, id="repo-recover"),
+    ],
+)
+def test_a_local_direct_landing_spends_no_drafting_turn(
+    tmp_path: Path,
+    recipe: str,
+    branch: str,
+    prepare: Callable[[Path], object],
+) -> None:
+    """`local-direct` opens no change request, so there is nothing for a body to describe.
+
+    The wrapper puts a drafting turn in front of the two verbs that open a change
+    request — and this policy is not one of them: it builds the base's squash commit
+    itself, and `onevcs` has no path that attaches a body to a commit. Every turn spent
+    here bought prose nothing would ever read, on the slowest seam in the landing.
+
+    Both verbs, because the skip sits in the one wrapper both go through and a guard
+    read for one verb and not the other is exactly the kind of drift a shared wrapper
+    invites: a recovery drafts through the same graph as a publication, so it has the
+    same turn to save on the same policy.
+
+    Read from the provider's own launch log rather than from the landing's report,
+    because the two failure modes are indistinguishable in that report: a drafter that
+    ran and a drafter that did not both leave a base commit with no body attached. The
+    log is written by the stand-in on its first turn, so its absence is the absence of a
+    turn.
+
+    The identity carries a passing `pre-push` hook because `recover` refuses one whose
+    merge path verifies nothing — an attestation with nothing behind it attests nothing —
+    and a publication reaches the same hook, so both verbs land here under one fixture.
+    """
+    publication = _publication(tmp_path, pre_push="exit 0")
+    prepare(publication.checkout)
+    assert publication.drafting_attempts is not None
+
+    published = _just(
+        recipe,
+        branch,
+        "--repo",
+        str(publication.checkout),
+        environment=publication.environment,
+        timeout=600,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    # The landing still happened, so this is a turn saved rather than a verb skipped.
+    assert PUBLISHED_FILE in _git("ls-tree", "--name-only", BASE, cwd=publication.origin), (
+        f"the finished work never reached the origin's {BASE}:\n{published.stdout}"
+    )
+    assert not publication.drafting_attempts.exists(), (
+        f"a `local-direct` landing reached the drafting provider "
+        f"{publication.drafting_attempts.read_text(encoding='utf-8')!r}; that policy opens "
+        f"no change request, so the turn bought a body nothing can carry"
+    )
+
+
+def test_a_landing_still_drafts_where_the_policy_opens_a_change_request(
+    tmp_path: Path,
+) -> None:
+    """The other half of the rule above, which is what keeps it from being a blanket skip.
+
+    Reading the workflow wrong in the safe direction — skipping every draft — is a
+    regression this repository already paid for once, when every branch landed by hand
+    opened with an empty description. So the skip is held to the policy it is about: the
+    same wrapper, the same flags, an identity whose rules resolve `change-open`, and a
+    body on the change request it opened.
+    """
+    hosted = _hosted(tmp_path, answers=[json.dumps({"body": DRAFTED_BODY})])
+    _finished_branch(hosted.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        environment=hosted.environment,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    opened = _opened_change_requests(hosted)
+    assert [change.body for change in opened] == [DRAFTED_BODY], (
+        f"the workflow read that skips drafting for `local-direct` also skipped it for "
+        f"`change-open`, whose change request is exactly what a body is for: {opened}"
+    )
 
 
 def test_publish_branch_refuses_a_branch_the_repositorys_own_merge_path_rejects(
@@ -1537,3 +1665,4 @@ def test_a_landing_that_cannot_remove_the_drafted_body_reports_it_and_still_land
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[shell_test_tiers_stay_split]

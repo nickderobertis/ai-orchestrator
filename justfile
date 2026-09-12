@@ -269,9 +269,12 @@ finish-plan *args:
 # is a project that could not be read or a check that could not be run, so nothing was
 # judged. A plan builder branches on the difference. And it reads the project only: it
 # launches nothing, spends no provider turn, and is safe to run beside live work.
+#
+# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
+# header is the one account of why.
 [doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
 check-plan *args:
-    @uv run orchestrator-check-plan "$@"
+    @./scripts/plan-store.sh uv run orchestrator-check-plan "$@"
 
 # Spend the judged turn that clears a plan's authored content: `just review-plan
 # <source>:<project>`.
@@ -317,10 +320,13 @@ review-plan *args:
 # The install line is `just plans`'s, for its reason: a fresh worktree or a publication
 # clone fires no `SessionStart` hook, so the plan-store CLI this reads is healed into this
 # checkout's own `.venv/bin` at the release this checkout pinned.
+#
+# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
+# header is the one account of why.
 [doc("Record the user's approval of one plan project's design document.")]
 approve-design *args:
     @./scripts/onetaskgraph-install.sh
-    @uv run orchestrator-approve-design "$@"
+    @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"
 
 # Copy a cleared plan onto the board this repository plans against: `just copy-plan
 # <source>:<project> [--to SOURCE] [<onetaskgraph project copy flags>]`.
@@ -359,10 +365,13 @@ approve-design *args:
 # instead it would be echoed to the operator on every run, which is the opposite of what
 # the rule asks for.
 # llmlint: ignore-block[tool_output_is_signal] the store's per-record report — one line per project and task, naming it created, updated or unchanged — is what a copy is run to produce, so it reaches the operator whole, exactly as for the `plans` reader below. This command's own output is only its refusals, each naming the next action.
+#
+# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
+# header is the one account of why.
 [doc('Copy a reviewed plan project, and its tasks, onto the plan board this repository launches from.')]
 copy-plan *args:
     @./scripts/onetaskgraph-install.sh
-    @uv run orchestrator-copy-plan "$@"
+    @./scripts/plan-store.sh uv run orchestrator-copy-plan "$@"
 # llmlint: ignore-end[tool_output_is_signal]
 
 # Read the next planner surface, with the events that led to it: `just channel-next
@@ -739,10 +748,13 @@ session-setup:
 # setup installs the release `config/onetaskgraph.version` names there, so the binary
 # this reads is the one this checkout pinned rather than whichever checkout on the
 # host provisioned last.
+#
+# `scripts/plan-store.sh` establishes this checkout's own board credential first; its
+# header is the one account of why.
 # llmlint: ignore[tool_output_is_signal] The selected query's result is this viewing command's product.
 plans *args:
-    ./scripts/onetaskgraph-install.sh
-    ./.venv/bin/onetaskgraph {{args}}
+    @./scripts/onetaskgraph-install.sh
+    @./scripts/plan-store.sh ./.venv/bin/onetaskgraph {{args}}
 
 # --- llmlint (LLM-judge tier) --------------------------------------------
 # Non-deterministic, harness-backed, and kept OUT of `just check`. It runs at

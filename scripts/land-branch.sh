@@ -24,6 +24,15 @@
 #     verb runs anyway, with no body — exactly what a run's publication closeout does
 #     when its drafting graph produces nothing. A branch that could not be described is
 #     still a branch that has to land.
+#   * **A `local-direct` identity is never drafted for.** That policy builds the base's
+#     squash commit itself and opens no change request, so there is no description for a
+#     body to be, and the turn is spent on prose nothing will ever read. The workflow is
+#     taken from `onevcs rules check`, never from `onevcs resolve`'s own `workflow`
+#     field — every identity on this host registers as `remote` while its rules resolve
+#     `local-direct`, so reading one for the other answers the wrong thing for all of
+#     them — and an answer this cannot read is drafted for exactly as before, which is
+#     the rule every other read here follows: miss rather than skip a body somebody
+#     wanted.
 #
 # **The turn is spent before the push**, because the body is an argument to `onevcs`
 # and the verb is what pushes — so a branch the merge path then refuses has paid for a
@@ -103,6 +112,10 @@ forwarded=()
 branch=""
 checkout=""
 caller_has_body=0
+#: What `--repo` was given, before the resolution below rewrites `checkout` into a
+#: directory. `onevcs rules check` is asked about the value the operator typed, because
+#: an alias is what the registry maps and what that verb takes.
+repo_argument=""
 drafting=1
 readable=1
 positional_seen=0
@@ -145,12 +158,14 @@ while [ $# -gt 0 ]; do
       ;;
     --repo=*)
       checkout="${argument#--repo=}"
+      repo_argument="$checkout"
       forwarded+=("$argument")
       ;;
     --repo)
       forwarded+=("$argument")
       if [ $# -gt 0 ]; then
         checkout="$1"
+        repo_argument="$1"
         forwarded+=("$1")
         shift
       fi
@@ -191,6 +206,25 @@ land() {
 if [ "$drafting" -eq 0 ] || [ "$caller_has_body" -eq 1 ] || [ "$readable" -eq 0 ] ||
   [ -z "$branch" ] || [ -z "$checkout" ]; then
   land
+fi
+
+# What publishing this identity actually does. `local-direct` opens no change request —
+# it builds the base's squash commit itself — so a drafted body describes nothing and the
+# turn is waste: measured on this repository's own publication journeys, which are
+# `local-direct` throughout and were paying an agent turn each to describe a change
+# request that never existed.
+#
+# Read from `rules check` and never from `onevcs resolve`'s own `workflow`, which is what
+# `onevcs register` derived from the origin and is explicitly not the routing;
+# `orchestrator/publication_guard.py` reads the same line the same way for the same
+# reason. Only a definite `local-direct` skips: an unreadable answer, an unregistered
+# value, or a policy this does not know drafts exactly as before, because this wrapper
+# adds no refusal and takes away no body somebody wanted.
+if policy=$(uv run onevcs rules check "$repo_argument" 2>/dev/null); then
+  publication_policy=$(printf '%s\n' "$policy" | sed -n 's/^publication:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)
+  if [ "$publication_policy" = local-direct ]; then
+    land
+  fi
 fi
 
 # What `--repo` named, as a directory the drafter can read the branch from. Asked of

@@ -21,7 +21,13 @@ export_host_credentials() {
     # nothing about which helper was called wrong.
     local caller=${1:?export_host_credentials: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, the way scripts/onepipeline.sh passes onepipeline, then retry}
     local here credentials line key value quote line_number=0
-    local -a lines=()
+    local -a lines=() defined=()
+    # Which names the file defines, whether or not each was exported, for a caller that
+    # has to place a refusal: `scripts/plan-store.sh` tells a name the file lacks from one
+    # it defines without a value. Set here, by the one parser of that file, rather than
+    # matched again by a second one. Empty until the file has been read whole.
+    # shellcheck disable=SC2034  # read by the caller that sourced this helper
+    credential_file_names=""
     # From this file's own location, because the file being loaded is this checkout's —
     # never from `$PWD`, which a launcher may be invoked from anywhere.
     # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this helper's own directory stops being enterable between a caller sourcing it and calling this; no journey can produce that without racing the filesystem the test itself runs on.
@@ -84,8 +90,11 @@ export_host_credentials() {
         # A name somebody exported deliberately for one command has to beat a file
         # written once and forgotten, or the file becomes impossible to override
         # without editing it.
+        defined+=("$key")
         if [[ ! -v $key ]]; then
             export "$key=$value"
         fi
     done
+    # shellcheck disable=SC2034  # read by the caller that sourced this helper
+    credential_file_names="${defined[*]+"${defined[*]}"}"
 }

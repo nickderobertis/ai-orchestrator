@@ -1308,6 +1308,21 @@ than forwarded, since `onevcs` has no such thing. It is the escape for a bulk la
 an operator working down `just recoverable` over dozens of branches pays one agent turn
 per branch otherwise.
 
+**A third case needs no escape, because there is nothing to describe.** A `local-direct`
+identity builds the base's squash commit itself and opens no change request, and `onevcs`
+has no path that attaches a body to a commit — so a body drafted for one is prose nobody
+can ever read, bought at the slowest seam in the landing. The wrapper therefore asks
+`onevcs rules check` for the resolved publication policy and lands straight away when
+the answer is `local-direct`. It is read from `rules check` and never from `onevcs
+resolve`'s own `workflow` field, which is what `onevcs register` derived from the origin
+and is explicitly not the routing: every identity on this host registers as `remote`
+while its rules resolve `local-direct`, so reading one for the other would skip drafting
+for all of them. Only a definite `local-direct` skips — an answer the wrapper cannot
+read, an unregistered value, and a policy it does not know each draft exactly as before,
+which is the same rule the checkout lookup above follows: miss rather than take away a
+body somebody wanted. `tests/e2e/test_publish_branch_e2e.py` drives both halves against
+a real drafting seam, the skip and the `change-open` landing that still gets its body.
+
 **A drafter whose member died says what killed it, and keeps the proof.** Where the
 graph ran and nothing answered, `oneagentgraph` is what knows why: it classifies each
 dead member with a `rule`, a `cause`, and a `detail` naming the thing to fix — the

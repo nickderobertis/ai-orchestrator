@@ -38,7 +38,8 @@
       "{workspaceRoot}/tests/e2e/test_supervision_readings_e2e.py",
       "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
       "{workspaceRoot}/tests/e2e/waits.py",
-      "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py"
+      "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py",
+      "{workspaceRoot}/tests/onetaskgraph_release.py"
     ],
     "planToolingWorkspace": [
       "{workspaceRoot}/nx.json",
@@ -130,6 +131,7 @@
       "{workspaceRoot}/scripts/check-nx-cache.sh",
       "{workspaceRoot}/scripts/nx.sh",
       "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/install-lock.sh",
       "{workspaceRoot}/scripts/workspace-install.sh",
       "{workspaceRoot}/scripts/python-install.sh",
       "{workspaceRoot}/scripts/onetaskgraph-install.sh",

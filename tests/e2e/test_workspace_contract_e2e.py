@@ -28,6 +28,7 @@ from typing import NamedTuple
 import pytest
 from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from nx_workspace import copy_checkout, copy_working_tree, shares_workspace_install
+from onetaskgraph_release import path_without
 from waits import timeout as e2e_timeout
 
 # Deliberately no module-level tier mark. Most of this file drives `just` recipes
@@ -200,6 +201,9 @@ fi
         "preserved-log.sh",
         "coverage-total.sh",
         "workspace-install.sh",
+        # The lock that provisioning takes, which `workspace-install.sh` and its plan-store
+        # sibling both source rather than each preparing `.logs` their own way.
+        "install-lock.sh",
         # The two that decide which projects `just check` runs over: real, because
         # deciding that is the behaviour these journeys are about.
         "nx-selection.sh",
@@ -285,6 +289,9 @@ if [[ "${FAIL_COMMAND:-}" == "bun" ]]; then
   echo "bun: captured failure detail" >&2
   exit 9
 fi
+# An install that takes long enough to overlap a concurrent caller, where a journey asks
+# for one: a racing journey with an instant install would serialize by luck.
+sleep "${BUN_INSTALL_SECONDS:-0}"
 mkdir -p node_modules/.bin
 cat >node_modules/.bin/nx <<'NX'
 #!/usr/bin/env bash
@@ -908,6 +915,7 @@ def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
     for script in (
         "nx.sh",
         "preserved-log.sh",
+        "install-lock.sh",
         "workspace-install.sh",
         "python-install.sh",
         "onetaskgraph-install.sh",
@@ -1079,8 +1087,17 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
     logs = checkout / ".logs"
     match mode:
         case "lock-directory":
-            # A regular file where the directory belongs: `mkdir -p` refuses.
+            # A regular file where the directory belongs: `mkdir` refuses it outright.
             logs.write_text("not a directory\n", encoding="utf-8")
+        case "linked-lock-directory":
+            # The property this installer did not have while it prepared `.logs` itself:
+            # a link is followed by `chmod`, so a bare create-and-secure took permissions
+            # away from whatever the link pointed at, outside the checkout entirely.
+            # `mkdir` refuses an existing path — a link included rather than followed —
+            # so what the shared helper meets here is the link, not its target.
+            elsewhere = checkout.parent / "elsewhere-linked-lock-directory"
+            elsewhere.mkdir(mode=0o755)
+            logs.symlink_to(elsewhere)
         case "unreadable-lock" | "write-only-lock":
             logs.mkdir()
             lock = logs / "workspace-install.lock"
@@ -1097,6 +1114,20 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
         case "unopenable-log":
             logs.mkdir()
             (logs / "workspace-install.log").mkdir()
+        case "unloadable-helper":
+            # Readable, and not loadable: the installer checked the first and assumed the
+            # second, so a helper truncated mid-function died with bash's own syntax error
+            # and no repair anybody could act on.
+            (checkout / "scripts" / "install-lock.sh").write_text(
+                "install_lock_take() {\n", encoding="utf-8"
+            )
+        case "helper-without-the-entry-point":
+            # Loadable, and empty of the one thing it is sourced for. Left unguarded this
+            # surfaces as `install_lock_take: command not found`, which names a function
+            # rather than the file to restore.
+            (checkout / "scripts" / "install-lock.sh").write_text(
+                "# a helper that defines nothing\n", encoding="utf-8"
+            )
         case _:  # pragma: no cover - guards the parametrization above
             raise AssertionError(f"unknown installer sabotage {mode!r}")
 
@@ -1105,10 +1136,13 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
     ("mode", "message"),
     [
         ("lock-directory", "cannot prepare"),
+        ("linked-lock-directory", "is a symbolic link"),
         ("unreadable-lock", "cannot open the install lock at"),
         ("write-only-lock", "cannot open the install lock at"),
         ("unacquirable-lock", "cannot serialize the locked install"),
         ("unopenable-log", "preserved-log: cannot open"),
+        ("unloadable-helper", "could not be loaded"),
+        ("helper-without-the-entry-point", "defines no install_lock_take"),
     ],
 )
 @pytest.mark.reads_recipes
@@ -1326,6 +1360,7 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
         lock.touch()
         locks.append(lock.open())
     owner_held, copy_held = locks
+    owner_lock = owner / ".logs" / "workspace-install.lock"
 
     try:
         for held in (owner_held, copy_held):
@@ -1348,9 +1383,22 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
                 assert modules.is_symlink(), (
                     f"the forced run discarded the link while the {whose} lock was held"
                 )
+                if held is copy_held:
+                    # Waiting on its own lock, the run must still be holding the
+                    # owner's: the two are held at once, and a helper that opened the
+                    # second on the first one's descriptors would have released the
+                    # first by closing them. `flock` conflicts across opens of one
+                    # process, so a fresh open here answers who holds it.
+                    with owner_lock.open() as probe, pytest.raises(BlockingIOError):
+                        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(held, fcntl.LOCK_UN)
         except BaseException:
             process.kill()
+            # Released before the pipes are drained: the `flock` the run forks waits
+            # on the lock this journey holds, keeps the run's pipes open while it
+            # does, and is not the process the kill above reached.
+            for held in locks:
+                fcntl.flock(held, fcntl.LOCK_UN)
             process.communicate()
             raise
     finally:
@@ -1367,6 +1415,237 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
     )
     assert (owner / "node_modules" / ".bin" / "nx").is_file(), (
         "the forced run in the copy reached the owning checkout's tree"
+    )
+
+
+#: How many callers race one flock-less install below: enough that an unserialized
+#: fallback would show as more than one install, and no more, because each is a process.
+FLOCKLESS_RACERS = 3
+
+#: How long the raced install takes, so the callers overlap rather than serialize by
+#: luck: with an instant install the first could finish before the second started.
+BUN_INSTALL_SECONDS = "2"
+
+
+def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str) -> dict[str, str]:
+    """The wrapper environment on a platform that ships no `flock`.
+
+    Stated rather than assumed: every journey below passes under `flock` too, so
+    without establishing it is gone each would prove the `flock` path a second time.
+    """
+    stripped = os.pathsep.join((str(checkout / "bin"), str(path_without(tmp_path, "flock"))))
+    resolves = subprocess.run(
+        ["bash", "-c", "command -v flock"],
+        env={"PATH": stripped},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert resolves.returncode != 0, (
+        f"this journey's PATH still resolves flock at {resolves.stdout.strip()!r}, so it "
+        "would prove the `flock` path a second time rather than the fallback"
+    )
+    return _nx_wrapper_env(checkout, tmp_path, trace, PATH=stripped, **overrides)
+
+
+# Both findings these answer are that the two fallback journeys below are selected by a
+# marker inside the `orchestrator` project rather than owned by an Nx project of their own.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes` is the
+# marker `tests/conftest.py` requires of any test that opens a script, and the tier it
+# selects, `orchestrator:test-recipes`, is keyed on `recipeWorkspace` — which covers
+# `scripts/**/*`, so an edit to the installer or the lock helper these drive selects it
+# already. That is the edge a project of its own would add, and moving the fifty-odd
+# recipe journeys of this module into one is a change to the tier layout, not to these.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
+# reason: the seconds each spends are the raced install's, so three callers overlap
+# rather than serialize by luck, and the two windows a forced run is watched not
+# running Bun in; the key that selects them is the narrowest one that reads the scripts
+# they exercise.
+@pytest.mark.reads_recipes
+def test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback(
+    tmp_path: Path,
+) -> None:
+    """The other installer through the same fallback, on a platform with no `flock`.
+
+    `flock` is util-linux and a stock macOS has none, so `scripts/install-lock.sh`
+    falls back to a mutex directory — and only the plan-store installer used to be
+    driven through that path, while this one reached the fallback through the same
+    helper unproved. Every caller succeeds and exactly one installs: the rest arrive
+    at a tree the first already provisioned, and answer it as Bun does, `(no changes)`.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "flockless")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+    environment = _flockless_env(checkout, tmp_path, trace, BUN_INSTALL_SECONDS=BUN_INSTALL_SECONDS)
+
+    racing = [
+        subprocess.Popen(
+            [str(checkout / "scripts" / "workspace-install.sh")],
+            cwd=checkout,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for _ in range(FLOCKLESS_RACERS)
+    ]
+    outcomes = [caller.communicate(timeout=e2e_timeout(180)) for caller in racing]
+
+    assert [caller.returncode for caller in racing] == [0] * FLOCKLESS_RACERS, (
+        f"a caller racing {FLOCKLESS_RACERS - 1} others with no `flock` on its PATH was "
+        f"refused rather than waiting for the directory the fallback locks with:\n{outcomes}"
+    )
+    installs = trace.read_text(encoding="utf-8").splitlines()
+    assert sorted(installs) == sorted(
+        ["bun install --frozen-lockfile"]
+        + ["bun install --frozen-lockfile (no changes)"] * (FLOCKLESS_RACERS - 1)
+    ), (
+        f"{FLOCKLESS_RACERS} concurrent callers with no `flock` recorded {installs}; one "
+        f"install and the rest finding it is what a serialized fallback leaves"
+    )
+    assert not (checkout / ".logs" / "workspace-install.lock.d").exists(), (
+        "the fallback's own lock directory outlived every caller that took it; nothing "
+        "releases a directory but the shell that made it, so one left behind is what a "
+        "later install inherits and waits out"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both(
+    tmp_path: Path,
+) -> None:
+    """The two-lock forced run through the fallback, which has to release two mutexes.
+
+    Under `flock` the kernel releases a lock when its holder exits; under the fallback
+    the sourcing shell's one EXIT trap does, and a forced run in a copy sharing an
+    install takes two locks in that shell — the owning tree's, then its own. A trap
+    re-armed for the second would have dropped the first, leaving a mutex behind that
+    every later install of the owner waits the whole budget out on. So this holds each
+    mutex in turn, the way the `flock` journey above holds each lock, reads that the run
+    neither ran Bun nor discarded the link while either was held, and then reads that
+    neither mutex outlived it.
+    """
+    owner = _nx_wrapper_checkout(tmp_path, "owner")
+    _add_nx_wrapper_doubles(owner)
+    _mark_nx_installed(owner)
+    copy = _nx_wrapper_checkout(tmp_path, "copy")
+    _add_nx_wrapper_doubles(copy)
+    modules = copy / "node_modules"
+    modules.symlink_to(owner / "node_modules", target_is_directory=True)
+    trace = tmp_path / "trace"
+    mutexes = []
+    for checkout in (owner, copy):
+        mutex = checkout / ".logs" / "workspace-install.lock.d"
+        mutex.parent.mkdir(mode=0o700)
+        mutex.mkdir()
+        mutexes.append(mutex)
+    owner_held, copy_held = mutexes
+
+    process = subprocess.Popen(
+        [str(copy / "scripts" / "workspace-install.sh"), "--force"],
+        cwd=copy,
+        env=_flockless_env(copy, tmp_path, trace),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
+            # The window a run not waiting on this mutex would have run Bun inside
+            # many times over: the doubled install returns in milliseconds.
+            with pytest.raises(subprocess.TimeoutExpired):
+                process.wait(timeout=e2e_timeout(2))
+            assert not trace.exists(), f"the forced run ran Bun while the {whose} mutex was held"
+            assert modules.is_symlink(), (
+                f"the forced run discarded the link while the {whose} mutex was held"
+            )
+            if held is copy_held:
+                # Waiting on its own mutex, the run must still be holding the owner's,
+                # which under the fallback is the directory it re-made once this
+                # journey released it.
+                assert owner_held.is_dir(), (
+                    "the forced run let go of the owner's mutex when it took its own"
+                )
+            held.rmdir()
+    except BaseException:
+        process.kill()
+        process.communicate()
+        raise
+    _, stderr = process.communicate(timeout=e2e_timeout(30))
+
+    assert process.returncode == 0, stderr
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert not modules.is_symlink() and (modules / ".bin" / "nx").is_file(), (
+        "the forced run left the copy sharing the owner's tree"
+    )
+    assert (owner / "node_modules" / ".bin" / "nx").is_file(), (
+        "the forced run in the copy reached the owning checkout's tree"
+    )
+    left = [str(mutex) for mutex in mutexes if mutex.exists()]
+    assert not left, (
+        f"{left} outlived the forced run that took both; the one EXIT trap has to "
+        "release every mutex the shell took, or the next install of that checkout "
+        "waits the whole budget out on a lock nothing holds"
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+def _install_lock_limit() -> int:
+    """How many locks `scripts/install-lock.sh` lets one shell hold, off its own declaration.
+
+    Each is a spelled-out descriptor pair, so the bound is the number of pairs.
+    """
+    declared = re.search(
+        r"^INSTALL_LOCK_LIMIT=(\d+)$",
+        (ROOT / "scripts" / "install-lock.sh").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert declared is not None, "scripts/install-lock.sh no longer declares INSTALL_LOCK_LIMIT"
+    return int(declared.group(1))
+
+
+INSTALL_LOCK_LIMIT = _install_lock_limit()
+
+
+@pytest.mark.reads_recipes
+def test_the_lock_helper_refuses_a_third_lock_rather_than_reusing_a_pair(
+    tmp_path: Path,
+) -> None:
+    """A lock past the helper's pairs is refused before it touches anything.
+
+    Each lock is held on its own descriptor pair, because taking one on a pair already
+    held would close it and release the `flock` on it. The pairs are spelled out, so a
+    caller asking for one more than there are is a defect in the caller, and the helper
+    says so and prepares nothing — the checkouts it already holds stay held, and the
+    one it refused gains no lock directory.
+    """
+    checkouts = [tmp_path / f"held-{index}" for index in range(INSTALL_LOCK_LIMIT + 1)]
+    for checkout in checkouts:
+        checkout.mkdir()
+    takes = " && ".join(
+        f"install_lock_take probe '{checkout}' probe.lock" for checkout in checkouts
+    )
+
+    result = _run(
+        "bash",
+        "-c",
+        f". '{ROOT / 'scripts' / 'install-lock.sh'}' && {takes}",
+        cwd=tmp_path,
+        env=os.environ.copy(),
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert f"holds at most {INSTALL_LOCK_LIMIT}" in result.stderr
+    assert "defect in the caller" in result.stderr
+    for checkout in checkouts[:INSTALL_LOCK_LIMIT]:
+        assert (checkout / ".logs" / "probe.lock").is_file(), (
+            f"the helper refused the lock past its bound and the one at {checkout} was never taken"
+        )
+    assert not (checkouts[INSTALL_LOCK_LIMIT] / ".logs").exists(), (
+        "the helper prepared a lock directory for the lock it refused"
     )
 
 

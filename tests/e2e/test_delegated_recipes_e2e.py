@@ -48,6 +48,7 @@ from typing import NamedTuple, cast
 
 import plan_root_variable
 import pytest
+from waits import timeout as e2e_timeout
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,6 +83,9 @@ WRAPPER_SCRIPTS = (
     # the case that heal no-ops in — but it has to be there to no-op.
     "onetaskgraph-install.sh",
     "credentials-env.sh",
+    # Every board command goes through this one, which is where this checkout's own
+    # credential file is read for a command that is not a launch.
+    "plan-store.sh",
     "ask-manager-env.sh",
     "ask-manager.sh",
     # `just plan` writes its project under the plan-authoring root this one resolves, so
@@ -434,13 +438,20 @@ DELEGATIONS = (
     # The published flag is spelled differently; the recipe keeps the spelling the
     # planner doctrine names and the wrapper absorbs the difference.
     Delegation("repos", ("--audit-gate-coverage",), "uv run onevcs repos --audit-gates"),
-    # The lookup in front of both landing rows is the drafter's, not the verb's: a
-    # `--repo` that is not a directory may still be a registered alias.
+    # The two lookups in front of both landing rows are the drafter's, not the verb's.
+    # The first asks which publication policy the identity resolves, because
+    # `local-direct` opens no change request and so is never drafted for; the second
+    # turns a `--repo` that is not a directory into one, since it may be a registered
+    # alias. Both answer nothing here — the traced `uv` prints none — so drafting
+    # proceeds, which is the fallthrough each of those reads is written to take.
     Delegation(
         "repo-recover",
         ("claude/work", "--repo", "/checkout"),
         "uv run onevcs recover claude/work --repo /checkout",
-        before=("uv run onevcs resolve /checkout",),
+        before=(
+            "uv run onevcs rules check /checkout",
+            "uv run onevcs resolve /checkout",
+        ),
     ),
     # The third landing verb, and the one that closes the gap the other two left: a
     # complete branch no session holds had neither an incomplete marker for `recover`
@@ -449,7 +460,10 @@ DELEGATIONS = (
         "publish-branch",
         ("claude/work", "--repo", "/checkout"),
         "uv run onevcs publish-branch claude/work --repo /checkout",
-        before=("uv run onevcs resolve /checkout",),
+        before=(
+            "uv run onevcs rules check /checkout",
+            "uv run onevcs resolve /checkout",
+        ),
     ),
     # Both optional flags reach the verb. That they arrive as the *words* they were
     # typed as is a separate claim this trace cannot make — it joins argv with spaces —
@@ -467,7 +481,10 @@ DELEGATIONS = (
         ),
         "uv run onevcs publish-branch claude/work --repo /checkout "
         "--title Add the thing --policy change-open",
-        before=("uv run onevcs resolve /checkout",),
+        before=(
+            "uv run onevcs rules check /checkout",
+            "uv run onevcs resolve /checkout",
+        ),
     ),
     # The two escapes from drafting, which are the recipe's own additions to the verb's
     # argument list rather than `onevcs` options. `--no-draft` is consumed here — the
@@ -1097,8 +1114,13 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        # The drafter's checkout lookup. A word of it reaching the invocation below
-        # would be a wrapper rewriting what the caller typed.
+        # The drafter's policy read and its checkout lookup. A word of either reaching
+        # the invocation below would be a wrapper rewriting what the caller typed.
+        "run",
+        "onevcs",
+        "rules",
+        "check",
+        "/checkout",
         "run",
         "onevcs",
         "resolve",
@@ -2162,3 +2184,401 @@ def test_an_outcome_read_that_could_not_run_is_named_rather_than_passed_off_as_n
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: The credential this checkout supplies from its own gitignored `.env`, and what stands
+#: in for it below. Not a real token, and never asserted as one — what is asserted is
+#: that the name arrived at the command the recipe delegates to.
+BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
+PLANTED_CREDENTIAL = "not-a-real-token-planted-by-this-journey"
+
+#: Records whether the board credential reached the delegated command, which the shared
+#: trace cannot say: it records argv, and a credential is not on one.
+CREDENTIAL_RECORDING_UV = """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${GH_PROJECTS_TOKEN-<unset>}" >>"$TRACE_FILE"
+"""
+
+
+class BoardRecipe(NamedTuple):
+    """One recipe that reads the plan store, and the arguments that make it read."""
+
+    recipe: str
+    arguments: tuple[str, ...]
+
+
+#: Which board recipes read the plan store, and the argument each takes. `just plans` is
+#: the reader, the other three are this repository's own commands over the same store.
+BOARD_RECIPES = (
+    BoardRecipe("plans", ("project", "list")),
+    BoardRecipe("check-plan", ("plans:example",)),
+    BoardRecipe("copy-plan", ("authoring:example",)),
+    BoardRecipe("approve-design", ("plans:example",)),
+)
+
+
+@pytest.fixture
+def without_the_board_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop the credential the enclosing dispatch carries, for the run of one journey.
+
+    Every worker verifies itself by running this suite from inside a dispatch, and a
+    launch exports this name into it — so a journey that inherited it would be asserting
+    about the host's own credential rather than about the one the checkout under test
+    supplies. `scripts/credentials-env.sh` never overrides a name the process already
+    defines, deliberately, which is exactly what would make that inheritance invisible.
+    """
+    monkeypatch.delenv(BOARD_CREDENTIAL, raising=False)
+
+
+def _board_checkout(tmp_path: Path, credentials: str | None) -> tuple[Path, Path]:
+    """A checkout whose board commands are traced for the credential they were handed."""
+    checkout, trace = _checkout(tmp_path)
+    # Written rather than copied: this repository's own `onetaskgraph.yaml` is outside
+    # `recipeWorkspace`, so a journey in this tier that read it would replay a verdict
+    # recorded before it changed. What it states here is the shape `scripts/plan-store.sh`
+    # reads a credential name out of; that the *real* source still spells it `token_env`
+    # and still names this variable is `tests/test_plan_source_roots.py`'s to hold.
+    (checkout / "onetaskgraph.yaml").write_text(
+        "default_sources: [plans]\n"
+        "sources:\n"
+        "  plans:\n"
+        "    plugin: github-projects\n"
+        "    config:\n"
+        f"      token_env: {BOARD_CREDENTIAL}\n",
+        encoding="utf-8",
+    )
+    if credentials is not None:
+        (checkout / ".env").write_text(credentials, encoding="utf-8")
+    (checkout / "bin/uv").write_text(CREDENTIAL_RECORDING_UV, encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+    # `just plans` reads the CLI out of this checkout's own environment rather than
+    # through `uv`, so the recorder stands there too.
+    store = checkout / ".venv" / "bin" / "onetaskgraph"
+    store.parent.mkdir(parents=True)
+    store.write_text(CREDENTIAL_RECORDING_UV, encoding="utf-8")
+    store.chmod(0o755)
+    return checkout, trace
+
+
+@pytest.mark.parametrize("board", BOARD_RECIPES, ids=[board.recipe for board in BOARD_RECIPES])
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_recipe_is_handed_the_credential_this_checkout_supplies(
+    tmp_path: Path, board: BoardRecipe
+) -> None:
+    """The half of the credential seam that was missing, driven through the real recipe.
+
+    `scripts/credentials-env.sh` is the one source of what this checkout supplies, and
+    for a long time only the launch verbs called it — so a **dispatch** was handed every
+    name in the file and the commands that read the plan store were handed none. Each of
+    these refused with onetaskgraph's own `environment variable GH_PROJECTS_TOKEN is
+    missing or empty` on a host where that file was configured correctly.
+    """
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+
+    result = _run(checkout, trace, board.recipe, *board.arguments)
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text(encoding="utf-8").splitlines()[-1] == PLANTED_CREDENTIAL, (
+        f"`just {board.recipe}` delegated without the board credential this checkout "
+        f"supplies; the store it reads would refuse it as missing"
+    )
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_command_that_fails_without_a_credential_names_the_file_that_supplies_one(
+    tmp_path: Path,
+) -> None:
+    """The refusal an operator could not place, answered where it is answerable.
+
+    The store's own words are `environment variable GH_PROJECTS_TOKEN is missing or
+    empty`, and this repository's wrapper used to add a pointer at the *source* — which
+    on the host where this happened was configured correctly. What was absent was the
+    credential, and the file this checkout would have taken it from is the one thing
+    neither of them named.
+    """
+    checkout, trace = _board_checkout(tmp_path, None)
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(checkout, trace, "check-plan", "plans:example")
+
+    assert result.returncode != 0
+    assert str(checkout / ".env") in result.stderr, (
+        f"the refusal named no environment file, so an operator reading it learns only "
+        f"that a variable is absent:\n{result.stderr}"
+    )
+    assert BOARD_CREDENTIAL in result.stderr, result.stderr
+    assert PLANTED_CREDENTIAL not in result.stderr, "a credential value reached a diagnostic"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_command_that_fails_with_its_credential_present_gets_no_note_and_its_own_status(
+    tmp_path: Path,
+) -> None:
+    """The wrapper answers one refusal and stays out of every other failure.
+
+    A store that fails for any reason but a missing credential — a bad query, a board
+    it cannot reach — has said what it has to say. The wrapper's note exists only for
+    the refusal an operator cannot place, so with the credential supplied it must add
+    nothing, and the exit status the operator reads must be the command's own rather
+    than one the wrapper composed.
+    """
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(checkout, trace, "check-plan", "plans:example")
+
+    assert result.returncode == 7, (
+        f"the command's own status was not passed through: {result.returncode}\n{result.stderr}"
+    )
+    assert "plan-store:" not in result.stderr, (
+        f"the wrapper added a credential note to a failure that was not about one:\n{result.stderr}"
+    )
+    assert PLANTED_CREDENTIAL not in result.stderr, "a credential value reached a diagnostic"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_refusal_tells_an_existing_env_file_apart_from_a_missing_one(
+    tmp_path: Path,
+) -> None:
+    """The other half of that diagnostic, and the one an operator is likelier to hit.
+
+    A checkout that has an `.env` but no entry for this name is a different repair from a
+    checkout that has no `.env` at all — add a line, rather than create a file — and the
+    two were one untested branch apart. Naming the wrong one sends somebody to create a
+    file that is already there and reads as the pointer being wrong about the checkout.
+    """
+    checkout, trace = _board_checkout(tmp_path, "SOMETHING_ELSE=unrelated\n")
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(checkout, trace, "check-plan", "plans:example")
+
+    assert result.returncode != 0
+    assert "defines no such name" in result.stderr, (
+        f"an `.env` that exists but lacks the name was reported as a missing file, so the "
+        f"repair named is to create one that is already there:\n{result.stderr}"
+    )
+    assert "does not exist" not in result.stderr, result.stderr
+    assert str(checkout / ".env") in result.stderr, result.stderr
+    assert BOARD_CREDENTIAL in result.stderr, result.stderr
+
+
+#: A second board source's credential name, beside the one every journey above uses.
+#: Not a name this host defines, so nothing inherits it into the checkout under test.
+SECOND_BOARD_CREDENTIAL = "PLAN_STORE_SECOND_BOARD_TOKEN"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_refusal_names_each_absent_credential_once_and_no_present_one(
+    tmp_path: Path,
+) -> None:
+    """Every name the store's sources configure, each once, and only the ones missing.
+
+    `onetaskgraph.yaml` can configure several sources, two of them on one credential
+    and a third on another, and the wrapper reads every `token_env` out of it rather
+    than assuming one. What that has to come to for an operator: one note per name the
+    process does not hold, none for a name it does, and no name twice however many
+    sources share it.
+    """
+    checkout, trace = _board_checkout(tmp_path, None)
+    (checkout / "onetaskgraph.yaml").write_text(
+        "default_sources: [plans]\n"
+        "sources:\n"
+        "  plans:\n"
+        "    plugin: github-projects\n"
+        "    config:\n"
+        f"      token_env: {BOARD_CREDENTIAL}\n"
+        "  archive:\n"
+        "    plugin: github-projects\n"
+        "    config:\n"
+        f"      token_env: {BOARD_CREDENTIAL}\n"
+        "  second:\n"
+        "    plugin: github-projects\n"
+        "    config:\n"
+        f"      token_env: {SECOND_BOARD_CREDENTIAL}\n",
+        encoding="utf-8",
+    )
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(
+        checkout,
+        trace,
+        "check-plan",
+        "plans:example",
+        env={SECOND_BOARD_CREDENTIAL: PLANTED_CREDENTIAL},
+    )
+
+    assert result.returncode != 0
+    notes = [line for line in result.stderr.splitlines() if line.startswith("plan-store:")]
+    assert notes == [
+        f"plan-store: {BOARD_CREDENTIAL} is not set in this environment, and this checkout "
+        f"supplies it from {checkout / '.env'}, which does not exist; create that file with "
+        f"'{BOARD_CREDENTIAL}=<value>' in it, then retry"
+    ], (
+        f"two sources on one absent name and a third on a present one should leave one "
+        f"note naming the absent one:\n{result.stderr}"
+    )
+    assert PLANTED_CREDENTIAL not in result.stderr, "a credential value reached a diagnostic"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_refusal_tells_an_empty_credential_line_apart_from_an_absent_one(
+    tmp_path: Path,
+) -> None:
+    """The third repair, and the one the other two notes would each get wrong.
+
+    `GH_PROJECTS_TOKEN=` is a line the file *has*, so "defines no such name" sends
+    somebody to add a second copy of it, and the value is still empty afterwards. What
+    is wrong is the value, and that is what the note has to say — without saying what
+    the value is, which is nothing here and a credential everywhere else.
+    """
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}=\n")
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(checkout, trace, "check-plan", "plans:example")
+
+    assert result.returncode != 0
+    assert "without a value" in result.stderr, (
+        f"a credential line with an empty value was reported as a missing line, so the "
+        f"repair named is to add one that is already there:\n{result.stderr}"
+    )
+    assert "defines no such name" not in result.stderr, result.stderr
+    assert "does not exist" not in result.stderr, result.stderr
+    assert str(checkout / ".env") in result.stderr, result.stderr
+    assert BOARD_CREDENTIAL in result.stderr, result.stderr
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_refusal_says_an_exported_empty_name_beats_the_files_value(
+    tmp_path: Path,
+) -> None:
+    """The one shape where the file is right and the environment is what is empty.
+
+    `scripts/credentials-env.sh` never overrides a name the process already defines, so
+    a name exported empty for one command beats a file that supplies a real value — and
+    the store then refuses the same `missing or empty`. The note has to say the value is
+    what to fix, where it is set, rather than send somebody to a file that is correct.
+    """
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(checkout, trace, "check-plan", "plans:example", env={BOARD_CREDENTIAL: ""})
+
+    assert result.returncode != 0
+    assert "already exported empty" in result.stderr, (
+        f"an exported-empty name over a file that supplies a value was reported as the "
+        f"file's fault:\n{result.stderr}"
+    )
+    assert "defines no such name" not in result.stderr, result.stderr
+    assert PLANTED_CREDENTIAL not in result.stderr, "a credential value reached a diagnostic"
+
+
+#: A recipe line of this repository's justfile: a name at column one, followed by its
+#: parameters or its colon. A body line is indented and a comment starts with `#`.
+RECIPE_HEADER = re.compile(r"^([A-Za-z0-9_-]+)(?:\s[^:]*)?:")
+
+
+def _recipes_through_the_plan_store_wrapper() -> frozenset[str]:
+    """Every recipe whose body runs `scripts/plan-store.sh`, read off the justfile."""
+    recipe = None
+    through = set()
+    for line in (ROOT / "justfile").read_text(encoding="utf-8").splitlines():
+        header = RECIPE_HEADER.match(line)
+        if header:
+            recipe = header.group(1)
+        elif recipe and line.startswith(" ") and "scripts/plan-store.sh" in line:
+            through.add(recipe)
+    return frozenset(through)
+
+
+@pytest.mark.reads_recipes
+def test_every_recipe_through_the_plan_store_wrapper_is_a_board_recipe_here() -> None:
+    """`BOARD_RECIPES` is an inventory, so the justfile is what it is held to.
+
+    A recipe added to go through the wrapper and not added here would delegate with, or
+    without, the credential unobserved; one renamed would leave a row driving a recipe
+    that no longer exists.
+    """
+    listed = frozenset(board.recipe for board in BOARD_RECIPES)
+    through = _recipes_through_the_plan_store_wrapper()
+    assert through, "no recipe goes through scripts/plan-store.sh, so this inventory is stale"
+    assert listed == through, (
+        f"BOARD_RECIPES names {sorted(listed)} but the justfile routes {sorted(through)} "
+        f"through scripts/plan-store.sh"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_the_plan_store_wrapper_refuses_to_run_nothing(tmp_path: Path) -> None:
+    """Handed no command, it says what it is for rather than exiting 0 having done nothing.
+
+    Every recipe names one, so this is the wrapper called by hand or by a recipe edited
+    down to the wrapper alone — and a wrapper that established a credential and then
+    returned success would read as the command having run.
+    """
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+
+    result = subprocess.run(
+        [str(checkout / "scripts" / "plan-store.sh")],
+        cwd=checkout,
+        env={**os.environ, "TRACE_FILE": str(trace)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "expected a plan-store command" in result.stderr, result.stderr
+    assert not trace.exists(), "the wrapper ran something it was never handed"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    "sabotage",
+    ["missing", "unloadable"],
+    ids=["helper-missing", "helper-unloadable"],
+)
+def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
+    tmp_path: Path, sabotage: str
+) -> None:
+    """The one source of the names is gone or broken, and the command does not run.
+
+    Running it anyway would hand the store whatever this process happened to hold, which
+    on a launching session is the host's own credential — the inheritance the wrapper
+    exists to replace with the checkout's. So the refusal comes before the command, and
+    it names the helper and the repair rather than the store's own `missing or empty`.
+    """
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+    helper = checkout / "scripts" / "credentials-env.sh"
+    match sabotage:
+        case "missing":
+            helper.unlink()
+        case "unloadable":
+            # A file `.` fails on rather than one whose function then fails: a syntax
+            # error is what an interrupted edit leaves behind.
+            helper.write_text("export_host_credentials() {\n", encoding="utf-8")
+
+    result = _run(checkout, trace, "check-plan", "plans:example")
+
+    assert result.returncode != 0
+    assert str(helper) in result.stderr, (
+        f"the refusal did not name the helper that could not be loaded:\n{result.stderr}"
+    )
+    assert "just bootstrap" in result.stderr, result.stderr
+    assert not trace.exists(), (
+        "the command ran without the checkout's credentials established, so the store "
+        "was handed whatever this process held"
+    )

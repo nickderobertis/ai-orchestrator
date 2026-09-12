@@ -2,8 +2,12 @@
 __pycache__/
 *.py[cod]
 .venv/
-# Host credentials exported onto this repository's dispatches.
-/.env
+# Host credentials exported onto this repository's dispatches — the whole family, not
+# `/.env` alone: a copy made before editing (`.env.bak`, `.env.2`) holds the same live
+# token, and nothing downstream of a commit redacts a file sitting in the tree. The
+# example file is documentation and is named back in, the way `/scratch/*` is below.
+/.env*
+!/.env.example
 # Local Markdown plan authoring; onetaskgraph copies finished plans to the remote store.
 /.plans/
 # uv

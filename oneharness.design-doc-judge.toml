@@ -44,7 +44,7 @@ history_labels = { role = "judge", agent_role = "judge" }
 harnesses = [
     "claude-code:alternate",
     "claude-code:alternate2",
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:primary",
 ]
@@ -54,6 +54,11 @@ harnesses = [
 # Sol is the flagship tier of the GPT-5.6 family; name it explicitly so the tier
 # cannot drift under us.
 [harness.codex]
+model = "gpt-5.6-sol"
+
+# A variant rather than the bare `codex`, so the environment rules below reach it; no
+# `unset_env` for `CODEX_HOME`, which this identity honours. AGENTS.md says why.
+[harness.codex.variant.primary]
 model = "gpt-5.6-sol"
 
 # The second Codex identity. See scripts/codex-alt-home.sh for the indirection.

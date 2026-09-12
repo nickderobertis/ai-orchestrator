@@ -727,7 +727,16 @@ through its typed SDK. Discovery: `onejudge --help`, `oneharness --help`, and
 that omitted one would lose that quota once everything ahead of it was exhausted; the
 primary Claude identity is last everywhere, and
 `tests/e2e/test_oneharness_timeout_e2e.py` holds every config's chain to its intended
-order. Each side's order is a decision:
+order. **Every identity in every chain is spelled as a variant**, the first Codex one as
+`codex:primary` rather than a bare `codex`, because `unset_env`, `env_from` and
+`env_file` are declarable on a variant only, so a bare harness id in a chain is one
+candidate no per-identity environment rule reaches — the `GH_PROJECTS_TOKEN` mask and
+the `XDG_RUNTIME_DIR` repoint the `oneharness.*.toml` files declare, each explained
+beside its rule. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
+which is ambient configuration a developer may export and this is the identity that
+honours it; `tests/e2e/test_dispatch_environment_e2e.py` reads what a turn is handed
+off the turn's own provider rather than off the configs. Each side's order is a
+decision:
 
 - **Agent side** — `oneharness.toml`: both alternate Claude subscriptions first, because
   the personas are tuned against that model tier, then codex.
@@ -848,12 +857,18 @@ it asks on, because a question asked any other way can be answered by a fabricat
 verdict: `onepipeline channel serve` answers its own timeouts with a ruling that reads
 like a decision. The same verbs load this checkout's credentials from the gitignored
 root `.env` through `scripts/credentials-env.sh`, never overriding a name the
-environment already defines and never on a read-only view; that file wins over
-onetaskgraph's machine-wide `secrets.env` by intent, and nothing detects the two
-drifting apart, so a value changed only in the machine-wide file reads as lost. Its
-`GH_PROJECTS_*` names nominate the board **onetaskgraph's own live test lane** writes
-to — that lane's concern, checked by nothing here — while this host's board is
-`onetaskgraph.yaml`'s `plans` source.
+environment already defines; so do the board recipes — `just plans`, `just check-plan`,
+`just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names
+that file when the store refuses for a credential this process does not hold, because
+a board read needs the board's token where a run view needs nothing and loads nothing.
+A dispatch is handed none of it: every `oneharness.*.toml` masks `GH_PROJECTS_TOKEN`
+from its chain except the design-document pair, whose composed task reads the plan out
+of the store, while the board nomination travels so a lane handed it and no token
+skips and says why. That file wins over onetaskgraph's machine-wide `secrets.env` by
+intent, and nothing detects the two drifting apart, so a value changed only in the
+machine-wide file reads as lost. Its `GH_PROJECTS_*` names nominate the board
+**onetaskgraph's own live test lane** writes to — that lane's concern, checked by
+nothing here — while this host's board is `onetaskgraph.yaml`'s `plans` source.
 
 ### Supervising
 

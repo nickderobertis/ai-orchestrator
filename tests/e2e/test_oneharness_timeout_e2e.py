@@ -96,7 +96,7 @@ DESIGN_DOC_REVIEWER_DEADLINE_SECONDS = 600
 #: what the whole set of this host's turn configs resolves — a chain dropped from either
 #: file is a lost quota, which is the property every config in the map below shares.
 DESIGN_DOC_WRITER_CHAIN = [
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
@@ -105,7 +105,7 @@ DESIGN_DOC_WRITER_CHAIN = [
 DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:alternate",
     "claude-code:alternate2",
-    "codex",
+    "codex:primary",
     "codex:alternate",
     "claude-code:primary",
 ]

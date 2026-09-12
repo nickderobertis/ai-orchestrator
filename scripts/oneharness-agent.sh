@@ -60,6 +60,27 @@ fi
 # shellcheck source=scripts/codex-alt-home.sh
 . "$codex_alt_helper"
 ensure_codex_alt_home oneharness-agent || exit $?
+# Both dispatch configs map a turn's XDG_RUNTIME_DIR out of the dispatch's own scratch,
+# so the runtime directory a turn writes into is the work it is doing rather than the
+# launching session's — which on this host is mounted `noexec`, and is why a shebang
+# recipe failed inside every dispatch. Inside a dispatch the engine has already set that
+# variable and the helper leaves it alone; this wrapper is the caller that is not one,
+# and oneharness refuses to start a variant whose indirection is unset.
+node_scratch_helper="$script_dir/node-scratch-dir.sh"
+if [ ! -f "$node_scratch_helper" ] || [ ! -r "$node_scratch_helper" ]; then
+    echo "oneharness-agent: required helper is not a readable regular file: $node_scratch_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/node-scratch-dir.sh
+. "$node_scratch_helper" || {
+    echo "oneharness-agent: required helper $node_scratch_helper could not be loaded; it is readable but did not load — restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+}
+if ! command -v ensure_node_scratch_dir >/dev/null 2>&1; then
+    echo "oneharness-agent: helper $node_scratch_helper loaded but defines no ensure_node_scratch_dir; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+ensure_node_scratch_dir oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
 # The judge side is identified by this basename, and only by it. The name is restated

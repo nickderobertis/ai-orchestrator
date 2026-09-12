@@ -61,7 +61,13 @@ JUDGE_MODEL = "judge-model-sentinel"
 
 #: An identity both shipped configs configure, so naming it exercises the selection
 #: path without narrowing either chain to something it does not declare.
-SHARED_IDENTITY = "codex"
+SHARED_IDENTITY = "codex:primary"
+
+#: What a stand-in config has to say for `SHARED_IDENTITY` to be selectable in it.
+#: `oneharness` refuses a chain naming a variant no `[harness.<id>.variant.<name>]`
+#: declares, so a stand-in that named only the chain would be refused for its own
+#: incompleteness rather than for whatever the journey is about.
+SHARED_IDENTITY_DECLARATION = "[harness.codex.variant.primary]\n"
 
 
 @pytest.fixture
@@ -439,7 +445,10 @@ def test_a_config_whose_declared_role_is_not_its_sides_is_refused(
         candidate.write_bytes((member_scratch / source).read_bytes())
     else:
         labels = f"history_labels = {{ role = {case.role!r} }}\n" if case.role else ""
-        candidate.write_text(f'harnesses = ["{SHARED_IDENTITY}"]\n{labels}', encoding="utf-8")
+        candidate.write_text(
+            f'harnesses = ["{SHARED_IDENTITY}"]\n{labels}{SHARED_IDENTITY_DECLARATION}',
+            encoding="utf-8",
+        )
 
     refused = _wrapper(
         "--config", str(candidate), "--print-command", "--prompt", "take this turn", environment={}
@@ -530,7 +539,8 @@ def test_the_implicit_agent_config_must_declare_the_agent_role_too(
     """
     labels = "" if declared is None else f"history_labels = {{ role = {declared!r} }}\n"
     (standin_checkout / AGENT_CONFIG_NAME).write_text(
-        f'harnesses = ["{SHARED_IDENTITY}"]\n{labels}', encoding="utf-8"
+        f'harnesses = ["{SHARED_IDENTITY}"]\n{labels}{SHARED_IDENTITY_DECLARATION}',
+        encoding="utf-8",
     )
 
     refused = _standin_wrapper(
@@ -553,7 +563,8 @@ def test_an_implicit_agent_config_declaring_the_agent_role_still_takes_its_turn(
     resolves — so the refusal is caused by the role and by nothing else.
     """
     (standin_checkout / AGENT_CONFIG_NAME).write_text(
-        f'harnesses = ["{SHARED_IDENTITY}"]\nhistory_labels = {{ role = "agent" }}\n',
+        f'harnesses = ["{SHARED_IDENTITY}"]\nhistory_labels = {{ role = "agent" }}\n'
+        f"{SHARED_IDENTITY_DECLARATION}",
         encoding="utf-8",
     )
 
@@ -716,3 +727,53 @@ def test_the_judge_side_keeps_the_inherited_labels_that_locate_the_turn(
         "the judge branch dropped every inherited label rather than only the ones it "
         f"had to, so the turn no longer says which node it supervises: {_layers(completed)}"
     )
+
+
+@pytest.mark.parametrize(
+    ("inherited", "expected"),
+    [
+        ("relative/scratch", "must be absolute"),
+        (None, "is relative"),
+    ],
+    ids=["inherited", "made-under-a-relative-tmpdir"],
+)
+def test_a_turns_runtime_directory_is_refused_unless_it_is_absolute(
+    tmp_path: Path, inherited: str | None, expected: str
+) -> None:
+    """Both ways a relative runtime directory can arrive, refused the same way.
+
+    The inherited value was validated from the start. The one the helper *makes* was not:
+    `mktemp` answers relative to its template, so a relative `TMPDIR` produced a relative
+    scratch that the helper exported — the very shape it refuses three lines earlier when
+    somebody else supplies it. A turn reads its runtime directory with a working directory
+    that is not this one, so relative is wrong whichever end it came from.
+    """
+    environment = _base_environment()
+    environment.pop("ONEPIPELINE_NODE_SCRATCH_DIR", None)
+    if inherited is None:
+        environment["TMPDIR"] = "a-relative-tmpdir"
+        (tmp_path / "a-relative-tmpdir").mkdir()
+    else:
+        environment["ONEPIPELINE_NODE_SCRATCH_DIR"] = inherited
+
+    completed = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--print-command"],
+        # A relative `TMPDIR` only resolves to somewhere writable from here.
+        cwd=tmp_path if inherited is None else REPO_ROOT,
+        env=environment,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert completed.returncode != 0, completed.stdout
+    assert expected in completed.stderr, completed.stderr
+    # Named rather than merely refused, and attributed to the wrapper that refused.
+    assert "oneharness-agent:" in completed.stderr, completed.stderr
+    if inherited is None:
+        # Refused before anything was made under it, not made and then taken back.
+        assert not any((tmp_path / "a-relative-tmpdir").iterdir()), (
+            "the helper made a scratch directory under a TMPDIR it then refused"
+        )
