@@ -45,6 +45,7 @@ from fake_backend import (
 )
 from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import _environment as _launched_environment
+from test_orchestrate_launch_e2e import _node
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -60,14 +61,8 @@ FINDING_DOCUMENT = "docs/orchestration.md"
 #: Who `harness_indirections` attributes an unresolvable alternate identity to.
 INDIRECTION_CALLER = "tests/e2e/test_observer_graph_liveness_e2e.py"
 
-#: What the shipped document declares on each member, as the plan that set them states
-#: it. The monitor's `every` is the hold between the judge's answer and the next agent
-#: turn — one turn per five minutes; its `start_after: 0` is stated because from schema
-#: 4 an omitted one defaults to `every`, which would leave the first five minutes of
-#: every run unwatched; `background: false` is what holds the run open between turns.
-#: The pacemaker keeps its half-hour resettable schedule and says nothing about
-#: liveness, because a scheduled member that says nothing is background, which is what
-#: a pacemaker is.
+#: What the shipped document declares on each member — the contract every other file in
+#: this change restates, so held here as the numbers rather than read off the document.
 MONITOR_HOLD_SECONDS = 300
 MONITOR_FIRST_TURN_SECONDS = 0
 PACEMAKER_PERIOD_SECONDS = 1800
@@ -92,19 +87,15 @@ REFUSAL_NAMES_THE_CAUSE = "nothing holds this run open"
 REFUSAL_NAMES_THE_DEFERRED = "never comes due"
 REFUSAL_NAMES_THE_ANSWER = "`background: false`"
 
-#: The launch every paced journey below spends: a one-node plan whose worker is held
-#: open long enough for the monitor to take several paced turns. What is under test is
-#: the observer graph every launch attaches, not anything the node does.
+#: The run the paced journey launches, and the node whose worker is held open for it.
 LAUNCHED_RUN = "observer-liveness-paced"
 HELD_NODE = "held"
 
-#: The hold the launch tells the graph to keep between monitor turns, in place of the
-#: shipped five minutes. `--set members.monitor.schedule.every` is the published override
-#: for a journey that needs turns closer together than the shipped period, so the shipped
-#: value stays what it is. Twelve seconds, and the worker is held for thirty-eight, so
-#: the run outlasts three of them: the second turn is the pacing, the third is what shows
-#: the member's own heartbeat landing inside a hold, and the last hold is the one the
-#: driver's cancel has to end.
+#: The hold the launch overrides in place of the shipped five minutes, and how long the
+#: worker is held. Thirty-eight seconds outlasts three twelve-second holds: the second
+#: turn is the pacing, the third puts the member's ~15-second heartbeat inside a hold,
+#: and the last hold ends within a few seconds of the settlement it has to be cancelled
+#: at — later, and a hold expiring during the write-back would read as one waited out.
 PACED_HOLD_SECONDS = 12
 HELD_SECONDS = 38
 
@@ -159,10 +150,18 @@ def _validated(graph: Path) -> Answered:
     return Answered(status=ran.returncode, said=f"{ran.stdout}\n{ran.stderr}")
 
 
+class Schedule(NamedTuple):
+    """A member's `schedule`, in the reader's own fields; `None` where the document omits one."""
+
+    every: int | None
+    start_after: int | None
+    resettable: bool | None
+
+
 class Declared(NamedTuple):
     """One member's liveness fields, as the shipped document writes them."""
 
-    schedule: dict[str, str]
+    schedule: Schedule
     #: `None` where the member says nothing, which for a scheduled member means
     #: background.
     background: bool | None
@@ -190,16 +189,21 @@ def _member_block(member: str) -> list[str]:
 
 def _declared(member: str) -> Declared:
     """What the shipped document declares about one member's schedule and liveness."""
-    schedule: dict[str, str] = {}
+    schedule = Schedule(every=None, start_after=None, resettable=None)
     background: bool | None = None
     for line in _member_block(member):
         if line.strip().startswith("#"):
             continue
         if scheduled := SCHEDULE_LINE.match(line):
-            schedule = {
+            fields = {
                 field.group("name"): field.group("value")
                 for field in SCHEDULE_FIELD.finditer(scheduled.group("fields"))
             }
+            schedule = Schedule(
+                every=int(fields["every"]) if "every" in fields else None,
+                start_after=int(fields["start_after"]) if "start_after" in fields else None,
+                resettable=fields["resettable"] == "true" if "resettable" in fields else None,
+            )
         if backgrounded := BACKGROUND_LINE.match(line):
             background = backgrounded.group("value") == "true"
     return Declared(schedule=schedule, background=background)
@@ -266,18 +270,19 @@ def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> Non
     )
 
     monitor = _declared(MONITOR_MEMBER)
-    assert monitor.schedule.get("every") == str(MONITOR_HOLD_SECONDS), (
+    assert monitor.schedule.every == MONITOR_HOLD_SECONDS, (
         f"the `{MONITOR_MEMBER}` member is no longer paced one turn per "
         f"{MONITOR_HOLD_SECONDS} seconds: {monitor.schedule}"
     )
-    assert monitor.schedule.get("start_after") == str(MONITOR_FIRST_TURN_SECONDS), (
+    assert monitor.schedule.start_after == MONITOR_FIRST_TURN_SECONDS, (
         f"the `{MONITOR_MEMBER}` member no longer opens with the wave: {monitor.schedule}. "
         "An omitted `start_after` defaults to `every`, which leaves the first five minutes "
         "of every run unwatched"
     )
-    assert "resettable" not in monitor.schedule, (
-        f"the `{MONITOR_MEMBER}` member's schedule is resettable, so a planner surface "
-        f"would restart the monitor's hold rather than the pacemaker's: {monitor.schedule}"
+    assert monitor.schedule.resettable is None, (
+        f"the `{MONITOR_MEMBER}` member's schedule states `resettable`, so a planner "
+        f"surface would restart the monitor's hold rather than the pacemaker's: "
+        f"{monitor.schedule}"
     )
     assert monitor.background is False, (
         f"the `{MONITOR_MEMBER}` member no longer declares `background: false`, which is "
@@ -285,10 +290,10 @@ def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> Non
     )
 
     pacemaker = _declared(PACEMAKER_MEMBER)
-    assert pacemaker.schedule.get("every") == str(PACEMAKER_PERIOD_SECONDS), (
+    assert pacemaker.schedule.every == PACEMAKER_PERIOD_SECONDS, (
         f"the `{PACEMAKER_MEMBER}` member's period moved: {pacemaker.schedule}"
     )
-    assert pacemaker.schedule.get("resettable") == "true", (
+    assert pacemaker.schedule.resettable is True, (
         f"the `{PACEMAKER_MEMBER}` member is no longer resettable, so a run already "
         f"reporting also gets a pacemaker surface: {pacemaker.schedule}"
     )
@@ -468,14 +473,7 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
                 "schema_version": 2,
                 "name": LAUNCHED_RUN,
                 "goal": {"text": "prove a paced monitor keeps watching between its turns"},
-                "tasks": [
-                    {
-                        "id": HELD_NODE,
-                        "persona": "engineer",
-                        "task": "## What\nReport.\n\n## Why\nBecause.\n\n"
-                        "## Acceptance criteria\n- Reported.",
-                    }
-                ],
+                "tasks": [_node(id=HELD_NODE)],
             }
         ),
         encoding="utf-8",
