@@ -61,8 +61,6 @@ FINDING_DOCUMENT = "docs/orchestration.md"
 #: Who `harness_indirections` attributes an unresolvable alternate identity to.
 INDIRECTION_CALLER = "tests/e2e/test_observer_graph_liveness_e2e.py"
 
-#: What the shipped document declares on each member — the contract every other file in
-#: this change restates, so held here as the numbers rather than read off the document.
 MONITOR_HOLD_SECONDS = 300
 MONITOR_FIRST_TURN_SECONDS = 0
 PACEMAKER_PERIOD_SECONDS = 1800
@@ -87,7 +85,6 @@ REFUSAL_NAMES_THE_CAUSE = "nothing holds this run open"
 REFUSAL_NAMES_THE_DEFERRED = "never comes due"
 REFUSAL_NAMES_THE_ANSWER = "`background: false`"
 
-#: The run the paced journey launches, and the node whose worker is held open for it.
 LAUNCHED_RUN = "observer-liveness-paced"
 HELD_NODE = "held"
 

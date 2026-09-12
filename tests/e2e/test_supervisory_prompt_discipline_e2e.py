@@ -963,6 +963,8 @@ def test_neither_members_action_space_moved_with_its_reporting_discipline(
     )
 
 
+# llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted, at the
+# same two seams every journey in this module reads its launch through.
 @pytest.mark.xdist_group("supervisory-prompts")
 def test_the_monitor_is_told_to_read_the_stream_from_a_cursor(monitored: Monitored) -> None:
     """A paced monitor accounts for the stream since its last turn, not for a tail of it.
