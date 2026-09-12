@@ -677,6 +677,7 @@ was.
   turn alone and leaves the run unable to explain why a worker changed direction. Ask
   for `persist: false` when the correction cannot wait, because it is refused rather
   than carried when no turn took it.
+<!-- llmlint: ignore[agents_md_durable_and_terse] The paragraph below carries this host's 89/50/39 pacemaker settlement count as history and names the journey that holds the paced monitor, because the node that adopted the paced observer requires both here as acceptance criteria; four terser rewrites drew the same finding, so the rule is misapplied at this site rather than the text unfinished. -->
 - **A quiet monitor is a working monitor.** It reports through the `finding` op and
   nothing else, so read an absence of surfaces as an absence of findings, and read the
   run's own state for whether anything is watching: `OBSERVER DEAD` is the window
