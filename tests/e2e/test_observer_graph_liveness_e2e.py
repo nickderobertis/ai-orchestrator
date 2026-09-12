@@ -322,8 +322,11 @@ def _graph_events(scratch: Path) -> list[Envelope]:
     record and no other's. Read here rather than off the run's journal because the
     member and the turn's role are exactly what the pacing is measured on.
     """
-    # llmlint: ignore[tests_mirror_real_usage] No operator view renders which member a
-    # turn belongs to, and which member paused is the whole question.
+    # llmlint: ignore-block[tests_mirror_real_usage] No operator view renders which member
+    # a turn belongs to, and which member paused is the whole question: `just status`
+    # reports the observer's verdicts and `just monitor` the run's stream, neither the
+    # member behind a turn, so the graph's own record is the one place the pacing can be
+    # measured until a view renders it.
     events: list[Envelope] = []
     for log in sorted(scratch.glob("dag-scope-*/events.jsonl")):
         for line in log.read_text("utf-8").splitlines():
@@ -345,6 +348,7 @@ def _graph_events(scratch: Path) -> list[Envelope]:
                 )
             )
     return events
+    # llmlint: ignore-end[tests_mirror_real_usage]
 
 
 def _of(events: list[Envelope], kind: str, member: str | None = None) -> list[Envelope]:
