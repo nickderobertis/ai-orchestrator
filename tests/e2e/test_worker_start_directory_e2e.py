@@ -345,10 +345,11 @@ def _worker_turns(journal: list[JournalEvent], kind: str) -> list[dict[str, obje
     # Read off the journal because, on the adopted engine, nothing else shows the stamp:
     # `just transcript` prints a turn's number and its tool lines, and `just monitor`
     # summarizes a `turn-started` by its status, outcome, message and reason — neither
-    # renders `origin`. The stamp is the producer's half of turn provenance, and the
-    # reader that acts on it is the engine landing `AGENTS.md` records as not yet
-    # adopted, so the relay putting it in the journal is the whole of what this host
-    # can observe. The day a view renders it, this read moves there.
+    # renders `origin`. The stamp is the producer's half of turn provenance; the engine
+    # half that acts on it is a landing `tests/test_adopted_engine_carries_this_plan.py`
+    # holds the adopted release to carry, and neither view renders the stamp, so the
+    # relay putting it in the journal is the whole of what this host can observe of
+    # it. The day a view renders it, this read moves there.
     # llmlint: ignore[tests_mirror_real_usage] No view renders a turn's `origin`; see above.
     return [
         cast(dict[str, object], event["payload"])
