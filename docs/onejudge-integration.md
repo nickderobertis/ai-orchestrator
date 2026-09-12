@@ -91,7 +91,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.28.0,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.28.2,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -248,7 +248,7 @@ readable without opening the report. **What is no longer true here is that there
 Through an earlier adoption the `oneagentgraph` this host's
 [smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
 a release behind the CLI it spawns; read from both installed wheels' own SBOMs under this
-adoption, `oneagentgraph-cli` 0.3.17 is compiled against `oneharness-core` 0.13.0
+adoption, `oneagentgraph-cli` 0.3.19 is compiled against `oneharness-core` 0.13.0
 and `oneharness-cli` 0.12.1 against 0.13.1 — a release apart again, where the adoption
 before them had the pair a release apart the other way and the one before that had it
 equal. They are separate artifacts on separate cadences,
@@ -1070,8 +1070,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.28.0,
-> `oneagentgraph` 0.3.17, nor `onevcs` 0.21.0. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.28.2,
+> `oneagentgraph` 0.3.19, nor `onevcs` 0.21.0. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with

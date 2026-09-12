@@ -361,7 +361,7 @@ def _worker_turns(journal: list[JournalEvent], kind: str) -> list[dict[str, obje
 def test_every_turn_the_dispatch_published_says_who_authored_it(launched: Launched) -> None:
     """The same journal stamps each of the worker's turns with its author.
 
-    The linked oneagentgraph 0.3.17 stamps a turn's opening with `origin` — `task` for
+    The linked oneagentgraph 0.3.19 stamps a turn's opening with `origin` — `task` for
     the composed task the member was opened on, `supervisor` for words its own
     simulated supervisor generated, `delivered` for text a manager handed the graph —
     and the engine relays the stamp into this journal untouched. It is the producer's
