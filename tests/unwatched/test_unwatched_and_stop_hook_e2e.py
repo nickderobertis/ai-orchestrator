@@ -728,22 +728,51 @@ def test_a_root_holding_only_an_undecidable_run_leaves_the_turn_alone(
     )
 
 
-def test_a_run_recorded_by_an_earlier_build_reads_unwatched_rather_than_undecidable(
-    tmp_path: Path,
-) -> None:
-    """A run started before this landed is unwatched until it is watched again.
-
-    Its stored document declares an earlier build's schema, which says its fields are
-    that build's to mean — and that settles nothing about whether the run stopped. So it
-    is not the undecidable case above and must not be folded into it: an unread document
-    is an answer that could not be obtained, while this one *was* obtained and says the
-    run is not proven settled. AGENTS.md states both consequences beside each other for
-    exactly this reason, and a build that quietly excused an older document would leave
-    every run this host started before the adoption unwatched and unmentioned.
+def _recorded_by_an_earlier_build(owned: Owned, run: str) -> int:
+    """Move `run`'s stored document one schema back, and return the schema it left.
 
     The document is the engine's own, at its own stamp, with only the version it declares
     moved back — which is what a document an earlier build wrote is, and the one part of
-    it this journey has no other way to obtain.
+    it these journeys have no other way to obtain.
+    """
+    document = _summary(owned, run)
+    stored = json.loads(document.read_text(encoding="utf-8"))
+    current = int(stored["schema_version"])
+    assert current >= 2, (
+        f"this build writes summary schema_version {current}, so there is no earlier "
+        "version to stand in for"
+    )
+    stored["schema_version"] = current - 1
+    document.write_text(json.dumps(stored), encoding="utf-8")
+    return current
+
+
+def _refreshed(owned: Owned, run: str, *, to: int) -> None:
+    """The document was rewritten at this build's schema, so the next read pays nothing."""
+    stored = json.loads(_summary(owned, run).read_text(encoding="utf-8"))
+    assert stored["schema_version"] == to, (
+        f"the verb left run {run}'s document at schema_version {stored['schema_version']} "
+        f"where this build writes {to}: it was decided without being refreshed, so every "
+        "read after this one folds it again"
+    )
+
+
+def test_a_settled_run_recorded_by_an_earlier_build_is_refreshed_and_excluded(
+    tmp_path: Path,
+) -> None:
+    """A run the previous release settled is not reported after the adoption.
+
+    Its stored document declares an earlier build's schema, which says its fields are
+    that build's to mean — and the engine's answer is to fold it once through the
+    listing's own reader, rewrite it at this build's schema, and decide it as any other
+    document. The alternative, reporting such a document unread, was measured as a guard
+    that refused the manager's turn after every successful run at every schema bump: the
+    run the previous binary settled sixteen seconds before the adopted package landed
+    read `DRIVER DEAD` until some view happened to refresh it.
+
+    So the settled run is excluded, nothing is said about it on either stream — it was
+    read and proved settled, which is neither unwatched nor undecidable — and the
+    document is left at this build's schema, so the fold is paid once.
     """
     _installed()
     owned = Owned(tmp_path / "runs", Session("recorded-by-an-earlier-build"))
@@ -754,26 +783,50 @@ def test_a_run_recorded_by_an_earlier_build_reads_unwatched_rather_than_undecida
         "a stopped run whose document this build reads is excluded, which is the control "
         "this journey moves one field away from"
     )
+    current = _recorded_by_an_earlier_build(owned, "started-before")
 
-    document = _summary(owned, "started-before")
-    stored = json.loads(document.read_text(encoding="utf-8"))
-    assert stored["schema_version"] >= 2, (
-        "this build writes summary schema_version "
-        f"{stored['schema_version']}, so there is no earlier version to stand in for"
+    verb = _unwatched(owned)
+    assert verb.returncode == NOTHING_UNWATCHED, (
+        "a settled run whose stored document declares a version this build has moved past "
+        f"was reported, where the engine refreshes and then decides it:\n{verb.stdout}"
     )
-    stored["schema_version"] -= 1
-    document.write_text(json.dumps(stored), encoding="utf-8")
+    assert "started-before" not in verb.stdout
+    assert "started-before" not in verb.stderr, (
+        "an older document was reported as evidence that could not be read, where it was "
+        f"read and proved the run settled:\n{verb.stderr}"
+    )
+    _refreshed(owned, "started-before", to=current)
+
+
+def test_a_run_still_recording_under_an_earlier_build_is_refreshed_and_reported(
+    tmp_path: Path,
+) -> None:
+    """The refresh excuses nothing: a run the older document says is unsettled is reported.
+
+    The other half of the journey above. Refreshing an older document rather than
+    reporting it unread keeps the one sound half of the rule it replaced — an answer
+    nobody could take must never *silence* a run — so a run whose store says it is still
+    recording is reported from what that store says, at this build's schema, exactly as
+    a run this build recorded would be.
+    """
+    _installed()
+    owned = Owned(tmp_path / "runs", Session("still-recording-under-an-earlier-build"))
+    owned.root.mkdir(parents=True)
+    _assembled(owned, "started-before")
+    _make_current(owned, "started-before")
+    current = _recorded_by_an_earlier_build(owned, "started-before")
 
     verb = _unwatched(owned)
     assert verb.returncode == RUNS_UNWATCHED, (
-        "a run whose stored document declares a version this build has moved past was "
-        f"not reported, so it was excused rather than read:\n{verb.stdout}{verb.stderr}"
+        "an unsettled run whose stored document declares a version this build has moved "
+        f"past was not reported, so the refresh excused it:\n{verb.stdout}{verb.stderr}"
     )
-    assert "started-before" in verb.stdout
+    assert "started-before" in verb.stdout, f"the run was not named:\n{verb.stdout}"
     assert "started-before" not in verb.stderr, (
         "an older document was reported as evidence that could not be read, where it was "
         f"read and proved nothing:\n{verb.stderr}"
     )
+    _refreshed(owned, "started-before", to=current)
 
 
 #: A search path holding a shell and no `onepipeline`. The journeys that plant an engine

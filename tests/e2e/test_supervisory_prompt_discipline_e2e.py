@@ -168,6 +168,31 @@ NO_CANCEL_FROM_A_TURN = OnBothSides(
 #: `edit-committed` event carrying the command.
 THE_RECORD_THAT_GROUNDS_A_RULING = "`edit-committed` event carrying that command against the node"
 
+#: The monitor's discipline on *how much* of the detailed stream a turn reads. Its turns
+#: are paced five minutes apart by `graphs/dag-scope.yaml`, and the streams it watches
+#: move at some 300 worker events an hour, so a turn that read a fixed tail either missed
+#: most of what landed or re-judged what the previous turn had already read. The cursor
+#: is a file in the member's own scratch holding the timestamp of the last line read —
+#: named on both sides, because a bar that requires "the stream since the cursor" of an
+#: agent never told which file that is holds it to a file it cannot find.
+CURSOR_FILE = "monitor.cursor"
+READ_FROM_A_CURSOR = OnBothSides(
+    monitor="read the stream from a cursor, never from a tail",
+    review="Require the stream **since the cursor** as the evidence",
+)
+#: What happens when the cursor is not there to read: a bounded tail, and the turn goes
+#: on. Both halves, because the failure this guards is a monitor that treated its own
+#: missing or garbled scratch file as a reason to fail the turn, and a reviewer that
+#: would then have rejected the fallback the agent was told to take.
+CURSOR_FALLS_BACK_TO_A_TAIL = OnBothSides(
+    monitor="is treated exactly as absent rather than failing the turn",
+    review="reject a turn that failed rather than falling back",
+)
+CURSOR_WRITTEN_BACK = OnBothSides(
+    monitor="then writes the last line's timestamp back",
+    review="to have written the cursor forward",
+)
+
 #: The monitor's discipline on what a turn is allowed to say. Three halves now, because
 #: the reporting route and the liveness rule are separate claims and each has its own
 #: failure: prose reaches nobody, so a monitor told only to stop narrating would still
@@ -897,6 +922,54 @@ def test_the_monitor_may_not_read_a_manager_ruling_off_a_turn_of_a_dispatch(
             f"the monitor's {side} side no longer names the record a claim about a "
             "manager's ruling has to rest on, so the rule says what is not evidence "
             f"without saying what is:\n{prose}"
+        )
+
+
+# llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted, at the
+# same two seams every journey in this module reads its launch through.
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_monitor_is_told_to_read_the_stream_from_a_cursor(monitored: Monitored) -> None:
+    """A paced monitor accounts for the stream since its last turn, not for a tail of it.
+
+    `graphs/dag-scope.yaml` holds the monitor's conversation five minutes between turns,
+    and this host's recorded runs show what a monitor did with the stream before that:
+    every turn piped `onepipeline monitor` through a fixed `tail -N`. At one turn per five
+    minutes that reads a few of the 25–50 events that landed and re-reads them next turn.
+    So the persona names a cursor file in the member's own scratch, tells the agent to read
+    everything after the timestamp it holds and write the last one back, and tells it what
+    to do when the file is absent or garbled — read a bounded tail and go on — rather than
+    fail the turn on its own bookkeeping.
+
+    Both sides, for the reason every two-sided rule here is: a reading rule stated only to
+    the agent is advice, and one stated only to the reviewer is enforced against an agent
+    nobody told. And the fallback on both, because a reviewer that did not know the
+    fallback was the instruction would reject the turn that took it.
+    """
+    # llmlint: ignore[tests_mirror_real_usage] No operator view carries an effective prompt.
+    agent = _flat(monitored.system)
+    # llmlint: ignore[tests_mirror_real_usage] Nor a merged config's reviewing bar.
+    review = _flat(monitored.review_bar)
+
+    for side, prose in (("agent", agent), ("review", review)):
+        assert CURSOR_FILE in prose, (
+            f"the monitor's {side} side no longer names the cursor file `{CURSOR_FILE}`, so "
+            f"a transcript reader cannot tell what the member is writing to:\n{prose}"
+        )
+    for named, phrase in (
+        ("to read the detailed stream from a cursor rather than a tail", READ_FROM_A_CURSOR),
+        ("to write the cursor forward after each read", CURSOR_WRITTEN_BACK),
+        (
+            "to treat an absent, unreadable or non-timestamp cursor as a bounded tail",
+            CURSOR_FALLS_BACK_TO_A_TAIL,
+        ),
+    ):
+        assert phrase.monitor in agent, (
+            f"the monitor's effective prompt no longer tells it {named}, so a paced turn "
+            f"reads a tail of the stream again:\n{monitored.system}"
+        )
+        assert phrase.review in review, (
+            f"the monitor's reviewing bar no longer holds it {named}, so the agent's own "
+            f"prompt is the only place it is stated:\n{monitored.review_bar}"
         )
 
 

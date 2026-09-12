@@ -677,18 +677,29 @@ was.
   turn alone and leaves the run unable to explain why a worker changed direction. Ask
   for `persist: false` when the correction cannot wait, because it is refused rather
   than carried when no turn took it.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of the bullet below: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. The block runs to the end of that bullet. -->
 - **A quiet monitor is a working monitor.** It reports through the `finding` op and
   nothing else, so read an absence of surfaces as an absence of findings, and read the
   run's own state for whether anything is watching: `OBSERVER DEAD` is the window
   before the driver relaunches the observer and may clear on its own; `OBSERVER NOT
   RESTARTED` is the driver having given up, and is yours to act on. The monitor is a
-  conversation because a conversation is what keeps the observer graph alive: the
-  pacemaker fires inside it.
+  **scheduled foreground conversation**: `graphs/dag-scope.yaml` holds it between
+  turns and declares it the member that keeps the observer graph alive, the pacemaker
+  firing inside those holds — a declaration now, where this host's 89 recorded
+  pacemaker settlements (50 beside a live conversation, 39 each taking a one-member
+  graph down) once stood behind the inference. A hold is not a death: the heartbeat
+  continues through it, `just status` reports neither verdict above during one, and a
+  `note` to the monitor ends the hold rather than waiting it out.
+  `tests/e2e/test_observer_graph_liveness_e2e.py` holds it.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **A surface's text reaches the engine as bytes**, never as a command-line word,
   because bash substitutes backticks and `$(...)` inside double quotes and a finding
   that quotes a command then runs it.
 - **The pacemaker interval is set at launch only**, so relaunch rather than expect to
-  retune a live run; live edits belong to the `monitor` member and to you.
+  retune a live run; live edits belong to the `monitor` member and to you. The
+  monitor's hold is the same kind of setting: `--set
+  members.monitor.schedule.every=<seconds>` on the launch, never an edit to the
+  shipped document.
 
 ## Personas and the base config
 

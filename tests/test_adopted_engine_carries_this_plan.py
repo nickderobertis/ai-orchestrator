@@ -137,7 +137,7 @@ SUPERVISION_WINDOW_LANDINGS = (
 #: Every engine-side node of the root-causes plan that the adopted release carries, in the
 #: order its work landed. `op-resolve-siblings` settled `no-changes`: the resolutions it
 #: was to move had been moved by #235 (`onevcs` 0.21.0 with its testing crate) and #236
-#: (`oneagentgraph` 0.3.17, `onejudge` 0.8.1, `oneharness-core` 0.13.1) before it was
+#: (`oneagentgraph` 0.3.17 at the time, `onejudge` 0.8.1, `oneharness-core` 0.13.1) before it was
 #: dispatched, so its row names the landing that carried the version-control move, which
 #: is the one 0.27.2 lacked.
 ROOT_CAUSES_LANDINGS = (
@@ -173,8 +173,22 @@ ROOT_CAUSES_LANDINGS = (
     ),
 )
 
+#: The engine half of turn provenance: a manager note told from a supervisor turn by the
+#: engine, and carried across a publication-failure re-dispatch. Held here because the
+#: producer's half — the `origin` stamp `tests/e2e/test_worker_start_directory_e2e.py`
+#: observes on a real dispatch — reads as the whole repair while the engine that acts on
+#: it is missing.
+NOTE_PROVENANCE_LANDINGS = (
+    Landing(
+        node="op-note-provenance",
+        change_request=231,
+        commit="2177b9c",
+        did="tell a manager note from a supervisor turn, and carry one across a re-dispatch",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
-LANDINGS = (*SUPERVISION_WINDOW_LANDINGS, *ROOT_CAUSES_LANDINGS)
+LANDINGS = (*SUPERVISION_WINDOW_LANDINGS, *ROOT_CAUSES_LANDINGS, *NOTE_PROVENANCE_LANDINGS)
 
 
 class Awaiting(NamedTuple):
@@ -188,26 +202,10 @@ class Awaiting(NamedTuple):
 
 
 #: The landings the adopted release does not carry, each declared against the release PR
-#: waiting on it. Adopted 2026-09-12: onepipeline 0.28.0 was cut at 01:43Z and #231 merged
-#: at 04:12Z, into release-plz's 0.28.1 PR, whose own `gate` check then failed on
-#: onepipeline's `main` — a fault of that repository's and not of this pin. The engine
-#: half of turn provenance is therefore not in force here: the linked oneagentgraph 0.3.17
-#: stamps every turn's author and the engine relays the stamp, but a manager note is not
-#: yet told from a supervisor turn by the engine, and a note is not yet carried across a
-#: publication-failure re-dispatch. `tests/e2e/test_worker_start_directory_e2e.py` is
-#: what observes the stamp itself on a real dispatch.
-AWAITING_RELEASE = (
-    Awaiting(
-        Landing(
-            node="op-note-provenance",
-            change_request=231,
-            commit="2177b9c",
-            did=("tell a manager note from a supervisor turn, and carry one across a re-dispatch"),
-        ),
-        release_change_request=239,
-        because="0.28.0 was the newest release the registry served, cut before #231 merged",
-    ),
-)
+#: waiting on it. Empty, and kept: the declaration shape and the gate that reads it stay
+#: so that the next adoption meeting a release cut between two landings can declare the
+#: gap without first rebuilding the machinery to declare it in.
+AWAITING_RELEASE: tuple[Awaiting, ...] = ()
 
 
 def _adopted() -> str:

@@ -17,14 +17,17 @@
 # directory: `oneagentgraph` resolves a relative ref against the directory the
 # document it appears in was read from.
 #
-# Schema 4, for the two fields the members below need. The `check-in` member
-# carries its own `task`, which requires 3; that task interpolates `{task}`, which
-# `oneagentgraph` expands only from 4 — under 3 the token reaches the model as its
-# six literal characters. Neither half is remembered: `tests/e2e/`'s launch suite
-# runs a member at the version declared below on every gate run and fails if `{task}`
-# reached it literally, and the range is re-read off the pinned binary at each
-# adoption, which refuses 0 and 8 by naming it. oneagentgraph 0.3.17 reads 1 through 7.
-version: 4
+# Schema 9, the first version that admits every field the members below carry. The
+# `check-in` member carries its own `task`, which requires 3; that task interpolates
+# `{task}`, which `oneagentgraph` expands only from 4 — under 3 the token reaches the
+# model as its six literal characters. The `monitor` member's `background` requires
+# 8, and a `schedule` on a two-party member requires 9. None of it is remembered:
+# `tests/e2e/`'s launch suite runs a member at the version declared below on every
+# gate run and fails if `{task}` reached it literally,
+# tests/e2e/test_observer_graph_liveness_e2e.py reads the paced fields back off a real
+# launch, and the range is re-read off the pinned binary at each adoption, which
+# refuses 0 and 10 by naming it. oneagentgraph 0.3.19 reads 1 through 9.
+version: 9
 name: dag-scope
 members:
   # The run's active monitor. It drives nothing — there are no engine verbs left to
@@ -66,6 +69,29 @@ members:
     judge:
       command: ["scripts/channel-serve.py"]
     mode: bypass
+    # One turn every five minutes, paced by the graph rather than by the model: `every`
+    # is the hold between the judge's answer and the next agent turn, and a `schedule`
+    # on a two-party member paces this one conversation rather than starting a second.
+    # The persona reads the stream from a cursor rather than a tail because of it.
+    #
+    # `start_after: 0` is stated because from schema 4 an omitted one defaults to
+    # `every`, which would leave the first five minutes of every run unwatched; the
+    # conversation still opens with the wave. `resettable` is deliberately absent: a
+    # planner-visible surface resets the pacemaker's clock below, not this one.
+    #
+    # A manager's `note` offered during the hold ENDS it — the turn opens with the note
+    # in it — so a note is never held for five minutes; a `trigger`, the run's `stop`,
+    # a `cancel`, and the driver's cancel at settlement end one the same way. A journey
+    # needing turns closer together says so with
+    # `just orchestrate --set members.monitor.schedule.every=<seconds>`, never here.
+    schedule: {every: 300, start_after: 0}
+    # FOREGROUND, and this line is what keeps the observer graph alive between the
+    # monitor's turns. A scheduled member is background unless it says otherwise, and a
+    # run settles once only background members survive — so without this the graph
+    # would take its initial wave and settle, and the pacemaker below would have
+    # nothing to fire inside. Liveness is a property this document declares;
+    # tests/e2e/test_observer_graph_liveness_e2e.py reads it back off a real launch.
+    background: false
   # The durable planner-update pacemaker: a single-sided member that comes due on a
   # schedule, reports the run's progress from durable evidence, and exits. It is what
   # keeps a supervising planner informed without being asked. Resettable, so every
@@ -94,7 +120,7 @@ members:
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
   # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
   # launcher identity —
-  # measured against onepipeline 0.28.0 on both of that member's sides, by dumping
+  # measured against onepipeline 0.28.2 on both of that member's sides, by dumping
   # each one's whole environment on a real launch. `{task}` is still what this member
   # is written against: it is this graph's own contract rather than a per-release
   # export, and it carries the run's goal as well as its id.
@@ -177,3 +203,9 @@ members:
       turned out to be newlines flattened for display. Say what you measured and what
       you measured it against.
     schedule: {every: 1800, resettable: true}
+    # BACKGROUND, by saying nothing: a scheduled member that declares no `background`
+    # is background, which is exactly the pacemaker this member is meant to be. It fires
+    # while the `monitor` conversation above holds the run open and never again once
+    # that conversation returns. `background: false` here would make a member that
+    # exits after each firing hold the run open forever, because a scheduled foreground
+    # member never finishes on its own.

@@ -11,7 +11,7 @@ The two halves already agree on the **response**. `channel serve` answers with
 exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
 onejudge's `supervisor` op expects. What they do not agree on is the **request**,
 and this filter is that one reconciliation, as onejudge 0.8.1 writes it and
-`onepipeline` 0.28.0 reads it:
+`onepipeline` 0.28.2 reads it:
 
     onejudge  ->  {"op": "supervisor", "task", "persona", "done_when",
                    "worktree", "history_name", "messages": [...], "session"}
@@ -28,7 +28,7 @@ out of what the frame itself carries:
 * **The run id.** The task `onepipeline` composes for the graph opens by naming
   the run, so the id is read from there. The environment names it too —
   `ONEPIPELINE_RUN_ID` is set to the run id on both sides of an observer member,
-  measured against onepipeline 0.28.0 by dumping this command's whole environment on
+  measured against onepipeline 0.28.2 by dumping this command's whole environment on
   a real launch — but that is a per-release export while the composed task is the
   contract this filter already validates, so the task stays the source. The export
   is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where
@@ -173,7 +173,7 @@ driven directly rather than through the channel for exactly that reason.
 Such an answer is **recognised, reported to the monitor, and not acted on**, and the
 member survives it. Not acted on is the measured half. `onepipeline reply` applies an
 envelope's commands *itself*, before the envelope is queued for any reader: measured
-against onepipeline 0.28.0 by replying `{"op":"add", …}` to a real run, which answers
+against onepipeline 0.28.2 by replying `{"op":"add", …}` to a real run, which answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records `edit-committed` there
 and then. So the
 edit has already reached the engine by the time it arrives here, and this reader has
@@ -236,11 +236,18 @@ SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 #: against anything the monitor wrote — this is the answer to *every* turn that was
 #: taken — and it says where a report goes, because the `finding` op is now the only
 #: route and a monitor that wrote its observation as prose has reported it to nobody.
+#:
+#: Answered at once: the hold between the monitor's turns is the graph's, counted from
+#: the moment this answer closes the turn, so sleeping here would only stack a second
+#: wait on the first. It says the next turn is *not* now, because "keep reading now" to
+#: a member about to be held reads as an instruction to spend the turn it just finished.
 TURN_TAKEN_ACKNOWLEDGED = (
     "Your turn was taken and no planner surface was raised for it: prose reaches "
     "nobody. A report reaches the planner only as a `finding` op in an "
     "`onepipeline reply` envelope, which arrives once and carries the node it is "
-    "about. Keep reading the detailed stream and file the next thing you find."
+    "about. Your next turn opens after the graph's hold, and reads the detailed "
+    "stream from your cursor: everything that landed since the timestamp "
+    "`monitor.cursor` holds, not the last few lines."
 )
 
 #: And why that ruling is a non-completion, for the reader who meets it in a transcript.
@@ -286,7 +293,7 @@ ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
 #: How `onepipeline` names the run to both sides of an observer member. The scoring op
 #: is the one frame that carries no `task`, so this is its only source; measured against
-#: onepipeline 0.28.0 and re-measured on a real launch by
+#: onepipeline 0.28.2 and re-measured on a real launch by
 #: `tests/e2e/test_orchestrate_launch_e2e.py` every gate run.
 RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 

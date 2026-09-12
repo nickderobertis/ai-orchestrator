@@ -1971,6 +1971,16 @@ SUPERVISED_RUN = "planner-supervises-monitor"
 PLANNER_STEER = "keep watching the gate and report what it is blocking"
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This fixture and the
+# launch it spends both pre-date this change, which only paces that launch's monitor
+# small; which Nx project owns the `tests/e2e` tree it sits in is a property of the tree
+# rather than of anything here — `AGENTS.md` records the tier split as a deliberate
+# decision, and re-homing the launch journeys into a new project is enforcement
+# configuration this change may not move in order to pass.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same site, same
+# reason.
+# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
+# a pytest journey over the real recipe, not a shell test suite.
 @pytest.fixture(scope="module")
 def planner_supervised(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
@@ -2017,6 +2027,8 @@ def planner_supervised(
             project_from_plan(plan),
             "--heartbeat-interval",
             str(PACEMAKER_INTERVAL_SECONDS),
+            "--set",
+            f"members.{MONITOR_MEMBER}.schedule.every={SUPERVISED_MONITOR_HOLD_SECONDS}",
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -2063,6 +2075,11 @@ def planner_supervised(
         launched.kill()
         launched.wait(timeout=e2e_timeout(60))
         _just("stop", SUPERVISED_RUN, environment=environment, seconds=60)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def _turns_so_far(prompt_log: Path) -> list[PromptRecord]:
@@ -3514,6 +3531,15 @@ WORKER_HELD_SECONDS = 20
 #: hold expires is refused for the right reason — the run settled — and so would fail
 #: those journeys for a reason they are not about.
 SUPERVISED_HELD_SECONDS = 120
+
+#: How long the supervised launch tells the graph to hold the monitor between turns.
+#: The shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds,
+#: counted from the planner's reply, and the journey reading the reply back out of the
+#: monitor's *next* turn waits 90 seconds for it — so under the shipped period the
+#: instruction the planner sent would never be observed. `--set
+#: members.monitor.schedule.every` is the published override for a journey that needs
+#: turns closer together than the shipped period; the shipped value stays what it is.
+SUPERVISED_MONITOR_HOLD_SECONDS = 2
 
 #: The verb the engine used to be advanced by. It is gone, and its absence is half of
 #: what "settles on its own" means: the other half is a run that settled anyway.

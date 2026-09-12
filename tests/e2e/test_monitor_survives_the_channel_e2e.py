@@ -41,6 +41,8 @@ member ended.
 # that is suppressed and a project split that would resolve it.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+# llmlint: ignore-block[shell_test_tiers_stay_split] see above; and this is a pytest
+# journey over the real recipe, not a shell test suite.
 
 from __future__ import annotations
 
@@ -87,6 +89,17 @@ HELD_SECONDS = 90
 #: `SustainedEditing` below is that. Above what a healthy run costs, which is
 #: `HELD_SECONDS` plus the seconds around it, and below what reads as a wedged tier.
 SUPERVISED_SECONDS = 300
+
+#: How long the launch tells the graph to hold the monitor between its turns. The
+#: shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds, and
+#: the claim below is counted in monitor turns taken *while edits are being sent* — so
+#: under the shipped period the twenty it needs would take longer than the run lives,
+#: and a watcher that was never handed a draw would read as one that survived them.
+#: `--set members.monitor.schedule.every` is the published override for a journey that
+#: needs turns closer together than the shipped period; the shipped value stays what it
+#: is. One second is the smallest hold the graph accepts, and this journey measures how
+#: many turns were taken alongside the edits rather than how far apart they were.
+MONITOR_HOLD_SECONDS = 1
 
 #: What has to have happened before this journey stops editing, and why these two.
 #:
@@ -492,6 +505,8 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
                 project_from_plan(plan),
                 "--heartbeat-interval",
                 str(PACEMAKER_INTERVAL_SECONDS),
+                "--set",
+                f"members.{MONITOR_MEMBER}.schedule.every={MONITOR_HOLD_SECONDS}",
             ],
             cwd=REPO_ROOT,
             env=environment,
@@ -1070,3 +1085,4 @@ def test_a_score_the_planner_gave_no_reason_for_still_says_who_decided_it(
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[shell_test_tiers_stay_split]

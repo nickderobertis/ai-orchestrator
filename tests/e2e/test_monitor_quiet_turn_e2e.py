@@ -66,6 +66,7 @@ from test_orchestrate_launch_e2e import (
     _lost_turn_transcript,
 )
 from test_orchestrate_launch_e2e import _environment as _launched_environment
+from test_supervisory_prompt_discipline_e2e import CURSOR_FILE
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -92,6 +93,15 @@ RUNS_DIR_ENV = "ONEPIPELINE_RUNS_DIR"
 #: nothing. It names no node and quotes no frame, so a surface carrying it could only
 #: have come from the raise this change removed.
 SAID_ON_A_QUIET_TURN = "read the detailed stream; nothing needed raising this turn"
+
+#: What the answer to a taken turn has to say about the turn after it. The graph paces
+#: the monitor's conversation with a hold between turns, so an acknowledgement that
+#: told the member to keep reading *now* would be an instruction to spend the turn it
+#: has just finished; what it says instead is that the next turn opens after the hold
+#: and reads the stream from the cursor file the persona keeps — `CURSOR_FILE`, which
+#: `tests/e2e/test_supervisory_prompt_discipline_e2e.py` reads off a real launch's
+#: effective prompt, so the answer and the instruction it refers to are one name.
+NEXT_TURN_OPENS_AFTER_THE_HOLD = "next turn opens after the graph's hold"
 
 #: How long a turn that raises nothing may take to answer before this journey calls it
 #: hung — every content-bearing turn, whatever the content is. Such a turn opens no
@@ -331,6 +341,14 @@ def test_a_monitor_turn_that_produced_content_costs_the_planner_no_surface(
         f"{case} answered with a bare non-completion, which reads in a transcript like a "
         f"planner who refused the watch: {ruling}"
     )
+    assert NEXT_TURN_OPENS_AFTER_THE_HOLD in ruling["message"], (
+        f"{case} was answered as if the monitor's next turn were now, and the graph holds "
+        f"that conversation between turns: {ruling}"
+    )
+    assert f"`{CURSOR_FILE}`" in ruling["message"], (
+        f"{case} was answered without telling the monitor to read its next turn from "
+        f"`{CURSOR_FILE}`, the cursor the persona keeps: {ruling}"
+    )
 
 
 def test_a_monitor_turn_its_agent_side_lost_still_reaches_the_planners_queue(
@@ -402,6 +420,16 @@ HELD_SECONDS = 25
 #: supervisory member producing surfaces — which is what makes "no MONITOR surface" a
 #: statement about the monitor rather than about a run nothing surfaced on.
 PACEMAKER_INTERVAL_SECONDS = 1
+
+#: How long the launch tells the graph to hold the monitor between its turns. The
+#: shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds, and
+#: this run lasts about as long as `HELD_SECONDS` — so under the shipped period the
+#: second turn this journey needs would never open, and a run that took one turn read
+#: exactly like the incident. `--set members.monitor.schedule.every` is the published
+#: override for a journey that needs turns closer together than the shipped period, and
+#: the shipped value stays what it is. Two seconds rather than one, so the second turn
+#: is visibly a paced turn and not the graph's floor.
+MONITOR_HOLD_SECONDS = 2
 
 #: Where `oneagentgraph` writes its own event log, named by this journey so it reads
 #: this run's graph and never a concurrent dispatch's. The rendered event line does not
@@ -548,6 +576,8 @@ def _what_the_monitor_said(events: list[GraphEvent]) -> list[str]:
 # here — `AGENTS.md` records the tier split as a deliberate decision, and re-homing forty
 # launch journeys into a new project is enforcement configuration this change may not
 # move in order to pass.
+# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
+# a pytest journey over the real recipe, not a shell test suite.
 @pytest.mark.xdist_group("monitor-quiet-turn")
 def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
     tmp_path: Path, oneharness_bin: str
@@ -604,6 +634,8 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
                 project_from_plan(plan),
                 "--heartbeat-interval",
                 str(PACEMAKER_INTERVAL_SECONDS),
+                "--set",
+                f"members.{MONITOR_MEMBER}.schedule.every={MONITOR_HOLD_SECONDS}",
             ],
             cwd=REPO_ROOT,
             env=environment,
@@ -704,3 +736,4 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
