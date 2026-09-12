@@ -686,12 +686,14 @@ same symptom.
 
 **A hold is not silence.** For the length of it the member's heartbeat continues and its
 activity clock is refreshed, so nothing condemns the monitor for waiting; `just status`
-read during a hold reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`. A hold
-ends early on a `trigger`, on the run's `stop` or the member's own `cancel`, and on a
-**note** offered to the member — the turn opens and the note is delivered into it — so a
-manager's `note` to the monitor is never held for five minutes. The driver's cancel at
-settlement ends the last hold, so a run that settles in seconds still returns in
-seconds. And the judge side is unchanged: `scripts/channel-serve.py` answers every
+read during a hold reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`. The
+driver's cancel at settlement ends the last hold, so a run that settles in seconds still
+returns in seconds. What else ends a hold early is the linked `oneagentgraph`'s own
+contract (its `docs/contract.md`, under `version: 9`), proven in that repository rather
+than here: a `trigger`, the run's `stop` or the member's own `cancel`, and a **note**
+offered to the member — the turn opens and the note is delivered into it — so a
+manager's `note` to the monitor is never held for five minutes. And the judge side is
+unchanged: `scripts/channel-serve.py` answers every
 supervisor frame at once, because the hold is the graph's and a judge that slept would
 only stack a second wait on the first; what its turn-taken acknowledgement now says is
 that the next turn opens after the hold and reads the stream from the cursor

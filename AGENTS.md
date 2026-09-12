@@ -683,13 +683,11 @@ was.
   before the driver relaunches the observer and may clear on its own; `OBSERVER NOT
   RESTARTED` is the driver having given up, and is yours to act on. The monitor is a
   **paced foreground conversation**: `graphs/dag-scope.yaml` holds it between turns
-  and declares it `background: false`, which is what keeps the observer graph alive
-  through a hold — a property the document declares, not one inferred from which
-  member is a conversation — and the pacemaker, a scheduled member declaring nothing
-  and so background, fires inside those holds. A hold is not a death: the heartbeat
-  continues through it, `just status` reports neither verdict above during one, and a
-  `note` to the monitor ends the hold rather than waiting it out.
-  `tests/e2e/test_observer_graph_liveness_e2e.py` holds that arrangement.
+  and declares, beside the member, what keeps the observer graph alive through a
+  hold, with the pacemaker firing inside those holds. A hold is not a death — the
+  heartbeat continues through it, `just status` reports neither verdict above during
+  one, and a `note` to the monitor ends the hold rather than waiting it out —
+  and `tests/e2e/test_observer_graph_liveness_e2e.py` holds that.
 - **A surface's text reaches the engine as bytes**, never as a command-line word,
   because bash substitutes backticks and `$(...)` inside double quotes and a finding
   that quotes a command then runs it.
