@@ -143,6 +143,14 @@ CONFIGURED_OWNER = _configured_owner()
 #: A repository under the same owner that the board fixture answers as invisible, which
 #: is what GitHub answers for one that does not exist or that the token cannot see.
 UNREACHABLE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="not-a-repository")
+#: A second repository of the configured owner the fixture knows, so a task naming it is
+#: filed somewhere the configured fallback is not — the placement the adopted release
+#: buys, which a fixture answering one node id for every lookup could never observe.
+SIBLING_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="oneharness")
+#: A repository under an owner the fixture has never heard of. GitHub files a sub-issue
+#: only in a repository of the same owner as its parent issue, so a task naming this one
+#: is refused before anything is created rather than looked up and found missing.
+FOREIGN_REPOSITORY = _Repository(owner="contoso", name="work")
 
 
 class _AddedNode(TypedDict):
@@ -273,11 +281,27 @@ STATUS_OPTIONS: tuple[_StatusOption, ...] = (
     _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
     _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
 )
-#: The node id the fixture answers the configured repository's own lookup with. The
-#: journey asserts this reaches `createIssue`, which is the whole of what naming a
-#: repository on the source buys: a board has none of its own, so a write without it
-#: is refused rather than filed somewhere.
-REPOSITORY_NODE_ID = _RepositoryNodeId("R_ai_orchestrator")
+#: The node id the fixture answers each repository it knows with, one per `owner/name`.
+#: The journeys assert which of these reaches `createIssue`, which is the whole of what
+#: naming a repository buys — on the source, whose configured one is the fallback a
+#: board has none of its own for, and on an item, whose own `repositories` decides where
+#: its issue is created. Distinct ids per repository because a fixture answering one id
+#: for every lookup would pass a source that resolved the right repository and then
+#: created every issue in the configured one.
+REPOSITORY_NODE_IDS: dict[_Repository, _RepositoryNodeId] = {
+    CONFIGURED_REPOSITORY: _RepositoryNodeId("R_ai_orchestrator"),
+    SIBLING_REPOSITORY: _RepositoryNodeId("R_oneharness"),
+}
+REPOSITORY_NODE_ID = REPOSITORY_NODE_IDS[CONFIGURED_REPOSITORY]
+
+
+def _repository_of(node_id: object) -> _Repository:
+    for repository, known in REPOSITORY_NODE_IDS.items():
+        if known == node_id:
+            return repository
+    raise ValueError(f"createIssue names repository {node_id!r}, which no lookup answered")
+
+
 #: A project somebody wrote on the board by hand, carrying one sub-issue. A board issue
 #: is a project when it has sub-issues or the source's own item-kind marker, so a board
 #: whose items were empty would answer `project list` with nothing — the board's own
@@ -302,6 +326,12 @@ class _Issue:
     body: str
     parent_id: _IssueNodeId | None = None
     sub_issues: int = 0
+    #: Where this issue lives, which is what its `repository.nameWithOwner` answers. A
+    #: created issue takes the repository its `createIssue` named, because the source
+    #: reads a parent's repository back off the board to place a task naming none and to
+    #: refuse one under another owner — so an issue that answered the configured
+    #: repository whatever it was created in would hide both from the journeys.
+    repository: _Repository = CONFIGURED_REPOSITORY
 
     def field_values(self) -> dict[str, object]:
         """This row's board field values, as both routes to it select them.
@@ -331,12 +361,12 @@ class _Issue:
             "id": self.content_id,
             "title": self.title,
             "body": self.body,
-            "url": f"https://github.com/{CONFIGURED_REPOSITORY}/issues/{self.item_id}",
+            "url": f"https://github.com/{self.repository}/issues/{self.item_id}",
             "createdAt": "2026-08-26T00:00:00Z",
             "updatedAt": "2026-08-26T00:00:00Z",
             "state": "OPEN",
             "stateReason": None,
-            "repository": {"nameWithOwner": str(CONFIGURED_REPOSITORY)},
+            "repository": {"nameWithOwner": str(self.repository)},
             "parent": None if self.parent_id is None else {"id": self.parent_id},
             "subIssuesSummary": {"total": self.sub_issues},
             "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
@@ -416,6 +446,9 @@ class _Board:
         )
         self.issues: list[_Issue] = [parent, child]
         self.created: list[_Issue] = []
+
+    def issues_created_and_kept(self) -> list[_Issue]:
+        return [issue for issue in self.created if issue in self.issues]
 
     def board_response(self) -> dict[str, object]:
         return {
@@ -511,6 +544,7 @@ class _Board:
             content_id=_IssueNodeId(f"I_created_{len(self.created)}"),
             title=title,
             body=body,
+            repository=_repository_of(payload.get("repositoryId")),
         )
         self.created.append(created)
         self.issues.append(created)
@@ -549,6 +583,21 @@ class _Board:
                     "subIssue": {"id": child.content_id},
                 }
             }
+        }
+
+    def delete_issue(self, variables: dict[str, object]) -> dict[str, object]:
+        """Take one issue off the board, which is how a refused copy undoes its creations.
+
+        Recorded as the issue leaving `issues` while staying in `created`, so a journey
+        can read both what a copy made and what it then took back.
+        """
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("deleteIssue requires an input object")
+        deleted = self._issue(payload.get("issueId"))
+        self.issues.remove(deleted)
+        return {
+            "data": {"deleteIssue": {"repository": {"id": REPOSITORY_NODE_IDS[deleted.repository]}}}
         }
 
 
@@ -629,6 +678,7 @@ class _Operation(StrEnum):
     UPDATE_FIELD = "updateField"
     ADD_SUB_ISSUE = "addSubIssue"
     UPDATE_ISSUE = "updateIssue"
+    DELETE_ISSUE = "deleteIssue"
 
 
 #: Each operation's marker in the document the source sends, in the order they are
@@ -646,6 +696,7 @@ _OPERATIONS: dict[str, _Operation] = {
     "updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELD,
     "addSubIssue(": _Operation.ADD_SUB_ISSUE,
     "updateIssue(": _Operation.UPDATE_ISSUE,
+    "deleteIssue(": _Operation.DELETE_ISSUE,
 }
 
 #: The title qualifier the source narrows a board search with, and the two characters
@@ -793,6 +844,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 }
             case _Operation.ADD_SUB_ISSUE:
                 return BOARD.add_sub_issue(request.variables)
+            case _Operation.DELETE_ISSUE:
+                return BOARD.delete_issue(request.variables)
 
     @staticmethod
     def _repository(named: _Repository) -> dict[str, object]:
@@ -800,15 +853,14 @@ class _GitHubFixture(BaseHTTPRequestHandler):
 
         A repository that does not exist, or that the token cannot see, comes back as a
         present and null field rather than as an error — which is the answer the source
-        turns into its refusal, so it is the answer this fixture gives.
+        turns into its refusal, so it is the answer this fixture gives. An owner the
+        fixture does not know is answered the same way, because to GitHub a repository
+        under an owner that does not exist is one more repository that is not there.
         """
-        if named != CONFIGURED_REPOSITORY:
+        known = REPOSITORY_NODE_IDS.get(named)
+        if known is None:
             return {"data": {"repository": None}}
-        return {
-            "data": {
-                "repository": {"id": REPOSITORY_NODE_ID, "nameWithOwner": str(named)},
-            }
-        }
+        return {"data": {"repository": {"id": known, "nameWithOwner": str(named)}}}
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -1010,14 +1062,16 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
 
 
 def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Path) -> None:
-    """A copy to `plans` creates its issues in the repository this checkout names.
+    """A copy of items naming no repository creates their issues in the one this checkout names.
 
-    That naming is the whole of what the `repository` field buys: a board has no
-    repository of its own and `createIssue` requires one, so a copy either resolves the
-    configured repository's node id and files every issue against it or is refused. The
-    node id the fixture answers with is asserted at `createIssue` rather than only at
-    the lookup, because a source that asked for the repository and then created its
-    issues somewhere else would pass the lookup assertion alone.
+    That is the fallback, and it is what the `repository` field buys: a board has no
+    repository of its own and `createIssue` requires one, so a copy of a project and a
+    task that name none either resolves the configured repository's node id and files
+    both against it or is refused. The node id the fixture answers with is asserted at
+    `createIssue` rather than only at the lookup, because a source that asked for the
+    repository and then created its issues somewhere else would pass the lookup
+    assertion alone. An item that *does* name a repository is the journey below, which
+    is where the adopted release parts from this one.
     """
     _write_local_project(tmp_path)
     with _serving_board() as remote:
@@ -1060,6 +1114,230 @@ def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Pa
     assert filed == {(project.content_id, task.content_id)}, (
         f"a project's tasks are its issue's sub-issues, and this copy filed {filed}"
     )
+
+
+def _hosted(repository: _Repository) -> str:
+    """``repository`` as the normalized origin a task record's `repositories` holds."""
+    return f"github.com/{repository}"
+
+
+#: The project whose tasks name where their work lands, the way a plan of this
+#: repository is written since a task's `repositories` became the field a copy files by.
+PLACED_PROJECT = _ProjectId("placed")
+PLACED_QUALIFIED = f"{AUTHORING_SOURCE}:{PLACED_PROJECT}"
+#: The creation arms of the placement rule a plan of this repository can write, each as
+#: the one normalized origin a task's `repositories` names — or none — keyed to the
+#: title its issue is created under so a `createIssue` can be read back per title: the
+#: configured repository, where the rule's answer equals the fallback; a sibling, whose
+#: placement is what the adopted release changes; and none, the fallback. Several is not
+#: here because the renderer a plan is written with names one `repo` per node, so no
+#: record this repository produces reaches that arm.
+PLACED_TASK_TITLES: dict[str | None, str] = {
+    _hosted(CONFIGURED_REPOSITORY): "feat: change the orchestrator",
+    _hosted(SIBLING_REPOSITORY): "feat: change the sibling",
+    None: "docs: name no repository",
+}
+
+
+@dataclass(frozen=True)
+class _PlacementRefusal:
+    """One arm of the placement rule's refusals, as a task record would meet it."""
+
+    #: The normalized origin the task's `repositories` names.
+    origin: str
+    #: Whether the source asks GitHub about that repository before refusing.
+    looked_up: bool
+
+    @property
+    def slug(self) -> str:
+        """The `owner/name` the refusal and the lookup spell the repository as."""
+        return self.origin.split("/", 1)[1]
+
+
+PLACEMENT_REFUSALS: dict[str, _PlacementRefusal] = {
+    # GitHub files a sub-issue only in a repository of the same owner as its parent
+    # issue, so the owner comparison refuses before anything asks about the repository.
+    "another owner": _PlacementRefusal(_hosted(FOREIGN_REPOSITORY), looked_up=False),
+    # One the token cannot see comes back null from the lookup the rule has to make.
+    "a repository the token cannot see": _PlacementRefusal(
+        _hosted(UNREACHABLE_REPOSITORY), looked_up=True
+    ),
+    # One that is not a GitHub repository at all is refused by its spelling.
+    "a repository off GitHub": _PlacementRefusal(
+        f"gitlab.com/{FOREIGN_REPOSITORY}", looked_up=False
+    ),
+}
+
+
+def _write_placed_project(root: Path, tasks: Mapping[str | None, str]) -> None:
+    """Write a project naming no repository whose tasks each name one, or none.
+
+    Written through the same renderer `just plan` writes a plan with, so the record a
+    copy reads is the record this repository produces — a task's hosted origin lands in
+    its own top-level `repositories`, and a task naming none carries no such field —
+    rather than a shape this journey composed by hand. No design document, because the
+    store's own copy verb is what this drives and nothing here launches.
+    """
+    write_plan_project(
+        root,
+        {
+            "schema_version": 3,
+            "name": PLACED_PROJECT,
+            "tasks": [
+                {
+                    "id": f"task-{index}",
+                    "persona": "engineer",
+                    "title": title,
+                    "task": "## What\nReply with done.\n\n## Why\nProve placement.\n\n"
+                    "## Acceptance criteria\n- The task settles.\n",
+                    **({} if origin is None else {"repo": origin}),
+                }
+                for index, (origin, title) in enumerate(tasks.items())
+            ],
+        },
+    )
+
+
+# llmlint: ignore[e2e_not_mocked] The one boundary doubled is GitHub's Projects API,
+# for the reason the block around `_Board` above gives — driving it for real writes to
+# the live board this repository plans on — and everything above the wire is real: the
+# installed `onetaskgraph`, `just plans`, and the record the renderer wrote.
+def _copy_placed_project(root: Path) -> subprocess.CompletedProcess[str]:
+    with _serving_board() as remote:
+        environment = _plan_environment(root)
+        environment.update(remote)
+        return subprocess.run(
+            ["just", "plans", "project", "copy", PLACED_QUALIFIED, "--to", "plans"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+
+def _created_titled(title: str) -> _Issue:
+    for issue in BOARD.created:
+        if issue.title == title:
+            return issue
+    raise AssertionError(f"the copy created no issue titled {title!r}: {BOARD.created}")
+
+
+def _looked_up() -> list[_Repository]:
+    return [
+        request.repository
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.REPOSITORY
+    ]
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The same finding under
+# its sibling name, answered the same way as the block just below: the placement is the
+# module's and predates these two journeys.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same subject and same
+# inputs as every journey beside them — the installed plan-store CLI driven against the
+# loopback board — so `nx affected` already selects this whole module together, and a
+# project of two functions would buy no selection while moving a placement that predates
+# them. They run in `orchestrator:test`, keyed `codeWorkspace`, which is the edge every
+# other CLI-spawning journey in this file already pays.
+def test_project_copy_files_each_task_issue_in_the_repository_its_own_record_names(
+    tmp_path: Path,
+) -> None:
+    """A task's `repositories` decides where its issue is created; none means its project's.
+
+    Read off the fixture's own record of `createIssue` per created title: the task naming
+    this repository carries the configured repository's node id, the task naming the
+    sibling carries the sibling's, and the task naming none carries the node id of the
+    repository the project's own issue was created in — which is the configured one here
+    because the project names none, and is asserted as the project issue's rather than
+    as the fallback so a source that stopped placing by the parent would fail even where
+    the two coincide. Each task issue is then a sub-issue of the
+    project issue whatever repository it lives in, which is the cross-repository pairing
+    GitHub permits under one owner, and each distinct repository is looked up once for
+    the whole command.
+    """
+    _write_placed_project(tmp_path, PLACED_TASK_TITLES)
+    copied = _copy_placed_project(tmp_path)
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    assert {issue.title for issue in BOARD.created} == {
+        PLACED_PROJECT,
+        *PLACED_TASK_TITLES.values(),
+    }
+    project = _created_titled(PLACED_PROJECT)
+    assert project.repository == CONFIGURED_REPOSITORY, (
+        "a project naming no repository is created in the configured one, and this one "
+        f"was created in {project.repository}"
+    )
+    created_in = {
+        request.input_value("title"): request.input_value("repositoryId")
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.CREATE_ISSUE
+    }
+    expected_in = {
+        PLACED_TASK_TITLES[_hosted(CONFIGURED_REPOSITORY)]: CONFIGURED_REPOSITORY,
+        PLACED_TASK_TITLES[_hosted(SIBLING_REPOSITORY)]: SIBLING_REPOSITORY,
+        PLACED_TASK_TITLES[None]: project.repository,
+    }
+    for title, repository in expected_in.items():
+        assert created_in[title] == REPOSITORY_NODE_IDS[repository], (
+            f"{title!r} has to be created in {repository}, and this copy created {created_in}"
+        )
+    filed = {
+        (request.input_value("issueId"), request.input_value("subIssueId"))
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.ADD_SUB_ISSUE
+    }
+    assert filed == {
+        (project.content_id, _created_titled(title).content_id)
+        for title in PLACED_TASK_TITLES.values()
+    }, f"every task issue is a sub-issue of the project's, and this copy filed {filed}"
+    lookups = _looked_up()
+    expected_lookups = sorted(
+        str(repository) for repository in (CONFIGURED_REPOSITORY, SIBLING_REPOSITORY)
+    )
+    assert sorted(str(repository) for repository in lookups) == expected_lookups, (
+        "each distinct repository is resolved once per command, and this copy looked up "
+        f"{[str(repository) for repository in lookups]}"
+    )
+
+
+@pytest.mark.parametrize("refusal", PLACEMENT_REFUSALS.values(), ids=PLACEMENT_REFUSALS)
+def test_project_copy_is_refused_for_a_task_whose_repository_cannot_hold_its_issue(
+    tmp_path: Path, refusal: _PlacementRefusal
+) -> None:
+    """A task naming a repository its issue cannot be created in is refused by name.
+
+    Three arms, each refused before `createIssue` rather than creating an issue that
+    `addSubIssue` would then leave orphaned: a repository under another owner than the
+    project issue's, one the token cannot see, and one that is not on GitHub at all. The
+    refusal names the task and the repository, the fixture's record holds no
+    `createIssue` for that task, and only the arm that has to ask GitHub whether the
+    repository is there is looked up — the other two are decided from the origin's own
+    spelling. The project's own issue, created before its task was refused, is taken back
+    with `deleteIssue`, so the board is left as the copy found it.
+    """
+    title = "feat: change a repository this copy cannot file in"
+    _write_placed_project(tmp_path, {refusal.origin: title})
+    copied = _copy_placed_project(tmp_path)
+
+    assert copied.returncode != 0, copied.stdout
+    assert title in copied.stderr, copied.stderr
+    assert refusal.slug in copied.stderr, copied.stderr
+    assert title not in {issue.title for issue in BOARD.created}, (
+        "a task whose repository is refused has no issue created for it, and this copy "
+        f"created {[issue.title for issue in BOARD.created]}"
+    )
+    asked = [str(repository) for repository in _looked_up()]
+    assert (refusal.slug in asked) is refusal.looked_up, f"this copy asked GitHub about {asked}"
+    assert not BOARD.issues_created_and_kept(), (
+        "a refused copy takes back the project issue it had created before the refusal, "
+        f"and this one left {[issue.title for issue in BOARD.issues_created_and_kept()]}"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def test_project_copy_is_refused_when_the_configured_repository_is_unreachable(

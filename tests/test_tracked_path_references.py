@@ -111,6 +111,11 @@ EXEMPTIONS = (
         "text of a link whose target is its URL at the pinned release",
     ),
     Exemption(
+        "docs/metadata.md",
+        "onetaskgraph's own document, quoted by AGENTS.md as the human statement of the "
+        "rule its github-projects source files each task issue by",
+    ),
+    Exemption(
         "docs/x.md",
         "an illustrative placeholder in orchestrator/criteria_guard.py's own examples of "
         "criterion prose that cites a file without demanding a change to it",

@@ -614,7 +614,7 @@ destination already held, which is what put that synthetic source on a settled p
 the first place; it is
 https://github.com/nickderobertis/onetaskgraph/issues/266, and the repair is
 https://github.com/nickderobertis/onetaskgraph/pull/252, carried by the adopted
-onetaskgraph 0.2.27. `orchestrator/plan_store.py` still recognises a record left under
+onetaskgraph 0.2.28. `orchestrator/plan_store.py` still recognises a record left under
 that source and says which engine wrote it, because a plan carried here from a host that
 ran one of those engines still carries the rewrite; the recogniser is about records, not
 about this host's pin.
@@ -657,9 +657,63 @@ engine wheel's bill of materials has no onetaskgraph entry to compare it with.
 <!-- llmlint: ignore[instruction_layer_localized] Which release this host adopts is a
 repo-wide constraint, which is what this document holds; subtree rules stay in
 `orchestrator/AGENTS.md`, `tests/AGENTS.md` and `tests/dag_ui/AGENTS.md`. -->
-**What the pin's own value buys this host is that a copied document's references point
-at the destination**, and it is named here because nothing beside a bare version string
-can say what a bump was for. The landing that cut the adopted release is
+**What the pin's own value buys this host is that a task's issue is filed in the
+repository its own record names**, and it is named here because nothing beside a bare
+version string can say what a bump was for. The landing that cut the adopted release is
+https://github.com/nickderobertis/onetaskgraph/pull/846, and what it changes is where a
+person finds the work: a task issue is found from the repository it changes, and every
+task issue this board held was filed in `nickderobertis/ai-orchestrator` — the one
+repository the `plans` source's `repository:` names — including the ones whose whole job
+was a change to `oneharness`, `onejudge`, `oneagentgraph` or `onepipeline`, which were
+invisible from every one of those. The `github-projects` source now reads each item's own
+`repositories` — the top-level list a task record carries, which is where
+`orchestrator/project_store.py` already puts a node's hosted origin — under one rule.
+**Exactly one entry, and the issue is created in that repository.** **Zero entries or
+several**, and a task's or a document's issue is created in the repository its parent
+project's issue lives in, while a project's issue is created in the source's configured
+`repository:` — so that field stays, as the fallback the rule bottoms out in rather than
+as the answer for every item. Three things are refused before `createIssue` rather than
+filed somewhere and reported afterwards, each naming the item and the repository: one the
+token cannot see, one that is not a `github.com/owner/name` repository at all, and one
+under a different owner from the parent issue's, because GitHub files a sub-issue only in
+a repository of the same owner as its parent — so a plan of this repository may send a task
+to any repository of this account and to no other. And **an existing issue is never
+moved**: the rule decides where an issue is *created*, so every issue filed on the board
+before this pin moved stays where it was filed, and a list that no longer matches where an
+issue lives is recorded on the item rather than acted on. The rule's one executable
+source is that crate's `GitHubProjectsSource::creation_target`, its human statement is
+that repository's `docs/metadata.md` under *Repositories*, and what re-takes it here on
+every gate run is `tests/e2e/test_onetaskgraph_host_e2e.py`'s
+`test_project_copy_files_each_task_issue_in_the_repository_its_own_record_names`, which
+copies a project of this repository — one task naming this repository, one naming a
+sibling under the same owner, one naming none — through the installed `onetaskgraph`
+onto the loopback board and reads which repository's node id each `createIssue`
+carried, beside
+`test_project_copy_is_refused_for_a_task_whose_repository_cannot_hold_its_issue`, which
+reads each of the three refusals and that only the unseen one was asked of GitHub. The
+fixture answers a distinct node id per repository it knows for exactly that reason: one
+id for every lookup would pass a source that resolved the right repository and then
+created every issue in the configured one, which is the release before this pin. Three
+arms those journeys do not drive, and each is unreachable from here rather than skipped.
+The several one is a record no plan of this repository writes — the renderer
+`orchestrator/project_store.py` puts one node's one `repo` in that list — so a journey
+driving it would compose a record by hand that no interface here produces; that crate's
+own `a_task_naming_none_or_several_is_created_in_its_projects_repository` in its
+`tests/plugin.rs` drives it. The never-moved one is a property of the *update* path — `creation_target` is consulted
+for an issue being created and not for one being updated — and no copy here updates; that
+crate's own `an_existing_issue_is_never_moved_and_a_differing_list_is_recorded` in its
+`tests/plugin.rs` is what drives it. And a **document's** issue takes the same rule as a
+task's, but no document this host writes names a repository — a design document's record
+carries a title, a project and its content, and `just finish-plan` gives it nothing else —
+so every document copied from here takes the project's repository by the zero arm the
+task journey already drives, and the one-repository and refused arms for a document are
+that same `tests/plugin.rs`'s, driven for a document beside every task case. That the two halves meet on the real board — a plan
+written here, copied with this host's credential, its issues read back from GitHub where
+the field says — was driven once, as the throwaway `board-repository-proof`, and is not
+re-taken by any check: a board write is not something a gate performs.
+
+**One further landing sits beneath this pin and is what a copied document's references
+point at**, named the same way. The landing is
 https://github.com/nickderobertis/onetaskgraph/pull/774, and what it changes is the
 artifact this whole plan flow exists to produce: a design document ends with a table of
 the planned tasks, one row per task, whose last column locates each one, and a plan is
@@ -728,7 +782,7 @@ GitHub's hourly allowance and reconciles that figure against GitHub's own
 number somebody has to change rather than going unnoticed.
 
 **What those three are worth is measured in the adopted release's own source rather than
-here**, in `crates/onetaskgraph-github-projects/session-cost.md` at tag `v0.2.27`, which
+here**, in `crates/onetaskgraph-github-projects/session-cost.md` at tag `v0.2.28`, which
 is where the figures are re-taken and where its
 `a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` holds a session
 to them: one session's worst-case node count falls from 1,757,301 to 222,516 — the record
@@ -765,7 +819,7 @@ and that change touches no crate source: every path in it is CI configuration, t
 `AGENTS.md`. release-plz cut no release for it and correctly cannot, because there is no
 versioned artifact to bump. **A later release has since swept that commit into its own
 history without carrying anything of it, and telling those two apart is the whole of this
-paragraph.** `7bcac9fa` landed after `v0.2.21` and is an ancestor of `v0.2.27` — the tag this
+paragraph.** `7bcac9fa` landed after `v0.2.21` and is an ancestor of `v0.2.28` — the tag this
 pin now names — so `git tag --contains` answers that the fix is *in* the adopted release,
 while the archive that release publishes is the compiled CLI, which holds no CI
 configuration, no `justfile`, nothing under `scripts/` and no `project.json`, and so carries
@@ -793,15 +847,15 @@ https://github.com/nickderobertis/onetaskgraph/pull/538, merged as `51596716`, s
 repository's startup sweep touching a run in flight; of its seventeen paths the only
 compiled source is `crates/onetaskgraph-live/src/`, and the rest are two `project.json`
 files, a `session-cost.md`, test targets under `tests/`, and two scripts. Both are
-ancestors of `v0.2.27`, so `git tag --contains` answers that the adopted release carries
+ancestors of `v0.2.28`, so `git tag --contains` answers that the adopted release carries
 each of them — and **the archive that release publishes carries neither**.
 
 **That last clause is measured on the artifact rather than argued from the manifest**,
 because it is the half a reader is most likely to take on trust and the half the
 release-guarantee wording invites getting wrong. The published
-`onetaskgraph-v0.2.27-<target>.tar.gz` holds exactly **one** file, the compiled
+`onetaskgraph-v0.2.28-<target>.tar.gz` holds exactly **one** file, the compiled
 `onetaskgraph` binary, and the copy this checkout installed is byte-identical to it
-(`sha256 de63ceca…`) — no scripts, no CI configuration, no `justfile`, no `project.json`.
+(`sha256 9bd38b28…`) — no scripts, no CI configuration, no `justfile`, no `project.json`.
 That binary embeds a source path for each crate compiled into it — `onetaskgraph-core`,
 `onetaskgraph-github-projects`, `onetaskgraph-in-memory`, `onetaskgraph-linear`,
 `onetaskgraph-local-md`, `onetaskgraph-plugin-api` and `onetaskgraph` itself — and
@@ -810,7 +864,7 @@ The producer's own bill of materials says the same without reading a binary at a
 that release is published as a PyPI wheel too, and the CycloneDX SBOM under its
 `dist-info/sboms/` declares six onetaskgraph crates — the six above minus the binary
 crate itself — and no `onetaskgraph-live`. The dependency graph says why and says it
-permanently: at `v0.2.27` the `onetaskgraph`
+permanently: at `v0.2.28` the `onetaskgraph`
 binary crate depends on `clap`, `onetaskgraph-core`, `onetaskgraph-plugin-api`, `serde`,
 `serde_json` and `tokio`, while `onetaskgraph-live` is declared by exactly two crates and
 under `[dev-dependencies]` in both, which is the only section it has ever been declared
@@ -1503,7 +1557,7 @@ own records, and the adopted onepipeline 0.27.0 is past the 0.20.0 that carries 
 `onetaskgraph`'s own half — a copy coming back to a destination no longer overwriting
 that destination's `onetaskgraph.origin`,
 https://github.com/nickderobertis/onetaskgraph/pull/252 — is carried by the adopted
-onetaskgraph 0.2.27. The two journeys that were exempt while the engine could not read
+onetaskgraph 0.2.28. The two journeys that were exempt while the engine could not read
 this store now run for real and pass, projecting a real settlement onto a real plan and
 reading it back afterwards. **What has not changed is that a green run proves nothing
 about the board**: the write-back is still best-effort and off the reconcile loop —
@@ -1546,7 +1600,7 @@ breakage above cheap while it lasts, which is why that breakage is worth accepti
 than waiting out.
 
 *The store half.* onetaskgraph https://github.com/nickderobertis/onetaskgraph/pull/173,
-carried by the adopted onetaskgraph 0.2.27: it reads GitHub's own limiter vocabulary out of
+carried by the adopted onetaskgraph 0.2.28: it reads GitHub's own limiter vocabulary out of
 a refusal's `message` rather than off its status, and it spaces a copy's content-creating
 mutations at 60000/80 ms — the fastest rate that cannot exceed GitHub's published
 per-minute ceiling. Before it, every release answered both refusals with one sentence —
@@ -3583,9 +3637,9 @@ which holds that lane's own fixtures, and number 2 *"AI Orchestrator"*, the plan
 updated ProjectV2 and wrote to whatever came back — so the moment the plans board became
 the more recently updated of the two, a credentialed write lane retargeted itself onto
 it with nothing said, and left a draft item there on 2026-08-27. **The adopted
-onetaskgraph 0.2.27 discovers nothing**, and it wants a third name: read from
+onetaskgraph 0.2.28 discovers nothing**, and it wants a third name: read from
 that release's own published source — `crates/onetaskgraph-github-projects/tests/live.rs`
-at tag `v0.2.27`, and the `tests/lane/mod.rs` beside it that file's `live_lane` decision
+at tag `v0.2.28`, and the `tests/lane/mod.rs` beside it that file's `live_lane` decision
 lives in — the board comes from
 `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER`, the repository its issues are created in
 comes from `GH_PROJECTS_REPOSITORY`, and an absent one of those **skips** the lane
@@ -3607,7 +3661,7 @@ own source at its own tag rather than to a reading taken here -->
 *The lane is no longer opt-in.* That test used to carry an `#[ignore]` whose reason sent
 the reader to that repository's own `test-live` recipe for `onetaskgraph-github-projects`,
 and a `live.yml` of its own under its `.github/workflows/`; that change request removed the
-attribute and deleted the workflow. At `v0.2.27` neither is there,
+attribute and deleted the workflow. At `v0.2.28` neither is there,
 and `crates/onetaskgraph-live/src/lib.rs`'s own header says every
 live journey in that workspace is *"an ordinary test in an ordinary `test` target,
 selected by the ordinary affected selection"*. So an ordinary test run of that repository
@@ -3616,7 +3670,7 @@ nomination matter more than it did rather than less.
 
 *A nomination that reaches a URL is held to GitHub's own grammar.* Before that same change
 request the lane accepted any `GH_PROJECTS_REPOSITORY` whose two halves were non-empty and
-whose name held no second `/`. At `v0.2.27` `is_login` and `is_repository_name` in that
+whose name held no second `/`. At `v0.2.28` `is_login` and `is_repository_name` in that
 `tests/lane/mod.rs` hold the
 owner to letters, digits and single inner hyphens within 39 characters, and the name to
 letters, digits, hyphens, underscores and dots within 100, refusing `.` and `..` outright
@@ -3650,7 +3704,7 @@ draws on, the remaining allowance minus that session's estimated cost is still a
 crate says it is on each budget's own scale — and a budget whose allowance could not be
 read never affords anything. That is the half of this release this host consumes without
 running it. What one session costs is `session-cost.md`'s to state and it is restated
-nowhere here: at `v0.2.27` its checked-in record `tests/fixtures/session-cost.txt` reads
+nowhere here: at `v0.2.28` its checked-in record `tests/fixtures/session-cost.txt` reads
 **100 requests** and a worst-case node count of **222,516**, the gate's own `GET
 /rate_limit` counted inside that rather than outside it, and the estimate the gate is sized
 from is **934 points** against the GraphQL budget and **5 requests** against the REST one.
@@ -3680,7 +3734,7 @@ against the lane's own source, and it is corrected.** A launch here exports
 this paragraph asks for, which was right throughout — beside
 `GH_PROJECTS_REPOSITORY=nickderobertis/onetaskgraph`, the lane's own repository, which now
 matches what `ci.yml` in that repository's own `.github/workflows/` gives its
-credentialed run at `v0.2.27`. It
+credentialed run at `v0.2.28`. It
 read `nickderobertis/ai-orchestrator` — **this** repository — and that third name is where
 the lane creates its artifact as a real issue and deletes it again, so a lane run in this
 environment would have filed and swept issues here instead of there. It is worth recording
@@ -3703,11 +3757,14 @@ host's plans board is `onetaskgraph.yaml`'s own `plans` source, and since the re
 carries `repository: nickderobertis/ai-orchestrator` beside its owner and number. That
 source is the one this repository plans against, for the reasons in [Where a plan of this
 repository lives](#where-a-plan-of-this-repository-lives). That
-field is where the board's project and task issues are created, because **a board is a
+field is where the board's project issues are created, and where a task's issue is
+created when the task's own record names no repository or several, because **a board is a
 container of projects and not a project**: a project is an issue and its tasks are that
 issue's sub-issues, `createIssue` requires a `repositoryId`, and a board has none of its
 own — so a write without the field is refused naming it, and the pin and the field have
-to move together. Spell it GitHub's way, `owner/name`: `github.com/nickderobertis/ai-orchestrator`
+to move together. A task naming exactly one repository is filed there instead, under the
+rule [the plan-store pin buys](#which-pin-governs-a-dispatch), and this field is what that
+rule bottoms out in. Spell it GitHub's way, `owner/name`: `github.com/nickderobertis/ai-orchestrator`
 is refused as not naming a repository, and `github.com/…` is only how the source renders
 that identity back.
 
