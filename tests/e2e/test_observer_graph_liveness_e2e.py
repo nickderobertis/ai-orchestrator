@@ -456,11 +456,12 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
     scripted quiet, so the pacing measured is the graph's and not the model's.
     """
     environment = _launched_environment(tmp_path, oneharness_bin)
+    # llmlint: ignore-block[live_tier_compiles_and_requires_credential] The boundary under
+    # test is the graph's pacing of a conversation, and a credentialed turn would prove
+    # nothing more about it; the paid provider is the one thing this suite doubles.
     # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
-    # llmlint: ignore[live_tier_compiles_and_requires_credential] The boundary under test
-    # is the graph's pacing of a conversation, and a credentialed turn would prove nothing
-    # more about it; the paid provider is the one thing this suite doubles.
     environment[OBSERVER_ANSWER_ENV] = SAID_ON_A_QUIET_TURN
+    # llmlint: ignore-end[live_tier_compiles_and_requires_credential]
     environment[OBSERVER_MEMBER_ENV] = MONITOR_MEMBER
     environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
     environment[GRAPH_STATE_ENV] = str(tmp_path / "graph-state")

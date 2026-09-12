@@ -925,44 +925,6 @@ def test_the_monitor_may_not_read_a_manager_ruling_off_a_turn_of_a_dispatch(
         )
 
 
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-
-
-@pytest.mark.xdist_group("supervisory-prompts")
-def test_neither_members_action_space_moved_with_its_reporting_discipline(
-    monitor_prompt: str, pacemaker_prompt: str
-) -> None:
-    """What these agents may *do* matches what the engine really allows them.
-
-    The monitor's six ops are the engine's allowlist restated to the model it bounds —
-    `tests/e2e/test_orchestrate_launch_e2e.py` is what drives the engine's own refusal
-    of the four outside it — and the pacemaker is forbidden the edit verb outright
-    because it takes one finitely deadlined turn and exits, so an edit it issued would
-    be answered after it had stopped watching. A prompt that offered an op the engine
-    refuses, or withheld one it accepts, would be invisible in the prose it shipped
-    beside.
-    """
-    flat_monitor = _flat(monitor_prompt)
-
-    assert MONITOR_ALLOWLIST_CLAUSE in flat_monitor, (
-        f"the monitor's effective prompt no longer states its op allowlist:\n{monitor_prompt}"
-    )
-    for operation in MONITOR_ALLOWLISTED_OPS:
-        assert operation in flat_monitor, (
-            f"the monitor's allowlist no longer offers {operation}, so this change "
-            f"moved its action space as well as its reporting:\n{monitor_prompt}"
-        )
-    for refused in ("`complete`", "`attest`", "`drop`", "`reparent`"):
-        assert f"{refused}" in flat_monitor, (
-            f"the monitor is no longer told {refused} is not its to issue:\n{monitor_prompt}"
-        )
-    assert PACEMAKER_EDIT_PROHIBITION in _flat(pacemaker_prompt), (
-        "the pacemaker's prohibition on issuing a live edit is gone from the only prose "
-        f"it is given:\n{pacemaker_prompt}"
-    )
-
-
 # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted, at the
 # same two seams every journey in this module reads its launch through.
 @pytest.mark.xdist_group("supervisory-prompts")
@@ -1009,3 +971,41 @@ def test_the_monitor_is_told_to_read_the_stream_from_a_cursor(monitored: Monitor
             f"the monitor's reviewing bar no longer holds it {named}, so the agent's own "
             f"prompt is the only place it is stated:\n{monitored.review_bar}"
         )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_neither_members_action_space_moved_with_its_reporting_discipline(
+    monitor_prompt: str, pacemaker_prompt: str
+) -> None:
+    """What these agents may *do* matches what the engine really allows them.
+
+    The monitor's six ops are the engine's allowlist restated to the model it bounds —
+    `tests/e2e/test_orchestrate_launch_e2e.py` is what drives the engine's own refusal
+    of the four outside it — and the pacemaker is forbidden the edit verb outright
+    because it takes one finitely deadlined turn and exits, so an edit it issued would
+    be answered after it had stopped watching. A prompt that offered an op the engine
+    refuses, or withheld one it accepts, would be invisible in the prose it shipped
+    beside.
+    """
+    flat_monitor = _flat(monitor_prompt)
+
+    assert MONITOR_ALLOWLIST_CLAUSE in flat_monitor, (
+        f"the monitor's effective prompt no longer states its op allowlist:\n{monitor_prompt}"
+    )
+    for operation in MONITOR_ALLOWLISTED_OPS:
+        assert operation in flat_monitor, (
+            f"the monitor's allowlist no longer offers {operation}, so this change "
+            f"moved its action space as well as its reporting:\n{monitor_prompt}"
+        )
+    for refused in ("`complete`", "`attest`", "`drop`", "`reparent`"):
+        assert f"{refused}" in flat_monitor, (
+            f"the monitor is no longer told {refused} is not its to issue:\n{monitor_prompt}"
+        )
+    assert PACEMAKER_EDIT_PROHIBITION in _flat(pacemaker_prompt), (
+        "the pacemaker's prohibition on issuing a live edit is gone from the only prose "
+        f"it is given:\n{pacemaker_prompt}"
+    )
