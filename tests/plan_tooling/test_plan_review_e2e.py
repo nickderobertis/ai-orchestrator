@@ -34,7 +34,7 @@ from pathlib import Path
 
 import plan_root_variable
 import pytest
-from nx_workspace import copy_working_tree
+from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import helper, local_project
 from waits import timeout as e2e_timeout
 
@@ -104,6 +104,12 @@ def _record_of(project: str, node_id: str) -> object:
         if task.node_id == node_id:
             return task.metadata.get(plan_review.RECORD_KEY)
     raise AssertionError(f"{project} has no task {node_id!r}")
+
+
+def _plan_record_of(project: str) -> object:
+    """The plan-level review record on ``project``'s own record, or ``None`` for none."""
+    metadata = plan_store.project_record(project).get("metadata")
+    return metadata.get(plan_review.RECORD_KEY) if isinstance(metadata, dict) else None
 
 
 def _document(project: str, node_id: str | None = None) -> Path:
@@ -199,26 +205,35 @@ def test_an_unreviewed_plan_is_refused_and_a_reviewed_one_is_accepted(tmp_path: 
     review = _just("review-plan", project, environment=environment)
     assert review.returncode == 0, review.stdout + review.stderr
     assert "recorded a review of 1 task(s)" in review.stdout, review.stdout
-    assert _launches(tmp_path) == 1, "the review did not spend exactly one turn"
+    assert "the plan as a whole was reviewed and recorded" in review.stdout, review.stdout
+    assert _launches(tmp_path) == 2, "the review did not spend one turn per task plus one"
 
-    # The record the recipe wrote, read back: the digest is the one this checkout's own
-    # key function computes over that task under the bar in force, which is what says
-    # the recorded value is the content's rather than an opaque token nothing checks.
+    # The records the recipe wrote, read back: each digest is the one this checkout's
+    # own key function computes — over that task under the bar in force, and over the
+    # plan whole under the plan bar — which is what says the recorded value is the
+    # content's rather than an opaque token nothing checks.
     (recorded,) = plan_store.read_tasks(project)
     written = recorded.metadata[plan_review.RECORD_KEY]
     assert isinstance(written, dict), written
     assert written["by"] == plan_review.BY_REVIEW, written
     assert written["key"] == plan_review.review_key(recorded, plan_review.bar_fingerprint())
+    whole = _plan_record_of(project)
+    assert isinstance(whole, dict), whole
+    assert whole["by"] == plan_review.BY_REVIEW, whole
+    assert whole["key"] == plan_review.plan_key(
+        plan_store.read_plan(project, [recorded]), plan_review.plan_bar_fingerprint()
+    )
 
     accepted = _just("check-plan", project)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "carries a review record" in accepted.stdout, accepted.stdout
-    assert _launches(tmp_path) == 1, "a recorded pass was re-judged rather than replayed"
+    assert _launches(tmp_path) == 2, "a recorded pass was re-judged rather than replayed"
 
     again = _just("review-plan", project, environment=environment)
     assert again.returncode == 0, again.stdout + again.stderr
     assert "1 already carried one" in again.stdout, again.stdout
-    assert _launches(tmp_path) == 1, "a recorded pass was re-judged rather than replayed"
+    assert "already carried a record for its current content" in again.stdout, again.stdout
+    assert _launches(tmp_path) == 2, "a recorded pass was re-judged rather than replayed"
 
 
 def test_a_refused_review_shows_every_finding_and_records_nothing(tmp_path: Path) -> None:
@@ -239,7 +254,10 @@ def test_a_refused_review_shows_every_finding_and_records_nothing(tmp_path: Path
         assert line in review.stderr, review.stderr
     assert "2 criterion(s) across 1 task(s)" in review.stderr, review.stderr
     assert "nothing was recorded" in review.stderr, review.stderr
-    assert _launches(tmp_path) == 1, "two findings cost two turns"
+    assert _launches(tmp_path) == 1, (
+        "two findings cost two turns, or a plan-level turn was spent beside a refused task"
+    )
+    assert _plan_record_of(project) is None, "a refused task's plan earned a plan-level record"
 
     still = _just("check-plan", project)
     assert still.returncode == 1, still.stdout + still.stderr
@@ -417,7 +435,13 @@ def test_a_human_node_is_reviewed_as_the_shape_it_is(tmp_path: Path) -> None:
     given = [
         json.loads(line)["prompt"] for line in prompts.read_text(encoding="utf-8").splitlines()
     ]
-    (human,) = [one for one in given if HUMAN_ACTION in one]
+    # The plan-level turn is handed every node's task too, so the human action reaches
+    # two prompts; the one under question is the task's own.
+    (human,) = [
+        one
+        for one in given
+        if HUMAN_ACTION in one and not one.startswith(plan_review.PLAN_REVIEW_PROMPT)
+    ]
     assert '"kind": "human"' in human, human
     assert 'A task whose `kind` is "human"' in human, human
 
@@ -691,17 +715,19 @@ def test_the_record_is_keyed_on_what_a_criterion_demands_rather_than_on_its_byte
         assert "no review record" in checked.stderr, checked.stderr
 
 
-def test_a_change_outside_the_authored_content_leaves_the_record_standing(
+def test_retargeting_a_node_at_another_repository_invalidates_its_record(
     tmp_path: Path,
 ) -> None:
-    """What the key covers is the authored content, and a repository is not part of it.
+    """The key covers the repository, which **reverses** what this gate once decided.
 
-    A node **retargeted at another repository** after its review keeps its record: which
-    repository the work lands in is not something the review ruled on. Driven against a
-    lifecycle node so that the pair with the two journeys above is exact — the same node
-    shape, one change outside the key and two inside it.
+    A node retargeted at another repository used to keep its record, because which
+    repository the work landed in was nothing the review ruled on. It is now the first
+    thing the pin-path question turns on — a node of this host's own repository is asked
+    to name the pin it moves and one outside it is not — so a retargeted task is a
+    different question, and both its own record and the plan's fall. Driven against a
+    lifecycle node, the way an operator retargets one: by editing the stored record.
     """
-    project = _stepped_project("review-unkeyed")
+    project = _stepped_project("review-retargeted")
     assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
     assert _just("check-plan", project).returncode == 0
 
@@ -716,20 +742,11 @@ def test_a_change_outside_the_authored_content_leaves_the_record_standing(
         encoding="utf-8",
     )
 
-    standing = _just("check-plan", project)
-    assert standing.returncode == 0, standing.stdout + standing.stderr
-
-    # And a keyed field still invalidates it, so this is the contract rather than a gate
-    # that stopped noticing anything at all.
-    document.write_text(
-        document.read_text(encoding="utf-8").replace(
-            'title: "feat: add the checkout route"', 'title: "feat: add a different route"'
-        ),
-        encoding="utf-8",
-    )
     refused = _just("check-plan", project)
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert "no review record" in refused.stderr, refused.stderr
+    assert "route" in refused.stderr, refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
 
 
 def test_a_settled_node_keeps_the_review_of_its_own_content(tmp_path: Path) -> None:
@@ -832,6 +849,9 @@ def test_moving_the_review_bar_invalidates_every_record_granted_under_it(
     moved = tmp_path / "checkout-with-a-moved-bar"
     moved.mkdir()
     copy_working_tree(moved)
+    # The copy answers the same origin as this checkout, so what it refuses below is
+    # the moved bar and not a host that reads as another repository.
+    answering_this_checkouts_origin(moved)
     move(moved)
 
     refused = subprocess.run(
@@ -898,10 +918,9 @@ def test_whether_a_number_is_the_right_number_is_the_judged_turns_to_decide(
 
     review = _just("review-plan", project, environment=environment)
     assert review.returncode == 0, review.stdout + review.stderr
-    assert _launches(tmp_path) == 1, "the judged turn was not spent on this criterion"
+    assert _launches(tmp_path) == 2, "the judged turn was not spent on this criterion"
 
-    (given,) = prompts.read_text(encoding="utf-8").splitlines()
-    turn = " ".join(json.loads(given)["prompt"].split())
+    turn, _whole = _prompts(prompts)
     assert criterion.removeprefix("- ") in turn, turn
     assert "This turn is the only thing that asks about a version literal" in turn, turn
 
@@ -1153,6 +1172,9 @@ def _a_checkout_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     checkout = tmp_path / "planning-checkout"
     checkout.mkdir()
     copy_working_tree(checkout)
+    # The closeout's records are keyed under a bar that names this host's own
+    # repository, read off the checkout's `origin`; the copy answers this checkout's.
+    answering_this_checkouts_origin(checkout)
     # `scripts/plan.sh` takes its interpreter from the tree it runs in and falls back to
     # whatever `python3` is on PATH, which need not be the pinned one.
     (checkout / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
@@ -1230,6 +1252,16 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     assert isinstance(record, dict), f"the closeout recorded nothing: {task.metadata}"
     assert record["by"] == plan_review.BY_PLANNING, record
     assert record["key"] == plan_review.review_key(task, plan_review.bar_fingerprint())
+    # And the plan whole, on the project, by the same closeout: the planner's own judge
+    # reviewed the plan whole, so no `just review-plan` turn is owed for it either.
+    whole = _plan_record_of(f"{AUTHORING}:{authored}")
+    assert isinstance(whole, dict), "the closeout recorded no plan-level pass"
+    assert whole["by"] == plan_review.BY_PLANNING, whole
+    assert whole["key"] == plan_review.plan_key(
+        plan_store.read_plan(f"{AUTHORING}:{authored}", [task]),
+        plan_review.plan_bar_fingerprint(),
+    )
+    assert _launches(tmp_path) == 0, "the closeout spent a provider turn"
 
     accepted = _just("check-plan", f"{AUTHORING}:{authored}", cwd=checkout)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
@@ -1300,6 +1332,9 @@ def test_a_planning_run_that_did_not_settle_records_nothing(
     (task,) = plan_store.read_tasks(f"{AUTHORING}:{authored}")
     assert plan_review.RECORD_KEY not in task.metadata, (
         "the closeout spoke for a planning run that never settled"
+    )
+    assert _plan_record_of(f"{AUTHORING}:{authored}") is None, (
+        "the closeout recorded a plan-level pass for a planning run that never settled"
     )
     refused = _just("check-plan", f"{AUTHORING}:{authored}", cwd=checkout)
     assert refused.returncode == 1, refused.stdout + refused.stderr
@@ -1372,8 +1407,21 @@ def _reviewed_prompt(tmp_path: Path, project: str, *answers: object) -> tuple[st
     environment = _reviewing(tmp_path, *answers)
     environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
     reviewed = _just("review-plan", project, environment=environment)
-    (prompt,) = _prompts(log)
+    # The task's own prompt is the first turn; a plan-level one follows it only once
+    # every task has passed, and `_plan_prompt_given` is how a journey reads that one.
+    prompt, *_ = _prompts(log)
     return prompt, reviewed
+
+
+def _plan_prompt_given(tmp_path: Path) -> str:
+    """The one plan-level prompt a `_reviewed_prompt` run delivered, or fail naming why."""
+    whole = [one for one in _prompts(tmp_path / "prompts.jsonl") if _flat_plan_prompt() in one]
+    assert len(whole) == 1, f"expected exactly one plan-level turn, found {len(whole)}"
+    return whole[0]
+
+
+def _flat_plan_prompt() -> str:
+    return " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
 
 
 def test_the_reviewer_is_told_a_release_that_is_the_tasks_subject_is_not_perishable(
@@ -1437,3 +1485,393 @@ def test_the_reviewer_is_asked_what_state_would_falsify_each_criterion(
     (finding,) = REFUSES_AS_DECORATIVE["findings"]
     assert f"{finding['criterion']} — {finding['why']}" in refused.stderr, refused.stderr
     assert _record_of(project, "route") is None, "a refusal recorded a pass"
+
+
+#: The adopting node of this host's own repository, in the shape the release-adoption
+#: bar asks for: it waits `published` on the producer, names no `consumes` — the host
+#: override names the wheel — and its criteria name the `config/<pin>.version` the
+#: installed engine wheel governs, with no version of its own.
+ADOPTS_THE_ENGINE = (
+    "- `config/onepipeline.version` names the engine release whose lockfile resolves the "
+    "linked fix, and the installed `onepipeline` reports that same release.\n"
+    "- A journey reads the pin and the installed binary and holds them together.\n"
+    "- The dispatch closes with a completion report naming its evidence."
+)
+
+#: The same node with the pin's path taken out and nothing else changed: the criteria
+#: still read as adopting the release, and nothing deterministic refuses them.
+ADOPTS_NAMING_NO_PIN = (
+    "- The installed `onepipeline` reports the engine release whose lockfile resolves the "
+    "linked fix.\n"
+    "- A journey reads the installed binary and holds it to that release.\n"
+    "- The dispatch closes with a completion report naming its evidence."
+)
+
+#: The same node pinning the release it waits for by number — the second answer the
+#: worker would follow over the engine's rendered references.
+PINS_THE_AWAITED_RELEASE = (
+    "- `config/onepipeline.version` names 0.29.0, the engine release carrying the fix.\n"
+    "- A journey reads the pin and the installed binary and holds them together.\n"
+    "- The dispatch closes with a completion report naming its evidence."
+)
+
+#: The producer this host installs a wheel from, and this repository, as the origins
+#: their task records name.
+ENGINE = "https://github.com/nickderobertis/onepipeline"
+THIS_REPOSITORY = "https://github.com/nickderobertis/ai-orchestrator"
+
+#: What the goal needs: the producer's change in force on this host.
+NEEDS_THE_FIX_HERE = "Put the engine's session-open fix in force on this host"
+
+
+def _adoption_project(name: str, criteria: str | None = ADOPTS_THE_ENGINE) -> str:
+    """A producer node and, unless ``criteria`` is ``None``, a node of this repository
+    adopting its release: `adoption: published`, no `consumes`, depending on it.
+
+    The adopting node's id sorts before the producer's, which is the order the store
+    lists them and so the order the review spends its turns in; the journeys that
+    script a per-task refusal for it rely on that and assert which node the refusal
+    landed on.
+    """
+    adopter = {
+        "id": "adopt",
+        "persona": "engineer",
+        "repo": THIS_REPOSITORY,
+        "title": "feat: adopt the engine release carrying the fix",
+        "task": _task(criteria or ""),
+        "deps": ["engine"],
+        "adoption": "published",
+    }
+    return local_project(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "goal": {"text": NEEDS_THE_FIX_HERE},
+                "tasks": [
+                    *([adopter] if criteria is not None else []),
+                    {
+                        "id": "engine",
+                        "persona": "engineer",
+                        "repo": ENGINE,
+                        "title": "feat: open a session without racing the registry",
+                        "task": _task(),
+                    },
+                ],
+            }
+        ),
+        name,
+    )
+
+
+#: What a plan-level reviewer refusing the plan for the adoption it omits answers.
+REFUSES_THE_PLAN = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "the plan",
+            "why": "no node of this repository adopts the engine release the fix lands in",
+        }
+    ],
+}
+
+#: What a per-task reviewer refusing the adopting node's criteria answers: one for the
+#: criterion that should carry the pin's path, one for the one pinning a number.
+REFUSES_NAMING_NO_PIN = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "the installed onepipeline reports the engine release",
+            "why": "it names no `config/<pin>.version`, so it adopts nothing a dispatch runs",
+        }
+    ],
+}
+REFUSES_THE_PINNED_NUMBER = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "config/onepipeline.version names 0.29.0",
+            "why": "the engine renders the released version into the task when the hold "
+            "releases, so a number here is a second answer the worker follows",
+        }
+    ],
+}
+
+
+def test_a_plan_that_adopts_the_release_its_goal_needs_is_recorded_whole(
+    tmp_path: Path,
+) -> None:
+    """One turn per task plus one for the plan, and the plan-level pass on the project.
+
+    The whole seam over the plan this bar exists for: a producer's fix, and a node of
+    this repository adopting the release that carries it. Both records are read back
+    through the store, `just check-plan` then accepts the plan, and the plan-level
+    prompt the provider was handed — read out of its own log — carries everything the
+    reviewer needs to answer the two questions and the questions themselves.
+    """
+    project = _adoption_project("review-adopts")
+    prompts = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+    assert "recorded a review of 2 task(s)" in review.stdout, review.stdout
+    assert "the plan as a whole was reviewed and recorded" in review.stdout, review.stdout
+    assert _launches(tmp_path) == 3, "the review did not spend one turn per task plus one"
+    for node in ("adopt", "engine"):
+        assert isinstance(_record_of(project, node), dict), node
+    whole = _plan_record_of(project)
+    assert isinstance(whole, dict), whole
+    assert whole["by"] == plan_review.BY_REVIEW, whole
+    plan, records = plan_store.read_project(project)
+    assert whole["key"] == plan_review.plan_key(plan, plan_review.plan_bar_fingerprint())
+
+    accepted = _just("check-plan", project)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert _launches(tmp_path) == 3, "the check spent a provider turn"
+
+    # The plan-level prompt, as the provider was actually given it.
+    turn = _plan_prompt_given(tmp_path)
+    bar = " ".join((REPO_ROOT / plan_review.BAR_FILES[0]).read_text(encoding="utf-8").split())
+    assert bar in turn, "the bar is missing from the plan-level prompt"
+    assert NEEDS_THE_FIX_HERE in turn, turn
+    for node in ("adopt", "engine"):
+        assert f"### Node `{node}`" in turn, turn
+    for shown in (
+        '"title": "feat: adopt the engine release carrying the fix"',
+        '"repo": "github.com/nickderobertis/ai-orchestrator"',
+        '"repo": "github.com/nickderobertis/onepipeline"',
+        '"deps": [ "engine" ]',
+        '"adoption": "published"',
+        '"consumes": null',
+        "resolves the linked fix, and the installed `onepipeline` reports that same release",
+        "Add the route and the test that drives it",
+    ):
+        assert shown in turn, shown
+    assert " ".join(plan_review.RUNGS.split()) in turn, turn
+    assert "`config/onepipeline.version` pins and which every dispatched node runs" in turn
+    for question in (
+        "does the goal need a change in one of the producers the table names",
+        "is there a node of this host's own repository that adopts that producer's release",
+        "touches a producer for a reason this host does not consume",
+        "reaches a dispatch only through `config/onepipeline.version`, via an `onepipeline` "
+        "node that links the crate",
+    ):
+        assert question in turn, question
+
+
+def test_a_plan_omitting_the_adoption_its_goal_needs_is_refused_whole(tmp_path: Path) -> None:
+    """The adopting node removed, a scripted plan-level refusal naming `the plan`.
+
+    The task's own pass stands and the project carries no plan-level record; the reason
+    reaches the operator; and `just check-plan` refuses the plan naming the project
+    record and the command that records one.
+    """
+    project = _adoption_project("review-omits-adoption", criteria=None)
+
+    review = _just(
+        "review-plan", project, environment=_reviewing(tmp_path, PASSES, REFUSES_THE_PLAN)
+    )
+    assert review.returncode == 1, review.stdout + review.stderr
+    (finding,) = REFUSES_THE_PLAN["findings"]
+    assert f"review-plan: {finding['criterion']} — {finding['why']}" in review.stderr, review.stderr
+    assert "no plan-level record was written" in review.stderr, review.stderr
+    assert _launches(tmp_path) == 2, "one task and one plan should cost two turns"
+    assert isinstance(_record_of(project, "engine"), dict), "the task's own pass was lost"
+    assert _plan_record_of(project) is None, "a refusal recorded a plan-level pass"
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+    assert "the project record" in refused.stderr, refused.stderr
+    assert f"just review-plan {project}" in refused.stderr, refused.stderr
+    assert "no review record" not in refused.stderr, "a recorded task was refused"
+
+
+def test_the_task_reviewer_is_handed_every_fact_the_pin_path_question_turns_on(
+    tmp_path: Path,
+) -> None:
+    """The per-task prompt for a `published` node, read back from the provider's log.
+
+    Its header carries the repository, adoption, consumes and merge policy; this host's
+    own repository is stated as the origin that header is compared with; the table
+    names the pin each wheel governs; and both halves of the question are asked. And a
+    scripted refusal on a criterion pinning the awaited release by number reaches the
+    operator and records nothing — for the task or the plan.
+    """
+    project = _adoption_project("review-pinned-number", PINS_THE_AWAITED_RELEASE)
+    prompt, refused = _reviewed_prompt(tmp_path, project, REFUSES_THE_PINNED_NUMBER)
+
+    for shown in (
+        '"repo": "github.com/nickderobertis/ai-orchestrator"',
+        '"adoption": "published"',
+        '"consumes": null',
+        '"merge_policy": null',
+        "## This host's own repository",
+        f"`{plan_review.host_repository()}` — the origin the task's `repo` is compared with",
+        "`config/onepipeline.version` pins and which every dispatched node runs",
+        "**It names the pin it moves.**",
+        "must name, in its `## Acceptance criteria`, the `config/<pin>.version` the table's "
+        "row gives",
+        "**It names no version of its own.**",
+        "naming which version, commit or branch of the dependency to pin",
+        "`config/onepipeline.version` names 0.29.0",
+    ):
+        assert shown in prompt, shown
+    assert plan_review.host_repository() == "github.com/nickderobertis/ai-orchestrator"
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    (finding,) = REFUSES_THE_PINNED_NUMBER["findings"]
+    assert f"{finding['criterion']} — {finding['why']}" in refused.stderr, refused.stderr
+    assert _record_of(project, "adopt") is None, "a refusal recorded a pass"
+    assert _plan_record_of(project) is None, "a plan-level turn was spent beside a refusal"
+
+
+def test_an_adopting_node_naming_no_pin_is_the_judged_turns_to_refuse(tmp_path: Path) -> None:
+    """The first fixture with the pin's path removed from the adopting node and nothing else.
+
+    Nothing deterministic refuses that plan for the missing path: the question is the
+    judged turn's, by meaning. So the scripted per-task refusal naming that node's
+    criterion is what leaves it without a record, no plan-level turn is spent, and `just
+    check-plan` refuses the plan naming the task. The prompt that turn was handed, read
+    back from the provider's log, carried every fact the question turns on — the
+    repository, the adoption, this host's own origin, the table row for the engine wheel
+    — and the criteria without the path, so the judge decided with nothing missing.
+    """
+    project = _adoption_project("review-no-pin", ADOPTS_NAMING_NO_PIN)
+    prompts = tmp_path / "prompts.jsonl"
+    # `adopt` is reviewed first (the store lists by id), so the refusal is its answer and
+    # the pass is `engine`'s; the records below say which node each landed on.
+    environment = _reviewing(tmp_path, REFUSES_NAMING_NO_PIN, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 1, review.stdout + review.stderr
+    (finding,) = REFUSES_NAMING_NO_PIN["findings"]
+    assert f"adopt: {finding['criterion']} — {finding['why']}" in review.stderr, review.stderr
+    assert _launches(tmp_path) == 2, "a plan-level turn was spent beside a refused task"
+    assert _record_of(project, "adopt") is None, "the refused node earned a record"
+    assert isinstance(_record_of(project, "engine"), dict), "the passing node lost its record"
+    assert _plan_record_of(project) is None
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "adopt" in refused.stderr, refused.stderr
+    assert "no review record" in refused.stderr, refused.stderr
+    assert f"just review-plan {project}" in refused.stderr, refused.stderr
+    assert "config/onepipeline.version" not in refused.stderr, (
+        "something deterministic refused the plan for the missing path"
+    )
+
+    (turn,) = [one for one in _prompts(prompts) if "holds it to that release" in one]
+    for shown in (
+        '"repo": "github.com/nickderobertis/ai-orchestrator"',
+        '"adoption": "published"',
+        "`github.com/nickderobertis/ai-orchestrator` — the origin the task's `repo`",
+        "github.com/nickderobertis/onepipeline releases its `pypi` target as "
+        "`pypi:onepipeline-cli`, which `config/onepipeline.version` pins",
+        "The installed `onepipeline` reports the engine release whose lockfile resolves "
+        "the linked fix",
+    ):
+        assert shown in turn, shown
+    assert "config/onepipeline.version` names the engine release" not in turn, (
+        "the adopting node's criteria still carried the path"
+    )
+
+
+def test_editing_the_goal_invalidates_the_plan_level_record_and_no_tasks(
+    tmp_path: Path,
+) -> None:
+    """The plan key covers the goal; the task keys do not, so their records stand.
+
+    And the other way about: editing an adopting node's `adoption` invalidates that
+    task's record and the plan's, while a settlement write-back's `status` leaves both.
+    """
+    project = _adoption_project("review-goal-edited")
+    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    assert _just("check-plan", project).returncode == 0
+    standing = {node: _record_of(project, node) for node in ("adopt", "engine")}
+
+    source, native = plan_store.qualified(project)
+    record = plan_store.project_document(source, native)
+    written = record.read_text(encoding="utf-8")
+    assert NEEDS_THE_FIX_HERE in written, written
+    record.write_text(
+        written.replace(NEEDS_THE_FIX_HERE, "Put a different fix in force"), encoding="utf-8"
+    )
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+    assert "no review record" not in refused.stderr, "a task's record fell with the goal"
+    assert {node: _record_of(project, node) for node in ("adopt", "engine")} == standing
+
+    # A settlement write-back moves neither record.
+    record.write_text(written, encoding="utf-8")
+    task = _document(project, "adopt")
+    task.write_text(
+        task.read_text(encoding="utf-8").replace('status: "todo"', 'status: "done"'),
+        encoding="utf-8",
+    )
+    accepted = _just("check-plan", project)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+    # The adopting node's `adoption` moves its own record and the plan's, and the
+    # producer's record stands.
+    reviewed_as = '"onepipeline.adoption": "published"'
+    assert reviewed_as in task.read_text(encoding="utf-8")
+    task.write_text(
+        task.read_text(encoding="utf-8").replace(reviewed_as, '"onepipeline.adoption": "fast"'),
+        encoding="utf-8",
+    )
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert refused.stderr.count("no review record") == 1, refused.stderr
+    assert "adopt" in refused.stderr, refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+    assert _record_of(project, "engine") == standing["engine"]
+
+
+def test_the_record_the_review_wrote_is_the_record_the_spawned_check_reads(
+    tmp_path: Path,
+) -> None:
+    """One key over the store's plan and the document the engine hands the check.
+
+    `just review-plan` keys what the store answers and writes the record; `onepipeline
+    plan check` then hands `scripts/plan-check.sh` the loaded document, which is where
+    `just check-plan` reads the record back. So the check is driven the way the verb
+    drives it — on the document the verb really wrote, captured rather than rebuilt,
+    with the project named the way the wrapper names it — and it refuses nothing, which
+    is what the two shapes hashing alike looks like from outside.
+    """
+    project = _adoption_project("review-one-key")
+    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    recorder = tmp_path / "record-check.sh"
+    captured = tmp_path / "captured.json"
+    recorder.write_text(
+        f'#!/usr/bin/env sh\ncat > "{captured}"\necho \'{{"refusals": []}}\'\n',
+        encoding="utf-8",
+    )
+    recorder.chmod(0o755)
+    read = subprocess.run(
+        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(recorder)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert captured.is_file(), read.stdout + read.stderr
+
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input=captured.read_text(encoding="utf-8"),
+        env=os.environ | {"ORCHESTRATOR_PLAN_CHECK_PROJECT": project},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    assert json.loads(answered.stdout)["refusals"] == [], answered.stdout

@@ -64,8 +64,24 @@ def _document(native: str) -> StoreDocument:
     )
 
 
-def _reads(monkeypatch: pytest.MonkeyPatch, *tasks: StoreTask) -> None:
+def _reads(monkeypatch: pytest.MonkeyPatch, *tasks: StoreTask, planned: bool = True) -> None:
+    """Answer the store's reads with ``tasks``, and a project record reviewed whole or not.
+
+    The plan is read by the same two store calls `just review-plan` reads it by — the
+    plan in the engine's shape, and the project record — so both are answered here, at
+    the store CLI boundary, with the project record carrying the plan-level key for
+    exactly that plan when ``planned`` and nothing when not.
+    """
+    plan = {
+        "name": "demo",
+        "goal": {"text": "Deliver it"},
+        "tasks": [{"id": t.node_id} for t in tasks],
+    }
+    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint())
+    record = {"metadata": {plan_review.RECORD_KEY: {"key": key}} if planned else {}}
     monkeypatch.setattr(plan_store, "read_tasks", lambda _project: list(tasks))
+    monkeypatch.setattr(plan_store, "read_plan", lambda _project, _records: plan)
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
 
 
 def _holds(monkeypatch: pytest.MonkeyPatch, *documents: StoreDocument) -> None:
@@ -88,6 +104,49 @@ def test_a_task_nothing_has_reviewed_refuses_the_copy_before_the_store_is_asked(
     assert "worker" in refusal, refusal
     assert "route" not in refusal, refusal
     assert "just review-plan authoring:demo" in refusal, refusal
+
+
+def test_a_plan_reviewed_task_by_task_but_never_whole_refuses_the_copy_before_the_store_is_asked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every task carries a record and the project carries none: the copy is refused.
+
+    The plan-level record is what says a reviewer read the plan whole for the adoption
+    its goal needs, and a plan copied without it arrives on a board that can never
+    give it one. Refused with the per-task exit status, before anything is written, and
+    naming the command that records it.
+    """
+    _reads(monkeypatch, _reviewed("route"), planned=False)
+
+    def never(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError("the copy ran despite the project carrying no plan-level record")
+
+    monkeypatch.setattr(plan_copy, "copy", never)
+
+    assert plan_copy.main(["authoring:demo"]) == plan_copy.UNREVIEWED
+    refusal = capsys.readouterr().err
+    assert "no plan-level one" in refusal, refusal
+    assert "just review-plan authoring:demo" in refusal, refusal
+    assert "Nothing was copied" in refusal, refusal
+
+
+def test_a_project_record_the_store_cannot_answer_is_neither_reviewed_nor_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The third outcome again, one read later: the store stopped answering."""
+    _reads(monkeypatch, _reviewed("route"))
+    monkeypatch.setattr(
+        plan_store,
+        "project_record",
+        lambda _project: (_ for _ in ()).throw(OSError("the store answered nothing")),
+    )
+    monkeypatch.setattr(plan_copy, "copy", lambda *_: pytest.fail("the copy ran"))
+
+    assert plan_copy.main(["authoring:demo"]) == plan_copy.UNREADABLE
+    reported = capsys.readouterr().err
+    assert "cannot read the plan-level review record of authoring:demo" in reported, reported
+    assert "the store answered nothing" in reported, reported
+    assert "nothing was copied" in reported, reported
 
 
 def test_a_fully_reviewed_plan_reaches_the_store_with_the_caller_s_own_arguments(

@@ -26,8 +26,9 @@ from pathlib import Path
 from typing import Any, TypedDict, get_type_hints
 
 import pytest
+from test_host_installs import RELEASE_RULE, RELEASES
 
-from orchestrator import criteria_guard, plan_review, plan_store
+from orchestrator import criteria_guard, host_installs, plan_review, plan_store
 from orchestrator.plan_store import StoreTask
 from orchestrator.root import REPO_ROOT
 
@@ -91,9 +92,19 @@ def _recorded(task: StoreTask, key: str) -> StoreTask:
     )
 
 
+def _metadata(**fields: object) -> dict[str, object]:
+    """The default task's metadata with ``fields`` written over it, as `onepipeline.` keys."""
+    return {
+        "onepipeline.id": "route",
+        "onepipeline.persona": "engineer",
+        **{f"onepipeline.{key}": value for key, value in fields.items()},
+    }
+
+
 def test_the_key_changes_with_every_authored_field() -> None:
     """The fields the record covers: title, prose, kind, persona, deps, whether the node
-    expects no diff, and a step's own three."""
+    expects no diff, the repository it names, how it adopts a release and under which
+    policy, and a step's own three."""
     base = plan_review.review_key(_task(), BAR)
     moved = {
         "title": _task(title="feat: add another route"),
@@ -101,16 +112,23 @@ def test_the_key_changes_with_every_authored_field() -> None:
         "kind": _task(metadata={"onepipeline.id": "route", "onepipeline.kind": "human"}),
         "persona": _task(metadata={"onepipeline.id": "route", "onepipeline.persona": "reviewer"}),
         "deps": _task(deps=("design",)),
-        "expects_no_diff": _task(
-            metadata={
-                "onepipeline.id": "route",
-                "onepipeline.persona": "engineer",
-                "onepipeline.expects_no_diff": True,
-            }
-        ),
+        "expects_no_diff": _task(metadata=_metadata(expects_no_diff=True)),
+        "repo (hosted)": _task(repositories=["github.com/nickderobertis/elsewhere"]),
+        "repo (local checkout)": _task(metadata=_metadata(repo="/home/nick/projects/org-apps")),
+        "adoption": _task(metadata=_metadata(adoption="published")),
+        "consumes": _task(metadata=_metadata(consumes={"engine": "crate"})),
+        "merge_policy": _task(metadata=_metadata(merge_policy="change-auto")),
     }
     for field, task in moved.items():
         assert plan_review.review_key(task, BAR) != base, field
+    # The two spellings of a repository are read in the engine's order — the record's
+    # own list first — so a hosted origin and the same origin on the reserved key are one
+    # value, and a local checkout beside a hosted origin is the hosted one.
+    assert plan_review.repository_of(_task(repositories=["github.com/o/n"])) == "github.com/o/n"
+    assert plan_review.repository_of(_task(metadata=_metadata(repo="github.com/o/n"))) == (
+        "github.com/o/n"
+    )
+    assert plan_review.repository_of(_task(metadata=_metadata(repo=7))) is None
 
 
 #: One change to what a criterion demands, and four that alter no demand at all. The pair
@@ -317,20 +335,16 @@ def test_steps_this_cannot_narrow_are_answered_as_no_steps(steps: object) -> Non
 def test_the_key_covers_the_authored_content_and_nothing_else_a_plan_carries() -> None:
     """Everything outside the authored content leaves a standing record standing.
 
-    The one worth naming because a reader will meet it is a task **retargeted at another
-    repository**, which keeps its record. `max_turns` is the shape of everything else: a
-    dispatch control its author sets and no reviewer rules on.
+    `max_turns` is the shape of it: a dispatch control its author sets and no reviewer
+    rules on, and so is `execution_checkout`, which says where a dispatch works rather
+    than what it is asked. A task **retargeted at another repository** used to be the
+    example here and is now on the other side — see the test above — because the
+    pin-path question is answered differently for a node of this host's own repository.
     """
     base = plan_review.review_key(_task(), BAR)
     unkeyed = {
-        "repositories": _task(repositories=["github.com/nickderobertis/elsewhere"]),
-        "max_turns": _task(
-            metadata={
-                "onepipeline.id": "route",
-                "onepipeline.persona": "engineer",
-                "onepipeline.max_turns": 60,
-            }
-        ),
+        "max_turns": _task(metadata=_metadata(max_turns=60)),
+        "execution_checkout": _task(metadata=_metadata(execution_checkout="isolated")),
     }
     for field, task in unkeyed.items():
         assert plan_review.review_key(task, BAR) == base, field
@@ -348,14 +362,21 @@ def test_a_record_stands_across_a_change_to_a_field_the_key_does_not_cover(
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
     task = _task()
     key = plan_review.review_key(task, BAR)
-    retargeted = _recorded(
-        _task(repositories=["github.com/nickderobertis/elsewhere"]),
-        key,
-    )
-    assert plan_review.unreviewed([retargeted]) == []
+    budgeted = _recorded(_task(metadata=_metadata(max_turns=60)), key)
+    assert plan_review.unreviewed([budgeted]) == []
 
     edited = _recorded(_task(content="## What\n\nSomething else entirely.\n"), key)
     assert plan_review.unreviewed([edited]) == [edited]
+    # A task retargeted at another repository is re-reviewed, which reverses what this
+    # gate once decided: the reviewer answers the pin-path question by the repository.
+    retargeted = _recorded(_task(repositories=["github.com/nickderobertis/elsewhere"]), key)
+    assert plan_review.unreviewed([retargeted]) == [retargeted]
+    for moved in (
+        _recorded(_task(metadata=_metadata(adoption="published")), key),
+        _recorded(_task(metadata=_metadata(consumes={"engine": "crate"})), key),
+        _recorded(_task(metadata=_metadata(merge_policy="change-auto")), key),
+    ):
+        assert plan_review.unreviewed([moved]) == [moved]
 
 
 def test_a_stepped_record_is_read_the_same_way_the_check_reads_it(
@@ -471,6 +492,434 @@ def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path) -> None:
     edited = moved / plan_review.BAR_FILES[0]
     edited.write_bytes(edited.read_bytes() + b"\n# one more byte\n")
     assert plan_review.bar_fingerprint(moved) != plan_review.bar_fingerprint(original)
+
+
+#: The canonical fixture of the two shapes a plan reaches a key in: what
+#: `plan_store.read_plan` answers for the store path, and what the engine's `plan check`
+#: hands `scripts/plan-check.sh` for the check path. They differ exactly where the two
+#: readers differ — the loaded document carries the engine's resolved `repo` beside the
+#: store's `metadata` map verbatim, drops the trailing newline off a task, and lists its
+#: nodes in its own order — so a key equal across the pair is one both readers hash alike.
+STORE_TASKS: list[dict[str, object]] = [
+    {
+        "id": "adopt",
+        "title": "feat: adopt the engine release",
+        "task": "## What\n\nMove the pin.\n",
+        "persona": "engineer",
+        "repo": "github.com/nickderobertis/ai-orchestrator",
+        "deps": ["engine"],
+        "adoption": "published",
+        "execution_checkout": "ai-orchestrator-isolated",
+    },
+    {
+        "id": "engine",
+        "title": "feat: link the fix",
+        "task": "## What\n\nLink it.\n",
+        "persona": "engineer",
+        "repo": "github.com/nickderobertis/onepipeline",
+        "consumes": {"library": "crate"},
+        "merge_policy": "change-auto",
+        "deps": ["library"],
+    },
+    {
+        "id": "library",
+        "title": "feat: fix the library",
+        "task": "## What\n\nFix it.\n",
+        "persona": "engineer",
+        "repo": "github.com/nickderobertis/onevcs",
+    },
+]
+STORE_PLAN: dict[str, object] = {
+    "name": "P",
+    "schema_version": 3,
+    "goal": {"text": "Put the fix in force here"},
+    "tasks": STORE_TASKS,
+}
+LOADED_PLAN: dict[str, object] = {
+    "schema_version": 3,
+    "name": "P",
+    "goal": {"text": "Put the fix in force here"},
+    "concurrency": 4,
+    "tasks": [
+        {
+            "id": "library",
+            "task": "## What\n\nFix it.",
+            "persona": "engineer",
+            "repo": "github.com/nickderobertis/onevcs",
+            "title": "feat: fix the library",
+            "metadata": {"onepipeline.id": "library", "onepipeline.persona": "engineer"},
+        },
+        {
+            "id": "engine",
+            "task": "## What\n\nLink it.",
+            "persona": "engineer",
+            "deps": ["library"],
+            "repo": "github.com/nickderobertis/onepipeline",
+            "merge_policy": "change-auto",
+            "title": "feat: link the fix",
+            "consumes": {"library": "crate"},
+            "metadata": {
+                "onepipeline.consumes": {"library": "crate"},
+                "onepipeline.id": "engine",
+                "onepipeline.merge_policy": "change-auto",
+                "onepipeline.persona": "engineer",
+            },
+        },
+        {
+            "id": "adopt",
+            "task": "## What\n\nMove the pin.",
+            "persona": "engineer",
+            "deps": ["engine"],
+            "repo": "github.com/nickderobertis/ai-orchestrator",
+            "title": "feat: adopt the engine release",
+            "execution_checkout": "ai-orchestrator-isolated",
+            "adoption": "published",
+            "metadata": {
+                "onepipeline.adoption": "published",
+                "onepipeline.execution_checkout": "ai-orchestrator-isolated",
+                "onepipeline.id": "adopt",
+                "onepipeline.persona": "engineer",
+            },
+        },
+    ],
+}
+
+
+def _with_node(plan: Mapping[str, object], node_id: str, **fields: object) -> dict[str, object]:
+    """``plan`` with ``fields`` written over the node ``node_id`` names."""
+    tasks = plan["tasks"]
+    assert isinstance(tasks, list)
+    return {
+        **plan,
+        "tasks": [{**task, **fields} if task["id"] == node_id else task for task in tasks],
+    }
+
+
+def test_the_plan_key_is_one_key_over_the_stores_plan_and_the_loaded_document() -> None:
+    """Both readers hash one thing, so the record one wrote is the record the other reads.
+
+    `just review-plan` keys the plan `plan_store.read_plan` answers, and `just
+    check-plan` keys the document the engine's loader hands the registered check; a
+    key that told the two apart would refuse every plan the review had just recorded.
+    """
+    assert plan_review.plan_key(STORE_PLAN, BAR) == plan_review.plan_key(LOADED_PLAN, BAR)
+
+
+def test_the_plan_key_changes_with_the_goal_and_every_node_field_it_renders() -> None:
+    """Every field the plan-level prompt shows moves the key, and each of them alone."""
+    base = plan_review.plan_key(STORE_PLAN, BAR)
+    moved = {
+        "goal": {**STORE_PLAN, "goal": {"text": "Something else"}},
+        "a node added": {**STORE_PLAN, "tasks": [*STORE_TASKS, {"id": "docs"}]},
+        "a node removed": {**STORE_PLAN, "tasks": STORE_TASKS[1:]},
+        "id": _with_node(STORE_PLAN, "adopt", id="adopt-it"),
+        "title": _with_node(STORE_PLAN, "adopt", title="feat: adopt something else"),
+        "repo": _with_node(STORE_PLAN, "adopt", repo="github.com/nickderobertis/elsewhere"),
+        "deps": _with_node(STORE_PLAN, "adopt", deps=["library"]),
+        "adoption": _with_node(STORE_PLAN, "adopt", adoption="fast"),
+        "consumes": _with_node(STORE_PLAN, "engine", consumes={"library": "wheel"}),
+        "merge_policy": _with_node(STORE_PLAN, "engine", merge_policy="change-open"),
+        "kind": _with_node(STORE_PLAN, "library", kind="human"),
+        "expects_no_diff": _with_node(STORE_PLAN, "library", expects_no_diff=True),
+        "persona": _with_node(STORE_PLAN, "library", persona="researcher"),
+        "task": _with_node(STORE_PLAN, "adopt", task="## What\n\nMove a different pin.\n"),
+        "a step's prose": _with_node(
+            STORE_PLAN, "adopt", steps=[{"id": "move", "persona": "engineer", "task": "Move."}]
+        ),
+        "bar": None,
+    }
+    for field, plan in moved.items():
+        key = (
+            plan_review.plan_key(STORE_PLAN, "moved")
+            if plan is None
+            else plan_review.plan_key(plan, BAR)
+        )
+        assert key != base, field
+
+
+def test_the_plan_key_survives_what_no_author_wrote_and_what_no_reviewer_read() -> None:
+    """A settlement write-back, a dispatch control, the store's own order: none moves it."""
+    base = plan_review.plan_key(STORE_PLAN, BAR)
+    standing = {
+        "status": _with_node(STORE_PLAN, "adopt", status="done", branch="onevcs/s-abc"),
+        "max_turns": _with_node(STORE_PLAN, "adopt", max_turns=60),
+        "execution_checkout": _with_node(STORE_PLAN, "adopt", execution_checkout="other"),
+        "the store's order": {**STORE_PLAN, "tasks": list(reversed(STORE_TASKS))},
+        "re-indented prose": _with_node(STORE_PLAN, "adopt", task="## What\n\n  Move  the pin."),
+        "a step field no author wrote": _with_node(
+            STORE_PLAN, "adopt", steps=[{"id": "m", "persona": "e", "task": "M", "branch": "b"}]
+        ),
+    }
+    for field, plan in standing.items():
+        if field.startswith("a step"):
+            base_for_steps = plan_review.plan_key(
+                _with_node(STORE_PLAN, "adopt", steps=[{"id": "m", "persona": "e", "task": "M"}]),
+                BAR,
+            )
+            assert plan_review.plan_key(plan, BAR) == base_for_steps, field
+            continue
+        assert plan_review.plan_key(plan, BAR) == base, field
+    # A plan whose `deps` say the same edges in another order is the same plan.
+    assert plan_review.plan_key(
+        _with_node(STORE_PLAN, "adopt", deps=["engine", "library"]), BAR
+    ) == plan_review.plan_key(_with_node(STORE_PLAN, "adopt", deps=["library", "engine"]), BAR)
+
+
+@pytest.mark.parametrize(
+    "plan",
+    ["not a plan", {"tasks": "route"}, {"tasks": ["route", 7]}, {}],
+    ids=["not-an-object", "tasks-not-a-list", "tasks-not-objects", "no-tasks"],
+)
+def test_a_plan_this_cannot_walk_is_keyed_over_no_nodes_rather_than_raised(plan: object) -> None:
+    """The safe direction: it earns a key no record will match, and the plan is refused."""
+    assert plan_review.plan_nodes(plan) == []
+    assert plan_review.plan_goal(plan) is None
+    assert plan_review.plan_key(plan, BAR) != plan_review.plan_key(STORE_PLAN, BAR)
+    # A goal that is not the `{"text": ...}` shape is keyed as whatever it is.
+    assert plan_review.plan_goal({"goal": "bare"}) == "bare"
+    assert (
+        plan_review.plan_nodes({"tasks": [{"id": "s", "steps": "not steps"}]})[0]["steps"] is None
+    )
+
+
+def test_the_plan_reviewer_is_shown_exactly_what_the_plan_key_covers() -> None:
+    """The same pairing as the task prompt's, one level up: shown iff keyed."""
+    sentinels = {
+        "goal": "sentinel-goal",
+        "id": "sentinel-id",
+        "title": "sentinel-title",
+        "repo": "github.com/nickderobertis/sentinel-repository",
+        "deps": "sentinel-dependency",
+        "adoption": "sentinel-adoption",
+        "consumes": "sentinel-consumed-target",
+        "merge_policy": "sentinel-merge-policy",
+        "kind": "sentinel-kind",
+        "expects_no_diff": "sentinel-expects-no-diff",
+        "persona": "sentinel-persona",
+        "task": "sentinel-body-prose",
+        "step id": "sentinel-step-id",
+        "step persona": "sentinel-step-persona",
+        "step prose": "sentinel-step-task",
+    }
+    unkeyed = {"max_turns": "sentinel-max-turns", "step branch": "sentinel-step-branch"}
+    plan = {
+        "goal": {"text": sentinels["goal"]},
+        "tasks": [
+            {
+                "id": sentinels["id"],
+                "title": sentinels["title"],
+                "repo": sentinels["repo"],
+                "deps": [sentinels["deps"]],
+                "adoption": sentinels["adoption"],
+                "consumes": {"library": sentinels["consumes"]},
+                "merge_policy": sentinels["merge_policy"],
+                "kind": sentinels["kind"],
+                "expects_no_diff": sentinels["expects_no_diff"],
+                "persona": sentinels["persona"],
+                "task": sentinels["task"],
+                "max_turns": unkeyed["max_turns"],
+                "steps": [
+                    {
+                        "id": sentinels["step id"],
+                        "persona": sentinels["step persona"],
+                        "task": sentinels["step prose"],
+                        "branch": unkeyed["step branch"],
+                    }
+                ],
+            }
+        ],
+    }
+    composed = plan_review._plan_prompt(plan)
+    for field, sentinel in sentinels.items():
+        assert sentinel in composed, f"{field} is hashed into the plan key and never shown"
+    for field, sentinel in unkeyed.items():
+        assert sentinel not in composed, f"{field} is shown and not covered by the plan key"
+    # Beside the bar: the table with both rungs stated, and the question itself.
+    assert composed.startswith(plan_review.PLAN_REVIEW_PROMPT)
+    assert host_installs.rendered() in composed
+    assert plan_review.RUNGS in composed
+    assert (REPO_ROOT / plan_review.BAR_FILES[0]).read_text(encoding="utf-8") in composed
+    # A node with no prose and no steps still renders, saying so.
+    assert "states no body prose" in plan_review._plan_prompt({"tasks": [{"id": "bare"}]})
+
+
+def test_the_plan_reviewer_is_asked_both_questions_and_told_the_pass_case() -> None:
+    """What the plan-level turn owns, asked of the prompt that is the only place it is asked."""
+    asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
+    for question in (
+        "does the goal need a change in one of the producers the table names to be "
+        "**in force on this host**",
+        "A plan naming no producer passes",
+        "touches a producer for a reason this host does not consume",
+        "your verdict says why you read it that way",
+        "errs toward missing",
+        "is there a node of this host's own repository that adopts that producer's release",
+        "reachable from the producer's node through `deps`",
+        "waits `published`",
+        "names that row's `config/<pin>.version` in its acceptance criteria",
+        "names no version, commit or branch of its own",
+        "reaches a dispatch only through `config/onepipeline.version`, via an `onepipeline` "
+        "node that links the crate",
+        "never through that library's own CLI pin",
+        f"a finding whose `criterion` is `{plan_review.THE_PLAN}`",
+        "a finding whose `criterion` names the node's id",
+    ):
+        assert question in asked, question
+    assert "waits `published` by default" in plan_review.RUNGS
+    assert "every other repository's rung is `fast`" in plan_review.RUNGS
+
+
+def test_the_rungs_the_plan_reviewer_is_told_are_the_overrides_own() -> None:
+    """`RUNGS` restates `config/onevcs.releases.yml`, so it is held to that file.
+
+    The override is read the way `tests/test_host_installs.py` reads it — as text, by
+    the one-line `match` shape every rule is written in — for this repository's own rule
+    and for the `default:` every other repository resolves to.
+    """
+    text = RELEASES.read_text(encoding="utf-8")
+    (own,) = [
+        rule for rule in RELEASE_RULE.finditer(text) if rule["name"].strip() == "ai-orchestrator"
+    ]
+    stated = re.search(r"^    adoption: (\S+)$", own["fields"], re.MULTILINE)
+    assert stated is not None, own["fields"]
+    assert stated.group(1) == "published", (
+        "this repository's own rung moved in config/onevcs.releases.yml"
+    )
+    assert f"waits `{stated.group(1)}` by default" in plan_review.RUNGS
+    default = re.search(r"^default:\n  adoption: (\S+)$", text, re.MULTILINE)
+    assert default is not None, text
+    assert f"every other repository's rung is `{default.group(1)}`" in plan_review.RUNGS
+
+
+def test_the_task_reviewer_is_asked_the_pin_path_question_in_both_halves() -> None:
+    """The per-task half: name the pin, name no version — and read the repository directly."""
+    asked = " ".join(plan_review.REVIEW_PROMPT.split())
+    for sentence in (
+        "**It names the pin it moves.**",
+        "must name, in its `## Acceptance criteria`, the `config/<pin>.version` the table's "
+        "row gives",
+        "adopts nothing a dispatch runs",
+        "by comparing the header's `repo` with the origin stated below — never by inferring "
+        "it from the prose",
+        "consuming a producer's crate or package for its own manifest, is not asked this",
+        "no particular phrase is required",
+        "do not refuse a task here for naming the wrong one",
+        "**It names no version of its own.**",
+        "naming which version, commit or branch of the dependency to pin",
+        "a release the node waits for is not yet an anchor",
+    ):
+        assert sentence in asked, sentence
+
+
+def test_the_plan_bar_covers_the_task_bar_the_plan_question_and_the_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct from the task bar, and moved by exactly three things.
+
+    Rewording the plan-level prompt moves every plan record and no task record; moving
+    the task bar moves both; and a change to the table moves both, because both prompts
+    render it.
+    """
+    before = plan_review.plan_bar_fingerprint()
+    task_bar = plan_review.bar_fingerprint()
+    assert before != task_bar
+
+    monkeypatch.setattr(
+        plan_review, "PLAN_REVIEW_PROMPT", f"{plan_review.PLAN_REVIEW_PROMPT}\nMore.\n"
+    )
+    assert plan_review.plan_bar_fingerprint() != before
+    assert plan_review.bar_fingerprint() == task_bar, "the plan prompt moved the task bar"
+    monkeypatch.undo()
+
+    monkeypatch.setattr(plan_review, "REVIEW_PROMPT", f"{plan_review.REVIEW_PROMPT}\nMore.\n")
+    assert plan_review.plan_bar_fingerprint() != before
+    monkeypatch.undo()
+
+    monkeypatch.setattr(host_installs, "rendered", lambda: "- one more wheel.\n")
+    assert plan_review.plan_bar_fingerprint() != before
+    assert plan_review.bar_fingerprint() != task_bar, "the table moved the plan bar alone"
+    monkeypatch.undo()
+
+    monkeypatch.setattr(plan_review, "host_repository", lambda: "github.com/elsewhere/host")
+    assert plan_review.bar_fingerprint() != task_bar, "this host's own repository is not in the bar"
+
+
+@pytest.mark.parametrize(
+    ("url", "origin"),
+    [
+        (
+            "https://github.com/nickderobertis/ai-orchestrator.git",
+            "github.com/nickderobertis/ai-orchestrator",
+        ),
+        (
+            "https://github.com/nickderobertis/ai-orchestrator",
+            "github.com/nickderobertis/ai-orchestrator",
+        ),
+        (
+            "git@github.com:nickderobertis/ai-orchestrator.git",
+            "github.com/nickderobertis/ai-orchestrator",
+        ),
+        (
+            "ssh://git@github.com/nickderobertis/ai-orchestrator.git",
+            "github.com/nickderobertis/ai-orchestrator",
+        ),
+    ],
+    ids=["https-git", "https", "scp-like", "ssh"],
+)
+def test_this_hosts_own_repository_is_the_normalized_origin_of_its_remote(
+    url: str, origin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every spelling a configured remote takes reads to the one shape a record names."""
+    _git_answers(monkeypatch, 0, url)
+    assert plan_review.host_repository() == origin
+
+
+def test_this_checkouts_own_remote_is_what_the_host_repository_is_read_from() -> None:
+    """Against the real remote: what git says this checkout's origin is, normalized."""
+    asked = subprocess.run(
+        [*plan_review.ORIGIN_COMMAND], cwd=REPO_ROOT, text=True, capture_output=True, check=True
+    )
+    assert plan_review.host_repository() == plan_review.hosted_origin(asked.stdout.strip())
+
+
+@pytest.mark.parametrize(
+    ("code", "stdout", "stderr", "refusal"),
+    [
+        (2, "", "fatal: No such remote 'origin'", "could not be read"),
+        (0, "/home/nick/projects/local-only", "", "not a hosted"),
+        (0, "", "", "not a hosted"),
+    ],
+    ids=["no-remote", "local-path", "empty"],
+)
+def test_a_remote_that_names_no_hosted_origin_is_refused_rather_than_guessed(
+    code: int, stdout: str, stderr: str, refusal: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A review against an unknown origin would be a pass over a question nobody could decide."""
+    _git_answers(monkeypatch, code, stdout, stderr)
+    with pytest.raises(OSError, match=refusal):
+        plan_review.host_repository()
+    with pytest.raises(OSError, match=refusal):
+        plan_review.bar_fingerprint()
+
+
+def test_a_host_that_cannot_run_git_is_refused_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        plan_review.subprocess,
+        "run",
+        lambda *_a, **_k: (_ for _ in ()).throw(FileNotFoundError("git")),
+    )
+    with pytest.raises(OSError, match="git could not be run"):
+        plan_review.host_repository()
+
+
+def _git_answers(monkeypatch: pytest.MonkeyPatch, code: int, stdout: str, stderr: str = "") -> None:
+    """Stand git in at the one boundary the origin crosses into this module."""
+
+    def run(command: Sequence[str], **_: object) -> subprocess.CompletedProcess[str]:
+        assert tuple(command) == plan_review.ORIGIN_COMMAND, command
+        return subprocess.CompletedProcess(list(command), code, f"{stdout}\n", stderr)
+
+    monkeypatch.setattr(plan_review.subprocess, "run", run)
 
 
 #: How each JSON Schema type the verdict declares is spelled in Python. A type appearing
@@ -644,6 +1093,12 @@ def test_a_live_edits_prompt_frames_the_task_as_a_live_edits_and_shows_its_perso
     assert whole.startswith(plan_review.REVIEW_PROMPT), whole
     assert plan_review.LIVE_EDIT_FRAME in whole
     assert bar in whole
+    # The two facts the pin-path question turns on sit beside the bar here too, because
+    # the prompt says they do and the bar digests them; the frame says what a live edit
+    # cannot show beside them.
+    assert host_installs.rendered() in whole
+    assert plan_review.host_repository() in whole
+    assert "no repository and no adoption fields to show you" in whole
     assert '"stated_as": "the task added as node \'x\'"' in whole, whole
     assert '"persona": "engineer"' in whole, whole
     assert whole.rstrip().endswith("## What\n\nDo it."), whole
@@ -690,14 +1145,30 @@ class _Configuration(TypedDict):
     settings: list[_Setting]
 
 
+#: The plan the store answers for every project here, in the engine's loaded shape:
+#: a goal and no nodes, which is enough for a plan-level key to be computed and written.
+PLAN = {"name": "P", "goal": {"text": "Deliver the route"}, "tasks": []}
+
+
 class _Store:
-    """A local Markdown source on disk, with the store answers a review reads it through."""
+    """A local Markdown source on disk, with the store answers a review reads it through.
+
+    Every project a task names gets a project record beside `plan.md`, because the
+    plan-level review is written into the project's own document and a project with no
+    record is one the closeout passes over.
+    """
 
     def __init__(self, root: Path, tasks: Sequence[StoreTask]) -> None:
         self.root = root
         self.tasks = list(tasks)
         (root / "projects").mkdir(parents=True, exist_ok=True)
-        (root / "projects" / "plan.md").write_text('---\ntitle: "P"\n---\n', encoding="utf-8")
+        for project in {
+            "plan",
+            *(task.qualified_id.partition(":")[2].split("/")[0] for task in tasks),
+        }:
+            document = root / "projects" / f"{project}.md"
+            if not document.exists():
+                document.write_text('---\ntitle: "P"\n---\n', encoding="utf-8")
         for task in self.tasks:
             _, _, native = task.qualified_id.partition(":")
             document = root / "tasks" / native.split("/")[0] / f"{native.split('/')[1]}.md"
@@ -719,9 +1190,14 @@ class _Store:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(plan_store, "store_json", self._answer)
         monkeypatch.setattr(plan_store, "read_tasks", self._read)
-        monkeypatch.setattr(
-            plan_store, "read_plan", lambda project, records: {"name": "P", "tasks": []}
-        )
+        monkeypatch.setattr(plan_store, "read_plan", lambda project, records: dict(PLAN))
+        monkeypatch.setattr(plan_store, "project_record", self._project)
+
+    def _project(self, project: str) -> dict[str, object]:
+        """The project record as the store would report it: its metadata, read off disk."""
+        _, _, native = project.partition(":")
+        record = self.written(native, project=True)
+        return {"metadata": {} if record is None else {plan_review.RECORD_KEY: record}}
 
     def _read(self, project: str) -> list[StoreTask]:
         assert project == "demo:plan"
@@ -736,8 +1212,12 @@ class _Store:
             ]
         )
 
-    def written(self, native: str) -> object:
-        document = self.root / "tasks" / native.split("/")[0] / f"{native.split('/')[1]}.md"
+    def written(self, native: str, *, project: bool = False) -> object:
+        """The review record one task — or, with ``project``, one project — carries."""
+        if project:
+            document = self.root / "projects" / f"{native}.md"
+        else:
+            document = self.root / "tasks" / native.split("/")[0] / f"{native.split('/')[1]}.md"
         for line in document.read_text(encoding="utf-8").splitlines():
             if f'"{plan_review.RECORD_KEY}"' in line:
                 return json.loads(line.split(": ", 1)[1])
@@ -763,7 +1243,7 @@ def test_a_passing_review_records_the_key_the_check_will_read(
     store = _Store(tmp_path / "store", [_task()])
     store.install(monkeypatch)
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
-    prompts = _verdicts(monkeypatch, PASSES)
+    prompts = _verdicts(monkeypatch, PASSES, PASSES)
 
     assert plan_review.main(["demo:plan"]) == 0
     written = store.written("plan/route")
@@ -772,6 +1252,93 @@ def test_a_passing_review_records_the_key_the_check_will_read(
     assert written["by"] == plan_review.BY_REVIEW
     assert "The review bar" in prompts[0]
     assert "Add the route." in prompts[0]
+    # And the plan-level turn, spent once every task carried a record, on the project.
+    whole = store.written("plan", project=True)
+    assert isinstance(whole, dict)
+    assert whole["key"] == plan_review.plan_key(PLAN, plan_review.plan_bar_fingerprint())
+    assert whole["by"] == plan_review.BY_REVIEW
+    assert prompts[1].startswith(plan_review.PLAN_REVIEW_PROMPT), prompts[1]
+    assert "Deliver the route" in prompts[1]
+    assert len(prompts) == 2
+
+
+def test_a_plan_level_refusal_records_nothing_for_the_plan_and_shows_every_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The task's own record stands; the plan's is not written; both findings reach stderr.
+
+    A finding names a node id or `the plan`, and the operator is told which reading
+    each is — an omission, or a node declaring its adoption wrongly.
+    """
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    refuses_the_plan = plan_review.Verdict(
+        passes=False,
+        findings=[
+            plan_review.Finding(
+                criterion=plan_review.THE_PLAN,
+                why="no node of this repository adopts the engine release the fix lands in",
+            ),
+            plan_review.Finding(
+                criterion="route", why="it names `config/onevcs.version` for a crate fix"
+            ),
+        ],
+    )
+    _verdicts(monkeypatch, PASSES, refuses_the_plan)
+
+    assert plan_review.main(["demo:plan"]) == 1
+    assert isinstance(store.written("plan/route"), dict), "the task's own pass was lost"
+    assert store.written("plan", project=True) is None, "a refusal recorded a plan-level pass"
+    reported = capsys.readouterr().err
+    for finding in refuses_the_plan["findings"]:
+        assert f"review-plan: {finding['criterion']} — {finding['why']}" in reported, reported
+    assert "the plan as a whole was refused on 2 finding(s)" in reported, reported
+    assert "no plan-level record was written" in reported, reported
+
+
+def test_no_plan_level_turn_is_spent_while_a_task_is_refused_or_unreviewed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The plan whole is read only once every task carries a record.
+
+    A refused task is one its author is about to change, so a plan-level verdict over
+    it would be a verdict over a plan that will not exist; and the operator is told the
+    turn is owed rather than left to wonder whether it was spent.
+    """
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    prompts = _verdicts(monkeypatch, REFUSES)
+
+    assert plan_review.main(["demo:plan"]) == 1
+    assert len(prompts) == 1, "a plan-level turn was spent beside a refused task"
+    assert store.written("plan", project=True) is None
+    assert "spent only once every task carries a record" in capsys.readouterr().err
+
+
+def test_a_plan_level_turn_that_answers_nothing_leaves_the_task_records_standing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The stop is reported as a stop, and the task passes already written are kept."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    answers = [PASSES]
+
+    def verdict(prompt: str) -> plan_review.Verdict:
+        if answers:
+            return answers.pop(0)
+        raise OSError("the chain answered nothing")
+
+    monkeypatch.setattr(plan_review, "verdict", verdict)
+
+    assert plan_review.main(["demo:plan"]) == 2
+    reported = capsys.readouterr().err
+    assert "the chain answered nothing" in reported, reported
+    assert "The plan-level review was left unrecorded" in reported, reported
+    assert isinstance(store.written("plan/route"), dict)
+    assert store.written("plan", project=True) is None
 
 
 def test_a_refused_review_records_nothing_and_shows_every_finding(
@@ -883,15 +1450,26 @@ def test_the_prompt_asks_for_every_criterion_the_reviewer_would_refuse() -> None
 def test_a_task_already_carrying_a_record_spends_no_judged_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Neither a recorded task nor a recorded plan spends a turn, and each is authoritative
+    on its own: a plan whose tasks all carry records still owes the one plan-level turn
+    until the project carries its record too."""
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
     current = _recorded(_task(), plan_review.review_key(_task(), BAR))
     store = _Store(tmp_path / "store", [current])
     store.install(monkeypatch)
-    prompts = _verdicts(monkeypatch)
+    prompts = _verdicts(monkeypatch, PASSES)
 
     assert plan_review.main(["demo:plan"]) == 0
-    assert prompts == []
-    assert "1 already carried one" in capsys.readouterr().out
+    assert len(prompts) == 1, "a recorded task was re-judged, or the plan whole was not"
+    assert prompts[0].startswith(plan_review.PLAN_REVIEW_PROMPT)
+    reported = capsys.readouterr().out
+    assert "1 already carried one" in reported
+    assert "reviewed and recorded on the project" in reported
+
+    prompts = _verdicts(monkeypatch)
+    assert plan_review.main(["demo:plan"]) == 0
+    assert prompts == [], "a recorded plan-level pass was re-judged rather than replayed"
+    assert "already carried a record for its current content" in capsys.readouterr().out
 
 
 def test_a_review_that_stops_partway_keeps_and_reports_the_passes_it_granted(
@@ -1069,12 +1647,16 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
         "persona": "sentinel-persona",
         "expects_no_diff": "sentinel-expects-no-diff",
         "deps": "sentinel-dependency",
+        "repo": "github.com/nickderobertis/sentinel-repository",
+        "adoption": "sentinel-adoption",
+        "consumes": "sentinel-consumed-target",
+        "merge_policy": "sentinel-merge-policy",
         "step id": "sentinel-step-id",
         "step prose": "sentinel-step-task",
         "step persona": "sentinel-step-persona",
     }
     unkeyed = {
-        "repository": "github.com/nickderobertis/sentinel-repository",
+        "execution checkout": "sentinel-execution-checkout",
         "a step field no author wrote": "sentinel-step-branch",
     }
     task = _task(
@@ -1085,6 +1667,10 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
             "onepipeline.kind": sentinels["kind"],
             "onepipeline.persona": sentinels["persona"],
             "onepipeline.expects_no_diff": sentinels["expects_no_diff"],
+            "onepipeline.adoption": sentinels["adoption"],
+            "onepipeline.consumes": {"engine": sentinels["consumes"]},
+            "onepipeline.merge_policy": sentinels["merge_policy"],
+            "onepipeline.execution_checkout": unkeyed["execution checkout"],
             "onepipeline.steps": [
                 {
                     "id": sentinels["step id"],
@@ -1094,7 +1680,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
                 }
             ],
         },
-        repositories=[unkeyed["repository"]],
+        repositories=[sentinels["repo"]],
         deps=(sentinels["deps"],),
     )
     composed = plan_review._prompt("P", task)
@@ -1105,6 +1691,11 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
             f"{field} is shown to the reviewer and not covered by the key, so a pass "
             f"would stand over content the reviewer read and nothing protects: {composed}"
         )
+    # And the two facts the pin-path question turns on sit beside the bar, because both
+    # are hashed into it: the table, and this host's own repository as the origin the
+    # header's `repo` is compared with.
+    assert host_installs.rendered() in composed, composed
+    assert f"`{plan_review.host_repository()}` — the origin the task's `repo`" in composed
 
 
 def test_a_task_with_no_body_prose_still_composes_a_prompt() -> None:
@@ -1136,12 +1727,20 @@ def test_a_planning_closeout_records_only_what_the_run_authored(
         "read_tasks",
         lambda project: [authored] if project == "demo:authored" else [existing],
     )
-    assert plan_review.record_projects_new_since(before).written == ["demo:authored/route"]
+    recorded = plan_review.record_projects_new_since(before)
+    assert recorded.written == ["demo:authored/route"]
     written = store.written("authored/route")
     assert isinstance(written, dict)
     assert written["by"] == plan_review.BY_PLANNING
     assert written["key"] == plan_review.review_key(authored, BAR)
     assert store.written("plan/existing") is None
+    # And the plan whole, beside its tasks, because the planner's own judge read it whole.
+    assert recorded.plans == ["demo:authored"]
+    whole = store.written("authored", project=True)
+    assert isinstance(whole, dict)
+    assert whole["by"] == plan_review.BY_PLANNING
+    assert whole["key"] == plan_review.plan_key(PLAN, plan_review.plan_bar_fingerprint())
+    assert store.written("plan", project=True) is None
 
 
 def test_a_plan_edited_beside_a_planning_run_is_left_unrecorded(
@@ -1254,8 +1853,9 @@ def test_the_planning_verbs_round_trip_their_snapshot(
     projects.append("demo:authored")
     monkeypatch.setattr(plan_store, "read_tasks", lambda project: [authored])
     assert plan_review.planning_main(["closeout", str(snapshot)]) == 0
-    assert "1 task(s)" in capsys.readouterr().err
+    assert "1 task(s) and for 1 plan(s) whole" in capsys.readouterr().err
     assert isinstance(store.written("authored/route"), dict)
+    assert isinstance(store.written("authored", project=True), dict)
 
 
 def test_a_project_a_closeout_cannot_record_is_left_alone_rather_than_failing_the_launch(

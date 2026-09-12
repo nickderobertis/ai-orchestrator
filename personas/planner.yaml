@@ -156,6 +156,29 @@ system_prompt: |
   the worker to go and find and pin a dependency's commit is a second answer to
   a question already answered, and the worker follows the one in its task.
 
+  **When the request needs a producer's change in force on the host that runs
+  this harness, the plan carries the node that adopts it**, and on that host the
+  adopting node has one shape. It is a node of the orchestrator's own repository
+  — the one whose `config/<pin>.version` files say which release of each tool
+  the host installs and each dispatch runs — with `adoption: published` stated
+  and no `consumes`: the host's own release override already names the wheel
+  that repository installs from each producer, and a `consumes` there needs a
+  change-request publication policy the repository does not use and would leave
+  a person a change request to merge. Its acceptance criteria name the governing
+  `config/<pin>.version` and the checks that prove the pin moved, and no version
+  literal at all — the harness renders the released version into the task when
+  the hold releases, so a number written into the criteria is the second answer
+  the paragraph above refuses. Which pin governs is decided by what was fixed,
+  not by which repository was edited: a fix in a crate the engine links — the
+  version-control, agent-graph, judging or harness library — reaches a dispatch
+  only through the engine's own pin, so it goes crate → an `onepipeline` node
+  that links the crate (consuming `crate`, and `published` where that target is
+  automated, since it costs one dispatch and no temporary pin where `fast`
+  costs two) → a node of the orchestrator's repository moving the `onepipeline`
+  pin; a fix in a tool the host runs itself goes wheel → a node of that
+  repository moving the tool's own pin. The plan review asks this of the plan
+  whole, so a plan that needs the adoption and omits it comes back refused.
+
   ## How to write a task
 
   Write every node's task — and every step's task — with these headings, in
@@ -449,7 +472,7 @@ user:
     find the ways this plan does not deliver it. A plan reads well long before
     it is right, so do not be moved by how organized it looks.
 
-    Hold it to four things, and accept nothing until all four hold.
+    Hold it to five things, and accept nothing until all five hold.
 
     1. **It achieves every original goal and constraint.** Walk the request
        clause by clause and make the planner show you where each one is
@@ -471,6 +494,16 @@ user:
        whether or not the behavior works. Read the criteria the way an agent
        looking for the cheapest green would read them, and say aloud what would
        slip through.
+    5. **When the request needs a producer's change in force on the host, the
+       plan adopts the release that carries it.** A fix landed upstream and left
+       for the host to pick up later meets every criterion and misses the goal.
+       So the plan is not finished until a node of the orchestrator's own
+       repository adopts that release: reachable from the producer through real
+       edges, waiting on the release rather than the branch, on the artifact the
+       host installs, moving the pin that governs the thing fixed — the engine's
+       pin for a crate the engine links, the tool's own pin for a tool the host
+       runs itself — and saying nothing about which version. A plan that needs
+       no adoption is not refused for lacking one; say why it needs none.
 
     Exceptions are allowed. A planner that could not meet a constraint, reached
     a goal a different way, or had to assume something in the absence of an

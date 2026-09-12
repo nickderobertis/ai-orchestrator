@@ -118,3 +118,28 @@ def copy_checkout(destination: Path) -> None:
     """A copy of this checkout wired to this checkout's own workspace install."""
     copy_working_tree(destination)
     (destination / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+
+
+def answering_this_checkouts_origin(destination: Path) -> None:
+    """Give a copied tree the one thing of `.git` a review reads: this checkout's `origin`.
+
+    `copy_working_tree` copies what git would commit and no `.git`, so a copy answers
+    `git remote get-url origin` with nothing — and `orchestrator/plan_review.py` reads
+    this host's own repository off that remote to decide which nodes of a plan are its
+    own. A copy that could not answer would refuse every review and check run in it for
+    want of the review configuration rather than for anything about the plan, and a
+    copy answering a *different* origin would be a different bar. So the copy is made a
+    repository with no history at all and exactly this checkout's remote: what it then
+    answers is what this checkout answers, and nothing else of git is there to read.
+    """
+    url = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    subprocess.run(["git", "init", "-q"], cwd=destination, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", url], cwd=destination, check=True, capture_output=True
+    )

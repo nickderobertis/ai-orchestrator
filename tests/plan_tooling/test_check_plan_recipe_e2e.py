@@ -2033,7 +2033,9 @@ def test_the_registered_check_run_with_no_project_names_the_command_shape(
 
     The project reaches this file only through the wrapper's environment, so a check
     run any other way has none — and a refusal about a missing review record whose
-    remedy named nothing would send its reader to a command that cannot work.
+    remedy named nothing would send its reader to a command that cannot work. The
+    plan-level record is read from the store by that same id, so a check handed none
+    refuses the plan whole for want of it rather than passing over what it cannot read.
     """
     project = project_from_plan(_plan(tmp_path, STATES_ITS_BAR))
     environment = {
@@ -2053,10 +2055,12 @@ def test_the_registered_check_run_with_no_project_names_the_command_shape(
 
     assert answered.returncode == 0, answered.stdout + answered.stderr
     refusals = json.loads(answered.stdout)["refusals"]
-    assert {one["node"] for one in refusals} == {"route", "approve"}, refusals
+    assert {one["node"] for one in refusals} == {"route", "approve", None}, refusals
     for refusal in refusals:
         assert refusal["field"] == "metadata", refusal
         assert "just review-plan <source>:<project>" in refusal["reason"], refusal
+    (whole,) = [one for one in refusals if one["node"] is None]
+    assert "for want of a project id" in whole["reason"], whole
 
 
 #: A `commit-msg` hook of the shape a repository this host publishes to really carries:
@@ -2911,11 +2915,19 @@ def test_a_destination_this_host_cannot_answer_for_refuses_nothing(
     # which puts this checkout's `.venv/bin` at the front of the child's PATH, so a
     # stand-in `onevcs` never answers it. What is spawned here is what `onepipeline plan
     # check` spawns, on the document that verb really hands it.
+    # The project id travels the way the wrapper hands it to the spawned check, because
+    # the plan-level review record is read from the store by it and a check handed none
+    # refuses the plan whole for want of it — a refusal about this host, not about the
+    # destination these shapes are about.
     answered = subprocess.run(
         [str(REPO_ROOT / "scripts" / "plan-check.sh")],
         cwd=REPO_ROOT,
         input=_loaded_plan(project, tmp_path),
-        env=os.environ | {"PATH": f"{binary}{os.pathsep}{os.environ['PATH']}"},
+        env=os.environ
+        | {
+            "PATH": f"{binary}{os.pathsep}{os.environ['PATH']}",
+            "ORCHESTRATOR_PLAN_CHECK_PROJECT": project,
+        },
         text=True,
         capture_output=True,
         timeout=e2e_timeout(180),
@@ -2929,8 +2941,9 @@ def test_a_destination_this_host_cannot_answer_for_refuses_nothing(
 
 #: Every way this host can have nothing to say about a release: no `onevcs` at all, one
 #: that refuses the question, and one whose answer is not the shape the rules read.
-#: ``None`` is a PATH holding the system's tools and the installed engine — which the
-#: check needs, to read the review bar out of — and no `onevcs`, so the CLI's absence is
+#: ``None`` is a PATH holding the system's tools, the installed engine — which the check
+#: needs, to read the review bar out of — and the installed plan store — which it needs,
+#: to read the plan-level review record from — and no `onevcs`, so the CLI's absence is
 #: the one thing tested.
 UNANSWERABLE_ADOPTION = (
     ("no onevcs on PATH", None),
@@ -2969,6 +2982,9 @@ def test_a_release_this_host_cannot_ask_about_refuses_nothing(
         engine = shutil.which("onepipeline")
         assert engine is not None, "the installed engine is what the check reads the bar from"
         (binary / "onepipeline").symlink_to(engine)
+        store = shutil.which("onetaskgraph")
+        assert store is not None, "the installed store is what the check reads the plan record from"
+        (binary / "onetaskgraph").symlink_to(store)
         path = f"{binary}{os.pathsep}/usr/bin:/bin"
     plan = _publishing_plan(
         tmp_path,
@@ -2979,11 +2995,15 @@ def test_a_release_this_host_cannot_ask_about_refuses_nothing(
 
     # llmlint: ignore-block[tests_mirror_real_usage] This script *is* the interface these
     # shapes are reachable through, for the reason the publication journey above states.
+    # The project id travels the way the wrapper hands it to the spawned check, for the
+    # reason the destination journey above gives: without it the check refuses the plan
+    # whole for want of the plan-level record, a refusal about this host rather than about
+    # the release these shapes are about.
     answered = subprocess.run(
         [str(REPO_ROOT / "scripts" / "plan-check.sh")],
         cwd=REPO_ROOT,
         input=_loaded_plan(project, tmp_path),
-        env=os.environ | {"PATH": path},
+        env=os.environ | {"PATH": path, "ORCHESTRATOR_PLAN_CHECK_PROJECT": project},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(180),

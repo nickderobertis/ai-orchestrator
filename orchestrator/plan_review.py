@@ -47,6 +47,22 @@ than add. The third is whether a node whose criteria describe work that changes 
 declares `expects_no_diff`, which is a reading of prose and so belongs here for the same
 reason.
 
+**One question spans nodes, so it is asked once per plan and recorded on the project.**
+Whether a plan puts the change its goal needs *in force on this host* — a producer's fix
+landed upstream and adopted here through the `config/<pin>.version` the installed wheel
+governs — is not a property of any task in it: a consumer missing from a plan is absent
+from every task, and the per-task turn reviews one task. So :func:`review` spends one
+further turn under :data:`PLAN_REVIEW_PROMPT` once every task carries a record, over the
+goal and every node whole, and records the pass on the **project** record under the same
+:data:`RECORD_KEY`, keyed by :func:`plan_key` under :func:`plan_bar_fingerprint`. The
+three properties hold for it exactly as for a task's record, and `just check-plan` and
+`just copy-plan` both refuse a plan whose project carries none. **A mid-run live edit is
+held to the per-task tiers only.** An `add`, a `retry` or a `requeue` with an amended
+task reaches :mod:`orchestrator.live_edit_check`, which spends the per-task turn and
+never this one, because a model call over the whole plan there would stall every
+mid-run correction; the manager's own review is what covers adoption on a mid-run add,
+and the plan-level record says nothing about an edit it never saw.
+
 **A record is read from any source and written into a local Markdown one**, which is the
 asymmetry to know before reaching for :func:`review`. A record travels in the open
 metadata map a task already carries, so :func:`recorded` answers for a board task exactly
@@ -71,8 +87,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict
 
-from orchestrator import plan_store
+from orchestrator import host_installs, plan_store
 from orchestrator.plan_store import QualifiedTaskId, StoreTask
+from orchestrator.project_store import hosted_origin
+from orchestrator.publication_guard import RESERVED_REPO_KEY
 from orchestrator.root import REPO_ROOT
 
 #: A digest of the review bar in force. Distinct from :data:`ReviewKey`, which is a
@@ -85,10 +103,12 @@ BarFingerprint = NewType("BarFingerprint", str)
 #: and what the deterministic check compares against.
 ReviewKey = NewType("ReviewKey", str)
 
-#: Where one task's review record lives. A namespaced entry of the open metadata map a
-#: task already carries, so it travels with the record it describes and stays visible to
-#: anybody reading the plan — rather than in a sidecar this repository would then have to
-#: keep in step with a store it does not own.
+#: Where one task's review record lives — and, on the project record, where the plan's
+#: own lives. A namespaced entry of the open metadata map a task already carries, so it
+#: travels with the record it describes and stays visible to anybody reading the plan —
+#: rather than in a sidecar this repository would then have to keep in step with a store
+#: it does not own. One key at both levels, because a project and a task are different
+#: records and the entry never has to say which it is on.
 RECORD_KEY = "orchestrator.plan-review"
 
 #: The bar this review is held to, and the schema its verdict is validated against. Both
@@ -199,6 +219,31 @@ than a review or an acceptance the plan's own supervisor would make; and to whet
 person could read it and know exactly what to do. Refusing it for having no acceptance
 criteria refuses the shape itself, which is the one refusal that can never be corrected.
 
+One question is asked of a node that adopts a dependency's release — `adoption` of
+`published` in its header, or `consumes` naming one — and it has two halves. **It
+names the pin it moves.** Below the bar is the table of what this host installs from
+each producer it depends on and the `config/<pin>.version` file each wheel governs,
+and then this host's own repository, stated as the origin the header's `repo` is
+compared with. A node of this host's own repository adopting a wheel that table names
+must name, in its `## Acceptance criteria`, the `config/<pin>.version` the table's row
+gives for that wheel: a task that adopts one and names none adopts nothing a dispatch
+runs, so refuse it naming the criterion that should carry the path. Decide whether the
+node is one of this host's own repository **directly**, by comparing the header's
+`repo` with the origin stated below — never by inferring it from the prose — and read
+which wheel it adopts from the task's own content and the header's `adoption` and
+`consumes`. A node whose `repo` is another repository, consuming a producer's crate or
+package for its own manifest, is not asked this. Judge it by meaning: a criterion
+stating the pin's path in its own words answers it, and no particular phrase is
+required. Whether the named pin is the right one for the *fix* — a crate fix reaches a
+dispatch only through `config/onepipeline.version` — is asked of the plan as a whole by
+a later turn, so do not refuse a task here for naming the wrong one. **It names no
+version of its own.** The engine renders the released version into the task's
+`## Cross-repository references` block when the hold releases, so a criterion or
+instruction naming which version, commit or branch of the dependency to pin — or
+telling the worker to go and find one — is a second answer the worker follows over the
+engine's, and is refused. The immutable-anchor exemption above applies only to a
+release already published; a release the node waits for is not yet an anchor.
+
 Do not rewrite the task and do not judge it on style. Answer with the JSON object the
 response schema declares: whether it passes, and one finding for **every** criterion
 you would refuse — not the first one, and not the worst one. Each finding names the
@@ -262,6 +307,20 @@ class Refusal(NamedTuple):
         ]
 
 
+class PlanReview(StrEnum):
+    """What the plan-level turn did, as a closed vocabulary rather than three flags.
+
+    `UNASKED` is the deliberate one: the plan-level turn is spent only once every task
+    carries a record, so a plan with a refused or unreviewed task spends nothing on it
+    and reports that rather than a pass or a refusal about a plan it never read whole.
+    """
+
+    RECORDED = "recorded"
+    HELD = "held"
+    REFUSED = "refused"
+    UNASKED = "unasked"
+
+
 class Reviewed(NamedTuple):
     """What one `just review-plan` did, named rather than positional."""
 
@@ -278,10 +337,79 @@ class Reviewed(NamedTuple):
     #: the three records already written — and a diagnostic claiming nothing was
     #: recorded would send its reader looking for state that is there.
     stopped: str | None = None
+    #: What the one plan-level turn did, and — when it refused — every finding it named,
+    #: each `criterion` being a node id or `the plan`. Nothing was recorded for a
+    #: refusal, and the task records above stand whatever this says.
+    plan: PlanReview = PlanReview.UNASKED
+    plan_findings: Sequence[Finding] = ()
+
+
+#: How this checkout's own `origin` remote is asked for, and the one shape it answers
+#: in. `git remote get-url` reads the configured URL and nothing else — no fetch, no
+#: network — so a checkout with the remote configured answers in milliseconds and one
+#: without answers non-zero.
+ORIGIN_COMMAND = ("git", "remote", "get-url", "origin")
+
+#: The scp-like spelling of a clone URL, `[user@]host:owner/name`, which
+#: :func:`orchestrator.project_store.hosted_origin` deliberately answers `None` for
+#: because a task record never holds one. A configured remote may be spelled that way,
+#: so it is rewritten to the `host/owner/name` shape that function reads before it is
+#: asked; an `ssh://` scheme is dropped for the same reason `https://` is.
+_SCP_LIKE = re.compile(r"^(?:ssh://)?(?:[\w.-]+@)?(?P<host>[A-Za-z0-9.-]+)[:/](?P<path>.+)$")
+
+
+def host_repository() -> str:
+    """This host's own repository: the normalized origin of this checkout's `origin` remote.
+
+    The pin-path question the reviewer is asked turns on whether a node is one of *this*
+    repository — the one whose `config/<pin>.version` files a dispatch runs under — and
+    that is decided by comparing the node's `repo` with this value, never by inferring it
+    from the prose. It is read from git rather than from any tracked file because the
+    tracked files name this repository nowhere a program reads, and because a copy of
+    this checkout is a different repository only if its remote says so.
+
+    Raises :class:`OSError` when the remote cannot be read or is not a hosted origin,
+    naming the repair, because every caller reads that as the review configuration this
+    checkout cannot answer: a review granted against an unknown origin would be a pass
+    over a question the reviewer could not decide.
+    """
+    try:
+        asked = subprocess.run(
+            ORIGIN_COMMAND, cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+    except OSError as exc:
+        raise OSError(f"git could not be run to read this checkout's origin: {exc}") from exc
+    if asked.returncode != 0:
+        raise OSError(
+            f"this checkout's `origin` remote could not be read from {REPO_ROOT} "
+            f"({asked.stderr.strip() or 'git reported no reason'}); the review compares "
+            f"each node's repository with it, so run this from a git checkout whose "
+            f"`origin` names this repository"
+        )
+    url = asked.stdout.strip()
+    origin = hosted_origin(url)
+    if origin is None:
+        rewritten = _SCP_LIKE.match(url)
+        if rewritten is not None:
+            origin = hosted_origin(f"{rewritten['host']}/{rewritten['path']}")
+    if origin is None:
+        raise OSError(
+            f"this checkout's `origin` remote is {url!r}, which is not a hosted "
+            f"`host/owner/name` origin a task record could name, so no node's repository "
+            f"can be compared with it"
+        )
+    return origin
 
 
 def bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
-    """A digest of the review bar in force, over ``root``'s copy of the files it is."""
+    """A digest of the review bar in force, over ``root``'s copy of the files it is.
+
+    The bar is the question, the files, and **what the reviewer was shown beside them**:
+    the table of what this host installs and the pin each wheel governs, and this host's
+    own repository. Both are rendered into every prompt and both decide the pin-path
+    answer, so a pass granted while either read differently is a pass over a question
+    the reviewer was not asked.
+    """
     digest = hashlib.sha256()
     digest.update(REVIEW_PROMPT.encode("utf-8"))
     for relative in BAR_FILES:
@@ -289,6 +417,9 @@ def bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
         digest.update(b"\0")
         digest.update((root / relative).read_bytes())
         digest.update(b"\0")
+    digest.update(host_installs.rendered().encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(host_repository().encode("utf-8"))
     return BarFingerprint(digest.hexdigest())
 
 
@@ -325,6 +456,38 @@ EXPECTS_NO_DIFF = "onepipeline.expects_no_diff"
 #: lives, and a key blind to it would leave a standing record over criteria nobody read.
 STEPS = "onepipeline.steps"
 
+#: The three fields that say how a node adopts another repository's release, and under
+#: which publication policy — authored, and keyed because each decides which question
+#: the reviewer asks of the node. `adoption` says whether it waits on the release or the
+#: branch, `consumes` names the target it waits for, and `merge_policy` decides whether
+#: a `consumes` is one its publication can ever satisfy; a record granted while any of
+#: them read differently is a pass over a node that now adopts something else. Spelled
+#: here the way :data:`PERSONA` is, as the engine's `onepipeline.<field>` metadata keys,
+#: and held to the engine rather than trusted: `tests/e2e/test_release_adoption_in_force_e2e.py`
+#: drives the installed loader refusing a bad `adoption` and a mis-keyed `consumes`
+#: written under exactly these keys, `tests/plan_tooling/test_check_plan_recipe_e2e.py`
+#: drives it reading a node's stated `merge_policy`, and the store-versus-loaded journey
+#: in `tests/plan_tooling/test_plan_review_e2e.py` holds the record written from the
+#: store's spelling to the document the loader hands the check.
+ADOPTION = "onepipeline.adoption"
+CONSUMES = "onepipeline.consumes"
+MERGE_POLICY = "onepipeline.merge_policy"
+
+
+def repository_of(task: StoreTask) -> str | None:
+    """``task``'s repository as its record names it, or ``None`` when it names none.
+
+    The one entry of the record's own `repositories` list for a hosted identity, else
+    what the reserved `onepipeline.repo` key holds for a local checkout — the same two
+    spellings the engine reads a node's `repo` from, in the same order. Keyed and shown
+    because the pin-path question is answered differently for a node of this host's own
+    repository and for one outside it, and the reviewer decides which by this value.
+    """
+    if task.repositories:
+        return str(task.repositories[0])
+    held = task.metadata.get(RESERVED_REPO_KEY)
+    return held if isinstance(held, str) else None
+
 
 class AuthoredStep(TypedDict):
     """One lifecycle step, narrowed to the three fields its author writes.
@@ -351,7 +514,16 @@ def authored_steps(task: StoreTask) -> list[AuthoredStep] | None:
     mappings by name, and it runs before the record is ever consulted, so a plan this
     cannot narrow is one no launch reaches whatever its record says.
     """
-    held = task.metadata.get(STEPS)
+    return _narrowed_steps(task.metadata.get(STEPS))
+
+
+def _narrowed_steps(held: object) -> list[AuthoredStep] | None:
+    """``held`` as a node's authored steps, or ``None`` when it is not a list of them.
+
+    Shared by the task key, which reads the steps off a store record's metadata, and the
+    plan key, which reads them off a node of the plan in the engine's loaded shape: one
+    narrowing, so the two keys cover a step's authored fields identically.
+    """
     if not isinstance(held, list) or not all(isinstance(step, Mapping) for step in held):
         return None
     return [
@@ -464,16 +636,24 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     Each of those fields is read for its **meaning** rather than for its bytes;
     :func:`meaning_bearing` says exactly how far that reaches and why it stops there.
 
-    One field a plan also carries is deliberately outside it, and what that costs is
-    worth knowing rather than discovering: a task **retargeted at another repository**
-    after its review keeps its record.
+    The repository the node names is in it too, and that **reverses** the decision this
+    docstring used to record — a task retargeted at another repository kept its record.
+    It no longer does: the pin-path question is answered differently for a node of this
+    host's own repository and for one outside it, and the reviewer decides which by
+    comparing the node's `repo` with this host's own, so a retargeted task is a
+    different question and is re-reviewed. So are its `adoption`, `consumes` and
+    `merge_policy`, for the reason their constants give.
     """
     authored = {
+        "adoption": task.metadata.get(ADOPTION),
         "bar": bar,
+        "consumes": task.metadata.get(CONSUMES),
         "deps": sorted(task.deps),
         "expects_no_diff": task.metadata.get(EXPECTS_NO_DIFF),
         "kind": task.metadata.get(KIND),
+        "merge_policy": task.metadata.get(MERGE_POLICY),
         "persona": task.metadata.get(PERSONA),
+        "repo": repository_of(task),
         "steps": authored_steps(task),
         "task": task.content,
         "title": task.title,
@@ -530,7 +710,7 @@ def edit_key(
     no provider turn.
 
     The two keys are deliberately **not** interchangeable, and the field names are what
-    keeps them apart: a digest over a plan task's eight authored fields can never equal
+    keeps them apart: a digest over a plan task's twelve authored fields can never equal
     one over these three, so a record made about a live edit can never be read as
     clearing a plan task or the other way round. Neither reads the other's store either —
     see :mod:`orchestrator.live_edit_check` for where a live edit's own record is kept.
@@ -555,7 +735,9 @@ This task was not read out of a plan. It was stated by a live edit on a running 
 channel — an added node, a retry's replacement node, or a requeued node's amended task
 — written by a manager in the minute after reading a failure, and it reaches its
 worker's judge exactly as a plan's task would. Hold it to the same bar. It carries no
-title and no dependencies to show you; the persona beside it is the role whose review
+title, no dependencies, no repository and no adoption fields to show you — so the
+pin-path question above is asked of it only as far as its own prose says which
+repository it is of and what it adopts; the persona beside it is the role whose review
 bar its judge is given, and `null` means the base config's generic contract.
 """
 
@@ -589,6 +771,7 @@ def edit_prompt(text: str, persona: object, where: str) -> str:
     return (
         f"{REVIEW_PROMPT}\n{LIVE_EDIT_FRAME}\n"
         f"## The review bar\n\n{bar}\n\n"
+        f"{_host_sections()}"
         f"## The task, as the live edit states it\n\n{stated}\n\n{text}\n"
     )
 
@@ -600,7 +783,12 @@ def recorded(task: StoreTask) -> ReviewKey | None:
     the safe direction: the task is then refused for want of a review, which is what an
     unreadable record means anyway, and one malformed entry cannot refuse a whole plan.
     """
-    held = task.metadata.get(RECORD_KEY)
+    return _recorded_key(task.metadata)
+
+
+def _recorded_key(metadata: Mapping[str, object]) -> ReviewKey | None:
+    """The digest the record in ``metadata`` names, or ``None`` when it holds none."""
+    held = metadata.get(RECORD_KEY)
     if not isinstance(held, dict):
         return None
     key = held.get("key")
@@ -777,7 +965,11 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
     # `tests/test_plan_review.py` holds the two together.
     authored = {
         "title": task.title,
+        "repo": repository_of(task),
         "depends_on": sorted(task.deps),
+        "adoption": task.metadata.get(ADOPTION),
+        "consumes": task.metadata.get(CONSUMES),
+        "merge_policy": task.metadata.get(MERGE_POLICY),
         "expects_no_diff": task.metadata.get(EXPECTS_NO_DIFF),
         "kind": task.metadata.get(KIND),
         "persona": task.metadata.get(PERSONA),
@@ -785,11 +977,253 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
     return (
         f"{REVIEW_PROMPT}\n"
         f"## The review bar\n\n{bar}\n\n"
+        f"{_host_sections()}"
         f"## The plan\n\n{plan_name}\n\n"
         f"## The task, as its author wrote it\n\n"
         f"{json.dumps(authored, indent=2, ensure_ascii=False)}\n\n"
         f"{task.content or '(this task states no body prose)'}"
         f"{_steps(task)}\n"
+    )
+
+
+def _host_sections() -> str:
+    """What this host installs and which repository it is, rendered for a reviewer.
+
+    Both sit in every prompt beside the bar, because both are facts the pin-path
+    question turns on and neither is knowable from the task: the table says which
+    `config/<pin>.version` an adopted wheel governs, and the origin is what the task's
+    `repo` is compared with to decide whether the question is asked of it at all.
+    """
+    return (
+        f"## What this host installs, and the pin each wheel governs\n\n"
+        f"{host_installs.rendered()}\n"
+        f"## This host's own repository\n\n"
+        f"`{host_repository()}` — the origin the task's `repo` is compared with to decide "
+        f"whether it is a node of this host's own repository.\n\n"
+    )
+
+
+#: What the reviewer is asked of a plan whole, once every task in it carries a record.
+#: Hashed into every plan-level key with the task bar and the table, and into no task
+#: key: rewording this moves every plan record and no task record.
+PLAN_REVIEW_PROMPT = """\
+You are reviewing ONE plan whole, after every task in it has passed its own review,
+for the one property no single task can show: whether the plan puts the change its
+goal needs in force on this host. Below is the review bar, then the plan's goal, then
+the table of what this host installs from each producer it depends on — the wheel,
+and the `config/<pin>.version` file that wheel governs — with the two rungs a node
+waits on a release under, and then every node of the plan with its authored fields
+and its whole task.
+
+Ask two questions.
+
+First: does the goal need a change in one of the producers the table names to be **in
+force on this host** — installed here, run by this host's own commands or by the nodes
+it dispatches — for the goal to be met? A plan naming no producer passes. A plan that
+touches a producer for a reason this host does not consume — that repository's own
+documentation, its tests, an artifact this host does not install — passes too, and
+your verdict says why you read it that way. This tier errs toward missing: refuse only
+a plan whose goal, read plainly, is not met while this host goes on running the
+release it has.
+
+Second, if it does, for each such producer: is there a node of this host's own
+repository that adopts that producer's release? Such a node is reachable from the
+producer's node through `deps`; waits `published` — stated on the node, or resolved by
+this repository's own rung, stated under the table — rather than `fast` against the
+branch; waits on the wheel this host installs, which is the table's row for that
+producer, and so names no `consumes` of its own; names that row's
+`config/<pin>.version` in its acceptance criteria; and names no version, commit or
+branch of its own, because the engine renders the released version into the task when
+the hold releases. One rule decides which pin is the right one for a fix: a fix in a
+crate the engine links — the version-control, agent-graph, judging and harness
+libraries — reaches a dispatch only through `config/onepipeline.version`, via an
+`onepipeline` node that links the crate, and never through that library's own CLI
+pin, which governs the host's own commands and nothing a dispatch runs; a fix in a
+tool this host runs itself moves that tool's own pin.
+
+A plan that omits the adoption its goal needs is refused with a finding whose
+`criterion` is `the plan`. A plan that declares it wrongly — the wrong pin for the fix,
+`fast` where the release is needed, a `consumes` on a node of this repository, a
+version literal — is refused with a finding whose `criterion` names the node's id. A
+verdict that passes carries no findings; one that refuses carries one per thing to
+correct, and says in each `why` what the plan would have to state instead.
+"""
+
+#: The two rungs a node of a plan waits on a release under, stated beside the table in
+#: the plan-level prompt: this repository's own, from `config/onevcs.releases.yml`, and
+#: the global one every other repository resolves to. Stated as prose the reviewer
+#: reads, and hashed into the plan bar through the prompt rather than restated in it.
+#: A restatement of that tracked file, held to it by `tests/test_plan_review.py`, which
+#: reads the override's own rule for this repository and its `default:` and fails the
+#: moment either rung moves without this sentence.
+RUNGS = (
+    "A node of this host's own repository waits `published` by default — the release "
+    "carrying the work, never the branch; every other repository's rung is `fast`."
+)
+
+#: What a finding of the plan-level turn names when it is about the plan rather than
+#: about one node: the word the prompt tells the reviewer to use, and what the operator
+#: reads it back as.
+THE_PLAN = "the plan"
+
+
+def plan_bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
+    """A digest of the bar a plan is held to whole, over ``root``'s copy of the files.
+
+    The task bar, the plan-level question, and the table the question is asked over —
+    distinct from :func:`bar_fingerprint` so that rewording the plan-level prompt
+    moves every plan record and no task record, while a change to the table moves
+    both, since both prompts render it.
+    """
+    digest = hashlib.sha256()
+    digest.update(bar_fingerprint(root).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(PLAN_REVIEW_PROMPT.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(host_installs.rendered().encode("utf-8"))
+    return BarFingerprint(digest.hexdigest())
+
+
+class KeyedNode(TypedDict):
+    """One node of a plan, narrowed to the authored fields the plan-level key covers.
+
+    Read off the plan in the **engine's loaded shape** — `plan_store.read_plan`'s answer
+    for the store path and the document `scripts/plan-check.sh` receives for the check
+    path, which carry these fields under these names, so both readers hash one thing.
+    Every field is authored; nothing a settlement write-back owns is here. Each is
+    ``object`` because it is read for its meaning rather than narrowed to a type: a
+    value of the wrong shape is keyed as what it is, and the engine's loader is what
+    refuses it, long before this is asked.
+    """
+
+    id: object
+    title: object
+    repo: object
+    deps: list[str]
+    adoption: object
+    consumes: object
+    merge_policy: object
+    kind: object
+    expects_no_diff: object
+    persona: object
+    task: object
+    steps: list[AuthoredStep] | None
+
+
+def plan_nodes(plan: object) -> list[KeyedNode]:
+    """Every node of ``plan``, narrowed to a :class:`KeyedNode`, sorted by id.
+
+    Read for its meaning field by field, exactly as a task's record is, and sorted so
+    that the order a store lists its tasks in — which is the store's to decide — is
+    not part of what a plan's key says. A plan carrying no readable `tasks` answers no
+    nodes rather than raising: the engine's loader has refused that shape long before
+    this is asked, and a key over an empty list refuses the plan for want of a record
+    exactly as an unreadable one would.
+    """
+    tasks = plan.get("tasks") if isinstance(plan, Mapping) else None
+    nodes: list[KeyedNode] = []
+    for task in tasks if isinstance(tasks, list) else []:
+        if not isinstance(task, Mapping):
+            continue
+        deps = task.get("deps")
+        nodes.append(
+            KeyedNode(
+                id=meaning_bearing(task.get("id")),
+                title=meaning_bearing(task.get("title")),
+                repo=meaning_bearing(task.get("repo")),
+                deps=sorted(str(dependency) for dependency in deps)
+                if isinstance(deps, list)
+                else [],
+                adoption=meaning_bearing(task.get("adoption")),
+                consumes=meaning_bearing(task.get("consumes")),
+                merge_policy=meaning_bearing(task.get("merge_policy")),
+                kind=meaning_bearing(task.get("kind")),
+                expects_no_diff=meaning_bearing(task.get("expects_no_diff")),
+                persona=meaning_bearing(task.get("persona")),
+                task=meaning_bearing(task.get("task")),
+                steps=_narrowed_steps(task.get("steps")),
+            )
+        )
+    return sorted(nodes, key=lambda node: json.dumps(node["id"], sort_keys=True))
+
+
+def plan_goal(plan: object) -> object:
+    """The goal text ``plan`` states, or whatever it states in the goal's place."""
+    goal = plan.get("goal") if isinstance(plan, Mapping) else None
+    if isinstance(goal, Mapping) and isinstance(goal.get("text"), str):
+        return goal["text"]
+    return goal
+
+
+def plan_key(plan: object, bar: BarFingerprint) -> ReviewKey:
+    """The digest ``plan``'s goal and every node's authored content hash to under ``bar``.
+
+    Over the plan in the engine's loaded shape, so the store path and the check path
+    compute one key. The `shape` field keeps it from ever equalling a task's key or a
+    live edit's, the way :func:`edit_key`'s does.
+    """
+    return content_key({"goal": plan_goal(plan), "nodes": plan_nodes(plan), "shape": "plan"}, bar)
+
+
+def plan_recorded(record: Mapping[str, object]) -> ReviewKey | None:
+    """The digest the project ``record``'s review entry names, or ``None`` for none."""
+    metadata = record.get("metadata")
+    return _recorded_key(metadata) if isinstance(metadata, Mapping) else None
+
+
+def plan_unreviewed(
+    record: Mapping[str, object], plan: object, bar: BarFingerprint | None = None
+) -> bool:
+    """Whether ``plan`` as it stands carries no plan-level record on its project ``record``."""
+    resolved = plan_bar_fingerprint() if bar is None else bar
+    return plan_recorded(record) != plan_key(plan, resolved)
+
+
+def write_plan_record(project: str, key: ReviewKey, by: By) -> Path:
+    """Record ``key`` as ``project``'s reviewed plan, and answer where it was written."""
+    source, native = plan_store.qualified(project)
+    document = plan_store.project_document(source, native)
+    plan_store.write_metadata(
+        document,
+        RECORD_KEY,
+        {"key": key, "reviewed_at": datetime.now(UTC).isoformat(), "by": by.value},
+    )
+    return document
+
+
+def _plan_prompt(plan: object) -> str:
+    """One plan whole, rendered for the plan-level review.
+
+    Every field :func:`plan_key` hashes is rendered here — the goal, and each node's
+    fields and whole task — for the reason `_prompt` gives about the task key: a field
+    whose change invalidates the record but which the reviewer never saw is one nobody
+    reviewed. `tests/test_plan_review.py` holds the two together.
+    """
+    bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
+    goal = plan_goal(plan)
+    sections = []
+    for node in plan_nodes(plan):
+        fields = {field: value for field, value in node.items() if field not in {"task", "steps"}}
+        steps = node["steps"]
+        body = node["task"] if isinstance(node["task"], str) else "(this node states no body prose)"
+        rendered = (
+            f"### Node `{node['id']}`\n\n"
+            f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n{body}"
+        )
+        if isinstance(steps, list):
+            rendered += "\n\n" + "\n\n".join(
+                f"#### Step {position}: {step['id']} (persona: {step['persona']})\n\n"
+                f"{step['task'] or '(this step states no body prose)'}"
+                for position, step in enumerate(steps, start=1)
+            )
+        sections.append(rendered)
+    return (
+        f"{PLAN_REVIEW_PROMPT}\n"
+        f"## The review bar\n\n{bar}\n\n"
+        f"## The plan's goal\n\n{goal if isinstance(goal, str) else json.dumps(goal)}\n\n"
+        f"## What this host installs, and the pin each wheel governs\n\n"
+        f"{host_installs.rendered()}\n{RUNGS}\n\n"
+        f"## Every node of the plan, as its author wrote it\n\n" + "\n\n".join(sections) + "\n"
     )
 
 
@@ -833,7 +1267,8 @@ def review(project: str) -> Reviewed:
     records = plan_store.read_tasks(project)
     bar = bar_fingerprint()
     pending = unreviewed(records, bar)
-    plan_name = plan_store.read_plan(project, records).get("name", project)
+    plan = plan_store.read_plan(project, records)
+    plan_name = plan.get("name", project)
     refused: list[Refusal] = []
     recorded = 0
     for index, task in enumerate(pending):
@@ -857,7 +1292,28 @@ def review(project: str) -> Reviewed:
             )
         if not answered["passes"]:
             refused.append(Refusal(task.node_id, answered["findings"]))
-    return Reviewed(recorded, len(records) - len(pending), refused)
+    held = len(records) - len(pending)
+    if refused:
+        return Reviewed(recorded, held, refused)
+    # The plan-level turn, spent only now: every task carries a record, so what is left
+    # is the one question no task can answer for itself. A plan with a refused task
+    # spends nothing here, because the plan it would be reading whole is one its author
+    # is about to change.
+    try:
+        plan_bar = plan_bar_fingerprint()
+        if not plan_unreviewed(plan_store.project_record(project), plan, plan_bar):
+            return Reviewed(recorded, held, refused, plan=PlanReview.HELD)
+        answered = verdict(_plan_prompt(plan))
+        if answered["passes"]:
+            write_plan_record(project, plan_key(plan, plan_bar), BY_REVIEW)
+            return Reviewed(recorded, held, refused, plan=PlanReview.RECORDED)
+    except OSError as exc:
+        return Reviewed(
+            recorded, held, refused, f"{exc}. The plan-level review was left unrecorded"
+        )
+    return Reviewed(
+        recorded, held, refused, plan=PlanReview.REFUSED, plan_findings=answered["findings"]
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -896,13 +1352,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"review-plan: {findings} criterion(s) across {len(answered.refused)} task(s) "
             f"were refused and nothing was recorded for them; correct every criterion named "
-            f"above in the plan's own task record, then run this command again",
+            f"above in the plan's own task record, then run this command again — the "
+            f"plan-level review is spent only once every task carries a record",
+            file=sys.stderr,
+        )
+        return 1
+    if answered.plan is PlanReview.REFUSED:
+        for finding in answered.plan_findings:
+            print(f"review-plan: {finding['criterion']} — {finding['why']}", file=sys.stderr)
+        print(
+            f"review-plan: the plan as a whole was refused on {len(answered.plan_findings)} "
+            f"finding(s) and no plan-level record was written; every task's own record "
+            f"stands. A finding naming `{THE_PLAN}` is an adoption the plan omits, and one "
+            f"naming a node is that node declaring it wrongly — correct the plan's own "
+            f"records, then run this command again",
             file=sys.stderr,
         )
         return 1
     print(
         f"review-plan: recorded a review of {answered.recorded} task(s); {answered.held} "
-        f"already carried one for their current authored content"
+        f"already carried one for their current authored content; the plan as a whole "
+        + (
+            "was reviewed and recorded on the project"
+            if answered.plan is PlanReview.RECORDED
+            else "already carried a record for its current content"
+        )
     )
     return 0
 
@@ -912,6 +1386,10 @@ class Recorded(NamedTuple):
 
     #: Every task this closeout recorded a planner pass for.
     written: list[QualifiedTaskId]
+    #: Every plan project this closeout recorded a plan-level planner pass for — the
+    #: planner's own judge reviewed the plan whole, so the plan is recorded beside its
+    #: tasks rather than left for `just review-plan` to spend the plan-level turn on.
+    plans: list[str]
     #: One line per plan project the closeout could not record, naming it and why.
     #: Kept rather than raised, because a project it cannot read or write is by
     #: construction one it cannot speak for — see :func:`record_projects_new_since`.
@@ -973,20 +1451,26 @@ def record_projects_new_since(before: Sequence[str]) -> Recorded:
     refuses, and the caller names each one.
     """
     bar = bar_fingerprint()
+    plan_bar = plan_bar_fingerprint()
     known = set(before)
     written: list[QualifiedTaskId] = []
+    plans: list[str] = []
     passed_over: list[str] = []
     for source in PLAN_SOURCES:
         for project in plan_store.local_projects(source):
             if project in known:
                 continue
             try:
-                for task in plan_store.read_tasks(project):
+                tasks = plan_store.read_tasks(project)
+                for task in tasks:
                     write_record(project, task, review_key(task, bar), BY_PLANNING)
                     written.append(task.qualified_id)
+                plan = plan_store.read_plan(project, tasks)
+                write_plan_record(project, plan_key(plan, plan_bar), BY_PLANNING)
+                plans.append(project)
             except OSError as exc:
                 passed_over.append(f"{project}: {exc}")
-    return Recorded(written, passed_over)
+    return Recorded(written, plans, passed_over)
 
 
 # llmlint: ignore[changed_behavior_has_e2e] Reaching a refusal here means handing the
@@ -1056,7 +1540,8 @@ def planning_main(argv: Sequence[str]) -> int:
     for passed_over in recorded.passed_over:
         print(f"plan-review: {passed_over}", file=sys.stderr)
     print(
-        f"plan-review: recorded a planner pass for {len(recorded.written)} task(s)",
+        f"plan-review: recorded a planner pass for {len(recorded.written)} task(s) and "
+        f"for {len(recorded.plans)} plan(s) whole",
         file=sys.stderr,
     )
     if recorded.passed_over:

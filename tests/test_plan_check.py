@@ -44,6 +44,27 @@ def appendix(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monke
     monkeypatch.setattr(criteria_guard, "APPENDIX", written)
 
 
+@pytest.fixture(autouse=True)
+def project_record(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """The project record the store answers for every project here.
+
+    Stood in at the store CLI, which is the one boundary the plan-level record crosses
+    into this module: it starts carrying no record, and `_planned` writes the key for a
+    document into it the way `just review-plan` would. A test about a task's own refusal
+    plans its document first, so the one refusal it reads is the one it is about.
+    """
+    record: dict[str, object] = {"metadata": {}}
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
+    return record
+
+
+def _planned(record: dict[str, object], document: dict[str, object]) -> dict[str, object]:
+    """``document``, once ``record`` carries a plan-level record for exactly it."""
+    key = plan_review.plan_key(document, plan_review.plan_bar_fingerprint())
+    record["metadata"] = {plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}}
+    return document
+
+
 def _task(criteria: str = COMPLETE) -> str:
     return f"## What\n\nAdd it.\n\n## Acceptance criteria\n\n{criteria}\n\n{APPENDIX}"
 
@@ -73,14 +94,90 @@ def _document(*tasks: dict[str, object]) -> dict[str, object]:
     return {"schema_version": 3, "name": "probe", "tasks": list(tasks)}
 
 
-def test_a_reviewed_and_complete_plan_earns_no_refusal() -> None:
-    document = _document(_reviewed(_node()))
+def test_a_reviewed_and_complete_plan_earns_no_refusal(project_record: dict[str, object]) -> None:
+    document = _planned(project_record, _document(_reviewed(_node())))
 
     assert plan_check.refusals(document, "authoring:probe") == []
     assert plan_check.dispatched(document) == 1
 
 
-def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_task() -> None:
+def test_a_plan_every_task_of_which_is_recorded_is_refused_for_want_of_the_plan_level_record(
+    project_record: dict[str, object],
+) -> None:
+    """The one refusal no task's own record answers, against the plan rather than a node.
+
+    Every task carries a record and the project carries none: nothing has read the plan
+    whole for the adoption its goal needs, so the refusal names the plan, the `metadata`
+    field the record lives in, and the command that records one.
+    """
+    document = _document(_reviewed(_node()))
+    assert project_record == {"metadata": {}}
+
+    (refusal,) = plan_check.refusals(document, "authoring:probe")
+
+    assert refusal["node"] is None
+    assert refusal["field"] == "metadata"
+    assert "no plan-level review record" in refusal["reason"]
+    assert "just review-plan authoring:probe" in refusal["reason"]
+
+    # And a record for a *different* plan is no record for this one: the goal moved.
+    _planned(project_record, {**document, "goal": {"text": "Something else"}})
+    (still,) = plan_check.refusals(document, "authoring:probe")
+    assert "no plan-level review record" in still["reason"]
+
+    _planned(project_record, document)
+    assert plan_check.refusals(document, "authoring:probe") == []
+
+
+def test_a_check_handed_no_project_id_refuses_rather_than_passes(
+    monkeypatch: pytest.MonkeyPatch, project_record: dict[str, object]
+) -> None:
+    """The record lives on the project, which the loaded plan does not carry.
+
+    So a check that cannot read it — because nothing named the project — refuses and
+    says why, rather than accepting a plan whose plan-level review it could not see; an
+    accept for want of the check's own environment would be the escape hatch this gate
+    has none of. The store is not asked at all, because there is nothing to ask it by.
+    """
+    document = _planned(project_record, _document(_reviewed(_node())))
+    monkeypatch.setattr(
+        plan_store,
+        "project_record",
+        lambda _project: pytest.fail("the store was asked for a project nothing named"),
+    )
+
+    (refusal,) = plan_check.refusals(document, plan_check.UNNAMED_PROJECT)
+
+    assert refusal["node"] is None
+    assert refusal["field"] == "metadata"
+    assert "for want of a project id" in refusal["reason"]
+    assert plan_check.PROJECT_ENV in refusal["reason"]
+    assert f"just review-plan {plan_check.UNNAMED_PROJECT}" in refusal["reason"]
+
+
+def test_a_project_record_the_store_cannot_answer_is_refused_naming_what_it_said(
+    monkeypatch: pytest.MonkeyPatch, project_record: dict[str, object]
+) -> None:
+    """Refused rather than raised: the store just loaded this plan, so its silence about
+    the project is a fact about the plan-level record and never an accept."""
+    document = _planned(project_record, _document(_reviewed(_node())))
+    monkeypatch.setattr(
+        plan_store,
+        "project_record",
+        lambda _project: (_ for _ in ()).throw(OSError("the store answered nothing")),
+    )
+
+    (refusal,) = plan_check.refusals(document, "authoring:probe")
+
+    assert refusal["node"] is None
+    assert refusal["field"] == "metadata"
+    assert "the store answered nothing" in refusal["reason"]
+    assert "just review-plan authoring:probe" in refusal["reason"]
+
+
+def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_task(
+    project_record: dict[str, object],
+) -> None:
     """A criteria refusal arrives on the `task` field, whatever the criteria did wrong.
 
     Driven over a criterion about somebody else's released artifact because that is a
@@ -89,7 +186,8 @@ def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_
     written over either would be measuring a refusal nothing here can make.
     """
     outside = f"{COMPLETE}\n{RELEASED_ELSEWHERE[0]}"
-    (refusal,) = plan_check.refusals(_document(_reviewed(_node(task=_task(outside)))), "s:p")
+    document = _planned(project_record, _document(_reviewed(_node(task=_task(outside)))))
+    (refusal,) = plan_check.refusals(document, "s:p")
 
     assert refusal["node"] == "route"
     assert refusal["field"] == "task"
@@ -98,16 +196,21 @@ def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_
     assert "the dispatch cannot do" in refusal["reason"]
 
 
-def test_a_node_whose_persona_cannot_resolve_is_refused_against_its_persona() -> None:
+def test_a_node_whose_persona_cannot_resolve_is_refused_against_its_persona(
+    project_record: dict[str, object],
+) -> None:
     node = _reviewed(_node(persona="../../elsewhere.yaml"))
-    (refusal,) = plan_check.refusals(_document(node), "s:p")
+    (refusal,) = plan_check.refusals(_planned(project_record, _document(node)), "s:p")
 
     assert refusal["field"] == "persona"
     assert "outside this checkout" in refusal["reason"]
 
 
-def test_a_task_nothing_has_reviewed_is_refused_and_names_the_command() -> None:
-    (refusal,) = plan_check.refusals(_document(_node()), "authoring:probe")
+def test_a_task_nothing_has_reviewed_is_refused_and_names_the_command(
+    project_record: dict[str, object],
+) -> None:
+    document = _planned(project_record, _document(_node()))
+    (refusal,) = plan_check.refusals(document, "authoring:probe")
 
     assert refusal["node"] == "route"
     assert refusal["field"] == "metadata"
@@ -127,9 +230,13 @@ def test_a_plan_shape_this_check_cannot_walk_is_one_refusal_about_the_plan() -> 
     assert refusal["node"] is None
     assert refusal["field"] is None
     assert "`kind` is 'review'" in refusal["reason"]
-    # The review record is still read: a plan this cannot walk is one whose criteria
-    # nothing has read either, and reporting only the first would hide the second.
-    assert [one["field"] for one in rest] == ["metadata"]
+    # The review records are still read, at both levels: a plan this cannot walk is one
+    # whose criteria nothing has read either, and reporting only the first would hide
+    # the second.
+    assert [(one["node"], one["field"]) for one in rest] == [
+        ("route", "metadata"),
+        (None, "metadata"),
+    ]
     assert plan_check.dispatched(malformed) == 0
 
 
@@ -161,14 +268,24 @@ def test_a_task_record_narrows_every_field_the_document_may_be_missing() -> None
     read = plan_check._task_record({"id": "a", "deps": ["b", 7], "task": "x", "title": "T"})
     assert read.deps == ("b",)
     assert read.content == "x"
+    assert read.repositories == []
+
+    # The document's resolved `repo` is carried as the record's one repository, so the
+    # key's `repo` reads the same value the store path reads off `repositories`.
+    hosted = plan_check._task_record({"id": "a", "repo": "github.com/o/n", "task": "x"})
+    assert plan_review.repository_of(hosted) == "github.com/o/n"
+    assert plan_review.repository_of(plan_check._task_record({"id": "a", "repo": 7})) is None
 
 
 def test_the_check_answers_its_contract_on_stdin(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_record: dict[str, object],
 ) -> None:
     """Stdout carries the whole answer, and nothing else is written anywhere."""
     monkeypatch.setenv(plan_check.PROJECT_ENV, "authoring:probe")
-    monkeypatch.setattr("sys.stdin", _Reader(json.dumps(_document(_reviewed(_node())))))
+    document = _planned(project_record, _document(_reviewed(_node())))
+    monkeypatch.setattr("sys.stdin", _Reader(json.dumps(document)))
 
     assert plan_check.answer_on_stdin() == 0
     read = capsys.readouterr()
@@ -318,18 +435,25 @@ def test_the_command_refuses_an_engine_the_environment_names_but_cannot_run(
 def test_a_project_that_is_not_a_qualified_id_is_not_put_into_a_command_to_run(
     named: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The value reaches a refusal's own prose, so it names a command that could work."""
+    """The value reaches a refusal's own prose, so it names a command that could work.
+
+    Both refusals — the task's, and the plan-level one a check handed no project id
+    makes — name the placeholder, and neither carries the value itself.
+    """
     if named is None:
         monkeypatch.delenv(plan_check.PROJECT_ENV, raising=False)
     else:
         monkeypatch.setenv(plan_check.PROJECT_ENV, named)
 
-    (refusal,) = plan_check.refusals(
+    task, whole = plan_check.refusals(
         _document(_node()), plan_check._named_project(os.environ.get(plan_check.PROJECT_ENV))
     )
 
-    assert plan_check.UNNAMED_PROJECT in refusal["reason"]
-    assert "not-qualified" not in refusal["reason"]
+    assert task["node"] == "route"
+    assert whole["node"] is None
+    for refusal in (task, whole):
+        assert plan_check.UNNAMED_PROJECT in refusal["reason"]
+        assert "not-qualified" not in refusal["reason"]
 
 
 def test_the_engine_is_taken_from_the_environment_before_the_search_path(

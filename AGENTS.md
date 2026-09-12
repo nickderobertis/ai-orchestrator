@@ -871,6 +871,10 @@ the record while a settlement write-back does not. Three questions are the revie
 rather than a matcher's: whether a number is the right number, whether the criteria
 answer a demand their bar or their `## Additional info` makes, judged by meaning, and
 whether a node whose criteria change no repository file declares `expects_no_diff`.
+It also spends one plan-level turn on release adoption — whether a plan whose goal needs
+a producer's change in force on this host carries a node of this repository adopting the
+release, on the right pin, naming no version — once every task carries a record, and
+records that pass on the project rather than on any task.
 `just plan`'s own closeout records what its planner authored, so a planner-written plan
 you did not touch costs nothing; the approval is not a second opinion on the plan, and
 every launch is refused without it save the bounded planning exemption above.

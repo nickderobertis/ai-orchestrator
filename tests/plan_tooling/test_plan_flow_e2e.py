@@ -66,7 +66,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
-from nx_workspace import copy_working_tree
+from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
@@ -1074,6 +1074,9 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     copy_working_tree(checkout)
+    # The review's records are keyed under a bar naming this host's own repository,
+    # read off the checkout's `origin`; the copy answers this checkout's.
+    answering_this_checkouts_origin(checkout)
     board = tmp_path / "board"
     # Created rather than left to the first write, for the reason the sibling fixture's
     # is: a `local-md` source canonicalizes its root when it is built.
