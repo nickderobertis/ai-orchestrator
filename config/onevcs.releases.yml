@@ -1,0 +1,55 @@
+# How a node of this host waits on another repository's release, and for which artifact.
+#
+# `onevcs` reads this file from `$ONEVCS_HOME/releases.yml` (`~/.onevcs/releases.yml`
+# by default); `just repos-apply` installs this tracked copy there beside the rules
+# file. Editing *this* file and re-running that recipe is how release adoption changes:
+# no command writes this document, and `onevcs release targets <repo>` reports what one
+# repository resolves out of it.
+#
+# A node adopts a dependency `fast` (against its branch, as soon as the change lands)
+# or `published` (once the release carrying it exists), decided by the node's own
+# `adoption`, then its repository's rule below, then `default:`, then `fast`.
+#
+#   - `default: adoption: fast` is what `onevcs` answers with no file at all, so a plan
+#     against a repository this file does not name runs as it always did.
+#
+#   - `ai-orchestrator` is `published`, and not as a preference: this identity
+#     publishes `local-direct`, and a `fast` node behind an unreleased producer is
+#     published as a draft carrying the pin it launched against — which `local-direct`
+#     refuses by name, since it opens no change request and would land the pin the
+#     draft exists to hold back. So a `fast` node of this repository behind a release
+#     could never land; a `published` one waits, then lands the released version.
+#
+#   - Every other rule names a producer this host installs and says which of its
+#     targets a consumer naming no `consumes` gets: `default_target` is the wheel this
+#     host installs, spelled as that producer's own `release-targets.toml` names it.
+#     `declaration: merge` keeps the producer's declaration as the source of its
+#     targets, and no rule carries `targets:` of its own, because a target restated
+#     here replaces the producer's whole and stops matching it the day it moves.
+version: 1
+default:
+  adoption: fast
+repositories:
+  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
+    adoption: published
+  - match: {host: github.com, owner: nickderobertis, name: onepipeline}
+    declaration: merge
+    default_target: pypi
+  - match: {host: github.com, owner: nickderobertis, name: onevcs}
+    declaration: merge
+    default_target: pypi
+  - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
+    declaration: merge
+    default_target: pypi
+  - match: {host: github.com, owner: nickderobertis, name: onejudge}
+    declaration: merge
+    default_target: cli
+  - match: {host: github.com, owner: nickderobertis, name: oneharness}
+    declaration: merge
+    default_target: cli-wheel
+  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
+    declaration: merge
+    default_target: pypi
+  - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
+    declaration: merge
+    default_target: pypi-cli

@@ -1,0 +1,31 @@
+# A stand-in for the release-targets.toml github.com/nickderobertis/onepipeline-ui declares at its
+# base, carrying its target ids and names and nothing a probe would run: what a scratch
+# producer identity in a journey of scripts/apply-repo-registry.sh declares. Its target
+# ids and names are held whole to the producer's own declaration, in
+# tests/test_host_installs.py's reads_checkouts tier.
+schema_version = 1
+probe = "scripts/release-probe.sh"
+
+[[target]]
+id = "crate:onepipeline-ui"
+name = "crate"
+what = "The crate target of onepipeline-ui, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "pypi:onepipeline-api-cli"
+name = "pypi-cli"
+what = "The pypi-cli target of onepipeline-ui, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "npm:onepipeline-api-cli"
+name = "npm-cli"
+what = "The npm-cli target of onepipeline-ui, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "npm:onepipeline-ui"
+name = "npm-ui"
+what = "The npm-ui target of onepipeline-ui, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."

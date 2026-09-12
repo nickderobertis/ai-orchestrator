@@ -22,7 +22,8 @@ links 0.19.3 — and every other live dispatch on the host does too. A check may
 the thing that decides that for the host.
 
 `snapshot()` is the answer: a per-process copy of the parts of the root a read needs —
-the registry, the rules file, and the release records — under a scratch directory, and
+the registry, the rules file, the release override, and the release records — under a
+scratch directory, and
 `ONEVCS_HOME` exported to it for the whole process so every subprocess a test spawns
 reads the copy. A test that sets its own `ONEVCS_HOME` is untouched, since it overrides
 this one in the environment it composes; a test that redirects `HOME` to sandbox a
@@ -47,9 +48,12 @@ from pathlib import Path
 ONEVCS_HOME = "ONEVCS_HOME"
 
 #: What a read of the root needs, and all that is copied. `releases` is a directory
-#: of per-identity release records; the other two are files. A member absent on the
-#: host is absent in the copy, which is the same answer.
-COPIED = ("registry.json", "rules.yml", "releases")
+#: of per-identity release records; the other three are files, and `releases.yml` is
+#: the override `just repos-apply` installs from `config/onevcs.releases.yml` — left
+#: out, every `release targets` read here would answer the global rung and no default
+#: target for a host that had configured both. A member absent on the host is absent
+#: in the copy, which is the same answer.
+COPIED = ("registry.json", "rules.yml", "releases.yml", "releases")
 
 #: The root this process was started under, recorded by the first `snapshot()` so a
 #: check can compare the copy against it without asking `onevcs` — which would be the

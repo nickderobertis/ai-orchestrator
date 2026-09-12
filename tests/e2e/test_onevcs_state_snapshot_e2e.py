@@ -138,6 +138,17 @@ def test_every_process_of_this_suite_reads_a_copy_of_the_hosts_root() -> None:
         "the copy holds different identities from the host, so a check asking it which "
         "repositories are registered here is asking about some other host"
     )
+    # The release override is part of what a read answers from: with it missing from the
+    # copy, every `release targets` read here would report the global rung and no
+    # default target for a host `just repos-apply` had configured with both.
+    if (host / "releases.yml").is_file():
+        assert (copy / "releases.yml").read_bytes() == (host / "releases.yml").read_bytes(), (
+            "the host holds a release override the copy does not carry byte for byte, so "
+            "a check asking what a producer's default target is would answer for a host "
+            "without one"
+        )
+    else:
+        assert not (copy / "releases.yml").exists()
     assert not (copy / "sessions").exists(), (
         "the copy carries the host's session records, which are live claims about "
         "dispatches somebody else is driving"

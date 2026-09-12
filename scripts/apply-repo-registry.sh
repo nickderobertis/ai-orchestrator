@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # Bring this host's `onevcs` registry up to the tracked repository configuration.
 #
-# Two tracked files describe it: `config/onevcs.checkouts` lists every checkout to
-# register, and `config/onevcs.rules.yml` is the rules file that decides how each
-# resulting identity publishes and what verifies it. This script installs the
-# second and registers the first, then proves that every registered checkout
-# resolves to a rule rather than falling through to the reviewed default.
+# Three tracked files describe it: `config/onevcs.checkouts` lists every checkout to
+# register, `config/onevcs.rules.yml` is the rules file that decides how each
+# resulting identity publishes and what verifies it, and `config/onevcs.releases.yml`
+# is the release override that decides which rung a node of each repository adopts a
+# dependency's release on and which of a producer's targets a consumer naming none
+# waits for. This script installs the second and third and registers the first, then
+# proves that every registered checkout resolves to a rule rather than falling
+# through to the reviewed default, and reports what each producer this host installs
+# resolves out of the override.
 #
 # It is the reproducible form of the migration off the pre-adoption
 # `~/.ai-orchestrator/repos.json` registry, and it is re-runnable: registration is
-# keyed by alias and the rules file is a whole-file replacement, so a second run
-# leaves the same registry a first one did. Run it after editing either tracked
-# file, and on a new host after cloning the checkouts.
+# keyed by alias and each installed file is a whole-file replacement, so a second run
+# leaves the same registry a first one did. Run it after editing any tracked file,
+# and on a new host after cloning the checkouts.
 #
 # Registration goes through `onevcs register`, never through the registry document
 # itself: what that command writes is what `onevcs` considers valid, and a document
@@ -44,15 +48,17 @@ valid_alias() {
 
 checkouts_file="$repo_root/config/onevcs.checkouts"
 rules_file="$repo_root/config/onevcs.rules.yml"
+releases_file="$repo_root/config/onevcs.releases.yml"
 dry_run=false
 
 usage() {
     cat >&2 <<'USAGE'
-usage: apply-repo-registry.sh [--dry-run] [--checkouts FILE] [--rules FILE]
+usage: apply-repo-registry.sh [--dry-run] [--checkouts FILE] [--rules FILE] [--releases FILE]
 
   --dry-run        Report what would change and change nothing.
   --checkouts FILE Read the checkout list from FILE (default config/onevcs.checkouts).
   --rules FILE     Install FILE as the rules file (default config/onevcs.rules.yml).
+  --releases FILE  Install FILE as the release override (default config/onevcs.releases.yml).
 
 The registry it writes is `$ONEVCS_HOME` (`~/.onevcs` when that is unset).
 USAGE
@@ -63,12 +69,13 @@ while [[ $# -gt 0 ]]; do
         --dry-run) dry_run=true; shift ;;
         --checkouts) [[ $# -ge 2 ]] || { usage; exit 2; }; checkouts_file=$2; shift 2 ;;
         --rules) [[ $# -ge 2 ]] || { usage; exit 2; }; rules_file=$2; shift 2 ;;
+        --releases) [[ $# -ge 2 ]] || { usage; exit 2; }; releases_file=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "apply-repo-registry: unknown argument '$1'" >&2; usage; exit 2 ;;
     esac
 done
 
-for file in "$checkouts_file" "$rules_file"; do
+for file in "$checkouts_file" "$rules_file" "$releases_file"; do
     if [[ ! -f $file ]]; then
         echo "apply-repo-registry: $file does not exist" >&2
         exit 2
@@ -102,6 +109,26 @@ fi
 
 registry_document="$onevcs_home/registry.json"
 installed_rules="$onevcs_home/rules.yml"
+installed_releases="$onevcs_home/releases.yml"
+
+# The same `uv run` the `onevcs` recipes reach the CLI through, for the one verb no
+# recipe wraps: `release targets` is a read, and what it answers here is the product.
+repo_onevcs() {
+    uv run --project "$repo_root" onevcs "$@"
+}
+
+# Whether the file already installed at $2 is byte-identical to the candidate at $1:
+# `true`, `false`, or a failed comparison, which ends the run rather than guessing.
+unchanged_install() {
+    [[ -f $2 ]] || { echo false; return 0; }
+    cmp_status=0
+    cmp -s -- "$1" "$2" || cmp_status=$?
+    case $cmp_status in
+        0) echo true ;;
+        1) echo false ;;
+        *) echo "apply-repo-registry: comparing $1 with $2 failed" >&2; exit 1 ;;
+    esac
+}
 
 # A registry that names its own rules file elsewhere would ignore the one installed
 # below, so the policy an operator reads here and the policy a publication resolves
@@ -129,16 +156,8 @@ fi
 
 echo "apply-repo-registry: registry $onevcs_home"
 
-rules_unchanged=false
-if [[ -f $installed_rules ]]; then
-    cmp_status=0
-    cmp -s -- "$rules_file" "$installed_rules" || cmp_status=$?
-    case $cmp_status in
-        0) rules_unchanged=true ;;
-        1) ;;
-        *) echo "apply-repo-registry: comparing $rules_file with $installed_rules failed" >&2; exit 1 ;;
-    esac
-fi
+rules_unchanged=$(unchanged_install "$rules_file" "$installed_rules")
+releases_unchanged=$(unchanged_install "$releases_file" "$installed_releases")
 
 present=0
 skipped=0
@@ -194,26 +213,38 @@ cleanup_validation() {
     fi
 }
 trap cleanup_validation EXIT
-validation_path=$first_path
-if [[ -z $validation_path ]]; then
-    validation_path="$validation_home/checkout"
-    if ! mkdir "$validation_path" || \
-        ! git -C "$validation_path" init -q -b main || \
-        ! git -C "$validation_path" remote add origin https://github.com/validation/registry-rules.git; then
-        echo "apply-repo-registry: could not prepare a checkout for rules validation" >&2
+validation_register() {
+    if ! registration=$(ONEVCS_HOME=$validation_home repo_recipe register-repo "$1" 2>&1); then
+        echo "$registration" >&2
+        echo "apply-repo-registry: could not prepare rules validation with $1" >&2
         exit 1
     fi
-fi
-if ! validation_registration=$(ONEVCS_HOME=$validation_home repo_recipe register-repo "$validation_path" 2>&1); then
-    echo "$validation_registration" >&2
-    echo "apply-repo-registry: could not prepare rules validation with $validation_path" >&2
+    registered_alias=$(awk '/^ *alias: /{print $2; exit}' <<<"$registration")
+    if ! valid_alias "$registered_alias"; then
+        echo "$registration" >&2
+        echo "apply-repo-registry: rules validation registration named no alias" >&2
+        exit 1
+    fi
+    echo "$registered_alias"
+}
+# A checkout of a repository no rule and no override names, for the validation that
+# has to be about the file alone. The override is validated against it rather than
+# against a real checkout, because `release targets` also refuses a `default_target`
+# the producer's declaration cannot be read to carry — a fact about that checkout's
+# momentary state, which the table below reports per producer, not about the file.
+# Its directory name is the alias `onevcs` derives, so it is one no listed checkout
+# shares: a second registration under one alias replaces the first.
+synthetic_path="$validation_home/apply-repo-registry-validation"
+if ! mkdir "$synthetic_path" || \
+    ! git -C "$synthetic_path" init -q -b main || \
+    ! git -C "$synthetic_path" remote add origin https://github.com/validation/registry-rules.git; then
+    echo "apply-repo-registry: could not prepare a checkout for rules validation" >&2
     exit 1
 fi
-validation_alias=$(awk '/^ *alias: /{print $2; exit}' <<<"$validation_registration")
-if ! valid_alias "$validation_alias"; then
-    echo "$validation_registration" >&2
-    echo "apply-repo-registry: rules validation registration named no alias" >&2
-    exit 1
+synthetic_alias=$(validation_register "$synthetic_path")
+validation_alias=$synthetic_alias
+if [[ -n $first_path ]]; then
+    validation_alias=$(validation_register "$first_path")
 fi
 if ! cp -- "$rules_file" "$validation_home/rules.yml"; then
     echo "apply-repo-registry: could not stage $rules_file for validation" >&2
@@ -222,6 +253,19 @@ fi
 if ! validation=$(ONEVCS_HOME=$validation_home repo_recipe repo-policy "$validation_alias" 2>&1); then
     echo "$validation" >&2
     echo "apply-repo-registry: $rules_file is not a valid onevcs rules file" >&2
+    exit 1
+fi
+# The override is validated in the same scratch home, through the one verb that loads
+# it: `release targets` refuses a malformed document by name, and a rule matching
+# nothing — every rule, against the synthetic identity — is fine.
+if ! cp -- "$releases_file" "$validation_home/releases.yml"; then
+    echo "apply-repo-registry: could not stage $releases_file for validation" >&2
+    exit 1
+fi
+# llmlint: ignore[boundary_inputs_validated] A producer rule's `default_target` cannot be validated against the file alone: `onevcs` refuses it only against a registered checkout whose base declares the targets, which is that checkout's momentary state on a host several managers share, not a property of the candidate. The per-producer readback after the install is where that answer is read, for every installed producer at once.
+if ! validation=$(ONEVCS_HOME=$validation_home repo_onevcs release targets "$synthetic_alias" 2>&1); then
+    echo "$validation" >&2
+    echo "apply-repo-registry: $releases_file is not a valid onevcs release override" >&2
     exit 1
 fi
 if ! rm -rf -- "$validation_home"; then
@@ -236,26 +280,43 @@ if [[ $dry_run == true ]]; then
     else
         echo "  rules      would install  $installed_rules"
     fi
+    if [[ $releases_unchanged == true ]]; then
+        echo "  releases   unchanged  $installed_releases"
+    else
+        echo "  releases   would install  $installed_releases"
+    fi
     echo "apply-repo-registry: dry run — ${present} checkout(s) would be registered, ${skipped} skipped"
     exit 0
 fi
 
-if [[ $rules_unchanged == true ]]; then
-    echo "  rules      unchanged  $installed_rules"
-else
+# Replace the installed copy at $2 with the candidate at $1 in one rename, so a copy
+# that fails part-way leaves the previous install intact rather than truncated.
+install_whole() {
     if ! mkdir -p "$onevcs_home"; then
         echo "apply-repo-registry: could not create $onevcs_home" >&2
         exit 1
     fi
-    staged_rules="$onevcs_home/.rules.yml.$$"
-    if ! cp -- "$rules_file" "$staged_rules" || ! mv -f -- "$staged_rules" "$installed_rules"; then
-        if [[ -e $staged_rules ]] && ! rm -f -- "$staged_rules"; then
-            echo "apply-repo-registry: could not remove incomplete $staged_rules" >&2
+    staged="$onevcs_home/.$(basename -- "$2").$$"
+    if ! cp -- "$1" "$staged" || ! mv -f -- "$staged" "$2"; then
+        if [[ -e $staged ]] && ! rm -f -- "$staged"; then
+            echo "apply-repo-registry: could not remove incomplete $staged" >&2
         fi
-        echo "apply-repo-registry: could not atomically install $installed_rules" >&2
+        echo "apply-repo-registry: could not atomically install $2" >&2
         exit 1
     fi
+}
+
+if [[ $rules_unchanged == true ]]; then
+    echo "  rules      unchanged  $installed_rules"
+else
+    install_whole "$rules_file" "$installed_rules"
     echo "  rules      installed  $installed_rules"
+fi
+if [[ $releases_unchanged == true ]]; then
+    echo "  releases   unchanged  $installed_releases"
+else
+    install_whole "$releases_file" "$installed_releases"
+    echo "  releases   installed  $installed_releases"
 fi
 
 # One reported field of `onevcs rules check`, without the `(from rule 1)` provenance
@@ -302,5 +363,48 @@ if [[ ${#unmatched[@]} -gt 0 ]]; then
     echo "  Add a rule naming its host, owner, and name, then re-run." >&2
     exit 1
 fi
+
+# What a consumer naming no `consumes` will get from each producer this host installs,
+# read back out of the override just installed through the verb a dispatch resolves it
+# with. `orchestrator/host_installs.py` is the one source of which producers those are.
+# A producer this registry does not hold, or whose checkout cannot be read at its base
+# right now, is reported rather than failed: neither is a fault in the override, and
+# an operator reading this table is told which line to act on.
+if ! producers=$(uv run --project "$repo_root" python -c '
+from orchestrator.host_installs import INSTALLED
+for row in INSTALLED:
+    print(row.producer)
+'); then
+    echo "apply-repo-registry: could not read which producers this host installs" >&2
+    exit 1
+fi
+# One reported field of `onevcs release targets`, whose keys can be two words —
+# `default target: pypi` — so `field` above, which reads the first word, cannot.
+release_field() {
+    sed -n "s/^$1: //p" <<<"$2" | head -n 1
+}
+echo "apply-repo-registry: release adoption"
+while IFS= read -r producer; do
+    [[ -n $producer ]] || continue
+    if resolved=$(repo_onevcs release targets "$producer" 2>&1); then
+        default_target=$(release_field "default target" "$resolved")
+        adoption=$(release_field adoption "$resolved")
+        # A resolved answer is one rung of the two `onevcs` knows and one target name,
+        # `none` where the override names no default: a read missing either is not an
+        # answer to print as one.
+        if [[ ! $adoption =~ ^(fast|published)$ || ! $default_target =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "$resolved" >&2
+            echo "apply-repo-registry: release targets output for $producer is incomplete or invalid" >&2
+            exit 1
+        fi
+        printf '  %-44s default target %-12s adoption %s\n' \
+            "$producer" "$default_target" "$adoption"
+    elif [[ $resolved == *"is not a registered repository"* ]]; then
+        printf '  %-44s not registered here\n' "$producer"
+    else
+        reason=${resolved#onevcs: }
+        printf '  %-44s unresolved: %s\n' "$producer" "${reason//$'\n'/ }"
+    fi
+done <<<"$producers"
 
 echo "apply-repo-registry: ${present} checkout(s) registered, ${skipped} skipped, every one matched a rule"

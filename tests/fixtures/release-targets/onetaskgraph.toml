@@ -1,0 +1,37 @@
+# A stand-in for the release-targets.toml github.com/nickderobertis/onetaskgraph declares at its
+# base, carrying its target ids and names and nothing a probe would run: what a scratch
+# producer identity in a journey of scripts/apply-repo-registry.sh declares. Its target
+# ids and names are held whole to the producer's own declaration, in
+# tests/test_host_installs.py's reads_checkouts tier.
+schema_version = 1
+probe = "scripts/release-probe.sh"
+
+[[target]]
+id = "crate:onetaskgraph"
+name = "crate"
+what = "The crate target of onetaskgraph, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "pypi:onetaskgraph-cli"
+name = "pypi"
+what = "The pypi target of onetaskgraph, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "pypi:onetaskgraph-sdk"
+name = "sdk-pypi"
+what = "The sdk-pypi target of onetaskgraph, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "npm:@onetaskgraph/cli"
+name = "npm"
+what = "The npm target of onetaskgraph, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "npm:@onetaskgraph/sdk"
+name = "sdk-npm"
+what = "The sdk-npm target of onetaskgraph, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."

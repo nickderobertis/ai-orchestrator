@@ -17,6 +17,13 @@ of the YAML.
 llmlint: ignore-file[e2e_not_mocked] The scratch checkouts stand in for this host's
 own clones, which a test may not register or publish from; the recipe, the script,
 `onevcs`, and git are all real, and the policy asserted is the one `onevcs` resolved.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] This module is the one journey of `just
+repos-apply`, and every journey of that recipe lives here — the ones this change adds
+beside the ones the migration wrote — so they select the same tier and read the same
+key. Moving the recipe's journeys to a project of their own is a change to `nx.json`,
+`orchestrator/project.json` and `tests/nx_inputs.py` together, for every one of them at
+once, and is not one more journey's to make.
 """
 
 from __future__ import annotations
@@ -24,13 +31,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
-from typing import Literal, NamedTuple, TypedDict
+from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
 
 import pytest
 from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
+from scratch_identity import seeded
 
+from orchestrator.host_installs import INSTALLED, Installed
 from orchestrator.root import REPO_ROOT
 
 #: The registry this host ran on before `onevcs` owned one, verbatim.
@@ -39,6 +49,25 @@ GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
 #: publication path — and, since onevcs 0.11.0, nothing else. It names no verifier,
 #: because this host runs none.
 TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
+
+#: The tracked release override the recipe installs beside the rules file, which
+#: decides the rung a node of each repository adopts a dependency's release on and
+#: which of a producer's targets a consumer naming none waits for.
+TRACKED_RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
+#: One stand-in `release-targets.toml` per producer this host installs, carrying the
+#: target ids and names the producer's own declaration carries — read from here rather
+#: than from this host's producer checkouts, which a test may not depend on the state
+#: of. `tests/test_host_installs.py`'s `reads_checkouts` tier holds the rows to the real
+#: declarations; this directory holds what a journey registers.
+RELEASE_DECLARATIONS = REPO_ROOT / "tests" / "fixtures" / "release-targets"
+#: The identity `config/onevcs.releases.yml` gives the one non-default rung, and the
+#: rung: a node of this repository waits for a producer's release rather than adopting
+#: its branch.
+THIS_REPOSITORY: RepoIdentity = "github.com/nickderobertis/ai-orchestrator"
+THIS_REPOSITORY_RUNG = "published"
+#: The rung every producer resolves — the global one, because the override names none
+#: for them — and what `onevcs` answers for a repository the override never mentions.
+GLOBAL_RUNG = "fast"
 
 #: The schema this host's rules file declares. At 3 a `gate:` anywhere is refused by
 #: `deny_unknown_fields`; at 1 and 2 it is accepted, ignored, and reported once. Both
@@ -167,6 +196,22 @@ def checkout(directory: Path, origin: str) -> Path:
     return directory
 
 
+def declaring_checkout(directory: Path, origin: str, declaration: Path) -> Path:
+    """A checkout of `origin` whose base carries `declaration` as its `release-targets.toml`.
+
+    Committed on `main` rather than left in the working tree, because `onevcs` reads a
+    producer's declaration at the publication checkout's base and nowhere else.
+    """
+    directory = checkout(directory, origin)
+    shutil.copyfile(declaration, directory / "release-targets.toml")
+    committer = ["-c", "user.email=t@example.com", "-c", "user.name=Test"]
+    subprocess.run(["git", "add", "-A"], cwd=directory, check=True)
+    subprocess.run(
+        ["git", *committer, "commit", "-qm", "chore: declare"], cwd=directory, check=True
+    )
+    return directory
+
+
 def apply_registry(manifest: Path, home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     """Run the real recipe against a scratch registry root."""
     return subprocess.run(
@@ -290,6 +335,265 @@ def test_apply_reports_the_resolved_policy_table(applied: Applied) -> None:
     assert "local-direct" in applied.result.stdout
     assert "org-apps" in applied.result.stdout
     assert "change-open" in applied.result.stdout
+
+
+def test_apply_installs_the_tracked_release_override_and_says_so(applied: Applied) -> None:
+    """The third tracked file, installed whole beside the rules file and reported."""
+    installed = applied.home / "releases.yml"
+    assert installed.read_bytes() == TRACKED_RELEASES.read_bytes()
+    assert f"releases   installed  {installed}" in applied.result.stdout
+
+
+class Producers(NamedTuple):
+    """A scratch registry holding one declaring checkout per producer this host installs."""
+
+    home: Path
+    result: subprocess.CompletedProcess[str]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Eight `git init`s and
+# one registry apply — the cost class of the `applied` and `ruled` fixtures above, which
+# register thirteen and twenty-five — in the module every journey of this recipe lives
+# in; the project edge those would all sit behind is the module docstring's follow-up.
+# Block-scoped because the rule reads the fixture's body, not its decorator line.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The edge this fixture
+# would sit behind is the one the module docstring's `shell_test_tiers_stay_split` note
+# defers: a project of this recipe's own is a change to `nx.json`,
+# `orchestrator/project.json` and `tests/nx_inputs.py` for all three module fixtures and
+# every journey here at once, and one more fixture of the same cost class in the same
+# module is not the change that makes it.
+@pytest.fixture(scope="module")
+def producers(tmp_path_factory: pytest.TempPathFactory) -> Producers:
+    """Every producer identity, declaring what the real one declares, plus this repository.
+
+    Registered from checkouts whose base carries a stand-in declaration, because what
+    `onevcs release targets` answers for a `default_target` depends on the producer
+    declaring that target: a producer whose declaration cannot be read is *refused*
+    for naming one, not answered without it, so a registry of empty checkouts would
+    prove nothing about the override.
+    """
+    root = tmp_path_factory.mktemp("producers")
+    paths = [
+        declaring_checkout(
+            root / "checkouts" / row.producer.rpartition("/")[2],
+            f"https://{row.producer}.git",
+            RELEASE_DECLARATIONS / f"{row.producer.rpartition('/')[2]}.toml",
+        )
+        for row in INSTALLED
+    ]
+    paths.append(checkout(root / "checkouts" / "ai-orchestrator", f"https://{THIS_REPOSITORY}.git"))
+    manifest = root / "checkouts.list"
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    home = root / "onevcs"
+    result = apply_registry(manifest, home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return Producers(home=home, result=result)
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+class Probe(TypedDict):
+    """A declared target's probe: the declaration's script, given the target's id."""
+
+    script: str
+    args: list[str]
+
+
+class Target(TypedDict):
+    name: str
+    style: str
+    probe: Probe
+
+
+class ReleaseTargets(TypedDict):
+    """The `onevcs release targets --json` answer, as far as these journeys read it.
+
+    `default_target` is present only where the override resolves one, which is itself
+    asserted on: a repository the override gives no default must answer without the key.
+    """
+
+    identity: str
+    adoption: str
+    default_target: NotRequired[str]
+    targets: list[Target]
+
+
+def release_targets(home: Path, identity: str) -> ReleaseTargets:
+    """What `onevcs release targets --json` answers for ``identity`` under ``home``.
+
+    Cast rather than validated, because the installed `onevcs`'s own answer is the
+    subject: a response that lost one of these keys fails the journey as the drift it
+    is, with the read naming the key.
+    """
+    asked = onevcs(home, "release", "targets", identity, "--json")
+    assert asked.returncode == 0, asked.stdout + asked.stderr
+    return cast(ReleaseTargets, json.loads(asked.stdout))
+
+
+@pytest.mark.parametrize("row", INSTALLED, ids=lambda row: row.producer)
+def test_each_producer_resolves_the_wheel_this_host_installs_as_its_default(
+    producers: Producers, row: Installed
+) -> None:
+    """The override's answer per producer, read through the verb a dispatch resolves it with.
+
+    Three things per row: the default target is the row's, it is a target the
+    declaration carries under the row's artifact id, and the producer sits on the
+    global rung — the override names no rung for a producer, so one resolving anything
+    else has been given a rule this file does not state.
+    """
+    answer = release_targets(producers.home, row.producer)
+    assert answer["default_target"] == row.target, answer
+    assert answer["adoption"] == GLOBAL_RUNG, answer
+    declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
+    assert declared[row.target] == row.artifact, declared
+
+
+def test_this_repository_resolves_the_published_rung(producers: Producers) -> None:
+    """A node of this repository waits for a producer's release, by the override alone.
+
+    It declares nothing and names no default target — only the rung, because its
+    `local-direct` policy refuses the draft a `fast` node behind a release would open.
+    """
+    answer = release_targets(producers.home, THIS_REPOSITORY)
+    assert answer["adoption"] == THIS_REPOSITORY_RUNG, answer
+    assert "default_target" not in answer, answer
+    assert answer["targets"] == [], answer
+
+
+def test_apply_reports_what_each_installed_producer_resolves(producers: Producers) -> None:
+    """Below the policy table, one line per producer this host installs, as read back.
+
+    An operator applying the configuration reads what a consumer will get from it, and
+    the lines are read back through `onevcs release targets` rather than composed from
+    the file, so a producer the override describes wrongly reads wrongly here.
+    """
+    stdout = producers.result.stdout
+    table = stdout.index("apply-repo-registry: release adoption")
+    assert table > stdout.index("apply-repo-registry: resolved policy")
+    reported = stdout[table:]
+    for row in INSTALLED:
+        line = next(line for line in reported.splitlines() if row.producer in line)
+        assert re.search(rf"default target {re.escape(row.target)}\s", line), line
+        assert line.rstrip().endswith(f"adoption {GLOBAL_RUNG}"), line
+
+
+def test_a_producer_this_registry_does_not_hold_is_reported_not_failed(
+    applied: Applied,
+) -> None:
+    """A host holding a subset of the producers reads which ones it lacks.
+
+    The `applied` registry holds the pre-adoption checkouts, none of which carries a
+    declaration and one of which — `onetaskgraph` — is not among them at all, so the
+    table below the policy one names each line's state rather than the apply failing
+    for a checkout's momentary shape: an unregistered producer as not registered, and a
+    registered one whose base declares nothing as unresolved with `onevcs`'s own reason.
+    """
+    reported = applied.result.stdout[applied.result.stdout.index("release adoption") :]
+    assert re.search(r"github\.com/nickderobertis/onetaskgraph\s+not registered here", reported)
+    assert re.search(r"github\.com/nickderobertis/onepipeline\s+unresolved: ", reported)
+    assert applied.result.returncode == 0
+
+
+def test_a_scratch_identity_seeds_beside_the_override_untouched_by_it(tmp_path: Path) -> None:
+    """`tests/e2e/scratch_identity.py` registers through the same recipe, and still does.
+
+    Every journey that publishes into a seeded identity registers it this way, so the
+    override installed beside its rules has to leave a path identity exactly as it was:
+    no rule matches it, so it resolves the global rung, no default target, no targets.
+    """
+    identity = seeded(tmp_path)
+
+    assert (identity.home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
+    answer = release_targets(identity.home, str(identity.publication))
+    assert answer["adoption"] == GLOBAL_RUNG, answer
+    assert "default_target" not in answer, answer
+    assert answer["targets"] == [], answer
+
+
+def test_a_different_release_override_is_installed_in_place_of_the_tracked_one(
+    tmp_path: Path,
+) -> None:
+    """`--releases FILE` installs FILE, observed as the installed bytes becoming its own."""
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.yml"
+    candidate.write_text(
+        "version: 1\ndefault:\n  adoption: published\nrepositories: []\n", encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    result = apply_registry(manifest, home, "--releases", str(candidate))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / "releases.yml").read_bytes() == candidate.read_bytes()
+    assert (home / "releases.yml").read_bytes() != TRACKED_RELEASES.read_bytes()
+    answer = release_targets(home, "github.com/nickderobertis/onevcs")
+    assert answer["adoption"] == "published", answer
+
+
+#: A release override the adopted `onevcs` loads, standing in for whatever a host
+#: already has installed when a replacement is refused or fails.
+INSTALLED_RELEASES = "version: 1\ndefault:\n  adoption: fast\nrepositories: []\n"
+
+
+def test_an_override_onevcs_refuses_leaves_the_installed_one_intact(tmp_path: Path) -> None:
+    """A candidate `onevcs` cannot load is refused by name, and replaces nothing.
+
+    Validated in the scratch home the rules already are, through `release targets` —
+    the one verb that loads the document — so a malformed rung or a `default_target`
+    naming no target is refused before the live copy is touched.
+    """
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "rules.yml").write_text(INSTALLED_RULES, encoding="utf-8")
+    installed = home / "releases.yml"
+    installed.write_text(INSTALLED_RELEASES, encoding="utf-8")
+    invalid = tmp_path / "invalid.yml"
+    invalid.write_text(
+        "version: 1\ndefault:\n  adoption: bogus\nrepositories: []\n", encoding="utf-8"
+    )
+
+    result = apply_registry(manifest, home, "--releases", str(invalid))
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"{invalid} is not a valid onevcs release override" in result.stderr
+    assert "unknown variant `bogus`" in result.stderr, result.stderr
+    assert installed.read_text(encoding="utf-8") == INSTALLED_RELEASES
+    assert "releases   installed" not in result.stdout
+
+
+def test_a_replacement_that_fails_after_validation_leaves_the_installed_copy_intact(
+    tmp_path: Path,
+) -> None:
+    """The install is a rename of a staged copy, so a failure part-way truncates nothing.
+
+    The destination is made unwritable after the candidate has been validated — the
+    registry root itself, since the staged copy and the rename both live in it — and
+    what is asserted is the previous install byte for byte, not merely present.
+    """
+    manifest = tmp_path / "checkouts"
+    manifest.write_text("", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    shutil.copyfile(TRACKED_RULES, home / "rules.yml")
+    installed = home / "releases.yml"
+    installed.write_text(INSTALLED_RELEASES, encoding="utf-8")
+    home.chmod(0o555)
+    try:
+        result = apply_registry(manifest, home)
+    finally:
+        home.chmod(0o755)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"could not atomically install {installed}" in result.stderr
+    assert "rules      unchanged" in result.stdout
+    assert installed.read_text(encoding="utf-8") == INSTALLED_RELEASES
 
 
 def test_resolve_accepts_registered_spellings_and_refuses_bare_owner_name(
@@ -484,10 +788,16 @@ def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:
     """Idempotence, which is what makes this a recipe to re-run rather than a migration."""
     document = applied.home / "registry.json"
     before = document.read_bytes()
+    override = applied.home / "releases.yml"
+    override_before = override.read_bytes()
+    override_installed_at = override.stat().st_mtime_ns
     again = apply_registry(applied.manifest, applied.home)
     assert again.returncode == 0, again.stdout + again.stderr
     assert document.read_bytes() == before
     assert "rules      unchanged" in again.stdout
+    assert "releases   unchanged" in again.stdout
+    assert override.read_bytes() == override_before
+    assert override.stat().st_mtime_ns == override_installed_at, "the override was rewritten"
 
 
 def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
@@ -505,6 +815,7 @@ def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"would register  {present}" in result.stdout
     assert "rules      would install" in result.stdout
+    assert "releases   would install" in result.stdout
     assert "dry run — 1 checkout(s) would be registered, 0 skipped" in result.stdout
     assert not registry_home.exists()
 
@@ -514,8 +825,10 @@ def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
     [
         (("--checkouts",), "usage: apply-repo-registry.sh"),
         (("--rules",), "usage: apply-repo-registry.sh"),
+        (("--releases",), "usage: apply-repo-registry.sh"),
         (("--unknown",), "unknown argument"),
         (("--checkouts", "/does/not/exist"), "does not exist"),
+        (("--releases", "/does/not/exist"), "does not exist"),
     ],
 )
 def test_invalid_cli_input_is_rejected(

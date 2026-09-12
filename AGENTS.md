@@ -273,14 +273,23 @@ package — and a consumer says which one it consumes, because "the crate is out
 "the wheel is out" are different waits. A repository declares its targets in a
 `release-targets.toml` at its own root; the host's override, `$ONEVCS_HOME/releases.yml`,
 sits outside the registry and the rules file so an older `onevcs` sharing the host reads
-a byte-identical registry. This host's copy names a default target per producer this
-host installs from PyPI, which is how a node of this repository — whose `local-direct`
-identity refuses a `consumes` — awaits a release under `adoption: published`.
+a byte-identical registry. **This host's override is tracked as
+`config/onevcs.releases.yml` and installed by `just repos-apply`** beside the rules file;
+it names, per producer this host installs, the wheel it installs as that producer's
+`default_target` — the one a consumer naming no `consumes` waits for, since a
+`local-direct` identity refuses a `consumes` — and gives this repository alone the
+`published` rung, leaving every other repository on the global `fast`.
+`orchestrator/host_installs.py` is the table those default targets are held to. So a
+plan of this repository awaits a release by
+**depending on the producer's node and naming no `consumes`**: the node resolves
+`published` from the override and waits for the release carrying that producer's
+default target, and no task states any of it. That rung is not a preference — under
+`fast` a node behind an unreleased producer publishes as a draft carrying the pin it
+launched against, which `local-direct` refuses by name, so it could never land at all.
 `ai-orchestrator` itself declares no target, and a repository declaring none releases
 nothing, so a plan of this repository earns no reference row and no hold as a producer.
-Discovery: `onevcs release --help`, onevcs's own
-`docs/contract.md`, and onepipeline's `docs/contract-divergences.md` for the two
-plan-node fields, `adoption` and `consumes`.
+Discovery: `onevcs release --help`, onevcs's own `docs/contract.md`, and onepipeline's
+`docs/contract-divergences.md` for the two plan-node fields, `adoption` and `consumes`.
 
 An automated target carries a **probe**; a human-step target is answered only by an
 acknowledgement somebody records afterwards. Nothing here is the second kind, so

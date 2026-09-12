@@ -93,16 +93,19 @@ Opening a node whose dependency was adopted `published` shows what it waited on 
 the versions that arrived; opening one held shows what it is held on, whether that is
 an automated probe or a person's release step.
 
-**On this host it renders none of that, and that is not a defect in the view.** No
-run recorded here holds a release event: `ai-orchestrator` declares no release target,
-and no plan launched from here has yet named `adoption` or `consumes` for a node in one
-of the six registered repositories that do declare one. The consequence worth
-internalising is that this
+**On this host it has so far rendered none of that, and that is not a defect in the
+view.** No run recorded here yet holds a release event: `ai-orchestrator` declares no
+release target, and no plan launched from here has yet awaited one. The tracked
+override `config/onevcs.releases.yml`, which `just repos-apply` installs as
+`$ONEVCS_HOME/releases.yml`, gives this repository the `published` rung and each
+producer this host installs a default target, so a node here that depends on a
+producer's node waits for that producer's wheel — and the first run that does is the
+first this view has a release row for. The consequence worth internalising is that this
 surface fails *silently* in the direction of looking absent: an operator sees no
 release row whether the release is unadopted or the target is undeclared, and the two
-are indistinguishable from the browser. Declaring a target for *this* repository would
-be a `release-targets.toml` at its own root, or a `releases.yml` under
-`$ONEVCS_HOME`, and nothing on this host writes either.
+are indistinguishable from the browser. `ai-orchestrator` still declares no target of
+its own — that would be a `release-targets.toml` at its root, which nothing here
+writes — so a plan of this repository earns a release row only as a consumer.
 
 What 0.6.3's *reader* answered differently is one number — `timeline_schema_version`,
 which it serves at 7 where 0.6.2 served 6, with every other byte of the timeline and

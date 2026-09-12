@@ -226,7 +226,7 @@ session once the binary is on `PATH`, and the log line above stops appearing.
 The registry lives under `~/.onevcs` (override the whole state root with
 `ONEVCS_HOME`) and is **per-machine and untracked**, so a new host starts with none
 of it and no lifecycle dispatch can resolve a repository. What it should hold *is*
-tracked, in two files, and one recipe applies them:
+tracked, in three files, and one recipe applies them:
 
 ```sh
 just repos-apply
@@ -245,19 +245,41 @@ just repos-apply
   marker uses a prefix the rules file does not name is reported unrecognized and
   refused publication — so dropping that key strands every branch preserved before
   the adoption. `just recoverable` is where you would see it.
+- **`config/onevcs.releases.yml`** — the release override, installed to
+  `$ONEVCS_HOME/releases.yml`. It decides how a node waits on another repository's
+  release: this repository's nodes resolve the `published` rung, so one that depends
+  on a producer's node waits for the release carrying that work rather than adopting
+  its branch, and each producer this host installs — the seven `pyproject.toml` and
+  `config/*.version` pin — names the wheel this host installs as its `default_target`,
+  which is what a consumer naming no `consumes` waits for. Every rule merges the
+  producer's own `release-targets.toml` and restates no target of its own, and the
+  file's header says why this repository's rung is `published`. The candidate is
+  validated through `onevcs release targets` in the same scratch home
+  the rules are, so a document `onevcs` cannot load — a rung it does not know, a
+  `default_target` naming no target — is refused by name and replaces nothing.
 
 The recipe is re-runnable and idempotent — registration is keyed by alias and the
-rules file is replaced whole, so a second run leaves the registry a first one did.
-Run it again after editing either file, and after cloning a repository onto the
-host. A path this host does not have is reported as skipped rather than failing, so
-a machine holding a subset of these checkouts still registers what it has.
-`--dry-run` reports what would change and changes nothing.
+rules file and the override are each replaced whole, so a second run leaves the
+registry a first one did. Run it again after editing any of the three files, and
+after cloning a repository onto the host. A path this host does not have is reported
+as skipped rather than failing, so a machine holding a subset of these checkouts
+still registers what it has. `--dry-run` reports what would change and changes
+nothing; `--rules FILE` and `--releases FILE` install a different candidate in place
+of the tracked one, which is how a journey seeds a scratch registry.
 
 It finishes by resolving every checkout it registered and printing the policy each
 one landed on, and it **fails** if any of them matched no rule. That is not
 pedantry: an unmatched repository falls through to the file's `default`, which is
 the reviewed path — safe, but nobody's configured policy, and a silent pass there
-is how a mistyped `owner` goes unnoticed.
+is how a mistyped `owner` goes unnoticed. Below that table it prints one line per
+producer this host installs — `orchestrator/host_installs.py` is the list — naming
+the `default target` and `adoption` that producer resolves, read back through
+`onevcs release targets` rather than composed from the file, so what an operator
+reads is what a consumer will get. A producer this registry does not hold reads
+`not registered here`; one whose checkout `onevcs` cannot read a declaration out of
+right now — on another manager's branch, or with no fetched base — reads
+`unresolved:` with `onevcs`'s own reason, because that is the checkout's momentary
+state rather than a fault in the file: `onevcs sync` puts it back.
 
 ### `just repos` lists; `just repo-policy` reports the routing
 

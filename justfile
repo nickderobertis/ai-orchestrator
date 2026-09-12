@@ -574,9 +574,11 @@ repo-policy *args:
 
 # Bring this host's registry up to the tracked repository configuration: register
 # every checkout in `config/onevcs.checkouts`, install `config/onevcs.rules.yml` as
-# the rules file, and prove every registered checkout matched a rule. Re-runnable —
-# run it after editing either file, and on a new host. `--dry-run` changes nothing.
-# llmlint: ignore[tool_output_is_signal] the per-checkout resolved policy this prints is what an operator applies the configuration to read.
+# the rules file and `config/onevcs.releases.yml` as the release override, prove every
+# registered checkout matched a rule, and report what each producer this host installs
+# resolves out of the override. Re-runnable — run it after editing any of the three
+# files, and on a new host. `--dry-run` changes nothing.
+# llmlint: ignore[tool_output_is_signal] the per-checkout resolved policy and per-producer release adoption this prints are what an operator applies the configuration to read.
 repos-apply *args:
     @./scripts/apply-repo-registry.sh "$@"
 
