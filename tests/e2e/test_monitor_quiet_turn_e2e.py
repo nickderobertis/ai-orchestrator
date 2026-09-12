@@ -66,6 +66,7 @@ from test_orchestrate_launch_e2e import (
     _lost_turn_transcript,
 )
 from test_orchestrate_launch_e2e import _environment as _launched_environment
+from test_supervisory_prompt_discipline_e2e import CURSOR_FILE
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -97,12 +98,10 @@ SAID_ON_A_QUIET_TURN = "read the detailed stream; nothing needed raising this tu
 #: the monitor's conversation with a hold between turns, so an acknowledgement that
 #: told the member to keep reading *now* would be an instruction to spend the turn it
 #: has just finished; what it says instead is that the next turn opens after the hold
-#: and reads the stream from the cursor `personas/orchestrator.yaml` keeps. The cursor
-#: file is read off the persona rather than retyped, so the answer and the instruction
-#: it refers to are reconciled here rather than left to drift.
+#: and reads the stream from the cursor file the persona keeps — `CURSOR_FILE`, which
+#: `tests/e2e/test_supervisory_prompt_discipline_e2e.py` reads off a real launch's
+#: effective prompt, so the answer and the instruction it refers to are one name.
 NEXT_TURN_OPENS_AFTER_THE_HOLD = "next turn opens after the graph's hold"
-PERSONA = REPO_ROOT / "personas" / "orchestrator.yaml"
-CURSOR_FILE = re.compile(r"the\s+file\s+`(?P<file>[a-z.]+)`\s+in\s+your\s+working\s+directory")
 
 #: How long a turn that raises nothing may take to answer before this journey calls it
 #: hung — every content-bearing turn, whatever the content is. Such a turn opens no
@@ -346,14 +345,9 @@ def test_a_monitor_turn_that_produced_content_costs_the_planner_no_surface(
         f"{case} was answered as if the monitor's next turn were now, and the graph holds "
         f"that conversation between turns: {ruling}"
     )
-    cursor = CURSOR_FILE.search(" ".join(PERSONA.read_text(encoding="utf-8").split()))
-    assert cursor is not None, (
-        f"{PERSONA} no longer names the cursor file the monitor reads the stream from, so "
-        "this journey cannot say whether the answer names the same one"
-    )
-    assert f"`{cursor.group('file')}`" in ruling["message"], (
+    assert f"`{CURSOR_FILE}`" in ruling["message"], (
         f"{case} was answered without telling the monitor to read its next turn from "
-        f"`{cursor.group('file')}`, the cursor the persona keeps: {ruling}"
+        f"`{CURSOR_FILE}`, the cursor the persona keeps: {ruling}"
     )
 
 
