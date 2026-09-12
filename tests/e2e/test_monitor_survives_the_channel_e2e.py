@@ -41,6 +41,8 @@ member ended.
 # that is suppressed and a project split that would resolve it.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
+# llmlint: ignore-block[shell_test_tiers_stay_split] see above; and this is a pytest
+# journey over the real recipe, not a shell test suite.
 
 from __future__ import annotations
 
@@ -1083,3 +1085,4 @@ def test_a_score_the_planner_gave_no_reason_for_still_says_who_decided_it(
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[shell_test_tiers_stay_split]

@@ -576,6 +576,8 @@ def _what_the_monitor_said(events: list[GraphEvent]) -> list[str]:
 # here — `AGENTS.md` records the tier split as a deliberate decision, and re-homing forty
 # launch journeys into a new project is enforcement configuration this change may not
 # move in order to pass.
+# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
+# a pytest journey over the real recipe, not a shell test suite.
 @pytest.mark.xdist_group("monitor-quiet-turn")
 def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
     tmp_path: Path, oneharness_bin: str
@@ -734,3 +736,4 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[shell_test_tiers_stay_split]

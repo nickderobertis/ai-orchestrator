@@ -532,6 +532,8 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
 # property of the tree rather than of anything here — `AGENTS.md` records the tier split
 # as a deliberate decision, and re-homing the launch journeys into a new project is
 # enforcement configuration this change may not move in order to pass.
+# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
+# a pytest journey over the real recipe, not a shell test suite.
 @pytest.mark.xdist_group("observer-graph-liveness")
 def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     tmp_path: Path, oneharness_bin: str
@@ -654,6 +656,7 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def test_the_pinned_reader_refuses_an_observer_graph_nothing_holds_open(tmp_path: Path) -> None:
