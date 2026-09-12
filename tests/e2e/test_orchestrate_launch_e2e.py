@@ -2017,6 +2017,8 @@ def planner_supervised(
             project_from_plan(plan),
             "--heartbeat-interval",
             str(PACEMAKER_INTERVAL_SECONDS),
+            "--set",
+            f"members.{MONITOR_MEMBER}.schedule.every={SUPERVISED_MONITOR_HOLD_SECONDS}",
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -3514,6 +3516,15 @@ WORKER_HELD_SECONDS = 20
 #: hold expires is refused for the right reason — the run settled — and so would fail
 #: those journeys for a reason they are not about.
 SUPERVISED_HELD_SECONDS = 120
+
+#: How long the supervised launch tells the graph to hold the monitor between turns.
+#: The shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds,
+#: counted from the planner's reply, and the journey reading the reply back out of the
+#: monitor's *next* turn waits 90 seconds for it — so under the shipped period the
+#: instruction the planner sent would never be observed. `--set
+#: members.monitor.schedule.every` is the published override for a journey that needs
+#: turns closer together than the shipped period; the shipped value stays what it is.
+SUPERVISED_MONITOR_HOLD_SECONDS = 2
 
 #: The verb the engine used to be advanced by. It is gone, and its absence is half of
 #: what "settles on its own" means: the other half is a run that settled anyway.
