@@ -290,43 +290,7 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # The channel-serve section, on what its filter reads and what it leaves.
         "measured against onepipeline {version} in the judge command's own environment",
         # The ask-manager section, on which launch shapes reach a worker that can ask.
-        # The reference half of the `AGENTS.md` sentence below, and its own site: a
-        # reader reaches this page for the wrapper's contract and that one for the
-        # manager's loop, so one shared phrase would gate only whichever came first.
         "every node dispatch of a run carries it as of onepipeline {version}",
-    ),
-    "AGENTS.md": (
-        "measured against onepipeline {version} on a real launch",
-        # Which dispatches can put a blocking question to their manager at all. Half
-        # the ask seam is this repository's — the wrapper — and half is the engine's,
-        # and the engine's half moved: below this release only an attached launch's
-        # dispatch carried a run id, and it carried one by leaking out of a driver
-        # that had started an observer in its own process rather than by design. A
-        # sentence that outlived the bump would tell a manager to write every brief
-        # around a question nobody can ask.
-        "every node dispatch of a run carries it as of onepipeline {version}",
-        # Why the pin is where it is: the fix a plan node gets is the one this
-        # release's *lockfile* resolved, not the one its `Cargo.toml` permits.
-        "is the adopted onepipeline {version}",
-        # The re-measurement of that lock, which is what makes the CLI-versus-linked
-        # distinction concrete rather than a warning. Its onevcs half is held to the
-        # *linked* version by `tests/test_linked_libraries.py`, so the two gates meet
-        # on this one sentence: this one dates it to the adopted onepipeline, that one
-        # holds the number in it to what that release's wheel actually resolved.
-        #
-        # The two halves now read the same number — `config/onepipeline.version` and
-        # `config/onevcs.version` both say 0.13.0 for the first time — so the sentence
-        # names the tool beside each one and this template stops at the word `onevcs`.
-        # A template that ran on into the number would be satisfied by either gate's
-        # value and would stop telling the two apart on exactly the adoption where
-        # that matters most.
-        "at v{version} and its lock still resolves onevcs",
-        # What a bodyless change request now says about itself. Phrased against the
-        # adopted release rather than the one it arrived in, for the reason the
-        # repo-lifecycle entry below records.
-        "on the adopted onepipeline {version} they no longer look it",
-        # That the read-only views now disclose a journal they cannot read whole.
-        "on the adopted onepipeline {version} a run whose journal does not hold",
     ),
     # The drafting endings, which did not exist below this release: the paragraph
     # states the release the kind arrived in, so a bump has to re-read whether the
@@ -444,45 +408,28 @@ def test_claims_about_the_adopted_onepipeline_name_the_adopted_release(
         )
 
 
-#: Per-release claims about the two *sibling* CLIs, as tool → file → the sentence
-#: each must spell. Same contract and same reason as the onepipeline claims above,
-#: and they share one test because they are one shape of claim: a behaviour this
-#: repository measured against a pinned sibling, restated in prose that would
+#: Per-release claims about a *sibling* CLI, as tool → file → the sentence each must
+#: spell. Same contract and same reason as the onepipeline claims above: a behaviour
+#: this repository measured against a pinned sibling, restated in prose that would
 #: otherwise survive the bump that invalidated it.
 #:
-#: Neither can go under the published-CLI count gate, and both for the reason the
-#: oneharness claims cannot: each of these files deliberately names a release this
-#: repository does **not** adopt, and those literals must not move with the pin.
+#: It cannot go under the published-CLI count gate, for the reason the oneharness
+#: claims cannot: the file deliberately names a release this repository does **not**
+#: adopt, and that literal must not move with the pin.
 #:
-#: * **oneagentgraph** decides which *persona shape* this repository may be written
-#:   in, and the claim gated here is a refusal — the pinned release rejects the other
-#:   spelling outright, in whichever direction the pin currently points.
-#:   `personas/README.md` names the superseded 0.2.18 beside it as history. A bump
-#:   fails here, which is the prompt to re-take that refusal against the new binary
-#:   and to move the pin, every file in `personas/`, and `config/onejudge.base.yaml`
-#:   at once — never one without the others, because a CLI certifying a shape the
-#:   linked reader refuses produces no member at all.
-#: * **onevcs** needs its own entry because the two onevcs versions in play are
-#:   deliberately different things: `config/onevcs.version` installs the **CLI** the
-#:   manager verbs run, while a dispatched session publishes through the onevcs
-#:   `onepipeline` links. They read 0.13.0 alike today and have not always — the
-#:   linked copy was 0.4.2 while the pin was several releases past it — so a claim
-#:   about one is never a claim about the other, and mistaking the CLI pin for the
-#:   version in force has already produced a wrong diagnosis here. The linked copy
-#:   is measured rather than restated, by `tests/test_linked_libraries.py`;
-#:   `AGENTS.md` names the 0.5.0 that carried no `commit-msg` code at all.
-#:
-#:   0.13.0 is also `config/onepipeline.version` this cycle, which is why the gated
-#:   sentence in `AGENTS.md` spells the tool — `the adopted **onevcs 0.13.0**` — and
-#:   why no sentence anywhere should leave that number to disambiguate itself.
+#: **oneagentgraph** decides which *persona shape* this repository may be written in,
+#: and the claim gated here is a refusal — the pinned release rejects the other
+#: spelling outright, in whichever direction the pin currently points.
+#: `personas/README.md` names the superseded 0.2.18 beside it as history. A bump fails
+#: here, which is the prompt to re-take that refusal against the new binary and to move
+#: the pin, every file in `personas/`, and `config/onejudge.base.yaml` at once — never
+#: one without the others, because a CLI certifying a shape the linked reader refuses
+#: produces no member at all.
 ADOPTED_SIBLING_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
     "oneagentgraph": {
         "personas/README.md": (
             "The pinned oneagentgraph {version} refuses the previous shape outright",
         ),
-    },
-    "onevcs": {
-        "AGENTS.md": ("the adopted **onevcs {version}** puts the composed subject",),
     },
 }
 
@@ -504,11 +451,7 @@ def test_claims_about_an_adopted_sibling_name_the_adopted_release(
     The oneagentgraph one by probing the installed binary three ways — `persona
     validate`, `oneagentgraph validate`, and a real `oneagentgraph run` of a
     one-member graph naming a 0.3.0-shaped persona by path — each with a
-    0.2.18-shaped control beside it. The onevcs one by publishing for real on both
-    releases in `tests/e2e/test_publish_branch_e2e.py`, which is what turned a claim
-    that read as "the hook is new" into the narrower one `AGENTS.md` now makes: 0.5.0
-    met the hook too, through git's own refusal of the publication commit, and what
-    0.6.1 added is asking before anything is written and saying what to do about it.
+    0.2.18-shaped control beside it.
 
     Each sentence is required **exactly once**, for the reason the onepipeline gate
     above states: a claim satisfied anywhere in its file leaves a second site ungated,

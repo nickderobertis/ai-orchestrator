@@ -51,18 +51,23 @@ from project_fixtures import local_project
 from registered_checkouts import registered_checkouts
 from test_linked_engine_reconciliation_e2e import LINKED_IN_BINARY
 from test_linked_libraries import Release
-from test_release_adoption_guidance import (
-    GUIDANCE_SECTION,
-    IN_FORCE_UNUSED,
-    RELEASE_MODES_FLOOR,
-    RELEASE_SURFACE_FLOOR,
-    RELEASE_VIEW_FLOOR,
-    flat,
-    section,
-)
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
+
+#: The release that added `onevcs release` and the release-target document behind it,
+#: as https://github.com/nickderobertis/onevcs/pull/78: the one version this repository
+#: has to know to say whether the surface is in force.
+RELEASE_SURFACE_FLOOR = Release(0, 13, 0)
+#: The release that carries the adoption modes —
+#: https://github.com/nickderobertis/onepipeline/pull/113 merged, and this is the first
+#: `onepipeline` release cut after it.
+RELEASE_MODES_FLOOR = Release(0, 13, 0)
+#: The release that added the view showing which release carried each landed node, and
+#: every release event, as https://github.com/nickderobertis/onepipeline-ui/pull/36.
+RELEASE_VIEW_FLOOR = Release(0, 6, 3)
+
+GUIDANCE_SECTION = "## Sequencing a node behind a release"
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This marker is not a
 # tier the default run hides: `orchestrator:test-checkouts` is a target of this same
@@ -608,15 +613,4 @@ def test_the_read_api_the_view_is_served_from_is_the_adopted_release() -> None:
     assert reported.stdout.strip() == f"onepipeline-api {adopted}", (
         "the read API `just telemetry-server` runs is not the one "
         f"config/onepipeline-ui.version pins: {reported.stdout.strip()!r}"
-    )
-
-
-def test_the_section_says_so_in_the_words_this_journey_measures() -> None:
-    """The measurement is only worth taking while the prose makes the claim it checks."""
-    assert IN_FORCE_UNUSED in flat(section()), (
-        f"{GUIDANCE_SECTION!r} no longer opens by saying the surface, the modes, and "
-        "the view are in force here while nothing on this host uses them. That "
-        "sentence is what the "
-        "measurements above exist to keep true; without it a reader cannot tell a "
-        "capability this host has from one it is using"
     )

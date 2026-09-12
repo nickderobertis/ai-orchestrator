@@ -217,10 +217,8 @@ is read under this host's configured prefix rather than under a name `onevcs` kn
 itself. **The remote half is unmoved and is still the dangerous one**: `no` closes the
 question where `unknown` leaves it open, and the checkout it was asked through carries
 that landing on its own `main`, so this is not a stale copy answering.
-`tests/test_phase_and_landing_guidance.py` re-takes this: it holds the stamp, the two
-refs, the condition, and both quoted answers to the release this checkout pins, so the
-day that pin moves the check fails and the measurement comes due rather than standing
-here describing a build nobody runs.
+`tests/e2e/test_work_status_and_import_e2e.py` is what drives `just work-status` for
+real, asking one branch before and after it lands and holding the two answers apart.
 
 **Asked in this host's own state root both answer `yes`, and this pair answers by two
 different tiers.** The
@@ -254,9 +252,6 @@ before believing it. It does not reproduce today only because
 fact about that directory this morning and not about the tiers. The reading it corrected —
 that `local-direct` is the strong side, unconditionally — is the one that would send a
 manager past this.
-The same check re-takes the half above, because it is the same re-take: what
-`tests/test_phase_and_landing_guidance.py` holds is the paragraph above, and the
-correction only survives while that paragraph is the one being re-measured.
 
 **That warning has two halves, and onevcs 0.14.0 moved exactly one of them.**
 
@@ -294,9 +289,6 @@ Do not try to settle it with `git diff main...branch` either — that measures f
 fork point, so a landed squash-merged branch still reports its full insertion count
 and reads as proof the work is missing. Only the files' presence on the base, or the
 squash commit's own stat, answers.
-`tests/test_phase_and_landing_guidance.py` re-takes it, holding the blob at the pinned
-release and the never-yes rule together, so a `landed.rs` that moved again is a failing
-check rather than a paragraph quietly describing an older one.
 
 *The retry half is fixed, and only forward.* onevcs 0.14.0
 (https://github.com/nickderobertis/onevcs/pull/80) links each session of a branch to
@@ -332,9 +324,8 @@ as both of those at once: the landing named is real and a release can be sequenc
 it, and the commits above it are what publishing now would land. Eleven of this host's
 445 preserved branches report it. The previous adoption's ref is gone from every registered
 checkout, as each pair before it has been, which is why this one is fresh rather than
-re-quoted.
-`tests/test_phase_and_landing_guidance.py` re-takes this one too, holding the ref, the
-landing commit and the answer to the release this checkout pins.
+re-quoted. `tests/e2e/test_work_status_and_import_e2e.py` is what drives `just
+work-status` for real against a landing.
 
 **Which tier decides is not the same for every branch, and that is the reading to
 carry.** Asked of `onevcs/s-a37f615ff961`, whose change request
@@ -1112,8 +1103,7 @@ sets no repository rung; `ai-orchestrator` declares no release target, so a plan
 this repository is a consumer of nothing and a producer of no instruction; and no plan
 here names `adoption` or `consumes`, so no node has been rendered one yet. A worker
 that has never met one of these rows is what an unconfigured host looks like, not what
-an absent mechanism looks like. `tests/test_release_adoption_guidance.py` holds both
-pins to the releases carrying their halves.
+an absent mechanism looks like.
 
 **Under published adoption the node does not launch at all** until every such
 dependency answers released. The hold is absolute — no timeout, no deadline, no retry
@@ -1193,9 +1183,9 @@ bumped `timeline_schema_version`,
 re-measured with the rest of that shape in
 [`docs/telemetry.md`](docs/telemetry.md#seeing-the-supervisory-tier). Everything else
 the release adds is a field that stays absent and a view that stays unrendered until
-something declares a target. `tests/test_release_adoption_guidance.py` re-takes every
-number above: it reads each pin this section names out of `config/` and holds it at or
-past the floor carrying its half, so an adoption that moved one of them fails there
+something declares a target. `tests/e2e/test_release_adoption_in_force_e2e.py` re-takes
+every number above: it reads each pin this section names out of `config/` and holds it
+at or past the floor carrying its half, so an adoption that moved one of them fails there
 rather than leaving this paragraph describing the pins before it.
 
 Five things were driven rather than read, on 2026-09-01. The pinned `onevcs --help`
@@ -1327,25 +1317,8 @@ nothing was denied, so there is nothing to say.
 the other will mislead you. `onepipeline` opens every session through
 `EventStream::open_filtered`, so a run's `filters.vcs` gets both halves. `onevcs
 events --filter` does not — it reads the file's own lines and matches them, consulting
-no supported set — so it neither refuses an unsupported phase nor drops one. Re-measured
-2026-09-09 on the pinned onevcs 0.19.3, against two streams because
-the two halves need different ones — and the pair the previous adoption used is gone
-from this host entirely, which is the ordinary fate of a session stream and the reason
-this claim is written as a shape a reader can re-take rather than as two tokens. On a
-stream a phase-stamping build wrote —
-`onevcs events s-a7dd1b932541 --filter '{"include":[{"phase":"review"}]}'` — the verb
-exits 0 with no output on this `local-direct` identity rather than refusing, and
-unfiltered the same stream's first two events carry `"phase":"development"` outright.
-On a stream written before the field existed (`s-3ebe7212a368`, opened 2026-08-12) the
-same `review` filter is likewise a silent empty exit 0, and unfiltered its events print
-with **no `phase` key at all** — yet `{"include":[{"phase":"development"}]}` returns
-all three of them, classified by the fallback above. Any session token this host still
-holds a stream for re-takes
-whichever half its stream is old or new enough for. So do not read a command-line
-events read as a test of what a run would relay.
-`tests/test_phase_and_landing_guidance.py` re-takes the claim, holding it to the pin it
-was measured on so a release that gave the command line a supported set brings this
-paragraph due.
+no supported set — so it neither refuses an unsupported phase nor drops one. So do not
+read a command-line events read as a test of what a run would relay.
 
 **A session's release events reach a run through the public reader, correlated by
 landing commit.** `release-probed` is written on the session's own stream and always
@@ -1383,7 +1356,6 @@ got before the pins moved. Elsewhere the Release phase is live rather than theor
 `onevcs release latest nickderobertis__onepipeline --target pypi` wrote a
 `release-probed` envelope carrying `"phase":"release"` onto that identity's own release
 record on 2026-08-29, which is the first release event this host has ever held.
-`tests/test_phase_and_landing_guidance.py` re-takes the pins and the floors, and
 `tests/e2e/test_release_adoption_in_force_e2e.py` re-takes the probe itself against the
 installed `onevcs`.
 

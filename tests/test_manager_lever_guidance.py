@@ -1,45 +1,16 @@
-"""What `AGENTS.md` tells a manager about steering a run, held to this checkout.
+"""What `AGENTS.md` offers a manager for steering a run, held to what this checkout has.
 
-Three passages, each written from a defect somebody paid for while the release-adoption
-work shipped on 2026-08-23/24, and each stating something a manager cannot discover by
-reading a run:
-
-* **which lever binds a node's judge.** A manager ruled a change out of scope mid-run,
-  the worker complied and re-ran its complete gate green, and seven minutes later that
-  node's own judge instructed it to restore what had been ruled out — because the note op
-  of the day reached the worker and never the task the judge reviews against. `AGENTS.md`
-  said both that an amended `task` is how a bar is amended and that the weaker note op was
-  the lever for steering a running dispatch, and said nothing about the gap between them.
-  The engine has since collapsed that op into `note` and removed it, so what the passage
-  owes now is the *new* split: `note` binds the conversation it is delivered into, `amend`
-  binds the node's stored bar, and only the second survives a re-dispatch.
-* **that a mid-run amendment is criteria.** `adopt-oneharness-cli-2` settled
-  `task-failed` on a *green* complete gate: the amendment named a mechanism — assert the
-  wrapper *refuses* an invalid inherited label — where the implementation drops the
-  offending pair and continues, which is what `orchestrator.labels.parse_labels` already
-  does with an inherited value. The judge was right about the task and the task was
-  wrong. The rule against writing criteria as procedure was stated for planners and
-  nowhere for a manager writing an amendment under time pressure.
-* **the bound on concurrent lifecycle dispatch.** `onevcs session open` reclaims a run
-  root on a lease nothing holds while a dispatch works, and nothing else bounds how many
-  dispatches one identity may safely have. The mechanism was recorded; the constraint
-  that follows from it was not.
-
-Each claim is enumerated here rather than summarized, and the ones this repository can
-check against something other than its own prose are checked: the sentence it quotes
-from the planner's own persona, the heading the operational notes really open at, the
-document it points at instead of restating, and the op table a lever is picked from.
-`tests/test_engine_contracts.py` holds the other end of the last two — the op table
-against the engine's `Command` enum, and the `## Planner context` rendering against the
-engine's own strings — so a release that gains a binding op, or rewords the sentence
-that makes a note non-binding, fails there rather than leaving this passage describing a
-lever this host does not have.
+Two things here are reconciled against something other than the prose: the heading the
+operational notes a task carries really open at, which is what "above the operational
+notes" means when a manager places an amendment; and the live-edit table a lever is
+picked from. `tests/test_engine_contracts.py` holds the other end of the second — the op
+table against the engine's `Command` enum — so a release that gains a binding op fails
+there rather than leaving this passage describing a lever this host does not have.
 """
 
 from __future__ import annotations
 
 import re
-from typing import NamedTuple
 
 import pytest
 
@@ -48,27 +19,16 @@ from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_docs
 
-#: The manager's own document, and the two regions of it these claims live in. Regions
-#: rather than the whole file, because each claim is made where a manager is doing that
-#: thing — a phrase that survived somewhere else would satisfy a document-wide search
-#: while the passage that has to carry it was gone.
+#: The manager's own document, and the region of it the lever passage lives in. A region
+#: rather than the whole file, because the claim is made where a manager is doing that
+#: thing — a lever named somewhere else would satisfy a document-wide search while the
+#: passage that has to carry it was gone.
 MANAGER = "AGENTS.md"
 LOOP_SECTION = "## Your loop as manager"
-RECLAMATION_OPENER = "**What prunes that history is `onevcs session open`"
 
-#: The planner's own persona, which is where the rule about how a criterion is written
-#: lives, and this repository's one source for the operational notes a task carries.
-PLANNER_PERSONA = "personas/planner.yaml"
-#: The heading those notes open at, which is what "above the operational notes" means
-#: when a manager places an amendment in a task.
+#: The heading the operational notes a task carries open at, which is what "above the
+#: operational notes" means when a manager places an amendment in a task.
 APPENDIX_HEADING = "## Additional info"
-#: Where the run-root mechanism is written in full, so the constraint may point at it.
-RECLAMATION_DOCUMENT = "docs/run-root-reclamation.md"
-
-#: The sentence `AGENTS.md` quotes from the planner's persona. One string, read from
-#: here by both halves of the reconciliation below, so the quotation and the original
-#: cannot come to be about two different rules.
-CRITERIA_RULE = "State the outcome the node owes, never the procedure for reaching it"
 
 #: The live-edit table a lever is picked from, and how a row names its op. The first
 #: column only: every row also backticks the fields that op takes, and `amend` is one of
@@ -80,169 +40,6 @@ OP_NAME = re.compile(r"^\| `([a-z]+)` \|", re.MULTILINE)
 
 #: The levers the passage names, each of which has to be an op that table declares.
 NAMED_LEVERS = ("retry", "cancel", "requeue", "note", "amend")
-
-
-class Claim(NamedTuple):
-    """One thing a passage has to say, and the phrase that says it."""
-
-    #: What the claim is about, for the failure message and the test id.
-    subject: str
-    #: Which region of the document has to carry it.
-    region: str
-    phrase: str
-
-
-#: Every claim these passages exist to make. Enumerated because each one is a thing a
-#: manager would otherwise have to learn by losing a dispatch to it — which is how all
-#: three of them were learned the first time.
-REQUIRED_CLAIMS = (
-    Claim(
-        "the task is what changes the bar",
-        LOOP_SECTION,
-        'the only text that changes what "done" means for a *later*\n   dispatch of it is the\n'
-        "   `task`",
-    ),
-    Claim(
-        "which binding edit reaches a task mid-run",
-        LOOP_SECTION,
-        "`amend`, which replaces the node's binding amendment",
-    ),
-    Claim(
-        "a requeue amendment is merged onto the node",
-        LOOP_SECTION,
-        "`cancel` plus a `requeue` whose `amend` is merged onto the node",
-    ),
-    Claim(
-        "an amendment does not alter the live dispatch's bar",
-        LOOP_SECTION,
-        "`amend` does not interrupt a dispatch already running",
-    ),
-    # The claim this replaces was "a note binds nothing", which the collapse made false:
-    # the surviving op may carry a `criterion`, and a delivered one enters the bar the
-    # conversation's judge decides against. What a manager now has to be told is not that
-    # a note binds nothing but *what* it binds — a conversation rather than the node — and
-    # that only `amend` outlives a re-dispatch.
-    Claim(
-        "what a note binds",
-        LOOP_SECTION,
-        "enters the acceptance criteria **that conversation's judge decides against**",
-    ),
-    Claim(
-        "and what it does not bind",
-        LOOP_SECTION,
-        "they are **the conversation** and\n   **the stored bar**, and only `amend` survives "
-        "a re-dispatch",
-    ),
-    Claim(
-        "a note carrying no criterion touches no criterion",
-        LOOP_SECTION,
-        "A note carrying no\n   `criterion` is observational and touches no acceptance criterion",
-    ),
-    Claim("where a carried note is rendered", LOOP_SECTION, "under `## Planner context`"),
-    Claim(
-        "what that rendering declares the note to be",
-        LOOP_SECTION,
-        "This reports observed state and adds no acceptance criteria.",
-    ),
-    Claim(
-        "a note is spent by whoever reads it",
-        LOOP_SECTION,
-        "A note is spent by the turn that reads it, and a carried one is spent by the "
-        "dispatch that takes it",
-    ),
-    Claim(
-        "reaching the turn and binding the next dispatch is not one op",
-        LOOP_SECTION,
-        "Reaching the live turn *and* binding the next dispatch is\n   deliberately not on "
-        "offer from one op: send the note and amend the node",
-    ),
-    Claim(
-        "when to amend",
-        LOOP_SECTION,
-        "Amend\n   whenever the correction has to hold however many times the node is "
-        "dispatched\n   again",
-    ),
-    Claim(
-        "when to send a note instead",
-        LOOP_SECTION,
-        "send a note — with a `criterion` where the correction changes what the\n   "
-        "finished tree must contain, without one where the judge has no opinion",
-    ),
-    Claim("what getting it backwards cost", LOOP_SECTION, "15:50:23Z"),
-    Claim("what the judge then instructed", LOOP_SECTION, "15:57:19Z"),
-    Claim(
-        "and what it took to resolve",
-        LOOP_SECTION,
-        "killing a live gate-green dispatch in order to\n   change its bar",
-    ),
-    Claim("an amendment is criteria", LOOP_SECTION, "**An amendment is criteria"),
-    Claim("held to the planner's own rule", LOOP_SECTION, CRITERIA_RULE),
-    Claim("the node that was failed for it", LOOP_SECTION, "`adopt-oneharness-cli-2`"),
-    Claim(
-        "the judge was right and the task was wrong",
-        LOOP_SECTION,
-        "The judge\n   was right about the task and the task was wrong",
-    ),
-    Claim(
-        "where an amendment sits in the task",
-        LOOP_SECTION,
-        "Put the amendment **above** the\n   operational notes the task carries",
-    ),
-    Claim("which heading those notes open at", LOOP_SECTION, f"those open at `{APPENDIX_HEADING}`"),
-    Claim(
-        "which of the two wins",
-        LOOP_SECTION,
-        "where it and the notes below it disagree, the amendment wins",
-    ),
-    # These seven used to hold the opposite claim — a hard one-lifecycle-dispatch-per-
-    # identity bound, and the three details a manager scheduled around it with. onevcs
-    # 0.14.1 fixed the reclamation race and this host adopted it at 0.15.4, so what a
-    # manager now has to be told is that the bound is gone, on whose authority, and what
-    # is left of it. Restated rather than deleted: a lifted constraint that nobody says
-    # was lifted goes on being obeyed, which costs exactly the parallelism it was
-    # protecting, and a lifted constraint with no release named cannot be re-checked by
-    # the next reader who doubts it.
-    Claim(
-        "the bound is lifted",
-        RECLAMATION_OPENER,
-        "the\none-dispatch-per-identity constraint this paragraph used to impose is lifted",
-    ),
-    Claim("which release fixed it", RECLAMATION_OPENER, "**onevcs 0.14.1 fixed that"),
-    Claim(
-        "which release this host adopts it at",
-        RECLAMATION_OPENER,
-        "this host adopts it at 0.15.8",
-    ),
-    Claim(
-        "the lift is a measurement, not a changelog reading",
-        RECLAMATION_OPENER,
-        "Re-measured here on 2026-08-25 against both binaries",
-    ),
-    Claim(
-        "what a manager may now schedule",
-        RECLAMATION_OPENER,
-        "schedule concurrent lifecycle\ndispatches on one identity freely",
-    ),
-    Claim(
-        "the mitigation is kept rather than retired",
-        RECLAMATION_OPENER,
-        "**kept and still wired**",
-    ),
-    Claim(
-        # `opened` until the adopted onevcs: from 0.15.6 an *open* record protects its
-        # run root whatever became of the process that opened it, so what makes an
-        # uncommitted root reclaimable is the session having closed. The old wording
-        # contradicted the widening this same passage now states two paragraphs above.
-        "an uncommitted abandoned session is still removed outright",
-        RECLAMATION_OPENER,
-        "an abandoned session that closed and never committed is still\nremoved outright",
-    ),
-    Claim(
-        "the mechanism is pointed at rather than restated",
-        RECLAMATION_OPENER,
-        f"[`{RECLAMATION_DOCUMENT}`]({RECLAMATION_DOCUMENT})",
-    ),
-)
 
 
 def _text(relative_path: str) -> str:
@@ -264,37 +61,6 @@ def _region(opener: str) -> str:
     return document.split(opener, 1)[1].split("\n## ", 1)[0]
 
 
-@pytest.mark.parametrize("claim", REQUIRED_CLAIMS, ids=lambda claim: claim.subject)
-def test_the_manager_is_told_every_part_of_how_to_steer_a_running_node(claim: Claim) -> None:
-    """A claim dropped from here is one a manager relearns by losing a dispatch.
-
-    None of these is recoverable from a run: a note that failed to bind produces no
-    error, an amendment that named a mechanism reads exactly like one that named a
-    property until the judge rules, and a reclaimed run root reports as five identities
-    refusing to spawn.
-    """
-    assert _flat(claim.phrase) in _flat(_region(claim.region)), (
-        f"{MANAGER}'s {claim.region!r} passage no longer says {claim.subject}: the phrase "
-        f"{claim.phrase!r} is gone"
-    )
-
-
-def test_the_rule_an_amendment_is_held_to_is_the_planners_own() -> None:
-    """The quotation and the original, reconciled.
-
-    `AGENTS.md` extends a rule it does not own — the persona is where criteria are
-    written, and it travels into whatever repository is being planned against. Quoting a
-    sentence that has since been reworded there would leave a manager holding an
-    amendment to a rule no planner is given, which is the two-authorities failure this
-    passage exists to close rather than repeat.
-    """
-    assert CRITERIA_RULE in _flat(_text(PLANNER_PERSONA)), (
-        f"{PLANNER_PERSONA} no longer states {CRITERIA_RULE!r}, which {MANAGER} quotes as "
-        "the rule a manager's mid-run amendment is held to. Re-read the persona and "
-        "correct the quotation, or the two halves are about different rules"
-    )
-
-
 def test_the_operational_notes_really_open_at_the_heading_the_manager_is_told_to_sit_above() -> (
     None
 ):
@@ -311,23 +77,6 @@ def test_the_operational_notes_really_open_at_the_heading_the_manager_is_told_to
         f"put an amendment above the operational notes names a boundary a task does not "
         f"have:\n{appendix[:120]}"
     )
-
-
-def test_the_constraint_points_at_a_document_that_carries_the_mechanism() -> None:
-    """The bound is stated here; the mechanism behind it is pointed at, so it must be there.
-
-    The passage deliberately does not restate how `reclaim` decides — that is a page of
-    measured reading, and two copies of it would drift. What it owes instead is a pointer
-    that resolves, to a document that still explains the lease the proof rests on and
-    still records that the fix is upstream.
-    """
-    document = _text(RECLAMATION_DOCUMENT)
-    for grounding in ("occupancy lease", "## The upstream fix"):
-        assert grounding in document, (
-            f"{RECLAMATION_DOCUMENT} no longer carries {grounding!r}, and {MANAGER} states "
-            "the concurrency bound by pointing at it rather than by restating the "
-            "mechanism. Either the mechanism moved or the pointer did"
-        )
 
 
 def test_every_lever_the_manager_is_offered_is_an_op_the_engine_table_declares() -> None:

@@ -17,6 +17,10 @@ still reads as unlanded there forever. This asks the same branch before and afte
 lands and holds the two answers apart, which is the whole reason a planner has anything
 to ask.
 
+The third question is what a landing leaves once this host's records are gone, and the
+answer differs by which workflow wrote the base commit; the last journey here holds that
+split, which `docs/repo-lifecycle.md` states and nothing else re-takes.
+
 Everything is real — the recipes, `onevcs`, git, and the origin. What makes that safe is
 isolation rather than substitution, exactly as in `tests/e2e/test_publish_branch_e2e.py`:
 `ONEVCS_HOME` points at a scratch registry and the repository is a throwaway checkout of
@@ -30,7 +34,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import NamedTuple, NotRequired, TypedDict, cast
 
 from waits import timeout as e2e_timeout
 
@@ -44,12 +48,48 @@ WORK_FILE = "shipped.txt"
 
 #: The base every identity here publishes onto.
 BASE = "main"
+#: A second branch, landed the way a remote merge path lands one, and the file it adds.
+SQUASHED_BRANCH = "claude/squashed-work"
+SQUASHED_FILE = "squashed.txt"
+#: The change request number a host's squash puts in the base subject — and nothing
+#: else: no trailer, and no record in any `ONEVCS_HOME`.
+SQUASHED_NUMBER = 7
+#: The prefix `Orchestrator-Landed-Commit` is read under, and one it is not.
+TRAILER_PREFIX = "Orchestrator-"
+OTHER_PREFIX = "Elsewhere-"
+
+
+#: The two `landed:` answers the lost-record journey tells apart, and the one tier it
+#: expects to have decided. `onevcs` owns that vocabulary, so these are the values this
+#: journey reads and not a copy of the CLI's whole set: a closed type over every answer
+#: would be a second statement of that contract with nothing here reconciling it.
+LANDED = "yes"
+UNDECIDED = "unknown"
+TRAILER_TIER = "trailer"
+
+
+class LandingEvidence(TypedDict):
+    """Which record tier decided a landing. Only `tier` is read; the rest stays the CLI's."""
+
+    tier: str
+
+
+class Landing(TypedDict):
+    """`work-status`'s `landed:` answer, in the two fields the lost-record journey reads.
+
+    `evidence` is present only when a record tier decided; the comparison tier is not a
+    record and names nothing, so its absence is itself one of the answers read.
+    """
+
+    state: str
+    evidence: NotRequired[LandingEvidence]
 
 
 class Publication(TypedDict):
     """Where `work-status` says a piece of work stands with its remote."""
 
     state: str
+    landed: Landing
 
 
 class WorkStatus(TypedDict):
@@ -132,20 +172,36 @@ def _identity(tmp_path: Path) -> Identity:
     _git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
     elsewhere = tmp_path / "elsewhere"
     _git("clone", "-q", str(origin), str(elsewhere), cwd=tmp_path)
-    (home / "rules.yml").write_text(
+    environment = _registry(home, checkout, prefix=TRAILER_PREFIX)
+    return Identity(checkout, origin, elsewhere, environment)
+
+
+def _rules(prefix: str) -> str:
+    """This journey's rules file: every identity publishes locally, under `prefix`."""
+    return (
         "version: 3\n"
-        "trailer_prefix: Orchestrator-\n"
+        f"trailer_prefix: {prefix}\n"
         "rules: []\n"
         "default:\n"
         "  publication: local-direct\n"
-        "  approvals: none\n",
-        encoding="utf-8",
+        "  approvals: none\n"
     )
+
+
+def _registry(home: Path, checkout: Path, *, prefix: str) -> dict[str, str]:
+    """Register `checkout` into the state root at `home`, and return the environment.
+
+    A fresh `home` holds no session record, so a landing asked through it has only what
+    the repository's own history says — which is the state a host is in once its
+    records are gone, and the one the lost-record journey needs to produce on purpose.
+    """
+    home.mkdir(exist_ok=True)
+    (home / "rules.yml").write_text(_rules(prefix), encoding="utf-8")
     environment = dict(os.environ)
     environment["ONEVCS_HOME"] = str(home)
     registered = _just("register-repo", str(checkout), environment=environment)
     assert registered.returncode == 0, registered.stderr + registered.stdout
-    return Identity(checkout, origin, elsewhere, environment)
+    return environment
 
 
 def _work_outside_the_registry(identity: Identity) -> str:
@@ -271,6 +327,128 @@ def test_work_status_answers_a_branch_before_and_after_it_lands(tmp_path: Path) 
     table = _just("work-status", WORK_BRANCH, environment=identity.environment)
     assert table.returncode == 0, table.stderr + table.stdout
     assert landed["publication"]["state"].replace("-", " ") in table.stdout, table.stdout
+
+
+def _land_the_way_a_host_squashes(identity: Identity) -> None:
+    """Land a second branch as a remote merge path leaves one, and import it.
+
+    A host's squash writes one commit on the base with the change request's number in
+    its subject and nothing else — no trailer, because `onevcs` did not write the
+    commit, and no record here, because nothing was published through it. That is done
+    by hand with git rather than through `publish-branch`, since the identity resolves
+    `local-direct` and the whole point is a landing this identity's publication did
+    **not** stamp. The branch is then imported so the identity holds it, which is what
+    lets `work-status` be asked about it at all.
+    """
+    _git("fetch", "-q", "origin", cwd=identity.elsewhere)
+    _git("checkout", "-q", "-B", SQUASHED_BRANCH, f"origin/{BASE}", cwd=identity.elsewhere)
+    (identity.elsewhere / SQUASHED_FILE).write_text("squashed\n", encoding="utf-8")
+    _git("add", "-A", cwd=identity.elsewhere)
+    _git("commit", "-q", "-m", "feat: the squashed work", cwd=identity.elsewhere)
+    _git("push", "-q", "origin", SQUASHED_BRANCH, cwd=identity.elsewhere)
+
+    _git("fetch", "-q", "origin", cwd=identity.checkout)
+    _git("checkout", "-q", BASE, cwd=identity.checkout)
+    _git("merge", "-q", "--ff-only", f"origin/{BASE}", cwd=identity.checkout)
+    _git("merge", "-q", "--squash", f"origin/{SQUASHED_BRANCH}", cwd=identity.checkout)
+    _git(
+        "commit",
+        "-q",
+        "-m",
+        f"feat: the squashed work (#{SQUASHED_NUMBER})",
+        cwd=identity.checkout,
+    )
+    _git("push", "-q", "origin", BASE, cwd=identity.checkout)
+
+    imported = _just(
+        "import-branch",
+        SQUASHED_BRANCH,
+        "--repo",
+        str(identity.checkout),
+        "--from",
+        str(identity.elsewhere),
+        environment=identity.environment,
+    )
+    assert imported.returncode == 0, imported.stderr + imported.stdout
+
+
+def _landing(branch: str, environment: dict[str, str]) -> tuple[Landing, str]:
+    """One `work-status` answer about `branch`: the `landed` field, and the table."""
+    machine = _just("work-status", branch, "--json", environment=environment)
+    assert machine.returncode == 0, machine.stderr + machine.stdout
+    # `cast` for the reason the landing journey gives: every field named is read below.
+    status = cast(WorkStatus, json.loads(machine.stdout))
+    table = _just("work-status", branch, environment=environment)
+    assert table.returncode == 0, table.stderr + table.stdout
+    return status["publication"]["landed"], table.stdout
+
+
+def test_a_lost_landing_is_read_from_the_base_only_where_the_publication_wrote_a_trailer(
+    tmp_path: Path,
+) -> None:
+    """Which landing survives the loss of this host's records depends on who wrote it.
+
+    `onevcs` stamps only the commit it writes. A `local-direct` publication writes the
+    base's squash commit itself, so the base carries `<prefix>Landed-Commit` and the
+    trailer tier reads it on a host that has never held a record of the branch. A remote
+    host's squash carries no trailer, and the change-request tier needs a record of the
+    change request before it can look for its number — so once the record is gone the
+    `(#N)` in the base's own subject goes unread and the answer falls to `content
+    comparison`, which never says `yes`. This drives both halves through registries
+    holding no session record, plus the one thing that turns the strong half off: the
+    trailer is read under the configured prefix and not under a name `onevcs` knows on
+    its own. The docs passage this reconciles is `docs/repo-lifecycle.md`'s *What
+    `decided by:` can reach, per workflow*. It runs in well under a second — the
+    identity's merge path runs nothing and `--no-draft` spends no turn — which is why it
+    sits in this module's tier beside the two journeys above rather than behind an
+    edge of its own.
+    """
+    identity = _identity(tmp_path)
+    _work_outside_the_registry(identity)
+    imported = _just(
+        "import-branch",
+        WORK_BRANCH,
+        "--repo",
+        str(identity.checkout),
+        "--from",
+        str(identity.elsewhere),
+        environment=identity.environment,
+    )
+    assert imported.returncode == 0, imported.stderr + imported.stdout
+    # `--no-draft`: a `local-direct` landing opens no change request, so there is no
+    # body for a drafting turn to describe.
+    published = _just(
+        "publish-branch",
+        WORK_BRANCH,
+        "--repo",
+        str(identity.checkout),
+        "--no-draft",
+        environment=identity.environment,
+    )
+    assert published.returncode == 0, published.stderr + published.stdout
+    _land_the_way_a_host_squashes(identity)
+    subjects = _git("log", "--format=%s", "-2", BASE, cwd=identity.origin)
+    assert f"(#{SQUASHED_NUMBER})" in subjects, subjects
+
+    # A registry that has never seen either branch: only the base's own history answers.
+    without_records = _registry(tmp_path / "no-records", identity.checkout, prefix=TRAILER_PREFIX)
+
+    stamped, stamped_table = _landing(WORK_BRANCH, without_records)
+    assert stamped["state"] == LANDED, stamped_table
+    assert stamped["evidence"]["tier"] == TRAILER_TIER, stamped_table
+    assert "a landing trailer on the base" in stamped_table, stamped_table
+
+    unstamped, unstamped_table = _landing(SQUASHED_BRANCH, without_records)
+    assert unstamped["state"] == UNDECIDED, unstamped_table
+    assert "evidence" not in unstamped, unstamped_table
+    assert "content comparison" in unstamped_table, unstamped_table
+
+    # The same branch and the same base, read under a prefix the base was not stamped
+    # with: the trailer tier finds nothing, and the strong half is the weak one.
+    other_prefix = _registry(tmp_path / "other-prefix", identity.checkout, prefix=OTHER_PREFIX)
+    unread, unread_table = _landing(WORK_BRANCH, other_prefix)
+    assert unread["state"] == UNDECIDED, unread_table
+    assert "content comparison" in unread_table, unread_table
 
 
 def test_work_status_refuses_a_reference_this_host_knows_nothing_about(tmp_path: Path) -> None:

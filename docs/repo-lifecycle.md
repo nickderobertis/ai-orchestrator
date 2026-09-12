@@ -1684,16 +1684,14 @@ merged, asked on a host whose session record for it is gone, answers `landed: un
 by `content comparison` and comes back into `just recoverable` under `— may have landed`
 with a `publish-branch` command beside it. Read that as *no record*, confirm against the
 change request, and do not run the command. A `local-direct` branch in the same state
-still answers from its trailer. Both halves are measured rather than reasoned, over one
-landing of each workflow asked twice — once in this host's state root, where both answer
-`a recorded landing`, and once in a throwaway one holding no session record for either,
-where they part. That measurement lives in exactly one place and is re-taken there each
-time the pin moves, because the pair it is taken over has to be re-chosen each time as
-well: a ref stops answering here within a cycle or two of landing, and the two this
-passage used to name are gone from every registered checkout.
-`tests/test_phase_and_landing_guidance.py` is what holds it — the refs, the condition and
-both quoted answers — to the release this checkout pins, so a stale copy of it here would
-be a second measurement nothing re-takes.
+still answers from its trailer. The tiers and their order are `crates/onevcs/src/landed.rs`
+at the tag `config/onevcs.version` names, which is the one source of this table, and
+`tests/e2e/test_work_status_and_import_e2e.py` is the gate that holds the table to it:
+it lands one branch through `publish-branch` and one the way a host squashes — a base
+commit carrying the number in its subject and no trailer — then asks both through a
+registry holding no session record, and asks the stamped one again under another
+`trailer_prefix`, where the trailer tier finds nothing and the answer falls to the
+comparison.
 
 The distinction that matters most is the middle two. `repo-recover` is the only
 verb that knows how to attest an incomplete-step marker, so a branch carrying one

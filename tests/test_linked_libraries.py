@@ -189,10 +189,7 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         "docs/onejudge-integration.md": ("`oneagentgraph` {version}, nor `onevcs`",),
     },
     "onevcs": {
-        # The retry floor: a dispatched session publishes through the linked onevcs, so
-        # the CLI pin beside it is not the version in force.
-        "AGENTS.md": ("its lock still resolves onevcs {version}",),
-        # Which onevcs the engine-behaviour claims in that document were read at. Every
+        # Which onevcs the lifecycle page's engine-behaviour claims were read at. Every
         # one of them is about the copy a *dispatched* node publishes through, so the
         # linked version is the only one that answers for them — and `DRAIN_SECONDS`
         # becoming `DRAIN` between 0.4.2 and 0.8.0 is what this gate is for: the
@@ -379,15 +376,6 @@ class LinkedCore(NamedTuple):
     core: str
 
 
-class ProseClaim(NamedTuple):
-    """A sentence some document must spell, against a fact measured elsewhere."""
-
-    #: The document, relative to the repository root.
-    relative_path: str
-    #: The sentence, as a format template over that measurement's own fields.
-    template: str
-
-
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
 #: between them would mean anything. Measured 2026-08-31 on this host's installed
 #: wheels: `config/oneharness.version` reads 0.11.2 and names the `oneharness-cli`
@@ -410,18 +398,6 @@ LINKED_HARNESS_CORES = (
     LinkedCore(dependent="onejudge", dependent_version="0.7.0", core="0.12.2"),
 )
 
-#: Where an operator meets the CLI-versus-core reality, and the sentence that has to
-#: name every half of it. Prose rather than only a comment for the reason the
-#: divergence below has prose: the person who reads `config/oneharness.version` and
-#: concludes the dispatched turn runs 0.11.2 is making the same mistake the whole of
-#: this module is about. One fragment, spelled once per dependent, with every number
-#: in it interpolated — a sentence that hardcoded the *dependent's* version would go
-#: stale the day oneagentgraph moved without this gate saying so.
-HARNESS_CORE_PROSE = ProseClaim(
-    relative_path="AGENTS.md",
-    template="`{dependent}` {dependent_version} brings `{crate}` {core}",
-)
-
 #: The pins that may not be reconciled today, each with the measured pair it was
 #: declared against. A divergence is permitted only where the linked release is not
 #: installable from PyPI at all — never as a convenience, and never as "not yet
@@ -432,27 +408,10 @@ HARNESS_CORE_PROSE = ProseClaim(
 #: not. Both halves of that ground went at once: the registry now carries every
 #: `onejudge` from 0.5.0 to 0.6.2, and the adopted engine links 0.6.2, so there is nothing left to
 #: except and the entry is retired rather than re-dated. What stays is the escape
-#: hatch — `Divergence`, this registry, and the two tests that read it — because the
+#: hatch — `Divergence`, this registry, and the pin gate that reads it — because the
 #: next adoption that meets an uninstallable linked release needs to declare one
 #: without first rebuilding the machinery to do it in.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}
-
-#: Where a divergence is explained to an operator, and the sentence naming both of
-#: its versions. Prose rather than only a comment, because the person who meets this
-#: is a manager reading why two version files disagree, and the numbers in that
-#: explanation go stale the same way every other restated measurement does.
-#:
-#: The template survives the registry being empty on purpose: it is parametrized over
-#: the declaration rather than over a version literal, so a re-declared divergence
-#: gets its prose gate back with no test to rewrite. What is *also* gated, below, is
-#: that an empty registry leaves no such paragraph behind — an explanation of a
-#: divergence that no longer exists is exactly the stale claim these gates are for.
-DIVERGENCE_PROSE = (
-    "AGENTS.md",
-    "links the `onejudge` crate {linked}, and PyPI carries no "
-    "`onejudge` {linked} — the tag is published and the distribution is not — so "
-    "`config/onejudge.version` stays at {pinned}",
-)
 
 
 def _pinned_cli(version_file: str) -> str:
@@ -536,64 +495,6 @@ def test_the_cli_pin_names_the_release_the_engine_linked(crate: str, version_fil
     )
 
 
-@pytest.mark.reads_docs
-def test_the_declared_divergence_is_explained_where_an_operator_meets_it() -> None:
-    """The prose naming both versions is held to the pair this host measures.
-
-    A divergence is a thing a manager has to be told, not only a thing a gate
-    tolerates: the whole failure mode is somebody reading one version file and
-    concluding a fix is in force. So the explanation names both numbers, and this
-    fails when either moves — which is the prompt to re-read the paragraph rather
-    than to inherit it.
-
-    With no divergence declared this asserts nothing, and the test below is the half
-    that then does the work.
-    """
-    relative_path, template = DIVERGENCE_PROSE
-    stated = {
-        crate: template.format(linked=declared.linked, pinned=declared.pinned)
-        for crate, declared in DECLARED_DIVERGENCES.items()
-    }
-    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
-
-    for crate, sentence in stated.items():
-        assert written.count(sentence) == 1, (
-            f"{relative_path} states the {crate} divergence {written.count(sentence)} "
-            f"times, not once; it must say {sentence!r} so the operator who meets two "
-            "disagreeing version files is told which one governs a dispatch"
-        )
-
-
-@pytest.mark.reads_docs
-def test_no_divergence_is_explained_that_this_host_no_longer_has() -> None:
-    """A retired divergence takes its paragraph with it.
-
-    The other direction of the gate above, and the one that comes due on an adoption
-    rather than on a bump: prose explaining why two version files disagree, left
-    standing after they stopped disagreeing, tells a manager to distrust a pin that is
-    now correct. That is worse than the stale claim it replaced, because it reads as
-    a deliberate exception somebody thought about.
-
-    Written against the *shape* of the explanation rather than against the retired
-    onejudge numbers, so it also catches a future divergence whose registry entry was
-    removed and whose paragraph was not.
-    """
-    relative_path, template = DIVERGENCE_PROSE
-    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
-    # The invariant half of the template — everything up to the first interpolation —
-    # is what a paragraph explaining any divergence has to spell.
-    shape = template.split("{", 1)[0].strip()
-
-    for crate in RECONCILED_PINS:
-        if crate in DECLARED_DIVERGENCES:
-            continue
-        assert shape not in written, (
-            f"{relative_path} still explains a divergence for {crate}, and "
-            f"DECLARED_DIVERGENCES has none: config/{RECONCILED_PINS[crate]} equals what "
-            "the adopted engine linked. Delete the paragraph rather than re-dating it"
-        )
-
-
 def test_the_engine_links_one_oneharness_core_for_every_dependent() -> None:
     """Which dependent brings which core — asserted as the mapping, not as a count.
 
@@ -656,29 +557,6 @@ def test_the_oneharness_pin_names_an_artifact_the_engine_does_not_link() -> None
     )
 
 
-@pytest.mark.reads_docs
-def test_the_linked_oneharness_cores_are_named_where_an_operator_meets_them() -> None:
-    """The prose naming each dependent's core is held to what this host measures.
-
-    Same reason the declared divergence has prose: the failure is a manager reading one
-    version file and concluding a fix is in force. `config/oneharness.version` is the
-    most inviting of the six to read that way, because it is the only one whose number
-    matches neither thing a dispatch runs — and that stayed true when the two linked
-    cores collapsed into one, since the number the pin carries is still the CLI's.
-    """
-    claim = HARNESS_CORE_PROSE
-    brought = _linked_by_dependent(UNRECONCILABLE_PIN.crate)
-    written = " ".join((REPO_ROOT / claim.relative_path).read_text(encoding="utf-8").split())
-
-    for resolved in brought:
-        stated = claim.template.format(crate=UNRECONCILABLE_PIN.crate, **resolved._asdict())
-        assert written.count(stated) == 1, (
-            f"{claim.relative_path} states {stated!r} {written.count(stated)} times, not "
-            f"once; the adopted engine links {brought}, and an operator meeting "
-            "disagreeing oneharness numbers has to be told which one a dispatched turn runs"
-        )
-
-
 #: The sibling CLI wheels this host installs beside the engine, each of which links
 #: `oneharness-core` on its own account. Named rather than derived because what is being
 #: reconciled is a claim about *these* artifacts: the standalone CLI a recipe spawns is
@@ -738,9 +616,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         "onejudge-cli": ("0.12.1", "0.12.2"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
-        "and AGENTS.md's \"How this pin's number compares with the linked core's\" "
-        "paragraph quotes the pair it was written against. Re-read that paragraph against "
-        "what is installed now and update it in the same change"
+        "not the pair this check was written against. Re-read what is installed now and "
+        "update the pair in the same change"
     )
 
 

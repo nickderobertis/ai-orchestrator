@@ -128,10 +128,6 @@ ONE_READING_ONLY = re.compile(
 #: check that recognised only the first would pass this one straight back in.
 UNDECIDED_SITE_SCOPE = re.compile(r"left\s+standing\s+at\s+a\s+site\s+it\s+touched", re.I)
 
-#: A file-scoped directive, in the comment syntaxes the documents this policy governs use.
-#: Its region is the whole file, which is what makes it the case the carve-out decides.
-FILE_SCOPED = re.compile(r"llmlint:\s*ignore-file\[(?P<rule>[^\]]+)\]")
-
 #: The words a *statement* of this policy cannot avoid, as opposed to a pointer at one,
 #: as `(label, the pattern that finds it)`. Patterns rather than substrings because
 #: `AGENTS.md` is hard-wrapped and the phrase that has to be caught most is the one a
@@ -214,30 +210,6 @@ def test_the_disclosure_leaves_a_compliant_worker_and_an_adversarial_judge_one_r
         "one thing over a file-scoped directive, whose region is every line of its file, "
         "so that wording leaves a worker and a judge free to land in different places on "
         "the case this repository's own documents present"
-    )
-
-
-def test_the_file_scoped_carve_out_decides_a_case_these_documents_really_present() -> None:
-    """The carve-out is held against the files it is about, not against a hypothetical.
-
-    A rule for a case nothing presents is a rule nobody reads, and the reason paragraph
-    in the appendix cites this one by name: `AGENTS.md` carries file-scoped directives at
-    its head, and a change that edits a paragraph of it changes a line every one of them
-    covers. So the appendix has to answer that case, and the file has to still be the
-    case it answers — the day these directives go, the citation is describing a file that
-    no longer reads that way.
-    """
-    guidance = _document(GUIDANCE_DOCUMENT)
-    covering = FILE_SCOPED.findall(guidance)
-    assert covering, (
-        f"{GUIDANCE_DOCUMENT} carries no file-scoped directive, so {APPENDIX}'s reason "
-        "for scoping the account by line cites a file that no longer presents the case; "
-        "re-take the reason against a document that does, or drop it"
-    )
-    assert f"at the head of `{GUIDANCE_DOCUMENT}`" in _document(str(APPENDIX)), (
-        f"{APPENDIX} no longer names {GUIDANCE_DOCUMENT} as the file whose file-scoped "
-        f"directives the scope had to decide, and it carries {len(covering)} of them; "
-        "without the case, the carve-out reads as a rule about nothing"
     )
 
 

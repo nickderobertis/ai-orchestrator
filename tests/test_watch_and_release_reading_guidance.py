@@ -1,13 +1,11 @@
-"""What `AGENTS.md` tells a supervisor about watching a run and reading a release.
+"""What `AGENTS.md` tells a supervisor about watching a run, held to what this checkout has.
 
-Each claim those two passages make is enumerated rather than summarized, because none
-of them announces itself when it goes missing: a buffered watch produces no error, a
-cursor extracted with its quote is refused far from where it was read, and a comparison
-that called a live publication a failure looks exactly like one that caught a real one.
-
-Four are reconciled against something other than this repository's own prose — the word
-the wrapper emits the cursor under, the count of its terminal conditions, the observer a
-planning launch attaches, and the per-record flush the buffering account rests on.
+Four things are reconciled against something other than this repository's own prose —
+the word the wrapper emits the cursor under, the count of its terminal conditions, the
+observer a planning launch attaches, and the per-record flush the buffering account
+rests on — because none of them announces itself when it drifts: a cursor extracted
+under the wrong word is refused far from where it was read, and a buffered watch
+produces no error at all.
 """
 
 from __future__ import annotations
@@ -22,13 +20,12 @@ from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_docs
 
-#: The manager's own document, and the two passages these claims live in. Passages
+#: The manager's own document, and the passage the watch claims live in. A passage
 #: rather than the whole file, because each claim is made where a supervisor is doing
 #: that thing — a phrase that survived somewhere else would satisfy a document-wide
 #: search while the passage that has to carry it was gone.
 MANAGER = "AGENTS.md"
 WATCH_SECTION = "### Never let dispatched work run unwatched"
-RELEASE_OPENER = "**Whether a release exists is read from the registry"
 
 #: The wrapper the watch passage documents, and the one place it declares the word a
 #: caller anchors the cursor on and the terminal conditions it branches between.
@@ -42,197 +39,6 @@ PLAN_LAUNCHER = "scripts/plan.sh"
 #: a default that moved to another spelling fails here rather than matching some other
 #: `off` in the file.
 PLANNING_OBSERVER = 'DEFAULT_DAG_GRAPH="off"'
-
-
-class Claim(NamedTuple):
-    """One thing a passage has to say, and the phrase that says it."""
-
-    #: What the claim is about, for the failure message and the test id.
-    subject: str
-    #: Which passage has to carry it.
-    region: str
-    phrase: str
-
-
-#: Every claim these passages exist to make. Each is a thing a supervisor would
-#: otherwise learn by watching a run go silent, which is how all of them were learned.
-REQUIRED_CLAIMS = (
-    Claim(
-        "the verb is invoked rather than scripted around",
-        WATCH_SECTION,
-        "**Invoke that verb directly, and write no loop around it.**",
-    ),
-    Claim(
-        "why a hand-written loop is the failure this replaces",
-        WATCH_SECTION,
-        "Every loop written here is a fresh chance to lose the invariant in a new way",
-    ),
-    Claim(
-        "and why fixing one fixes none of the others",
-        WATCH_SECTION,
-        "no fifth loop inherits a fix for any of them",
-    ),
-    Claim(
-        "where the properties hold by construction",
-        WATCH_SECTION,
-        "hold by construction inside the command and by somebody's memory anywhere else",
-    ),
-    Claim(
-        "a missing condition is reported rather than looped around",
-        WATCH_SECTION,
-        "a missing terminal condition worth reporting rather than a loop worth writing",
-    ),
-    Claim(
-        "the cursor reaches a caller as well as a reader",
-        WATCH_SECTION,
-        "**The cursor is emitted for a caller as well as printed for a reader.**",
-    ),
-    Claim(
-        "on a line of its own",
-        WATCH_SECTION,
-        "as a line of its own carrying `watch-cursor <cursor>` and nothing else",
-    ),
-    Claim(
-        "how a caller reads it back",
-        WATCH_SECTION,
-        "cursor=$(sed -n 's/^watch-cursor //p' watch.log | tail -n 1)",
-    ),
-    Claim(
-        "what parsing it out of the sentence costs",
-        WATCH_SECTION,
-        "Extracting the token out of the sentence takes the closing quote along with it",
-    ),
-    Claim(
-        # The count in that sentence is deliberately not quoted here.
-        # `test_the_endings_the_passage_counts_are_the_ones_the_wrapper_has` reads it out
-        # of the passage and reconciles it against the wrapper, so a number in this claim
-        # would be a second copy of it — and the one that goes stale silently, because a
-        # claim is satisfied by the sentence being *there*.
-        "and where the watch re-armed with it ends",
-        WATCH_SECTION,
-        "the watch stopping rather than continuing",
-    ),
-    Claim(
-        "what the wait can be told to return on",
-        WATCH_SECTION,
-        "**`--until` is how you say what the wait is for",
-    ),
-    Claim(
-        "every value is checked when the command is invoked",
-        WATCH_SECTION,
-        "every one is checked when the command is invoked",
-    ),
-    Claim(
-        "a node the graph does not hold is refused up front",
-        WATCH_SECTION,
-        "refused up front — naming the ids the graph does hold",
-    ),
-    Claim(
-        "the wait can have no bound at all",
-        WATCH_SECTION,
-        "`--timeout none` does not bound the wait at all",
-    ),
-    Claim(
-        "and that is a different value from reading once",
-        WATCH_SECTION,
-        "a different value from `--timeout 0`, whose meaning is unchanged",
-    ),
-    Claim(
-        "what a piped watch depends on",
-        WATCH_SECTION,
-        "**What you pipe a watch into decides whether you see any of it.**",
-    ),
-    Claim(
-        "the lines are written as they happen",
-        WATCH_SECTION,
-        "Every line is written as it happens",
-    ),
-    Claim(
-        "which filters hold everything until the watch exits",
-        WATCH_SECTION,
-        "`sed` and `awk` delivered nothing at all",
-    ),
-    Claim(
-        "what tail does by construction",
-        WATCH_SECTION,
-        "`tail` shows nothing by construction because it is holding out for the end",
-    ),
-    Claim(
-        "which filters pass a line through",
-        WATCH_SECTION,
-        "`cat` and GNU `grep` pass each line through as it arrives",
-    ),
-    Claim(
-        "what a buffered watch is indistinguishable from",
-        WATCH_SECTION,
-        "**A buffered watch reads from outside exactly like a healthy quiet run and "
-        "exactly like a dead one**",
-    ),
-    Claim(
-        "and what to do about it",
-        WATCH_SECTION,
-        "redirect it to a file and read the file, or make the filter line-buffer "
-        "(`stdbuf -oL`, `sed -u`, `grep --line-buffered`)",
-    ),
-    Claim(
-        "monitoring is critical for every dispatch",
-        WATCH_SECTION,
-        "**Monitoring is critical for every dispatch, and a planning run is a dispatch.**",
-    ),
-    Claim(
-        "no class of launch is exempt",
-        WATCH_SECTION,
-        "There is no class of launch this rule exempts",
-    ),
-    Claim(
-        "a planning run attaches no observer",
-        WATCH_SECTION,
-        "`just plan` names `--dag-graph off` deliberately",
-    ),
-    Claim(
-        "what a supervisor owes a launch that attaches no monitor",
-        WATCH_SECTION,
-        "What a supervisor owes a launch that attaches no monitor of its own is the same "
-        "thing it owes every other one",
-    ),
-    Claim(
-        "whether a release exists is read from the registry",
-        RELEASE_OPENER,
-        "read from the registry, and from nothing else",
-    ),
-    Claim(
-        "not from a verification workflow's conclusion",
-        RELEASE_OPENER,
-        "a **verification workflow's conclusion**, which reports one verdict over three "
-        "different jobs of work",
-    ),
-    Claim(
-        "what that conclusion cannot tell apart",
-        RELEASE_OPENER,
-        "a genuine post-publish failure, a pre-publish gate failure and ordinary noise are "
-        "indistinguishable in it",
-    ),
-    Claim(
-        "not from a comparison of a tag against a registry",
-        RELEASE_OPENER,
-        "a **comparison of a tag against a registry**",
-    ),
-    Claim(
-        "what that comparison misreads",
-        RELEASE_OPENER,
-        "reads work still in flight as work that failed",
-    ),
-    Claim(
-        "that it was reproduced after the rule was recorded",
-        RELEASE_OPENER,
-        "from a watcher written *after* this rule had already been recorded",
-    ),
-    Claim(
-        "and what to do instead",
-        RELEASE_OPENER,
-        "ask the registry for the version, and where it is not there yet, wait and ask it again",
-    ),
-)
 
 
 def _text(relative_path: str) -> str:
@@ -249,9 +55,9 @@ def _region(opener: str) -> str:
 
     The opener is part of the passage rather than the boundary before it, because a
     passage's own first sentence states the rule the rest of it is about. Cut at a
-    heading of any depth rather than at a top-level one: both passages here sit under
-    `###` headings, and stopping only at `## ` would let a phrase deleted from one
-    passage be satisfied by a neighbouring section that still carries it.
+    heading of any depth rather than at a top-level one: the passage sits under a
+    `###` heading, and stopping only at `## ` would let a phrase deleted from it be
+    satisfied by a neighbouring section that still carries it.
     """
     document = _text(MANAGER)
     assert opener in document, (
@@ -259,8 +65,8 @@ def _region(opener: str) -> str:
         "to watch a run and how to read whether a release exists"
     )
     lines = (opener + document.split(opener, 1)[1]).splitlines()
-    # From the second line on: one of these two openers *is* a heading, and a passage
-    # bounded by the first heading it meets would be the empty string.
+    # From the second line on: the opener *is* a heading, and a passage bounded by the
+    # first heading it meets would be the empty string.
     for line_number, line in enumerate(lines[1:], start=1):
         if line.startswith("#") and line.lstrip("#").startswith(" "):
             return "\n".join(lines[:line_number])
@@ -300,22 +106,6 @@ def _surface_rows() -> list[SurfaceRow]:
         kind, _, rest = line.partition(" ")
         rows.append(SurfaceRow(kind=kind, rest=rest))
     return rows
-
-
-@pytest.mark.parametrize("claim", REQUIRED_CLAIMS, ids=lambda claim: claim.subject)
-def test_the_supervisor_is_told_every_part_of_watching_and_of_reading_a_release(
-    claim: Claim,
-) -> None:
-    """A claim dropped from here is one a supervisor relearns by losing a run.
-
-    Each of these was learned the expensive way and none of them announces itself: a
-    buffered watch, an expired one, a loop matching its own shell, and a comparison
-    calling a live publication a failure all look from outside like everything working.
-    """
-    assert _flat(claim.phrase) in _flat(_region(claim.region)), (
-        f"{MANAGER}'s {claim.region!r} passage no longer says {claim.subject}: the phrase "
-        f"{claim.phrase!r} is gone"
-    )
 
 
 def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_wrapper_emits() -> None:

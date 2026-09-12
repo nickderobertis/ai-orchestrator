@@ -20,10 +20,6 @@ from orchestrator.root import REPO_ROOT
 #: and pacing a copy's content-creating mutations instead of sending them as one burst.
 #: onetaskgraph https://github.com/nickderobertis/onetaskgraph/pull/173.
 PACING_FLOOR = "0.2.18"
-#: The engine refusal a pin below the floor would be traded for, in the words the prose
-#: is held to. One string rather than two copies, because the gate over `AGENTS.md` and
-#: the journeys that would observe the older behaviour describe the same trade.
-BLOCKED_BY = "unknown field `location`"
 
 
 def adopted_release() -> str:
