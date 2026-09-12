@@ -238,13 +238,14 @@ SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 #: route and a monitor that wrote its observation as prose has reported it to nobody.
 #:
 #: It is answered at once, and it says the next turn is *not* now. The hold between
-#: the monitor's turns is the graph's — `graphs/dag-scope.yaml` paces the member with
-#: `schedule: {every: 300}`, counted from the moment this answer closes the turn — so a
-#: judge side that slept here would only stack a second wait on the first. What this
-#: answer owes the monitor is the other half: that when the hold ends its turn reads the
-#: detailed stream from the cursor it left (`personas/orchestrator.yaml`), not from a tail
-#: of whatever is newest, because "keep reading now" to a member about to be held for
-#: five minutes reads as an instruction to spend the turn it has just finished.
+#: the monitor's turns is the graph's — `graphs/dag-scope.yaml`'s `schedule` on the
+#: member, counted from the moment this answer closes the turn — so a judge side that
+#: slept here would only stack a second wait on the first. What this answer owes the
+#: monitor is the other half: that when the hold ends its turn reads the detailed stream
+#: from the cursor it left, not from a tail of whatever is newest, because "keep reading
+#: now" to a member about to be held reads as an instruction to spend the turn it has
+#: just finished. `tests/e2e/test_monitor_quiet_turn_e2e.py` holds the file it names to
+#: the one `personas/orchestrator.yaml` tells the monitor to keep.
 TURN_TAKEN_ACKNOWLEDGED = (
     "Your turn was taken and no planner surface was raised for it: prose reaches "
     "nobody. A report reaches the planner only as a `finding` op in an "

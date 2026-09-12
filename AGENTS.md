@@ -682,26 +682,22 @@ was.
   run's own state for whether anything is watching: `OBSERVER DEAD` is the window
   before the driver relaunches the observer and may clear on its own; `OBSERVER NOT
   RESTARTED` is the driver having given up, and is yours to act on. The monitor is a
-  **paced foreground conversation**: `graphs/dag-scope.yaml` holds it 300 seconds
-  between turns and declares `background: false`, which is what keeps the observer
-  graph alive between them — a property the document declares, not one inferred from
-  which member is a conversation — and the pacemaker, a scheduled member declaring
-  nothing and so background, fires inside those holds. A hold is not a death: the
-  heartbeat continues through it, `just status` reports neither verdict above during
-  one, and a `note` to the monitor ends the hold rather than waiting it out. This
-  host's 89 recorded pacemaker settlements, 50 beside a live conversation and 39 taking
-  a one-member graph down with them, are the history behind that declaration;
-  `tests/e2e/test_observer_graph_liveness_e2e.py` holds the arrangement, and
-  `docs/orchestration.md`'s "The monitor is a paced foreground conversation" has the
-  account.
+  **paced foreground conversation**: `graphs/dag-scope.yaml` holds it between turns
+  and declares it `background: false`, which is what keeps the observer graph alive
+  through a hold — a property the document declares, not one inferred from which
+  member is a conversation — and the pacemaker, a scheduled member declaring nothing
+  and so background, fires inside those holds. A hold is not a death: the heartbeat
+  continues through it, `just status` reports neither verdict above during one, and a
+  `note` to the monitor ends the hold rather than waiting it out.
+  `tests/e2e/test_observer_graph_liveness_e2e.py` holds that arrangement.
 - **A surface's text reaches the engine as bytes**, never as a command-line word,
   because bash substitutes backticks and `$(...)` inside double quotes and a finding
   that quotes a command then runs it.
 - **The pacemaker interval is set at launch only**, so relaunch rather than expect to
   retune a live run; live edits belong to the `monitor` member and to you. The
-  monitor's hold is the same kind of setting: `just orchestrate --set
-  members.monitor.schedule.every=<seconds>` for one run, never an edit to the shipped
-  document.
+  monitor's hold is the same kind of setting: `--set
+  members.monitor.schedule.every=<seconds>` on the launch, never an edit to the
+  shipped document.
 
 ## Personas and the base config
 

@@ -173,13 +173,11 @@ ROOT_CAUSES_LANDINGS = (
     ),
 )
 
-#: The engine half of turn provenance, which the two adoptions before this one left out:
-#: onepipeline 0.28.0 was cut at 01:43Z on 2026-09-12 and #231 merged at 04:12Z, into
-#: release-plz's 0.28.1 PR (#239). It was declared `AWAITING_RELEASE` under that pin and
-#: moved here by the adoption of 0.28.2, whose history carries it — so a manager note is
-#: now told from a supervisor turn by the engine, and carried across a
-#: publication-failure re-dispatch. `tests/e2e/test_worker_start_directory_e2e.py` is what
-#: observes the producer's stamp itself on a real dispatch.
+#: The engine half of turn provenance: a manager note told from a supervisor turn by the
+#: engine, and carried across a publication-failure re-dispatch. Held here because the
+#: producer's half — the `origin` stamp `tests/e2e/test_worker_start_directory_e2e.py`
+#: observes on a real dispatch — reads as the whole repair while the engine that acts on
+#: it is missing.
 NOTE_PROVENANCE_LANDINGS = (
     Landing(
         node="op-note-provenance",
@@ -204,14 +202,9 @@ class Awaiting(NamedTuple):
 
 
 #: The landings the adopted release does not carry, each declared against the release PR
-#: waiting on it.
-#:
-#: **Empty, and kept.** The one entry this carried was `op-note-provenance` (#231),
-#: declared absent from 0.28.0 because that release was cut before the landing merged;
-#: 0.28.2 carries it and the row moved into `NOTE_PROVENANCE_LANDINGS`. What stays is the
-#: declaration shape and the gate that reads it, because the next adoption that meets a
-#: release cut between two landings needs to declare the gap without first rebuilding the
-#: machinery to declare it in.
+#: waiting on it. Empty, and kept: the declaration shape and the gate that reads it stay
+#: so that the next adoption meeting a release cut between two landings can declare the
+#: gap without first rebuilding the machinery to declare it in.
 AWAITING_RELEASE: tuple[Awaiting, ...] = ()
 
 

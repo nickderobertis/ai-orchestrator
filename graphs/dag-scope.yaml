@@ -69,45 +69,28 @@ members:
     judge:
       command: ["scripts/channel-serve.py"]
     mode: bypass
-    # One turn every five minutes, paced by the graph rather than by the model. A
-    # `schedule` on a two-party member paces this one conversation and never starts a
-    # second: `every` is the hold between the judge's answer and the next agent turn,
-    # counted from the moment `scripts/channel-serve.py` closes a turn with its next
-    # instruction. Before this the conversation took a turn every 23–60 seconds and
-    # was 58% of this host's Codex tokens, 94% of those turns reporting nothing; at
-    # one turn per 300 seconds the persona reads the stream from a cursor
-    # (../personas/orchestrator.yaml) rather than a tail, because 25–50 events land
-    # between turns.
+    # One turn every five minutes, paced by the graph rather than by the model: `every`
+    # is the hold between the judge's answer and the next agent turn, and a `schedule`
+    # on a two-party member paces this one conversation rather than starting a second.
+    # The persona reads the stream from a cursor rather than a tail because of it.
     #
-    # `start_after: 0` is stated rather than left to the default, because from schema
-    # 4 an omitted `start_after` defaults to `every`, and that would leave the first
-    # five minutes of every run unwatched. So the conversation still opens with the
-    # wave, as it always did; only the turns after the first are held.
+    # `start_after: 0` is stated because from schema 4 an omitted one defaults to
+    # `every`, which would leave the first five minutes of every run unwatched; the
+    # conversation still opens with the wave. `resettable` is deliberately absent: a
+    # planner-visible surface resets the pacemaker's clock below, not this one.
     #
-    # The hold is not silence: the member's heartbeat continues and its activity clock
-    # is refreshed for the length of it, so nothing condemns the monitor for waiting.
-    # A manager's `note` offered during a hold ENDS it — the turn opens and the note is
-    # delivered into it — so a note is never held for five minutes. A `trigger`, the
-    # run's `stop`, and a `cancel` end a hold the same way, and the driver's cancel
-    # at settlement ends the last one, so a run that settles in seconds returns in
-    # seconds. A journey that needs turns closer together than the shipped period says
-    # so with `just orchestrate --set members.monitor.schedule.every=<seconds>` and
-    # never by editing this value.
-    #
-    # `resettable` is deliberately NOT stated here: a planner-visible surface resets the
-    # pacemaker's clock below, not the monitor's, because the monitor is what reads the
-    # stream that produced the surface.
+    # A manager's `note` offered during the hold ENDS it — the turn opens with the note
+    # in it — so a note is never held for five minutes; a `trigger`, the run's `stop`,
+    # a `cancel`, and the driver's cancel at settlement end one the same way. A journey
+    # needing turns closer together says so with
+    # `just orchestrate --set members.monitor.schedule.every=<seconds>`, never here.
     schedule: {every: 300, start_after: 0}
-    # FOREGROUND, and this is the declaration that keeps the observer graph alive. From
-    # schema 8 a run stays open while any foreground member is unfinished and settles
-    # once only background members survive, and a scheduled member is background
-    # unless it says otherwise — so without this line the graph would take its initial
-    # wave and settle, and the pacemaker below would have nothing left to fire inside.
-    # With it, this conversation holds the run open between its own turns, until its
-    # judge completes it, onejudge settles it, `max_turns` bounds it, or the driver's
-    # cancel at settlement ends it. Liveness is now a property this document declares
-    # rather than one inferred from which members carry clocks; see
-    # docs/orchestration.md#the-monitor-is-a-paced-foreground-conversation.
+    # FOREGROUND, and this line is what keeps the observer graph alive between the
+    # monitor's turns. A scheduled member is background unless it says otherwise, and a
+    # run settles once only background members survive — so without this the graph
+    # would take its initial wave and settle, and the pacemaker below would have
+    # nothing to fire inside. Liveness is a property this document declares;
+    # tests/e2e/test_observer_graph_liveness_e2e.py reads it back off a real launch.
     background: false
   # The durable planner-update pacemaker: a single-sided member that comes due on a
   # schedule, reports the run's progress from durable evidence, and exits. It is what
@@ -220,12 +203,9 @@ members:
       turned out to be newlines flattened for display. Say what you measured and what
       you measured it against.
     schedule: {every: 1800, resettable: true}
-    # BACKGROUND, by saying nothing: a scheduled member is background unless it
-    # declares otherwise, and that default is exactly the pacemaker this member is
-    # meant to be. It fires while the `monitor` conversation above holds the run open,
-    # and never again once that conversation returns — the run does not stay open for
-    # it. Stating `background: true` here would say the same thing twice; stating
-    # `background: false` would make a member that exits after each firing hold the
-    # run open forever, because a scheduled foreground member never finishes on its
-    # own. The reset a consumed planner surface applies restarts THIS clock, so a run
-    # already reporting does not also get a pacemaker surface.
+    # BACKGROUND, by saying nothing: a scheduled member that declares no `background`
+    # is background, which is exactly the pacemaker this member is meant to be. It fires
+    # while the `monitor` conversation above holds the run open and never again once
+    # that conversation returns. `background: false` here would make a member that
+    # exits after each firing hold the run open forever, because a scheduled foreground
+    # member never finishes on its own.

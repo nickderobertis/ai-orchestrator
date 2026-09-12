@@ -93,6 +93,17 @@ RUNS_DIR_ENV = "ONEPIPELINE_RUNS_DIR"
 #: have come from the raise this change removed.
 SAID_ON_A_QUIET_TURN = "read the detailed stream; nothing needed raising this turn"
 
+#: What the answer to a taken turn has to say about the turn after it. The graph paces
+#: the monitor's conversation with a hold between turns, so an acknowledgement that
+#: told the member to keep reading *now* would be an instruction to spend the turn it
+#: has just finished; what it says instead is that the next turn opens after the hold
+#: and reads the stream from the cursor `personas/orchestrator.yaml` keeps. The cursor
+#: file is read off the persona rather than retyped, so the answer and the instruction
+#: it refers to are reconciled here rather than left to drift.
+NEXT_TURN_OPENS_AFTER_THE_HOLD = "next turn opens after the graph's hold"
+PERSONA = REPO_ROOT / "personas" / "orchestrator.yaml"
+CURSOR_FILE = re.compile(r"the\s+file\s+`(?P<file>[a-z.]+)`\s+in\s+your\s+working\s+directory")
+
 #: How long a turn that raises nothing may take to answer before this journey calls it
 #: hung — every content-bearing turn, whatever the content is. Such a turn opens no
 #: channel at all, so what this really bounds is the regression: a filter that raised a
@@ -330,6 +341,19 @@ def test_a_monitor_turn_that_produced_content_costs_the_planner_no_surface(
     assert ruling["reason"].strip(), (
         f"{case} answered with a bare non-completion, which reads in a transcript like a "
         f"planner who refused the watch: {ruling}"
+    )
+    assert NEXT_TURN_OPENS_AFTER_THE_HOLD in ruling["message"], (
+        f"{case} was answered as if the monitor's next turn were now, and the graph holds "
+        f"that conversation between turns: {ruling}"
+    )
+    cursor = CURSOR_FILE.search(" ".join(PERSONA.read_text(encoding="utf-8").split()))
+    assert cursor is not None, (
+        f"{PERSONA} no longer names the cursor file the monitor reads the stream from, so "
+        "this journey cannot say whether the answer names the same one"
+    )
+    assert f"`{cursor.group('file')}`" in ruling["message"], (
+        f"{case} was answered without telling the monitor to read its next turn from "
+        f"`{cursor.group('file')}`, the cursor the persona keeps: {ruling}"
     )
 
 

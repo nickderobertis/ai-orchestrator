@@ -453,6 +453,9 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
     """
     environment = _launched_environment(tmp_path, oneharness_bin)
     # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
+    # llmlint: ignore[live_tier_compiles_and_requires_credential] The boundary under test
+    # is the graph's pacing of a conversation, and a credentialed turn would prove nothing
+    # more about it; the paid provider is the one thing this suite doubles.
     environment[OBSERVER_ANSWER_ENV] = SAID_ON_A_QUIET_TURN
     environment[OBSERVER_MEMBER_ENV] = MONITOR_MEMBER
     environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
@@ -524,6 +527,12 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `xdist_group` selects
 # an xdist worker under this suite's `--dist loadgroup`, not a test tier; the tiers here
 # split by what a test reads, which is what each one's Nx cache key has to cover.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey replaces
+# the one-turn-each settlement journey this module used to spend a launch on, in the
+# `tests/e2e` tree that pre-dates this change; which Nx project owns that tree is a
+# property of the tree rather than of anything here — `AGENTS.md` records the tier split
+# as a deliberate decision, and re-homing the launch journeys into a new project is
+# enforcement configuration this change may not move in order to pass.
 @pytest.mark.xdist_group("observer-graph-liveness")
 def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     tmp_path: Path, oneharness_bin: str
@@ -637,6 +646,7 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_pinned_reader_refuses_an_observer_graph_nothing_holds_open(tmp_path: Path) -> None:
