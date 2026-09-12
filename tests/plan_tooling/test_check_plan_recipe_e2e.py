@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -47,7 +48,7 @@ from project_fixtures import project_from_plan, reviewed
 from scratch_identity import registered, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_store
+from orchestrator import host_installs, plan_store
 from orchestrator.criteria_guard import (
     APPENDIX,
     APPENDIX_ENV,
@@ -2238,7 +2239,9 @@ def test_a_stated_change_request_policy_lets_a_local_direct_node_consume_a_relea
     refused a plan the launch would have accepted — which stopped `just finish-plan` at
     its check step, before any design document could be written or approved.
     """
-    (checkout,) = registered(tmp_path / "registry", ["service"])
+    (checkout,) = registered(
+        tmp_path / "registry", ["service"], declarations={"service": _declaring(WHEEL)}
+    )
     _hooked(checkout)
     plan = _publishing_plan(
         tmp_path,
@@ -2305,7 +2308,9 @@ def test_a_plan_this_host_would_publish_is_not_refused_for_where_it_lands(
     this host has never registered. The last two are the same answer — this host cannot
     say — and refusing either would refuse plans that launch correctly today.
     """
-    hooked, bare = registered(tmp_path / "registry", ["hooked", "bare"])
+    hooked, bare = registered(
+        tmp_path / "registry", ["hooked", "bare"], declarations={"hooked": _declaring(WHEEL)}
+    )
     _hooked(hooked)
     plan = _publishing_plan(
         tmp_path,
@@ -2492,7 +2497,12 @@ def test_a_node_consuming_a_release_its_identity_really_publishes_is_not_refused
     this registry is what proves the difference matters: the same identity registers as
     `local` and resolves `change-auto`, so a reader of the wrong one would refuse this.
     """
-    (checkout,) = registered(tmp_path / "registry", ["service"], publication="change-auto")
+    (checkout,) = registered(
+        tmp_path / "registry",
+        ["service"],
+        publication="change-auto",
+        declarations={"service": _declaring(WHEEL)},
+    )
     _hooked(checkout)
     plan = _publishing_plan(
         tmp_path,
@@ -2512,6 +2522,320 @@ def test_a_node_consuming_a_release_its_identity_really_publishes_is_not_refused
 
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+#: A wheel this host installs, as `host_installs` names it, and two artifacts it does
+#: not: what a scratch producer declares so a node can wait on either kind.
+WHEEL = ("pypi", "pypi:onepipeline-cli")
+CRATE = ("crate", "crate:onepipeline")
+NPM = ("npm", "npm:onepipeline-cli")
+
+#: This host's own repository, as `onevcs` files it and as a node's `repo` names it. The
+#: journeys about a node *of this repository* name it unregistered in the scratch
+#: registry, which is fine: those rules compare origins and read the dependency's
+#: targets, and every other rule passes over what it cannot resolve.
+THIS_REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
+
+
+def _declaring(*declared: tuple[str, str]) -> str:
+    """A `release-targets.toml` declaring each ``(name, id)`` target and nothing a probe runs."""
+    rows = "".join(
+        f'\n[[target]]\nid = "{artifact}"\nname = "{name}"\n'
+        f'what = "The {name} target, as a scratch producer declares it."\n'
+        f"published_by = \"Nothing: a journey's stand-in for a producer's declaration.\"\n"
+        for name, artifact in declared
+    )
+    return f'schema_version = 3\nprobe = "scripts/release-probe.sh"\n{rows}'
+
+
+def _releases(root: Path, **rules: dict[str, str]) -> str:
+    """A `releases.yml` for the scratch registry under ``root``, one rule per checkout name.
+
+    Matched by checkout path — `root / name`, which is where `registered` puts each
+    identity's one checkout — because that is what `onevcs`'s `path` matcher reads, so
+    two identities in one registry can sit on different rungs.
+    """
+    written = "".join(
+        f'  - match: {{path: "{root / name}"}}\n'
+        + "".join(f"    {key}: {value}\n" for key, value in rule.items())
+        for name, rule in rules.items()
+    )
+    return f"version: 1\ndefault:\n  adoption: fast\nrepositories:\n{written}"
+
+
+def _consumer(**fields: object) -> dict[str, object]:
+    """A node landing in `service` behind the `library` producer, with ``fields`` on top."""
+    return {
+        "id": "consumer",
+        "title": "feat: adopt the release",
+        "repo": "service",
+        "deps": ["producer"],
+        **fields,
+    }
+
+
+PRODUCER = {"id": "producer", "title": "feat: release the library", "repo": "library"}
+
+
+def _adoption_check(
+    tmp_path: Path, *nodes: dict[str, object], environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Check a plan of ``nodes`` through the real recipe against the scratch registry."""
+    return _check_project(
+        project_from_plan(_publishing_plan(tmp_path, *nodes)),
+        environment=environment or _in_registry(tmp_path / "registry" / "onevcs"),
+    )
+
+
+def test_a_consumed_target_the_producer_does_not_resolve_is_refused_listing_what_it_does(
+    tmp_path: Path,
+) -> None:
+    """R2, through the real recipe: a wait on a target the producer does not release.
+
+    The producer really declares a wheel, in its origin's first commit where `onevcs`
+    reads a declaration from, so what the refusal lists is what the real verb resolved
+    rather than what the plan claimed.
+    """
+    registered(
+        tmp_path / "registry",
+        ["library", "service"],
+        publication="change-auto",
+        declarations={"library": _declaring(WHEEL)},
+    )
+
+    refused = _adoption_check(tmp_path, PRODUCER, _consumer(consumes={"producer": "npm"}))
+    accepted = _adoption_check(tmp_path, PRODUCER, _consumer(consumes={"producer": "pypi"}))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: scripts/plan-check.sh: consumer: consumes:" in refused.stderr, (
+        refused.stderr
+    )
+    assert "'npm'" in refused.stderr, refused.stderr
+    assert "resolves: pypi" in refused.stderr, refused.stderr
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_a_published_node_with_no_target_to_wait_on_is_refused_as_held_for_ever(
+    tmp_path: Path,
+) -> None:
+    """R3: the hold nothing can end, with the node's rung read out of the real override.
+
+    The node states no `adoption` of its own; `published` is what `onevcs` answers for
+    its repository out of the `releases.yml` seeded into the scratch registry — so the
+    rung the engine would hold it on is the one this refusal read.
+    """
+    root = tmp_path / "registry"
+    registered(
+        root,
+        ["library", "service"],
+        declarations={"library": _declaring(WHEEL)},
+        releases=_releases(root, service={"adoption": "published"}),
+    )
+
+    refused = _adoption_check(tmp_path, PRODUCER, _consumer())
+    accepted = _adoption_check(
+        tmp_path,
+        PRODUCER,
+        _consumer(consumes={"producer": "pypi"}, merge_policy="change-open"),
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: scripts/plan-check.sh: consumer: adoption:" in refused.stderr, (
+        refused.stderr
+    )
+    assert "held for ever" in refused.stderr, refused.stderr
+    assert "`consumes: {producer: <target>}`" in refused.stderr, refused.stderr
+    assert "`default_target` in config/onevcs.releases.yml" in refused.stderr, refused.stderr
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_a_fast_node_behind_a_release_publishing_without_a_change_request_is_refused(
+    tmp_path: Path,
+) -> None:
+    """R4: the node that fails at its last step after all of its work.
+
+    `local-direct` is what the scratch rules resolve for every identity here, so the
+    policy this refusal names is the one `onevcs rules check` answered; stating a
+    change-request policy on the node is the correction the refusal names, and it is
+    accepted.
+    """
+    registered(
+        tmp_path / "registry", ["library", "service"], declarations={"library": _declaring(WHEEL)}
+    )
+
+    refused = _adoption_check(tmp_path, PRODUCER, _consumer())
+    accepted = _adoption_check(tmp_path, PRODUCER, _consumer(merge_policy="change-open"))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: scripts/plan-check.sh: consumer: adoption:" in refused.stderr, (
+        refused.stderr
+    )
+    assert "adopts `fast`" in refused.stderr, refused.stderr
+    assert "'local-direct'" in refused.stderr, refused.stderr
+    assert "`adoption: published`" in refused.stderr, refused.stderr
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_a_node_of_this_repository_resolving_a_crate_is_refused_naming_the_judged_tier(
+    tmp_path: Path,
+) -> None:
+    """R5: a crate reaches nothing a dispatch here runs, and the pin question is the judge's.
+
+    The scratch producer declares what the engine's real producer declares — a crate,
+    the wheel `host_installs` names, and an npm launcher — so the artifact the refusal
+    names is one the real verb read off a real declaration.
+    """
+    registered(
+        tmp_path / "registry", ["library"], declarations={"library": _declaring(CRATE, WHEEL, NPM)}
+    )
+    consumer = _consumer(repo=THIS_REPOSITORY, adoption="published", merge_policy="change-open")
+
+    refused = _adoption_check(tmp_path, PRODUCER, consumer | {"consumes": {"producer": "crate"}})
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: scripts/plan-check.sh: consumer: consumes:" in refused.stderr, (
+        refused.stderr
+    )
+    assert "`crate:onepipeline`" in refused.stderr, refused.stderr
+    assert "engine wheel" in refused.stderr, refused.stderr
+    assert "`just review-plan`'s question" in refused.stderr, refused.stderr
+    assert host_installs.by_artifact(WHEEL[1]) is not None, "the pass case below names no wheel"
+
+
+@pytest.mark.parametrize(
+    "criteria",
+    (
+        pytest.param(STATES_ITS_BAR, id="silent about the pin"),
+        pytest.param(
+            f"{STATES_ITS_BAR}\n- `config/onepipeline.version` names the release this node adopts.",
+            id="naming the pin",
+        ),
+    ),
+)
+def test_a_node_of_this_repository_adopting_a_wheel_is_accepted_whatever_its_criteria_say(
+    tmp_path: Path, criteria: str
+) -> None:
+    """The correction R5 names, and the line this tier does not cross.
+
+    Two fixtures differing only in whether the criteria name the `config/<pin>.version`
+    the wheel governs, and both pass: no rule of this module reads a task's prose, so
+    whether the pin named is the right one for the fix is `just review-plan`'s question
+    and never this recipe's refusal.
+    """
+    registered(
+        tmp_path / "registry", ["library"], declarations={"library": _declaring(CRATE, WHEEL, NPM)}
+    )
+    consumer = _consumer(
+        repo=THIS_REPOSITORY,
+        adoption="published",
+        merge_policy="change-open",
+        consumes={"producer": "pypi"},
+        task=_task(criteria),
+    )
+
+    accepted = _adoption_check(tmp_path, PRODUCER, consumer)
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_a_node_elsewhere_taking_the_hosts_default_target_is_told_what_to_write(
+    tmp_path: Path,
+) -> None:
+    """R7: the shape every planner outside this repository meets first.
+
+    The override gives the producer a `default_target`, exactly as this host's tracked
+    one does for every producer it installs, and a `published` node of another
+    repository naming no `consumes` would take it — this host's own wheel. The refusal
+    says what to write and lists the producer's targets; writing it is accepted.
+    """
+    root = tmp_path / "registry"
+    registered(
+        root,
+        ["library", "service"],
+        publication="change-auto",
+        declarations={"library": _declaring(WHEEL, CRATE)},
+        releases=_releases(root, library={"default_target": "pypi"}),
+    )
+
+    refused = _adoption_check(tmp_path, PRODUCER, _consumer(adoption="published"))
+    accepted = _adoption_check(
+        tmp_path, PRODUCER, _consumer(adoption="published", consumes={"producer": "crate"})
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "check-plan: scripts/plan-check.sh: consumer: consumes:" in refused.stderr, (
+        refused.stderr
+    )
+    assert "`default_target` ('pypi')" in refused.stderr, refused.stderr
+    assert "`consumes: {producer: <target>}`" in refused.stderr, refused.stderr
+    assert "resolves: pypi, crate" in refused.stderr, refused.stderr
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_a_plan_whose_repositories_the_registry_does_not_know_earns_no_adoption_refusal(
+    tmp_path: Path,
+) -> None:
+    """Every rule passes over what this host cannot answer for.
+
+    A node carrying every field the rules read — `published`, a `consumes` naming a
+    target nobody resolves, a dependency elsewhere — against a registry holding neither
+    repository. Nothing about any of it is knowable here, so nothing is refused.
+    """
+    registered(tmp_path / "registry", ["unrelated"])
+    consumer = _consumer(repo="nobody__service", adoption="published", consumes={"producer": "npm"})
+
+    accepted = _adoption_check(tmp_path, PRODUCER | {"repo": "nobody__library"}, consumer)
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+
+def test_the_two_paths_report_the_same_adoption_refusal(tmp_path: Path) -> None:
+    """The direct path raises the first refusal the rules make; the verb collects them all.
+
+    Two violations in one plan, one per node, so the two amounts differ: the through-engine
+    path prints both, and the direct path prints exactly one — which has to be one of the
+    two, naming the same node, field and rule. On a plan carrying one violation the two
+    outputs name the same three things.
+    """
+    root = tmp_path / "registry"
+    registered(
+        root,
+        ["library", "service"],
+        declarations={"library": _declaring(WHEEL)},
+        releases=_releases(root, service={"adoption": "published"}),
+    )
+    held = _consumer(id="held")
+    drafted = _consumer(id="drafted", adoption="fast")
+    two = project_from_plan(_publishing_plan(tmp_path, PRODUCER, held, drafted))
+    (tmp_path / "one").mkdir()
+    one = project_from_plan(_publishing_plan(tmp_path / "one", PRODUCER, held))
+    registry = _in_registry(root / "onevcs")
+    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
+    # engine carrying no `plan check`, for the reason `_older_engine` states.
+    direct = registry | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    through = _check_project(two, environment=registry)
+    directly = _check_project(two, environment=direct)
+    through_one = _check_project(one, environment=registry)
+    directly_one = _check_project(one, environment=direct)
+
+    assert through.returncode == 1, through.stdout + through.stderr
+    assert directly.returncode == 1, directly.stdout + directly.stderr
+    collected = [
+        line.removeprefix("check-plan: scripts/plan-check.sh: ")
+        for line in through.stderr.splitlines()
+        if line.startswith("check-plan: scripts/plan-check.sh: ")
+    ]
+    assert {line.split(": ")[0] for line in collected} == {"held", "drafted"}, collected
+    (raised,) = [line for line in directly.stderr.splitlines() if line.startswith("check-plan: ")]
+    assert raised.removeprefix("check-plan: ") in collected, (raised, collected)
+    for reported in (through_one, directly_one):
+        assert reported.returncode == 1, reported.stdout + reported.stderr
+        assert "held: adoption: this node adopts `published`" in reported.stderr, reported.stderr
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -2592,6 +2916,74 @@ def test_a_destination_this_host_cannot_answer_for_refuses_nothing(
         cwd=REPO_ROOT,
         input=_loaded_plan(project, tmp_path),
         env=os.environ | {"PATH": f"{binary}{os.pathsep}{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    assert json.loads(answered.stdout)["refusals"] == [], f"{what} refused: {answered.stdout}"
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+#: Every way this host can have nothing to say about a release: no `onevcs` at all, one
+#: that refuses the question, and one whose answer is not the shape the rules read.
+#: ``None`` is a PATH holding the system's tools and the installed engine — which the
+#: check needs, to read the review bar out of — and no `onevcs`, so the CLI's absence is
+#: the one thing tested.
+UNANSWERABLE_ADOPTION = (
+    ("no onevcs on PATH", None),
+    ("a verb that exits non-zero", "import sys\n\nsys.exit(3)\n"),
+    ("an answer that is not the JSON shape the rules read", "print('adoption: published')\n"),
+)
+
+
+@pytest.mark.parametrize("what,program", UNANSWERABLE_ADOPTION, ids=lambda row: row)
+def test_a_release_this_host_cannot_ask_about_refuses_nothing(
+    tmp_path: Path, what: str, program: str | None
+) -> None:
+    """The adoption rules are written to miss wherever `onevcs` cannot answer.
+
+    The node carries every field the rules read — `published`, a `consumes` naming a
+    target nobody resolves, a dependency in another repository — so that an empty answer
+    is the silence rather than an accident of the fixture. Driven through
+    `scripts/plan-check.sh` for the reason the publication journey above gives: the
+    recipe reaches the engine through `uv run`, which puts this checkout's `.venv/bin`
+    ahead of anything a journey could put on PATH.
+    """
+    binary = tmp_path / "bin"
+    binary.mkdir(parents=True)
+    if program is not None:
+        # llmlint: ignore-block[e2e_not_mocked] `onevcs` is the published CLI this check
+        # delegates its questions to, doubled at that boundary and nothing above it: a
+        # verb that refuses and an answer of another shape cannot be produced by the real
+        # one on demand. The script, the module, the subprocess boundary between them and
+        # the plan document the verb writes are all real.
+        stand_in = binary / "onevcs"
+        stand_in.write_text(f"#!{sys.executable}\n{program}", encoding="utf-8")
+        stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR)
+        # llmlint: ignore-end[e2e_not_mocked]
+        path = f"{binary}{os.pathsep}{os.environ['PATH']}"
+    else:
+        engine = shutil.which("onepipeline")
+        assert engine is not None, "the installed engine is what the check reads the bar from"
+        (binary / "onepipeline").symlink_to(engine)
+        path = f"{binary}{os.pathsep}/usr/bin:/bin"
+    plan = _publishing_plan(
+        tmp_path,
+        PRODUCER,
+        _consumer(adoption="published", consumes={"producer": "npm"}, merge_policy="change-open"),
+    )
+    project = reviewed(project_from_plan(plan))
+
+    # llmlint: ignore-block[tests_mirror_real_usage] This script *is* the interface these
+    # shapes are reachable through, for the reason the publication journey above states.
+    answered = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "plan-check.sh")],
+        cwd=REPO_ROOT,
+        input=_loaded_plan(project, tmp_path),
+        env=os.environ | {"PATH": path},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(180),

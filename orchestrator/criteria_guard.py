@@ -101,7 +101,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from orchestrator import plan_review, plan_store, publication_guard
+from orchestrator import adoption_guard, plan_review, plan_store, publication_guard
 from orchestrator.root import REPO_ROOT
 
 #: The operational text every dispatched task carries, and the one source a plan
@@ -1487,7 +1487,8 @@ def check_plan(plan: object) -> int:
     The criteria first and this host's publication policy after, which is the order the
     two cost a plan's author: a criterion its own judge would fail on is a wrong bar
     whatever repository it lands in, and where it lands is what
-    :mod:`orchestrator.publication_guard` then asks about.
+    :mod:`orchestrator.publication_guard` then asks about — and whether the release it
+    waits on could ever arrive there is :mod:`orchestrator.adoption_guard`'s, asked last.
     """
     checked = 0
     for node in dispatched_nodes(plan):
@@ -1495,6 +1496,7 @@ def check_plan(plan: object) -> int:
         check_appendix(node.task, node.id)
         checked += 1
     publication_guard.check_plan(plan)
+    adoption_guard.check_plan(plan)
     return checked
 
 
@@ -1567,7 +1569,11 @@ def check_directly(project: str) -> int:
         return 2
     try:
         checked = check_plan(plan)
-    except (CriteriaError, publication_guard.PublicationError) as exc:
+    except (
+        CriteriaError,
+        publication_guard.PublicationError,
+        adoption_guard.AdoptionError,
+    ) as exc:
         print(f"check-plan: {exc}", file=sys.stderr)
         return 1
     # tests/test_criteria_guard.py covers this, and no recipe journey can: the recipe

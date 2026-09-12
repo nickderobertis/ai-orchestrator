@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -72,6 +72,11 @@ PLANNING_FLOW_ORIGIN = "github.com/nickderobertis/ai-orchestrator"
 #: The variable git reaches an ssh remote through, and the one name a hosted scratch
 #: identity puts in a journey's environment.
 GIT_SSH_COMMAND = "GIT_SSH_COMMAND"
+
+#: The document a repository declares what it publishes in, at its own root, and the
+#: name `onevcs` reads a host's release override under its state root by.
+DECLARATION = "release-targets.toml"
+RELEASES = "releases.yml"
 
 #: The fake `ssh` a hosted origin is served through. Called as `ssh <host> <command>`,
 #: where the command is `git-upload-pack 'owner/name.git'` or `git-receive-pack
@@ -233,7 +238,12 @@ def rules_for(publication: str) -> str:
 
 
 def registered(
-    root: Path, names: Sequence[str], *, publication: str = "local-direct"
+    root: Path,
+    names: Sequence[str],
+    *,
+    publication: str = "local-direct",
+    declarations: Mapping[str, str] | None = None,
+    releases: str | None = None,
 ) -> tuple[Path, ...]:
     """Seed one checkout per name in a scratch registry, and answer where each one is.
 
@@ -244,6 +254,15 @@ def registered(
     Its own origin per name, because two checkouts of one origin are two aliases of one
     identity and share its whole policy: what a caller wants from several names is
     several identities.
+
+    ``declarations`` maps a name to the `release-targets.toml` its origin's **first
+    commit** carries, which is where `onevcs` reads a producer's declaration from — the
+    publication checkout's base, never its working tree. ``releases`` is installed into
+    the scratch registry as its `releases.yml` by the same recipe, in place of the
+    tracked `config/onevcs.releases.yml` that recipe installs when nothing names one: the
+    host override `onevcs release targets` resolves a repository's adoption rung and
+    default target out of, whose rules match a seeded identity by the path of its
+    checkout, `root / name`.
     """
     checkouts = []
     for name in names:
@@ -252,6 +271,8 @@ def registered(
         git("init", "-q", "--bare", "-b", "main", str(origin))
         git("init", "-q", "-b", "main", str(seed))
         (seed / "README.md").write_text("seed\n", encoding="utf-8")
+        if declarations and name in declarations:
+            (seed / DECLARATION).write_text(declarations[name], encoding="utf-8")
         git("add", "-A", cwd=seed)
         git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=seed)
         git("remote", "add", "origin", str(origin), cwd=seed)
@@ -264,8 +285,13 @@ def registered(
     manifest.write_text("".join(f"{path}\n" for path in checkouts), encoding="utf-8")
     rules = root / "onevcs.rules.yml"
     rules.write_text(rules_for(publication), encoding="utf-8")
+    override: list[str] = []
+    if releases is not None:
+        written = root / f"onevcs.{RELEASES}"
+        written.write_text(releases, encoding="utf-8")
+        override = ["--releases", str(written)]
     applied = subprocess.run(
-        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules), *override],
         cwd=REPO_ROOT,
         env={**os.environ, "ONEVCS_HOME": str(home)},
         text=True,
