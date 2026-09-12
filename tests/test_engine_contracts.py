@@ -162,9 +162,13 @@ DEATH_WORD_BINDING = re.compile(
 #: the next literal status anywhere in the crate, which is `Failed`. Nothing failed:
 #: the gate went on reconciling, against three pairings the engine has never written.
 #: So what is captured here is the **function's name**, and its arms are read below.
+#: The function's argument list is not anchored past the publication it reads:
+#: onepipeline 0.28.0 hands it the closeout's draft reason as a second argument, and a
+#: pattern demanding the call close on the first would report the relay gone.
 RELAY_SITE = re.compile(
     r"outcome:\s*Some\(crate::vcs::outcome_of\(.*?"
-    r"\.\.Settlement::plain\(\s*&node\.id,\s*([a-z_]+)\(&published\.outcome\),",
+    r"\.\.Settlement::plain\(\s*&node\.id,\s*([a-z_]+)\(\s*&published\.outcome\b.*?\),"
+    r"\s*None,?\s*\)",
     re.DOTALL,
 )
 

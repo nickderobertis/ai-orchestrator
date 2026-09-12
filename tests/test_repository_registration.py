@@ -1,23 +1,24 @@
-"""The three tracked files a registered repository takes, read together as content.
+"""The two tracked files a registered repository takes, read together as content.
 
-`config/onevcs.checkouts` says where a repository's working copies are,
-`config/onevcs.rules.yml` how a change there publishes, and
-`config/merge-path-checks.json` what can then refuse that merge. Each refuses a half
-registration at a different moment — one of them only once work has been dispatched —
-so every way the three can disagree is demonstrated here rather than left to a reader.
+`config/onevcs.checkouts` says where a repository's working copies are and
+`config/onevcs.rules.yml` how a change there publishes. Each refuses a half registration
+at a different moment, so every way the two can disagree is demonstrated here rather
+than left to a reader. What can then refuse the merge is not a third file: the adopted
+`onevcs` reads each identity's required checks off the host itself, and `just repos
+--audit-gate-coverage` reports them — `tests/e2e/test_merge_path_audit_e2e.py` drives
+that. A tracked copy of that list used to stand here, reconciled against GitHub by a test
+at the end of the gate, and every branch failed a whole gate whenever a sibling renamed a
+check; it is gone rather than kept as an annotation.
 
 Content is the whole subject: a checkout path is a claim about a directory outside
 this tree. What policy the files resolve is `tests/e2e/test_repo_registry_apply_e2e.py`'s,
-and reconciling them against the working copies and branch protection this host really
-has is the uncached `orchestrator:test-checkouts` tier's.
+and reconciling them against the working copies this host really has is the uncached
+`orchestrator:test-checkouts` tier's.
 """
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import NamedTuple
 
@@ -27,8 +28,6 @@ from orchestrator.root import REPO_ROOT
 
 TRACKED_CHECKOUTS = REPO_ROOT / "config" / "onevcs.checkouts"
 TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
-MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
-MERGE_PATH_AUDIT = REPO_ROOT / "scripts" / "merge-path-audit.py"
 
 #: The repository this registration is about, in the spellings the three files use.
 OWNER = "nickderobertis"
@@ -45,10 +44,6 @@ PUBLICATION = f"{DISPATCHED_ROOT}/{OWNER}__{REPOSITORY}"
 #: clone from, spelled the way `~/ai-orchestrator-isolated` is spelled beside
 #: `~/ai-orchestrator`.
 EXECUTION = f"{PUBLICATION}-isolated"
-#: The base branch a change here merges into, and so the branch whose required checks
-#: `config/merge-path-checks.json` is about.
-BASE_BRANCH = "main"
-
 #: A checkout entry as every line of that file is written: `~`-relative, one path, no
 #: segment that could be a shell surprise or a traversal. Registration resolves an
 #: identity from a checkout's own `origin` rather than from its path, so this is only
@@ -81,11 +76,10 @@ EXPECTED_POLICY = {"publication": "change-auto", "approvals": "none"}
 
 
 class Registration(NamedTuple):
-    """The three tracked files as content, so a defective one can be handed over too."""
+    """The two tracked files as content, so a defective one can be handed over too."""
 
     checkouts: str
     rules: str
-    inventory: str
 
 
 def tracked() -> Registration:
@@ -93,7 +87,6 @@ def tracked() -> Registration:
     return Registration(
         checkouts=TRACKED_CHECKOUTS.read_text(encoding="utf-8"),
         rules=TRACKED_RULES.read_text(encoding="utf-8"),
-        inventory=MERGE_PATH_CHECKS.read_text(encoding="utf-8"),
     )
 
 
@@ -140,17 +133,16 @@ def repository_of(entry: str) -> tuple[str | None, str]:
 
 
 def complaints(registration: Registration) -> list[str]:
-    """Every way the three files fail to describe one registered repository.
+    """Every way the two files fail to describe one registered repository.
 
-    One function rather than three assertions because the failures are about the files
-    *together*: a checkout with no rule and a rule with no inventory entry are each a
-    gap between two of them, and neither is visible from inside either one.
+    One function rather than two assertions because the failures are about the files
+    *together*: a checkout with no rule is a gap between them, and it is not visible
+    from inside either one.
     """
     entries = listed(registration.checkouts)
     rules = rules_of(registration.rules)
     ruled = {rule.identity for rule in rules}
     ruled_names = {rule.identity.rpartition("/")[2] for rule in rules}
-    inventoried: set[RepoIdentity] = set(json.loads(registration.inventory)["identities"])
     found: list[str] = []
 
     for entry in entries:
@@ -170,11 +162,6 @@ def complaints(registration: Registration) -> list[str]:
                 "than letting it fall through to the reviewed default"
             )
 
-    found += [
-        f"config/onevcs.rules.yml routes {identity}, which config/merge-path-checks.json "
-        "does not inventory, so the merge-path audit reports it as coverage unknown"
-        for identity in sorted(ruled - inventoried)
-    ]
     found += checkout_pair_complaints(registration.checkouts, entries)
     found += rule_complaints(registration.rules, rules)
     return found
@@ -263,51 +250,8 @@ RULE_BLOCK = (
 )
 
 
-def inventoried() -> dict[str, str]:
-    """What the tracked inventory says can refuse a merge here, and what each one is.
-
-    Read from the file rather than restated, because the answer is a fact about somebody
-    else's branch protection: the uncached tier reconciles this file against GitHub, so
-    a check added there is added here, and a test naming its own copy of the set would
-    then be asserting about a merge path that has moved.
-    """
-    declared = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))
-    checks: dict[str, str] = declared["identities"][IDENTITY]["checks"]
-    return checks
-
-
-#: What each classification means, in the words the audit prints beside a check.
-REASONS: dict[str, str] = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))["reasons"]
-
-
-def audit(stream: str) -> subprocess.CompletedProcess[str]:
-    """The real merge-path audit filter, over a real audit and the tracked declaration.
-
-    No network and no registry: the filter is handed the identity headings the
-    published audit prints and the file that decides the verdict it appends, which is
-    the whole of what this is about. What `onevcs` itself would say about a checkout
-    on this host is `tests/e2e/test_merge_path_audit_e2e.py`'s subject.
-    """
-    return subprocess.run(
-        [sys.executable, str(MERGE_PATH_AUDIT), str(MERGE_PATH_CHECKS)],
-        input=stream,
-        text=True,
-        capture_output=True,
-    )
-
-
-def audit_stream(*identities: RepoIdentity) -> str:
-    """One block per identity, shaped the way `onevcs repos --audit-gates` prints them."""
-    return "".join(
-        f"{identity}\tremote\tsingle-owner\t<no-op>\n"
-        f"  /checkouts/{identity.rpartition('/')[2]}\n"
-        "    merge-path coverage: the host's required checks\n"
-        for identity in identities
-    )
-
-
 def test_the_tracked_registration_is_complete_and_agrees_with_itself() -> None:
-    """The finished tree: three files, one repository, nothing left half-said."""
+    """The finished tree: two files, one repository, nothing left half-said."""
     assert complaints(tracked()) == []
 
 
@@ -391,21 +335,6 @@ def test_a_checkout_no_rule_matches_is_refused() -> None:
     )
 
 
-def test_a_rule_with_no_inventory_entry_is_refused() -> None:
-    """The other half of the same gap: routed, and the audit says nothing about it."""
-    registration = tracked()
-    uninventoried = (
-        f"  - match: {{host: github.com, owner: {OWNER}, name: uninventoried}}\n"
-        "    publication: change-auto\n"
-        "    approvals: none\n\n"
-    )
-    defective = registration._replace(
-        rules=registration.rules.replace(RULE_BLOCK, uninventoried + RULE_BLOCK, 1)
-    )
-
-    assert any("does not inventory" in found for found in complaints(defective))
-
-
 def test_the_rule_states_this_hosts_policy_and_nothing_else() -> None:
     """The routing decision itself, read off the file `just repos-apply` installs."""
     rule = next(rule for rule in rules_of(tracked().rules) if rule.identity == IDENTITY)
@@ -445,47 +374,3 @@ def test_a_rule_carrying_a_field_beyond_the_policy_is_refused() -> None:
     )
 
     assert any("where the policy for a single-owner" in found for found in complaints(defective))
-
-
-def test_the_audit_classifies_this_identity_from_the_committed_inventory() -> None:
-    """The entry earns the answer it was written for: inventoried, and listed by name.
-
-    This began as the other answer. When the repository was registered its base branch
-    declared no protection at all, and an empty required-check set was the honest entry
-    — which the audit rendered as a merge path it knows about and nothing can refuse.
-    That branch has since grown three, so what is asserted is the same property one
-    state further on: every check the tracked inventory records is named to the operator
-    with what that check *is*, and none of it reads as coverage nobody recorded.
-
-    Which of the two answers the entry earns is a fact about somebody else's branch
-    protection and moves without warning. The uncached tier is what notices — it asks
-    GitHub and fails when this file disagrees — so read a failure here as that having
-    happened rather than as this file having been wrong.
-    """
-    result = audit(audit_stream(IDENTITY))
-
-    assert result.returncode == 0, result.stderr
-    assert "merge-path coverage: the host's required checks — not the whole merge path" in (
-        result.stdout
-    )
-    assert f"{len(inventoried())} required checks on {BASE_BRANCH}" in result.stdout, result.stdout
-    for required, reason in inventoried().items():
-        assert f"{required} — {REASONS[reason]}" in result.stdout, result.stdout
-    assert "coverage unknown" not in result.stdout
-
-
-def test_the_audit_still_reports_an_identity_it_has_no_entry_for_as_unknown() -> None:
-    """The direction that has to keep failing loudly, from the same run and the same file.
-
-    Omitting the identity rather than inventorying it empty would land here — and this
-    verdict reads as a gap to go and look at, which is what an empty entry must never
-    be confused with.
-    """
-    unknown: RepoIdentity = f"github.com/{OWNER}/never-registered"
-
-    result = audit(audit_stream(IDENTITY, unknown))
-
-    assert result.returncode == 0, result.stderr
-    assert (
-        f"coverage unknown: config/merge-path-checks.json records no required checks for {unknown}"
-    ) in result.stdout

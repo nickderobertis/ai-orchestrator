@@ -40,7 +40,12 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
-from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
+from fake_backend import (
+    JUDGE_CONFIG_NAME,
+    JUDGE_SEND_BACK_ENV,
+    PROMPT_LOG_ENV,
+    RUN_ON_MARKER_ENV,
+)
 from project_fixtures import project_from_plan
 from scratch_identity import seeded
 from waits import timeout as e2e_timeout
@@ -205,6 +210,12 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     keyed = root / "commands.json"
     keyed.write_text(json.dumps({COMMIT_MARKER: COMMIT_COMMANDS}), encoding="utf-8")
     environment[RUN_ON_MARKER_ENV] = str(keyed)
+    # The stand-in's supervisor sends the worker back once, so the conversation has a
+    # turn that opens on the supervisor's own words — which is the turn the provenance
+    # journey below reads the `supervisor` stamp off. The commit above is idempotent,
+    # so a second worker turn changes nothing about where it stood.
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] a turn more, not a launch more
+    environment[JUDGE_SEND_BACK_ENV] = "1"
 
     launch = subprocess.run(
         [
@@ -323,4 +334,63 @@ def test_the_worker_s_harness_was_told_to_serve_the_turn_in_that_directory(
     assert served == set(_started(launched.journal, WORKER_MEMBER)), (
         f"the harness served the worker's turns in {sorted(served, key=str)}, while the "
         f"journal records it started in {sorted(set(_started(launched.journal, WORKER_MEMBER)))}"
+    )
+
+
+def _worker_turns(journal: list[JournalEvent], kind: str) -> list[dict[str, object]]:
+    """Every `kind` turn event the dispatched worker's conversation published, in order."""
+    # The turn events carry more than `Placement`; what is read off them here is the
+    # provenance stamp, so the payload is read as the open map it is.
+    #
+    # Read off the journal because, on the adopted engine, nothing else shows the stamp:
+    # `just transcript` prints a turn's number and its tool lines, and `just monitor`
+    # summarizes a `turn-started` by its status, outcome, message and reason — neither
+    # renders `origin`. The stamp is the producer's half of turn provenance, and the
+    # reader that acts on it is the engine landing `AGENTS.md` records as not yet
+    # adopted, so the relay putting it in the journal is the whole of what this host
+    # can observe. The day a view renders it, this read moves there.
+    # llmlint: ignore[tests_mirror_real_usage] No view renders a turn's `origin`; see above.
+    return [
+        cast(dict[str, object], event["payload"])
+        for event in journal
+        if event.get("kind") == kind and event.get("labels", {}).get("member") == WORKER_MEMBER
+    ]
+
+
+@pytest.mark.xdist_group("worker-start-directory")
+def test_every_turn_the_dispatch_published_says_who_authored_it(launched: Launched) -> None:
+    """The same journal stamps each of the worker's turns with its author.
+
+    The linked oneagentgraph 0.3.17 stamps a turn's opening with `origin` — `task` for
+    the composed task the member was opened on, `supervisor` for words its own
+    simulated supervisor generated, `delivered` for text a manager handed the graph —
+    and the engine relays the stamp into this journal untouched. It is the producer's
+    half of what tells a manager's note from a supervisor's turn: a monitor once read a
+    simulated supervisor's *"Stop work on this dispatch"* as the planner's and
+    cancelled a live dispatch on it, because a turn that only named a role could not
+    say who wrote it. Observed on a real dispatch rather than inferred from the pins,
+    because a relay that dropped the field would leave every version file reading
+    current and every turn unattributed.
+    """
+    opened = _worker_turns(launched.journal, "turn-started")
+    assert opened, "the journal records no turn of the dispatched worker"
+    first = next(turn for turn in opened if turn.get("role") == "assistant")
+    assert first.get("origin") == "task", (
+        f"the worker's opening turn is not stamped as the composed task: {first}"
+    )
+    # The stand-in's supervisor sends the worker back once, so the next worker turn
+    # opens on the supervisor's own words and is stamped as theirs.
+    later = [turn for turn in opened if turn.get("role") == "assistant" and turn is not first]
+    assert later, "the supervisor never sent the worker back for another turn"
+    assert {turn.get("origin") for turn in later} == {"supervisor"}, (
+        f"a later worker turn is not stamped as its supervisor's: {later}"
+    )
+    said = [
+        turn
+        for turn in _worker_turns(launched.journal, "turn-message")
+        if turn.get("role") == "user"
+    ]
+    assert said, "the journal records no words of the worker's supervising side"
+    assert {turn.get("origin") for turn in said} == {"supervisor"}, (
+        f"the supervising side's words reached the journal unattributed: {said}"
     )

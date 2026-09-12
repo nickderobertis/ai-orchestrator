@@ -100,10 +100,8 @@ WRAPPER_SCRIPTS = (
     "ask-manager-contract.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
-    # `just repos` goes through this one, which absorbs the flag spelling and — when
-    # an audit is asked for — pipes the answer through the filter it names.
+    # `just repos` goes through this one, which absorbs the flag spelling.
     "repos.sh",
-    "merge-path-audit.py",
     # The two landing recipes go through this one, which reads the branch and `--repo`
     # for the drafter and forwards everything else; the drafter itself is what it
     # names, and a checkout without it would delegate through a wrapper that cannot
@@ -542,8 +540,6 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     # The one source the wrappers read the read API's address from; a checkout
     # without it is not one these recipes can run in.
     shutil.copy2(ROOT / "config/read-api.address", checkout / "config/read-api.address")
-    # `just repos --audit-gate-coverage` reads this to say what its answer leaves out.
-    shutil.copy2(ROOT / "config/merge-path-checks.json", checkout / "config/merge-path-checks.json")
     # The operational appendix `just plan` hands its dispatch. Written rather than copied,
     # for the reason the template below is: what a launch does with it — that it exports
     # the text and refuses a checkout carrying none — is this suite's subject, and what

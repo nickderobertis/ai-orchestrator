@@ -48,11 +48,13 @@ remote open-PR publication for one run without changing stored workflow.
 throws its answer away, and where it ran less than the merge path it read as
 verification while a branch sat blocked on a required check it never ran. What verifies
 a change is the repository's own merge path — the host's required checks for a remote
-identity, the `pre-push` hook for a local one — and `onevcs` detects which. Required
-checks are inventoried per identity in `config/merge-path-checks.json`, so a new
-identity gets a rule *and* an entry there; `just repos --audit-gate-coverage` names
-them per identity and reports one it cannot classify as unknown rather than covered.
-Keep missing and unknown coverage visible.
+identity, the `pre-push` hook for a local one — and `onevcs` detects which. Every check
+a remote identity requires is one only its merge path runs, and `just repos
+--audit-gate-coverage` names them per identity, read off that repository's own branch
+protection and rulesets by `onevcs` at the moment you ask. There is no tracked copy of
+that list, so a new identity needs a rule and nothing else. Read the audit before
+relying on a merge path, and keep an identity it cannot classify visible rather than
+reading it as covered.
 
 **Nothing that changes what a remote or a base branch sees bypasses `onevcs`.**
 Pushing, merging into a base, and opening a change request go through
@@ -239,6 +241,21 @@ merging, in that repository's build graph, with no pin here to move: `git tag
 --contains` says the release carries the commit while the archive carries nothing of
 it, and `tests/test_plan_store_guidance.py` re-takes that on the installed plan-store
 CLI.
+
+**The `onevcs` pin moves for the whole host at once, never for one checkout.** `onevcs`
+keeps one registry under `$ONEVCS_HOME` for every checkout and every manager on the
+host, migrates it to its own schema on the first contact of any verb — a read included
+— and the release before it then fails on every verb, the copy a live dispatch of an
+older engine links included. Session setup is such a contact, and it runs on the
+`SessionStart` hook of every session that starts *or resumes* in a checkout carrying
+the new tool, the pin-moving dispatch's own worktree included. So move the pin only
+against the runs still live under an engine linking the older release, and
+re-provision every checkout onto it — session setup, or `just bootstrap`, there — because
+that is the remedy; restoring the older schema by hand is the stop-gap for a live run
+you cannot yet re-provision, and holds only until the next contact. The suite reads a
+per-process copy (`tests/conftest.py` exports `ONEVCS_HOME`), so a test that sandboxes
+`HOME` names `ONEVCS_HOME` beside it; `tests/e2e/test_onevcs_state_snapshot_e2e.py`
+re-takes the migration.
 
 ## Sequencing a node behind a release
 

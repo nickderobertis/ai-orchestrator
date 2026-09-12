@@ -3,7 +3,7 @@
 A plan now names its target repository as a normalized origin in the task record's own
 `repositories`, and the engine hands that origin to `onevcs` verbatim. `onevcs resolve
 <origin>` answers with **one** of the identity's registered checkouts — `store::resolve`
-at `onevcs` v0.19.3 takes the first `BTreeMap` entry whose identity matches, so it is the
+at `onevcs` v0.21.0 takes the first `BTreeMap` entry whose identity matches, so it is the
 checkout whose alias sorts first. On this host that is the canonical checkout for
 `ai-orchestrator` (`ai-orchestrator` < `ai-orchestrator-isolated` <
 `ai-orchestrator-isolated-2`) and for `printobserver`, by the accident of their names: a

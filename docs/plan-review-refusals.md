@@ -192,8 +192,9 @@ is right about detection. What it did not record is that for one class of node t
 
 The class is a node whose deliverable *is itself* an assertion about something outside the
 tree: an inventory of another system's settings, a pinned copy of a published contract, a
-fixture mirroring a service's shape. `config/merge-path-checks.json` — this repository's own
-inventory of the checks each merge path requires — is exactly one.
+fixture mirroring a service's shape. The inventory of the checks each merge path requires
+that this repository used to track — retired once `onevcs` reported them itself, because
+it went stale whenever a sibling renamed a check — was exactly one.
 
 Asked for criteria over such a node, the reviewer refused all three available shapes:
 

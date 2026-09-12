@@ -127,7 +127,7 @@ def test_both_documents_name_the_same_plan_source() -> None:
     )
 
 
-#: The crate whose source the two landings under "in force by merging" actually change,
+#: The crate whose source the live-lane landings under "in force by merging" change,
 #: and the one this CLI must not be shipping if that classification is to hold. Named
 #: rather than derived: what is being gated is a claim about *this* crate, and a check
 #: that asked "does the binary carry every crate it declares" would answer a different
@@ -146,16 +146,17 @@ CRATE_SOURCE_PATH = "crates/{crate}/src"
 def test_the_installed_plan_store_cli_ships_none_of_the_live_crate() -> None:
     """The artifact half of "in force by merging", measured on the installed binary.
 
-    Two landings this document classifies that way — the gate-selection repair and the
-    startup-sweep repair — are ancestors of the adopted release, so `git tag --contains`
-    answers that the release carries them. The archive does not, and every check in this
-    repository that reads a pin passes either way, which is exactly the reading that sent
-    one dispatch looking for a bump nobody made.
+    Three landings this document classifies that way — the gate-selection repair, the
+    startup-sweep repair, and the root-causes plan's own allowance re-check — are
+    ancestors of the adopted release, so `git tag --contains` answers that the release
+    carries them. The archive does not, and every check in this repository that reads a
+    pin passes either way, which is exactly the reading that sent one dispatch looking
+    for a bump nobody made.
 
     So the classification is held to the artifact rather than to the ancestry. The only
-    compiled source either landing touches is `onetaskgraph-live`, which is a
+    compiled source any of them touches is `onetaskgraph-live`, which is a
     dev-dependency of two crates and of nothing else, so the published CLI carries no
-    part of it — and the day that stops being true is the day both landings really are
+    part of it — and the day that stops being true is the day those landings really are
     adopted through this pin and the paragraph saying otherwise is wrong.
 
     Both directions are asserted. A crate the binary *does* carry has to be found, or an
@@ -177,8 +178,8 @@ def test_the_installed_plan_store_cli_ships_none_of_the_live_crate() -> None:
     )
     assert live not in compiled, (
         f"the installed plan-store CLI now carries {LIVE_ONLY_CRATE}, the crate holding "
-        "the only compiled source that the gate-selection and startup-sweep landings "
-        f"touch. {MANAGER} classifies both as in force by merging with no pin to move, "
-        "and that is now wrong: re-read the paragraph naming pull/433 and pull/538 "
-        "against what this release actually ships"
+        "the only compiled source that the gate-selection, startup-sweep and "
+        f"allowance re-check landings touch. {MANAGER} classifies all three as in force "
+        "by merging with no pin to move, and that is now wrong: re-read the paragraph "
+        "naming pull/433, pull/538 and pull/821 against what this release actually ships"
     )

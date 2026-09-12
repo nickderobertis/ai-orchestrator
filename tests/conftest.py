@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import onevcs_state_snapshot
 import plan_fixture_root
 import pytest
 from nx_inputs import (
@@ -56,6 +57,15 @@ from orchestrator.root import REPO_ROOT
 # to bound here. A call that states its own `timeout` is untouched, so nothing that
 # already chose a bound, or that catches `TimeoutExpired` on purpose, changes behaviour.
 install_default_bounds()
+
+# Every read of this host's `onevcs` state root is taken from a copy, for the whole of
+# this process and every subprocess it spawns. At import for the same reason the bounds
+# above are, and for a sharper one: the adopted `onevcs` rewrites a registry on first
+# contact and an older release cannot read what it writes, so the first `onevcs resolve`
+# or `onepipeline runs` any fixture ran against the real root would flip the host for
+# every process still on the older release. `tests/onevcs_state_snapshot.py` is the
+# measurement and the rule.
+onevcs_state_snapshot.snapshot()
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The directories under this checkout that git ignores and Nx therefore never hashes.

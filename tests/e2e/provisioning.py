@@ -136,6 +136,13 @@ def run_setup(
             "ASDF_BUN_VERSION": bun_version,
             "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
             "HOME": str(tmp_path),
+            # Named beside `HOME` rather than derived from it: the suite exports
+            # `ONEVCS_HOME` to a copy of the host's root (`tests/onevcs_state_snapshot.py`),
+            # and that export would otherwise win over the derivation this sandbox
+            # relies on — the sweep session setup runs would read the copy, and the
+            # journey that plants a broken root under `$HOME` would plant it where
+            # nothing looks.
+            "ONEVCS_HOME": str(tmp_path / ".onevcs"),
             "PATH": path or os.environ["PATH"],
             "TMPDIR": str(scratch_root),
             # A shared cache and a suite that corrupts what it installed cannot both

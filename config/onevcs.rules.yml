@@ -54,8 +54,9 @@
 #     that hook; `spanish-language-tutor` does not yet, so its merge-path audit
 #     truthfully reports no coverage.
 #
-# `config/merge-path-checks.json` is the inventory of what those required checks
-# are, per identity, and `just repos --audit-gate-coverage` reports them: with
+# `just repos --audit-gate-coverage` reports what those required checks are, per
+# identity, read off each repository's own branch protection and rulesets at the
+# moment it is asked — there is no tracked copy of that list: with
 # nothing here front-running them, *every* required check is one only the merge path
 # runs, and every one of them can refuse a merge. That is not a loss of coverage —
 # it is the coverage stated honestly for the first time.
@@ -104,9 +105,9 @@ rules:
     publication: change-auto
     approvals: none
 
-  # Its base branch is `master`, which is why `config/merge-path-checks.json`
-  # records that branch for it: the required checks an audit reports are the ones
-  # declared on the branch a change here actually merges into.
+  # Its base branch is `master`, which the audit names beside the checks it reports
+  # for it: the required checks are the ones declared on the branch a change here
+  # actually merges into.
   - match: {host: github.com, owner: nickderobertis, name: nick-derobertis-site}
     publication: change-auto
     approvals: none

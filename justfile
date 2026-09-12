@@ -538,16 +538,17 @@ results *args:
 transcript *args:
     @./scripts/onepipeline.sh transcript "$@"
 
-# Register a repository checkout alias. Type and workflow come from the rules file
-# the identity matches rather than from flags here; `onevcs` detects the gate the
-# checkout itself carries, which is a different thing and not the routing.
+# Register a repository checkout alias. Publication policy and approvals come from
+# the rules file the identity matches rather than from flags here; `onevcs` detects
+# the gate the checkout itself carries, which is a different thing and not the routing.
 register-repo *args:
     @uv run onevcs register "$@"
 
 # List repository identities and checkout aliases.
 # `just repos --audit-gate-coverage` also reports, per identity, every required check
-# on its merge path — each of which can refuse a merge, and none of which anything on
-# this host runs, since onevcs 0.11.0 removed the gate it used to run itself.
+# on its merge path — read off the repository's own branch protection at that moment,
+# each able to refuse a merge, and none run by anything on this host, since onevcs
+# 0.11.0 removed the gate it used to run itself.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:
     @./scripts/repos.sh "$@"
@@ -555,9 +556,9 @@ repos *args:
 # Report the policy one repository publishes under, and the rule that decided it:
 # `just repo-policy <identity|alias|origin|path>`.
 #
-# This is the routing answer, and `just repos` is not: the type and workflow that
-# listing prints are `onevcs register`'s own derivation from the origin, while what
-# a publication actually does comes from the rules file — see `docs/host-setup.md`.
+# This is the routing answer, and `just repos` is not: that listing prints the gate
+# `onevcs register` guessed from the checkout, while what a publication actually does
+# comes from the rules file — see `docs/host-setup.md`.
 # llmlint: ignore[tool_output_is_signal] the matched rule and the policy that followed are this viewing command's product.
 repo-policy *args:
     @uv run onevcs rules check "$@"

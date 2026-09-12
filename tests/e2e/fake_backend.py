@@ -228,6 +228,19 @@ RUN_ON_MARKER_ENV = "FAKE_BACKEND_RUN_ON_MARKER"
 #: journey wanting only the worker delayed launches with no observer graph.
 AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 
+#: Set to anything non-empty, the stand-in's supervisor sends the worker back **once**
+#: before it accepts. It is what gives a journey a conversation of more than one worker
+#: turn: the second turn opens on the supervisor's own words, which is the turn
+#: `oneagentgraph` stamps `origin: supervisor`, and a supervisor that accepts on the
+#: first never produces one. The decision is read off the prompt — how many worker
+#: replies the transcript it carries holds — rather than remembered in a file, because
+#: one supervisor decision can invoke this process more than once: a judge turn asked
+#: under `--control` whose socket address the harness refuses is asked again without
+#: it, and a marker written by the refused invocation would make the retry accept.
+JUDGE_SEND_BACK_ENV = "FAKE_BACKEND_JUDGE_SENDS_BACK_ONCE"
+#: What the stand-in worker says on every turn, and what the supervisor counts.
+WORKER_REPLY = "the stand-in worker reported without changing anything"
+
 
 class RecordedTurn(TypedDict):
     """One turn this backend records when `PROMPT_LOG_ENV` names a sink.
@@ -466,6 +479,20 @@ def main(argv: list[str]) -> int:
     if config and Path(config).name == JUDGE_CONFIG_NAME:
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))
+        if os.environ.get(JUDGE_SEND_BACK_ENV) and prompt.count(WORKER_REPLY) < 2:
+            return _answer(
+                argv,
+                # `completion: false` is usable only with the next instruction in
+                # `message`; without one the supervisor is asked again and the sending
+                # back never happens.
+                json.dumps(
+                    {
+                        "completion": False,
+                        "message": "Say what you did in one line, then report again.",
+                        "reason": "the stand-in sends the worker back once",
+                    }
+                ),
+            )
         return _answer(
             argv, json.dumps({"completion": True, "reason": "the stand-in accepts the work"})
         )
@@ -486,7 +513,7 @@ def main(argv: list[str]) -> int:
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
     if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
-    return _answer(argv, "the stand-in worker reported without changing anything")
+    return _answer(argv, WORKER_REPLY)
 
 
 if __name__ == "__main__":

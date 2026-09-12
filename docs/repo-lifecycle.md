@@ -13,18 +13,18 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.27.2**
+that source on every `just check` rather than restated: **`onepipeline` v0.28.0**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.19.3** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.21.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through. The manager verbs — `just publish-branch`,
 `just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.19.3** as well at
+the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.21.0** as well at
 this pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.27.2
-and 0.19.3. The habit that ambiguity taught is worth keeping rather than retiring
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.28.0
+and 0.21.0. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -253,31 +253,39 @@ the task worktree. Normally they are the same. `onevcs session open <repo>
 flag is on `session open` and nowhere else, so a lifecycle node names its safety
 clone through the plan's `execution_checkout` rather than by passing a flag to a
 recovery or publication verb. The lifecycle reports the exact execution path,
-publication path, normalized identity, effective repository type, workflow,
+publication path, normalized identity, resolved publication policy and approvals,
 merge policy, PR base, and synthetic stack base in human output, JSON, and the
 recorded run ledger.
 
-The registry's version 4 format stores `identities` keyed by normalized origin and
-stores alias-to-path records separately under `checkouts`. Workflow exists only on
-the identity alongside `repo_type` (`single-owner` or `team`) and `gate`. Thus GitHub/SSH URL spellings, canonical clones, safety clones, linked
-worktrees, and auxiliary clones resolve to one workflow even when several aliases
-share the origin. Flat, v2, and v3 registries migrate lazily in one atomic replacement;
-the migration detects a gate from a registered checkout or stores `<no-op>`:
-`local` is affirmative single-owner evidence; `remote` is inferred by comparing
-the normalized GitHub origin owner case-insensitively with `gh api user --jq
-.login`. Missing authentication or a non-GitHub origin fails before dispatch
-unless the node declares `repo_type`. Conflicting legacy
-entries fail with every alias/path/workflow and the rule to correct; no
-workflow is selected implicitly.
+The registry's version 6 format stores `identities` keyed by normalized origin —
+each carrying its `origin` and the `gate` `register` guessed, and nothing else — and
+alias-to-path records separately under `checkouts`. Thus GitHub/SSH URL spellings,
+canonical clones, safety clones, linked worktrees, and auxiliary clones resolve to one
+identity even when several aliases share the origin, and one *policy*, because the
+policy is the rules file's and lives on no record. Versions 2 through 5 migrate lazily
+in one atomic replacement, on the first contact of any verb, and the replacement is
+one an older release cannot read: version 5 carried `workflow` and `repo_type`, which
+`register` inferred from whether the origin had a host — `remote` / `team` for every
+hosted one — and onevcs 0.21.0 dropped both, because two verbs read them as the routing
+and refused every hosted `local-direct` identity on their strength. On a host several
+managers share that migration is one-way for every process still on an older release:
+the first 0.21.0 verb to touch `$ONEVCS_HOME` — a read included — rewrites the shared
+registry, and every dispatch still running under an engine that links onevcs below
+0.21.0 then refuses it (`missing field `workflow``) at its next registry read. The
+remedy for a stranded consumer is to re-provision it onto the adopted pin; a hand
+rewrite of the file back to version 5, with `workflow: remote` and `repo_type: team`
+on every hosted identity, is the stop-gap that unbreaks a live run until it can be,
+and holds only until the next 0.21.0 contact.
 
-Type is not a command option on any of these verbs any more, and there is no verb
-left that takes one: `just register-repo` forwards only `--origin`, and every other
-`onevcs` verb resolves the type from the rules file the identity matches. A plan
-node's `repo_type` — a field of the plan document, not a flag — still beats the
-stored or inferred type for that node. Change the resolved type by editing the
-rule that matches the repository in the rules file — `onevcs rules check` reports
-which rule a repository matches and the policy that follows; a team repository's
-workflow is `remote`.
+Type is not a command option on any of these verbs, and there is no verb left that
+takes one: `just register-repo` forwards only `--origin`, and every other `onevcs` verb
+resolves the policy from the rules file the identity matches. A plan node may still
+spell `repo_type` and `workflow` — schema-3 fields the engine keeps so a plan that wrote
+one still loads and still round-trips through a task's metadata — and **nothing reads
+either**: a node carrying one publishes exactly as one carrying none. Change the
+resolved policy by editing the rule that matches the repository in the rules file;
+`onevcs rules check` reports which rule a repository matches and the policy that
+follows.
 
 Each run cuts a **private clone** from the execution checkout and hands out a **git
 worktree per branch** from that clone, under
@@ -437,9 +445,10 @@ is the whole of the verification. It reports an
 executable effective `pre-push` hook (respecting `core.hooksPath`) and required
 GitHub status checks on the repository's actual default branch. A configured
 hooks directory without an executable `pre-push` does not count. Which evidence
-counts depends on the identity's workflow: a **local** workflow pushes straight
-to its base branch and never opens a PR, so branch protection has nothing to run
-against and only the hook can cover it. A remote workflow is covered by either —
+counts depends on the identity's resolved publication policy: **`local-direct`**
+pushes straight to its base branch and never opens a PR, so branch protection has
+nothing to run against and only the hook can cover it. A change-request policy is
+covered by either —
 the hook judges the branch push that feeds the PR, and required checks decide the
 merge. If nothing applicable is
 present, registration succeeds but prints an identity-specific warning; an
@@ -451,10 +460,11 @@ it with:
 just repos --audit-gate-coverage
 ```
 
-### The audit answers what verifies an identity, not what can refuse it
+### The audit answers what can refuse a merge, not only what verifies an identity
 
-That published answer is about the *presence* of a verifier, and reading it as
-coverage is what hid this host's own defect. Two things it does not say:
+Its `merge-path coverage:` line is about the *presence* of a verifier, and reading that
+line as coverage is what hid this host's own defect. Two things it does not say, which
+the `required checks:` line above it now does:
 
 - **A `pre-push` hook is not necessarily a complete bar.** Four identities
   registered here report coverage by a hook that is a screencomp
@@ -465,33 +475,36 @@ coverage is what hid this host's own defect. Two things it does not say:
   coverage, a dispatched branch passed the gate this host then ran, published as PR
   #77, and the required `llmlint` check that gate never ran refused it.
 
-So `just repos --audit-gate-coverage` here is `onevcs repos --audit-gates` with each
-`merge-path coverage:` line rewritten from what verifies the identity into what can
-refuse it, out of the required checks inventoried in
-`config/merge-path-checks.json`:
+So `just repos --audit-gate-coverage` here is `onevcs repos --audit-gates`, and since
+onevcs 0.21.0 that audit names, per identity, each check the host requires before a
+merge — read off the repository's own branch protection and rulesets at the moment it is
+asked — above every checkout's resolved policy and the verifier on its merge path:
 
 ```
-github.com/nickderobertis/nick-derobertis-site	remote	team	just gate
+github.com/nickderobertis/nick-derobertis-site	just gate
+  required checks: check, classify-gate, llmlint (required by the repository's rulesets and branch protection for master)
   nickderobertis__nick-derobertis-site	/home/…/nickderobertis__nick-derobertis-site
-    merge-path coverage: pre-push hook at /home/… — not the whole merge path
-      3 required checks on master, each able to refuse the merge, and nothing on this host runs any of them:
-        check — runs the repository's own verification of the working tree on the merge path's runner: …
-        classify-gate — captures screenshots in CI's pinned container and classifies …
-        llmlint — runs the repository's own verification of the working tree on the merge path's runner: …
+    publication: change-auto (from rule 7)
+    approvals: none (from rule 7)
+    merge-path coverage: pre-push hook at /home/…/.githooks/pre-push
 ```
 
 Since onevcs 0.11.0 that list is *every* required check rather than the leftovers
 after a local gate: this host front-runs nothing, so nothing here can be the whole
-bar and the audit stops implying it might be. The reason beside each check says
-what that check is, which is what tells an operator which of them is the verdict on
-their tree. An identity the file does not classify is reported as unknown rather
-than as covered.
-`test_the_declared_required_checks_match_each_repositorys_branch_protection` asks
-GitHub what is really required, so a check added or newly required upstream is found
-here rather than by a blocked change request, and
+bar and the audit stops implying it might be. An identity whose base declares no
+protection reads `none required`, naming both places it looked, which is what parts
+"nothing is required" from "nothing was asked". **There is no tracked copy of that
+list here any more.** A tracked JSON inventory under `config/` held it, a filter rewrote
+the audit out of it, and a test at the end of the gate compared it with GitHub — so
+whenever a sibling renamed a check, every branch here failed a whole gate to learn it,
+after the suite had run, on a defect no retry could fix; two siblings drifted in one
+evening and two publications paid a full gate each within the hour. With the tool
+reporting the checks itself there is nothing to go stale, and
+`tests/e2e/test_merge_path_audit_e2e.py` drives the recipe against the real
+repositories' branch protection instead.
 `test_the_resolved_policy_is_publication_and_approvals_and_nothing_else` reads the
-policy back off `onevcs` so a gate reintroduced into the rules file fails here. Both
-live in `tests/e2e/test_repo_registry_apply_e2e.py`.
+policy back off `onevcs` so a gate reintroduced into the rules file fails here; it lives
+in `tests/e2e/test_repo_registry_apply_e2e.py`.
 
 Lifecycle dispatch and `just repo-recover` repeat this audit and refuse before
 starting any work when coverage is missing or unknown, because nothing here runs a
@@ -562,7 +575,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.27.2 and is refused **by its own name**, at every schema version and on a live
+v0.28.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -793,7 +806,7 @@ failed.
 That identity is a **workstream** boundary, not a dispatch boundary. Measured on
 2026-08-27 against the installed onepipeline 0.16.3 binary (which its SBOM and
 embedded crate paths both identified as linking onevcs 0.15.4) and re-read against the
-adopted onepipeline 0.27.2 / onevcs 0.19.3 pair, every follow-up shape
+adopted onepipeline 0.28.0 / onevcs 0.21.0 pair, every follow-up shape
 keeps the workstream's publication base:
 
 | Follow-up shape | What `ONEVCS_COMPARISON_BASE` names | Measured source | Judged surface |
@@ -918,15 +931,11 @@ split at those seams rather than at convenient ones:
   commits here touch nothing else, so most commits replay them.
 - **`orchestrator:test-checkouts`** runs the tests marked
   `@pytest.mark.reads_checkouts` and is **uncached**, because there is no key that
-  would be right. Its subject is the *other* repositories this host routes — today,
-  reconciling the required checks each merge path really declares against the
-  inventory `config/merge-path-checks.json` keeps of them — and those live outside
+  would be right. Its subject is the *other* repositories this host routes — their
+  registered checkouts, and the required checks each merge path really declares,
+  which `just repos --audit-gate-coverage` reads off GitHub — and those live outside
   the workspace, so no `nx.json` glob could name one and a memo would describe
-  whatever they required when it was recorded. It is seconds of work. A host that
-  cannot reach *any* of them reconciles nothing and skips, saying so; a host that
-  reached some and not others **fails**, naming each identity it could not read and
-  the diagnostic `gh` returned for it, because a partial verification reported as a
-  green is the one outcome this tier exists to prevent.
+  whatever they required when it was recorded.
 - **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
   whole workspace with `docs/**` and `**/*.md` removed.
 
@@ -1193,9 +1202,13 @@ checkouts to that order. The `Node` schema is
 `deny_unknown_fields`, so what it may carry is a closed list —
 `id`, `kind`, `task`, `amendment`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
 `context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
-`merge_policy`, `base_branch`, `branch`, `title`, `body`, `execution_checkout`,
-`steps`, `resume`, `adoption`, `consumes` — and
-anything else is refused while the plan loads. The last two arrived with onepipeline
+`merge_policy`, `base_branch`, `branch`, `title`, `body`, `draft`,
+`execution_checkout`, `steps`, `resume`, `adoption`, `consumes` — and
+anything else is refused while the plan loads. `draft` arrived with onepipeline 0.28.0:
+a node carrying `draft: true` leaves the change request it publishes as a draft at
+closeout for a person to lift, settles `done` with outcome `change-draft` and no
+landing, and is refused at load on a node whose resolved publication opens no change
+request. `adoption` and `consumes` arrived with onepipeline
 0.13.0 and are release adoption's half of the schema: `adoption` is `fast` or
 `published`, and `consumes` names a release target per **dependency node id**. Both
 are validated at load — `adoption: "bogus"` is refused with `unknown variant
@@ -1220,8 +1233,7 @@ dispatched. Measured against the adopted pair: 120 loads, and 121 is refused wit
 holds a publication subject to`.
 
 All explicit task, base, anchor, and recovery branch names pass Git's literal
-branch validator before any Git command; a plan that explicitly combines
-`repo_type: team` with `workflow: local` fails validation before dispatch.
+branch validator before any Git command.
 
 - one prerequisite is the child's checkout and PR base;
 - root-landed prerequisites are dropped using branch ancestry or the recorded PR
@@ -1346,7 +1358,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.27.2.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.28.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1422,8 +1434,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.19.3 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.27.2 settles the node that
+`onevcs` 0.21.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.28.0 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached only once the last step has settled and the publication
 starts, and reached then only because a release the node adopted early has not happened
@@ -1620,20 +1632,42 @@ has settled is read with `just results` and `just telemetry`.
 Every branch this harness can leave behind has a `onevcs` verb that lands it. That
 is the whole point of routing version control through `onevcs`: an agent that finds
 its documented path missing improvises with raw `git` or `gh`, and improvised
-publication is how a change reaches a base branch with nothing having ruled on it. So the table is
-exhaustive by construction — **no branch state here requires raw `git` or `gh`.**
+publication is how a change reaches a base branch with nothing having ruled on it. So
+the table is exhaustive by construction — **no branch state here requires raw `git` or
+`gh`** — and each row's condition is the one its verb enforces, read out of the
+adopted `onevcs` rather than restated from memory.
 
 | The branch is… | Verb | What it does |
 | --- | --- | --- |
 | held by a live session, work finished | `onevcs publish` (the lifecycle's own closeout) | Verifies the session's work and publishes it under its policy |
-| complete, unpublished, no session holds it | [`just publish-branch <branch> --repo <checkout>`](#complete-branch-after-publication-failure) | Verifies it and publishes it under the policy the rules resolve |
+| complete, unpublished, no session holds it | [`just publish-branch <branch> --repo <checkout>`](#complete-branch-after-publication-failure) | Verifies it and publishes it under the policy the rules resolve — for a `local-direct` identity that is one squash on the base, pushed |
 | carrying unattested incomplete provenance | [`just repo-recover <branch> --repo <checkout>`](#what-the-base-branch-carries-for-a-recovered-incomplete-step) | Attests the incomplete-step marker, verifies, and publishes |
-| complete, and the identity publishes `local-direct` | [`just integrate <branch> --push`](#integrating-completed-workstreams) | Merge train: merges into the base locally, then pushes |
+| complete, and the identity's **resolved publication policy** is `local-direct` — `onevcs rules check` answers it, whatever the origin's host | [`just integrate <branch>… --push`](#integrating-completed-workstreams) | Merge train: merges the named branches into the base locally, in order, then pushes; refused by name for the three change-request policies |
+
+That last row's condition is stated as the policy because the verb now gates on
+nothing else. Through onevcs 0.19.3 it gated on two stored identity fields that
+`register` inferred from whether the origin had a host — every `github.com` identity
+was recorded `remote` / `team`, and the train refused it as `(repo_type: team)` — so
+the row read *"the identity publishes `local-direct`"*, this repository's own identity
+met it exactly, and the verb refused it. onevcs 0.21.0
+(https://github.com/nickderobertis/onevcs/pull/136) removed the two fields and reads
+the rules, which is what
+`tests/e2e/test_integrate_local_direct_e2e.py` drives: a hosted scratch identity whose
+rules resolve `local-direct`, landed by the train through the recipe.
 
 `just recoverable` is how you find out which row a branch is on: it lists every
 preserved unpublished branch, why its workstream stopped, whether it carries an
 incomplete-step marker, and the exact command that lands it. Reach for it before
-diffing clones by hand.
+diffing clones by hand. **Read its `Resume:` line as naming two of the three landing
+verbs, never the third**: it offers `just repo-recover` for a branch carrying
+incomplete provenance and `just publish-branch` for every other unlanded one, whatever
+policy the identity resolves, and it never composes an `integrate`. That is not a gap
+in the table — `publish-branch` lands a complete `local-direct` branch as the row above
+says — and it is why the claim of exhaustiveness is about the *table* rather than the
+handoff: the merge train is reached from here, or from `repo-recover`'s own refusal of
+a branch that carries no incomplete marker, which names it for a `local-direct`
+identity. Reach for the train when several finished branches must land on one base in
+an order, and for `publish-branch` when there is one.
 
 Every row of that table reads the branch from the identity's **publication
 checkout**, never from wherever a session happens to be working. So a branch that
@@ -1705,8 +1739,8 @@ identity's rule resolves, which for a team identity means opening the PR.
 
 ## Integrating completed workstreams
 
-For a repository whose identity resolves to `workflow: local`, `just integrate`
-runs a merge train without letting one failure block the others:
+For a repository whose identity's rules resolve `publication: local-direct`, `just
+integrate` runs a merge train without letting one failure block the others:
 
 ```sh
 just integrate claude/api claude/docs --push
@@ -1718,9 +1752,15 @@ everything outstanding. `just recoverable` is where that discovery lives — it
 lists every preserved unpublished branch and the command that lands each one, and
 its output is what feeds this argument list.
 
-Before any mutation, integration resolves the supplied checkout back to its
-canonical registry entry. Remote and unregistered repositories reject normal
-integration and `--push` with exit 2; there is no routine bypass.
+Before any mutation, integration resolves the checkout it is run inside back to its
+canonical registry entry — it must be run from within a registered checkout of the
+identity. An identity whose policy is any of the three change-request ones, and an
+unregistered repository, reject integration and `--push` with exit 2, naming the
+policy; there is no routine bypass. A hosted origin is not a refusal on its own any
+more: through onevcs 0.19.3 it was, because the verb read the stored `repo_type` and
+`workflow` that `register` inferred from the host, and this repository's own identity
+— hosted, and `local-direct` by its rules — was refused the one verb this document
+named for it.
 
 Each permitted candidate fetches the selected remote and merges current
 `<remote>/<base>` (then earlier train candidates) in its own worktree, under the
@@ -1770,8 +1810,9 @@ stopped dispatch is what leaves the marker.
 unattested marker, and it refuses everything else by name:
 
 - **A branch with no unattested marker** is refused with the verb it actually needs —
-  `publish-branch` for a team or remote identity, `integrate` otherwise, read from
-  the stored `repo_type` and `workflow`.
+  `integrate` for an identity whose rules resolve `local-direct`, `publish-branch`
+  otherwise. Through onevcs 0.19.3 this read the stored `repo_type` and `workflow`
+  instead, and sent every hosted identity to `publish-branch`.
 - **A marker written under a prefix this host is not configured with** is refused as
   unreadable rather than read or ignored; `trailer_prefix` in the rules file is the
   one source of that spelling.
@@ -2068,7 +2109,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.27.2 — so every number in it was a
+journey it named are absent from `onepipeline` v0.28.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

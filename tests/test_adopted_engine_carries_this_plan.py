@@ -1,17 +1,26 @@
-"""The engine this host pins carries every engine-side fix of the supervision-window plan.
+"""The engine this host pins carries every engine-side fix of the plans that changed it.
 
-Nine of that plan's nodes landed in `onepipeline` rather than here, and none of them is
-in force on this host until `config/onepipeline.version` names a release whose history
-contains it. The pin is one number, and a number says nothing about *which* landings it
-carries: release-plz cuts a release from whatever is on the base when it cuts it, so a
-release published between two of these landings carries some and not the others, reads as
-current, and leaves a supervisor believing repairs are in force that nothing installed
-here can perform.
+Nine of the supervision-window plan's nodes landed in `onepipeline` rather than here, and
+five of the root-causes plan's after it, and none of them is in force on this host until
+`config/onepipeline.version` names a release whose history contains it. The pin is one
+number, and a number says nothing about *which* landings it carries: release-plz cuts a
+release from whatever is on the base when it cuts it, so a release published between two
+of these landings carries some and not the others, reads as current, and leaves a
+supervisor believing repairs are in force that nothing installed here can perform.
 
 So the landings are recorded, one row per node, by the commit each produced — and the
 adopted release's own history is asked whether it contains them. History rather than a
 release note: a note is written by whoever wrote it, and what decides whether a fix is in
 a release is whether the commit is an ancestor of that release's tag.
+
+**A landing the adopted release is known not to carry is declared, not omitted.** A
+release is cut from whatever is on the base when release-plz cuts it, so the release
+adopted on a day a plan's last landing merged can carry every landing but that one; the
+pin then reads current while one repair is not in force. `AWAITING_RELEASE` names each
+such landing with the release PR that carries it, and the gate holds it to being
+*absent* from the adopted release — so the next bump, which will carry it, fails here
+until the row is moved into `LANDINGS`, rather than inheriting a declaration that says a
+repair is missing when it is not.
 
 **What this cannot say is whether a row is complete.** Nothing here knows the plan; the
 rows are what the run that made them recorded, node by node, and a tenth engine node
@@ -63,8 +72,8 @@ class Landing(NamedTuple):
     did: str
 
 
-#: Every engine-side node of the plan, in the order its work landed.
-LANDINGS = (
+#: Every engine-side node of the supervision-window plan, in the order its work landed.
+SUPERVISION_WINDOW_LANDINGS = (
     Landing(
         node="op-loader-policy",
         change_request=211,
@@ -121,6 +130,82 @@ LANDINGS = (
             "serve run listings from the summary document, and report which owned runs "
             "nothing watches"
         ),
+    ),
+)
+
+
+#: Every engine-side node of the root-causes plan that the adopted release carries, in the
+#: order its work landed. `op-resolve-siblings` settled `no-changes`: the resolutions it
+#: was to move had been moved by #235 (`onevcs` 0.21.0 with its testing crate) and #236
+#: (`oneagentgraph` 0.3.17, `onejudge` 0.8.1, `oneharness-core` 0.13.1) before it was
+#: dispatched, so its row names the landing that carried the version-control move, which
+#: is the one 0.27.2 lacked.
+ROOT_CAUSES_LANDINGS = (
+    Landing(
+        node="op-cross-platform",
+        change_request=228,
+        commit="6da8d8a",
+        did="have a spawned child announce itself instead of waiting on a fixed deadline",
+    ),
+    Landing(
+        node="op-settlement-and-death",
+        change_request=229,
+        commit="aab7e75",
+        did=(
+            "clear a park wherever a node settles, and report an empty branch and an "
+            "unnamed failure"
+        ),
+    ),
+    Landing(
+        node="op-channel-log",
+        change_request=227,
+        commit="bbee552",
+        did="make the surface log the record and the queue a projection of it",
+    ),
+    Landing(
+        node="op-resolve-siblings",
+        change_request=235,
+        commit="fac6ff7",
+        did=(
+            "link the onevcs 0.21.0 that gates on the configured policy and reports the "
+            "required checks, beside its testing crate"
+        ),
+    ),
+)
+
+#: Every landing the adopted release is held to carry.
+LANDINGS = (*SUPERVISION_WINDOW_LANDINGS, *ROOT_CAUSES_LANDINGS)
+
+
+class Awaiting(NamedTuple):
+    """One engine-side landing the adopted release is known to leave out."""
+
+    landing: Landing
+    #: The release-plz change request that carries it, for whoever moves the pin next.
+    release_change_request: int
+    #: Why the pin was moved to a release without it.
+    because: str
+
+
+#: The landings the adopted release does not carry, each declared against the release PR
+#: waiting on it. Adopted 2026-09-12: onepipeline 0.28.0 was cut at 01:43Z and #231 merged
+#: at 04:12Z, into release-plz's 0.28.1 PR, whose own `gate` check then failed on
+#: onepipeline's `main` — a fault of that repository's and not of this pin. The engine
+#: half of turn provenance is therefore not in force here: the linked oneagentgraph 0.3.17
+#: stamps every turn's author and the engine relays the stamp, but a manager note is not
+#: yet told from a supervisor turn by the engine, and a note is not yet carried across a
+#: publication-failure re-dispatch. `tests/e2e/test_worker_start_directory_e2e.py` is
+#: what observes the stamp itself on a real dispatch.
+AWAITING_RELEASE = (
+    Awaiting(
+        Landing(
+            node="op-note-provenance",
+            change_request=231,
+            commit="2177b9c",
+            did=("tell a manager note from a supervisor turn, and carry one across a re-dispatch"),
+        ),
+        release_change_request=239,
+        because="0.28.0 was the newest release the registry served, cut before #231 merged",
     ),
 )
 
@@ -201,4 +286,34 @@ def test_the_adopted_release_contains_the_landing_this_node_produced(landing: La
         f"contain {landing.commit}, which is where {landing.node} landed "
         f"(#{landing.change_request}: {landing.did}). That work is not in force on this "
         "host, whatever the pin reads: adopt a release cut after it"
+    )
+
+
+@pytest.mark.parametrize("awaiting", AWAITING_RELEASE, ids=lambda awaiting: awaiting.landing.node)
+def test_a_landing_declared_as_awaiting_a_release_is_still_absent_from_the_adopted_one(
+    awaiting: Awaiting,
+) -> None:
+    """A declared gap is held to being a gap, so the bump that closes it moves the row.
+
+    The failure this answers is the quiet one: a declaration that a repair is *not* in
+    force, inherited across the adoption that put it in force, reads to a supervisor as a
+    reason to keep working around a defect the engine no longer has.
+    """
+    tag = f"v{_adopted()}"
+    landing = awaiting.landing
+
+    known = _git("rev-parse", "--verify", f"{landing.commit}^{{commit}}")
+    assert known.returncode == 0, (
+        f"the {ENGINE} checkout does not know {landing.commit}, the commit "
+        f"{landing.node} landed as (#{landing.change_request}): {known.stderr.strip()}. "
+        "Fetch that history"
+    )
+
+    contained = _git("merge-base", "--is-ancestor", landing.commit, tag)
+
+    assert contained.returncode != 0, (
+        f"{ENGINE} {tag} carries {landing.commit} — {landing.node} (#{landing.change_request}: "
+        f"{landing.did}) — which AWAITING_RELEASE declares it does not, because "
+        f"{awaiting.because}. Move that row into LANDINGS in the same change, and re-read "
+        "every sentence that says the engine half of turn provenance is not in force here"
     )

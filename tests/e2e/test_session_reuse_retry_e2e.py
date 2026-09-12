@@ -474,6 +474,8 @@ def prior(
     adopted leg's.
     """
     world = _world(tmp_path_factory, "session-reuse-prior")
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one file rewrite, not a new launch
+    _as_the_prior_release_reads(world.home)
     name = "session-reuse-prior"
     return Journey(
         world=world,
@@ -484,6 +486,40 @@ def prior(
             oneharness_bin,
         ),
     )
+
+
+#: The registry schema the prior release's linked `onevcs` reads, and the two identity
+#: fields that schema carried: `register` inferred both from whether the origin had a
+#: host, and this identity's origin is a path.
+PRIOR_REGISTRY_VERSION = 5
+PRIOR_INFERRED_FIELDS = {"workflow": "local", "repo_type": "single-owner"}
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] No public interface on this host writes
+# this document. The prior release's `onevcs` is a library linked into `prior_binary`,
+# which exposes no `register`, and the one `onevcs` CLI installed here writes version 6 —
+# so the registry that release reads can only be put back by hand, which is the same edit
+# `AGENTS.md` names as the operator's stop-gap for a consumer stranded below 0.21.0.
+def _as_the_prior_release_reads(home: Path) -> None:
+    """Rewrite the scratch registry into the schema the prior release can read.
+
+    The world is built with the installed `onevcs`, which since 0.21.0 writes registry
+    version 6 — the version-5 document minus the two inferred identity fields — and a
+    release below that refuses it outright: `declares version 6; this build reads 2 to
+    5`. The prior leg is read for what its engine does with a stranded branch, and a
+    refusal of the registry would fail it before that question was asked, so the
+    document is put back into the shape its own `register` would have written. Only the
+    registry: the session record and the worktree the stranding left are read by both.
+    """
+    registry = home / "registry.json"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    document["version"] = PRIOR_REGISTRY_VERSION
+    for identity in document["identities"].values():
+        identity.update(PRIOR_INFERRED_FIELDS)
+    registry.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
 
 
 @pytest.mark.xdist_group("session-reuse-retry")

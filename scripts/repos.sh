@@ -1,38 +1,23 @@
 #!/usr/bin/env bash
 # `just repos` — list the registered identities and checkouts, and audit their merge paths.
 #
-# Two things happen here that a bare `onevcs repos` does not do. The published flag is
-# spelled `--audit-gates`; the planner doctrine names it `--audit-gate-coverage`, and
-# this absorbs the difference. And an audit's `merge-path coverage:` lines are passed
-# through `scripts/merge-path-audit.py`, which replaces each claim about what verifies
-# an identity with what can still refuse its merge. See that filter for why the
-# published claim cannot be read as coverage on this host.
+# One thing happens here that a bare `onevcs repos` does not do: the published flag is
+# spelled `--audit-gates`, the planner doctrine names it `--audit-gate-coverage`, and
+# this absorbs the difference. The audit itself is the published one — since onevcs
+# 0.21.0 it names, per identity, each check the host requires before a merge, read off
+# that repository's own branch protection and rulesets — so nothing here rewrites it.
+# A filter used to, out of a tracked copy of every sibling's required checks; the copy
+# went stale whenever a sibling renamed a check and failed every branch here at the end
+# of its gate, and `onevcs` reporting the checks itself is what retired it.
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
 published=()
-audit=0
 for argument in "$@"; do
   case "$argument" in
-    --audit-gate-coverage | --audit-gates)
-      audit=1
-      published+=(--audit-gates)
-      ;;
+    --audit-gate-coverage | --audit-gates) published+=(--audit-gates) ;;
     *) published+=("$argument") ;;
   esac
 done
 
-if [ "$audit" -eq 0 ]; then
-  # llmlint: ignore[tool_output_is_signal] The requested registry listing is this command's whole product; reducing it would leave nothing.
-  exec uv run onevcs repos ${published[@]+"${published[@]}"}
-fi
-
-# The repository's own interpreter when this is a provisioned checkout, and the
-# system one otherwise — the filter is stdlib-only precisely so both work.
-python="$root/.venv/bin/python3"
-[ -x "$python" ] || python=python3
-
-# llmlint: ignore[tool_output_is_signal] The audit's per-identity report is the requested product; the filter's whole job is to make each line say more, so summarizing it away would defeat the command.
-uv run onevcs repos "${published[@]}" |
-  "$python" "$root/scripts/merge-path-audit.py" "$root/config/merge-path-checks.json"
+# llmlint: ignore[tool_output_is_signal] The requested registry listing, or the per-identity audit, is this command's whole product; reducing it would leave nothing.
+exec uv run onevcs repos ${published[@]+"${published[@]}"}

@@ -259,15 +259,18 @@ pedantry: an unmatched repository falls through to the file's `default`, which i
 the reviewed path — safe, but nobody's configured policy, and a silent pass there
 is how a mistyped `owner` goes unnoticed.
 
-### `just repos` does not report the routing; `just repo-policy` does
+### `just repos` lists; `just repo-policy` reports the routing
 
-`just repos` prints each identity's stored `workflow`, `repo_type`, and `gate`.
-Those three are **`onevcs register`'s own derivation from the origin** — every
-hosted origin is recorded `remote` / `team`, and the gate is guessed from the build
-file it finds in the checkout. There is no surface that sets them, and nothing on
-the publication path reads them: what a change actually does comes from the rules
-file. So `just repos` answers *which repositories and checkouts exist*, and this
-answers what one of them will do:
+`just repos` prints each identity with its stored `gate` — `onevcs register`'s guess
+from the build file it finds in the checkout, which nothing on the publication path
+reads — and, under `--audit-gate-coverage`, each checkout's resolved `publication:`
+and `approvals:` beside the verifier on its merge path. It used to print two more
+stored fields, `workflow` and `repo_type`, derived from whether the origin had a host
+and unsettable by any surface; onevcs 0.21.0 removed them, because two verbs *did*
+read them — `integrate` and `recover` refused every hosted identity on their strength,
+this repository's own `local-direct` one included — and what a change actually does
+has to come from the rules file alone. So `just repos` answers *which repositories and
+checkouts exist*, and this answers what one of them will do:
 
 ```sh
 just repo-policy ai-orchestrator     # an alias, identity, origin, or path
@@ -282,13 +285,13 @@ approvals: none (from rule 1)
 gate: command: just gate (from rule 1)
 ```
 
-Change the routing by editing the rule and re-running `just repos-apply`. A rule's
-gate must run every tier its repository's merge path requires — most of these
-repositories keep the judged llmlint tier outside `check` and require it as a
-separate status check — so record what each merge path requires in
-`config/merge-path-checks.json` at the same time, and confirm what is left over with
-`just repos --audit-gate-coverage`, which names the required checks no gate here runs
-and so can still refuse a merge the gate passed.
+Change the routing by editing the rule and re-running `just repos-apply`. Nothing
+here runs a gate before the merge path does, so every check a repository requires is
+one only its merge path runs and every one of them can refuse a merge: `just repos
+--audit-gate-coverage` names them per identity, read off that repository's own branch
+protection and rulesets by `onevcs` at the moment you ask. There is no tracked copy of
+that list to keep in step — there was one, and every branch here failed a whole gate
+whenever a sibling renamed a check.
 
 ### Register with the checkout path, never the alias
 
@@ -324,7 +327,7 @@ shape on the way across, none of them silently:
 | Was | Is | Why |
 | --- | --- | --- |
 | alias `local/ai-orchestrator`, `nickderobertis/crozier` | `ai-orchestrator`, `nickderobertis__crozier` | `onevcs` derives the alias from the checkout's directory name; no surface names one. |
-| identity `repo_type` / `workflow` / merge strategy | a rule's `publication` + `approvals` | The registry's own copies are `register`'s derivation and unsettable; the rules file is what publication reads. |
+| identity `repo_type` / `workflow` / merge strategy | a rule's `publication` + `approvals` | The registry's own copies were `register`'s derivation and unsettable, and onevcs 0.21.0 removed them; the rules file is what every verb reads. |
 | a gate template with `{base}` | nothing — the rules file names no verifier | onevcs 0.11.0 removed the gate concept. What verifies a change is the repository's own merge path, which reads the comparison identity from `$ONEVCS_COMPARISON_REMOTE` / `$ONEVCS_COMPARISON_BASE`. |
 
 ## 8. Verify the host

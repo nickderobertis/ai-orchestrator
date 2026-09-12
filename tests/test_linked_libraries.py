@@ -127,6 +127,35 @@ GATE_FREE_FLOOR = Release(0, 11, 0)
 CONTROL_MODEL_CORE_FLOOR = Release(0, 13, 0)
 
 
+#: The four sibling releases carrying the root-causes plan's linked-library work, each
+#: established by reading that library's own source at the release rather than by the
+#: number: the change request, the commit it landed as, and the symbol the source
+#: carries from that release on. A floor is what holds the adoption from regressing
+#: while every pin still reads current — the reading is what put the floor here.
+#:
+#: onevcs https://github.com/nickderobertis/onevcs/pull/136 (`8cb92450`), first cut as
+#: 0.20.0: `store::VERSION` is 6 and `INFERRED_KEYS` drops `workflow` and `repo_type`,
+#: `integrate::run` refuses on the resolved `MergePolicy` rather than on either, and
+#: `host::RemoteHost::required_checks_on` reads an identity's required checks off the
+#: host for `repos --audit-gates`.
+POLICY_GATED_ONEVCS_FLOOR = Release(0, 20, 0)
+#: oneagentgraph https://github.com/nickderobertis/oneagentgraph/pull/95 (`ba636b5b`),
+#: first cut as 0.3.16: `event::Origin` — `task`, `supervisor`, `delivered` — and
+#: `judge::opening_origin`, which stamps a worker turn's opening with it.
+TURN_PROVENANCE_FLOOR = Release(0, 3, 16)
+#: onejudge https://github.com/nickderobertis/onejudge/pull/74 (`464abaed`), first cut
+#: as 0.8.0: `provider::SUPERVISOR_REASK_LIMIT` and `SupervisorOutcome::Unparseable`,
+#: which re-ask a supervisor whose answer nothing could act on instead of failing the
+#: member on it.
+SUPERVISOR_REASK_FLOOR = Release(0, 8, 0)
+#: oneharness https://github.com/nickderobertis/oneharness/pull/1286 (`66e868f5`), cut
+#: as `oneharness-core` 0.13.1 and `oneharness-cli` 0.12.1: `fallback.rs` decides what
+#: an unclassified failure stops and `report::FallbackReport::stopped_without_work`
+#: attributes it, so a chain that stopped on a candidate with nothing to show for
+#: itself is told apart from one that stopped after work.
+CHAIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 1)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -663,6 +692,67 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "
         "update the pair in the same change"
+    )
+
+
+@pytest.mark.parametrize(
+    ("crate", "floor", "carries"),
+    [
+        (
+            "onevcs",
+            POLICY_GATED_ONEVCS_FLOOR,
+            "gates the merge train on the resolved policy and reads required checks off the host",
+        ),
+        ("oneagentgraph", TURN_PROVENANCE_FLOOR, "stamps every turn with who authored it"),
+        (
+            "onejudge",
+            SUPERVISOR_REASK_FLOOR,
+            "re-asks an unparseable supervisor answer instead of failing the member",
+        ),
+        (
+            UNRECONCILABLE_PIN.crate,
+            CHAIN_CLASSIFICATION_CORE_FLOOR,
+            "decides and attributes what an unclassified fallback failure stops",
+        ),
+    ],
+    ids=("onevcs", "oneagentgraph", "onejudge", UNRECONCILABLE_PIN.crate),
+)
+def test_the_linked_sibling_carries_this_plans_change_to_it(
+    crate: str, floor: Release, carries: str
+) -> None:
+    """Each linked sibling is at or past the release whose source carries the change.
+
+    The number is the gate; the reading is the evidence, and it is written beside each
+    floor above — the change request, its commit, and the symbols the source carries
+    from that release on. Held on the *linked* copy because that is what a dispatch runs:
+    an engine that reconciled perfectly against unfixed siblings would leave every pin
+    reading current with none of this in force, which is the failure this repository
+    has recorded twice.
+    """
+    linked = Release.parse(_linked_version(crate))
+
+    assert linked >= floor, (
+        f"the adopted engine links {crate} {linked}, below the {floor} that {carries}; "
+        "the pins reconcile and the change is not in force"
+    )
+
+
+def test_the_installed_oneharness_cli_is_built_from_a_core_carrying_the_chain_classification() -> (
+    None
+):
+    """The CLI the wrapper scripts and the smoke spawn is held to the same core floor.
+
+    It is a separate artifact from the core the engine links — `config/oneharness.version`
+    names the `oneharness-cli` wheel — so the engine's floor says nothing about it, and
+    it is read from that wheel's own SBOM the way the sibling CLIs are read below.
+    """
+    built_from = Release.parse(_sibling_core("oneharness-cli"), "oneharness-cli's SBOM")
+
+    assert built_from >= CHAIN_CLASSIFICATION_CORE_FLOOR, (
+        f"the installed oneharness-cli is built from {UNRECONCILABLE_PIN.crate} {built_from}, "
+        f"below the {CHAIN_CLASSIFICATION_CORE_FLOOR} that decides and attributes what an "
+        "unclassified fallback failure stops; a wrapper-spawned turn's stopped chain would "
+        "read as it did before"
     )
 
 

@@ -24,9 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
@@ -47,12 +45,6 @@ TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 #: halves are driven below, because "we migrated" and "the engine still tolerates an
 #: unmigrated host" are separate claims and only one of them is about this file.
 RULES_SCHEMA_VERSION = 3
-
-#: The tracked inventory of what each repository's merge path really requires. It was
-#: a coverage claim — which required checks this host's gate reproduced — until that
-#: gate was removed; the first category is now empty by construction, so the file
-#: records the merge path's own checks and every one of them can refuse a merge.
-MERGE_PATH_CHECKS = REPO_ROOT / "config" / "merge-path-checks.json"
 
 #: How every rule in the tracked file names the repository it matches. Reading them
 #: back out is what makes a rule added later fail here, rather than at that
@@ -209,33 +201,6 @@ def ruled_identities() -> tuple[RepoIdentity, ...]:
     return named
 
 
-class MergePath(NamedTuple):
-    """One identity's merge path, as `config/merge-path-checks.json` inventories it."""
-
-    #: The branch its required checks are declared on.
-    branch: str
-    #: Required check → the reason slug saying what that check is.
-    checks: dict[str, str]
-
-    @property
-    def required(self) -> frozenset[str]:
-        """Every check the merge path requires."""
-        return frozenset(self.checks)
-
-
-def merge_path_checks() -> tuple[dict[RepoIdentity, MergePath], dict[str, str]]:
-    """The tracked declaration, read once into records with a shape to check."""
-    document = json.loads(MERGE_PATH_CHECKS.read_text(encoding="utf-8"))
-    declared = {
-        key: MergePath(branch=record["branch"], checks=dict(record["checks"]))
-        for key, record in sorted(document["identities"].items())
-    }
-    return declared, dict(document["reasons"])
-
-
-MERGE_PATHS, REASONS = merge_path_checks()
-
-
 def reported(output: str, key: str) -> str:
     """One field of `onevcs rules check`, without its `(from rule 1)` annotation."""
     for line in output.splitlines():
@@ -386,413 +351,6 @@ def test_local_direct_repositories_publish_locally(ruled: Path, identity: str) -
     checked = onevcs(ruled, "rules", "check", identity)
     assert reported(checked.stdout, "publication") == "local-direct"
     assert reported(checked.stdout, "approvals") == "none"
-
-
-class ProtectionRoute(NamedTuple):
-    """One place GitHub keeps what a branch requires, and how to reduce its answer."""
-
-    #: The `gh api` route, with `{repository}` and `{branch}` left to fill in.
-    route: str
-    #: The `--jq` that reduces that route's answer to one bare context per line.
-    reduction: str
-
-
-#: The two places GitHub keeps "what must pass before this branch will take a merge",
-#: as the route to ask and the `--jq` that reduces its answer to bare contexts. Classic
-#: branch protection is one and a repository ruleset is the other; a repository may use
-#: either, both, or neither, and the endpoints do not report each other. Asking one
-#: alone is why this gate is read at all — a branch whose checks are declared only by a
-#: ruleset answers the protection route `Branch not protected`, so every check it really
-#: requires reads as required by nothing, and the inventory that would pass is the empty
-#: one. That is the omission this file's own declaration refuses: *nothing is claimed by
-#: omission*. `petsinc/hellopatient` is this host's first such identity.
-PROTECTION_ROUTES: tuple[ProtectionRoute, ...] = (
-    ProtectionRoute(
-        route="repos/{repository}/branches/{branch}/protection",
-        reduction="[.required_status_checks.contexts // []] | flatten | .[]",
-    ),
-    ProtectionRoute(
-        route="repos/{repository}/rules/branches/{branch}",
-        reduction='[.[] | select(.type == "required_status_checks")'
-        " | .parameters.required_status_checks[].context] | .[]",
-    ),
-)
-
-
-def required_checks(key: RepoIdentity) -> tuple[frozenset[str], str | None]:
-    """What GitHub really requires to merge into an identity's base branch.
-
-    Asked of the API rather than of a workflow file, because a workflow job is not a
-    required check: `llmlint` and `screencomp` both run one on every pull request and
-    require neither, and a gate reproducing those would verify something that cannot
-    refuse a merge. Every route above is asked and their answers unioned, because a
-    check that can refuse this merge is required whichever of the two declares it.
-    Returns the contexts, or the reason they could not be read.
-
-    One read failing is the whole identity unread rather than the other route's answer
-    on its own: a half-read identity is the partial verification the gate below refuses
-    to let a green stand for, and here it would be invisible — the surviving route
-    answers perfectly well, and what it omits is exactly what nobody asked about.
-    """
-    repository = key.partition("/")[2]
-    branch = MERGE_PATHS[key].branch
-    contexts: set[str] = set()
-    for source in PROTECTION_ROUTES:
-        probe = subprocess.run(
-            [
-                "gh",
-                "api",
-                source.route.format(repository=repository, branch=branch),
-                "--jq",
-                source.reduction,
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if probe.returncode == 0:
-            contexts |= set(probe.stdout.split("\n")) - {""}
-            continue
-        # An unprotected branch is an answer, not an outage: nothing is required there.
-        # It is the ordinary answer for a repository that declares its checks the other
-        # way, so it may not stop the remaining routes being asked.
-        if "Branch not protected" in probe.stderr:
-            continue
-        diagnostic = (probe.stderr or probe.stdout).strip()
-        return frozenset(), (
-            diagnostic.splitlines()[-1] if diagnostic else "gh reported no diagnostic"
-        )
-    return frozenset(contexts), None
-
-
-#: How this gate names an identity it could not read while it could read others. A
-#: partial read is the failure the gate exists to make loud, so the phrase is a
-#: constant rather than a spelling: the journey below drives the real gate and asserts
-#: against this, so the two cannot part company.
-PARTIALLY_READ = "was not read, so this run verified nothing about that identity"
-#: How it names a run that could read nothing at all, which is the one deliberate
-#: skip. Same reason for being a constant.
-NOTHING_READ = "no branch protection could be read at all"
-
-
-def unread_report(key: RepoIdentity, diagnostic: str) -> str:
-    """One identity nobody could read, with what `gh` said about it.
-
-    The diagnostic rides along because it is what separates the three cases an
-    operator has to act on differently — an expired credential, a rate limit, and a
-    repository that was renamed or made private — and re-running the gate to learn
-    which one it was costs another fifteen API calls and answers no faster.
-    """
-    return (
-        f"{key}: {MERGE_PATHS[key].branch}'s branch protection {PARTIALLY_READ} "
-        f"— gh said: {diagnostic}"
-    )
-
-
-# Both findings these answer are that this tier is selected by a marker inside the broad
-# `orchestrator` project rather than owned by an Nx project of its own.
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is
-# not a narrower key inside a memoized tier: it moves this test out of every memoized
-# tier into the uncached `orchestrator:test-checkouts`, because its subject — what other
-# repositories require to merge — is outside this workspace and no `nx.json` glob hashes
-# it. A project of its own would give this gate a key, and the docstring below is about a
-# memoized green replaying across the very drift it exists to catch.
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
-# reason: a narrow project edge is what earns a memo, and this tier must not have one.
-# `tests/conftest.py`'s checkout guard states that reasoning where it enforces the
-# marker, and every `reads_checkouts` test in this repository is tiered this way for it.
-@pytest.mark.reads_checkouts
-def test_the_declared_required_checks_match_each_repositorys_branch_protection() -> None:
-    """The drift gate: the declaration, against the merge paths that own the fact.
-
-    `config/merge-path-checks.json` restates something no file in this repository
-    decides — which checks another repository requires to merge — and a check added,
-    renamed, or newly required after it was written would otherwise be found the way
-    this host found the defect: by a dispatched branch passing its gate, publishing,
-    and sitting blocked.
-
-    This is why the tier is uncached, for the same reason the recipe reconciliation
-    is: its input is other repositories' branch protection, which no `nx.json` key
-    covers, and a memoized green would be a verdict on whatever they required when it
-    was recorded.
-
-    **An identity this run could not read fails it.** It used to be filed away and
-    skipped over, which made a partial verification indistinguishable from a whole
-    one: on 2026-08-23 a dispatch ran the complete gate over its tree at 03:31Z and
-    got exit 0, and its publishing push eight minutes later ran this same uncached
-    tier over that same tree and was refused, naming an onetaskgraph drift the first
-    run had silently declined to ask about. The declaration this file guards says the
-    same thing about itself — *"nothing is claimed by omission"* — and an identity
-    nobody asked about is the largest omission available here.
-
-    The one case that stays a skip is a run that could read *nothing*, which is a
-    report about this host rather than about the inventory; it is decided explicitly
-    below rather than fallen into, and says so in its own message.
-    """
-    if shutil.which("gh") is None:
-        pytest.skip("gh is not installed, so this host cannot read any branch protection")
-
-    answered: dict[RepoIdentity, frozenset[str]] = {}
-    unread: dict[RepoIdentity, str] = {}
-    for key in sorted(MERGE_PATHS):
-        contexts, failure = required_checks(key)
-        if failure is None:
-            answered[key] = contexts
-        else:
-            unread[key] = failure
-    if not answered:
-        # The deliberate half of the rule: with nothing readable there is no partial
-        # verification for a green to overstate, and a host with no network or no
-        # credentials cannot be asked to verify other repositories. Every diagnostic
-        # still travels, because "the token expired" and "every repository was
-        # renamed" reach this line the same way and are not the same problem.
-        pytest.skip(
-            f"{NOTHING_READ}, so none of the {len(MERGE_PATHS)} routed identities was "
-            "verified: "
-            + "; ".join(f"{key}: {diagnostic}" for key, diagnostic in sorted(unread.items()))
-        )
-
-    drifted = {
-        key: (contexts ^ MERGE_PATHS[key].required)
-        for key, contexts in answered.items()
-        if contexts != MERGE_PATHS[key].required
-    }
-    complaints = [
-        f"{key}: config/merge-path-checks.json and {MERGE_PATHS[key].branch}'s branch "
-        f"protection disagree about {sorted(difference)} — inventory each one under "
-        "`checks` with the reason saying what that check is, or drop it if it no longer "
-        "gates the merge"
-        for key, difference in drifted.items()
-    ] + [unread_report(key, diagnostic) for key, diagnostic in sorted(unread.items())]
-    assert not complaints, "\n".join(
-        [
-            f"{len(answered)} of {len(MERGE_PATHS)} routed identities were read:",
-            *complaints,
-        ]
-    )
-
-
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-
-GATE = test_the_declared_required_checks_match_each_repositorys_branch_protection.__name__
-#: What the substituted `gh` says before the line carrying its reason, so the journey
-#: below proves the report carries the *diagnostic* rather than whatever `gh` happened
-#: to print first. Real `gh` prefaces an auth failure the same way.
-GH_PREAMBLE = "gh: this request was not answered"
-
-
-def write_fake_gh(directory: Path) -> None:
-    """Install a `gh` that answers branch protection for some identities and not others.
-
-    The remote host is the one thing here that cannot be real: driving the gate against
-    GitHub would need a repository whose protection this suite could break on purpose.
-    Everything above it is real — the real `gh` argv, the real probe, the real gate
-    function under a real pytest — and what this program decides is only which
-    identities the API answers for. It answers each readable one with exactly what
-    `config/merge-path-checks.json` declares, so the readable half of a partial read
-    contributes no drift of its own and the failure under test is the only one.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    fake = directory / "gh"
-    fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, sys\n"
-        "argv = sys.argv[1:]\n"
-        # `gh api repos/<owner>/<name>/branches/<branch>/protection --jq <expr>`
-        "route = argv[1].split('/') if len(argv) > 1 and argv[0] == 'api' else []\n"
-        "if len(route) < 3:\n"
-        "    sys.stderr.write(f'fake gh: nothing here answers {argv}\\n')\n"
-        "    raise SystemExit(1)\n"
-        "key = 'github.com/' + route[1] + '/' + route[2]\n"
-        "unreadable = dict(\n"
-        "    pair.split('=', 1)\n"
-        "    for pair in os.environ['FAKE_GH_UNREADABLE'].split(';')\n"
-        "    if pair\n"
-        ")\n"
-        "if key in unreadable:\n"
-        f"    sys.stderr.write({GH_PREAMBLE!r} + '\\n')\n"
-        "    sys.stderr.write(unreadable[key] + '\\n')\n"
-        "    raise SystemExit(1)\n"
-        "declared = list(json.loads(\n"
-        "    open(os.environ['FAKE_GH_CHECKS'], encoding='utf-8').read()\n"
-        ")['identities'][key]['checks'])\n"
-        "drifted = dict(\n"
-        "    pair.split('=', 1)\n"
-        "    for pair in os.environ['FAKE_GH_NEWLY_REQUIRED'].split(';')\n"
-        "    if pair\n"
-        ")\n"
-        "if key in drifted:\n"
-        "    declared.append(drifted[key])\n"
-        "sys.stdout.write(''.join(context + '\\n' for context in declared))\n",
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
-
-
-def drive_the_gate(
-    tmp_path: Path,
-    unreadable: dict[RepoIdentity, str],
-    newly_required: dict[RepoIdentity, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run the real gate, under a real pytest, against that substituted remote host.
-
-    `newly_required` is a check that repository started requiring after the inventory
-    was written, which is the drift the gate has always been for: it is here so the
-    two kinds of complaint can be driven together.
-    """
-    binaries = tmp_path / "bin"
-    write_fake_gh(binaries)
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            f"{Path(__file__).resolve()}::{GATE}",
-            # `-rs` because a skip's reason is half of what is asserted here, and a
-            # quiet run prints only the dot.
-            "-rs",
-            "--no-cov",
-            "-p",
-            "no:cacheprovider",
-        ],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
-            "FAKE_GH_UNREADABLE": ";".join(
-                f"{key}={diagnostic}" for key, diagnostic in unreadable.items()
-            ),
-            "FAKE_GH_NEWLY_REQUIRED": ";".join(
-                f"{key}={context}" for key, context in (newly_required or {}).items()
-            ),
-            "FAKE_GH_CHECKS": str(MERGE_PATH_CHECKS),
-        },
-        text=True,
-        capture_output=True,
-    )
-
-
-def test_an_identity_nobody_could_read_fails_the_drift_gate(tmp_path: Path) -> None:
-    """The regression: a partial read is a failure, and it names what went unasked.
-
-    One identity refusing to answer while the rest do used to remove that identity
-    from the comparison and leave the tier green, which is how a tree that had just
-    passed the complete gate was refused eight minutes later by the same tier run
-    from the `pre-push` hook. The diagnostic is asserted because an operator reading
-    this has to tell an expired credential from a renamed repository, and re-running
-    the gate to find out is fifteen more API calls and no faster.
-    """
-    unreadable = "github.com/nickderobertis/onetaskgraph"
-    diagnostic = "gh: Not Found (HTTP 404)"
-
-    driven = drive_the_gate(tmp_path, {unreadable: diagnostic})
-
-    assert driven.returncode != 0, driven.stdout + driven.stderr
-    assert "1 failed" in driven.stdout
-    assert unreadable in driven.stdout
-    assert PARTIALLY_READ in driven.stdout
-    assert diagnostic in driven.stdout
-    # The preamble is what `gh` said first and the diagnostic is what it said last;
-    # reporting the first line would name the outage without naming its reason.
-    assert GH_PREAMBLE not in driven.stdout
-    assert f"{len(MERGE_PATHS) - 1} of {len(MERGE_PATHS)} routed identities were read" in (
-        driven.stdout
-    )
-    # The other identities answered exactly what the inventory declares, so nothing
-    # here is drift and none of them is named: an operator reading this failure is
-    # reading one problem. Asserted per identity rather than against the drift wording,
-    # which pytest also echoes back as the source of the assertion that failed.
-    assert not [key for key in MERGE_PATHS if key != unreadable and key in driven.stdout]
-    assert NOTHING_READ not in driven.stdout
-
-
-def test_drift_and_an_unread_identity_are_reported_by_one_run(tmp_path: Path) -> None:
-    """Both kinds of complaint reach the operator from the same run.
-
-    The drift the gate has always caught and the unread identity it used to swallow
-    are now one report, which is the point of aggregating them: a run that named the
-    drift and then skipped over the unread identity would send an operator back for
-    a second fifteen-call round to learn the other half.
-    """
-    unreadable = "github.com/nickderobertis/onetaskgraph"
-    diagnostic = "gh: Not Found (HTTP 404)"
-    drifting = "github.com/nickderobertis/crozier"
-    newly_required = "coverage-floor"
-
-    driven = drive_the_gate(tmp_path, {unreadable: diagnostic}, {drifting: newly_required})
-
-    assert driven.returncode != 0, driven.stdout + driven.stderr
-    assert f"{len(MERGE_PATHS) - 1} of {len(MERGE_PATHS)} routed identities were read" in (
-        driven.stdout
-    )
-    assert f"{drifting}: config/merge-path-checks.json" in driven.stdout
-    assert f"['{newly_required}']" in driven.stdout
-    assert unread_report(unreadable, diagnostic) in driven.stdout
-
-
-def test_drift_alone_still_fails_with_the_inventory_it_disagrees_with(tmp_path: Path) -> None:
-    """The gate's original job, unchanged: everything read, one repository moved."""
-    drifting = "github.com/nickderobertis/crozier"
-    newly_required = "coverage-floor"
-
-    driven = drive_the_gate(tmp_path, {}, {drifting: newly_required})
-
-    assert driven.returncode != 0, driven.stdout + driven.stderr
-    assert f"{len(MERGE_PATHS)} of {len(MERGE_PATHS)} routed identities were read" in driven.stdout
-    assert f"{drifting}: config/merge-path-checks.json" in driven.stdout
-    assert f"['{newly_required}']" in driven.stdout
-    assert PARTIALLY_READ not in driven.stdout
-
-
-def test_a_host_that_can_read_nothing_at_all_still_skips(tmp_path: Path) -> None:
-    """The stated exception: no answers anywhere is a report about this host.
-
-    It is a skip because there is no partial verification for a green to overstate,
-    and the message says which case the reader is in — with every identity's own
-    diagnostic, since a token that expired and a network that is gone arrive here the
-    same way.
-    """
-    diagnostic = "gh: To get started with GitHub CLI, please run: gh auth login"
-
-    driven = drive_the_gate(tmp_path, dict.fromkeys(MERGE_PATHS, diagnostic))
-
-    assert driven.returncode == 0, driven.stdout + driven.stderr
-    assert "1 skipped" in driven.stdout
-    assert NOTHING_READ in driven.stdout
-    assert f"none of the {len(MERGE_PATHS)} routed identities was verified" in driven.stdout
-    assert diagnostic in driven.stdout
-
-
-def test_every_identity_answering_the_declaration_still_passes(tmp_path: Path) -> None:
-    """The green path this change must not have moved: all read, all agreeing."""
-    driven = drive_the_gate(tmp_path, {})
-
-    assert driven.returncode == 0, driven.stdout + driven.stderr
-    assert "1 passed" in driven.stdout
-
-
-def test_every_ruled_identity_declares_what_its_merge_path_requires() -> None:
-    """A rule nobody inventoried is a merge path nobody looked at.
-
-    The two files decide different halves of one question — `config/onevcs.rules.yml`
-    how a change publishes, `config/merge-path-checks.json` what can then refuse it —
-    and an identity present in only one of them is the half nobody checked.
-    """
-    assert set(MERGE_PATHS) == set(ruled_identities())
-
-
-@pytest.mark.parametrize("key", sorted(MERGE_PATHS))
-def test_every_required_check_names_a_reason_the_vocabulary_defines(key: RepoIdentity) -> None:
-    """A check whose reason nothing defines renders to an operator as a blank."""
-    unknown = {reason for reason in MERGE_PATHS[key].checks.values() if reason not in REASONS}
-    assert not unknown, f"{key} names reasons no `reasons` entry defines: {sorted(unknown)}"
-
-
-def test_every_declared_reason_is_one_some_identity_uses() -> None:
-    """The vocabulary is small on purpose: an unused reason is one nobody had to justify."""
-    used = {reason for declared in MERGE_PATHS.values() for reason in declared.checks.values()}
-    assert set(REASONS) == used, f"unused reasons: {sorted(set(REASONS) - used)}"
 
 
 def test_the_tracked_rules_declare_the_migrated_schema_and_name_no_gate() -> None:
@@ -988,6 +546,14 @@ def test_malformed_existing_registry_is_rejected(tmp_path: Path) -> None:
     assert "cannot read a valid registry" in result.stderr
 
 
+#: A rules file the adopted `onevcs` loads, standing in for whatever a host already has
+#: installed when an invalid replacement is refused.
+INSTALLED_RULES = (
+    "version: 3\ntrailer_prefix: Orchestrator-\nrules: []\n"
+    "default:\n  publication: change-open\n  approvals: required\n"
+)
+
+
 def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> None:
     present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
     manifest = tmp_path / "checkouts"
@@ -995,7 +561,10 @@ def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> Non
     home = tmp_path / "home"
     home.mkdir()
     installed = home / "rules.yml"
-    installed.write_text("version: 2\nrules: []\n", encoding="utf-8")
+    # A file `onevcs` can load, because the adopted release's `register` resolves a
+    # checkout's policy from the installed rules on the way in — an installed file it
+    # cannot read fails the registration before the replacement is ever validated.
+    installed.write_text(INSTALLED_RULES, encoding="utf-8")
     invalid = tmp_path / "invalid.yml"
     invalid.write_text("not: [valid", encoding="utf-8")
 
@@ -1003,7 +572,7 @@ def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> Non
 
     assert result.returncode == 1
     assert "is not a valid onevcs rules file" in result.stderr
-    assert installed.read_text(encoding="utf-8") == "version: 2\nrules: []\n"
+    assert installed.read_text(encoding="utf-8") == INSTALLED_RULES
 
 
 def test_invalid_rules_are_rejected_with_no_present_checkout(tmp_path: Path) -> None:

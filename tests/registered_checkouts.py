@@ -156,7 +156,7 @@ def publication_resolutions(
     """Compare, per identity with several held checkouts, its origin form with its first alias.
 
     Among several checkouts of one identity, `onevcs resolve <origin>` selects the one
-    whose alias sorts first: `store::resolve` at `onevcs` v0.19.3 answers the identity-key
+    whose alias sorts first: `store::resolve` at `onevcs` v0.21.0 answers the identity-key
     branch with ``registry.checkouts.iter().find(|(_, c)| c.identity == key)`` over a
     ``BTreeMap`` keyed by alias, so which checkout a plan naming its repository by origin
     publishes from is decided by alias order. This host's publication checkouts sort
