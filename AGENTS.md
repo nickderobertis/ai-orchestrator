@@ -677,7 +677,7 @@ was.
   turn alone and leaves the run unable to explain why a worker changed direction. Ask
   for `persist: false` when the correction cannot wait, because it is refused rather
   than carried when no turn took it.
-<!-- llmlint: ignore[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of this paragraph: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of the bullet below: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. The block runs to the end of that bullet. -->
 - **A quiet monitor is a working monitor.** It reports through the `finding` op and
   nothing else, so read an absence of surfaces as an absence of findings, and read the
   run's own state for whether anything is watching: `OBSERVER DEAD` is the window
@@ -691,6 +691,7 @@ was.
   continues through it, `just status` reports neither verdict above during one, and a
   `note` to the monitor ends the hold rather than waiting it out.
   `tests/e2e/test_observer_graph_liveness_e2e.py` holds it.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **A surface's text reaches the engine as bytes**, never as a command-line word,
   because bash substitutes backticks and `$(...)` inside double quotes and a finding
   that quotes a command then runs it.
