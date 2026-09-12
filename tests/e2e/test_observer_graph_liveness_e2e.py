@@ -543,11 +543,11 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     * the observer ends when the run settles rather than when the hold would have: the
       launch returns before the next turn was due.
 
-    Reverting the document's `schedule` fails the first claim — `--set` on a member with
-    no schedule gives it one whose first turn is deferred to its period, so the monitor no
-    longer opens with the wave — and reverting `background: false` fails at the reader
-    before any of it, because the pacemaker's deferred first turn then has nothing to hold
-    the run open for it.
+    Reverting the document's `schedule` fails before any of it: `--set
+    members.monitor.schedule.every` on a member with no schedule is refused by the reader
+    (`this graph has no schedule`), the launch attaches no observer, and the graph records
+    nothing for the run. Reverting `background: false` fails at the reader too, because
+    the pacemaker's deferred first turn then has nothing to hold the run open for it.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
