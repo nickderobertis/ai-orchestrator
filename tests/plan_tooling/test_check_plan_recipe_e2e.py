@@ -2057,6 +2057,75 @@ def test_a_node_consuming_a_release_its_identity_never_publishes_is_refused_at_t
     assert "it did not run" in refused.stderr, refused.stderr
 
 
+def test_a_stated_change_request_policy_lets_a_local_direct_node_consume_a_release(
+    tmp_path: Path,
+) -> None:
+    """The node's own `merge_policy` decides what its `consumes` can hold.
+
+    The shape this host's own observer-pacing adoption takes: a node of a `local-direct`
+    repository that states `change-open` for itself, so its run opens the change request
+    the release hold is a state of. The engine's loader reads the stated policy over the
+    repository's; this repository's registered check read only the repository's and
+    refused a plan the launch would have accepted — which stopped `just finish-plan` at
+    its check step, before any design document could be written or approved.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"])
+    _hooked(checkout)
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "landing", "title": "feat: add the reader", "repo": "service"},
+        {
+            "id": "consumer",
+            "title": "feat: adopt the release",
+            "repo": "service",
+            "deps": ["landing"],
+            "consumes": {"landing": "pypi"},
+            "merge_policy": "change-open",
+        },
+    )
+
+    accepted = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "consumes" not in accepted.stderr, accepted.stderr
+
+
+def test_a_stated_local_direct_policy_refuses_consumes_whatever_the_repository_opens(
+    tmp_path: Path,
+) -> None:
+    """The converse: a node that says it opens no change request, on a repository that does.
+
+    `change-auto` opens one, so the repository's own answer would let this node through;
+    the node's stated `local-direct` is what decides, whichever way it points. Refused
+    through the same recipe, so what an operator is told is what is asserted — whichever
+    side of the recipe makes the refusal, it names the stated policy and the field.
+    """
+    (checkout,) = registered(tmp_path / "registry", ["service"], publication="change-auto")
+    _hooked(checkout)
+    plan = _publishing_plan(
+        tmp_path,
+        {"id": "landing", "title": "feat: add the reader", "repo": "service"},
+        {
+            "id": "consumer",
+            "title": "feat: adopt the release",
+            "repo": "service",
+            "deps": ["landing"],
+            "consumes": {"landing": "pypi"},
+            "merge_policy": "local-direct",
+        },
+    )
+
+    refused = _check_project(
+        project_from_plan(plan), environment=_in_registry(tmp_path / "registry" / "onevcs")
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "consumer: consumes:" in refused.stderr, refused.stderr
+    assert "local-direct" in refused.stderr, refused.stderr
+
+
 def test_a_plan_this_host_would_publish_is_not_refused_for_where_it_lands(
     tmp_path: Path,
 ) -> None:

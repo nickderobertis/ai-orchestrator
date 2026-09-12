@@ -335,6 +335,58 @@ def test_a_node_consuming_a_release_on_a_change_request_workflow_is_not_refused(
     assert refusals(_plan(consumes={"library": "pypi"})) == []
 
 
+def test_a_policy_the_node_states_decides_what_its_consumes_can_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A node's own `merge_policy` beats its repository's, whichever way it points.
+
+    The engine's loader reads it that way, and this host's own observer-pacing adoption
+    is the shape it exists for: a `change-open` node of a `local-direct` repository,
+    which the engine accepted and this check refused for a workflow the node does not
+    publish under. The converse is the trap the rule closes — a node naming
+    `local-direct` on an identity that opens change requests has said it opens none.
+    """
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={
+            "service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT),
+            "hosted": (_checkout(tmp_path / "hosted"), OPENS_A_CHANGE_REQUEST),
+        },
+    )
+
+    assert (
+        refusals(_plan(consumes={"library": "pypi"}, merge_policy=Workflow.CHANGE_OPEN.value)) == []
+    )
+
+    (refused,) = refusals(
+        _plan(
+            repo="hosted",
+            consumes={"library": "pypi"},
+            merge_policy=Workflow.LOCAL_DIRECT.value,
+        )
+    )
+    assert (refused.node, refused.field) == ("work", "consumes")
+    assert "'local-direct'" in refused.reason, refused.reason
+    assert "states for itself" in refused.reason, refused.reason
+
+
+def test_a_stated_policy_outside_the_vocabulary_decides_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine refuses the spelling by name at launch; this reads the repository's."""
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
+    )
+
+    (refused,) = refusals(_plan(consumes={"library": "pypi"}, merge_policy="auto"))
+
+    assert refused.field == "consumes"
+    assert "resolves for" in refused.reason, refused.reason
+
+
 def test_an_empty_consumes_is_not_a_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Naming the field and naming a target are different things."""
     _onevcs(

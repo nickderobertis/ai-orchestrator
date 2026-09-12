@@ -186,6 +186,11 @@ class Node(NamedTuple):
     #: metadata map verbatim beside the resolved ``repo``, which is the only way to tell
     #: the two spellings apart once the engine has read both to one field.
     reserved: str | None
+    #: The publication policy the node states for itself, when it states one the
+    #: published vocabulary knows; ``None`` is a node publishing under its repository's.
+    #: A value outside the vocabulary is carried as ``None`` too — the engine refuses
+    #: that by name at its own boundary, and this module decides nothing it cannot read.
+    merge_policy: Workflow | None = None
 
 
 def publishing_nodes(plan: object) -> Iterator[Node]:
@@ -224,6 +229,7 @@ def publishing_nodes(plan: object) -> Iterator[Node]:
                     repo,
                     consumes if isinstance(consumes, Mapping) else {},
                     reserved if isinstance(reserved, str) and reserved else None,
+                    _stated_policy(task.get("merge_policy")),
                 )
             case _:
                 continue
@@ -424,22 +430,58 @@ def _title_refusal(node: Node, where: Destination) -> Refusal | None:
     )
 
 
+def _stated_policy(value: object) -> Workflow | None:
+    """The policy a node states for itself, or ``None`` where it states none this reads.
+
+    A node's own `merge_policy` is the one lever a plan has over where one node's work
+    lands — an explicit `change-open` forces a change request on a run whose identity
+    otherwise squashes onto its base — so a rule about what a node's publication can
+    hold has to read it, or it answers a question the node has already settled the
+    other way. A spelling outside the four is ``None`` rather than a refusal: the older
+    `direct` / `none` / `auto` names are refused by the engine at launch, by name, and a
+    second refusal here about the same word would be one more thing to keep in step.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        return Workflow(value)
+    except ValueError:
+        return None
+
+
 def _consumes_refusal(node: Node, where: Destination) -> Refusal | None:
-    """Whether this node awaits a release its own identity's workflow never publishes."""
-    if not node.consumes or where.workflow is None or where.workflow.opens_a_change_request:
+    """Whether this node awaits a release the policy it publishes under never opens.
+
+    The policy is the node's own where it states one, and its repository's otherwise —
+    and a stated one decides *whichever way it points*, exactly as the engine's loader
+    reads it: a node naming `change-open` on a `local-direct` identity has said it opens
+    a change request, and a node naming `local-direct` on an identity that opens them
+    has said it opens none. Reading the repository's answer over the node's own let the
+    second shape through and refused the first, which is the plan this host's own
+    observer-pacing adoption is — a `change-open` node of a `local-direct` repository,
+    accepted by the engine and refused here for a policy it does not publish under.
+    """
+    if not node.consumes:
+        return None
+    publication = node.merge_policy if node.merge_policy is not None else where.workflow
+    if publication is None or publication.opens_a_change_request:
         return None
     named = ", ".join(sorted(str(dependency) for dependency in node.consumes))
     opening = ", ".join(one.value for one in Workflow if one.opens_a_change_request)
+    stated = (
+        "states for itself" if node.merge_policy is not None else f"resolves for {where.identity}"
+    )
     return Refusal(
         node=node.id,
         field="consumes",
         reason=(
-            f"this node consumes a release target ({named}) while {where.identity} "
-            f"resolves the {where.workflow.value!r} workflow, which lands on the base "
+            f"this node consumes a release target ({named}) while it publishes under the "
+            f"{publication.value!r} workflow this host {stated}, which lands on the base "
             f"itself and opens no change request — so the release it would wait on is one "
-            f"this identity never publishes, and the node is unpublishable whatever its "
-            f"adoption mode says. Drop `consumes`, or publish this node's work through "
-            f"an identity whose workflow opens a change request ({opening})."
+            f"this publication never makes, and the node is unpublishable whatever its "
+            f"adoption mode says. Drop `consumes`, or publish this node's work under a "
+            f"policy that opens a change request ({opening}), stated on the node or "
+            f"resolved by the identity's rules."
         ),
     )
 
