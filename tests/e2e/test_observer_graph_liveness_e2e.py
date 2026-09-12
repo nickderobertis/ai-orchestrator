@@ -58,9 +58,6 @@ PACEMAKER_MEMBER = "check-in"
 #: Where the finding is written up for a manager, and what the last journey reads back.
 FINDING_DOCUMENT = "docs/orchestration.md"
 
-#: Who `harness_indirections` attributes an unresolvable alternate identity to.
-INDIRECTION_CALLER = "tests/e2e/test_observer_graph_liveness_e2e.py"
-
 MONITOR_HOLD_SECONDS = 300
 MONITOR_FIRST_TURN_SECONDS = 0
 PACEMAKER_PERIOD_SECONDS = 1800
@@ -404,6 +401,8 @@ class StatusReading(NamedTuple):
 
     began: datetime
     ended: datetime
+    #: The recipe's exit status, because a view that failed prints neither verdict either.
+    status: int
     said: str
 
 
@@ -430,7 +429,9 @@ def _status_readings(
             check=False,
         )
         said = (status.stdout + status.stderr).split("\n  providers:", 1)[0]
-        readings.append(StatusReading(began=began, ended=datetime.now(UTC), said=said))
+        readings.append(
+            StatusReading(began=began, ended=datetime.now(UTC), status=status.returncode, said=said)
+        )
         time.sleep(STATUS_POLL_SECONDS)
     return readings
 
@@ -440,8 +441,9 @@ class Paced(NamedTuple):
 
     events: list[Envelope]
     readings: list[StatusReading]
-    #: When the launch process returned, by this journey's own clock.
+    #: When the launch process returned, by this journey's own clock, and how.
     returned: datetime
+    status: int
     printed: str
 
 
@@ -497,7 +499,7 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
         )
         try:
             readings = _status_readings(launch, environment)
-            launch.wait(timeout=e2e_timeout(300))
+            status = launch.wait(timeout=e2e_timeout(300))
             returned = datetime.now(UTC)
         finally:
             launch.kill()
@@ -515,6 +517,7 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
         events=_graph_events(tmp_path / "graph-state"),
         readings=readings,
         returned=returned,
+        status=status,
         printed=printed.read_text("utf-8"),
     )
 
@@ -556,6 +559,10 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     paced = _paced_launch(tmp_path, oneharness_bin)
+    assert paced.status == 0, (
+        f"the attached launch exited {paced.status}, so what follows is read off a run "
+        f"that did not settle cleanly:\n{paced.printed}"
+    )
     events = paced.events
     assert events, f"the dag-scope graph recorded nothing for this run:\n{paced.printed}"
 
@@ -612,6 +619,10 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
         f"the view reports while the monitor waits: {paced.readings}"
     )
     for reading in inside:
+        assert reading.status == 0, (
+            f"`just status` failed inside a hold, so its silence about the observer says "
+            f"nothing:\n{reading.said}"
+        )
         assert OBSERVER_DEAD not in reading.said and OBSERVER_NOT_RESTARTED not in reading.said, (
             "`just status` read the monitor's hold as the observer having died, which is "
             f"what a paced watch must never look like from outside:\n{reading.said}"
