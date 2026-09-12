@@ -236,11 +236,22 @@ SAFE_RUN_ID = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 #: against anything the monitor wrote — this is the answer to *every* turn that was
 #: taken — and it says where a report goes, because the `finding` op is now the only
 #: route and a monitor that wrote its observation as prose has reported it to nobody.
+#:
+#: It is answered at once, and it says the next turn is *not* now. The hold between
+#: the monitor's turns is the graph's — `graphs/dag-scope.yaml` paces the member with
+#: `schedule: {every: 300}`, counted from the moment this answer closes the turn — so a
+#: judge side that slept here would only stack a second wait on the first. What this
+#: answer owes the monitor is the other half: that when the hold ends its turn reads the
+#: detailed stream from the cursor it left (`personas/orchestrator.yaml`), not from a tail
+#: of whatever is newest, because "keep reading now" to a member about to be held for
+#: five minutes reads as an instruction to spend the turn it has just finished.
 TURN_TAKEN_ACKNOWLEDGED = (
     "Your turn was taken and no planner surface was raised for it: prose reaches "
     "nobody. A report reaches the planner only as a `finding` op in an "
     "`onepipeline reply` envelope, which arrives once and carries the node it is "
-    "about. Keep reading the detailed stream and file the next thing you find."
+    "about. Your next turn opens after the graph's hold, and reads the detailed "
+    "stream from your cursor: everything that landed since the timestamp "
+    "`monitor.cursor` holds, not the last few lines."
 )
 
 #: And why that ruling is a non-completion, for the reader who meets it in a transcript.

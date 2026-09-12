@@ -1,14 +1,26 @@
-"""What holds `graphs/dag-scope.yaml`'s monitor to being a conversation.
+"""What holds `graphs/dag-scope.yaml`'s monitor to being a paced, foreground conversation.
 
-The finding itself — why a scheduled monitor is unavailable on the pinned reader, what
-it costs, and the two upstream changes that would lift it — is written up for a manager
-in `docs/orchestration.md`. This module is what keeps that write-up honest, by driving
-the reader rather than describing it:
+The observer graph every `just orchestrate` attaches used to stay alive only because its
+monitor was a conversation that took its next turn the moment its judge answered: the
+pinned reader refused a document whose members were all scheduled, and the remedy it
+named settled the whole graph after one turn each. The `oneagentgraph` the adopted
+engine links lifted both halves — a member declares whether it is `background`, and a
+`schedule` on a two-party member paces one conversation rather than starting a second —
+so the monitor is now held five minutes between turns and the graph stays open because
+the document *says* the monitor is foreground. The write-up for a manager is in
+`docs/orchestration.md`; this module is what keeps it honest, by driving the reader and
+the launch rather than describing them:
 
-* the shipped document validates, which is what every run's watching depends on;
-* the same document with its monitor converted to the pacemaker's shape does not;
-* the remedy that refusal names settles the whole observer graph after one turn each;
-* the write-up quotes a refusal the installed reader still prints.
+* the shipped document validates under the pinned reader and declares the monitor
+  paced and foreground — `every: 300`, `start_after: 0`, `background: false` — and the
+  pacemaker a scheduled member that says nothing about liveness;
+* a real launch under the shipped document, with both periods overridden small the
+  published way, shows two consecutive monitor turns no closer together than the hold,
+  the run watched between them, the pacemaker firing inside a hold, and the observer
+  ending at settlement without waiting the hold out;
+* the refusal that remains: a document nothing holds open — every member scheduled and
+  background, and a first turn deferred — is refused by the reader, in words the write-up
+  quotes.
 
 Only the paid provider is substituted, at both seams a member can reach one through.
 """
@@ -17,13 +29,22 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
-from datetime import datetime
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from persona_probe import probe_environment
+from fake_backend import (
+    AGENT_DELAY_ENV,
+    OBSERVER_ANSWER_ENV,
+    OBSERVER_MEMBER_ENV,
+    PROMPT_LOG_ENV,
+)
+from project_fixtures import project_from_plan
+from test_orchestrate_launch_e2e import _environment as _launched_environment
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -39,40 +60,81 @@ FINDING_DOCUMENT = "docs/orchestration.md"
 #: Who `harness_indirections` attributes an unresolvable alternate identity to.
 INDIRECTION_CALLER = "tests/e2e/test_observer_graph_liveness_e2e.py"
 
-#: The monitor as the repair would have it: the pacemaker's shape, the monitor's own
-#: harness config, and the schedule that repair asked for. Written out here rather than
-#: derived, because what is under test is whether the reader accepts *this* member.
-SCHEDULED_MONITOR = """  monitor:
-    kind: oneharness
-    oneharness_config: ../oneharness.orchestrator.toml
-    task: |
-      {task}
+#: What the shipped document declares on each member, as the plan that set them states
+#: it. The monitor's `every` is the hold between the judge's answer and the next agent
+#: turn — one turn per five minutes; its `start_after: 0` is stated because from schema
+#: 4 an omitted one defaults to `every`, which would leave the first five minutes of
+#: every run unwatched; `background: false` is what holds the run open between turns.
+#: The pacemaker keeps its half-hour resettable schedule and says nothing about
+#: liveness, because a scheduled member that says nothing is background, which is what
+#: a pacemaker is.
+MONITOR_HOLD_SECONDS = 300
+MONITOR_FIRST_TURN_SECONDS = 0
+PACEMAKER_PERIOD_SECONDS = 1800
 
-      Watch that run and report what you find.
-    schedule: {every: 600, start_after: 180, resettable: false}
-"""
+#: The schema the shipped document has to declare: `background` requires 8 and a
+#: `schedule` on a two-party member 9, so 9 is the first that admits every field above.
+SCHEMA_VERSION = 9
 
-#: The same member with the first turn the refusal's own remedy demands. Substituted
-#: into both members, because the reader asks it of every one of them.
-IMMEDIATE_FIRST_TURN = re.compile(r"start_after: \d+")
-IMMEDIATE = "start_after: 0"
+#: The lines a member's fields are written on, read with a reader written for this one
+#: document rather than with a YAML library — the workspace installs none, and
+#: `oneagentgraph validate` on the real document is what holds it well-formed.
+SCHEDULE_LINE = re.compile(r"^\s*schedule:\s*\{(?P<fields>[^}]*)\}\s*$")
+SCHEDULE_FIELD = re.compile(r"(?P<name>[a-z_]+):\s*(?P<value>[a-z0-9]+)")
+BACKGROUND_LINE = re.compile(r"^\s*background:\s*(?P<value>true|false)\s*$")
+VERSION_LINE = re.compile(r"^version:\s*(?P<version>\d+)\s*$", re.MULTILINE)
 
-#: What the pinned reader says when no member is left outside the schedules. Split into
-#: the three claims it makes, so a reword that keeps the refusal fails on the wording
-#: rather than on the behaviour: it names the quiescing, the members whose first turn
-#: never comes due, and the two ways out.
-REFUSAL_NAMES_THE_QUIESCE = "the run quiesces as soon as its clocks tick"
+#: What the pinned reader says when nothing holds a run open. Split into the claims it
+#: makes, so a reword that keeps the refusal fails on the wording rather than on the
+#: behaviour: that nothing holds the run open, that a deferred first turn never comes
+#: due, and the declaration this document uses as its answer.
+REFUSAL_NAMES_THE_CAUSE = "nothing holds this run open"
 REFUSAL_NAMES_THE_DEFERRED = "never comes due"
-REFUSAL_NAMES_THE_REMEDIES = ("`start_after: 0`", "a member outside the schedules")
+REFUSAL_NAMES_THE_ANSWER = "`background: false`"
 
-#: How long a one-tick observer graph may take and still prove the point. Both shipped
-#: schedules are minutes apart (600 and 1800 seconds), so a graph that has settled
-#: inside this has settled without ever waiting for a second tick.
-SETTLED_WITHOUT_A_SECOND_TICK_SECONDS = 120
+#: The launch every paced journey below spends: a one-node plan whose worker is held
+#: open long enough for the monitor to take several paced turns. What is under test is
+#: the observer graph every launch attaches, not anything the node does.
+LAUNCHED_RUN = "observer-liveness-paced"
+HELD_NODE = "held"
 
-#: The task a probe run composes. Distinctive, so a member's own `{task}` interpolation
-#: is visibly this run's rather than something a stale scratch directory held.
-PROBE_TASK = "onepipeline run `observer-liveness-probe`."
+#: The hold the launch tells the graph to keep between monitor turns, in place of the
+#: shipped five minutes. `--set members.monitor.schedule.every` is the published override
+#: for a journey that needs turns closer together than the shipped period, so the shipped
+#: value stays what it is. Twelve seconds, and the worker is held for thirty-eight, so
+#: the run outlasts three of them: the second turn is the pacing, the third is what shows
+#: the member's own heartbeat landing inside a hold, and the last hold is the one the
+#: driver's cancel has to end.
+PACED_HOLD_SECONDS = 12
+HELD_SECONDS = 38
+
+#: How far short of the hold two consecutive turns may open and still be the hold's
+#: doing. Measured on the linked oneagentgraph 0.3.19: a conversation held 12 seconds
+#: opened its turns 11.93 to 12.11 seconds apart, and one held 2 seconds 1.90 to 2.11 —
+#: the scheduler's clock is coarse by about a tenth of a second in either direction, and
+#: an unpaced conversation opens its next turn within a tenth of a second of the judge
+#: answering, so half a second tells the two apart with room to spare.
+CLOCK_GRANULARITY_SECONDS = 0.5
+
+#: The pacemaker's period for the same launch, overridden the same way. Short, so it
+#: fires several times inside the monitor's holds — which is what shows a background
+#: scheduled member firing while a foreground one holds the run open.
+PACED_PACEMAKER_SECONDS = 5
+
+#: What the stand-in monitor says on every turn: an ordinary quiet turn, so what is
+#: measured is the graph's pacing and not anything the model's words caused.
+SAID_ON_A_QUIET_TURN = "read the detailed stream since the cursor; nothing needed raising"
+
+#: How often the run's `just status` is read while the launch is live, and the two
+#: verdicts that view prints for an observer that has stopped watching. A reading taken
+#: inside a hold is what says the hold is not read as a death.
+STATUS_POLL_SECONDS = 2.0
+OBSERVER_DEAD = "OBSERVER DEAD"
+OBSERVER_NOT_RESTARTED = "OBSERVER NOT RESTARTED"
+
+#: Where `oneagentgraph` writes its own event log, named by this journey so it reads
+#: this run's graph and never a concurrent dispatch's.
+GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
 
 
 class Answered(NamedTuple):
@@ -97,178 +159,365 @@ def _validated(graph: Path) -> Answered:
     return Answered(status=ran.returncode, said=f"{ran.stdout}\n{ran.stderr}")
 
 
-def _observer_graph_with_a_scheduled_monitor(written_to: Path, *, immediate: bool) -> Path:
-    """The shipped document with its monitor converted to a scheduled single-sided member.
+class Declared(NamedTuple):
+    """One member's liveness fields, as the shipped document writes them."""
 
-    Taken from the shipped file rather than retyped, so what is refused below is this
-    repository's own observer graph with one member's shape changed and nothing else —
-    the pacemaker, the schema version and every comment travel verbatim. Its relative
-    refs are rewritten to absolute, which is what they already resolve to: a ref is
-    resolved against the directory the document was read from, and this copy is read
-    from a temporary one.
+    schedule: dict[str, str]
+    #: `None` where the member says nothing, which for a scheduled member means
+    #: background.
+    background: bool | None
 
-    `immediate` drives the remedy the refusal itself names onto every member, which is
-    the only other shape an all-scheduled observer graph can have.
-    """
+
+def _member_block(member: str) -> list[str]:
+    """The lines of one member of the shipped document, comments included."""
     lines = (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8").splitlines()
     opened = next(
-        (index for index, line in enumerate(lines) if line.strip() == f"{MONITOR_MEMBER}:"),
+        (index for index, line in enumerate(lines) if line.strip() == f"{member}:"),
         None,
     )
     assert opened is not None, (
-        f"{DAG_SCOPE_GRAPH} declares no `{MONITOR_MEMBER}` member, so this journey is "
-        "reading a document that has moved on without it"
+        f"{DAG_SCOPE_GRAPH} declares no `{member}` member, so this journey is reading a "
+        "document that has moved on without it"
     )
-    closed = next(
-        index for index, line in enumerate(lines) if line.strip() == f"{PACEMAKER_MEMBER}:"
-    )
-    # The pacemaker's own comment block belongs to the pacemaker, not to the member
-    # being replaced, so the replacement stops where that block opens.
-    while lines[closed - 1].strip().startswith("#"):
-        closed -= 1
+    indent = len(lines[opened]) - len(lines[opened].lstrip())
+    block = [lines[opened]]
+    for line in lines[opened + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        block.append(line)
+    return block
 
-    document = "\n".join([*lines[:opened], *SCHEDULED_MONITOR.splitlines(), *lines[closed:]])
-    if immediate:
-        document = IMMEDIATE_FIRST_TURN.sub(IMMEDIATE, document)
-        document = document.replace(
-            "schedule: {every: 1800,", f"schedule: {{every: 1800, {IMMEDIATE},"
-        )
-    written_to.write_text(document.replace("../", f"{REPO_ROOT}/") + "\n", encoding="utf-8")
+
+def _declared(member: str) -> Declared:
+    """What the shipped document declares about one member's schedule and liveness."""
+    schedule: dict[str, str] = {}
+    background: bool | None = None
+    for line in _member_block(member):
+        if line.strip().startswith("#"):
+            continue
+        if scheduled := SCHEDULE_LINE.match(line):
+            schedule = {
+                field.group("name"): field.group("value")
+                for field in SCHEDULE_FIELD.finditer(scheduled.group("fields"))
+            }
+        if backgrounded := BACKGROUND_LINE.match(line):
+            background = backgrounded.group("value") == "true"
+    return Declared(schedule=schedule, background=background)
+
+
+def _shipped_document_nothing_holds_open(written_to: Path) -> Path:
+    """The shipped document with its monitor's `background: false` removed and deferred.
+
+    Taken from the shipped file rather than retyped, so what is refused below is this
+    repository's own observer graph with the one declaration that holds it open removed
+    — the pacemaker, the schema version and every comment travel verbatim. The monitor's
+    first turn is deferred to its period, which is what an omitted `start_after` means,
+    because a scheduled member that took an immediate turn would still fire once. Its
+    relative refs are rewritten to absolute, which is what they already resolve to: a
+    ref is resolved against the directory the document was read from, and this copy is
+    read from a temporary one.
+    """
+    lines = (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8").splitlines()
+    kept: list[str] = []
+    removed_background = False
+    deferred = False
+    for line in lines:
+        backgrounded = BACKGROUND_LINE.match(line)
+        if backgrounded is not None and backgrounded.group("value") == "false":
+            removed_background = True
+            continue
+        if (scheduled := SCHEDULE_LINE.match(line)) and "start_after" in scheduled.group("fields"):
+            line = re.sub(r"start_after:\s*\d+", f"start_after: {MONITOR_HOLD_SECONDS}", line)
+            deferred = True
+        kept.append(line)
+    assert removed_background, (
+        f"{DAG_SCOPE_GRAPH} declares no `background: false`, so there is nothing for this "
+        "journey to remove"
+    )
+    assert deferred, (
+        f"{DAG_SCOPE_GRAPH} declares no `start_after`, so this journey cannot defer the "
+        "monitor's first turn"
+    )
+    written_to.write_text("\n".join(kept).replace("../", f"{REPO_ROOT}/") + "\n", encoding="utf-8")
     return written_to
 
 
-class Envelope(NamedTuple):
-    """One event a probe run streamed, narrowed at the seam to what is read below.
-
-    Parsed rather than cast, and parsed once here rather than at each read: a field the
-    producer has moved arrives as its empty default, so a journey fails on the claim it
-    was making instead of on a `KeyError` three frames away from the claim.
-    """
-
-    kind: str
-    ts: str
-    #: Who produced it — `member` is the one read here.
-    labels: dict[str, str]
-    #: Its kind's own body: a turn's `role`, a settlement's `members`.
-    payload: dict[str, object]
-
-
-def _envelope(streamed: dict[str, object]) -> Envelope:
-    """One decoded stream line, narrowed by checking rather than by asserting."""
-    labels = streamed.get("labels")
-    payload = streamed.get("payload")
-    return Envelope(
-        kind=_text(streamed, "kind"),
-        ts=_text(streamed, "ts"),
-        labels={
-            name: value
-            for name, value in (labels if isinstance(labels, dict) else {}).items()
-            if isinstance(value, str)
-        },
-        payload=payload if isinstance(payload, dict) else {},
-    )
-
-
-def _text(streamed: dict[str, object], field: str) -> str:
-    """One string field of a decoded line, empty where it is absent or not a string."""
-    value = streamed.get(field)
-    return value if isinstance(value, str) else ""
-
-
-class Ran(NamedTuple):
-    """One probe run of a graph, narrowed to what these journeys read."""
-
-    envelopes: list[Envelope]
-    #: Everything it printed, for a failure message that can be acted on.
-    said: str
-
-
-def _ran(graph: Path, environment: dict[str, str], directory: Path) -> Ran:
-    """Run one probe graph for real, in a directory of its own.
-
-    `oneagentgraph run` is the verb `onepipeline` starts an observer graph with, so a
-    member firing, settling, or never coming due is observable here exactly as it is on
-    a launched run.
-    """
-    ran = subprocess.run(
-        ["oneagentgraph", "run", str(graph), "--task", PROBE_TASK, "--dir", str(directory)],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(300),
-        check=False,
-    )
-    decoded = (json.loads(line) for line in ran.stdout.splitlines() if line.startswith("{"))
-    return Ran(
-        envelopes=[_envelope(line) for line in decoded if isinstance(line, dict)],
-        said=f"{ran.stdout}\n{ran.stderr}",
-    )
-
-
-def _of_kind(ran: Ran, kind: str) -> list[Envelope]:
-    """Every envelope of one kind, in the order the run streamed them."""
-    return [envelope for envelope in ran.envelopes if envelope.kind == kind]
-
-
-def _agent_turns(ran: Ran, member: str) -> list[Envelope]:
-    """Every turn one member actually took, which is what a schedule firing looks like."""
-    return [
-        envelope
-        for envelope in _of_kind(ran, "turn-started")
-        if envelope.labels.get("member") == member and envelope.payload.get("role") == "assistant"
-    ]
-
-
-def test_the_shipped_observer_graph_is_one_the_pinned_reader_accepts() -> None:
-    """`graphs/dag-scope.yaml` still loads, which is what every run's watching depends on.
+def test_the_shipped_observer_graph_declares_a_paced_foreground_monitor() -> None:
+    """`graphs/dag-scope.yaml` loads, and says the monitor is paced and holds the run open.
 
     A document the reader refuses attaches no observer at all: the run is driven, reports
-    plain `ACTIVE`, and nothing watches it. That is the failure the whole
-    `kind: onejudge` monitor exists to avoid, and it is why the two journeys below —
-    which show what refuses — are worth nothing without this one beside them.
+    plain `ACTIVE`, and nothing watches it. And a document the reader accepts with the
+    monitor's `background: false` missing is one the refusal journey below shows cannot
+    exist — so what is read here, field by field, is the contract every other file in
+    this change restates: the hold, the immediate first turn, the foreground
+    declaration, and a pacemaker that declares nothing and is therefore background.
     """
     validated = _validated(REPO_ROOT / DAG_SCOPE_GRAPH)
-
     assert validated.status == 0, (
         f"{DAG_SCOPE_GRAPH} is not a document the pinned reader will run, so every "
         f"launch from this checkout attaches no observer:\n{validated.said}"
     )
-    for member in (MONITOR_MEMBER, PACEMAKER_MEMBER):
-        assert member in (REPO_ROOT / DAG_SCOPE_GRAPH).read_text(encoding="utf-8"), (
-            f"{DAG_SCOPE_GRAPH} no longer declares its `{member}` member"
-        )
+
+    declared = VERSION_LINE.search((REPO_ROOT / DAG_SCOPE_GRAPH).read_text("utf-8"))
+    version = int(declared.group("version")) if declared is not None else None
+    assert version == SCHEMA_VERSION, (
+        f"{DAG_SCOPE_GRAPH} declares schema {version}, and `background` needs 8 and a "
+        f"two-party `schedule` 9: {SCHEMA_VERSION} is the first that admits both"
+    )
+
+    monitor = _declared(MONITOR_MEMBER)
+    assert monitor.schedule.get("every") == str(MONITOR_HOLD_SECONDS), (
+        f"the `{MONITOR_MEMBER}` member is no longer paced one turn per "
+        f"{MONITOR_HOLD_SECONDS} seconds: {monitor.schedule}"
+    )
+    assert monitor.schedule.get("start_after") == str(MONITOR_FIRST_TURN_SECONDS), (
+        f"the `{MONITOR_MEMBER}` member no longer opens with the wave: {monitor.schedule}. "
+        "An omitted `start_after` defaults to `every`, which leaves the first five minutes "
+        "of every run unwatched"
+    )
+    assert "resettable" not in monitor.schedule, (
+        f"the `{MONITOR_MEMBER}` member's schedule is resettable, so a planner surface "
+        f"would restart the monitor's hold rather than the pacemaker's: {monitor.schedule}"
+    )
+    assert monitor.background is False, (
+        f"the `{MONITOR_MEMBER}` member no longer declares `background: false`, which is "
+        "the one declaration that keeps the observer graph alive between its turns"
+    )
+
+    pacemaker = _declared(PACEMAKER_MEMBER)
+    assert pacemaker.schedule.get("every") == str(PACEMAKER_PERIOD_SECONDS), (
+        f"the `{PACEMAKER_MEMBER}` member's period moved: {pacemaker.schedule}"
+    )
+    assert pacemaker.schedule.get("resettable") == "true", (
+        f"the `{PACEMAKER_MEMBER}` member is no longer resettable, so a run already "
+        f"reporting also gets a pacemaker surface: {pacemaker.schedule}"
+    )
+    assert pacemaker.background is None, (
+        f"the `{PACEMAKER_MEMBER}` member states `background: {pacemaker.background}`; a "
+        "scheduled member that states nothing is background, which is what a pacemaker "
+        "is, and `false` would make a member that exits after each firing hold the run "
+        "open forever"
+    )
 
 
-def test_the_pinned_reader_refuses_an_observer_graph_whose_members_are_all_scheduled(
-    tmp_path: Path,
-) -> None:
-    """Converting the monitor to the pacemaker's shape leaves nothing to pace the graph.
+class Envelope(NamedTuple):
+    """One event the observer graph recorded, narrowed to what is read below."""
 
-    The reader is explicit about why, and about the only two ways out — every member
-    taking an immediate first turn, or a member outside the schedules. Neither gives the
-    monitor the deferred first turn a scheduled repair would want, which is the whole of
-    why that repair is unavailable on this release.
+    kind: str
+    at: datetime
+    #: Who produced it — `member` is the one read here.
+    member: str | None
+    #: Its kind's own body: a turn's `role`, a settlement's `members`.
+    payload: dict[str, object]
+
+
+def _instant(stamped: str) -> datetime:
+    """A stream timestamp as an instant, so two of them can be subtracted."""
+    return datetime.strptime(stamped.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S.%f%z")
+
+
+def _graph_events(scratch: Path) -> list[Envelope]:
+    """The dag-scope graph's own record of this run, which names the member per event.
+
+    The graph writes these into the scratch this journey named, so this is that run's
+    record and no other's. Read here rather than off the run's journal because the
+    member and the turn's role are exactly what the pacing is measured on.
     """
-    refused = _validated(
-        _observer_graph_with_a_scheduled_monitor(tmp_path / "all-scheduled.yaml", immediate=False)
-    )
+    # llmlint: ignore[tests_mirror_real_usage] No operator view renders which member a
+    # turn belongs to, and which member paused is the whole question.
+    events: list[Envelope] = []
+    for log in sorted(scratch.glob("dag-scope-*/events.jsonl")):
+        for line in log.read_text("utf-8").splitlines():
+            if not line.strip():
+                continue
+            # `oneagentgraph` owns this schema; `kind`, `ts`, `labels.member` and the
+            # payload's `role` are what is read, each narrowed here.
+            decoded = json.loads(line)
+            assert isinstance(decoded, dict), decoded
+            labels = decoded.get("labels") or {}
+            payload = decoded.get("payload") or {}
+            member = labels.get("member") if isinstance(labels, dict) else None
+            events.append(
+                Envelope(
+                    kind=str(decoded.get("kind")),
+                    at=_instant(str(decoded.get("ts"))),
+                    member=member if isinstance(member, str) else None,
+                    payload=payload if isinstance(payload, dict) else {},
+                )
+            )
+    return events
 
-    assert refused.status != 0, (
-        "the pinned reader now accepts an observer graph whose members are all "
-        "scheduled, so the constraint this journey and `docs/orchestration.md` record "
-        f"has been lifted upstream and the write-up is due a re-measurement:\n{refused.said}"
-    )
-    assert REFUSAL_NAMES_THE_QUIESCE in refused.said, refused.said
-    assert REFUSAL_NAMES_THE_DEFERRED in refused.said, refused.said
-    for remedy in REFUSAL_NAMES_THE_REMEDIES:
-        assert remedy in refused.said, (
-            f"the refusal no longer names {remedy!r} as a way out, so the write-up's "
-            f"account of what it offers is out of date:\n{refused.said}"
+
+def _of(events: list[Envelope], kind: str, member: str | None = None) -> list[Envelope]:
+    """Every event of one kind, optionally of one member, in the order recorded."""
+    return [
+        event
+        for event in events
+        if event.kind == kind and (member is None or event.member == member)
+    ]
+
+
+def _agent_turns(events: list[Envelope], member: str) -> list[Envelope]:
+    """Every turn one member's agent side opened, which is what a paced turn is."""
+    return [
+        event
+        for event in _of(events, "turn-started", member)
+        if event.payload.get("role") == "assistant"
+    ]
+
+
+def _judge_closes(events: list[Envelope], member: str) -> list[Envelope]:
+    """Every turn one member's judge side finished, which is where a hold is counted from."""
+    return [
+        event
+        for event in _of(events, "turn-completed", member)
+        if event.payload.get("role") == "user"
+    ]
+
+
+class Hold(NamedTuple):
+    """One hold of the monitor's conversation: from the judge closing a turn to the next."""
+
+    opened: datetime
+    closed: datetime
+
+    def covers(self, at: datetime) -> bool:
+        return self.opened <= at <= self.closed
+
+
+def _holds(events: list[Envelope]) -> list[Hold]:
+    """Every hold the monitor's conversation completed: between consecutive agent turns."""
+    closes = _judge_closes(events, MONITOR_MEMBER)
+    opens = _agent_turns(events, MONITOR_MEMBER)
+    holds: list[Hold] = []
+    for closed_turn in closes:
+        following = [opened for opened in opens if opened.at > closed_turn.at]
+        if following:
+            holds.append(Hold(opened=closed_turn.at, closed=following[0].at))
+    return holds
+
+
+class StatusReading(NamedTuple):
+    """One `just status` of the live run, and when the read began and ended."""
+
+    began: datetime
+    ended: datetime
+    said: str
+
+
+def _status_readings(
+    launch: subprocess.Popen[str], environment: dict[str, str]
+) -> list[StatusReading]:
+    """Read the run's status through the real recipe until the launch returns.
+
+    Cut at the `providers:` boundary the way `AGENTS.md` tells a watch to cut it, because
+    everything below it is `oneagentgraph health`'s report about the host. Each reading
+    keeps both instants, so a reading is credited to a hold only when the whole of it
+    fell inside one.
+    """
+    readings: list[StatusReading] = []
+    while launch.poll() is None:
+        began = datetime.now(UTC)
+        status = subprocess.run(
+            ["just", "status", LAUNCHED_RUN],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
         )
-    assert MONITOR_MEMBER in refused.said, (
-        "the refusal no longer names the member whose first turn never comes due, which "
-        f"is what says the monitor is the one being refused:\n{refused.said}"
+        said = (status.stdout + status.stderr).split("\n  providers:", 1)[0]
+        readings.append(StatusReading(began=began, ended=datetime.now(UTC), said=said))
+        time.sleep(STATUS_POLL_SECONDS)
+    return readings
+
+
+class Paced(NamedTuple):
+    """One real launch under the shipped document, paced small, and what it recorded."""
+
+    events: list[Envelope]
+    readings: list[StatusReading]
+    #: When the launch process returned, by this journey's own clock.
+    returned: datetime
+    printed: str
+
+
+def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
+    """Launch a one-node run under the shipped observer graph, with both periods small.
+
+    Everything between `just orchestrate` and the model is real: the driver, the observer
+    graph, `oneagentgraph`, the onejudge conversation and its channel-served judge side.
+    The worker is held so the run outlasts several holds; the monitor's own words are
+    scripted quiet, so the pacing measured is the graph's and not the model's.
+    """
+    environment = _launched_environment(tmp_path, oneharness_bin)
+    # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
+    environment[OBSERVER_ANSWER_ENV] = SAID_ON_A_QUIET_TURN
+    environment[OBSERVER_MEMBER_ENV] = MONITOR_MEMBER
+    environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
+    environment[GRAPH_STATE_ENV] = str(tmp_path / "graph-state")
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
+    plan = tmp_path / "paced.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": LAUNCHED_RUN,
+                "goal": {"text": "prove a paced monitor keeps watching between its turns"},
+                "tasks": [
+                    {
+                        "id": HELD_NODE,
+                        "persona": "engineer",
+                        "task": "## What\nReport.\n\n## Why\nBecause.\n\n"
+                        "## Acceptance criteria\n- Reported.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Streamed to a file rather than a pipe nobody drains: an attached launch prints the
+    # whole merged event stream, and a full pipe buffer stops the driver mid-run.
+    printed = tmp_path / "launch.log"
+    with printed.open("w", encoding="utf-8") as streaming:
+        launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--set",
+                f"members.{MONITOR_MEMBER}.schedule.every={PACED_HOLD_SECONDS}",
+                "--set",
+                f"members.{PACEMAKER_MEMBER}.schedule.every={PACED_PACEMAKER_SECONDS}",
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdout=streaming,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            readings = _status_readings(launch, environment)
+            launch.wait(timeout=e2e_timeout(300))
+            returned = datetime.now(UTC)
+        finally:
+            launch.kill()
+            launch.wait(timeout=e2e_timeout(60))
+            subprocess.run(
+                ["just", "stop", LAUNCHED_RUN],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=e2e_timeout(60),
+                check=False,
+            )
+    return Paced(
+        events=_graph_events(tmp_path / "graph-state"),
+        readings=readings,
+        returned=returned,
+        printed=printed.read_text("utf-8"),
     )
 
 
@@ -276,79 +525,163 @@ def test_the_pinned_reader_refuses_an_observer_graph_whose_members_are_all_sched
 # an xdist worker under this suite's `--dist loadgroup`, not a test tier; the tiers here
 # split by what a test reads, which is what each one's Nx cache key has to cover.
 @pytest.mark.xdist_group("observer-graph-liveness")
-def test_the_remedy_that_refusal_names_settles_the_observer_after_one_turn_each(
+def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """The all-scheduled graph that *does* load stops watching almost immediately.
+    """The shipped document, launched for real, paces the monitor and stays alive for it.
 
-    This is the shape a repair would be left with once the reader has had its way, and
-    running it is what shows the cost: both members fire once, both settle, and the graph
-    settles with them — minutes before either schedule comes round again. Nothing
-    relaunches it, so a run wired this way is watched for one turn and driven, unwatched,
-    for the rest of its life.
+    Five claims, each read off the graph's own record of one launch or off the run's
+    status while that launch was live:
+
+    * the monitor opens with the wave, and its next agent turn opens no sooner than the
+      hold after its judge answered — two consecutive turns at least `every` apart;
+    * the run is watched through the hold: the graph does not settle, the member's own
+      heartbeat lands inside a hold, and `just status` read inside one reports neither
+      `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
+    * the pacemaker fires inside a hold and the graph survives it, taking another monitor
+      turn afterwards;
+    * the observer ends when the run settles rather than when the hold would have: the
+      launch returns before the next turn was due.
+
+    Reverting the document's `schedule` fails the first claim — `--set` on a member with
+    no schedule gives it one whose first turn is deferred to its period, so the monitor no
+    longer opens with the wave — and reverting `background: false` fails at the reader
+    before any of it, because the pacemaker's deferred first turn then has nothing to hold
+    the run open for it.
     """
-    graph = _observer_graph_with_a_scheduled_monitor(tmp_path / "immediate.yaml", immediate=True)
-    accepted = _validated(graph)
-    assert accepted.status == 0, (
-        "the remedy the refusal names does not even load, so this journey cannot show "
-        f"what it costs:\n{accepted.said}"
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    paced = _paced_launch(tmp_path, oneharness_bin)
+    events = paced.events
+    assert events, f"the dag-scope graph recorded nothing for this run:\n{paced.printed}"
+
+    started = _of(events, "graph-started")
+    assert started, f"the observer graph never started:\n{paced.printed}"
+    died = _of(events, "member-died")
+    assert not died, (
+        f"a member of the observer graph died during a paced run: {died}\n{paced.printed}"
     )
 
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    # llmlint: ignore[live_tier_compiles_and_requires_credential] Same: the boundary under
-    # test is the graph reader, and a credentialed turn would prove nothing more about it.
-    environment = probe_environment(tmp_path, oneharness_bin, INDIRECTION_CALLER)
-    ran = _ran(graph, environment, tmp_path)
+    turns = _agent_turns(events, MONITOR_MEMBER)
+    assert len(turns) >= 3, (
+        f"the `{MONITOR_MEMBER}` member took {len(turns)} agent turn(s) in a run held for "
+        f"{HELD_SECONDS}s at a {PACED_HOLD_SECONDS}s hold, so it is not being paced through "
+        f"the run — or not held open between its turns at all:\n{paced.printed}"
+    )
+    opened_with_the_wave = (turns[0].at - started[0].at).total_seconds()
+    assert opened_with_the_wave < PACED_HOLD_SECONDS, (
+        f"the monitor's first turn opened {opened_with_the_wave:.1f}s after the graph "
+        "started, which is a deferred first turn: `start_after: 0` is what opens the "
+        f"conversation with the wave, and the document no longer says it:\n{paced.printed}"
+    )
+    gaps = [
+        (later.at - earlier.at).total_seconds()
+        for earlier, later in zip(turns, turns[1:], strict=False)
+    ]
+    assert all(gap >= PACED_HOLD_SECONDS - CLOCK_GRANULARITY_SECONDS for gap in gaps), (
+        f"consecutive `{MONITOR_MEMBER}` agent turns opened {gaps} seconds apart, and the "
+        f"graph was told to hold {PACED_HOLD_SECONDS}s between them; a turn that opened "
+        f"sooner is a conversation the graph is not pacing:\n{paced.printed}"
+    )
 
-    settled = _of_kind(ran, "graph-settled")
-    assert settled, f"the probe observer graph never settled at all:\n{ran.said}"
-    for member in (MONITOR_MEMBER, PACEMAKER_MEMBER):
-        turns = _agent_turns(ran, member)
-        assert len(turns) == 1, (
-            f"the `{member}` member took {len(turns)} turn(s) in a graph that settled "
-            "immediately; if it now takes more, a scheduled member is being paced by "
-            f"something and this journey's account of the cost is wrong:\n{ran.said}"
+    holds = _holds(events)
+    assert len(holds) >= 2, f"fewer than two holds completed: {holds}\n{paced.printed}"
+    settled = _of(events, "graph-settled")
+    for hold in holds:
+        assert not any(hold.covers(one.at) for one in settled), (
+            f"the observer graph settled inside a hold {hold}, so the monitor's "
+            f"`background: false` is not holding the run open:\n{paced.printed}"
         )
-    started = _of_kind(ran, "graph-started")[0].ts
-    finished = settled[0].ts
-    watched_for = _seconds_between(started, finished)
-    assert watched_for < SETTLED_WITHOUT_A_SECOND_TICK_SECONDS, (
-        f"the probe graph watched for {watched_for:.1f}s, which is long enough that it "
-        "may have waited for a second tick; this journey can no longer tell a one-shot "
-        f"observer from a paced one:\n{ran.said}"
+    heartbeats = _of(events, "member-heartbeat", MONITOR_MEMBER)
+    assert any(hold.covers(beat.at) for hold in holds for beat in heartbeats), (
+        f"no heartbeat of the `{MONITOR_MEMBER}` member landed inside a hold "
+        f"({[beat.at.isoformat() for beat in heartbeats]} against {holds}), so a held "
+        f"conversation is silent to the activity watchdog:\n{paced.printed}"
     )
-    members = settled[0].payload.get("members")
-    assert isinstance(members, dict), settled[0].payload
-    assert set(members) == {MONITOR_MEMBER, PACEMAKER_MEMBER}, members
+    inside = [
+        reading
+        for reading in paced.readings
+        if any(hold.covers(reading.began) and hold.covers(reading.ended) for hold in holds)
+    ]
+    assert inside, (
+        f"no `just status` reading fell wholly inside a hold, so nothing here says what "
+        f"the view reports while the monitor waits: {paced.readings}"
+    )
+    for reading in inside:
+        assert OBSERVER_DEAD not in reading.said and OBSERVER_NOT_RESTARTED not in reading.said, (
+            "`just status` read the monitor's hold as the observer having died, which is "
+            f"what a paced watch must never look like from outside:\n{reading.said}"
+        )
+
+    fired = _of(events, "cron-fired", PACEMAKER_MEMBER)
+    fired_inside = [firing for firing in fired if any(hold.covers(firing.at) for hold in holds)]
+    assert fired_inside, (
+        f"the `{PACEMAKER_MEMBER}` member never fired inside a monitor hold "
+        f"({[firing.at.isoformat() for firing in fired]} against {holds}), so nothing here "
+        f"shows a background member firing while a foreground one holds the run open:\n"
+        f"{paced.printed}"
+    )
+    assert any(turn.at > fired_inside[0].at for turn in turns), (
+        f"the monitor took no turn after the pacemaker fired at {fired_inside[0].at}, so "
+        f"the firing may have ended the graph:\n{paced.printed}"
+    )
+
+    last_close = _judge_closes(events, MONITOR_MEMBER)[-1].at
+    next_turn_was_due = last_close.timestamp() + PACED_HOLD_SECONDS
+    assert paced.returned.timestamp() < next_turn_was_due, (
+        f"the launch returned at {paced.returned.isoformat()}, after the next monitor turn "
+        f"was due at {datetime.fromtimestamp(next_turn_was_due, UTC).isoformat()}: the "
+        "driver's cancel at settlement is not ending the monitor's last hold, so a run "
+        f"that settles in seconds waits the hold out:\n{paced.printed}"
+    )
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
-def _seconds_between(started: str, finished: str) -> float:
-    """How long the run lasted, from the two timestamps its own envelopes carry."""
-    read = "%Y-%m-%dT%H:%M:%S.%f%z"
-    opened = datetime.strptime(started.replace("Z", "+0000"), read)
-    closed = datetime.strptime(finished.replace("Z", "+0000"), read)
-    return (closed - opened).total_seconds()
+def test_the_pinned_reader_refuses_an_observer_graph_nothing_holds_open(tmp_path: Path) -> None:
+    """The shipped document with the monitor's foreground declaration removed does not load.
+
+    Without `background: false` the monitor is a scheduled member and therefore
+    background, so nothing holds the run open for a deferred first turn: the graph would
+    take its initial waves and settle. The reader refuses that rather than running it,
+    says why, and names the declaration this document uses as its answer — so removing
+    the line is refused at the launch rather than discovered as a run nothing watched.
+    """
+    refused = _validated(_shipped_document_nothing_holds_open(tmp_path / "nothing-holds.yaml"))
+
+    assert refused.status != 0, (
+        "the pinned reader now accepts an observer graph whose members are all "
+        "background with a deferred first turn, so the refusal this journey and "
+        f"`{FINDING_DOCUMENT}` record has been lifted upstream and the write-up is due a "
+        f"re-measurement:\n{refused.said}"
+    )
+    assert REFUSAL_NAMES_THE_CAUSE in refused.said, refused.said
+    assert REFUSAL_NAMES_THE_DEFERRED in refused.said, refused.said
+    assert REFUSAL_NAMES_THE_ANSWER in refused.said, (
+        f"the refusal no longer names {REFUSAL_NAMES_THE_ANSWER} as a way out, so the "
+        f"write-up's account of what it offers is out of date:\n{refused.said}"
+    )
+    assert MONITOR_MEMBER in refused.said, (
+        "the refusal no longer names the member whose first turn never comes due, which "
+        f"is what says the monitor is the one being refused:\n{refused.said}"
+    )
 
 
 @pytest.mark.reads_docs
 def test_the_write_up_quotes_the_refusal_the_reader_actually_prints(tmp_path: Path) -> None:
-    """The documented finding is held to the tool, not to the memory of having run it.
+    """The documented refusal is held to the tool, not to the memory of having run it.
 
-    `docs/orchestration.md` quotes the reader's refusal as the evidence that the monitor
-    cannot be a scheduled member here. A quote is exactly the kind of claim that outlives
-    the release it was taken from, so it is compared against what the reader says today —
-    which makes a reword upstream a failing check rather than a paragraph quietly
-    describing a message nothing produces.
+    `docs/orchestration.md` quotes the reader's refusal as the evidence that liveness is a
+    declaration and not a property of a member's kind. A quote is exactly the kind of
+    claim that outlives the release it was taken from, so it is compared against what the
+    reader says today — which makes a reword upstream a failing check rather than a
+    paragraph quietly describing a message nothing produces.
     """
-    refused = _validated(
-        _observer_graph_with_a_scheduled_monitor(tmp_path / "all-scheduled.yaml", immediate=False)
-    )
+    refused = _validated(_shipped_document_nothing_holds_open(tmp_path / "nothing-holds.yaml"))
     written = (REPO_ROOT / FINDING_DOCUMENT).read_text(encoding="utf-8")
 
-    quoted = REFUSAL_NAMES_THE_QUIESCE
+    quoted = REFUSAL_NAMES_THE_CAUSE
     assert quoted in " ".join(written.split()), (
         f"{FINDING_DOCUMENT} no longer quotes the refusal it records, so a reader has "
         "nothing to compare against the reader's own words"

@@ -403,6 +403,16 @@ HELD_SECONDS = 25
 #: statement about the monitor rather than about a run nothing surfaced on.
 PACEMAKER_INTERVAL_SECONDS = 1
 
+#: How long the launch tells the graph to hold the monitor between its turns. The
+#: shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds, and
+#: this run lasts about as long as `HELD_SECONDS` — so under the shipped period the
+#: second turn this journey needs would never open, and a run that took one turn read
+#: exactly like the incident. `--set members.monitor.schedule.every` is the published
+#: override for a journey that needs turns closer together than the shipped period, and
+#: the shipped value stays what it is. Two seconds rather than one, so the second turn
+#: is visibly a paced turn and not the graph's floor.
+MONITOR_HOLD_SECONDS = 2
+
 #: Where `oneagentgraph` writes its own event log, named by this journey so it reads
 #: this run's graph and never a concurrent dispatch's. The rendered event line does not
 #: carry the member, and which member died is the whole question.
@@ -604,6 +614,8 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
                 project_from_plan(plan),
                 "--heartbeat-interval",
                 str(PACEMAKER_INTERVAL_SECONDS),
+                "--set",
+                f"members.{MONITOR_MEMBER}.schedule.every={MONITOR_HOLD_SECONDS}",
             ],
             cwd=REPO_ROOT,
             env=environment,

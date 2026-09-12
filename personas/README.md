@@ -253,3 +253,18 @@ monitor and the pacemaker are what a split would silently cost.
 `tests/e2e/test_path_dispatched_personas_e2e.py` is what keeps that from being an
 argument: it runs each path-named persona through a real `oneagentgraph run` and
 fails if either stops loading.
+
+### The monitor's cadence
+
+`orchestrator` is dispatched as `graphs/dag-scope.yaml`'s `monitor` member, and that
+document paces it: `schedule: {every: 300, start_after: 0}` opens the conversation with
+the wave and holds it 300 seconds between the judge's answer and the next agent turn, one
+turn per five minutes rather than one every 23–60 seconds. The persona is written for
+that cadence — it reads the detailed stream from a cursor file in the member's own
+scratch (`monitor.cursor`, the timestamp of the last line read) rather than from a
+tail, because some 25–50 events land between paced turns — and its `max_turns`
+derivation is restated at the paced rate where the value is declared. `check-in` keeps
+its half-hour resettable schedule and, being a scheduled member that declares nothing,
+is background: it fires inside the monitor's holds. Why the monitor is foreground and
+the pacemaker is not is in `docs/orchestration.md`, "The monitor is a paced foreground
+conversation", and `tests/e2e/test_observer_graph_liveness_e2e.py` holds it.

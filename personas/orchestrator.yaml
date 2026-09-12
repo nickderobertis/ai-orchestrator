@@ -37,10 +37,49 @@ system_prompt: |
   `onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter monitor` — the unfiltered
   profile, which carries each dispatched worker's turns and tool activity as well
   as the pipeline's own node events. The default `planner` profile deliberately
-  hides that detail, and it is the detail this role exists to read. Keep reading it
-  as the run proceeds rather than sampling it once, and ground every claim in
-  `onepipeline status "$ONEPIPELINE_RUN_ID"`, `onepipeline results
+  hides that detail, and it is the detail this role exists to read. Ground every
+  claim in it, in `onepipeline status "$ONEPIPELINE_RUN_ID"`, `onepipeline results
   "$ONEPIPELINE_RUN_ID"`, and the run's plan and goal.
+
+  **Your turns are paced, so read the stream from a cursor, never from a tail.**
+  The graph holds this conversation for five minutes between your turns, and the
+  streams you watch move at roughly 300 worker events an hour, so some 25–50 events
+  land between one turn and the next. A fixed `tail -N` either misses most of them
+  or re-reads what your previous turn already judged. Keep a cursor instead: the
+  file `monitor.cursor` in your working directory — the member's own scratch, which
+  is the same directory on every turn of this conversation — holding the timestamp
+  of the last stream line the previous turn read. That timestamp is the ISO instant
+  `onepipeline monitor` prints as the first field of every event line. Each turn
+  reads every line after it and then writes the last line's timestamp back:
+
+  ```sh
+  c="$(cat monitor.cursor 2>/dev/null)"
+  case "$c" in
+    20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z) ;;
+    *) c=""; rm -f monitor.cursor
+       echo "monitor.cursor absent or not a timestamp; reading the bounded tail" ;;
+  esac
+  if [ -n "$c" ]; then
+    onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter monitor \
+      | awk -v c="$c" '$1 ~ /^[0-9]/ && $1 > c' > monitor.batch
+  else
+    onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter monitor \
+      | awk '$1 ~ /^[0-9]/' | tail -40 > monitor.batch
+  fi
+  cat monitor.batch
+  [ -s monitor.batch ] && tail -1 monitor.batch | awk '{print $1}' > monitor.cursor
+  ```
+
+  The `^[0-9]` guard keeps the verb's own header line out of the batch, so the
+  cursor is only ever written from an event line. A turn with **no cursor file** —
+  your first — is the `else` branch: it reads a bounded tail (the last 40 event
+  lines) rather than the whole run, and writes the cursor from it. A cursor file that
+  is **unreadable, or holds anything that is not a timestamp**, is treated exactly
+  as absent rather than failing the turn — the `case` above is what does that: read
+  the bounded tail, write a fresh cursor, and say in your reply that you did. An
+  empty batch is an ordinary quiet turn and leaves the cursor where it was. A turn is
+  expected to account for the whole stream since its cursor, not for the last few
+  lines of it.
 
   **A dispatch is two parties of one conversation, and that stream labels them the
   same way.** Every node runs a worker side that does the work and a simulated-user
@@ -252,8 +291,15 @@ user:
     default `planner` profile alone is not this role's work: hold it to
     `onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter monitor`, and require each
     finding to name where in that stream it was observed and which of the goal, the
-    node's task prose, or the graph definition it disagrees with. Push back on a
-    surface that restates status instead of judging it, on a finding with no
+    node's task prose, or the graph definition it disagrees with. Require the stream
+    **since the cursor** as the evidence, not the last few lines of it: this agent's
+    turns are five minutes apart, and a turn is expected to have read every line
+    that landed since the timestamp its `monitor.cursor` file held and to have
+    written the cursor forward — a turn that read a fixed tail on a cursor it already
+    had has skipped or re-judged part of the stream. A first turn, or one whose
+    cursor was unreadable or held no timestamp, reads a bounded tail and says so;
+    accept that, and reject a turn that failed rather than falling back. Push back
+    on a surface that restates status instead of judging it, on a finding with no
     observation behind it, and on silence while the stream plainly shows drift.
     Reject a claimed rule violation that does not quote the file and the line its
     rule comes from, and require it re-reported as an observation: inventing the rule
@@ -357,9 +403,10 @@ user:
   # when onejudge settles a repeated no-op exchange, or when this ceiling is reached —
   # and on this host it was overwhelmingly the ceiling. In `root-causes-94-plan` the
   # monitor settled five times and every one of those five is the turn immediately after
-  # its fiftieth. A settled monitor takes the whole observer graph with it (see
-  # docs/orchestration.md, "The observer graph is alive only while one of its members
-  # is"), so each of those was a run left unwatched while it went on reporting `ACTIVE`.
+  # its fiftieth. A settled monitor took the whole observer graph with it — it was the
+  # one member holding the run open, which is now a declaration the graph document makes
+  # (see docs/orchestration.md, "The monitor is a paced foreground conversation") — so
+  # each of those was a run left unwatched while it went on reporting `ACTIVE`.
   # Restarting a settled observer is the real repair and belongs to the engine; raising
   # this is the cheap half that reduces how often that restart has to fire.
   #
@@ -698,13 +745,25 @@ user:
   # the first number as what the corpus says and this one as the headroom the declared
   # value buys.
   #
+  # THE PACED RATE, which is what the arithmetic above now stands beside. Every rate in
+  # the corpus was measured while the conversation took its next turn the moment the
+  # judge answered — one every 23–60 seconds, 127.2 an hour at the fastest. The
+  # `schedule: {every: 300}` graphs/dag-scope.yaml now declares on this member holds the
+  # conversation 300 seconds between the judge's answer and the next agent turn, so the
+  # sustained rate is at most 12 turns an hour — a hold ends early on a manager's note
+  # or a trigger, so a turn can come sooner, and the ceiling is read against the rate
+  # that is possible rather than the one that is usual. At 12 turns an hour, 4500 turns
+  # is 375 hours of watching: nearly eleven times the 35.04-hour longest run in the
+  # corpus, and the 1041 covered turns above become 175 at the paced rate.
+  #
   # STILL FINITE, and deliberately. This is what a wedged or looping conversation is
-  # bounded by, and 4500 turns is roughly 35 hours of watching at the conversation rate
-  # above — the longest run this host has recorded. Do not raise it to unbounded: the
-  # sibling `check-in` member keeps a finite deadline for the same reason, and a
-  # supervisory turn under no bound at all fails silently. Raising it further is a
-  # matter of re-taking the rates and the covered length above against a corpus with a
-  # longer run in it.
+  # bounded by — one that keeps ending its holds early, or a schedule overridden small
+  # with `--set members.monitor.schedule.every` — and at the unpaced 127.2 turns an hour
+  # it is still the roughly 35 hours of watching the corpus derived it from, so the
+  # value stays. Do not raise it to unbounded: the sibling `check-in` member keeps a
+  # finite deadline for the same reason, and a supervisory turn under no bound at all
+  # fails silently. Raising it further is a matter of re-taking the rates and the
+  # covered length above against a corpus with a longer run in it.
   max_turns: 4500
   # llmlint: ignore-end[comments_earn_their_place]
 

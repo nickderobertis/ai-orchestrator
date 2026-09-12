@@ -646,7 +646,11 @@ of that check, not a second declaration of it. -->
 The monitor is the exception because of what one of its turns *is*: a watch that
 lasts as long as the run does — reading the detailed stream, judging it, and
 surfacing what it finds — where a deadline would end the watching rather than bound
-it. Under the 120-second default three consecutive runs died, each reported only as
+it. That stays right now that `graphs/dag-scope.yaml` paces the monitor one turn per
+300 seconds: the hold is the graph's, kept *between* turns, and a per-turn deadline
+never sees it — a turn opens when the hold ends and runs to the judge's answer as it
+always did, so `timeout = 0` bounds nothing about the pacing and the pacing changes
+nothing about what a turn is. Under the 120-second default three consecutive runs died, each reported only as
 `member-died
 rule=provider-failure cause=timeout` — which reads as a provider problem and is not
 one. Two things make that diagnosis expensive, and both are worth knowing before
