@@ -516,14 +516,6 @@ CONSTANTS = (
         '"version":{value}',
     ),
     Constant(
-        "transcript tool-output ceiling",
-        ONEPIPELINE,
-        "event.rs",
-        re.compile(r"pub const MAX_PAYLOAD_TEXT_BYTES: usize = (\d+);"),
-        MANAGER,
-        "an output is bounded at {value} characters",
-    ),
-    Constant(
         "boundary attempts",
         ONEPIPELINE,
         "engine.rs",

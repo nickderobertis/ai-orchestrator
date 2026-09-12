@@ -60,11 +60,6 @@ def test_smoke_selector_covers_exact_documented_launch_paths(tmp_path: Path) -> 
     assert not selected(previous, "0" * 40)
 
     documented_lists = {
-        "AGENTS.md": re.search(
-            r"when the pushed diff touches (?P<paths>.+?);\s+ordinary pushes",
-            (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
-            re.DOTALL,
-        ),
         "docs/onejudge-integration.md": re.search(
             r"when the pushed endpoint diff touches (?P<paths>.+?);\s+every other",
             (ROOT / "docs/onejudge-integration.md").read_text(encoding="utf-8"),

@@ -1,16 +1,14 @@
 """What `AGENTS.md` tells a supervisor about watching a run, held to what this checkout has.
 
-Four things are reconciled against something other than this repository's own prose —
-the word the wrapper emits the cursor under, the count of its terminal conditions, the
-observer a planning launch attaches, and the per-record flush the buffering account
-rests on — because none of them announces itself when it drifts: a cursor extracted
-under the wrong word is refused far from where it was read, and a buffered watch
-produces no error at all.
+Three things are reconciled against something other than this repository's own prose —
+the word the wrapper emits the cursor under, the observer a planning launch attaches,
+and the per-record flush the buffering account rests on — because none of them
+announces itself when it drifts: a cursor read from under the wrong word is refused far
+from where it was read, and a buffered watch produces no error at all.
 """
 
 from __future__ import annotations
 
-import re
 import subprocess
 from typing import NamedTuple
 
@@ -28,7 +26,7 @@ MANAGER = "AGENTS.md"
 WATCH_SECTION = "### Never let dispatched work run unwatched"
 
 #: The wrapper the watch passage documents, and the one place it declares the word a
-#: caller anchors the cursor on and the terminal conditions it branches between.
+#: caller anchors the cursor on.
 WRAPPER = REPO_ROOT / "scripts" / "watch-run.sh"
 #: The renderer whose per-record flush is what makes "every line is written as it
 #: happens" true of this command rather than an aspiration about it.
@@ -109,13 +107,13 @@ def _surface_rows() -> list[SurfaceRow]:
 
 
 def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_wrapper_emits() -> None:
-    """The documented extraction and the emission, reconciled.
+    """The documented cursor line and the emission, reconciled.
 
-    `AGENTS.md` hands a caller a `sed` expression anchored on one word, and
-    `scripts/watch-run.sh` is what writes that word. Two copies of it is how a
-    documented extraction comes to return nothing at all — which reads as a watch that
-    handed back no cursor, so the caller starts over and re-reads everything the last
-    watch already showed rather than learning that it read the wrong word.
+    `AGENTS.md` tells a caller which line to re-arm from, anchored on one word, and
+    `scripts/watch-run.sh` is what writes that word. Two copies of it is how a caller
+    comes to read the wrong line — which reads as a watch that handed back no cursor,
+    so the caller starts over and re-reads everything the last watch already showed
+    rather than learning that it read the wrong word.
     """
     emitted = [row.rest for row in _surface_rows() if row.kind == "cursor-prefix"]
     assert len(emitted) == 1, (
@@ -130,68 +128,6 @@ def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_wrapper_emits() 
         f"what {WRAPPER.name} emits. Reconcile the passage with the wrapper, or a caller "
         "anchors on a word no watch writes"
     )
-    assert f"sed -n 's/^{prefix} //p'" in passage, (
-        f"{MANAGER}'s documented extraction no longer anchors on {prefix!r}, which is the "
-        f"word {WRAPPER.name} emits the cursor under"
-    )
-
-
-#: How the passage spells a small count, so the number it writes can be read back. Only
-#: as far as the endings this verb could plausibly grow; a count past that is a document
-#: this gate should fail on rather than quietly understand.
-COUNTED = {
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-}
-
-#: Where the passage states that count. Both sentences name it, and both are read: one
-#: is what a caller branching on the statuses is told, and the other is what a supervisor
-#: reading a mangled cursor's ending is told.
-COUNTS_THE_ENDINGS = (
-    re.compile(r"returns on one of (\w+) terminal\s+conditions"),
-    re.compile(r"ends at a status that\s+is none of the (\w+)"),
-)
-
-
-def test_the_endings_the_passage_counts_are_the_ones_the_wrapper_has() -> None:
-    """ "None of the four" is a number, and the wrapper is what decides it.
-
-    The passage tells a supervisor how many terminal conditions a watch returns on, and
-    that a watch re-armed with a mangled cursor ends at a status that is none of them. A
-    wrapper that grew one more would leave both sentences miscounting the endings a
-    caller branches on, which is the one thing about this verb a caller is asked to rely
-    on.
-
-    **The count is read out of the passage rather than written here**, and that is the
-    repair this check needed rather than a new number. It asserted `4` as a literal, so
-    the release that gave the verb a fifth ending failed it with a demand to *re-count
-    the passage* — which is right — and would have gone on passing had somebody moved
-    only the literal. Reading both sides means the gate says the same thing at any count
-    the verb reaches, and says it about the document rather than about itself.
-    """
-    conditions = [row.rest for row in _surface_rows() if row.kind == "status"]
-    passage = _flat(_region(WATCH_SECTION))
-
-    for spelling in COUNTS_THE_ENDINGS:
-        written = spelling.search(passage)
-        assert written is not None, (
-            f"{MANAGER} no longer counts the terminal conditions where this gate reads "
-            f"it ({spelling.pattern!r}), so the count a caller branches on is "
-            "reconciled against nothing"
-        )
-        counted = COUNTED.get(written.group(1))
-        assert counted == len(conditions), (
-            f"{WRAPPER.name} branches on {len(conditions)} terminal conditions "
-            f"({[name.split(' ', 1)[-1] for name in conditions]}), and {MANAGER} says "
-            f"{written.group(0)!r}. Re-count the passage, or a supervisor is told about "
-            "endings the command does not have"
-        )
 
 
 def test_the_planning_launch_really_attaches_no_monitor_of_its_own() -> None:

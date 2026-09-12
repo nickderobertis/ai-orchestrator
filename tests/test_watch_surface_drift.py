@@ -148,8 +148,8 @@ class Terminal(NamedTuple):
 #:
 #: **The third is undrivable for a sharper reason, and it is one worth knowing.** A node
 #: settling is not a state a recorded run lacks — every run here has one. Two endings are
-#: checked before any condition a caller named and can be neither asked for nor skipped:
-#: a complete graph answers `settled`, and a run nothing is driving answers
+#: checked before any condition a caller named and cannot be skipped, though either can
+#: be named: a complete graph answers `settled`, and a run nothing is driving answers
 #: `nothing-driving`, because they are "facts *about* the run where a settlement is a
 #: fact *within* one" and a settlement read out of a run nobody is driving is not the
 #: thing to act on. A recorded run is by definition undriven, so one of those two answers

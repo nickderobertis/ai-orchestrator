@@ -1,7 +1,7 @@
-"""Five passages of `AGENTS.md` a manager acts on mid-run, held to what this checkout has.
+"""Four passages of `AGENTS.md` a manager acts on mid-run, held to what this checkout has.
 
-Each is read in the middle of something going wrong — a watch firing, a plan refused, a
-change request minutes from merging, a finding to rule on — so what is reconciled here
+Each is read in the middle of something going wrong — a watch firing, a change request
+minutes from merging, a finding to rule on — so what is reconciled here
 is what such a reader would act on: every `just <recipe>` those passages name is one
 the justfile declares, and the subject passage's contrast rests on a drafting graph this
 repository really has. The watch item's cut is held against `onepipeline`'s own status
@@ -20,8 +20,8 @@ from orchestrator.root import REPO_ROOT
 pytestmark = pytest.mark.reads_docs
 
 #: The manager's own document. Every passage here is manager judgment rather than
-#: worker-facing operational text: arming a watch, validating a plan, reading a change
-#: request before it merges, and ruling on a finding are all decisions no dispatch
+#: worker-facing operational text: arming a watch, reading a change request before it
+#: merges, and ruling on a finding are all decisions no dispatch
 #: makes, so none of this belongs in `config/dispatch-appendix.md`.
 MANAGER = "AGENTS.md"
 
@@ -29,7 +29,6 @@ MANAGER = "AGENTS.md"
 #: rather than document-wide: a phrase that survived somewhere else would satisfy a
 #: whole-file search while the passage that has to carry it was gone.
 WATCH_ITEM = "6. **A grep over the whole of `just status`"
-CHECK_PLAN = "**That prediction has since been"
 SUBJECT = "**The body is re-derived at every publication"
 FINDING = "**A supervisory finding earns a check, never an action**"
 DECLINED = "**A finding you decline on the merits"
@@ -88,12 +87,12 @@ def test_every_recipe_these_passages_tell_a_manager_to_run_exists() -> None:
     """A passage may name commands this checkout has, and no others.
 
     Each of these is read in the middle of something going wrong — a watch firing, a
-    plan refused, a change request minutes from merging — which is the worst moment to
+    change request minutes from merging — which is the worst moment to
     discover that the command in front of you is not a recipe here.
     """
     declared = set(RECIPE.findall(_text("justfile")))
     assert declared, "no recipe parsed out of the justfile, so this gate proves nothing"
-    for passage in (WATCH_ITEM, CHECK_PLAN, SUBJECT, FINDING, DECLINED):
+    for passage in (WATCH_ITEM, SUBJECT, FINDING, DECLINED):
         for recipe in NAMED_RECIPE.findall(_paragraph(passage)):
             assert recipe in declared, (
                 f"{MANAGER}'s passage opening {passage!r} tells a manager to run `just "

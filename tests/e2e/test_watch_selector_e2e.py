@@ -32,9 +32,9 @@ what `AGENTS.md`'s watch rule calls a HARD REQUIREMENT.
 
 `node-settled` is driven over that same run, and where it is reachable is the whole of
 why it needs one. Two endings are checked before any condition a caller named and cannot
-be asked for or skipped — a complete graph answers `settled`, a run nothing is driving
-answers `nothing-driving` — so no recorded run can answer on a node at all, every one of
-them being undriven. A *live* run can, and only while another node holds the graph
+be skipped, though either can be named — a complete graph answers `settled`, a run
+nothing is driving answers `nothing-driving` — so no recorded run can answer on a node at
+all, every one of them being undriven. A *live* run can, and only while another node holds the graph
 incomplete and its driver working. The plan below is two nodes for exactly that reason.
 
 A waiting surface is **not** one of those two: that check is itself a selector, so it

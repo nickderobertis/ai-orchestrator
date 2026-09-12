@@ -56,6 +56,16 @@ PLAN_STORE_INSTALL_WORKSPACE = "planStoreInstallWorkspace"
 #: half of that to this key; the subprocess half is the trace, so a launch path that
 #: starts reading a new file is a re-take of it rather than a glob to widen.
 UNWATCHED_WORKSPACE = "unwatchedWorkspace"
+#: The key the `merge-policy` project's one tier is memoized on. Files rather than trees,
+#: for the reason `unwatchedWorkspace` names: every journey there spends a real launch,
+#: so every path in the key they never read makes an unrelated edit pay for it. Measured
+#: the same way — the tier traced under `strace -f -e trace=openat,execve`, its opened
+#: paths intersected with what git tracks — so the key is the launch machinery a refused
+#: `just orchestrate` reaches through `scripts/onepipeline.sh`, every pin in `config/`,
+#: the modules the tests import, and the three documents whose restated vocabulary the
+#: journeys hold to the launcher: a prose-only diff of one of those selects this project,
+#: because its verdict is about that prose.
+MERGE_POLICY_WORKSPACE = "mergePolicyWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
 #: `just telemetry-server` drive and read — those two recipes and the scripts they
 #: reach, the address both resolve each other through, the pins that decide which
@@ -171,6 +181,19 @@ UNWATCHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 UNWATCHED_ROOT = "tests/unwatched"
+
+#: The project whose test target owns the journeys that hold the `merge_policy` vocabulary
+#: this repository's prose restates to the one the installed launcher accepts — a real
+#: `just orchestrate` per policy, read for its refusal. A project of its own for the
+#: reason `unwatched` is: each journey spends a real launch, a cost `nx affected` can
+#: only keep off an unrelated edit where it is a separate project.
+MERGE_POLICY_PROJECT = "merge-policy"
+#: That project's one test target. One rather than two: what its journeys read of this
+#: repository's prose is three named documents, carried in its key by name.
+MERGE_POLICY_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore. Path-selected, as
+#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+MERGE_POLICY_ROOT = "tests/merge_policy"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

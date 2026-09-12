@@ -59,12 +59,12 @@ CALL_FRAGMENT = "LINKED CRATES"
 #: from today's pins would make the fixture stop being a recording.
 RESULT_FRAGMENT = "onevcs-0.11.0"
 
-#: What the renderer does with an output too large to print whole is stated in
-#: `AGENTS.md` and gated by `tests/test_engine_contracts.py`, against `onepipeline`'s
-#: own `MAX_PAYLOAD_TEXT_BYTES` and the three notes its renderer writes. It is not
-#: driven here on purpose: no run this host has recorded produced an output past that
-#: ceiling, so reaching one would mean writing synthetic records into a recorded
-#: journal — a producer this repository does not have, standing in for one it does.
+#: What the renderer does with an output too large to print whole is `onepipeline`'s
+#: own to say — its `MAX_PAYLOAD_TEXT_BYTES` and the notes its renderer writes — and
+#: `AGENTS.md` no longer restates the ceiling. It is not driven here on purpose: no run
+#: this host has recorded produced an output past it, so reaching one would mean
+#: writing synthetic records into a recorded journal — a producer this repository does
+#: not have, standing in for one it does.
 #: What this journey drives is the fixture as it was recorded.
 
 
