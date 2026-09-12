@@ -141,13 +141,17 @@ def record_prompt(argv: list[str]) -> None:
 
     codex takes its prompt as the last positional word of `exec --json <prompt>`,
     which is the argv oneharness builds and `tests/e2e/test_orchestrate_launch_e2e.py`
-    reads back; nothing is inferred from flags this stand-in does not implement.
+    reads back; nothing is inferred from flags this stand-in does not implement. The
+    one other spelling codex accepts is `-`, which says the prompt is on stdin — what
+    oneharness hands over when a prompt outgrows a command line, as a plan reviewed
+    whole does — so that word is read through rather than recorded as the prompt.
     """
     log = os.environ.get("FAKE_CODEX_PROMPT_LOG")
     if log is None or not argv:
         return
+    prompt = sys.stdin.read() if argv[-1] == "-" else argv[-1]
     with Path(log).open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"prompt": argv[-1]}) + "\n")
+        stream.write(json.dumps({"prompt": prompt}) + "\n")
 
 
 def turn(launches: int | None) -> tuple[TurnEvent, ...]:

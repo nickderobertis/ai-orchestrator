@@ -109,13 +109,18 @@ def _node(node_id: str) -> dict[str, str]:
     }
 
 
+#: The goal every plan here states, and what a journey edits to move the plan-level
+#: record alone.
+GOAL = "Deliver the checkout route"
+
+
 def _project(name: str, *node_ids: str) -> str:
     """A drafted, unreviewed plan project in the local store, and its qualified id."""
     return local_project(
         json.dumps(
             {
                 "schema_version": 3,
-                "goal": {"text": "Deliver the checkout route"},
+                "goal": {"text": GOAL},
                 "tasks": [_node(one) for one in (node_ids or ("route",))],
             }
         ),
@@ -158,6 +163,16 @@ def _stored_tasks(project: str) -> list[dict[str, object]]:
     assert listed.returncode == 0, listed.stdout + listed.stderr
     items = json.loads(listed.stdout)["items"]
     return [one["item"] for one in items]
+
+
+def _stored_project(project: str) -> dict[str, object]:
+    """``project``'s own record, read through `just plans` for the reason above."""
+    shown = _just("plans", "project", "show", project, "--json", seconds=90)
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    (item,) = json.loads(shown.stdout)["items"]
+    record = item["item"]
+    assert isinstance(record, dict), record
+    return record
 
 
 def _stored_documents(project: str) -> list[dict[str, object]]:
@@ -266,10 +281,15 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     (document,) = _stored_documents(copied_id)
     assert design_approval.RECORD_KEY in document["metadata"], document["metadata"]
 
-    # And it is a record of the content that *arrived* rather than an opaque token that
+    # And so did the plan-level record, on the project: an entry of the project's own
+    # metadata map, which the store's `project copy` carries.
+    project_record = _stored_project(copied_id)
+    assert plan_review.RECORD_KEY in project_record["metadata"], project_record["metadata"]
+
+    # And each is a record of the content that *arrived* rather than an opaque token that
     # merely survived the copy: `check-plan` recomputes the digest over the landed task
-    # under the bar in force and accepts it, which is the same reading that refused this
-    # plan before it was cleared.
+    # and over the landed plan whole under the bars in force and accepts both, which is
+    # the same reading that refused this plan before it was cleared.
     checked = _just("check-plan", copied_id)
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "carries a review record" in checked.stdout, checked.stdout
@@ -281,6 +301,43 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert unreadable.returncode == 2, unreadable.stdout + unreadable.stderr
     assert "cannot read project" in unreadable.stderr, unreadable.stderr
     assert "no review record" not in unreadable.stderr, unreadable.stderr
+
+
+def test_a_plan_cleared_task_by_task_but_not_whole_is_refused_by_both_commands(
+    destination: Path,
+) -> None:
+    """The plan-level record is the second question both commands ask, and one answer.
+
+    A plan cleared whole and then edited at the goal keeps every task's record and loses
+    the plan's — the case no task's own review can see — so the copy is refused before
+    the store is asked to write, naming the command that records it, and the check
+    refuses the same plan for the same want.
+    """
+    project = _project("copy-plan-level")
+    # `reviewed` reaches these records the way an operator does — the real `just
+    # review-plan`, the real script, the real `oneharness` CLI and its response schema —
+    # and substitutes the paid provider process alone, this suite's one sanctioned double.
+    # llmlint: ignore[e2e_not_mocked] see the note above this line
+    reviewed(project)
+    assert _just("check-plan", project).returncode == 0
+
+    source, native = plan_store.qualified(project)
+    record = plan_store.project_document(source, native)
+    written = record.read_text(encoding="utf-8")
+    assert GOAL in written, written
+    record.write_text(written.replace(GOAL, "Deliver something else"), encoding="utf-8")
+
+    copy = _just("copy-plan", project, "--to", DESTINATION)
+    assert copy.returncode == 1, copy.stdout + copy.stderr
+    assert "no plan-level one" in copy.stderr, copy.stderr
+    assert "every task of" in copy.stderr, copy.stderr
+    assert f"just review-plan {project}" in copy.stderr, copy.stderr
+    assert _records(destination) == [], "a plan reviewed only task by task was copied"
+
+    checked = _just("check-plan", project)
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    assert "no plan-level review record" in checked.stderr, checked.stderr
+    assert "no review record" not in checked.stderr, "a task's record fell with the goal"
 
 
 def test_the_copy_and_the_check_name_the_same_unreviewed_tasks(destination: Path) -> None:

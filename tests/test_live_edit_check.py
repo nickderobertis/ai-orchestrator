@@ -34,7 +34,7 @@ from typing import Any, cast
 
 import pytest
 
-from orchestrator import live_edit_check, plan_review
+from orchestrator import live_edit_check, plan_review, plan_store
 from orchestrator.criteria_guard import (
     APPENDIX,
     CRITERIA_HEADING,
@@ -1595,3 +1595,32 @@ def test_the_tracked_appendix_itself_is_left_alone() -> None:
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+def test_a_live_edit_spends_no_plan_level_turn_and_reads_no_plan_level_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-task tiers alone, as `orchestrator/plan_review.py`'s docstring states.
+
+    A novel whole task — a retry's replacement here — owes the judged turn a plan task
+    owes and nothing more: the one judged turn it spends is the per-task prompt, never the
+    plan-level one, and the project's plan-level record is neither read nor written. A
+    model call over the whole plan here would stall every mid-run correction; the
+    manager's own review is what covers adoption on a mid-run add.
+    """
+    monkeypatch.setattr(
+        plan_store,
+        "project_record",
+        lambda _project: pytest.fail("a live edit read the plan-level record"),
+    )
+    monkeypatch.setattr(
+        plan_review,
+        "write_plan_record",
+        lambda *_: pytest.fail("a live edit wrote a plan-level record"),
+    )
+    judge = ScriptedJudge(PASSES)
+
+    assert refusal(_envelope(_retry(_task())), judge=judge) is None
+    (prompt,) = judge.prompts
+    assert prompt.startswith(plan_review.REVIEW_PROMPT), prompt
+    assert plan_review.PLAN_REVIEW_PROMPT not in prompt

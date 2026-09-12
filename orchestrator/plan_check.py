@@ -153,6 +153,12 @@ def _task_record(task: object) -> plan_store.StoreTask:
     that. ``qualified_id`` is the one field the loaded plan does not carry — it is the
     store's address for the record, and nothing on this path addresses one — so it is
     filled from the node id, which is what every message here names anyway.
+
+    ``repositories`` is filled from the document's resolved ``repo``, which the engine
+    read from the record's own `repositories` list or its reserved `onepipeline.repo`
+    key — the same two spellings, in the same order,
+    :func:`orchestrator.plan_review.repository_of` reads a store record by — so the
+    `repo` the key covers is one value whichever path computed it.
     """
     read = task if isinstance(task, dict) else {}
     node_id = read.get("id")
@@ -160,6 +166,7 @@ def _task_record(task: object) -> plan_store.StoreTask:
     deps = read.get("deps")
     title = read.get("title")
     content = read.get("task")
+    repo = read.get("repo")
     # An id that is not a string is not rendered into one: the engine's loader refuses a
     # node without one long before this runs, so a missing id here means the two readers
     # disagree — and a record addressed as `None` would refuse a node no plan contains.
@@ -170,7 +177,7 @@ def _task_record(task: object) -> plan_store.StoreTask:
         title=title if isinstance(title, str) else "",
         content=content if isinstance(content, str) else None,
         metadata=metadata if isinstance(metadata, dict) else {},
-        repositories=[],
+        repositories=[repo] if isinstance(repo, str) else [],
         deps=tuple(
             plan_store.NodeId(dependency)
             for dependency in (deps if isinstance(deps, list) else [])
@@ -201,6 +208,37 @@ def _review_refusals(document: object, project: str) -> Iterator[Refusal]:
         )
 
 
+def _plan_review_refusal(document: object, project: str | None) -> Refusal | None:
+    """The one refusal about the plan whole: no plan-level review record for it.
+
+    The record lives on the **project** record, which the document does not carry — it
+    is the loaded *plan* — so it is read from the store by the id the wrapper named in
+    :data:`PROJECT_ENV`. A check handed no id **refuses rather than passes**, saying so:
+    the record it cannot read is the one that says a reviewer read the plan whole, and
+    a check that accepted for want of its own environment would be the escape hatch
+    this gate has none of. With an id, the reading and the refusal's text are
+    :func:`orchestrator.criteria_guard.plan_record_refusal`'s, which
+    :func:`orchestrator.criteria_guard.check_directly` reads through too, so the two
+    paths cannot drift in what they read or in what they say about it.
+    """
+    if project is None:
+        return Refusal(
+            node=None,
+            field="metadata",
+            reason=(
+                f"the plan-level review record could not be read for want of a project id: "
+                f"{PROJECT_ENV} names none, and the record lives on the project's own store "
+                f"record rather than in the loaded plan. Run `just check-plan "
+                f"{UNNAMED_PROJECT}`, which names it, and review the plan whole with "
+                f"`just review-plan {UNNAMED_PROJECT}`"
+            ),
+        )
+    reason = criteria_guard.plan_record_refusal(project, document)
+    if reason is None:
+        return None
+    return Refusal(node=None, field="metadata", reason=reason)
+
+
 def refusals(document: object, project: str) -> list[Refusal]:
     """Everything this repository refuses about ``document``, in the order it reads it.
 
@@ -208,7 +246,13 @@ def refusals(document: object, project: str) -> list[Refusal]:
     engine's own loader has already refused every shape it knows, so what reaches here
     is either well-formed or something both readers disagree about, and a traceback
     would report that as a broken check rather than as a plan to fix.
+
+    ``project`` is the qualified id the wrapper named, or :data:`UNNAMED_PROJECT` when
+    nothing did. Every refusal names it as the command that records a review; the
+    plan-level record is read from the store by it, and the placeholder reads as no
+    project to read one from.
     """
+    named = None if project == UNNAMED_PROJECT else project
     found: list[Refusal] = []
     try:
         found.extend(_node_refusals(document))
@@ -220,6 +264,9 @@ def refusals(document: object, project: str) -> list[Refusal]:
         for refused in guard.refusals(document)
     )
     found.extend(_review_refusals(document, project))
+    whole = _plan_review_refusal(document, named)
+    if whole is not None:
+        found.append(whole)
     return found
 
 

@@ -198,7 +198,16 @@ are blocked on the answer.
 - The cursor's shape and its type are stated.
 - What an exhausted page answers is stated.
 """
-RUN = RunId("plan-recipe-e2e")
+#: Per pytest process rather than one fixed word, because the module's one launch is
+#: made by two tiers at once. `orchestrator:test` and `orchestrator:test-docs` are
+#: separate pytest runs Nx starts together, and the `reads_docs` journey below shares
+#: the `planned` fixture with the rest — so each tier launches this module's plan into
+#: the *same* `.plans` root this checkout resolves, under whatever name is written
+#: here. Under one name, the tier that settled first removed the project document on
+#: its way out and the other's launch then read it as never written, seven errors on a
+#: green tree. The pid tells the two launches apart at the store, the ledger, and the
+#: receipt line alike.
+RUN = RunId(f"plan-recipe-e2e-{os.getpid()}")
 
 #: The planner node's own id, which every launch writes and the second node depends on.
 PLANNER_NODE = "plan"

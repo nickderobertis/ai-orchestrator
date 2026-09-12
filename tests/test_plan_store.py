@@ -257,6 +257,35 @@ def test_a_task_with_no_record_on_disk_is_named_rather_than_written_to(
         plan_store.task_document("demo", "demo/absent")
 
 
+def test_a_project_resolves_to_the_document_holding_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan-level review record is written into the project's own document."""
+    _written(tmp_path, monkeypatch)
+    document = tmp_path / "store" / "projects" / "demo.md"
+    document.parent.mkdir(parents=True)
+    document.write_text('---\ntitle: "demo"\n---\n', encoding="utf-8")
+    assert plan_store.project_document("demo", "demo") == document
+
+
+@pytest.mark.parametrize("native", ["..", "demo/route", "", "."])
+def test_a_project_id_that_is_not_a_local_records_name_is_refused(
+    native: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`..` is the value that would carry the write out of the root, so it is refused by shape."""
+    _written(tmp_path, monkeypatch)
+    with pytest.raises(OSError, match="not a local record's own name"):
+        plan_store.project_document("demo", native)
+
+
+def test_a_project_with_no_record_on_disk_is_named_rather_than_written_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _written(tmp_path, monkeypatch)
+    with pytest.raises(OSError, match="has no record at"):
+        plan_store.project_document("demo", "absent")
+
+
 def test_writing_a_record_sets_one_entry_and_leaves_every_other_byte(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

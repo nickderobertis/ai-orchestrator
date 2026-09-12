@@ -1547,6 +1547,39 @@ def accepted(counted: Counted, path: str) -> str:
     )
 
 
+def plan_record_refusal(project: str, plan: object) -> str | None:
+    """Why ``plan`` carries no plan-level review record on ``project``, or ``None``.
+
+    The one reading of that record for both of `just check-plan`'s paths — the check the
+    engine's `plan check` spawns and :func:`check_directly` — so that what they read and
+    what they say cannot drift apart: the path with no engine verb once read no
+    plan-level record at all and accepted a plan the other path refused. The record lives
+    on the **project** record, which the loaded plan does not carry, so it is read from
+    the store by the qualified id rather than from ``plan``. A record the store cannot
+    answer is a refusal naming what the store said and never an accept, because the plan
+    it is being asked about is one that same store just loaded. What is not answered here
+    is a review bar this checkout cannot fingerprint: that :class:`OSError` is the
+    caller's, because each path already reports that condition in its own shape.
+    """
+    try:
+        record = plan_store.project_record(project)
+    except OSError as exc:
+        return (
+            f"the project record carrying the plan-level review could not be read: "
+            f"{exc}; nothing says a reviewer read this plan whole, so review it with "
+            f"`just review-plan {project}` once the store answers"
+        )
+    if not plan_review.plan_unreviewed(record, plan):
+        return None
+    return (
+        f"the project record carries no plan-level review record for the plan's "
+        f"current goal and nodes. Every task may carry one and the plan still lack "
+        f"the adoption its goal needs, which no task's own review can see. Review it "
+        f"with `just review-plan {project}`, which spends one turn on the plan whole "
+        f"once every task carries a record"
+    )
+
+
 def check_directly(project: str) -> int:
     """Check ``project`` with this repository's checks alone, against an engine with no
     `plan check`.
@@ -1554,9 +1587,11 @@ def check_directly(project: str) -> int:
     The path this command took before the engine had a verb to register a check with,
     kept rather than deleted because it is the answer for a host whose engine predates
     that verb — and because it is the same checks over the same plan, so the two paths
-    agree by construction rather than by being kept in step. What it cannot do is make
-    the loader's own refusals: those are the engine's, and a plan checked this way is
-    still refused by the launch for a structural error this never looks at.
+    agree by construction rather than by being kept in step: the per-task records and
+    the plan-level record are both read here, the second through the
+    :func:`plan_record_refusal` the spawned check reads it through. What it cannot do is
+    make the loader's own refusals: those are the engine's, and a plan checked this way
+    is still refused by the launch for a structural error this never looks at.
     """
     try:
         plan, records = plan_store.read_project(project)
@@ -1589,6 +1624,7 @@ def check_directly(project: str) -> int:
         return 2
     try:
         unreviewed = plan_review.unreviewed(records)
+        whole = plan_record_refusal(project, plan)
     # tests/test_criteria_guard.py covers this: the review bar is composed from this
     # checkout's own tracked files, so a recipe journey run from here cannot remove one.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
@@ -1616,6 +1652,9 @@ def check_directly(project: str) -> int:
             f"in a local Markdown store.",
             file=sys.stderr,
         )
+    if whole is not None:
+        print(f"check-plan: {whole}", file=sys.stderr)
+    if unreviewed or whole is not None:
         return 1
     print(accepted(Counted(checked), DIRECTLY))
     return 0

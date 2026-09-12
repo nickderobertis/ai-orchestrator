@@ -854,6 +854,28 @@ def task_document(source: str, native_task_id: str) -> Path:
     return document
 
 
+def project_document(source: str, native_project_id: str) -> Path:
+    """The Markdown file holding one project of a local Markdown source.
+
+    A local project's native id is its file's stem below the root's `projects/`
+    directory — the layout `orchestrator/project_store.py` writes and
+    :func:`local_projects` lists — and the plan-level review record
+    `orchestrator/plan_review.py` writes goes into this file, exactly as a task's goes
+    into the one :func:`task_document` names. Held to :data:`RECORD_COMPONENT` for the
+    same reason: the id is the store's answer about a directory this repository writes
+    into, and the caller is about to edit whatever this returns.
+    """
+    if not RECORD_COMPONENT.fullmatch(native_project_id):
+        raise OSError(
+            f"project id {native_project_id!r} is not a local record's own name, so the "
+            f"document holding it cannot be named"
+        )
+    document = source_root(source) / "projects" / f"{native_project_id}.md"
+    if not document.is_file():
+        raise OSError(f"project {source}:{native_project_id} has no record at {document}")
+    return document
+
+
 #: What a project or task component of a local record's id may be. Deliberately an
 #: allowlist: this decides a path a caller then writes to, and `.` and `..` are the two
 #: values that would carry that write out of the project it names.

@@ -14,10 +14,14 @@ enforced by a command rather than remembered by an operator. It composes: it spe
 judged turn, reviews nothing itself, and changes neither of the two commands beside it.
 What it does before writing anything to the destination is read the plan and refuse it
 when any of its tasks carries no review record for that task's current authored
-content — the same question `just check-plan` asks, answered by calling
-:func:`~orchestrator.plan_review.unreviewed` rather than by restating how a record is
-keyed. A second implementation of that key would be a second answer to one question, and
-would disagree with the first the moment either moved.
+content, or when its project record carries no plan-level one for the plan as it stands
+— the same two questions `just check-plan` asks, answered by calling
+:func:`~orchestrator.plan_review.unreviewed` and
+:func:`~orchestrator.plan_review.plan_unreviewed` rather than by restating how either
+record is keyed. A second implementation of that key would be a second answer to one
+question, and would disagree with the first the moment either moved. A copied plan
+carries both: each record is an entry of the metadata map the store's own copy carries,
+on the task and on the project.
 
 **The plan's documents are copied beside it, and that is not an extra.** The store's
 `project copy` carries the project and its tasks and no document at all, while what a
@@ -157,6 +161,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"the task's own Markdown document and a board is not a directory — so review "
             f"it with `just review-plan {args.project}` while it is still local, then copy "
             f"it up.",
+            file=sys.stderr,
+        )
+        return UNREVIEWED
+    # The plan whole, read by the same two store calls `just review-plan` reads it by, so
+    # the key this compares against is the one that command wrote. Refused before the
+    # store is asked to write anything, for the reason the per-task refusal is: a board
+    # is not a directory, and a plan copied without this record can never earn one there.
+    try:
+        plan = plan_store.read_plan(args.project, records)
+        pending_plan = plan_review.plan_unreviewed(plan_store.project_record(args.project), plan)
+    except (OSError, ValueError) as exc:
+        print(
+            f"copy-plan: cannot read the plan-level review record of {args.project}: {exc}; "
+            f"nothing was copied. Pass the qualified project id you would hand "
+            f"`just check-plan`",
+            file=sys.stderr,
+        )
+        return UNREADABLE
+    if pending_plan:
+        print(
+            f"copy-plan: every task of {args.project} carries a review record, and its "
+            f"project record carries no plan-level one for the plan as it stands — nothing "
+            f"has read the plan whole for the adoption its goal needs. Nothing was copied "
+            f"into {args.destination!r}. Review it with `just review-plan {args.project}` "
+            f"while it is still local, then copy it up.",
             file=sys.stderr,
         )
         return UNREVIEWED
