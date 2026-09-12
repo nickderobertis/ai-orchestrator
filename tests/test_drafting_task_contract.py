@@ -21,7 +21,7 @@ from functools import cache
 from pathlib import Path
 
 import pytest
-from drafting_task_contract import drafting_endings, onepipeline_opening
+from drafting_task_contract import drafting_endings, drafting_starting_points, onepipeline_opening
 
 from orchestrator.root import REPO_ROOT
 
@@ -75,4 +75,25 @@ def test_every_ending_the_drafter_reports_is_one_the_pinned_onepipeline_knows(
         "scripts/draft-pr-body.sh reports a bodyless run with; either the script "
         "invented a name or the engine renamed one, and an operator reading it would "
         "find nothing under it"
+    )
+
+
+@pytest.mark.parametrize("heading", drafting_starting_points())
+def test_every_section_the_drafter_starts_from_is_one_the_pinned_onepipeline_composes(
+    heading: str,
+) -> None:
+    """Each heading the prompt reads by name is a heading the adopted engine writes.
+
+    The drafter is told to finish the description under `## Change request` and may run
+    the command under `## Worker transcript`; both headings are the engine's literals,
+    composed into the drafting task by the closeout. `scripts/draft-pr-body.sh` composes
+    neither, so the graph is the one place this repository names them — and a heading
+    the engine reworded would leave the drafter looking for a section the task no longer
+    opens, silently starting over on a description the worker had begun.
+    """
+    assert heading.encode("utf-8") in _pinned_engine(), (
+        f"the pinned onepipeline does not carry {heading!r}, which graphs/pr-author.yaml "
+        "tells the drafter to read its starting point from; either the prompt named a "
+        "section the engine never composes or the engine reworded the heading, and the "
+        "drafter would start over on a description the worker had begun"
     )

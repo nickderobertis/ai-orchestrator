@@ -22,6 +22,7 @@ from typing import NamedTuple
 
 import pytest
 
+from orchestrator.criteria_guard import AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
 
@@ -64,6 +65,20 @@ OWNED_STATEMENTS = (
     Owned(PLANNER.document, "there is no second place to state one"),
     Owned(PLANNER.document, "satisfiable by that node's own worker inside its own dispatch"),
     Owned(PLANNER.document, "the criteria stop at *ready to publish*"),
+    # Evidence a worker produces on the host — a demonstration change request, a check it
+    # triggers — and the two carve-outs that let it: how the criteria state that evidence
+    # without addressing a role, where the grant goes, and what `draft` settles as are the
+    # planner's and travel; the one sentence saying a worker may do exactly two things to
+    # a remote is the manager's, because the commands and the closing belong to the
+    # appendix and the manager's document only points at it.
+    Owned(PLANNER.document, "One exception, and it is the worker's own draft"),
+    Owned(PLANNER.document, "State the evidence in `## Acceptance criteria`, addressing nobody"),
+    Owned(PLANNER.document, "Grant the worker what it needs in `## Additional info`"),
+    Owned(PLANNER.document, "Never write a static rule about which dependents produce evidence"),
+    # The `draft` field itself is the engine's vocabulary and both documents name it;
+    # what is the planner's alone is when to reach for it.
+    Owned(PLANNER.document, "never to hold a run"),
+    Owned(MANAGER.document, "A lifecycle worker may do exactly two things to a remote on its own"),
     Owned(PLANNER.document, "$ORCHESTRATOR_ASK_MANAGER"),
     Owned(PLANNER.document, "PLANNER EXCEPTIONS"),
     # The manager's judgment: what to dispatch, what to brief, what to decide, what
@@ -285,4 +300,30 @@ def test_the_manager_names_the_persona_that_owns_the_rest_of_the_doctrine() -> N
     assert f"({PLANNER.document})" in _section(MANAGER), (
         f"{MANAGER.document}'s {MANAGER.section!r} no longer points at {PLANNER.document}; "
         "a reader who cannot find the planner's judgment will restate it here instead"
+    )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("authorization", AUTHORIZATIONS, ids=lambda one: one.name)
+def test_the_planner_grants_a_carve_out_in_the_words_the_criteria_guard_reads(
+    authorization: object,
+) -> None:
+    """The grant the persona tells a planner to write is the grant `just check-plan` reads.
+
+    A planner writes a task's grant in a worktree of a repository this file never reaches,
+    and the guard reads it back here; the persona is the only copy of the instruction
+    that travels, so its words and the guard's pattern are held to each other rather than
+    remembered. A persona that paraphrased the grant would send every plan written under
+    it back refused for a criterion its task had granted.
+    """
+    assert isinstance(authorization, tuple)
+    role = _flat(_planner_instructions())
+    assert authorization.grant in role, (
+        f"{PLANNER.document} no longer tells a planner to grant {authorization.name} as "
+        f"{authorization.grant!r}, which is the wording orchestrator/criteria_guard.py reads"
+    )
+    assert authorization.granted_by.search(role), (
+        f"{PLANNER.document} spells the grant of {authorization.name} in words the criteria "
+        "guard does not read; a plan written under it would be refused for a criterion its "
+        "task had granted"
     )

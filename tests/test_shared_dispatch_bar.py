@@ -207,6 +207,31 @@ CHECK_SELECTION_POLICY = (
     ),
 )
 
+#: Every rule about publication the preamble may not state, held **absent** the way the
+#: check-selection policies above are. Publication is dispatch policy with one source:
+#: `config/dispatch-appendix.md` states the rule and the two carve-outs a task may grant
+#: — the worker's own draft, and a demonstration change request stacked on it — and a
+#: preamble stating any rule about pushing, opening or landing a change request would be
+#: a second copy the carve-outs then have to be carved out of twice. On the demand
+#: rather than the wording, for the reason the policies above are.
+PUBLICATION_POLICY = (
+    Policy("a ban on pushing", re.compile(r"\bgit\s+push\b|\bno\s+push(?:es|ing)?\b", re.I)),
+    Policy(
+        "a rule about opening a change request",
+        re.compile(
+            r"\bgh\s+pr\b|\bopen(?:s|ed|ing)?\s+(?:a|the|its)\s+(?:pull|change)\s+request", re.I
+        ),
+    ),
+    Policy(
+        "a rule about landing or publishing the branch",
+        re.compile(
+            r"\bpublish(?:es|ed|ing)?\b|\bland(?:s|ed|ing)?\s+(?:it|the\s+branch|on)\b|\bmerg(?:e|es|ed|ing)\b",
+            re.I,
+        ),
+    ),
+    Policy("a rule about a draft", re.compile(r"\bdraft\b", re.I)),
+)
+
 #: The one thing the preamble may still say about a check, and the scope that makes it
 #: sayable. Unscoped it read on every test in the repository, including ones failing for
 #: the host's own reasons and ones the branch never touched.
@@ -236,6 +261,27 @@ def test_the_preamble_states_no_policy_about_which_checks_a_dispatch_runs(policy
         "Which checks a dispatch runs is `config/dispatch-appendix.md`'s to say — the "
         "one copy a worker and its judge read together — and two copies of it have "
         f"already disagreed:\n{preamble}"
+    )
+
+
+@pytest.mark.parametrize("policy", PUBLICATION_POLICY, ids=lambda row: row.name)
+def test_the_preamble_states_no_rule_of_its_own_about_publication(policy: Policy) -> None:
+    """What a dispatch may do to a remote has one source, and this file is not it.
+
+    The appendix's publication paragraph keeps the rule and grants two carve-outs on the
+    task's own say-so; `AGENTS.md`'s bypass rule points at that paragraph in one
+    sentence. A third statement here — the shape the preamble's commit-as-you-go clause
+    could easily grow — would be read by every worker and its judge as a rule the
+    carve-outs do not reach, so the three are held to being one source, one pointer and
+    one carve-out.
+    """
+    preamble = " ".join(shared_agent_preamble().split())
+    found = policy.stated_by.search(preamble)
+    assert found is None, (
+        f"{BASE_CONFIG}'s `system_prompt` states {policy.name} ({found.group(0)!r}). "
+        "What a dispatch may push, open or land is `config/dispatch-appendix.md`'s to "
+        "say, carve-outs included; the preamble points at the task's own "
+        f"`## Additional info` and states nothing of its own:\n{preamble}"
     )
 
 

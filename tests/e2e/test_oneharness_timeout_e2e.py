@@ -56,8 +56,10 @@ PR_AUTHOR_MEMBER = "pr-author"
 
 #: The drafter's per-turn deadline, as `oneharness.pr-author.toml` states it. Exact
 #: for the same reason the pacemaker's is: what matters is that it is *finite* and
-#: chosen, not that it is some number.
-DRAFTER_DEADLINE_SECONDS = 300
+#: chosen, not that it is some number. Doubled when the drafter started from the
+#: worker's description and the worker's transcript rather than the diff alone; the
+#: measurement behind the number is beside it in that file.
+DRAFTER_DEADLINE_SECONDS = 600
 
 #: The plan reviewer's config, which is the fourth copy of the supervisory routing.
 #: It is named here rather than read out of a graph because nothing dispatches it: it

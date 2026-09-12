@@ -43,7 +43,9 @@ from criteria_examples import (
 from orchestrator import criteria_guard, plan_check, plan_review, plan_store
 from orchestrator.criteria_guard import (
     APPENDIX_ENV,
+    AUTHORIZATIONS,
     CRITERIA_HEADING,
+    Authorization,
     Bar,
     CriteriaError,
     appendix_text,
@@ -51,6 +53,7 @@ from orchestrator.criteria_guard import (
     builtin_persona,
     builtin_persona_names,
     check,
+    check_amendment,
     check_appendix,
     check_changes_allowed,
     check_directly,
@@ -1570,6 +1573,216 @@ def test_project_plan_rejects_a_dependency_on_an_unlisted_task(
     # the engine and the issue, and holding this apart is what says that sentence is
     # about the rewrite rather than about every missing edge.
     assert plan_store.WRITE_BACK_SOURCE not in str(refused.value)
+
+
+#: A grant in the words the appendix carve-out names, per authorization, as a task's own
+#: `## Additional info` writes it above the operational appendix. Composed from the
+#: guard's own `grant` rather than spelled here, so the sentence a planner is told to
+#: write and the one this check reads stay one sentence.
+def _sentence(fragment: str) -> str:
+    """``fragment`` capitalized to open a sentence, as a criterion or a grant writes it."""
+    return f"{fragment[0].upper()}{fragment[1:]}"
+
+
+def _granting(*names: str) -> str:
+    grants = [one.grant for one in AUTHORIZATIONS if one.name in names]
+    sentences = " ".join(
+        f"{grant[0].upper()}{grant[1:]}, under the carve-out below." for grant in grants
+    )
+    return f"## Additional info\n\n{sentences}\n\n{APPENDIX}"
+
+
+#: The wordings the admission must not reach, under every grant at once: a merge, a
+#: landing on a base, the merge path's own verdict, and the node's own publication, each
+#: applied to the draft or to the demonstration change request. The word `draft` is not
+#: a licence; the subject of an admitted clause is the draft *and* the predicate is the
+#: one thing the carve-out lets a worker do.
+STILL_REFUSED_UNDER_EVERY_GRANT = (
+    "- The draft is merged.",
+    "- The demonstration PR lands on main.",
+    "- The draft change request's required checks pass.",
+    "- The branch publishes as a draft.",
+    "- The demonstration pull request is merged.",
+    "- The demonstration change request's wheel exists on the registry.",
+)
+
+
+@pytest.mark.parametrize("authorization", AUTHORIZATIONS, ids=lambda one: one.name)
+def test_a_criterion_about_what_the_carve_out_lets_the_worker_do_is_admitted_under_its_grant(
+    authorization: criteria_guard.Authorization,
+) -> None:
+    """Each authorization's own example: admitted with the grant, refused without it.
+
+    The same criterion on the same task, differing only in whether the task's own
+    `## Additional info` grants the carve-out in the appendix's words. Without the grant
+    the worker may not do the thing the criterion rests on, so it is refused exactly as
+    every other publication is — and the refusal names the grant to write rather than a
+    precondition to state, because that is the correction an author cannot derive.
+    """
+    criterion = f"- {authorization.example[0].upper()}{authorization.example[1:]}."
+
+    check(
+        _task(f"{criterion}\n{COMPLETE}", _granting(authorization.name)), "probe", NOTHING_DEMANDED
+    )
+
+    with pytest.raises(CriteriaError) as refused:
+        check(_task(f"{criterion}\n{COMPLETE}"), "probe", NOTHING_DEMANDED)
+    reported = str(refused.value)
+    assert "the dispatch cannot do" in reported, reported
+    assert f"A criterion about {authorization.name} is admitted only" in reported, reported
+    assert authorization.grant in reported, reported
+
+
+def test_a_demonstration_criterion_is_refused_on_a_task_granting_only_early_publication() -> None:
+    """The two grants are two grants, and the more specific subject decides which is needed.
+
+    A task that lets its worker publish its draft early has not let it open a throwaway
+    change request stacked on that draft, so a criterion whose subject is the
+    demonstration change request is refused under early publication alone — including
+    one that also says `draft`, since "the demonstration draft" is about the demonstration.
+    """
+    demonstration, early = AUTHORIZATIONS
+    assert demonstration.name == "a demonstration change request"
+    for criterion in (
+        f"- {demonstration.example[0].upper()}{demonstration.example[1:]}.",
+        "- The demonstration draft is published.",
+    ):
+        with pytest.raises(CriteriaError) as refused:
+            check(
+                _task(f"{criterion}\n{COMPLETE}", _granting(early.name)), "probe", NOTHING_DEMANDED
+            )
+        assert f"A criterion about {demonstration.name} is admitted only" in str(refused.value), (
+            str(refused.value)
+        )
+
+
+@pytest.mark.parametrize(
+    "criterion", STILL_REFUSED_UNDER_EVERY_GRANT, ids=range(len(STILL_REFUSED_UNDER_EVERY_GRANT))
+)
+def test_the_wordings_the_carve_out_does_not_reach_stay_refused_under_every_grant(
+    criterion: str,
+) -> None:
+    """What the admission is bounded by: the subject alone admits nothing.
+
+    Every one of these names the draft or the demonstration change request and rests on
+    something the worker still cannot reach — a merge, a landing, a required check, the
+    branch's own publication, a release — and each is refused with both grants written,
+    by the existing refusals rather than by a new one.
+    """
+    every = _granting(*(one.name for one in AUTHORIZATIONS))
+    with pytest.raises(CriteriaError) as refused:
+        check(_task(f"{criterion}\n{COMPLETE}", every), "probe", NOTHING_DEMANDED)
+    reported = str(refused.value)
+    assert "the dispatch cannot do" in reported, reported
+    assert "is admitted only" not in reported, reported
+
+
+#: What the engine appends below the appendix, each carrying a grant in the carve-out's
+#: own words and each spelling `## Additional info` on a line of its own after it: a
+#: carried note quoting a task, rendered under `## Planner context`; the same with the
+#: quoted heading opening the context; and a references block. Under a reader that took
+#: the *last* opening of the heading as the appendix's, every one of these pulled the
+#: grant sentence into the task's own section, and a task granting nothing was accepted
+#: on the strength of a sentence nobody reviewed as a grant.
+def _appended_after_the_appendix(grant: str) -> tuple[str, ...]:
+    return (
+        f"## Planner context\n\n{grant}.\n\nQuoted from the task:\n\n## Additional info\n\nx\n",
+        f"## Planner context\n\n## Additional info\n\n{grant}.\n",
+        f"## Cross-repository references\n\n{grant}.\n\n## Additional info\n\nx\n",
+    )
+
+
+def test_a_grant_is_read_from_the_tasks_own_section_and_nowhere_else() -> None:
+    """Where the grant is read from, held in both directions.
+
+    A task's own `## Additional info` is the block the first opening of that heading
+    holds, read only when the heading closing that block is the second opening — the
+    appendix's, directly below it. So a task opening it once has no section of its own,
+    and prose the engine appends after the appendix, such as a manager's carried
+    `## Planner context`, is never a grant however it is worded — even when it spells
+    the heading itself on a line of its own. A grant a planner context could confer would
+    be a criterion nobody reviewed admitting a publication.
+    """
+    _, early = AUTHORIZATIONS
+    criterion = f"- {_sentence(early.example)}."
+    assert criteria_guard.own_additional_info(_task(COMPLETE)) == ""
+    ungranted = _task(f"{criterion}\n{COMPLETE}")
+    appended = f"{ungranted}\n\n## Planner context\n\n{_sentence(early.grant)}.\n"
+    own = criteria_guard.own_additional_info(appended)
+    assert criteria_guard.authorizations(own) == frozenset(), own
+
+    with pytest.raises(CriteriaError, match="is admitted only"):
+        check(appended, "probe", NOTHING_DEMANDED)
+
+    criteria = f"{criterion}\n{COMPLETE}"
+    granting_nothing = "## Additional info\n\nNothing is granted here.\n\n"
+    for trailing in _appended_after_the_appendix(_sentence(early.grant)):
+        for additional in (APPENDIX, f"{granting_nothing}{APPENDIX}"):
+            appended = f"{_task(criteria, additional)}\n{trailing}"
+            own = criteria_guard.own_additional_info(appended)
+            assert criteria_guard.authorizations(own) == frozenset(), (trailing, own)
+            with pytest.raises(CriteriaError, match="is admitted only"):
+                check(appended, "probe", NOTHING_DEMANDED)
+
+    granted = f"{_task(criteria, _granting(early.name))}\n## Planner context\n"
+    assert criteria_guard.authorizations(criteria_guard.own_additional_info(granted)) == {
+        early.name
+    }
+    check(granted, "probe", NOTHING_DEMANDED)
+
+
+#: A carve-out named in the appendix's own words and then negated. Each is what a planner
+#: writes to *withhold* one, and each carries the very phrase the grant matcher reads.
+NEGATED_GRANTS = (
+    "A throwaway demonstration change request is not authorized.",
+    "This task does not authorize a throwaway demonstration change request.",
+    "No demonstration change request is authorized.",
+    "Never authorize a throwaway demonstration change request.",
+    "A throwaway demonstration change request isn't authorized.",
+)
+
+
+@pytest.mark.parametrize("withheld", NEGATED_GRANTS)
+def test_a_negated_grant_grants_nothing(withheld: str) -> None:
+    """A sentence that names a carve-out to withhold it is not a grant of it.
+
+    The grant is read in the appendix's own words, and every one of these carries them:
+    *"demonstration change request … authorized"* is inside *"is not authorized"* as much
+    as inside the grant. Read by phrase alone, a task that had just forbidden the
+    demonstration admitted a criterion resting on it — so the grant is read by the
+    sentence, and a negated one is refused exactly as a task saying nothing is, naming
+    the grant to write. Held at every reader: the parser, a task, and an amendment.
+    """
+    demonstration, _ = AUTHORIZATIONS
+    assert criteria_guard.authorizations(withheld) == frozenset(), withheld
+    criterion = f"- {_sentence(demonstration.example)}."
+    additional = f"## Additional info\n\n{withheld}\n\n{APPENDIX}"
+    with pytest.raises(CriteriaError, match="is admitted only"):
+        check(_task(f"{criterion}\n{COMPLETE}", additional), "probe", NOTHING_DEMANDED)
+    with pytest.raises(CriteriaError, match="is admitted only"):
+        check_amendment(f"{withheld} {demonstration.example}.", "the amendment for node 'work'")
+
+
+@pytest.mark.parametrize("authorization", AUTHORIZATIONS, ids=lambda one: one.name)
+def test_the_words_that_grant_a_carve_out_are_not_themselves_a_publication_criterion(
+    authorization: Authorization,
+) -> None:
+    """A grant names a publication — "may be published early" — and is not one.
+
+    That sentence reaches the criteria reader only in an amendment, which carries its
+    grant in its own text; a task's grant lives outside the criteria block. So the
+    publication matcher passes over a match inside a grant's own span, and an amendment
+    carrying the grant beside a criterion about the draft is admitted whole. Held from
+    both sides: the same criterion with no grant beside it is refused as ungranted, which
+    is what says the grant — and not a matcher that never fired — is what admits it.
+    """
+    where = "the amendment for node 'work'"
+    with pytest.raises(CriteriaError) as refused:
+        check_amendment(f"{authorization.example}.", where)
+    assert f"A criterion about {authorization.name} is admitted only" in str(refused.value), str(
+        refused.value
+    )
+    assert check_amendment(f"{authorization.grant}. {authorization.example}.", where) is None
 
 
 def test_the_criteria_fingerprint_reads_the_files_the_deterministic_bar_is(

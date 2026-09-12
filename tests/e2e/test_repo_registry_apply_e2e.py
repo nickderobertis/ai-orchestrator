@@ -555,6 +555,15 @@ INSTALLED_RULES = (
 
 
 def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> None:
+    """A refused rules file leaves the one already installed exactly as it was.
+
+    The installed stand-in has to be a rules file the pinned `onevcs` itself accepts,
+    because registration reads it before the supplied file is ever validated: onevcs
+    0.20.0 resolves an identity's publication policy from the rules at `register`, and
+    a file with no `default:` is refused there as malformed — so a stand-in written as
+    the bare `version: 2` / `rules: []` of earlier releases fails the recipe one step
+    before the refusal this journey is about, and proves nothing about replacement.
+    """
     present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
     manifest = tmp_path / "checkouts"
     manifest.write_text(f"{present}\n", encoding="utf-8")
@@ -570,7 +579,7 @@ def test_invalid_rules_do_not_replace_the_installed_rules(tmp_path: Path) -> Non
 
     result = apply_registry(manifest, home, "--rules", str(invalid))
 
-    assert result.returncode == 1
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "is not a valid onevcs rules file" in result.stderr
     assert installed.read_text(encoding="utf-8") == INSTALLED_RULES
 

@@ -81,7 +81,7 @@ import re
 
 import pytest
 
-from orchestrator.criteria_guard import APPENDIX
+from orchestrator.criteria_guard import APPENDIX, AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_docs
@@ -176,6 +176,30 @@ REPORT_IS_LAST = re.compile(
     r"completion\s+report\s+is\s+the\s+last\s+thing\s+this\s+dispatch\s+produces", re.I
 )
 REPORTED_AFRESH = re.compile(r"fixed\s+first\s+and\s+then\s+reported\s+afresh", re.IGNORECASE)
+
+#: The publication rule, and the two carve-outs this host lets a task grant beside it.
+#: Each half is held on its load-bearing words: the session branch reaching its remote
+#: through `onevcs publish` alone, landing staying the lifecycle's, each carve-out
+#: opening on the task's own grant, the draft never marked ready by the worker, the
+#: demonstration change request based on the session branch and closed before the
+#: worker finishes, and everything else still forbidden. `\s+` between words because
+#: this file is hard-wrapped.
+PUBLICATION_RULE = re.compile(r"\*\*Publication goes through the harness\.\*\*")
+ONLY_THROUGH_ONEVCS = re.compile(r'only\s+through\s+`onevcs publish "\$ONEVCS_SESSION"`')
+LANDING_IS_NOT_THE_WORKERS = re.compile(r"Landing it is explicitly \*\*not\*\* yours")
+CARVE_OUT = re.compile(r"\*\*Only when the task's `## Additional info`\s+(?P<grant>[^*]+)\*\*")
+OPENS_THE_DRAFT = re.compile(r'`onevcs publish "\$ONEVCS_SESSION" --draft')
+DESCRIBES_THE_DRAFT = re.compile(r'`onevcs change describe "\$ONEVCS_SESSION" --body-file PATH`')
+READS_THE_DRAFT_BACK = re.compile(r'`onevcs change show "\$ONEVCS_SESSION"`')
+NEVER_ONE_SECOND_CHANGE_REQUEST = re.compile(r"never\s+opens\s+a\s+second")
+NEVER_MARKED_READY_BY_THE_WORKER = re.compile(r"Never\s+mark\s+the\s+draft\s+ready")
+BASED_ON_THE_SESSION_BRANCH = re.compile(r"--base <session branch>")
+NEVER_ON_THE_REPOSITORYS_BASE = re.compile(r"never\s+the\s+repository's\s+base")
+CLOSED_WITH_ITS_BRANCH = re.compile(r"`gh pr close <n> --delete-branch`")
+CLOSED_BEFORE_FINISHING = re.compile(r"closed\s+before\s+you\s+finish")
+EVERYTHING_ELSE_STAYS_FORBIDDEN = re.compile(
+    r"Everything\s+else\s+a\s+push\s+or\s+a\s+change-request\s+verb\s+could\s+do\s+is\s+still\s+not\s+yours"
+)
 
 #: The heading of the section that asks for each demand to be stated as a criterion. The
 #: bullets under it are what a plan's builder copies, so a demand is asked for there or
@@ -977,4 +1001,73 @@ def test_the_appendix_says_a_process_must_finish_inside_the_turn_that_started_it
             f"{APPENDIX} no longer says {missing}. This file teaches backgrounding as the "
             "way to wait on a slow command, and a worker that reads only that ends its "
             "turn with the run still going and nothing to show for it"
+        )
+
+
+def test_the_publication_rule_keeps_its_rule_and_states_the_two_carve_outs(
+    appendix: str,
+) -> None:
+    """Publication is the lifecycle's, and two things beside it are the worker's on a grant.
+
+    A worker may open its session's change request as a draft and, stacked on it, a
+    throwaway demonstration change request — each only when its task's own
+    `## Additional info` says so. This is the one file that states that, so what is held
+    is the whole shape: the rule kept, each carve-out opening on the task's grant, the
+    commands, the base, the closing, and what stays forbidden. A worker reading to
+    comply and a judge reading to refuse have to land in the same place, which is why
+    the boundaries are stated rather than left to the commands.
+    """
+    rule = PUBLICATION_RULE.search(appendix)
+    assert rule, f"{APPENDIX} no longer states that publication goes through the harness"
+    paragraph = appendix[rule.start() : appendix.find("\n\n**", rule.end() + 1)]
+    assert ONLY_THROUGH_ONEVCS.search(paragraph), (
+        f"{APPENDIX} no longer says the session branch reaches its remote only through "
+        "`onevcs publish`; that is the rule the carve-outs are carved out of"
+    )
+    assert LANDING_IS_NOT_THE_WORKERS.search(paragraph), (
+        f"{APPENDIX} no longer says landing the change is not the worker's; with a draft "
+        "the worker may open, that is the half of the rule a worker most needs stated"
+    )
+    assert EVERYTHING_ELSE_STAYS_FORBIDDEN.search(paragraph), (
+        f"{APPENDIX} states the carve-outs without closing them: everything else a push "
+        "or a change-request verb could do has to be said to stay forbidden"
+    )
+
+    for expectation, missing in (
+        (OPENS_THE_DRAFT, "the command that opens the session's change request as a draft"),
+        (NEVER_ONE_SECOND_CHANGE_REQUEST, "that a later draft publication opens no second one"),
+        (DESCRIBES_THE_DRAFT, "the command that replaces the draft's description"),
+        (READS_THE_DRAFT_BACK, "the command that reads the description back"),
+        (NEVER_MARKED_READY_BY_THE_WORKER, "that the worker never marks the draft ready"),
+        (BASED_ON_THE_SESSION_BRANCH, "that the demonstration is based on the session branch"),
+        (NEVER_ON_THE_REPOSITORYS_BASE, "that it is never based on the repository's base"),
+        (CLOSED_WITH_ITS_BRANCH, "the command that closes it and deletes its branch"),
+        (CLOSED_BEFORE_FINISHING, "that it is closed before the worker finishes"),
+    ):
+        assert expectation.search(paragraph), f"{APPENDIX}'s carve-out no longer states {missing}"
+
+
+def test_each_carve_out_opens_on_the_grant_the_criteria_guard_reads(appendix: str) -> None:
+    """The words a task grants a carve-out in are the words `just check-plan` reads.
+
+    `orchestrator/criteria_guard.py` admits a criterion about the worker's draft, or about
+    a demonstration change request, only for a task whose own `## Additional info` grants
+    it — and it reads the grant by the carve-out's own words. So each carve-out here has
+    to open on a sentence that grant pattern matches: a planner told to write "in the
+    words the appendix names" would otherwise write words the guard does not read, and
+    the plan would be refused for a criterion its task had granted.
+    """
+    rule = PUBLICATION_RULE.search(appendix)
+    assert rule, f"{APPENDIX} no longer states that publication goes through the harness"
+    paragraph = appendix[rule.start() : appendix.find("\n\n**", rule.end() + 1)]
+    grants = [" ".join(found["grant"].split()) for found in CARVE_OUT.finditer(paragraph)]
+    assert len(grants) == len(AUTHORIZATIONS), (
+        f"{APPENDIX} opens {len(grants)} carve-outs on the task's own `## Additional info` "
+        f"and the criteria guard reads {len(AUTHORIZATIONS)} authorizations: {grants}"
+    )
+    for authorization in AUTHORIZATIONS:
+        assert any(authorization.granted_by.search(grant) for grant in grants), (
+            f"{APPENDIX}'s carve-outs open on {grants}, none of which is the wording the "
+            f"criteria guard reads a grant of {authorization.name} by — a task writing "
+            f"{authorization.grant!r} would be granting something this file does not name"
         )

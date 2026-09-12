@@ -230,10 +230,36 @@ limit while `gh api rate_limit` still shows budget, stop making that call: deliv
 result another way, name in your report what was refused and what you tried, and leave the
 retry to a person.
 
-**Publication goes through the harness.** No `git push`, no `gh pr create`, no `gh pr
-merge`. Finish the branch, commit everything, leave the tree clean, and report — the
-lifecycle publishes it after you settle. Publication is explicitly **not** yours to
-perform and **not** part of your acceptance criteria.
+**Publication goes through the harness.** The session branch reaches its remote only
+through `onevcs publish "$ONEVCS_SESSION"`, and its change request is lifted and landed
+by the lifecycle after you settle. No `git push` of the session branch, no `gh pr create`
+for it, no `gh pr ready`, no `gh pr merge`. Finish the branch, commit everything, leave
+the tree clean, and report. Landing it is explicitly **not** yours to perform and **not**
+part of your acceptance criteria. Two things are yours, and each only when this task's
+own `## Additional info` — its own words above these notes — says so:
+
+- **Only when the task's `## Additional info` says the change request may be published
+  early**: `onevcs publish "$ONEVCS_SESSION" --draft [--title T] [--body-file PATH]` opens
+  the session's change request as a draft, and a later `publish --draft` pushes new
+  commits onto that same change request and never opens a second. Commit everything
+  first — a dirty tree is committed for you, under a provenance you did not choose.
+  `onevcs change describe "$ONEVCS_SESSION" --body-file PATH` replaces its description
+  and `onevcs change show "$ONEVCS_SESSION"` reads it back. The description you leave is
+  what the drafter finishes from, so start it with what only you know — the evidence and
+  where it is. Never mark the draft ready; the lifecycle does, after the description is
+  finished. `ONEVCS_SESSION` is in every lifecycle dispatch's environment.
+- **Only when the task's `## Additional info` authorizes a throwaway demonstration change
+  request**: after the draft is open, cut a branch from the session branch, commit the
+  demonstration on it, push it with `git push -u origin <branch>`, open it with
+  `gh pr create --draft --base <session branch> --head <branch> --title "DO NOT MERGE: …"`,
+  capture the evidence — `gh pr view <n> --comments`, `gh pr checks <n>`, and `gh api`
+  **reads** of that change request's own comments, checks and reviews, never a write to
+  anything — then close it with `gh pr close <n> --delete-branch`, return to the session
+  branch, and delete the local branch — a local branch left behind makes the session's
+  close refuse. Its base is always the session branch, never the repository's base; it
+  is never marked ready; it is closed before you finish.
+
+Everything else a push or a change-request verb could do is still not yours.
 
 **Every claim you make about the finished work is true of the tree as it finally
 stands.** That is the property you are held to, and it says nothing about where your

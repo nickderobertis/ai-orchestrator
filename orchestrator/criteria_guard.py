@@ -48,6 +48,18 @@ its work complete and landed. It is an entry of :data:`OUT_OF_DISPATCH` beside t
 merge path's own verdict, and it is one of the two this module does **not** ask of an
 amendment — :func:`check_amendment` says why.
 
+One shape on that list is **admitted** under a condition, and the condition is the
+task's own. A worker may open its session's change request as a draft it holds, and a
+throwaway demonstration change request stacked on that draft, when its task's own
+``## Additional info`` grants either in the words `config/dispatch-appendix.md`'s
+carve-out names — so a criterion whose subject is that draft, or that demonstration
+change request, and whose predicate is the publication entry, is a property of state the
+worker controls. :data:`AUTHORIZATIONS` holds the two grants and :func:`_admitted` reads
+the clause's subject; the same criterion on a task granting nothing is refused exactly as
+before, naming the grant to write, and a merge, a landing, a required check's verdict or
+a release stays refused whatever the subject says. `docs/plan-review-refusals.md`
+records the false refusal this prevents.
+
 One shape is worse than any of them, because no wording of the criteria rescues it:
 a bar that forbids the dispatch changing project files, under a task that requires
 one to change. The judge is then *required* to fail the work the task is *required*
@@ -466,6 +478,13 @@ class OutOfDispatch(NamedTuple):
     #: the ordinary mid-run correction is the very thing the entry refuses; the reason
     #: per entry is beside it.
     of_an_amendment: bool = True
+    #: Whether a task's own authorization can admit a match of this entry, when the
+    #: clause's subject is the thing that authorization lets the worker do. True only
+    #: for the publication shapes, because publishing *as a draft* is the one thing on
+    #: this list a worker may now do from inside its dispatch; a merge, a landing, a
+    #: required check's verdict and a release are as far outside it as they ever were,
+    #: whatever the clause's subject is.
+    admissible: bool = False
 
 
 # Work the dispatch cannot perform: it happens after the worker settles. Patterns rather
@@ -477,12 +496,32 @@ OUT_OF_DISPATCH = (
     # no negation may be one of them, because "a release is not published for it" states
     # the precondition this refusal exists to ask for, and the bare phrase never matched
     # a negation either.
+    #
+    # The one admissible entry. "The worker's draft is published" and "the demonstration
+    # change request is published as a draft" are properties of state the worker controls
+    # once its task grants the carve-out `config/dispatch-appendix.md` names, and
+    # :func:`_admitted` is what decides that — on the clause's subject, never on the word
+    # `draft` appearing somewhere in the criterion.
     OutOfDispatch(
         re.compile(r"\b(?:is|are|was|were|be|been)(?: (?!not\b|never\b|no\b)\w+){0,2} published\b"),
         "is published",
+        admissible=True,
     ),
     OutOfDispatch(re.compile(r"pr is merged"), "pr is merged"),
     OutOfDispatch(re.compile(r"pull request is merged"), "pull request is merged"),
+    # The draft and the demonstration change request, merged. Neither of the two entries
+    # above reaches "the draft is merged", and the admission below would otherwise be
+    # read as the word `draft` licensing whatever follows it. A merge is the lifecycle's
+    # whatever the subject, so this is refused under every authorization — and it is
+    # anchored on those two subjects rather than on a bare `is merged`, which the corpus
+    # records refusing "Nothing is merged, pushed, or opened" on a task that passed.
+    OutOfDispatch(
+        re.compile(
+            r"\b(?:draft|demonstration)(?: [\w'’]+){0,3} "
+            r"(?:is|are|was|were|gets?|has been|have been) merged\b"
+        ),
+        "draft is merged",
+    ),
     OutOfDispatch(re.compile(r"lands on master"), "lands on master"),
     OutOfDispatch(re.compile(r"lands on main"), "lands on main"),
     OutOfDispatch(re.compile(r"deploy"), "deploy"),
@@ -534,6 +573,150 @@ OUT_OF_DISPATCH = (
         of_an_amendment=False,
     ),
 )
+
+
+class Authorization(NamedTuple):
+    """One thing a task's own ``## Additional info`` may let its worker do on the host.
+
+    The carve-out in `config/dispatch-appendix.md` names two, each conditional on the
+    task saying so in its own words above the operational notes: publishing the session's
+    change request early, as a draft the worker holds, and opening a throwaway
+    demonstration change request stacked on it. A criterion about either is a property
+    of state the worker controls — but only for a worker whose task grants it, because a
+    worker of any other task may not do the thing the criterion rests on.
+    """
+
+    #: What it is, for the refusal and the test id.
+    name: str
+    #: How a task grants it: the appendix carve-out's own words, which is what
+    #: `personas/planner.yaml` tells a planner to write and what keeps the grant one
+    #: sentence a worker, its judge and this check all read alike.
+    granted_by: re.Pattern[str]
+    #: What the subject of an admitted clause names. The admission is on the subject
+    #: rather than on the word appearing anywhere, because "the draft is merged" and
+    #: "the demonstration PR lands on main" have to stay refused.
+    subject: re.Pattern[str]
+    #: What a task writes to grant it, for the refusal that says so.
+    grant: str
+    #: A criterion this admits whole under that grant, so the journeys that drive every
+    #: authorization have one admitted and one refused example each.
+    example: str
+
+
+#: The demonstration one first, because :func:`_admitted` takes the first subject that
+#: matches and "the demonstration draft is published" is about the demonstration change
+#: request — a task authorizing only early publication has not authorized that.
+AUTHORIZATIONS = (
+    Authorization(
+        "a demonstration change request",
+        re.compile(
+            r"\bauthori[sz]e\w*(?: [\w'’]+){0,3} (?:throwaway )?demonstration change request"
+            r"|\bdemonstration change request(?: [\w'’]+){0,3} (?:is |are )?authori[sz]e\w*"
+        ),
+        re.compile(r"\bdemonstration\b"),
+        "a throwaway demonstration change request is authorized",
+        "the demonstration change request is published as a draft against the session branch",
+    ),
+    Authorization(
+        "early publication",
+        re.compile(r"\bchange request may be published early\b"),
+        re.compile(r"\bdraft\b"),
+        "the change request may be published early",
+        "the worker's draft is published carrying the evidence",
+    ),
+)
+
+_EVERY_AUTHORIZATION = frozenset(one.name for one in AUTHORIZATIONS)
+
+#: Where one clause ends and the next begins, for reading the subject of the clause a
+#: refused phrase sits in. Deliberately coarse: a subject this cannot read is refused
+#: with the wording to use, which costs one rewrite, where a subject read across a
+#: clause boundary admits a criterion about something else.
+_CLAUSE_BOUNDARY = re.compile(r"[\n;,(:]|\band\b|\bor\b|—|-\s")
+
+#: The task's own `## Additional info`, as distinct from the operational appendix that
+#: opens under the same heading. A task carries the heading twice when its author wrote
+#: anything of their own — the appendix is copied in verbatim below it, heading included
+#: — so the author's section is the block the first opening holds, and it is read only
+#: when the level-2 heading that closes that block is the second opening: the
+#: appendix's, directly below it, which is where every author is told to write. A task
+#: opening it once has no section of its own, and what the engine appends after the
+#: appendix — `## Planner context`, the cross-repository references — is never read,
+#: however it is worded. That last clause is why the boundary is the block's own
+#: closing heading rather than the *last* opening: the engine appends a carried note's
+#: text verbatim, so a note quoting a task spells this heading on a line of its own, and
+#: bounding at the last opening pulled everything above that line — the appendix's own
+#: carve-out sentences and the note's — into the read, admitting a criterion on a task
+#: that granted nothing. Written to miss: an author's section closed by any other
+#: heading is read as no section, which costs one move of the text to above the
+#: appendix, where reading it would trust text the author did not write.
+_OPENS_ADDITIONAL_INFO = re.compile(r"^## Additional info[ \t]*$", re.MULTILINE)
+
+
+def own_additional_info(task: str) -> str:
+    """The text ``task``'s author wrote under ``## Additional info``, above the appendix."""
+    opens = list(_OPENS_ADDITIONAL_INFO.finditer(task))
+    if len(opens) < 2:
+        return ""
+    closes = SECTION_HEADING.search(task, opens[0].end())
+    if closes is None or closes.start() != opens[1].start():
+        return ""
+    return task[opens[0].end() : opens[1].start()]
+
+
+#: Where one sentence of a grant's carrier ends: a terminal mark and the space after it,
+#: or a line break. A grant is read one sentence at a time, because whether a sentence
+#: grants is decided by the whole of it and not by a phrase inside it.
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+|\n")
+
+#: What turns a sentence naming a carve-out into its opposite. A sentence carrying one
+#: of these grants nothing, however the rest of it is worded: *"a demonstration change
+#: request is not authorized"* and *"never authorize a throwaway demonstration change
+#: request"* both name the carve-out in the words the appendix uses to grant it, and a
+#: reader that matched the phrase alone admitted a criterion the task had just
+#: forbidden. Written to miss rather than to over-admit: a genuine grant whose own
+#: sentence also says "not" about something else is not read, which costs one rewrite
+#: into the sentence the appendix names, where reading it would admit a publication a
+#: task had refused.
+_NEGATED = re.compile(r"\b(?:not|never|no|nor|neither|without)\b|n't\b")
+
+
+def authorizations(text: str) -> frozenset[str]:
+    """The names of every authorization ``text`` grants, in the carve-out's own words.
+
+    Read sentence by sentence, and a sentence that negates is not a grant — see
+    :data:`_NEGATED` for why the phrase alone cannot decide it.
+    """
+    granted: set[str] = set()
+    for sentence in _SENTENCE_BOUNDARY.split(text):
+        if _NEGATED.search(sentence.lower()):
+            continue
+        granted.update(one.name for one in AUTHORIZATIONS if one.granted_by.search(sentence))
+    return frozenset(granted)
+
+
+def _admitted(
+    block: str, rests_on: re.Match[str], entry: OutOfDispatch, granted: frozenset[str]
+) -> Authorization | None:
+    """The authorization that admits ``rests_on``, or ``None`` when it stays refused.
+
+    Read on the subject of the clause the match sits in: the text from the previous
+    clause boundary to the match. A subject naming a demonstration change request needs
+    that authorization; one naming the draft needs early publication; any other subject
+    — the branch, the change request unqualified, the node's own publication — is refused
+    exactly as before, and so is every entry that is not ``admissible`` whatever the
+    subject says.
+    """
+    if not entry.admissible:
+        return None
+    lowered = block.lower()
+    boundaries = _CLAUSE_BOUNDARY.finditer(lowered, 0, rests_on.start())
+    starts = [0, *(found.end() for found in boundaries)]
+    subject = lowered[max(starts) : rests_on.start()]
+    for one in AUTHORIZATIONS:
+        if one.subject.search(subject):
+            return one if one.name in granted else None
+    return None
 
 
 #: What a criterion naming an invocation is told to do instead. Kept as the default
@@ -692,9 +875,20 @@ def criteria_items(block: str) -> Iterator[str]:
         yield "\n".join(current)
 
 
+class RestsOutside(NamedTuple):
+    """A match of :data:`OUT_OF_DISPATCH` that no authorization admitted."""
+
+    rests_on: re.Match[str]
+    entry: OutOfDispatch
+    #: The authorization whose subject the clause named, when the match would have been
+    #: admitted under it and the task grants none — so the refusal can say which grant
+    #: to write rather than which precondition to state.
+    wanted: Authorization | None
+
+
 def _out_of_dispatch(
-    block: str, *, of_an_amendment: bool = False
-) -> tuple[re.Match[str], OutOfDispatch] | tuple[None, None]:
+    block: str, *, of_an_amendment: bool = False, granted: frozenset[str] = frozenset()
+) -> RestsOutside | None:
     """The first thing ``block`` rests on that the worker's own dispatch never reaches.
 
     One reader for both carriers of criteria — a node's ``## Acceptance criteria`` and
@@ -704,17 +898,42 @@ def _out_of_dispatch(
     whose refusal means the same thing mid-run, which is a field of each entry rather
     than a second list.
 
+    ``granted`` is what the carrier's own text authorizes, read by :func:`authorizations`
+    — a task's from its own ``## Additional info``, an amendment's from the amendment
+    itself — and a match :func:`_admitted` admits under one of them is passed over so
+    scanning continues, the way :func:`_prescribed` continues past an exempt match.
+
     The entry is returned beside its match because the correction differs by shape, the
     way :func:`_prescribed` returns its procedure.
     """
     lowered = block.lower()
+    # The sentence that grants a carve-out names a publication — "may be published
+    # early" — and is a grant rather than a criterion about one. It reaches this reader
+    # only in an amendment, which carries its grant in its own text; a task's grant lives
+    # under its `## Additional info`, outside the criteria block.
+    grants = [span.span() for one in AUTHORIZATIONS for span in one.granted_by.finditer(lowered)]
     for entry in OUT_OF_DISPATCH:
         if of_an_amendment and not entry.of_an_amendment:
             continue
-        rests_on = entry.pattern.search(lowered)
-        if rests_on is not None:
-            return rests_on, entry
-    return None, None
+        for rests_on in entry.pattern.finditer(lowered):
+            if any(start <= rests_on.start() < end for start, end in grants):
+                continue
+            if _admitted(block, rests_on, entry, granted) is not None:
+                continue
+            wanted = _admitted(block, rests_on, entry, _EVERY_AUTHORIZATION)
+            return RestsOutside(rests_on, entry, wanted)
+    return None
+
+
+def _unauthorized(wanted: Authorization | None, carrier: str) -> str:
+    """How a refusal says that a grant, rather than a precondition, is what is missing."""
+    if wanted is None:
+        return ""
+    return (
+        f" A criterion about {wanted.name} is admitted only for a task whose own "
+        f"`## Additional info` grants it above the operational appendix, in the carve-out's "
+        f'words — "{wanted.grant}" — and {carrier} does not.'
+    )
 
 
 def _prescribed(block: str) -> tuple[re.Match[str], Procedure] | tuple[None, None]:
@@ -908,11 +1127,12 @@ def check(task: str, node_id: str, bar: Bar) -> None:
     block = criteria_block(task)
 
     check_backticks_pair(block, node_id)
-    rests_on, outside = _out_of_dispatch(block)
-    if rests_on is not None and outside is not None:
+    outside = _out_of_dispatch(block, granted=authorizations(own_additional_info(task)))
+    if outside is not None:
         raise CriteriaError(
-            f"{node_id}: criteria name '{rests_on.group(0)}' — that is work the "
-            f"dispatch cannot do, so finished work fails against it. {outside.remedy}"
+            f"{node_id}: criteria name '{outside.rests_on.group(0)}' — that is work the "
+            f"dispatch cannot do, so finished work fails against it."
+            f"{_unauthorized(outside.wanted, 'this task')} {outside.entry.remedy}"
         )
     deferred = DEFERRAL.search(block)
     if deferred:
@@ -1038,6 +1258,13 @@ def check_amendment(text: str, where: str) -> None:
       corrects, so the prose it points at is right there, and a correction about wording
       — a commit subject, a heading — is a legitimate thing to amend.
 
+    **The authorizations are asked of an amendment on the same terms as of a task, and
+    read from the amendment's own text.** An amendment carries no ``## Additional info``
+    and the reply envelope names a node rather than a task, so the grant that admits a
+    criterion about the worker's draft, or about a demonstration change request, has to
+    be in the amendment itself — which is where a manager granting it mid-run writes it
+    anyway, since the amendment is composed onto the task above the operational notes.
+
     What is asked first is neither question but the precondition for both: an unclosed
     backtick run makes every pattern below read inline code that was never written, and
     the quote in the refusal then spans text its author wrote apart.
@@ -1047,12 +1274,13 @@ def check_amendment(text: str, where: str) -> None:
     ``note``, which touches no acceptance criterion at all.
     """
     check_backticks_pair(text, where)
-    rests_on, outside = _out_of_dispatch(text, of_an_amendment=True)
-    if rests_on is not None and outside is not None:
+    outside = _out_of_dispatch(text, of_an_amendment=True, granted=authorizations(text))
+    if outside is not None:
         raise CriteriaError(
-            f"{where}: it names '{rests_on.group(0)}' — that is work the dispatch cannot "
-            f"do, so this amendment holds the worker to state that arrives after it is "
-            f"gone. {outside.remedy} Or send it as a `note`, which touches no acceptance "
+            f"{where}: it names '{outside.rests_on.group(0)}' — that is work the dispatch "
+            f"cannot do, so this amendment holds the worker to state that arrives after it "
+            f"is gone.{_unauthorized(outside.wanted, 'this amendment')} "
+            f"{outside.entry.remedy} Or send it as a `note`, which touches no acceptance "
             f"criterion."
         )
     named, procedure = _prescribed(text)

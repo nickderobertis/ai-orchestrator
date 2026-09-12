@@ -60,7 +60,11 @@ reading it as covered.
 Pushing, merging into a base, and opening a change request go through
 `publish-branch` / `repo-recover` / `integrate`; local commits, merges into your own
 working branch, and every read are the agent's own git, because local authoring *is*
-git and a rule everyone breaks routes nothing. Every branch state has a verb, decided
+git and a rule everyone breaks routes nothing. A lifecycle worker may do exactly two
+things to a remote on its own — open its own draft, and a throwaway demonstration change
+request stacked on it, each only when its task grants it — and
+`config/dispatch-appendix.md` is the one statement of both, because every dispatch reads
+that text and `tests/test_shared_dispatch_bar.py` refuses a second. Every branch state has a verb, decided
 by what the branch *is*: `just publish-branch` verifies and publishes a complete
 unpublished branch no session holds, under its identity's resolved policy; `just
 repo-recover` is for a branch carrying unattested incomplete provenance and is the only
@@ -84,11 +88,16 @@ which is where the landing verbs read a branch from and nowhere else.
 
 A remote lifecycle change request's body is drafted by an agent graph the launch names,
 the way its observer is: `just orchestrate` adds `--pr-author-graph
-graphs/pr-author.yaml`, whose one post-verification turn reads the branch's diff and
-answers a template-shaped body. `just publish-branch` and `just repo-recover` draft
-through the same graph, so the turn is spent before the push; a caller's own `--body` /
-`--body-file` is forwarded untouched and `--no-draft` skips it. Drafting never blocks
-publication: a draft that cannot run opens the change request with no body. The raw
+graphs/pr-author.yaml`. The drafter runs after verification and **finishes the
+description the worker left**, reading the worker's transcript for evidence — so a
+worker starts that description with what only it knows — and a node whose task
+metadata carries `onepipeline.draft: true` is left as a draft for a person to lift,
+settling `done` as `change-draft` with its dependents proceeding. `just publish-branch`
+and `just repo-recover` draft through the same graph, so the turn is spent before the
+push; a
+caller's own `--body` / `--body-file` is forwarded untouched and `--no-draft` skips it.
+Drafting never blocks publication: a draft that cannot run opens the change request with
+no body, or keeps the description the worker left. The raw
 `onevcs publish-branch …` line `onevcs recoverable` prints reaches the verb below the
 wrapper and opens an empty description, which is why `just recoverable` re-renders it in
 `just` form.
@@ -264,9 +273,12 @@ package — and a consumer says which one it consumes, because "the crate is out
 "the wheel is out" are different waits. A repository declares its targets in a
 `release-targets.toml` at its own root; the host's override, `$ONEVCS_HOME/releases.yml`,
 sits outside the registry and the rules file so an older `onevcs` sharing the host reads
-a byte-identical registry. This host has no such file and `ai-orchestrator` declares no
-target, and a repository declaring none releases nothing, so a plan of this repository
-earns no reference row and no hold. Discovery: `onevcs release --help`, onevcs's own
+a byte-identical registry. This host's copy names a default target per producer this
+host installs from PyPI, which is how a node of this repository — whose `local-direct`
+identity refuses a `consumes` — awaits a release under `adoption: published`.
+`ai-orchestrator` itself declares no target, and a repository declaring none releases
+nothing, so a plan of this repository earns no reference row and no hold as a producer.
+Discovery: `onevcs release --help`, onevcs's own
 `docs/contract.md`, and onepipeline's `docs/contract-divergences.md` for the two
 plan-node fields, `adoption` and `consumes`.
 

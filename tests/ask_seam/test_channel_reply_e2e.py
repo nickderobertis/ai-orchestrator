@@ -53,6 +53,7 @@ from project_fixtures import helper, project_from_plan
 from waits import deadline
 from waits import timeout as e2e_timeout
 
+from orchestrator.criteria_guard import AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
 #: The three real programs on the far ends of this channel: the wrapper a dispatched
@@ -1573,6 +1574,47 @@ def test_a_sound_amendment_is_sent_unchanged(replying: Replying) -> None:
         f"judged against is unchanged:\n{sent.stdout}"
     )
     assert observation in committed, "the note beside it was judged as though it were criteria"
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] `_committed` reads the run's own journal
+# for the reason the journey above it states; the refusal and the acceptance are asserted
+# off the recipe's own status and stderr, which is what a manager sees.
+def test_an_amendment_about_the_workers_own_draft_is_admitted_only_under_its_own_grant(
+    replying: Replying,
+) -> None:
+    """The carve-out's grant is read off an amendment too, at the surface one is sent from.
+
+    A criterion about the worker's own draft rests on a publication, and a worker may
+    perform that one only when its task grants it in `config/dispatch-appendix.md`'s
+    words. An amendment carries no `## Additional info`, so it carries its grant in its
+    own text: the same criterion is refused whole as an amendment naming no grant —
+    telling the manager the grant to write rather than a precondition to restate — and
+    reaches the graph when the amendment states the grant beside it.
+    """
+    demonstration, early = AUTHORIZATIONS
+    criterion = f"{early.example[0].upper()}{early.example[1:]}."
+
+    refused = _reply(replying, {"version": 2, "commands": [_amend(WORK_NODE, criterion)]})
+
+    assert refused.returncode == REPLY_REFUSED, (
+        f"an ungranted amendment about the worker's draft exited {refused.returncode} where "
+        f"a refusal is {REPLY_REFUSED}:\n{refused.stdout}{refused.stderr}"
+    )
+    assert f"A criterion about {early.name} is admitted only" in refused.stderr, refused.stderr
+    assert early.grant in refused.stderr, refused.stderr
+    assert _committed(replying) == [], "a refused amendment reached the graph anyway"
+
+    granted = _amend(WORK_NODE, f"{early.grant[0].upper()}{early.grant[1:]}. {criterion}")
+    sent = _reply(replying, {"version": 2, "commands": [granted]})
+
+    assert sent.returncode == 0, f"a granted amendment was refused:\n{sent.stdout}{sent.stderr}"
+    assert granted in _committed(replying), (
+        f"the granted amendment did not reach the graph:\n{sent.stdout}"
+    )
+    assert demonstration.name not in sent.stderr, sent.stderr
 
 
 # llmlint: ignore-end[tests_mirror_real_usage]

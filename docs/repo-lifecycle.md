@@ -1335,14 +1335,70 @@ line of the report, and the whole of `--json`, is `onevcs`'s own and passes thro
 untouched.
 
 On the run path, what runs is one turn of that graph, after the final branch-vs-base
-gate passes and before the change request is opened — the one ordering the landing
-verbs cannot have, for the reason above: there, drafting is what produces an argument
-to the verb that runs the gate. `onepipeline` composes the task — "Read this
-branch's diff and write the change request's body, following the repository's own
-template", followed by the task the branch delivered — runs the graph in the
-branch's worktree, and reads the drafted body out of `results[].structured.body` of
-the retained member report. Stack metadata is appended as usual. It costs one turn
-per published change request, including workstream and draft-checkpoint ones.
+gate passes and before the change request is **published** — the one ordering the
+landing verbs cannot have, for the reason above: there, drafting is what produces an
+argument to the verb that runs the gate. **The closeout runs in one order, and the
+adopted onepipeline 0.28.0 moved where the drafter sits in it**
+(https://github.com/nickderobertis/onepipeline/pull/235, on the `onevcs` half at
+https://github.com/nickderobertis/onevcs/pull/138):
+
+1. The steps run and settle. Nothing moves before verification.
+2. The session's own change request is read — `onevcs change show`, never an open —
+   because a worker may have opened it as a draft itself: `onevcs publish
+   "$ONEVCS_SESSION" --draft`, which `config/dispatch-appendix.md`'s carve-out lets a
+   lifecycle worker do when its task says so, and under which it may write what only it
+   knows into the description (`onevcs change describe`) and stack a throwaway
+   demonstration change request on the draft. A host that could not be asked has not
+   said the session holds nothing; that is said on standard error and the closeout
+   publishes as it always has.
+3. The drafting dispatch runs, in the node's own worktree, on a composed task:
+   `onepipeline`'s opening sentence — "Read this branch's diff and write the change
+   request's body, following the repository's own template" — then the task the branch
+   delivered, then a `## Change request` section **only where the session holds one**
+   (its URL, whether the worker holds it as a draft, and the description verbatim under
+   `### Description as the worker left it`), and **always** a `## Worker transcript`
+   section naming `onepipeline transcript <RUN> <NODE>`, which `ONEPIPELINE_RUN_ID` and
+   `ONEPIPELINE_RUNS_DIR` in the dispatch's environment serve, so the drafter can read
+   every tool call the worker made and cite what it finds. `graphs/pr-author.yaml`'s
+   member is written to finish the description the worker started and to read that
+   transcript, and `tests/drafting_task_contract.py` holds both headings to the pinned
+   engine beside the opening sentence.
+4. Where it drafted a body and the session holds a change request, the body is written
+   onto it — `onevcs change describe`, under the node's own `title` on every write, so
+   the change request carries the plan's subject whatever the worker opened it under —
+   and the description write reaches the run's journal as its own `review`-phase event
+   through the session follow. Where it
+   drafted none, `body-not-drafted` is recorded as below and the description stays as
+   the worker left it, said on the settlement.
+5. One publication — `onevcs publish` with no body where the session holds the change
+   request, and with the drafted body where it opens one — which lifts the adopted draft
+   (`draft-lifted`) and lands under the resolved policy. The node settles on the
+   publication's own words, and its detail says the worker opened the change request as
+   a draft, that the closeout wrote the description onto it, and that it was marked
+   ready for review.
+
+The drafted body is read out of `results[].structured.body` of the retained member
+report. Stack metadata is appended as usual. It costs one turn per published change
+request, including workstream and draft-checkpoint ones — and a retry that continues
+a preserved branch whose earlier attempt opened a change request now has its
+description **rewritten** from the final tree at closeout, where before the re-drafted
+body was silently ignored for an adopted change request; the drafter sees the previous
+description in its task and keeps what is still true.
+
+**A node may leave its change request as a draft on purpose.** `draft: true` on a
+lifecycle node — `onepipeline.draft` in a task's metadata, default `false` and omitted
+when false — leaves the change request as a draft at closeout for a person to lift:
+opened as one where the session holds none, held as one where the worker opened it.
+Such a node settles `done` with outcome **`change-draft`** and no landing, and its
+dependents proceed. It is deliberately not `complete-but-draft`, which is the status of
+a draft a release arrives to lift and which holds the run; where the node also awaits a
+release, the release reason wins and it settles `complete-but-draft` as before. The
+loader refuses it before anything dispatches on a node whose resolved publication opens
+no change request, in the shape `consumes` is refused on a `local-direct` identity.
+Every dispatch of a lifecycle node's agent steps, and its drafting dispatch, carries
+`ONEVCS_SESSION` naming the session whose worktree it runs in, and a direct node's
+carries none; `tests/ask_seam/test_launch_ask_seam_e2e.py` reads both off real
+dispatches.
 
 That `structured` is the contract, and this repository's graph is built around it:
 `oneharness.pr-author.toml` names `config/pr-author-body.schema.json` as its
@@ -1437,12 +1493,13 @@ reason it used to rest on is gone: both engines now have a draft change request 
 `onevcs` 0.21.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
 … which cannot land while it is one"*, and `onepipeline` v0.28.0 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
-**publication** outcome, reached only once the last step has settled and the publication
-starts, and reached then only because a release the node adopted early has not happened
-yet; nothing on the pause path can produce one, on a local or a remote identity. A pause
-is still purely local branch state, and the difference now matters: a node holding a
-draft is neither paused nor settled, and reading one as the other is what a manager
-would otherwise do with `complete-but-draft`.
+**publication** outcome, reached once the last step has settled and the publication
+starts, because a release the node adopted early has not happened yet or because the
+node declared `draft: true` — or a **worker's** outcome, reached from inside a step
+under the appendix's carve-out; nothing on the pause path itself can produce one, on a
+local or a remote identity. A pause is still purely local branch state, and the
+difference now matters: a node holding a draft is neither paused nor settled, and
+reading one as the other is what a manager would otherwise do with `complete-but-draft`.
 
 **`attest` takes a node id, and it folds that node to `done`.** This is the part
 most worth re-reading before relying on a human step. `compile_attest` accepts one

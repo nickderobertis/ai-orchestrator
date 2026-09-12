@@ -251,3 +251,60 @@ comes back. The open questions about the reviewer's demandingness — whether it
 itself across rounds, whether the loop should have a convergence bound, and whether its
 judgment agrees with the two documents above when tested directly — are untouched by this
 change and remain follow-up work.
+
+## The shape the out-of-dispatch list admits, and the false refusal it stops
+
+Every entry of `OUT_OF_DISPATCH` rests on one ground: publication happens after the worker
+settles, so a criterion resting on it fails finished work. That ground moved for exactly
+two things when this host adopted the releases that let a worker open its own draft — a
+session's change request **opened as a draft the worker holds** (`onevcs publish
+"$ONEVCS_SESSION" --draft`), and a **throwaway demonstration change request** stacked on
+that draft, opened against the session branch and closed before the worker finishes. Both
+are state the worker controls from inside its dispatch, and both are what a plan of that
+kind has to be able to state criteria about: *"the worker's draft is published carrying
+the evidence"* and *"the demonstration change request is published as a draft against the
+session branch"* were the first two criteria written for the capability, and this tier
+refused each of them as `is published` — the false refusal this section records.
+
+The admission is bounded three ways, and each bound is a refusal kept rather than a hole.
+**It is conditional on the task's own grant.** A criterion about the worker's draft is
+admitted only for a task whose own `## Additional info`, above the operational appendix,
+says *the change request may be published early*; one about a demonstration change
+request only for a task saying *a throwaway demonstration change request is authorized* —
+the words `config/dispatch-appendix.md`'s carve-out names, which is what makes the grant
+one sentence a worker, its judge and this check read alike. An otherwise identical task
+carrying no grant has the same criterion refused exactly as before, naming the grant to
+write, because a worker of that task may not do the thing the criterion rests on; and a
+task granting only early publication has a demonstration criterion refused, because the
+two grants are two grants. A grant is read by the **sentence**, and a sentence that
+negates grants nothing: *"a throwaway demonstration change request is not authorized"*
+carries the very words the grant is read in, and read by phrase alone it admitted a
+criterion the task had just withheld — so a task saying that has its demonstration
+criterion refused exactly as a task saying nothing does. And the section it is read from
+is the block directly above the appendix's own heading, never anything the engine
+appends below the appendix: a carried note quoting a task spells `## Additional info` on
+a line of its own, and a reader that took the last such line as the appendix's swallowed
+the note's sentence into the task's own section and accepted a task that granted nothing.
+**It is read on the subject of
+the clause**, never on the word `draft` appearing somewhere in the criterion: the text
+from the previous clause boundary to the refused phrase has to name the draft or the
+demonstration change request, so
+*"the branch publishes as a draft"* stays refused — its subject is the branch. **And only
+the publication entry is admissible.** *"The draft is merged"* — a shape no entry reached
+before, now refused by its own entry — *"the demonstration PR lands on main"*, *"the draft
+change request's required checks pass"* and *"the demonstration change request's wheel
+exists on the registry"* are refused under both grants at once, by the existing refusals,
+because a merge, a landing, a required check's verdict and a release are as far outside a
+dispatch as they ever were, whatever the clause's subject is.
+
+`check_amendment` asks the same question on the same terms, reading the grant from the
+amendment's own text, since an amendment carries no `## Additional info` and is composed
+onto the task above the operational notes anyway; the grant sentence itself names a
+publication — *"may be published early"* — and is passed over as a grant rather than
+refused as a criterion. `tests/test_criteria_guard.py` drives every one of those cases —
+the amendment's beside the task's, since the amendment check is that module's own — and
+`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the admitted, the ungranted,
+the wrong-grant and the still-refused shapes through the real `just check-plan`. This
+shape is labelled coverage rather than corpus evidence, for the reason the released-artifact
+shape is: the corpus stores a fragment per refusal, and the two refusals above were paid
+against a plan written for the capability rather than recorded in it.

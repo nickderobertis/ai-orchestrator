@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -184,6 +185,21 @@ PLAN_ROOT = Input(
     "the directory a dispatched planner authors its plan into; a relative source root "
     "resolves against each process's own working directory, so an unset one is a plan "
     "written where the launching checkout never looks",
+)
+
+#: Not an input of the wrapper at all, and read here because this is the one place a
+#: real dispatch's own environment is read per launch shape. `ONEVCS_SESSION` is what
+#: lets a lifecycle worker publish its session's change request as a draft
+#: (`onevcs publish "$ONEVCS_SESSION" --draft`), which `config/dispatch-appendix.md`'s
+#: carve-out lets it do when its task says so; the engine composes it for every dispatch
+#: that runs in a session's worktree and for no direct dispatch, whose worktree is nobody's
+#: session. A lifecycle worker whose environment lost it would meet the carve-out with
+#: nothing to name, and a direct worker given one would be told it has a session to publish.
+SESSION = Input(
+    "ONEVCS_SESSION",
+    "the session token a lifecycle dispatch's worktree belongs to, which is what the "
+    "appendix's draft publication names; a direct dispatch runs in no session and is "
+    "given none",
 )
 
 #: Required of a planning launch for the same reason, and it carries a **value** rather
@@ -478,6 +494,10 @@ class PlanNode(TypedDict, total=False):
     kind: str
     task: str
     deps: list[str]
+    #: A lifecycle node's two checkouts: the one its work publishes to, and the
+    #: registered alias its session clones to cut a worktree from.
+    repo: str
+    execution_checkout: str
 
 
 class TurnRecord(TypedDict):
@@ -541,6 +561,7 @@ def _environment(
             *(required.name for required in REQUIRED_INPUTS),
             NODE_SCRATCH.name,
             CHANNEL_ASKER.name,
+            SESSION.name,
             PLAN_ROOT.name,
             DISPATCH_APPENDIX.name,
             CREDENTIAL_NAME,
@@ -564,6 +585,19 @@ def _node(node_id: str, deps: list[str] | None = None) -> PlanNode:
     }
     if deps is not None:
         node["deps"] = deps
+    return node
+
+
+def _lifecycle_node(node_id: str, identity: Identity) -> PlanNode:
+    """The same node, made a lifecycle one by naming the two checkouts it runs between.
+
+    That is the whole of what makes the engine open an `onevcs` session for a dispatch:
+    a `repo` to publish into and an execution checkout to clone from. The alias is the
+    directory name `seeded` gave the clone, because that is the alias `onevcs` registers.
+    """
+    node = _node(node_id)
+    node["repo"] = str(identity.publication)
+    node["execution_checkout"] = identity.execution.name
     return node
 
 
@@ -856,6 +890,58 @@ def orchestrate_detached(tmp_path_factory: pytest.TempPathFactory, oneharness_bi
         just("stop", run, environment=environment, seconds=60)
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This launch is already
+# behind its own edge: `tests/ask_seam/` is an Nx project of its own, keyed on
+# `askSeamWorkspace`, which exists precisely so an unrelated edit does not pay for these
+# launches. That key covers the configuration, graphs, personas, scripts and orchestrator
+# code a real launch reads — a lifecycle one reads more of it than a direct one, not
+# less — so narrowing it would leave the tier replaying a green across a change one of
+# these launches exercises, which is the failure the split was made to end.
+@pytest.fixture(scope="module")
+def orchestrate_lifecycle(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Dispatch:
+    """Launch `just orchestrate --detach` on a lifecycle node, and read what its session gave it.
+
+    The one launch here whose dispatch runs in a session worktree: the node names a
+    seeded scratch identity's publication checkout and execution alias, so the engine
+    opens a real `onevcs` session under this journey's own `ONEVCS_HOME` and cuts the
+    worktree the worker starts in. Detached, for the reason the detached shape above is
+    measured at all — what the dispatch is given is composed where the dispatch is made,
+    and an attached launcher could add nothing to it afterwards.
+
+    It used to be the `just plan` launches that were read for this, while the planner
+    was a lifecycle node; `scripts/plan.sh` moved it back onto the direct shape, so a
+    planning dispatch runs in no session and is rightly given none — which left this
+    suite with no lifecycle dispatch to read, and a journey asserting a session of a
+    launch that opens none.
+    """
+    _requires_just()
+    tmp_path = tmp_path_factory.mktemp("orchestrate-lifecycle")
+    run = RunId("launch-seam-orchestrate-lifecycle")
+    turns = tmp_path / "turns.jsonl"
+    environment = _environment(tmp_path, oneharness_bin, turns)
+    identity = seeded(tmp_path)
+    environment["ONEVCS_HOME"] = str(identity.home)
+    environment.update(identity.environment)
+    plan = _plan(tmp_path, run, [_lifecycle_node("only", identity)])
+
+    launched = just(
+        "orchestrate",
+        project_from_plan(plan),
+        "--detach",
+        *WITHOUT_OBSERVER,
+        environment=environment,
+        seconds=120,
+    )
+    try:
+        assert launched.returncode == 0, f"the launch failed:\n{launched.stdout}{launched.stderr}"
+        return Dispatch(run=run, worker=_await_dispatch(turns), asked=None, environment=environment)
+    finally:
+        just("stop", run, environment=environment, seconds=60)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 @pytest.fixture(scope="module")
 def orchestrate_adopted(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Dispatch:
     """Park a run on a human action, adopt it, and read what the fresh driver dispatched.
@@ -1360,6 +1446,68 @@ def test_every_launch_exports_repository_credentials_onto_its_dispatch(
     assert carried == {CREDENTIAL_VALUE}, (
         f"the dispatch of {dispatch.run} read {carried!r} for {CREDENTIAL_NAME}, rather "
         "than the value loaded by its launcher from this checkout's .env"
+    )
+
+
+def test_a_lifecycle_dispatch_is_given_the_session_its_worktree_belongs_to(
+    orchestrate_lifecycle: Dispatch,
+) -> None:
+    """A dispatch in a session worktree is told which session, by the engine that opened it.
+
+    The launch's node is a lifecycle node — it names a seeded identity's two checkouts
+    and opens a real `onevcs` session under this journey's own `ONEVCS_HOME` — so what
+    its worker is given is read off the worker's own turn: a token in `onevcs`'s own
+    spelling that names a session record under that home. That token is what the
+    appendix's carve-out has a worker publish its draft under, and a launch whose
+    dispatch lost it would leave a worker granted early publication with nothing to
+    name. The planning launches are deliberately not read for it: their node is direct,
+    so a session there would be the defect the journey below this one refuses.
+    """
+    dispatch = orchestrate_lifecycle
+    token = _given(dispatch, SESSION)
+    assert re.fullmatch(r"s-[0-9a-f]{12}", token), (
+        f"a dispatch of run {dispatch.run} was given {token!r} as {SESSION.name}, which is "
+        "not a session token in onevcs's own spelling"
+    )
+    home = Path(dispatch.environment["ONEVCS_HOME"])
+    assert (home / "sessions" / f"{token}.json").is_file(), (
+        f"a dispatch of run {dispatch.run} was given session {token}, and {home} holds no "
+        "record of it; the token names a session the worker could not publish from"
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "orchestrate_attached",
+        "orchestrate_detached",
+        "orchestrate_adopted",
+        "plan_attached",
+        "plan_detached",
+    ],
+)
+def test_a_direct_dispatch_is_given_no_session_at_all(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """The other half: a dispatch in no session's worktree names none.
+
+    The node these launches dispatch is direct — the orchestrate shapes name no
+    repository, and `just plan` writes its planner as a direct node that works in the
+    launching checkout — so the engine opens no session for it and composes no
+    `ONEVCS_SESSION`. And it must not, because the appendix's carve-out tells a worker
+    holding one that it may publish a draft from it. Read as an absence off every turn
+    of the dispatch rather than as a blank, since a blank would be the variable composed
+    with nothing in it.
+
+    `cast` for the reason the journey above gives: a fixture chosen by name at run time
+    is one no static type can follow back to what it returns.
+    """
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    assert dispatch.worker, f"run {dispatch.run} dispatched nothing, so nothing here is measured"
+    given = {turn["environment"].get(SESSION.name) for turn in dispatch.worker}
+    assert given == {None}, (
+        f"a direct dispatch of run {dispatch.run} was given {SESSION.name}={given!r}; it "
+        "runs in no session's worktree and has nothing to publish a draft from"
     )
 
 

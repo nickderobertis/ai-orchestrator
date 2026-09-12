@@ -48,7 +48,14 @@ from scratch_identity import registered, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
-from orchestrator.criteria_guard import APPENDIX, APPENDIX_ENV, OUT_OF_DISPATCH, OutOfDispatch
+from orchestrator.criteria_guard import (
+    APPENDIX,
+    APPENDIX_ENV,
+    AUTHORIZATIONS,
+    OUT_OF_DISPATCH,
+    Authorization,
+    OutOfDispatch,
+)
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`, rather than a marker tier of the
@@ -59,13 +66,21 @@ from orchestrator.root import REPO_ROOT
 #: set as `planToolingWorkspace`, and `tests/conftest.py` holds these tests to it.
 
 
-def _task(criteria: str) -> str:
-    """A node's task in the shape every plan here writes, carrying the real appendix."""
+def _task(criteria: str, own: str = "", appended: str = "") -> str:
+    """A node's task in the shape every plan here writes, carrying the real appendix.
+
+    ``own`` is what the task's author writes under `## Additional info` above the
+    appendix — the appendix is copied in verbatim below it, its own heading included,
+    which is the layout every task carrying author's notes has. ``appended`` is what the
+    engine adds below the appendix at dispatch — a carried note under `## Planner
+    context`, the cross-repository references — which no author wrote.
+    """
+    additional = f"## Additional info\n\n{own}\n\n" if own else ""
     return (
         "## What\n\nAdd the route and the test that drives it.\n\n"
         "## Why\n\nThe user cannot complete a purchase without it.\n\n"
-        f"## Acceptance criteria\n\n{criteria}\n\n"
-        f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
+        f"## Acceptance criteria\n\n{criteria}\n\n{additional}"
+        f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n{appended}"
     )
 
 
@@ -128,7 +143,7 @@ OMITS_A_DEMAND_THE_ROLE_MAKES = (
 RESTS_ON_A_RELEASE = f"{STATES_ITS_BAR}\n{RELEASED_ELSEWHERE[0]}"
 
 
-def _plan(root: Path, criteria: str) -> Path:
+def _plan(root: Path, criteria: str, own: str = "", appended: str = "") -> Path:
     written = root / "plan.json"
     written.write_text(
         json.dumps(
@@ -142,7 +157,7 @@ def _plan(root: Path, criteria: str) -> Path:
                         "persona": "engineer",
                         "repo": "https://github.com/nickderobertis/some-service",
                         "title": "feat: add the checkout route",
-                        "task": _task(criteria),
+                        "task": _task(criteria, own, appended),
                     },
                     {"id": "approve", "kind": "human", "task": "Approve the release."},
                 ],
@@ -606,6 +621,160 @@ def test_a_criterion_resting_on_work_the_dispatch_cannot_do_is_refused(
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert entry.example in refused.stderr, refused.stderr
     assert "the dispatch cannot do" in refused.stderr, refused.stderr
+
+
+def _sentence(fragment: str) -> str:
+    """``fragment`` capitalized to open a sentence, as a criterion or a grant writes it."""
+    return f"{fragment[0].upper()}{fragment[1:]}"
+
+
+def _granting(*authorizations: Authorization) -> str:
+    """A task's own `## Additional info` granting each carve-out in the appendix's words."""
+    return " ".join(
+        f"{_sentence(one.grant)}, under the carve-out the operational notes below name."
+        for one in authorizations
+    )
+
+
+#: The wordings the admission must not reach, applied to the draft and to the demonstration
+#: change request: a merge, a landing on a base, the merge path's own verdict, the node's
+#: own publication, and a release. Each is refused with both grants written.
+STILL_REFUSED_UNDER_EVERY_GRANT = (
+    "- The draft is merged.",
+    "- The demonstration PR lands on main.",
+    "- The draft change request's required checks pass.",
+    "- The branch publishes as a draft.",
+    "- The demonstration pull request is merged.",
+    "- The demonstration change request's wheel exists on the registry.",
+)
+
+
+@pytest.mark.parametrize("authorization", AUTHORIZATIONS, ids=lambda one: one.name)
+def test_a_criterion_about_the_workers_own_draft_is_admitted_only_under_its_tasks_grant(
+    tmp_path: Path, authorization: Authorization
+) -> None:
+    """Each carve-out's own example, through the recipe: admitted with the grant, refused without.
+
+    A worker may open its session's change request as a draft, and a throwaway
+    demonstration change request stacked on it, only when its task's own
+    `## Additional info` says so in the words `config/dispatch-appendix.md` names. So the
+    same criterion on the same node is admitted with that grant above the appendix and
+    refused on an otherwise identical task without it — and the refusal names the grant
+    to write rather than a precondition to state, which is the correction an author
+    cannot derive.
+    """
+    criterion = f"- {_sentence(authorization.example)}."
+
+    accepted = _check_plan(
+        _plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}", _granting(authorization))
+    )
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}"))
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "the dispatch cannot do" in refused.stderr, refused.stderr
+    assert f"A criterion about {authorization.name} is admitted only" in refused.stderr, (
+        refused.stderr
+    )
+    assert authorization.grant in refused.stderr, refused.stderr
+
+
+def test_a_negated_grant_admits_nothing_through_the_recipe(tmp_path: Path) -> None:
+    """A task that names a carve-out to withhold it has not granted it, at the surface.
+
+    *"A throwaway demonstration change request is not authorized"* carries the words the
+    grant is read in, and the recipe refuses the demonstration criterion under it exactly
+    as it does under no grant at all — naming the grant to write, so an author who meant
+    to withhold sees the refusal agree with them rather than a plan that launched.
+    """
+    demonstration, _ = AUTHORIZATIONS
+    criterion = f"- {_sentence(demonstration.example)}."
+    withheld = f"{_sentence(demonstration.grant).replace(' is authorized', ' is not authorized')}."
+    assert "is not authorized" in withheld, withheld
+
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}", withheld))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert f"A criterion about {demonstration.name} is admitted only" in refused.stderr, (
+        refused.stderr
+    )
+
+
+def test_a_grant_the_engine_appended_below_the_appendix_admits_nothing_through_the_recipe(
+    tmp_path: Path,
+) -> None:
+    """A grant is the task's author's alone, at the surface: text below the appendix is none.
+
+    The engine appends a carried note's text verbatim under `## Planner context`, so a
+    note quoting a task spells `## Additional info` on a line of its own below the
+    appendix. Read against the *last* opening of that heading, the section between it and
+    the author's swallowed the note's sentence, and a task granting nothing was accepted
+    on a grant nobody reviewed. So the recipe refuses the draft criterion under such a
+    note exactly as under no grant at all, naming the grant to write — with the author's
+    own section present and absent, since the appendix's heading is the first one in the
+    latter.
+    """
+    _, early = AUTHORIZATIONS
+    criterion = f"- {_sentence(early.example)}."
+    carried = (
+        f"\n## Planner context\n\n{_sentence(early.grant)}.\n\nQuoted from the task:\n\n"
+        "## Additional info\n\nRun the checks that exercise the change.\n"
+    )
+
+    for own in ("", "The judge reads the route's test before anything else."):
+        refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}", own, carried))
+
+        assert refused.returncode == 1, refused.stdout + refused.stderr
+        assert f"A criterion about {early.name} is admitted only" in refused.stderr, refused.stderr
+        assert early.grant in refused.stderr, refused.stderr
+
+    accepted = _check_plan(
+        _plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}", _granting(early), carried)
+    )
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_a_demonstration_criterion_is_refused_on_a_task_granting_only_early_publication(
+    tmp_path: Path,
+) -> None:
+    """The two grants are two grants, at the surface an author meets the refusal.
+
+    A task that lets its worker publish its draft early has not let it open a throwaway
+    change request stacked on that draft, so a criterion about the demonstration change
+    request is refused under early publication alone, naming the grant it needs.
+    """
+    demonstration, early = AUTHORIZATIONS
+    criterion = f"- {_sentence(demonstration.example)}."
+
+    refused = _check_plan(_plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}", _granting(early)))
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert f"A criterion about {demonstration.name} is admitted only" in refused.stderr, (
+        refused.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    "criterion", STILL_REFUSED_UNDER_EVERY_GRANT, ids=range(len(STILL_REFUSED_UNDER_EVERY_GRANT))
+)
+def test_the_wordings_the_carve_out_does_not_reach_stay_refused_under_every_grant(
+    tmp_path: Path, criterion: str
+) -> None:
+    """The bound the admission is bought under, paid at the same surface.
+
+    Every one of these names the draft or the demonstration change request and rests on
+    something the worker still cannot reach — a merge, a landing, a required check, the
+    branch's own publication, a release. Each is refused with both grants written, by the
+    existing refusals: the subject of a clause admits nothing on its own.
+    """
+    refused = _check_plan(
+        _plan(tmp_path, f"{STATES_ITS_BAR}\n{criterion}", _granting(*AUTHORIZATIONS))
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "the dispatch cannot do" in refused.stderr, refused.stderr
+    assert "is admitted only" not in refused.stderr, refused.stderr
 
 
 @pytest.mark.parametrize("criterion", RED_BEFORE_GREEN, ids=range(len(RED_BEFORE_GREEN)))

@@ -21,10 +21,21 @@ run_mode = "fallback"
 # for as long as the run lasts.
 #
 # What a missed deadline costs is bounded and already handled: a drafting turn that
-# does not answer publishes the change request with no body, which is the same
+# does not answer publishes the change request with no body — or, where the worker
+# opened it as a draft, with the description the worker left — which is the same
 # outcome as naming no drafting graph at all. So this is set generously enough for
-# an honest read of a large diff and no more.
-timeout = 300
+# an honest read of what the drafter now reads and no more.
+#
+# Doubled from 300 when the drafter's position moved: it now starts from a description
+# the worker left and may read the worker's transcript, where it used to see the task
+# and the diff alone. Measured on this host on 2026-09-12 against two real nodes of a
+# recorded run: `onepipeline transcript` renders 0.7 MB and 1.2 MB in 0.2 s and 0.4 s,
+# so the render is not the cost — the turn is, because a transcript that size is read
+# by searching it over several tool calls rather than whole. A worker's own turns run
+# 600 to 2000 seconds here; a drafter reading a template, a diff, a description and a
+# transcript is a fraction of one of those, and 600 leaves that fraction room without
+# holding a verified branch unpublished for the life of a wedged turn.
+timeout = 600
 
 # schema_file: the structured answer every turn is validated against, and what makes
 # this a contract rather than a prompt. Relative to THIS file's directory, which is

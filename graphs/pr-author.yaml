@@ -9,6 +9,22 @@
 # pull request from this host gets a drafted body and a bare `onepipeline start`
 # elsewhere does not.
 #
+# Where it sits in the closeout has moved, and the prompt below is written to the new
+# position. The steps run and settle; the session's own change request is read; this
+# turn runs, in the node's own worktree, on a composed task that is the opening
+# sentence, the node's rendered task, a `## Change request` section where the worker
+# already opened one as a draft — carrying the description as the worker left it —
+# and a `## Worker transcript` section naming the command that renders every tool
+# call the worker made; the body it answers with is written onto that change request
+# (or opens one where the session holds none); and one publication lifts the draft
+# and lands under the policy. So this drafter finishes a description the worker
+# started and may read what the worker did, where it used to see the task and the
+# diff and nothing else. Those two section headings are the engine's literals:
+# tests/test_drafting_task_contract.py reads them out of this file and holds each to
+# the pinned `onepipeline`, beside the opening sentence scripts/draft-pr-body.sh
+# composes with — and that script composes neither section, because an out-of-band
+# landing has no run to read a transcript from and no change request to read.
+#
 # Nothing scaffolds this file: the published crate ships the *flag*, not the
 # document, because the document names the operator's own oneharness config and
 # persona. This repository is that operator, and this is its file.
@@ -41,7 +57,8 @@ members:
   #
   # It claims its own `task`, and that is a rule rather than a nicety. `onepipeline`
   # composes ONE task for this graph — "Read this branch's diff and write the change
-  # request's body…", followed by the task the branch delivered — and `oneagentgraph`
+  # request's body…", followed by the task the branch delivered, the change request
+  # the session holds and how to read the worker's transcript — and `oneagentgraph`
   # hands it to every member that does not claim one; a member's own `task` REPLACES
   # that composed task as its whole prompt. So this member states its role here and
   # opens by interpolating `{task}` back in, because that composed task is the ONLY
@@ -54,10 +71,28 @@ members:
     task: |
       {task}
 
-      Write that body the way this repository's own pull request template states
-      it: a terse `## What`, a terse `## Why`, and `## Additional info` only when
-      there is something to put in it. Read `.github/pull_request_template.md` in
-      the branch if it has one.
+      The task above is the only thing that names the branch. The sections that may
+      follow it are the engine's, and they change what you start from.
+
+      Where it carries a `## Change request` section, the worker already opened this
+      branch's change request as a draft, and the description under it is the
+      worker's start. Finish that description rather than starting over: keep what
+      is still true of the diff, finish what is missing, and never drop a link or a
+      piece of evidence it cites — the worker knew where that came from and you do
+      not.
+
+      Where it carries a `## Worker transcript` section, that section names the
+      command that renders every tool call the worker made and what each returned.
+      You may run that command to read what the worker did — a demonstration change
+      request it opened, a comment a bot posted, a check it triggered — and cite what
+      you find, by its link.
+
+      Write the body the way this repository's own pull request template states it.
+      Read `.github/pull_request_template.md` in the branch: where it asks for
+      verification or evidence, put the evidence the worker produced there, with its
+      links; where it does not, leave process out. Without a template, a terse
+      `## What`, a terse `## Why`, and `## Additional info` only when there is
+      something to put in it.
 
       `## What` describes at a high level what changed and its impact, from the
       diff — never a walkthrough of individual hunks, and never a restatement of
@@ -65,10 +100,9 @@ members:
       `## Why` of the task above, which records the impact and the decision driver
       a diff cannot recover.
 
-      Nothing about how the change was produced belongs in the body. No dispatch
-      details, no agent-turn or iteration counts, no local verification narrative,
-      no orchestrator-to-agent handoff phrasing, no pasted task prose.
+      Under every template, what stays out: agent-turn and iteration counts,
+      dispatch details, orchestrator-to-agent handoff phrasing, pasted task prose.
 
       Answer with the JSON object the response schema declares: exactly one `body`
-      field, holding that Markdown. It is published verbatim as the change
-      request's body.
+      field, holding that Markdown. It is written verbatim as the change request's
+      description.

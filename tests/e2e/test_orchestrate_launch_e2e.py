@@ -103,6 +103,25 @@ PR_AUTHOR_BODY_SCHEMA = "config/pr-author-body.schema.json"
 #: on a reword that changed nothing about this graph.
 DRAFTING_TASK = "Draft the body for `probe-branch`, which added a health endpoint."
 
+#: The same composed task as the closeout composes it once the worker has opened the
+#: change request as a draft: the node's task, then the engine's two sections — the
+#: change request the session holds with the description as the worker left it, and
+#: the command that renders the worker's transcript. Both headings are read out of
+#: `graphs/pr-author.yaml` by `tests/drafting_task_contract.py` and held to the pinned
+#: engine there; what is driven here is that a turn is prompted with both.
+DRAFTING_TASK_WITH_A_WORKER_START = (
+    f"{DRAFTING_TASK}\n\n"
+    "## Change request\n\nhttps://github.com/example/service/pull/7\n"
+    "Held as a draft by the worker: yes\n\n"
+    "### Description as the worker left it\n\n"
+    "## What\nA health endpoint.\n\n## Additional info\n"
+    "Demonstrated by https://github.com/example/service/pull/8, closed after its "
+    "comment was captured.\n\n"
+    "## Worker transcript\n\n`onepipeline transcript probe-run health` renders every "
+    "tool call the worker made and what each returned; ONEPIPELINE_RUN_ID and "
+    "ONEPIPELINE_RUNS_DIR in this dispatch's environment are what it reads.\n"
+)
+
 #: How often the launch tells the pacemaker to come due. Short enough that it comes
 #: due while this run is still going, which is the only state in which what it does
 #: with a turn can be observed at all.
@@ -1001,7 +1020,7 @@ class DraftingReport(TypedDict):
 
 
 def _drafted(
-    tmp_path: Path, oneharness_bin: str, answers: list[str]
+    tmp_path: Path, oneharness_bin: str, answers: list[str], task: str = DRAFTING_TASK
 ) -> tuple[subprocess.CompletedProcess[str], DraftingReport]:
     """Run the real drafting graph on a scripted provider, and hand back its report.
 
@@ -1018,7 +1037,7 @@ def _drafted(
             "run",
             PR_AUTHOR_GRAPH,
             "--task",
-            DRAFTING_TASK,
+            task,
             "--dir",
             str(tmp_path),
         ],
@@ -1073,6 +1092,56 @@ def test_the_drafting_graph_answers_with_the_body_contract(
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey costs
+# what its two `_drafted` siblings beside it cost — one `oneagentgraph` run of the real
+# drafting graph with only the paid provider scripted, no launch and no dispatch — and
+# the task that added it names this module as where the drafting graph is driven.
+# Re-homing `tests/e2e` into an Nx project of its own is a restructuring of that whole
+# tree and is enforcement configuration this change may not move in order to pass.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same site, same
+# reason.
+def test_the_drafter_is_prompted_with_the_workers_description_and_transcript(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A composed task carrying both sections reaches the drafting turn whole.
+
+    The closeout now composes the change request the session holds — with the
+    description as the worker left it — and the command that renders the worker's
+    transcript beneath the node's task, and `graphs/pr-author.yaml`'s member is written
+    to finish that description and to read that transcript. The member's own `task`
+    replaces the composed one as its whole prompt, so a prompt that carried the branch
+    but dropped either section would be a drafter starting over on a description the
+    worker had begun, with nothing else here to say so. Driven on the real graph with
+    only the paid provider scripted, and read off the turn's own recorded prompt.
+    """
+    body = "## What\nA health endpoint.\n\n## Why\nOperators had nothing to poll.\n"
+    # llmlint: ignore-block[e2e_not_mocked] Only the paid provider's answer is scripted;
+    # the graph, the member's task, the harness and the schema review are all real.
+    ran, report = _drafted(
+        tmp_path, oneharness_bin, [json.dumps({"body": body})], DRAFTING_TASK_WITH_A_WORKER_START
+    )
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    prompt = report["prompt"]
+    assert DRAFTING_TASK_WITH_A_WORKER_START in prompt, (
+        "the drafting turn was prompted without the composed task's sections; the member's "
+        f"own task has to interpolate the whole of it back in:\n{prompt}"
+    )
+    for section, instruction in (
+        ("## Change request", "Finish that description rather than starting over"),
+        ("## Worker transcript", "You may run that command to read what the worker did"),
+    ):
+        assert prompt.index(section) < prompt.index(instruction), (
+            f"the prompt carries {section!r} but the instruction about it comes first, so "
+            f"the drafter is told what to do with a section it has not yet been shown:\n{prompt}"
+        )
+    assert "pull request template" in prompt, prompt
+    assert report["results"][-1]["structured"] == {"body": body}
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 def test_a_drafting_answer_that_does_not_validate_is_re_prompted(
     tmp_path: Path, oneharness_bin: str
 ) -> None:

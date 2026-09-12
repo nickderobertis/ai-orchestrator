@@ -106,6 +106,18 @@ TURN_CONTENT_FLOOR = Release(0, 3, 6)
 GATE_FREE_FLOOR = Release(0, 11, 0)
 
 
+#: The onevcs release that let a session open its own change request **as a draft it
+#: holds**, describe it after it exists, and lift the draft as a verb —
+#: https://github.com/nickderobertis/onevcs/pull/138, cut as 0.21.0. Below it a
+#: lifecycle worker granted `config/dispatch-appendix.md`'s early-publication carve-out
+#: has no `onevcs publish "$ONEVCS_SESSION" --draft` to run: the linked copy is what a
+#: dispatch publishes through, and a `--draft` it does not know is refused by the verb
+#: while every version file on this host reads current. What the floor buys is that the
+#: carve-out the appendix grants, the criteria `just check-plan` admits under it, and the
+#: drafter that finishes a worker's description are all about a verb the worker's own
+#: dispatch can reach — and that a bump to `config/onepipeline.version` resolving an
+#: older onevcs fails here rather than at a worker's first `publish --draft`.
+SESSION_DRAFT_FLOOR = Release(0, 21, 0)
 #: The oneharness-core release that runs a controlled codex turn under its candidate's
 #: own model — https://github.com/nickderobertis/oneharness/pull/1284, cut as
 #: `oneharness-core` 0.13.0 — and refuses one the server would run elsewhere. Below it
@@ -350,6 +362,26 @@ def test_the_linked_onevcs_runs_no_gate_of_its_own() -> None:
         f"the adopted engine links onevcs {linked}, below the {GATE_FREE_FLOOR} that "
         "removed the gate; a dispatch would publish through a release that still runs "
         "a tier of its own, and cannot read this host's version 3 rules file at all"
+    )
+
+
+def test_the_linked_onevcs_lets_a_session_open_its_own_draft() -> None:
+    """Above the floor, the carve-out a task grants names a verb the dispatch can run.
+
+    Asserted as a floor on the *linked* onevcs rather than on `config/onevcs.version`,
+    which is the CLI the manager verbs run and the one a worker types in its session
+    worktree: the closeout that reads a worker's draft back and finishes its description
+    runs through the copy the engine links, and a `publish --draft` the linked copy
+    refused would leave a granted worker with a carve-out it cannot use and a closeout
+    that never sees a draft to finish.
+    """
+    linked = Release.parse(_linked_version("onevcs"))
+
+    assert linked >= SESSION_DRAFT_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below the {SESSION_DRAFT_FLOOR} that "
+        "lets a session open its change request as a draft it holds; a worker granted the "
+        "appendix's early-publication carve-out would have no verb to publish its draft "
+        "through, and the closeout no draft to finish"
     )
 
 
