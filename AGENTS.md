@@ -2513,16 +2513,17 @@ and nothing has read it yet.
 which is what this document is and what `orchestrator/AGENTS.md` deliberately is not:
 that file states the Python package's own conventions for somebody editing it, and no
 manager supervising a run reads it. -->
-**An amendment in that envelope is held to the criteria bar before any of it is sent,
-and this is the only place it can be.** An `amend` replaces the binding text that
-becomes part of a node's effective task, and that task is what the node's judge reads —
-so an amendment *is* criteria, written in the minute after you read a failure, which is
-far more pressure than a plan is ever written under. It reaches a node over this channel
-rather than through the plan store, so `just check-plan` never sees one, and it was the
-only criteria on this host that nothing checked. Five were written during one run and
-three cost a node each: *"the finished branch merges cleanly into its base and its
-change request's required checks pass"* names checks that run on the host after the
-agent step has ended, and *"do not re-research it"* and *"preserve that result as
+**Task prose in that envelope is held to the criteria bar before any of it is sent, and
+this is the only place it can be.** An `amend` replaces the binding text that becomes
+part of a node's effective task, and `add`, `retry` and `requeue` each state a whole
+task — and that text is what the node's judge reads, so all four of them *are* criteria,
+written in the minute after you read a failure, which is far more pressure than a plan is
+ever written under. Every one reaches a node over this channel rather than through the
+plan store, so `just check-plan` never sees one and `just review-plan` never records one,
+and it was the only criteria on this host that nothing checked. Five were written during
+one run and three cost a node each: *"the finished branch merges cleanly into its base
+and its change request's required checks pass"* names checks that run on the host after
+the agent step has ended, and *"do not re-research it"* and *"preserve that result as
 evidence and stop there"* each forbade the route that turned out to find the answer.
 Every one of them settled correct, committed, gate-green work as a task failure. `just
 channel-reply` now asks the bar's two questions of each `amend`'s text — does it state a
@@ -2534,6 +2535,120 @@ plan; which of its questions apply to an amendment, and why the rest do not, is 
 down beside the questions themselves. **Every refusal names the escape**, because it is
 the one a plan's criteria do not have: a correction the judge should have no opinion
 about is a `note`, which touches no acceptance criterion at all.
+
+**A whole task is read past the block one heading opens, and that is the half an
+amend-only check could never have.** The four ops are not one shape: an `amend` is
+criteria and nothing else, so the whole of it is asked those two questions, while a
+whole task carries an `## Acceptance criteria` block asked the whole bar and an
+`## Additional info` section that is left alone — it is where every refusal here tells
+you to put a command, and it carries `config/dispatch-appendix.md` verbatim, whose own
+text names `pkill`, `git status` and a `just` invocation. What sits **between** them was
+read by nothing at all, and that is the region an amendment lands in when you follow this
+document: put it above the operational notes, under a heading of its own, and until this
+landed three readers passed it. It cost a node an hour — an amendment inside a `retry`'s
+replacement task required a stable verdict from the judged lint tier, contradicting that
+task's own stop rule, under a preamble saying the amendment outranked the notes below it;
+the worker obeyed the manager over the task and rolled that tier five times against a
+diff moving under it. So every section a whole task opens which is not `## What`,
+`## Why`, `## Acceptance criteria` or `## Additional info` is now asked an amendment's
+two questions, and the refusal names the section as well as the node. Two things it
+deliberately does **not** read, for the reason every check here is written to miss rather
+than to over-refuse: the descriptive halves of the template, so that prose accepted as a
+plan is not refused on a retry of it, and a `###` block, so that the appendix's own
+subsections stay inside the one section that is exempt.
+
+**The deterministic tier is the cheap half of that bar, and a novel whole task it takes
+is then put to the same judge a plan's task is.** A plan's task clears `just check-plan`
+and then `just review-plan`, and the questions this repository moved out of the
+deterministic tier — whether a number is the right number, whether the criteria answer a
+demand their own bar makes, whether a criterion could be falsified — are asked by the
+judged one alone. A live edit read by the matchers alone therefore reached its dispatch
+with exactly those unasked, and it was the one route to a task that `just review-plan`
+never reads. **Which live edits owe that turn is decided by what the content is, not by
+which op carried it.** A **novel whole task** — an `add`'s node, a `retry`'s replacement,
+a `requeue`'s amended task — is a complete authored task nothing holds a pass for and
+would have been reviewed had it arrived in the plan, so `just channel-reply` spends **one
+judged turn** on it through the real `oneharness` under `oneharness.plan-review.toml` —
+the same reviewer, prompt, bar and verdict schema `just review-plan` uses, framed for a
+task a live edit stated. A **correction** to a node a review already cleared — a bare
+`amend`, or a `note`'s `criterion` — is deterministic only: it is written in the minute
+after you read a failure and has to be answered before the envelope is sent, and a model
+call there would make every mid-run correction wait and give you a reason to route
+around the guard, which is the one thing it cannot survive. That is the same reasoning
+that exempts an amendment from the released-artifact refusal. Every finding a verdict
+names is on stderr, naming the text the way the refusal does, and nothing is sent. The
+cost is spent in cost order: a text the matchers refuse spends none, and only a text they
+take pays for a judge. **A turn that answers nothing is a third outcome, not a
+refusal.** A provider that answered with no verdict — nothing took the turn, or nothing
+answered in the schema — leaves nothing known about the text, so the reply is refused
+with `could not be judged` and told to send the same envelope again once the harness
+answers, where a refusal says `correct it`; a manager told to correct a sound edit would
+rewrite it. **A node nothing dispatches from is read by neither tier**: an `add` of
+`{"task": "Report.", "expects_no_diff": true}` settles without a worker, so it has no
+judge to be held to and is left to the engine, as is a step declaring the same of itself.
+**Every retry you issue mid-run pays a judged turn**, and that is the design rather than
+a cost to soften: an amendment written under time pressure is precisely the content most
+likely to name a mechanism instead of a property, and this repository already has a node
+that died on exactly that.
+
+**A `note` is the fifth carrier, and it is two things at once.** Its `text` is
+observational and touches no acceptance criterion — it is the escape every refusal above
+names, and holding it to a criteria bar would refuse exactly the corrections you most need
+to send — so it is never read. Its optional `criterion` enters the acceptance criteria the
+judge of the conversation it reaches decides against, which is the whole reason the weaker
+op it replaced was removed; so it *is* criteria, and it is asked an amendment's two
+questions exactly as an `amend` is. A refusal names the field and the escape that fits
+it — the note's own `text` — and refuses the whole envelope, as every refusal here does.
+
+**What is keyed and read is the whole effective task, composed as the engine composes
+it, rather than the text the envelope happens to carry.** What a node's judge reads is
+the task its dispatch receives, and the engine composes that from the node as it stands
+on the run: an `amend` is the node's *current* task — its steps, its persona, amendments
+and requeues before it included — with the new text rendered under `## Amendment`
+immediately above the operational notes, exactly where this document tells you to put
+one; a `requeue` is the parked node's own record with the overrides written over it, so a
+requeue that restates no persona keeps the parked node's and is judged under **that**
+persona's bar — a `researcher`'s clause against changing project files refuses criteria
+that require one, where the same overrides restating `engineer` are taken; an `add` and
+a `retry` are the node they state. The run's current nodes are read from the checkpoint
+every reader leaves under the run root and from the journal past the offset it names,
+folded by the engine's own rules, and `tests/test_engine_contracts.py` holds the
+restated composition to the engine's source at the pinned release. Two consequences are
+the point: the same amendment sent to two nodes is two reviews, because it composes onto
+two different tasks; and two ops that result in one effective task — a `requeue` amending
+a node's task and an `add` stating that same task under the same persona — are one, the
+second finding the record the first wrote and spending nothing. A `requeue` whose
+overrides change no task — a turn budget, a branch pin — results in what the node already
+dispatched under, so it reads nothing and spends nothing.
+
+**What decides whether either tier runs at all is a digest of that effective task, and
+this run is where the answer is kept.** Every op producing a new effective task has that
+task digested under the bar in force — the same review key a plan task carries, over the
+effective task, the persona its judge is given and which tiers it was asked — a whole task
+under both, a whole task an amendment composed onto its node under the deterministic one
+alone, or a correction read by itself — instead of over a plan record's eight authored
+fields — and a digest this run has already cleared is applied untouched, spending no
+second judged turn. The tiers are in the key because two carriers can result in one
+effective text while owing different bars: a bare `amend` clears the free tier and
+records what it composed, and an `add` or a `retry` later stating that same text is a
+novel whole task that still spends its judged turn rather than finding a correction's
+pass standing in for it. What
+clears is recorded in `orchestrator-live-edit-reviews.json` under the run's own root,
+beside the derived `checkpoint.json` a reader already leaves there and named so it can
+never be read as one of the engine's records: a replacement node has no plan-store
+document to carry a review, and nothing here writes to the run's own record of itself.
+So the second reply of a run finds what the first one wrote, and a register that could
+not be written is said on stderr rather than refusing anything — all that is lost is the
+saving. Three consequences worth reading. A pass is recorded for **text**, not for an
+envelope that went out, so correcting one command and re-sending the whole envelope pays
+for the correction alone. Only a pass is recorded, so a text the judge refused is judged
+again when it is sent again, rather than found refused. And the digest covers **both**
+tiers of the bar as well as the content — `orchestrator/criteria_guard.py` and
+`config/onejudge.base.yaml` for the deterministic one, and `personas/planner.yaml`, the
+verdict schema, the reviewer's prompt and the live-edit frame for the judged one — so
+moving either invalidates every live-edit record made under the one before it, exactly
+as `personas/planner.yaml` moving invalidates a plan's, while a reworded frame moves no
+plan record because no plan task was ever shown it.
 
 **A reply the engine accepted and did not reconcile says what it is still waiting for,
 and the exit status is no longer how you tell.** The engine's reply forks on the run's

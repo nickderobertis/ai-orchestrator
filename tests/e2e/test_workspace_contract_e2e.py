@@ -13,6 +13,7 @@ boundary run separately.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -1136,6 +1137,237 @@ def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
     assert result.returncode == 1
     assert message in result.stderr
     assert not trace.exists(), "an installer that never took its lock must not have run Bun"
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes`
+# deselects nothing and hides no cost: `orchestrator:test-recipes` runs `-m reads_recipes`
+# as a target of this same project and `just check` runs it, so the marker chooses the
+# `recipeWorkspace` key the verdict is memoized on — and `tests/conftest.py` fails a recipe
+# journey that omits it. The installer under test is the doubled one every sibling here
+# drives, and the journey takes seconds.
+@pytest.mark.reads_recipes
+def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Path) -> None:
+    """Two callers over one tree serialize on one lock, wherever each runs from.
+
+    Every journey `nx_workspace.copy_checkout` builds symlinks its `node_modules` at
+    this checkout's own install, so an installer run in the copy writes the tree the
+    owning checkout's installer writes — and a lock kept beside each caller serialized
+    nothing between them. That is not harmless on a tree already in agreement with the
+    lockfile: measured on Bun 1.3.14, four `bun install --frozen-lockfile` at once over
+    one in-sync shared tree fail with `Failed to link <pkg>: EEXIST`, because a
+    no-change run still re-links every package carrying a `bin`. Two Nx targets running
+    two pytest processes is where the gate met it, past the reach of any xdist group.
+
+    Proven by holding the owner's lock rather than by racing: a copy that takes the
+    owner's lock waits, and one that takes its own would have run Bun long before the
+    lock is released.
+    """
+    owner = _nx_wrapper_checkout(tmp_path, "owner")
+    _add_nx_wrapper_doubles(owner)
+    _mark_nx_installed(owner)
+    copy = _nx_wrapper_checkout(tmp_path, "copy")
+    _add_nx_wrapper_doubles(copy)
+    (copy / "node_modules").symlink_to(owner / "node_modules", target_is_directory=True)
+    trace = tmp_path / "trace"
+    owner_lock = owner / ".logs" / "workspace-install.lock"
+    owner_lock.parent.mkdir()
+    owner_lock.touch()
+
+    with owner_lock.open() as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [str(copy / "scripts" / "workspace-install.sh")],
+            cwd=copy,
+            env=_nx_wrapper_env(copy, tmp_path, trace),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            # The window an installer taking its own lock would run Bun inside many
+            # times over: the doubled install returns in milliseconds.
+            with pytest.raises(subprocess.TimeoutExpired):
+                process.wait(timeout=e2e_timeout(2))
+            assert not trace.exists(), (
+                "the copy's installer ran Bun while the owning checkout's lock was held"
+            )
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+        fcntl.flock(held, fcntl.LOCK_UN)
+    _, stderr = process.communicate(timeout=e2e_timeout(30))
+
+    assert process.returncode == 0, stderr
+    # The `(no changes)` line: the tree the copy shares is the owner's provisioned one,
+    # which is the in-sync case the race above fails in.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile (no changes)"]
+    assert not (copy / ".logs" / "workspace-install.lock").exists(), (
+        "the copy took a lock of its own beside the owner's"
+    )
+    # The log stays the caller's: it records this run, and this run was the copy's.
+    assert (copy / ".logs" / "workspace-install.log").is_file()
+    assert not (owner / ".logs" / "workspace-install.log").exists()
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+def _plant_unenterable_install_tree(checkout: Path, shape: str) -> None:
+    """A `node_modules` that exists and cannot be entered, in one of two shapes."""
+    modules = checkout / "node_modules"
+    match shape:
+        case "dangling-symlink":
+            # What a copy sharing an install is left with once the install it shared
+            # is gone: the link is there and the tree is not.
+            modules.symlink_to(checkout / "nowhere" / "node_modules", target_is_directory=True)
+        case "unreadable-directory":
+            modules.mkdir()
+            modules.chmod(0o000)
+        case _:  # pragma: no cover - guards the parametrization below
+            raise AssertionError(f"unknown install tree shape {shape!r}")
+
+
+@pytest.mark.parametrize("shape", ["dangling-symlink", "unreadable-directory"])
+@pytest.mark.reads_recipes
+def test_an_install_tree_that_cannot_be_entered_is_refused_rather_than_read_as_absent(
+    tmp_path: Path, shape: str
+) -> None:
+    """A tree that exists and cannot be entered is not a tree that does not exist.
+
+    The lock is the tree's, found by entering `node_modules` and asking where it is.
+    Read as absent, a dangling symlink or an unreadable directory would take this
+    checkout's own lock while whatever it points at is still the tree Bun writes —
+    losing the one property the lock exists for exactly where the tree is already
+    broken. So the installer stops before Bun and says what to do about it.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, f"unenterable-{shape}")
+    _add_nx_wrapper_doubles(checkout)
+    _plant_unenterable_install_tree(checkout, shape)
+    trace = tmp_path / "trace"
+
+    try:
+        result = _run(
+            str(checkout / "scripts" / "workspace-install.sh"),
+            cwd=checkout,
+            env=_nx_wrapper_env(checkout, tmp_path, trace),
+        )
+    finally:
+        if shape == "unreadable-directory":
+            (checkout / "node_modules").chmod(0o700)
+
+    assert result.returncode == 1
+    assert f"'{checkout / 'node_modules'}' exists but cannot be entered" in result.stderr
+    assert "just bootstrap" in result.stderr
+    assert not trace.exists(), "an installer that could not find the tree's lock ran Bun anyway"
+    assert not (checkout / ".logs" / "workspace-install.lock").exists(), (
+        "the installer took this checkout's lock over a tree it could not enter"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_a_forced_install_discards_a_tree_it_cannot_enter(tmp_path: Path) -> None:
+    """`--force` is the repair the refusal above names, so it must not meet the refusal.
+
+    A forced run discards the tree before it installs, so the tree it then writes is
+    this checkout's own, and this checkout's lock is the right one — a dangling
+    symlink is removed like any other `node_modules` and the install lands beside it.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "forced-unenterable")
+    _add_nx_wrapper_doubles(checkout)
+    _plant_unenterable_install_tree(checkout, "dangling-symlink")
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        "--force",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    modules = checkout / "node_modules"
+    assert not modules.is_symlink(), "the forced run installed through the dangling link"
+    assert (modules / ".bin" / "nx").is_file()
+    assert (checkout / ".logs" / "workspace-install.lock").is_file()
+
+
+@pytest.mark.reads_recipes
+def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
+    tmp_path: Path,
+) -> None:
+    """`--force` in a copy sharing an install changes which tree its path names mid-run.
+
+    Before it, `node_modules` is a link into the owning checkout's tree; after it, a
+    tree of the copy's own. So one lock cannot cover it. Taking the owner's alone — the
+    lock the ordinary run over that link takes — lets a caller arriving in the copy
+    once the link is gone pick the copy's lock and install beside it; taking the copy's
+    alone lets a caller already writing through the link collide with the link being
+    pulled out from under it. The forced run holds the owner's first, so writers
+    through the link finish, then its own, so later arrivals wait — and only then
+    discards the link. The owner's tree itself is never written or removed.
+
+    Proven the way the shared-lock journey above is: by holding each lock in turn and
+    reading that the run neither ran Bun nor discarded the link while either was held.
+    """
+    owner = _nx_wrapper_checkout(tmp_path, "owner")
+    _add_nx_wrapper_doubles(owner)
+    _mark_nx_installed(owner)
+    copy = _nx_wrapper_checkout(tmp_path, "copy")
+    _add_nx_wrapper_doubles(copy)
+    modules = copy / "node_modules"
+    modules.symlink_to(owner / "node_modules", target_is_directory=True)
+    trace = tmp_path / "trace"
+    locks = []
+    for checkout in (owner, copy):
+        lock = checkout / ".logs" / "workspace-install.lock"
+        lock.parent.mkdir()
+        lock.touch()
+        locks.append(lock.open())
+    owner_held, copy_held = locks
+
+    try:
+        for held in (owner_held, copy_held):
+            fcntl.flock(held, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [str(copy / "scripts" / "workspace-install.sh"), "--force"],
+            cwd=copy,
+            env=_nx_wrapper_env(copy, tmp_path, trace),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
+                # The window a run not waiting on this lock would have run Bun inside
+                # many times over: the doubled install returns in milliseconds.
+                with pytest.raises(subprocess.TimeoutExpired):
+                    process.wait(timeout=e2e_timeout(2))
+                assert not trace.exists(), f"the forced run ran Bun while the {whose} lock was held"
+                assert modules.is_symlink(), (
+                    f"the forced run discarded the link while the {whose} lock was held"
+                )
+                fcntl.flock(held, fcntl.LOCK_UN)
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+    finally:
+        for held in locks:
+            held.close()
+    _, stderr = process.communicate(timeout=e2e_timeout(30))
+
+    assert process.returncode == 0, stderr
+    # It installed rather than reconciling: the link is gone before Bun runs, so the
+    # tree Bun meets is the copy's own and empty.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert not modules.is_symlink() and (modules / ".bin" / "nx").is_file(), (
+        "the forced run left the copy sharing the owner's tree"
+    )
+    assert (owner / "node_modules" / ".bin" / "nx").is_file(), (
+        "the forced run in the copy reached the owning checkout's tree"
+    )
 
 
 @pytest.mark.reads_recipes

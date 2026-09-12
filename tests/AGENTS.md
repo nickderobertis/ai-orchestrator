@@ -31,7 +31,10 @@ Conventions for this repository's tests.
   readers on one xdist worker — one name, because `--dist loadgroup` co-locates only
   tests sharing a name, and nothing holds two Nx targets apart. An unlocked
   read-modify-write on `runs/<run-id>/channel/queue.json` can destroy a worker's
-  blocking question. Read the queue before re-diagnosing the group.
+  blocking question. Read the queue before re-diagnosing the group. A waiter here looks
+  at that file read-only through `planner_channel.queue_may_hand_something_out` and
+  reads through `channel-next` only once it holds something, because the verb rewrites
+  the file even when it hands nothing out.
 - **A shared stand-in is reached through `project_fixtures.helper`, never through a test
   module's own `__file__`**: a paid provider's stand-in that does not exist is not a
   stand-in — the journey spends real turns while passing.

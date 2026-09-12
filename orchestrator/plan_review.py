@@ -478,9 +478,119 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
         "task": task.content,
         "title": task.title,
     }
-    authored = {field: meaning_bearing(value) for field, value in authored.items()}
-    rendered = json.dumps(authored, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return content_key(authored, bar)
+
+
+def content_key(authored: Mapping[str, object], bar: BarFingerprint) -> ReviewKey:
+    """The digest ``authored``, read for its meaning and reviewed under ``bar``, hashes to.
+
+    The one place a review key is composed, so every carrier of reviewable content is
+    keyed the same way: :func:`review_key` hands it a plan task's authored fields, and
+    :func:`edit_key` hands it the text a live edit states. Each value goes through
+    :func:`meaning_bearing` first, which is what keeps a re-indented block from costing
+    a second review of a demand nobody moved.
+    """
+    read = {field: meaning_bearing(value) for field, value in {**authored, "bar": bar}.items()}
+    rendered = json.dumps(read, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return ReviewKey(hashlib.sha256(rendered.encode("utf-8")).hexdigest())
+
+
+def edit_key(
+    text: str,
+    persona: object,
+    bar: BarFingerprint,
+    *,
+    whole_task: bool = True,
+    judged: bool = True,
+) -> ReviewKey:
+    """The digest one live edit's resulting task, reviewed under ``bar``, hashes to.
+
+    A live edit states a task on the channel rather than in the plan store, so it carries
+    none of the fields beside a plan task's prose — no title, no dependencies, no `kind`.
+    What it does carry is the persona whose bar that text will be judged under, and that
+    is in the key because it decides the answer: the same prose under a role forbidden to
+    change the tree is a different review from the same prose under `engineer`. So is
+    **what the text is** — a whole task or an amendment — because the two are asked
+    different questions under different frames, and a pass granted to a correction says
+    nothing about the same words stated as a task.
+
+    **And so is which tiers the text was asked**, which is a third shape rather than a
+    flag on the second. A whole task reaches this key by two routes that are not asked
+    the same questions: a novel one — an added node, a retry's replacement, a requeued
+    node's amended task — clears the deterministic bar and then a judged turn, while an
+    amendment composed onto its node's own task is a whole task that clears the
+    deterministic bar alone, because a correction owes no judged turn. A key that told
+    those two apart by nothing would let a bare amendment's free pass stand in for the
+    judged turn a later `add` or `retry` stating that same effective text owes — the one
+    way this register could hand a novel whole task to a dispatch with the judged
+    tier's questions unasked. So a whole task judged under both tiers hashes as a
+    ``task``, one cleared under the deterministic tier alone as a ``composed`` task, and
+    a correction read alone as an ``amendment``; a text cleared under the stronger bar
+    is asked the free tier again when it later arrives as the weaker shape, which costs
+    no provider turn.
+
+    The two keys are deliberately **not** interchangeable, and the field names are what
+    keeps them apart: a digest over a plan task's eight authored fields can never equal
+    one over these three, so a record made about a live edit can never be read as
+    clearing a plan task or the other way round. Neither reads the other's store either —
+    see :mod:`orchestrator.live_edit_check` for where a live edit's own record is kept.
+    """
+    if not whole_task:
+        shape = "amendment"
+    elif judged:
+        shape = "task"
+    else:
+        shape = "composed"
+    return content_key({"edit": text, "persona": persona, "shape": shape}, bar)
+
+
+#: What the reviewer is told about a whole task a **live edit** states, between the
+#: question above and the bar. A plan task reaches the reviewer through `just
+#: review-plan` with its title and dependencies beside it; an `add`, a `retry`'s
+#: replacement node and a `requeue`'s amended task reach it through
+#: :mod:`orchestrator.live_edit_check` with neither, written by a manager in the minute
+#: after reading a failure. The bar is the same one, because the judge it reaches is.
+LIVE_EDIT_FRAME = """\
+This task was not read out of a plan. It was stated by a live edit on a running run's
+channel — an added node, a retry's replacement node, or a requeued node's amended task
+— written by a manager in the minute after reading a failure, and it reaches its
+worker's judge exactly as a plan's task would. Hold it to the same bar. It carries no
+title and no dependencies to show you; the persona beside it is the role whose review
+bar its judge is given, and `null` means the base config's generic contract.
+"""
+
+
+def edit_bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
+    """A digest of the judged bar a live edit is held to, over ``root``'s copy of it.
+
+    The plan bar — :func:`bar_fingerprint`, with the prompt and the files it hashes —
+    and the frame above, which is as much a part of what a live edit is asked as the
+    prompt is of what a plan task is asked. Distinct from :func:`bar_fingerprint` so that
+    rewording the frame moves every live-edit record and no plan record: a plan task was
+    never shown it, so a review granted to one says exactly what it said before.
+    """
+    digest = hashlib.sha256()
+    digest.update(bar_fingerprint(root).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(LIVE_EDIT_FRAME.encode("utf-8"))
+    return BarFingerprint(digest.hexdigest())
+
+
+def edit_prompt(text: str, persona: object, where: str) -> str:
+    """One live edit's resulting whole task, rendered for review under a plan's bar.
+
+    ``where`` is how the refusal names the text — *the replacement task for node
+    'x'* — and it is shown to the reviewer as well, so that a finding's wording and the
+    refusal that carries it are about the same thing. The persona shown is the one whose
+    bar the task's judge is given; `null` is the base config's generic contract.
+    """
+    bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
+    stated = json.dumps({"stated_as": where, "persona": persona}, indent=2, ensure_ascii=False)
+    return (
+        f"{REVIEW_PROMPT}\n{LIVE_EDIT_FRAME}\n"
+        f"## The review bar\n\n{bar}\n\n"
+        f"## The task, as the live edit states it\n\n{stated}\n\n{text}\n"
+    )
 
 
 def recorded(task: StoreTask) -> ReviewKey | None:
@@ -582,13 +692,19 @@ def _answered(structured: object) -> Verdict | None:
             return None
 
 
-def _verdict(prompt: str) -> Verdict:
+def verdict(prompt: str) -> Verdict:
     """Spend one judged turn on ``prompt`` and return the structured verdict it answered.
 
     The turn goes through the same seam every other side of this repository reaches its
     model at — `oneharness run` under a config that names the identity chain, the
     deadline, and the response schema — so the paid provider is the only thing a journey
     has to stand in for, and the schema is enforced by oneharness rather than here.
+
+    Public because it is the one judged turn this repository spends on task prose, and
+    :mod:`orchestrator.live_edit_check` spends it on a live edit's resulting task under
+    :func:`edit_prompt`; a second spawn there would be a second seam to stand in for.
+    Raises :class:`OSError` when no verdict came back, naming why and the repair, so a
+    caller never records a pass from a turn that answered nothing.
     """
     completed = subprocess.run(
         [
@@ -722,8 +838,8 @@ def review(project: str) -> Reviewed:
     recorded = 0
     for index, task in enumerate(pending):
         try:
-            verdict = _verdict(_prompt(str(plan_name), task))
-            if verdict["passes"]:
+            answered = verdict(_prompt(str(plan_name), task))
+            if answered["passes"]:
                 write_record(project, task, review_key(task, bar), BY_REVIEW)
                 recorded += 1
         # Reviewing a task and recording its pass are caught together, because they fail
@@ -739,8 +855,8 @@ def review(project: str) -> Reviewed:
                 refused,
                 f"{exc}. {remaining} task(s) were left unreviewed, beginning at {task.node_id}",
             )
-        if not verdict["passes"]:
-            refused.append(Refusal(task.node_id, verdict["findings"]))
+        if not answered["passes"]:
+            refused.append(Refusal(task.node_id, answered["findings"]))
     return Reviewed(recorded, len(records) - len(pending), refused)
 
 

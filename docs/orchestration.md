@@ -1370,6 +1370,27 @@ cause on the evidence, and nothing here should be read as naming one. The race i
 engine's: the repair is to serialise the queue's read-modify-write in that crate, and
 this repository cannot make it short of doubling the verb its journeys exist to prove.
 
+**What this repository's own suite can do is stop being the reader in the window, and
+it does.** The managers its journeys play — `_waited_for_question` in
+`tests/ask_seam/test_ask_manager_e2e.py`, and `answer_each` and `answer_persistently`
+in `tests/e2e/planner_channel.py` — used to poll an empty channel through the verb from
+the moment the asking wrapper was spawned, and every one of those reads was a rewrite of
+`queue.json` from a state that held no surface: measured, `onepipeline next` over an
+empty queue hands nothing out and still leaves the file under a new inode and a new
+stamp. Two consecutive publication gates here each lost a different one of those
+journeys' questions to it. So each of those loops now **looks** before it reads —
+`queue_may_hand_something_out` reads the file read-only until it holds something waiting
+or pending — and only then hands out through `channel-next`, which keeps the suite's
+own write out of the window the worker's push lands in. That is not doubling the verb:
+the verb is still the only thing that hands a surface out, and a manager who reads
+`just channel-next` when the views say something is unread is doing the same thing.
+What it does not close is a push landing while a *second* surface is already queued,
+since the reader then has something to read; that residue, and the manager's own reads,
+are the engine's repair to take.
+`test_a_waiting_manager_leaves_an_empty_queue_unwritten_until_a_question_is_there` holds
+both halves: a wait with nothing queued moves neither the queue's inode nor its stamp,
+and the same waiter then hands a real question out through the verb.
+
 ### Read profiles
 
 Every read verb shapes its view through a named **filter profile**, and two ship:
@@ -1789,6 +1810,24 @@ verdict before it exits:
 | 0 | every edit in the envelope was applied by the reconciler | `{"reply":N,"state":"applied","commands":"applied"}` |
 | 1 | the edits were accepted and durable but not reconciled in time; they remain queued — check `just monitor` rather than resubmitting | the reply's state |
 | 2 | the reply was malformed, or an edit was refused at submission, or the reconciler rejected it | the reason, on stderr |
+
+Before any of that, an envelope stating task prose — an `amend`, the whole task an
+`add`, a `retry` or a `requeue` states, or the `criterion` a `note` may carry — is held
+to the bar a plan's task is held to, over the **whole effective task** the op results in
+as the engine composes it: `orchestrator/criteria_guard.py`'s matchers over every
+resulting task, then one judged turn of the `just review-plan` reviewer over a **novel
+whole task** — an added node, a retry's replacement, a requeued node's amended task —
+spent once per resulting task and recorded under the run's own root so the same text
+never spends a second. A correction — a bare `amend`, a note's `criterion` — is matched
+and never judged; a note's `text` is never read at all. The record is keyed on which
+tiers the text was asked as well as on the text, so a bare `amend`'s free pass over the
+task it composed onto never stands in for the judged turn an `add` or a `retry` stating
+that same text owes. A refusal by either tier exits 2
+with the findings on stderr and sends nothing; a judged turn that answered nothing exits
+2 too, saying `could not be judged` and asking for the same envelope again rather than a
+correction. AGENTS.md, under "Answering on the channel", is the contract for what each
+carrier is asked, how the effective task is composed, and why a node nothing dispatches
+from is read by neither tier.
 
 An edit that passes submission can still lose a race to the frontier it was
 validated against — the log a submitter reads lags the live frontier — and that

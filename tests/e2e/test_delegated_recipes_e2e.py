@@ -934,7 +934,8 @@ def test_the_reply_recipe_sends_an_amendment_the_bar_takes(tmp_path: Path) -> No
 
     A narrow guard widens quietly: an amendment stating what the finished tree must carry
     is the ordinary case a manager sends all run long, and it has to reach the verb byte
-    for byte with nothing this recipe added to it.
+    for byte with nothing this recipe added to it — and with no judged turn spent, because
+    a bare amendment is a correction to a task a review already cleared.
     """
     checkout, trace = _checkout(tmp_path)
     envelope = json.dumps(

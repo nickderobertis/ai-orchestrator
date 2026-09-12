@@ -606,6 +606,49 @@ def test_the_bar_fingerprint_covers_the_question_it_asks(
     assert plan_review.bar_fingerprint() != before
 
 
+def test_the_edit_bar_covers_the_plan_bar_and_the_frame_a_live_edit_is_shown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live edit's judged bar is the plan bar plus what a live edit is told about itself.
+
+    Distinct from `bar_fingerprint` so that rewording the frame moves every live-edit
+    record and no plan record — a plan task was never shown it — and covering it so that
+    a reworded frame is a moved bar rather than a pass over a question nobody asked. All
+    three halves are read off the digests: it differs from the plan bar, it moves when
+    the plan bar moves, and it moves when the frame does.
+    """
+    before = plan_review.edit_bar_fingerprint()
+    assert before != plan_review.bar_fingerprint()
+
+    monkeypatch.setattr(plan_review, "REVIEW_PROMPT", f"{plan_review.REVIEW_PROMPT}\nMore.\n")
+    assert plan_review.edit_bar_fingerprint() != before
+    monkeypatch.undo()
+
+    monkeypatch.setattr(plan_review, "LIVE_EDIT_FRAME", f"{plan_review.LIVE_EDIT_FRAME}\nMore.\n")
+    assert plan_review.edit_bar_fingerprint() != before
+    assert plan_review.bar_fingerprint() == plan_review.bar_fingerprint(REPO_ROOT), (
+        "moving the live-edit frame moved the plan bar, so every plan record would fall"
+    )
+
+
+def test_a_live_edits_prompt_frames_the_task_as_a_live_edits_and_shows_its_persona() -> None:
+    """The reviewer is shown the bar, the frame for what the text is, and the text.
+
+    A whole task is framed as a live edit's and shown its persona, and named the way its
+    refusal names it, so a finding and the refusal that carries it are about the same
+    thing.
+    """
+    bar = (REPO_ROOT / plan_review.BAR_FILES[0]).read_text(encoding="utf-8")
+
+    whole = plan_review.edit_prompt("## What\n\nDo it.", "engineer", "the task added as node 'x'")
+    assert whole.startswith(plan_review.REVIEW_PROMPT), whole
+    assert plan_review.LIVE_EDIT_FRAME in whole
+    assert bar in whole
+    assert '"stated_as": "the task added as node \'x\'"' in whole, whole
+    assert '"persona": "engineer"' in whole, whole
+    assert whole.rstrip().endswith("## What\n\nDo it."), whole
+
+
 @pytest.mark.parametrize(
     "record",
     [None, "a string", {"no key": 1}, {"key": 7}],
@@ -710,7 +753,7 @@ def _verdicts(monkeypatch: pytest.MonkeyPatch, *answers: plan_review.Verdict) ->
         seen.append(prompt)
         return given.pop(0)
 
-    monkeypatch.setattr(plan_review, "_verdict", verdict)
+    monkeypatch.setattr(plan_review, "verdict", verdict)
     return seen
 
 
@@ -871,7 +914,7 @@ def test_a_review_that_stops_partway_keeps_and_reports_the_passes_it_granted(
             return answers.pop(0)
         raise OSError("the chain answered nothing")
 
-    monkeypatch.setattr(plan_review, "_verdict", verdict)
+    monkeypatch.setattr(plan_review, "verdict", verdict)
 
     assert plan_review.main(["demo:plan"]) == 2
     reported = capsys.readouterr().err
@@ -988,7 +1031,7 @@ def test_the_judged_turn_reads_its_verdict_out_of_the_harness_report(
             }
         ),
     )
-    assert plan_review._verdict("prompt") == sound
+    assert plan_review.verdict("prompt") == sound
 
 
 @pytest.mark.parametrize(
@@ -1007,7 +1050,7 @@ def test_a_turn_that_answered_no_verdict_is_refused_rather_than_assumed(
     """The failure direction is always "not reviewed", never "reviewed and passed"."""
     _harness(monkeypatch, stdout, stderr)
     with pytest.raises(OSError, match=expected):
-        plan_review._verdict("prompt")
+        plan_review.verdict("prompt")
 
 
 def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:

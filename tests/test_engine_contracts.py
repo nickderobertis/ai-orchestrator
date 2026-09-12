@@ -2373,3 +2373,285 @@ def test_the_checkpoint_a_reader_writes_is_named_what_the_engine_names_it(
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The three strings the engine composes an amendment into a task with, and where each
+#: is declared in `src/plan.rs`: the heading it renders under, the sentence stating its
+#: authority, and the heading it is placed immediately above. Read as declarations of
+#: string constants rather than as prose, so a reworded sentence is a moved value here
+#: rather than a paragraph quietly drifting.
+AMENDMENT_CONSTANTS = {
+    "AMENDMENT_HEADING": re.compile(r'pub const AMENDMENT_HEADING: &str = "([^"]+)";'),
+    "AMENDMENT_PRECEDENCE": re.compile(
+        r'const AMENDMENT_PRECEDENCE: &str =\s*"([^"]+)";', re.MULTILINE
+    ),
+    "ADDITIONAL_INFO_HEADING": re.compile(r'const ADDITIONAL_INFO_HEADING: &str = "([^"]+)";'),
+}
+
+#: The engine's `amended`, whose two arms are the whole of the placement rule: the block
+#: is one heading, one precedence sentence, a blank line and the amendment; a task that
+#: states the operational-notes heading gets the block immediately before that line,
+#: and one that states none gets it at the end.
+AMENDED = re.compile(
+    r"fn amended\(task: &str, amendment: &str\) -> String \{\s*"
+    r'let block = format!\("\{AMENDMENT_HEADING\}\\n\{AMENDMENT_PRECEDENCE\}'
+    r'\\n\\n\{amendment\}\\n"\);\s*'
+    r"match additional_info_at\(task\) \{\s*"
+    r'Some\(at\) => format!\("\{\}\\n\\n\{block\}\\n\{\}", '
+    r"task\[\.\.at\]\.trim_end\(\), &task\[at\.\.\]\),\s*"
+    r'None => format!\("\{\}\\n\\n\{block\}", task\.trim_end\(\)\),',
+    re.DOTALL,
+)
+
+#: The engine's `NodeRequeued` fold: the existing node's record with `parked` removed
+#: and every override written over its own field, top-level key by key.
+NODE_REQUEUED_FOLD = re.compile(
+    r"Operation::NodeRequeued \{ node, amend \} => \{.*?"
+    r'object\.remove\("parked"\);\s*'
+    r"for \(key, value\) in amend\.iter\(\)\.flatten\(\) \{\s*"
+    r"object\.insert\(key\.clone\(\), value\.clone\(\)\);",
+    re.DOTALL,
+)
+
+
+#: The engine's `Operation` enum: serialized by `kind` in kebab case, with each variant's
+#: fields declared as struct fields. The first captures the serde attribute the wire
+#: spelling comes from; the second captures one variant with its fields, doc comments
+#: and attributes included, so a field a variant gained or lost is read from the
+#: declaration rather than assumed.
+OPERATION_TAGGING = re.compile(
+    r'#\[serde\(tag = "kind", rename_all = "kebab-case"\)\]\s*pub enum Operation \{'
+)
+OPERATION_VARIANT = re.compile(r"\n    (?P<name>[A-Z]\w*) \{(?P<body>.*?)\n    \},", re.DOTALL)
+VARIANT_FIELD = re.compile(r"^\s{8}(?:pub )?(?P<field>[a-z_]\w*): ", re.MULTILINE)
+#: A top-level struct's fields, at the indentation a struct body declares them.
+STRUCT_FIELD = re.compile(r"^\s{4}pub (?P<field>[a-z_]\w*): ", re.MULTILINE)
+
+
+def _kebab(variant: str) -> str:
+    """A Rust variant name as serde's `kebab-case` spells it on the wire."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower()
+
+
+#: The checkpoint's shape, at the four declarations the reply reads it through: the
+#: checkpoint carrying `coverage` and `state`, the coverage's `bytes`, the projected
+#: state's `graph`, and the graph as written with its `nodes`.
+CHECKPOINT_SHAPE = (
+    (
+        "checkpoint.rs",
+        re.compile(r"struct Checkpoint \{.*?coverage: Coverage,.*?state: RunState,", re.DOTALL),
+    ),
+    ("checkpoint.rs", re.compile(r"struct Coverage \{.*?bytes: u64,", re.DOTALL)),
+    ("projection.rs", re.compile(r"pub struct RunState \{.*?pub graph: Graph,", re.DOTALL)),
+    (
+        "graph.rs",
+        re.compile(r"struct AsWritten \{\s*concurrency: u32,\s*nodes: Vec<Node>,", re.DOTALL),
+    ),
+)
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
+# this into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
+# above states: its subject is the adopted engine's own source, outside this workspace.
+def test_the_run_state_a_live_edit_composes_onto_is_read_as_the_engine_writes_it() -> None:
+    """The reply folds a run's nodes from the engine's own records, so the record shapes it
+    reads — the checkpoint's paths to its nodes and its coverage, and the operations of an
+    `edit-committed` record with their fields — are held to the engine's declarations at
+    the pinned release. A drifted shape here would not fail: the reader falls back to the
+    launch plan and every amendment would compose onto text no dispatch reads.
+    """
+    from orchestrator import live_edit_check
+
+    for source, declaration in CHECKPOINT_SHAPE:
+        assert declaration.search(_source(ONEPIPELINE, source)) is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer declares in {source} the shape "
+            f"`orchestrator.live_edit_check` reads the checkpoint through ({declaration.pattern!r})"
+        )
+    assert live_edit_check.CHECKPOINT_NODES == ("state", "graph", "nodes")
+    assert live_edit_check.CHECKPOINT_COVERAGE == ("coverage", "bytes")
+
+    edits_rs = _source(ONEPIPELINE, "edits.rs")
+    tagged = OPERATION_TAGGING.search(edits_rs)
+    assert tagged is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer serializes `Operation` by `kind` in kebab "
+        "case, so every kind `orchestrator.live_edit_check.FOLDED` names is spelled wrong"
+    )
+    declared = {
+        _kebab(variant["name"]): set(VARIANT_FIELD.findall(variant["body"]))
+        for variant in OPERATION_VARIANT.finditer(edits_rs[tagged.end() :].split("\n}\n", 1)[0])
+    }
+    for kind, fields in live_edit_check.FOLDED.items():
+        assert kind in declared, (
+            f"orchestrator/live_edit_check.py folds {kind!r}, which onepipeline "
+            f"{ONEPIPELINE.ref} does not declare among {sorted(declared)}"
+        )
+        assert set(fields) <= declared[kind], (
+            f"orchestrator/live_edit_check.py reads {kind!r} for {fields}, while onepipeline "
+            f"{ONEPIPELINE.ref} declares it with {sorted(declared[kind])}"
+        )
+    node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
+    node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
+    assert live_edit_check.AMENDMENT in node_fields, (
+        f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field a live edit's "
+        f"amendment is read from; it declares {sorted(node_fields)}"
+    )
+
+
+#: Where the engine's projection folds a committed command's operations from: the arm
+#: over the journal kinds it folds, and the payload key it reads the operations at.
+COMMITTED_FOLD = re.compile(
+    r"Some\((?P<kinds>(?:journal::PipelineKind::\w+\s*\|?\s*)+)\) => \{\s*"
+    r"let operations = payload\s*\.get\(\"(?P<key>[a-z_]+)\"\)",
+    re.DOTALL,
+)
+
+#: `RunPaths`'s public accessor for each of the run's own records that
+#: `orchestrator/live_edit_check.py` reads under a run root, beside the constant that
+#: restates its name. The checkpoint is the third file it reads and is not here: that
+#: accessor is crate-private, and `CHECKPOINT_DECLARATION` is what reads it.
+LIVE_EDIT_RUN_FILES = (("plan", "LAUNCH_PLAN"), ("journal", "JOURNAL"))
+
+
+def test_the_records_a_live_edit_folds_a_run_from_are_the_ones_the_engine_writes() -> None:
+    """The reply reads three files under the run root and folds one journal envelope, and
+    every name involved is the engine's: the file each `RunPaths` accessor joins, the
+    `kind` words of the journal records whose operations the engine's own projection
+    folds, and the payload key it folds them from. None of those drifting would fail —
+    a renamed file, kind or key leaves the reader folding from nothing and composing
+    every amendment onto text no dispatch reads — so each is held to its declaration.
+    """
+    from orchestrator import live_edit_check
+
+    for accessor, constant in LIVE_EDIT_RUN_FILES:
+        assert getattr(live_edit_check, constant) == _joined_under_a_run_root(accessor), (
+            f"orchestrator/live_edit_check.py's `{constant}` is not the file onepipeline "
+            f"{ONEPIPELINE.ref}'s `RunPaths::{accessor}` joins onto a run's directory"
+        )
+    checkpoint = CHECKPOINT_DECLARATION.search(_source(ONEPIPELINE, "ledger.rs"))
+    assert checkpoint is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares a fold checkpoint on `RunPaths` "
+        "where this gate reads it; re-read `ledger.rs`"
+    )
+    assert checkpoint.group(1) == live_edit_check.CHECKPOINT, (
+        f"orchestrator/live_edit_check.py reads the checkpoint as {live_edit_check.CHECKPOINT!r}, "
+        f"while onepipeline {ONEPIPELINE.ref} writes {checkpoint.group(1)!r}"
+    )
+
+    words = dict(re.findall(r'Self::(\w+) => "([a-z][a-z-]*)",', _source(ONEPIPELINE, "event.rs")))
+    folded = COMMITTED_FOLD.search(_source(ONEPIPELINE, "projection.rs"))
+    assert folded is not None, (
+        f"onepipeline {ONEPIPELINE.ref}'s projection no longer folds a committed command's "
+        "operations off the payload where this gate reads it; re-read `projection.rs`"
+    )
+    variants = re.findall(r"journal::PipelineKind::(\w+)", folded.group("kinds"))
+    assert set(live_edit_check.COMMITTED_KINDS) == {words[variant] for variant in variants}, (
+        f"orchestrator/live_edit_check.py folds {live_edit_check.COMMITTED_KINDS}, while "
+        f"onepipeline {ONEPIPELINE.ref}'s projection folds operations off {variants}"
+    )
+    assert folded.group("key") == live_edit_check.OPERATIONS, (
+        f"orchestrator/live_edit_check.py reads a committed command's operations at "
+        f"{live_edit_check.OPERATIONS!r}, while onepipeline {ONEPIPELINE.ref}'s projection "
+        f"folds them from {folded.group('key')!r}"
+    )
+
+
+def test_the_effective_task_a_live_edit_is_keyed_on_is_composed_as_the_engine_composes_it() -> None:
+    """A live edit's review is keyed on the task the dispatch will read, so how the engine
+    renders an amendment into a task is restated in `orchestrator/live_edit_check.py`,
+    and this holds the restatement to the engine's source at the pinned release: the
+    three strings, the placement rule, and the requeue fold the effective node comes from.
+    A release that moved any of them would leave every live-edit key a key over text no
+    dispatch reads, silently — which is the one thing a key must not be.
+    """
+    from orchestrator import live_edit_check
+
+    plan_rs = _source(ONEPIPELINE, "plan.rs")
+    for name, declaration in AMENDMENT_CONSTANTS.items():
+        declared = declaration.search(plan_rs)
+        assert declared is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer declares {name} in plan.rs where this "
+            "gate reads it; re-read how it renders an amendment and correct the restatement"
+        )
+        assert getattr(live_edit_check, name) == declared.group(1), (
+            f"orchestrator/live_edit_check.py restates {name} as "
+            f"{getattr(live_edit_check, name)!r} while onepipeline {ONEPIPELINE.ref} "
+            f"declares {declared.group(1)!r}"
+        )
+    assert AMENDED.search(plan_rs) is not None, (
+        f"onepipeline {ONEPIPELINE.ref}'s `amended` no longer places the block the way "
+        "`orchestrator.live_edit_check.amended` restates; re-read it and correct the "
+        "restatement"
+    )
+    assert NODE_REQUEUED_FOLD.search(_source(ONEPIPELINE, "edits.rs")) is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer folds a requeue as `parked` removed and "
+        "every override written over its field; re-read `NodeRequeued` and correct "
+        "`orchestrator.live_edit_check._requeued`"
+    )
+
+
+#: The engine's live-edit command vocabulary: `Command` in `channel.rs`, serialized by
+#: `op` in lower case with unknown fields refused, which is what makes each variant's
+#: field set the whole of what an envelope may carry for that op.
+COMMAND_TAGGING = re.compile(
+    r'#\[serde\(tag = "op", rename_all = "lowercase", deny_unknown_fields\)\]\s*'
+    r"pub enum Command \{"
+)
+
+
+def _command_fields() -> dict[str, dict[str, str]]:
+    """Every `Command` variant at the pinned release, by wire op, with its fields' types."""
+    channel_rs = _source(ONEPIPELINE, "channel.rs")
+    tagged = COMMAND_TAGGING.search(channel_rs)
+    assert tagged is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer serializes `Command` by `op` in lower "
+        "case with unknown fields refused, so every op `orchestrator.live_edit_check` "
+        "names and every field it reads for one is unreconciled"
+    )
+    body = channel_rs[tagged.end() :].split("\n}\n", 1)[0]
+    return {
+        variant["name"].lower(): dict(
+            re.findall(r"^\s{8}(?:pub )?([a-z_]\w*): (.+?),?$", variant["body"], re.MULTILINE)
+        )
+        for variant in OPERATION_VARIANT.finditer(body)
+    }
+
+
+def test_the_ops_a_live_edit_reads_task_prose_from_are_the_commands_the_engine_declares() -> None:
+    """Which ops carry a node mapping, in which field, and which carry a text or a
+    criterion, is restated in `orchestrator/live_edit_check.py` as data, and the
+    live-edit table in `docs/orchestration.md` is held to that restatement elsewhere. This
+    holds it to the declaration both derive from: the engine's own `Command` enum at the
+    pinned release. An op that stopped carrying its node, or moved it to another field,
+    would otherwise leave the table and the module agreeing with each other about a wire
+    the engine no longer speaks — and task prose reaching a dispatch through the field
+    nothing reads.
+    """
+    from orchestrator import live_edit_check
+
+    declared = _command_fields()
+    assert set(live_edit_check.WHOLE_TASK_OPS) == set(live_edit_check.STATED_IN)
+    for op, field in live_edit_check.STATED_IN.items():
+        assert op in declared, (
+            f"orchestrator/live_edit_check.py reads a whole task off {op!r}, which onepipeline "
+            f"{ONEPIPELINE.ref} does not declare among {sorted(declared)}"
+        )
+        assert field in declared[op], (
+            f"orchestrator/live_edit_check.py reads {op!r}'s task from {field!r}, while "
+            f"onepipeline {ONEPIPELINE.ref} declares it with {sorted(declared[op])}"
+        )
+    # `add` and `retry` state a full `Node`; `requeue` states partial overrides of one,
+    # which is the map the module folds over the parked node.
+    assert declared["add"]["node"] == declared["retry"]["node"] == "Node", declared
+    assert declared["requeue"]["amend"].startswith("Option<Map<"), declared["requeue"]
+    # An amendment is the `text` of `amend`, a note's criteria half is its `criterion`,
+    # and both name their node by `id` — the three fields the module matches on.
+    assert "text" in declared[live_edit_check.AMEND_OP], declared[live_edit_check.AMEND_OP]
+    assert {"id", "criterion"} <= set(declared[live_edit_check.NOTE_OP]), declared[
+        live_edit_check.NOTE_OP
+    ]
+    assert all("id" in declared[op] for op in ("retry", "requeue", live_edit_check.AMEND_OP)), (
+        declared
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

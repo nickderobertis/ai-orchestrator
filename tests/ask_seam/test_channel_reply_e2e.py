@@ -16,6 +16,18 @@ Everything here is real: the recipe, the `onepipeline` beneath it, `scripts/ask-
 raising real blocking questions, and `scripts/channel-serve.py` raising the monitor's own
 surface. Only the paid model is doubled, at the `oneharness` seam, exactly as
 `tests/ask_seam/test_ask_manager_e2e.py` doubles it.
+
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the edge: every
+journey here spends a real launch and is behind its own — `tests/ask_seam/` is an Nx
+project of its own, keyed on `askSeamWorkspace` and selected by directory, which
+`tests/AGENTS.md` states as the settled design and `tests/conftest.py` enforces. That key
+names `scripts/**/*`, `orchestrator/**/*`, `config/**/*`, `personas/**/*` and
+`graphs/**/*` because these journeys really read them: `just channel-reply` runs the
+script and the module, the bar it holds an envelope to is fingerprinted over the base
+config and the planner persona, and a launch reads the graphs. Narrowing it would leave
+this tier replaying a green across a change one of these journeys exercises, which is the
+failure the split was made to end; a project per journey would give one key nothing
+enforces beside the one that is.
 """
 
 from __future__ import annotations
@@ -53,6 +65,33 @@ CHANNEL_SERVE = REPO_ROOT / "scripts" / "channel-serve.py"
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 
+#: The guard over the identities `ONEHARNESS_BIN_*` cannot reach. The judged tier `just
+#: channel-reply` now spends a turn of goes through `oneharness.plan-review.toml`'s
+#: chain, whose Codex identities are doubled by the stand-in above and whose Claude ones
+#: are only reached by a chain that fell through — and where a billed turn and a free
+#: one look identical from a journey's assertions, this is what makes the difference
+#: loud rather than invisible.
+PAID_PROVIDER_GUARD = helper("no-paid-provider")
+
+#: What the doubled provider answers a review turn with, by default: a verdict that
+#: passes, in the shape `config/plan-review-verdict.schema.json` declares. Every journey
+#: here that states sound task prose spends exactly one such turn, so this is what the
+#: environment scripts unless a journey scripts otherwise through `_reply`.
+PASSING_VERDICT = {"passes": True, "findings": []}
+
+#: A verdict that refuses, naming the one criterion the sound task below states.
+REFUSING_VERDICT = {
+    "passes": False,
+    "findings": [
+        {
+            "criterion": "- The finished tree carries an assertion whose subject is that "
+            "behaviour, so removing it fails.",
+            "why": "no state of the tree would fail it, so it reads as satisfied whatever "
+            "the dispatch does",
+        }
+    ],
+}
+
 #: A launching session these journeys state rather than inherit: this suite runs inside
 #: a dispatch whose own harness session would otherwise own the runs.
 LAUNCHING_SESSION = "e2e-channel-reply"
@@ -86,6 +125,11 @@ SUITE = hashlib.sha256(f"{REPO_ROOT}\0{os.getpid()}".encode()).hexdigest()[:8]
 #: node to be addressed to.
 WORK_NODE = "work"
 GATE_NODE = "gate"
+#: A second agent node behind the same gate, under `researcher` — the shipped role whose
+#: bar forbids the dispatch changing project files, which is what lets a journey tell a
+#: requeue judged under the parked node's own persona from one judged under the generic
+#: contract. Nothing is ever dispatched from it either.
+OTHER_NODE = "other"
 
 #: What `just channel-reply` exits with when it refuses. Asserted exactly rather than as
 #: "not zero", because a refusal and a crash are both non-zero and only one of them
@@ -141,6 +185,15 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # And the identities that seam cannot reach; see `PAID_PROVIDER_GUARD`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    # The judged review turn `just channel-reply` spends on task prose it has not seen,
+    # scripted to pass; `_judged_turns` counts how many the doubled provider was asked
+    # for, which is how a journey proves a turn was spent once and never twice.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider's answer is scripted.
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(PASSING_VERDICT)])
+    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "review-launches")
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
     # Host state under the real `HOME` reaches a launch these journeys make, so a
     # sandbox is what makes them answer about this checkout.
@@ -218,6 +271,12 @@ def replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replyin
         [
             {"id": GATE_NODE, "kind": "human", "task": _task("Approve.")},
             {"id": WORK_NODE, "persona": "engineer", "deps": [GATE_NODE], "task": _task("Report.")},
+            {
+                "id": OTHER_NODE,
+                "persona": "researcher",
+                "deps": [GATE_NODE],
+                "task": _task("Read."),
+            },
         ],
         tmp_path,
     )
@@ -286,19 +345,46 @@ def _committed(replying: Replying) -> list[dict[str, Any]]:
 
 
 def _reply(
-    replying: Replying, envelope: dict[str, Any], *, seconds: float = 120
+    replying: Replying,
+    envelope: dict[str, Any],
+    *,
+    seconds: float = 120,
+    verdicts: Sequence[object] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Send one envelope over the live channel, as a manager types it."""
+    """Send one envelope over the live channel, as a manager types it.
+
+    ``verdicts`` scripts what the doubled provider answers the judged review turns this
+    reply spends, one per launch with the last repeating; the environment's default is
+    a verdict that passes. A whole envelope is `onepipeline reply`'s own open contract,
+    so it is the untyped object a manager types.
+    """
+    environment = dict(replying.environment)
+    if verdicts is not None:
+        # llmlint: ignore[e2e_not_mocked] Only the paid provider's answer is scripted.
+        environment["FAKE_CODEX_ANSWERS"] = json.dumps(
+            [answer if isinstance(answer, str) else json.dumps(answer) for answer in verdicts]
+        )
     return subprocess.run(
         ["just", "channel-reply", replying.run],
         cwd=REPO_ROOT,
-        env=replying.environment,
+        env=environment,
         input=json.dumps(envelope),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(seconds),
         check=False,
     )
+
+
+def _judged_turns(replying: Replying) -> int:
+    """How many review turns this run's replies have put to the doubled provider so far.
+
+    Read off the attempt log the stand-in appends to per launch — the only moment a
+    journey can prove the provider was reached — because a judged turn spent and a
+    record found look the same from the recipe's own answer.
+    """
+    log = Path(replying.environment["FAKE_CODEX_ATTEMPT_LOG"])
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.is_file() else 0
 
 
 def _asked(replying: Replying, question: str) -> subprocess.Popen[str]:
@@ -1487,6 +1573,651 @@ def test_a_sound_amendment_is_sent_unchanged(replying: Replying) -> None:
         f"judged against is unchanged:\n{sent.stdout}"
     )
     assert observation in committed, "the note beside it was judged as though it were criteria"
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+#: One whole task in the template every plan here is written in, built around a criterion
+#: stating a property of the finished tree. Its `## Additional info` names a `just`
+#: invocation on purpose: that section is the one this bar is required to leave alone, so
+#: a task carrying it is what says the exemption is real over the real recipe.
+def _whole_task(*sections: str) -> str:
+    """A whole task as an `add` or a `retry` states one, with ``sections`` in the middle."""
+    return "\n\n".join(
+        (
+            "## What\n\nAdd the route and the test that drives it.",
+            "## Why\n\nThe user cannot complete a purchase without it.",
+            "## Acceptance criteria\n\n- The finished tree carries an assertion whose "
+            "subject is that behaviour, so removing it fails.",
+            *sections,
+            "## Additional info\n\nRun `just test` over what you changed, and commit it.",
+        )
+    )
+
+
+#: The section that cost a node, in the placement `AGENTS.md` instructs: under a heading
+#: of its own, above the operational notes, opening by saying it outranks them. It rode
+#: inside a `retry`'s replacement task, which is why three readers passed it — the
+#: amendment check declined a `retry` by design, and the task-level bar read the
+#: acceptance-criteria block and stopped at the next heading.
+UNREAD_SECTION = (
+    "## Amendment\n\nWhere this and the notes below it disagree, this wins: the "
+    "finished branch merges cleanly into its base and its change request's required "
+    "checks pass."
+)
+
+#: Where this repository keeps, under a run's own root, the resulting task content that
+#: run's replies have already cleared. Spelled here rather than imported for the reason
+#: every other published shape in this module is: what a journey asserts about a file a
+#: manager can open has to be readable beside the assertion.
+REVIEW_REGISTER = "orchestrator-live-edit-reviews.json"
+
+
+def _register(replying: Replying) -> dict[str, Any]:
+    """The resulting task content this run's replies have cleared, as the file holds it."""
+    kept = replying.root / REVIEW_REGISTER
+    if not kept.is_file():
+        return {}
+    # `cast` rather than a validating read, for the reason `_queue` gives: this
+    # repository owns the file's shape, and what the journey reads off it is one mapping.
+    held = cast(dict[str, Any], json.loads(kept.read_text(encoding="utf-8")))
+    reviews = held.get("reviews")
+    return reviews if isinstance(reviews, dict) else {}
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] Both reads are the ones `_queue` and
+# `_committed` are defined for: no operator view renders an edit's **absence**, which is
+# the whole of what a refusal has to prove, and reading a surface through the verb is
+# what consumes it. Everything the refusal says is asserted off the recipe's own stderr.
+def test_a_whole_tasks_own_section_is_read_before_it_reaches_a_dispatch(
+    replying: Replying,
+) -> None:
+    """The region that cost a node, refused over the real recipe against a real run.
+
+    `add`, `retry` and `requeue` each state a **whole task**, and until this ran nothing
+    read the part of one between its acceptance criteria and its operational notes. The
+    manager who wrote the amendment that cost that node put it exactly where this
+    repository says to put it — under a heading of its own, above the operational notes —
+    and had no signal at all that nothing had checked it.
+
+    Driven as an `add` rather than as the `retry` the incident used, because this run's
+    `work` node is not running and the engine refuses a `retry` of it for a reason of its
+    own: a journey whose subject is this refusal must not be able to pass on somebody
+    else's. An `add` is one the engine accepts, so without this reader both commands
+    below reach the graph. `tests/test_live_edit_check.py` drives `retry`, `requeue` and
+    each step of a lifecycle node against the same bar.
+
+    Refused **whole**, with the sound `add` beside it going nowhere either: a manager who
+    steers and corrects in one send must not have the steering half applied against a
+    correction that was declined.
+    """
+    riding = {
+        "op": "add",
+        "node": {
+            "id": "beside",
+            "persona": "engineer",
+            "deps": [GATE_NODE],
+            "task": _whole_task(),
+        },
+    }
+    before = _queue(replying)
+
+    refused = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [
+                {
+                    "op": "add",
+                    "node": {
+                        "id": "unread",
+                        "persona": "engineer",
+                        "deps": [GATE_NODE],
+                        "task": _whole_task(UNREAD_SECTION),
+                    },
+                },
+                riding,
+            ],
+        },
+    )
+
+    assert refused.returncode == REPLY_REFUSED, (
+        f"a whole task hiding a clause under a heading of its own exited "
+        f"{refused.returncode} where a refusal is {REPLY_REFUSED}, so a judge was handed "
+        f"a bar its worker cannot clear:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "required checks pass" in refused.stderr, refused.stderr
+    assert "under '## Amendment'" in refused.stderr, (
+        f"the refusal does not name the section to correct, which is the whole of what a "
+        f"manager holding a whole replacement task can act on:\n{refused.stderr}"
+    )
+    assert "nothing was sent" in refused.stderr, refused.stderr
+    assert _committed(replying) == [], (
+        "the envelope was refused and something in it reached the graph anyway"
+    )
+    assert _queue(replying) == before, "a refused reply changed what the channel is holding"
+    assert _judged_turns(replying) == 0, (
+        "a text the free tier refuses was put to the judge anyway, which is a provider "
+        "turn spent on the commonest refusal there is"
+    )
+
+    landed = _reply(replying, {"version": 2, "commands": [riding]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert riding in _committed(replying), "the sound command sent on its own did not land"
+    assert _judged_turns(replying) == 1, (
+        "a whole task the free tier took reached the graph without its one judged turn"
+    )
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] `_committed` reads the run's own journal
+# because that is where the engine records an accepted edit, and `_register` reads the
+# file this repository keeps beside it — which is the subject, and which no view renders.
+def test_task_content_one_reply_cleared_is_found_by_the_next(replying: Replying) -> None:
+    """A whole task that clears the bar reaches the graph, and is not read twice.
+
+    The two halves are one journey because only the pair means anything: a bar that
+    refused this would be an outage, and a register nothing wrote to would re-read every
+    resulting task a run ever sent. The second `add` states the same task under a
+    different id, so its content hashes to what the first one cleared — and the record's
+    own timestamp is what says the second reply *found* that record rather than writing
+    its own over the top of it.
+    """
+    task = _whole_task()
+
+    first = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [
+                {
+                    "op": "add",
+                    "node": {
+                        "id": "cleared",
+                        "persona": "engineer",
+                        "deps": [GATE_NODE],
+                        "task": task,
+                    },
+                }
+            ],
+        },
+    )
+
+    assert first.returncode == 0, f"a sound whole task was refused:\n{first.stdout}{first.stderr}"
+    assert any(command.get("op") == "add" for command in _committed(replying)), (
+        f"the added node did not reach the graph:\n{first.stdout}"
+    )
+    assert _judged_turns(replying) == 1, "the first reply did not spend exactly one judged turn"
+    kept = _register(replying)
+    assert len(kept) == 1, f"one resulting task cleared the bar and the register holds {kept}"
+    (cleared,) = kept.values()
+
+    second = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [
+                {
+                    "op": "add",
+                    "node": {
+                        "id": "cleared-again",
+                        "persona": "engineer",
+                        "deps": [GATE_NODE],
+                        "task": task,
+                    },
+                }
+            ],
+        },
+    )
+
+    assert second.returncode == 0, f"{second.stdout}{second.stderr}"
+    assert _register(replying) == kept, (
+        f"the second reply did not find the record the first one wrote, so the same "
+        f"resulting task was read against the bar twice:\n{_register(replying)}"
+    )
+    assert _judged_turns(replying) == 1, (
+        "the second reply spent a judged turn on text the first one had already cleared"
+    )
+    assert cleared["where"] == "the task added as node 'cleared'", kept
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] The same two reads, for the same reason:
+# no view renders an edit's absence, and the register is the subject.
+def test_a_whole_task_the_free_tier_takes_is_refused_by_its_judged_review(
+    replying: Replying,
+) -> None:
+    """The second tier over the real recipe: a judge reads what no matcher can.
+
+    The questions that moved out of the deterministic tier — whether a number is the
+    right number, whether the criteria answer a demand their own bar makes, whether a
+    criterion could be falsified — are put to one turn of the same reviewer `just
+    review-plan` spends, through the real `oneharness` under the real
+    `oneharness.plan-review.toml` and its verdict schema, with the paid provider scripted
+    to refuse. Every finding is on the recipe's stderr naming the text the way the
+    refusal does; nothing reaches the graph; nothing is recorded, so the same text sent
+    again is judged again and lands once the judge takes it.
+    """
+    added = {
+        "op": "add",
+        "node": {
+            "id": "judged",
+            "persona": "engineer",
+            "deps": [GATE_NODE],
+            "task": _whole_task(),
+        },
+    }
+    before = _queue(replying)
+
+    refused = _reply(replying, {"version": 2, "commands": [added]}, verdicts=[REFUSING_VERDICT])
+
+    assert refused.returncode == REPLY_REFUSED, (
+        f"a whole task its judged review refused exited {refused.returncode} where a "
+        f"refusal is {REPLY_REFUSED}:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "the task added as node 'judged' was refused by its judged review" in refused.stderr, (
+        refused.stderr
+    )
+    (finding,) = REFUSING_VERDICT["findings"]
+    assert finding["criterion"] in refused.stderr, refused.stderr
+    assert finding["why"] in refused.stderr, refused.stderr
+    assert "nothing was sent" in refused.stderr, refused.stderr
+    assert _committed(replying) == [], "a judged refusal let the edit reach the graph anyway"
+    assert _queue(replying) == before, "a refused reply changed what the channel is holding"
+    assert _register(replying) == {}, "a judged refusal was recorded as though it were a pass"
+    assert _judged_turns(replying) == 1, "the refusal did not come from exactly one judged turn"
+
+    landed = _reply(replying, {"version": 2, "commands": [added]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert added in _committed(replying), "the same text, taken by its judge, did not land"
+    assert _judged_turns(replying) == 2, "a refused text sent again was not judged again"
+    assert len(_register(replying)) == 1, _register(replying)
+
+
+def test_a_retry_and_a_requeue_state_whole_tasks_and_are_read_as_an_add_is(
+    replying: Replying,
+) -> None:
+    """The two ops the incident used, over the real recipe against a real run.
+
+    A `retry` states a whole replacement node and a `requeue` states partial overrides
+    that may carry a whole task; both reach the graph through this recipe and nothing
+    else, and the amendment that cost a node rode inside a `retry`. This run's `work`
+    node is parked first, which is the state a `requeue` returns a node from — so the
+    refusal of the requeue below is this check's and not the graph's, and the sound
+    `requeue` at the end is accepted by the graph and spends the one judged turn a whole
+    task earns. A parked node is not one the engine lets a `retry` supersede, so the
+    `retry` here proves only that this check refuses its replacement task before the
+    graph is asked anything; `tests/test_live_edit_check.py` reads each op's shape.
+    Beside them, an `add` of a node nothing dispatches from — the ordinary way a manager
+    records a follow-up — lands with no turn spent and nothing read.
+    """
+    parked = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [{"op": "cancel", "id": WORK_NODE, "reason": "park it for the retry"}],
+        },
+    )
+    assert parked.returncode == 0, f"{parked.stdout}{parked.stderr}"
+
+    requeued = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [
+                {"op": "requeue", "id": WORK_NODE, "amend": {"task": _whole_task(UNREAD_SECTION)}}
+            ],
+        },
+    )
+    assert requeued.returncode == REPLY_REFUSED, f"{requeued.stdout}{requeued.stderr}"
+    assert "the amended task for node 'work'" in requeued.stderr, requeued.stderr
+    assert "under '## Amendment'" in requeued.stderr, requeued.stderr
+
+    replacement = {
+        "id": "work-2",
+        "persona": "engineer",
+        "deps": [GATE_NODE],
+        "task": _whole_task(UNREAD_SECTION),
+    }
+    retried = _reply(
+        replying,
+        {"version": 2, "commands": [{"op": "retry", "id": WORK_NODE, "node": replacement}]},
+    )
+    assert retried.returncode == REPLY_REFUSED, f"{retried.stdout}{retried.stderr}"
+    assert "the replacement task for node 'work-2'" in retried.stderr, retried.stderr
+    assert "under '## Amendment'" in retried.stderr, retried.stderr
+    assert [command["op"] for command in _committed(replying)] == ["cancel"], (
+        "a refused retry or requeue reached the graph"
+    )
+    assert _judged_turns(replying) == 0, "a text the free tier refuses was put to the judge"
+
+    follow_up = {
+        "op": "add",
+        "node": {"id": "follow-up", "task": "Report.", "expects_no_diff": True},
+    }
+    recorded = _reply(replying, {"version": 2, "commands": [follow_up]})
+    assert recorded.returncode == 0, (
+        f"a node nothing dispatches from was refused for the criteria it has no judge "
+        f"for:\n{recorded.stdout}{recorded.stderr}"
+    )
+    assert follow_up in _committed(replying), "the follow-up did not reach the graph"
+    assert _judged_turns(replying) == 0, "a node nothing dispatches from was put to the judge"
+
+    sound = {"op": "requeue", "id": WORK_NODE, "amend": {"task": _whole_task()}}
+    landed = _reply(replying, {"version": 2, "commands": [sound]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert sound in _committed(replying), "the sound amended task did not reach the graph"
+    assert _judged_turns(replying) == 1, "the sound amended task did not spend one judged turn"
+
+
+def test_a_review_turn_that_answers_nothing_is_not_read_as_a_verdict(
+    replying: Replying,
+) -> None:
+    """No verdict is neither a pass nor a refusal, and the recipe says which repair.
+
+    The provider answers, is billed, and never produces the object the schema declares —
+    which oneharness re-prompts and then reports as invalid — so nothing is known about
+    the text. It is not sent, because sending would put unreviewed text in front of a
+    dispatch; it is not reported as refused, because a manager told to correct a sound
+    edit would rewrite it; and nothing is recorded. The refusal names the harness's own
+    account and tells the manager to send the same envelope again, which then lands.
+    """
+    added = {
+        "op": "add",
+        "node": {
+            "id": "unanswered",
+            "persona": "engineer",
+            "deps": [GATE_NODE],
+            "task": _whole_task(),
+        },
+    }
+
+    unanswered = _reply(
+        replying, {"version": 2, "commands": [added]}, verdicts=["a sentence, not a verdict"]
+    )
+
+    assert unanswered.returncode == REPLY_REFUSED, (
+        f"a reply whose judged turn answered nothing exited {unanswered.returncode}:\n"
+        f"{unanswered.stdout}{unanswered.stderr}"
+    )
+    assert "could not be judged" in unanswered.stderr, unanswered.stderr
+    assert "the task added as node 'unanswered' could not be reviewed" in unanswered.stderr, (
+        unanswered.stderr
+    )
+    assert "no candidate answered" in unanswered.stderr, unanswered.stderr
+    assert "send the whole envelope again unchanged" in unanswered.stderr, unanswered.stderr
+    assert "correct it" not in unanswered.stderr, (
+        f"a turn that answered nothing was reported as a refusal to correct:\n{unanswered.stderr}"
+    )
+    assert _committed(replying) == [], "unreviewed text reached the graph"
+    assert _register(replying) == {}, "a turn that answered nothing was recorded as a pass"
+    assert _judged_turns(replying) > 0, "the unanswerable review never reached a provider"
+
+    landed = _reply(replying, {"version": 2, "commands": [added]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert added in _committed(replying), "the same envelope, sent again, did not land"
+
+
+def test_a_notes_criterion_is_held_to_the_bar_and_its_text_is_not(replying: Replying) -> None:
+    """A note's `criterion` binds the judge of the conversation it reaches; its text does not.
+
+    So the criterion is read exactly as an amendment is and the text is never read — a
+    note whose text names a route and whose criterion rests on the merge path's verdict
+    is refused for the criterion alone, naming the field and the escape that fits it,
+    and the same note with a sound criterion lands with its route-naming text intact and
+    spends no judged turn. Refused whole, so the `amend` riding beside it goes nowhere.
+    """
+    riding = _amend(WORK_NODE, SOUND_AMENDMENT)
+    unsatisfiable = {
+        **_note(WORK_NODE, "the gate on that branch was `just check` and it is green"),
+        "addressee": "both",
+        "criterion": UNSATISFIABLE_AMENDMENT,
+    }
+    before = _queue(replying)
+
+    refused = _reply(replying, {"version": 2, "commands": [unsatisfiable, riding]})
+
+    assert refused.returncode == REPLY_REFUSED, (
+        f"a note whose criterion the bar refuses exited {refused.returncode} where a "
+        f"refusal is {REPLY_REFUSED}:\n{refused.stdout}{refused.stderr}"
+    )
+    assert "the criterion of the note for node 'work'" in refused.stderr, refused.stderr
+    assert "required checks pass" in refused.stderr, refused.stderr
+    assert "belongs in the note's `text`" in refused.stderr, refused.stderr
+    assert "nothing was sent" in refused.stderr, refused.stderr
+    assert _committed(replying) == [], "the envelope was refused and something reached the graph"
+    assert _queue(replying) == before, "a refused reply changed what the channel is holding"
+
+    sound = {**unsatisfiable, "criterion": SOUND_AMENDMENT}
+    landed = _reply(replying, {"version": 2, "commands": [sound, riding]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    committed = _committed(replying)
+    assert sound in committed, "a note with a sound criterion did not reach the graph"
+    assert riding in committed, "the amendment beside it did not land"
+    assert _judged_turns(replying) == 0, "a correction spent a judged turn"
+
+
+def test_the_same_amendment_on_two_nodes_is_two_effective_tasks(replying: Replying) -> None:
+    """An amendment is keyed on the task it composes onto, not on its own words.
+
+    The same sound amendment sent to `work` and to `other` — two nodes whose tasks and
+    personas differ — lands twice and leaves two records, each naming the effective task
+    of its node, and spends no judged turn: a bare amendment is a correction to a task a
+    review already cleared. Keyed on the words alone, the second would have found the
+    first's pass and the run would hold one record for two different tasks.
+    """
+    for node in (WORK_NODE, OTHER_NODE):
+        landed = _reply(replying, {"version": 2, "commands": [_amend(node, SOUND_AMENDMENT)]})
+        assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+        assert _amend(node, SOUND_AMENDMENT) in _committed(replying), node
+
+    kept = _register(replying)
+    assert sorted(held["where"] for held in kept.values()) == [
+        f"the effective task of node '{OTHER_NODE}'",
+        f"the effective task of node '{WORK_NODE}'",
+    ], kept
+    assert _judged_turns(replying) == 0, "a bare amendment spent a judged turn"
+
+
+def test_a_requeue_keeps_the_parked_nodes_own_persona(replying: Replying) -> None:
+    """A requeue's overrides merge onto the parked node, and its persona comes with it.
+
+    `other` is a `researcher`, whose shipped bar forbids the dispatch changing project
+    files. A requeue that overrides its task with criteria requiring a file to change and
+    restates no persona is judged under that bar — refused naming the clause, before any
+    turn is spent — where the same overrides restating `engineer` are taken and spend the
+    one judged turn a novel whole task earns. Read from the envelope alone, both would
+    have been judged under the generic contract and the first would have passed.
+    """
+    parked = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [{"op": "cancel", "id": OTHER_NODE, "reason": "park it for the requeue"}],
+        },
+    )
+    assert parked.returncode == 0, f"{parked.stdout}{parked.stderr}"
+    changes = _whole_task().replace(
+        "- The finished tree carries an assertion whose subject is that behaviour, so removing "
+        "it fails.",
+        "- `docs/x.md` gains a row.",
+    )
+    assert "`docs/x.md` gains a row" in changes
+
+    refused = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [{"op": "requeue", "id": OTHER_NODE, "amend": {"task": changes}}],
+        },
+    )
+
+    assert refused.returncode == REPLY_REFUSED, f"{refused.stdout}{refused.stderr}"
+    assert f"the amended task for node '{OTHER_NODE}'" in refused.stderr, refused.stderr
+    assert "modified project files" in refused.stderr, (
+        f"the requeue was not judged under the parked node's own persona:\n{refused.stderr}"
+    )
+    assert _judged_turns(replying) == 0, "a text the free tier refuses was put to the judge"
+
+    restated = {
+        "op": "requeue",
+        "id": OTHER_NODE,
+        "amend": {"task": changes, "persona": "engineer"},
+    }
+    landed = _reply(replying, {"version": 2, "commands": [restated]})
+
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert restated in _committed(replying), "the requeue under a restated persona did not land"
+    assert _judged_turns(replying) == 1, "a requeued novel task did not spend its judged turn"
+
+
+def test_a_later_op_resulting_in_the_same_effective_task_reuses_its_pass(
+    replying: Replying,
+) -> None:
+    """Two ops that result in one whole effective task are one review.
+
+    A requeue that amends `work`'s task spends the judged turn and records the effective
+    task it results in; an `add` of a new node stating that same task under the same
+    persona results in the same effective task, finds the record, and spends nothing —
+    the register unchanged to the timestamp.
+    """
+    parked = _reply(
+        replying,
+        {
+            "version": 2,
+            "commands": [{"op": "cancel", "id": WORK_NODE, "reason": "park it for the requeue"}],
+        },
+    )
+    assert parked.returncode == 0, f"{parked.stdout}{parked.stderr}"
+    same = _whole_task()
+
+    first = _reply(
+        replying,
+        {"version": 2, "commands": [{"op": "requeue", "id": WORK_NODE, "amend": {"task": same}}]},
+    )
+    assert first.returncode == 0, f"{first.stdout}{first.stderr}"
+    assert _judged_turns(replying) == 1, "the requeued novel task did not spend one judged turn"
+    kept = _register(replying)
+    assert [held["where"] for held in kept.values()] == [f"the amended task for node '{WORK_NODE}'"]
+
+    added = {
+        "op": "add",
+        "node": {"id": "again", "persona": "engineer", "deps": [GATE_NODE], "task": same},
+    }
+    second = _reply(replying, {"version": 2, "commands": [added]})
+
+    assert second.returncode == 0, f"{second.stdout}{second.stderr}"
+    assert added in _committed(replying), "the added node did not reach the graph"
+    assert _register(replying) == kept, (
+        f"a later op resulting in the same effective task did not find the record the "
+        f"first one wrote:\n{_register(replying)}"
+    )
+    assert _judged_turns(replying) == 1, "the same effective task spent a second judged turn"
+
+
+def test_a_bare_amendments_pass_does_not_stand_in_for_the_judged_turn_a_novel_task_owes(
+    replying: Replying,
+) -> None:
+    """The one effective task two carriers can share while owing different tiers.
+
+    An `amend` of `work` composes onto that node's own task and is cleared by the free
+    tier alone, spending no provider turn; an `add` then states that same effective text
+    outright — `work`'s task with the same amendment — which is a novel whole task and
+    owes the judged turn. Keyed on the text and persona alone, the add would find the
+    amendment's record and reach the graph with the judged tier's questions unasked,
+    which is the one route by which this register could pass a novel task unjudged. So
+    the register holds a record per shape, the add spends its turn, and both records
+    stand afterwards.
+    """
+    amended = _reply(replying, {"version": 2, "commands": [_amend(WORK_NODE, SOUND_AMENDMENT)]})
+    assert amended.returncode == 0, f"{amended.stdout}{amended.stderr}"
+    assert _judged_turns(replying) == 0, "a bare amendment spent a judged turn"
+    kept = _register(replying)
+    assert [held["where"] for held in kept.values()] == [
+        f"the effective task of node '{WORK_NODE}'"
+    ]
+
+    restated = {
+        "op": "add",
+        "node": {
+            "id": "restated",
+            "persona": "engineer",
+            "deps": [GATE_NODE],
+            "task": _task("Report."),
+            "amendment": SOUND_AMENDMENT,
+        },
+    }
+    added = _reply(replying, {"version": 2, "commands": [restated]})
+
+    assert added.returncode == 0, f"{added.stdout}{added.stderr}"
+    assert restated in _committed(replying), "the added node did not reach the graph"
+    assert _judged_turns(replying) == 1, (
+        "an added node stating a bare amendment's effective text found that amendment's "
+        "free pass and reached the graph without the judged turn a novel whole task owes"
+    )
+    assert sorted(held["where"] for held in _register(replying).values()) == [
+        f"the effective task of node '{WORK_NODE}'",
+        "the task added as node 'restated'",
+    ], f"the two shapes of one text were not each recorded:\n{_register(replying)}"
+
+
+def test_an_amendment_composes_onto_a_node_only_the_journal_holds(replying: Replying) -> None:
+    """A node the journal alone records is the one an amendment composes onto.
+
+    A reading — `just status` — leaves the engine's own checkpoint under the run root,
+    folded up to that moment; an `add` then puts `fresh` into the journal **past** it,
+    where the launch plan never named it and the checkpoint does not hold it. The
+    amendment sent to `fresh` is recorded as *the effective task of node 'fresh'* — the
+    node's own task with the amendment rendered in — rather than as the amendment alone,
+    which is what the recipe records for a node the run cannot read. So the node was read
+    out of the journal past the checkpoint, by the fold the engine's own replay uses, and
+    a fold that silently read nothing would have recorded the other phrase. Both
+    preconditions are asserted rather than assumed, because a checkpoint the reply
+    itself refreshed would make this journey prove nothing about the fold.
+    """
+    read = _just("status", replying.run, environment=replying.environment)
+    assert read.returncode == 0, f"{read.stdout}{read.stderr}"
+    checkpoint = replying.root / "checkpoint.json"
+    assert checkpoint.is_file(), "the reading left no checkpoint for the add to land past"
+    # The reading's own health block probes the doubled provider too, so the turns the
+    # replies below spend are counted from here rather than from zero.
+    probed = _judged_turns(replying)
+
+    added = {
+        "op": "add",
+        "node": {"id": "fresh", "persona": "engineer", "deps": [GATE_NODE], "task": _whole_task()},
+    }
+    landed = _reply(replying, {"version": 2, "commands": [added]})
+    assert landed.returncode == 0, f"{landed.stdout}{landed.stderr}"
+    assert added in _committed(replying), "the added node did not reach the graph"
+    assert _judged_turns(replying) == probed + 1, "the added task did not spend one judged turn"
+
+    # `onepipeline` owns both records; each is read for the one list of node ids in it.
+    folded = cast(dict[str, Any], json.loads(checkpoint.read_text(encoding="utf-8")))
+    held = {node.get("id") for node in folded["state"]["graph"]["nodes"]}
+    assert "fresh" not in held, "the checkpoint holds the added node, so the journal fold is moot"
+    launched = cast(dict[str, Any], json.loads((replying.root / "plan.json").read_text("utf-8")))
+    assert "fresh" not in {task.get("id") for task in launched["tasks"]}
+
+    amended = _reply(replying, {"version": 2, "commands": [_amend("fresh", SOUND_AMENDMENT)]})
+
+    assert amended.returncode == 0, f"{amended.stdout}{amended.stderr}"
+    assert _amend("fresh", SOUND_AMENDMENT) in _committed(replying), "the amendment did not land"
+    assert _judged_turns(replying) == probed + 1, "a bare amendment spent a judged turn"
+    assert sorted(kept["where"] for kept in _register(replying).values()) == [
+        "the effective task of node 'fresh'",
+        "the task added as node 'fresh'",
+    ], f"the amendment was not composed onto the node the journal holds:\n{_register(replying)}"
 
 
 # llmlint: ignore-end[tests_mirror_real_usage]

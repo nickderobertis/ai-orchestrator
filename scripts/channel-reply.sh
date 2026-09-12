@@ -257,6 +257,39 @@ fi
 python="$root/.venv/bin/python3"
 [ -x "$python" ] || python=python3
 
+# The judged tier below spends one `oneharness run` per resulting task this run has not
+# cleared, and every identity chain this repository configures names a portable
+# indirection its variant maps into the child — CODEX_HOME for the second Codex
+# identity, CLAUDE_CONFIG_DIR for each alternate Claude subscription — which oneharness
+# refuses to start without. Resolved here exactly as `scripts/review-plan.sh` resolves
+# them for the same reviewer, so an unauthenticated identity falls through the chain
+# rather than hard-failing a reply. Checked and sourced the way the contract helper
+# above is, and for the same reason: a helper that is readable but does not load is a
+# broken checkout, not a refused reply.
+for helper in codex-alt-home.sh claude-alt-config-dir.sh; do
+    if [ ! -f "$script_dir/$helper" ] || [ ! -r "$script_dir/$helper" ]; then
+        fail "required helper is not a readable regular file: $script_dir/$helper" \
+            "restore it from the repository or run 'just bootstrap', then retry"
+    fi
+done
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when a file this script has just tested as a readable regular file fails to load; a journey producing that would have to corrupt the checkout it is reading itself from.
+# shellcheck source=scripts/codex-alt-home.sh
+. "$script_dir/codex-alt-home.sh" || fail "$script_dir/codex-alt-home.sh is readable but could not be loaded" \
+    "restore it from the repository or run 'just bootstrap', then retry"
+ensure_codex_alt_home "channel-reply" || exit "$?"
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when a file this script has just tested as a readable regular file fails to load; a journey producing that would have to corrupt the checkout it is reading itself from.
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$script_dir/claude-alt-config-dir.sh" || fail "$script_dir/claude-alt-config-dir.sh is readable but could not be loaded" \
+    "restore it from the repository or run 'just bootstrap', then retry"
+resolve_claude_alt_config_dir "channel-reply" || exit "$?"
+
+# Where the pinned `oneharness` the judged tier spawns lives, put in front of the
+# check's own PATH when this checkout has one — the reviewer resolves it by name, and
+# `just review-plan` reaches the same binary through `uv run`, which this recipe does
+# not go through. A checkout with no `.venv` leaves PATH as the caller had it.
+check_path="$PATH"
+[ -d "$root/.venv/bin" ] && check_path="$root/.venv/bin:$PATH"
+
 delegate="$script_dir/onepipeline.sh"
 if [ ! -x "$delegate" ]; then
     fail "the onepipeline wrapper is not executable at $delegate" \
@@ -302,24 +335,47 @@ else
         "pipe the envelope in, or name a file after the run id"
 fi
 
-# An amendment is criteria — it replaces the binding text that becomes part of a node's
-# effective task, and that task is what the node's judge reads — so it is held to the
-# same bar a plan's acceptance criteria are held to, and this is the only place it can
-# be: an amendment reaches a node over this channel rather than through the plan store,
-# so `just check-plan` never sees one. The bar itself is `orchestrator/criteria_guard.py`'s
-# and none of it is restated here or in the module below; which of its questions apply to
-# an amendment is that module's own decision, written down where the questions are.
+# llmlint: ignore[boundary_inputs_validated] This is `onepipeline`'s own configured ledger root, not an input this recipe owns a policy for: it reaches only three lenient reads — a register whose unreadability costs a repeated check, a queue whose unreadability forwards the envelope, and a journal whose size is checked where it is taken — and never a command line. Validating it here would be a second opinion on the verb's own configuration, and a stricter one would refuse replies the verb accepts.
+runs_root="${!RUNS_ROOT_ENV:-$DEFAULT_RUNS_ROOT}"
+# Empty when the run is not a reference this can safely resolve a path from, which is
+# what keeps all three reads — the review register's, the guard's and the outcome's —
+# off a path composed from a value nobody checked. All three are then skipped
+# together, for the same reason.
+run_root=""
+# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
+if [[ "$run" =~ $ASK_MANAGER_SAFE_REFERENCE ]]; then
+    run_root="$runs_root/$run"
+fi
+
+# A live edit that states task prose is criteria — an `amend` replaces the binding text
+# that becomes part of a node's effective task, and `add`, `retry` and `requeue` each
+# state a whole task — and that text is what the node's judge reads, so it is held to the
+# same bar a plan's acceptance criteria are held to, in both of that bar's tiers. This is
+# the only place it can be: a live edit reaches a node over this channel rather than
+# through the plan store, so `just check-plan` never sees one and `just review-plan`
+# never records one. The deterministic tier is `orchestrator/criteria_guard.py`'s and the
+# judged tier is `orchestrator/plan_review.py`'s — the same reviewer `just review-plan`
+# spends a turn of, framed for a live edit — and none of either is restated here or in
+# the module below; which questions apply to a whole task and which to an amendment is
+# each module's own decision, written down where the questions are.
+#
+# The run root is handed over so the module can find this run's register of the task
+# content it has already cleared — empty when the reference could not be resolved, which
+# costs a repeated read of the deterministic bar and a repeated judged turn, and never a
+# different answer. What a resulting task the register does not hold costs is one
+# provider turn, spent before anything is sent; what one it holds costs is nothing.
 #
 # **Asked before the rendezvous guard below**, which is the one thing about the order
 # that matters: that guard's refusal ends by telling a manager the commands may be
-# re-sent on their own, and re-sending a refused amendment is not what it means to say.
+# re-sent on their own, and re-sending a refused edit is not what it means to say.
 #
 # `PYTHONPATH` is set rather than prepended to, exactly as `scripts/plan-check.sh` sets
 # it and for the same reason: an inherited value is a directory this interpreter would
 # import from, and an empty entry there means whatever directory a manager replied from.
-amend_status=0
-amend_said=$(PYTHONPATH="$root" "$python" -m orchestrator.amendment_check <"$staged") ||
-    amend_status=$?
+edit_status=0
+# llmlint: ignore[tool_output_is_signal] The check's stderr flows through on purpose, and it carries one sentence in one state: a run root that is not this ledger's, or a register that could not be kept, so that the next reply re-reads what this one cleared. Either is a saving that silently stopped happening, which nobody would look for; it is printed beside a successful reply for the same reason the `queued` advice below is, and on no other outcome.
+edit_said=$(PATH="$check_path" PYTHONPATH="$root" "$python" -m orchestrator.live_edit_check "$run_root" \
+    <"$staged") || edit_status=$?
 # A refusal names itself on stdout, so a non-zero status with nothing there is the check
 # having failed to run rather than a verdict about the envelope — the same distinction
 # the rendezvous guard below draws, in the same shape and for the same reason: read as a
@@ -328,15 +384,23 @@ amend_said=$(PYTHONPATH="$root" "$python" -m orchestrator.amendment_check <"$sta
 # defensive one, and an interpreter dying with a status of its own can collide with a
 # refusal's, which is why the two are told apart by what was said rather than by which
 # status was returned.
-if [ "$amend_status" -ne 0 ] && [ -z "$amend_said" ]; then
-    fail "the amendment(s) in this reply to run $run could not be judged against the criteria bar: $python exited $amend_status with nothing to say for it" \
+if [ "$edit_status" -ne 0 ] && [ -z "$edit_said" ]; then
+    fail "the task prose in this reply to run $run could not be judged against the criteria bar: $python exited $edit_status with nothing to say for it" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 fi
-case "$amend_status" in
+case "$edit_status" in
     0) ;;
     1)
-        fail "this reply to run $run carries an amendment a judge would hold its worker to as work — $amend_said" \
-            "nothing was sent, so no other command in this envelope was applied either; correct the amendment and send the whole envelope again"
+        fail "this reply to run $run states task prose a judge would hold its worker to as work — $edit_said" \
+            "nothing was sent, so no other command in this envelope was applied either; correct it and send the whole envelope again — every other edit in it that already cleared the bar is recorded, so the re-send pays for the correction alone"
+        ;;
+    3)
+        # Not a verdict either way: the judged turn a resulting task needed answered
+        # with nothing, so the text is neither cleared nor refused, and the repair is
+        # the harness's rather than the envelope's. Said apart from a refusal because a
+        # manager told to *correct* text nobody judged would be rewriting a sound edit.
+        fail "the task prose in this reply to run $run could not be judged: $edit_said" \
+            "nothing was sent, so no other command in this envelope was applied either; every resulting task in it that already cleared the bar is recorded, so once the harness answers — 'oneharness doctor' says why it did not — send the whole envelope again unchanged"
         ;;
     *)
         # Reachable only when the check itself could not run and said something anyway,
@@ -344,21 +408,10 @@ case "$amend_status" in
         # so it is carried into the message rather than dropped: it is the only account of
         # what actually failed, and a report naming the interpreter and its status alone
         # leaves a manager with a refusal and no cause.
-        fail "the amendment(s) in this reply to run $run could not be judged against the criteria bar: $python exited $amend_status saying: $amend_said" \
+        fail "the task prose in this reply to run $run could not be judged against the criteria bar: $python exited $edit_status saying: $edit_said" \
             "restore the pinned toolchain with 'just bootstrap', then retry"
         ;;
 esac
-
-# llmlint: ignore[boundary_inputs_validated] This is `onepipeline`'s own configured ledger root, not an input this recipe owns a policy for: it reaches only two lenient reads — a queue whose unreadability forwards the envelope, and a journal whose size is checked where it is taken — and never a command line. Validating it here would be a second opinion on the verb's own configuration, and a stricter one would refuse replies the verb accepts.
-runs_root="${!RUNS_ROOT_ENV:-$DEFAULT_RUNS_ROOT}"
-# Empty when the run is not a reference this can safely resolve a path from, which is
-# what keeps both reads — the guard's and the outcome's — off a path composed from a
-# value nobody checked. Both are then skipped together, for the same reason.
-run_root=""
-# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
-if [[ "$run" =~ $ASK_MANAGER_SAFE_REFERENCE ]]; then
-    run_root="$runs_root/$run"
-fi
 
 # Initialized beside the status rather than only inside the branch that sets them: the
 # check below reads both, and a run this could not resolve a queue path from never enters

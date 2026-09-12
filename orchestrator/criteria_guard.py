@@ -80,6 +80,7 @@ the wrong one here would validate every plan against a bar no dispatch is given.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import sys
@@ -936,6 +937,75 @@ def check(task: str, node_id: str, bar: Bar) -> None:
     check_changes_allowed(block, node_id, bar)
 
 
+#: The sections of a task some other reader already answers for, and the one section
+#: this module's own refusals send an author to. Everything else in a task is a section
+#: somebody added, and on the live channel that somebody is a manager writing an
+#: amendment into a replacement task — which is the region :func:`unreviewed_sections`
+#: hands to :func:`check_amendment`.
+#:
+#: Each is left alone for its own reason, and the reasons are why this is a set of
+#: headings rather than a rule about depth. `## What` and `## Why` are the descriptive
+#: halves of the template every plan here is written in and no deterministic tier reads
+#: them, so asking the bar's questions of them would refuse, on a retry, prose that was
+#: accepted as a plan. :data:`CRITERIA_HEADING` has a reader already and it is
+#: :func:`check`. And `## Additional info` is where every refusal in this module tells an
+#: author to put the commands it refuses — it is also where the tracked appendix is
+#: carried verbatim, and that text names `pkill`, `git status` and a `just` invocation, so
+#: a reader that examined it would refuse every task carrying the text this host requires.
+DESCRIBED_ELSEWHERE = frozenset({"## What", "## Why", CRITERIA_HEADING, "## Additional info"})
+
+#: Where a task's own sections begin: a level-2 heading on a line of its own. Level two
+#: exactly, so a `###` subsection stays inside the section that opened it — the appendix
+#: is one `## Additional info` holding two `###` blocks, and splitting at every depth
+#: would lift those out of the one section this reader is required to leave alone.
+SECTION_HEADING = re.compile(r"^##[ \t]+(?P<heading>\S.*?)[ \t]*$", re.MULTILINE)
+
+
+def unreviewed_sections(task: str) -> Iterator[tuple[str, str]]:
+    """Each section of ``task`` no other reader examines, as its heading and its body.
+
+    The region this exists for is the one that cost a node: a manager retried a failed
+    node, wrote an amendment into the replacement task under a heading of its own — the
+    placement `AGENTS.md` instructs, above the operational notes — and three readers
+    passed it. :func:`check_amendment` declines a `retry` by design, :func:`check` reads
+    the acceptance-criteria block and stops at the next heading, and nothing at all read
+    what sat between them.
+
+    Text before the first heading is deliberately not yielded, and neither is a `###`
+    block: what this locates is a **section somebody opened**, which is the shape the
+    instruction produces. That is the same "written to miss rather than to over-refuse"
+    trade every other reader here makes — an amendment buried inside `## Why` goes
+    unread, and refusing prose that a plan was accepted with would be worse.
+    """
+    opens = list(SECTION_HEADING.finditer(task))
+    for position, opened in enumerate(opens):
+        heading = f"## {opened['heading']}"
+        if heading in DESCRIBED_ELSEWHERE:
+            continue
+        ends = opens[position + 1].start() if position + 1 < len(opens) else len(task)
+        yield heading, task[opened.end() : ends]
+
+
+def check_whole_task(task: str, node_id: str, bar: Bar) -> None:
+    """Raise :class:`CriteriaError` for anything in ``task`` a judge would hold a worker to.
+
+    The whole task rather than the one block a heading opens, which is the difference
+    between this and :func:`check` and the whole of why it exists. A plan's task reaches
+    a dispatch only through `just check-plan` and `just review-plan`, which between them
+    read its criteria and put its content in front of a judge; a **live edit** states a
+    whole task on the channel and passes neither, so the region between its criteria and
+    its operational notes reaches a dispatch unread.
+
+    The criteria block is asked the whole bar, exactly as a plan's is. Every other
+    section it opens is asked :func:`check_amendment`'s two questions, because that is
+    what the text in one *is*: a correction a manager wrote in the minute after reading a
+    failure, which is what an amendment is wherever it is carried.
+    """
+    check(task, node_id, bar)
+    for heading, body in unreviewed_sections(task):
+        check_amendment(body, f"{node_id}, under {heading!r}")
+
+
 def check_amendment(text: str, where: str) -> None:
     """Raise :class:`CriteriaError` if an amendment would be judged the way a criterion is.
 
@@ -1030,6 +1100,36 @@ def check_appendix(task: str, node_id: str) -> None:
             f"dispatch, or from {REPO_ROOT / APPENDIX} on this host — rather than from an "
             f"older builder's copy."
         )
+
+
+#: Everything that decides an answer :func:`check_whole_task` and :func:`check_amendment`
+#: give, hashed together so that a record of a pass is a claim about content **under a
+#: bar** rather than about content alone. Its own source, because the patterns above
+#: *are* the bar; and the base config, because the shared review contract composes into
+#: every :func:`resolve_bar`. `__file__` rather than a spelled path: a constant naming
+#: this module would go on naming it after the module moved, and a fingerprint that
+#: silently stopped covering the bar is worse than none.
+#:
+#: :data:`APPENDIX` is deliberately not here. It decides :func:`check_appendix`, which
+#: no caller of this fingerprint runs, and what exempts the section carrying it is that
+#: section's **heading** rather than its text — so hashing it would invalidate every
+#: record for an edit to prose no reader of this bar had read.
+BAR_SOURCES = (Path(__file__), REPO_ROOT / BASE_CONFIG)
+
+
+def criteria_fingerprint() -> str:
+    """A digest of the deterministic bar in force, over this checkout's copy of it.
+
+    Distinct from :func:`orchestrator.plan_review.bar_fingerprint`, which digests the
+    **judged** review bar. Both are hex strings of the same length and neither is
+    meaningful in the other's place, so they are never interchanged: a record kept under
+    one says nothing about the answer the other would give.
+    """
+    digest = hashlib.sha256()
+    for source in BAR_SOURCES:
+        digest.update(source.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 class Node(NamedTuple):

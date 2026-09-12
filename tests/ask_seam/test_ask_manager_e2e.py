@@ -38,6 +38,7 @@ from typing import Any, NamedTuple, NewType, Protocol, TypedDict, cast
 import pytest
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import (
+    LOOK_INTERVAL_SECONDS,
     MANAGER_PATIENCE_SECONDS,
     TOKEN,
     Manager,
@@ -45,6 +46,7 @@ from planner_channel import (
     Surface,
     next_surface,
     next_surface_record,
+    queue_may_hand_something_out,
     reply,
     reply_unguarded,
     ruling,
@@ -381,6 +383,7 @@ def _ask(
     dropping: tuple[str, ...] = (),
     stdin: str | None = None,
     cwd: Path = REPO_ROOT,
+    holding_stdin: bool = False,
 ) -> subprocess.Popen[str]:
     """Start the real wrapper the way a dispatched agent runs it.
 
@@ -391,6 +394,11 @@ def _ask(
     checkout, as a lifecycle dispatch does. Removing a name is a separate seam from
     overriding one on purpose: what a dispatch's environment says about the runs root is
     *nothing at all*, and an override can only ever say something.
+
+    `holding_stdin` starts the wrapper reading its question from a pipe the caller
+    still holds: the wrapper reads to EOF, so until the caller writes and closes it, this
+    is the real asker in the one state a stand-in would otherwise have to play — started,
+    and not yet asking.
     """
     environment = dict(asked.environment)
     environment["ONEPIPELINE_RUN_ID"] = asked.run
@@ -403,7 +411,7 @@ def _ask(
         cwd=cwd,
         env=environment,
         text=True,
-        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+        stdin=subprocess.PIPE if stdin is not None or holding_stdin else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -592,9 +600,21 @@ def _waited_for_question(
     """
     limit = deadline(seconds)
     while True:
-        message = next_surface(asked.run, asked.environment)
-        if message is not None:
-            return message
+        # Looking before reading: `queue_may_hand_something_out` is the read-only look,
+        # and it is what keeps this loop's own reads out of the window the wrapper's
+        # `channel serve` pushes the question in. A read through the verb over an empty
+        # queue rewrites it from the state it loaded, and one landing over that push is
+        # how two publication gates here each lost one of these questions — the engine's
+        # defect, and this loop's not to make more likely than a manager reading would.
+        # llmlint: ignore-block[tests_mirror_real_usage] The look decides *when* to read
+        # through the verb, never what is read: the surface is still handed out by
+        # `just channel-next` alone, and a manager who reads only when the views say
+        # something is unread is doing the same thing.
+        if queue_may_hand_something_out(asked.run, asked.environment):
+            message = next_surface(asked.run, asked.environment)
+            if message is not None:
+                return message
+        # llmlint: ignore-end[tests_mirror_real_usage]
         if asking.poll() is not None:
             out, err = asking.communicate()
             raise AssertionError(
@@ -602,7 +622,7 @@ def _waited_for_question(
                 f"reaching run {asked.run}'s channel:\n{err}{out}"
             )
         assert time.monotonic() < limit, f"{named} never reached run {asked.run}'s channel"
-        time.sleep(0.2)
+        time.sleep(LOOK_INTERVAL_SECONDS)
 
 
 #: The answer a manager gives, so what arrives on stdout can be compared to it whole.
@@ -1762,6 +1782,59 @@ def test_an_explicitly_named_onepipeline_is_the_one_that_reaches_the_manager(
     )
     try:
         assert "Which release answered this?" in _waited_for_question(asked, asking)
+    finally:
+        _reaped(asking)
+
+
+def test_a_waiting_manager_leaves_an_empty_queue_unwritten_until_a_question_is_there(
+    asked: Asked,
+) -> None:
+    """The managers this suite plays look at an empty channel; they do not read it.
+
+    `onepipeline next` rewrites `channel/queue.json` whole from the state it loaded even
+    when it hands nothing out, so a manager polling an empty channel through it while a
+    worker's `channel serve` pushes a question into that same file is the lost update
+    `docs/orchestration.md` describes under *A question that was raised and then
+    dropped* — and it is what two consecutive publication gates of this repository each
+    failed on, losing a different one of these journeys' questions each time. The engine
+    owns the repair. What this suite owns is not polling through a verb that writes:
+    `_waited_for_question` and the managers in `planner_channel` look at the queue
+    read-only until it holds something, and only then hand out through `channel-next`.
+
+    Both halves are asserted, because either alone passes for the wrong reason. That a
+    wait with nothing queued leaves the queue's inode and stamp untouched is what says
+    the reader's write is out of the window; that the same waiter then hands out a real
+    question through the verb is what says looking did not replace reading. The asker
+    is the real wrapper throughout: started reading its question from a pipe this
+    journey holds, it is an asker that has not asked yet for exactly as long as the
+    pipe stays open, and the question it then asks is the one the waiter hands out.
+    """
+    queue = Path(asked.environment["ONEPIPELINE_RUNS_DIR"]) / asked.run / "channel" / "queue.json"
+    question = "Which of the two schemas should the route answer in?"
+    asking = _ask(asked, window=ANSWERED_WINDOW_SECONDS, holding_stdin=True)
+    try:
+        # The launch that reached its gate has written nothing to the channel yet, or
+        # has written an empty queue; either way the file's identity is what a rewrite
+        # moves, and a rewrite is the whole of what a waiting manager must not make.
+        # llmlint: ignore-block[tests_mirror_real_usage] The lost update *is* this file
+        # being rewritten from stale state, so its identity across the wait is the
+        # observable outcome here; nothing above the file reports that a reader wrote
+        # nothing.
+        before = (queue.stat().st_ino, queue.stat().st_mtime_ns) if queue.exists() else None
+        with pytest.raises(AssertionError, match="never reached"):
+            _waited_for_question(asked, asking, seconds=3, named="an asker that has not asked")
+        after = (queue.stat().st_ino, queue.stat().st_mtime_ns) if queue.exists() else None
+        assert after == before, (
+            f"the waiting manager rewrote {queue} while nothing was queued: {before} -> {after}"
+        )
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        assert asking.poll() is None, "the real asker exited before it was handed a question"
+
+        assert asking.stdin is not None
+        asking.stdin.write(f"{question}\n")
+        asking.stdin.close()
+        asking.stdin = None
+        assert question in _waited_for_question(asked, asking), question
     finally:
         _reaped(asking)
 

@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol, TypedDict, cast
 
 from waits import deadline
@@ -88,6 +89,51 @@ def ruling(message: str) -> str:
 #: that can read the store raises none, and then this matches nothing and every reader
 #: behaves exactly as it did before.
 RUNS_OWN_PROJECTION_COMPLAINT = re.compile(r"did not take this run's projection")
+
+
+def queue_may_hand_something_out(run: str, environment: dict[str, str]) -> bool:
+    """Whether reading the run's channel through the verb could hand a surface out.
+
+    Read off `runs/<run>/channel/queue.json` and off nothing else, without the verb,
+    because the verb is not a read: `onepipeline next` rewrites that file whole even
+    when it hands nothing out — measured, an empty queue comes back under a new inode
+    and a new modification stamp — and it rewrites it from the state it loaded. So a
+    manager polling an empty channel through the verb, once a second, while a worker's
+    `channel serve` is pushing its blocking question into that same file, is the
+    read-modify-write that loses the question: the reader's write-back lands over the
+    push and the queue is back to `next_id: 0` with the surface recorded everywhere but
+    there. That is the engine's defect, described under *A question that was raised and
+    then dropped* in `docs/orchestration.md`, and the repair is the engine's. What is this
+    suite's is that its managers spend their wait *looking*, not reading through a verb
+    that writes: a wait that reads the file read-only until it holds something, and only
+    then hands out through `channel-next`, keeps the reader's write out of the window the
+    worker's push lands in. The verb is still the only thing that hands a surface out.
+
+    `True` when the queue holds anything waiting or pending — a surface the verb would
+    hand out, or a pending one it would leave standing — and `False` when it holds
+    nothing yet, is not there yet, or is half-written: every one of those is "nothing to
+    hand out at this instant", and the caller looks again. **`True` where the runs root
+    is not named**, deliberately: the guard can only look where it knows the queue is,
+    and a caller that did not say is read through the verb exactly as it always was
+    rather than never read at all.
+    """
+    runs = environment.get("ONEPIPELINE_RUNS_DIR")
+    if runs is None:
+        return True
+    queue = Path(runs) / run / "channel" / "queue.json"
+    try:
+        state = json.loads(queue.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    return bool(state.get("waiting")) or state.get("pending") is not None
+
+
+#: How long a waiting manager pauses between looks at a queue that holds nothing. Short,
+#: because a look is one small file read rather than a `just` recipe: what bounded the
+#: old loop was the ~1.6s a `channel-next` costs, and a bare loop over a read would spin.
+LOOK_INTERVAL_SECONDS = 0.2
 
 
 def next_surface_record(run: str, environment: dict[str, str]) -> Surface | None:
@@ -212,6 +258,14 @@ def answer_each(
         while token is None:
             if time.monotonic() >= limit:
                 raise AssertionError(f"run {run} never surfaced a question carrying a token")
+            # llmlint: ignore-block[tests_mirror_real_usage] The look decides when to
+            # read through the verb, never what is read: `channel-next` alone hands the
+            # surface out, and `queue_may_hand_something_out` says why reading through
+            # it over an empty queue is the write that loses the question.
+            if not queue_may_hand_something_out(run, environment):
+                time.sleep(LOOK_INTERVAL_SECONDS)
+                continue
+            # llmlint: ignore-end[tests_mirror_real_usage]
             surface = next_surface_record(run, environment)
             if surface is not None and seen is not None:
                 seen.append(surface)
@@ -220,7 +274,7 @@ def answer_each(
             if found is not None:
                 token = found.group(0)
                 break
-            time.sleep(0.2)
+            time.sleep(LOOK_INTERVAL_SECONDS)
         sent = sending(run, environment, compose(token))
         assert sent.returncode == 0, f"the channel refused this reply:\n{sent.stderr}{sent.stdout}"
         answered.append(sent)
@@ -252,10 +306,13 @@ def answer_persistently(
     moments with no reader at all, and that is not a failing manager.
 
     Surfaces keep being read alongside, because handing one out is what opens the reply
-    rendezvous at all: a re-ask that nobody reads can be answered by nobody. They are
-    recorded into `seen` where a caller asks for them, exactly as `answer_each` records
-    the ones it read: a journey counting what one ask put in front of a manager has to
-    count the ones this read too, or the answer depends on which manager it hired.
+    rendezvous at all: a re-ask that nobody reads can be answered by nobody. Read only
+    once the queue is seen to hold one, though — `queue_may_hand_something_out` says why
+    a read through the verb over an empty queue is the write that loses the re-ask this
+    is waiting to hand out. They are recorded into `seen` where a caller asks for them,
+    exactly as `answer_each` records the ones it read: a journey counting what one ask
+    put in front of a manager has to count the ones this read too, or the answer depends
+    on which manager it hired.
 
     `send` is `answer_each`'s seam and is here for the same reason: a journey whose
     subject is an envelope `just channel-reply` refuses to send needs the engine
@@ -270,16 +327,21 @@ def answer_persistently(
             if token is not None:
                 return
             raise AssertionError(f"run {run} never surfaced a question carrying a token")
-        surface = next_surface_record(run, environment)
-        if surface is not None and seen is not None:
-            seen.append(surface)
-        message = None if surface is None else surface["message"]
-        found = None if message is None else TOKEN.search(message)
-        if found is not None:
-            token = found.group(0)
+        # llmlint: ignore-block[tests_mirror_real_usage] Same look as `answer_each`, for
+        # the same reason: it only decides when the verb is read, and the verb is still
+        # what hands out.
+        if queue_may_hand_something_out(run, environment):
+            surface = next_surface_record(run, environment)
+            if surface is not None and seen is not None:
+                seen.append(surface)
+            message = None if surface is None else surface["message"]
+            found = None if message is None else TOKEN.search(message)
+            if found is not None:
+                token = found.group(0)
+        # llmlint: ignore-end[tests_mirror_real_usage]
         if token is not None:
             sending(run, environment, compose(token))
-        time.sleep(0.2)
+        time.sleep(LOOK_INTERVAL_SECONDS)
 
 
 class PersistentManager:

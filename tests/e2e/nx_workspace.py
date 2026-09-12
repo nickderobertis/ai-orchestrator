@@ -35,11 +35,15 @@ Marked = TypeVar("Marked")
 #: `copy_checkout` points every copy's `node_modules` at this install rather than
 #: duplicating it — and `scripts/nx.sh` heals through `bun install --frozen-lockfile`
 #: before every Nx invocation, so two of these journeys at once are two installs
-#: writing one tree. The lock that would serialise them is per copy, so each racer
-#: takes a different one; under `-n 4` that fails as `bun install ... Failed to link
-#: <pkg>: EEXIST`, or as an Nx cache miss where the recorded verdict was due.
-#: `--dist loadgroup` is the fix, and applying both marks from one tuple is what stops
-#: a journey taking the install without the group.
+#: writing one tree. The lock that serialises them is the tree's rather than the
+#: copy's — `scripts/workspace-install.sh` takes it beside the checkout `node_modules`
+#: resolves into — because a lock kept per copy let each racer take a different one,
+#: which failed as `bun install ... Failed to link <pkg>: EEXIST` even over a tree
+#: already in agreement with the lockfile, and did so across two Nx targets' pytest
+#: processes where no xdist group reaches. What the group still serialises is an Nx
+#: cache miss where the recorded verdict was due, and the second resource below;
+#: applying both marks from one tuple is what stops a journey taking the install
+#: without the group.
 #:
 #: `node_modules` is one of two things this group serialises, and the second is why
 #: the group is named for the toolchain rather than for the install. The other is this

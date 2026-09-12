@@ -22,6 +22,7 @@ refusal attributable to one cause.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -1024,7 +1025,7 @@ def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
         ),
     )
     monkeypatch.setattr(
-        plan_review, "_verdict", lambda _: pytest.fail("a recorded pass spent a judged turn")
+        plan_review, "verdict", lambda _: pytest.fail("a recorded pass spent a judged turn")
     )
 
     assert check_directly("authoring:probe") == 0
@@ -1569,3 +1570,39 @@ def test_project_plan_rejects_a_dependency_on_an_unlisted_task(
     # the engine and the issue, and holding this apart is what says that sentence is
     # about the rewrite rather than about every missing edge.
     assert plan_store.WRITE_BACK_SOURCE not in str(refused.value)
+
+
+def test_the_criteria_fingerprint_reads_the_files_the_deterministic_bar_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deterministic half of a live edit's key is a digest of this bar's two sources.
+
+    A record of a pass is a claim about content under a bar, and this is the fingerprint
+    that says which bar: `criteria_guard.py` itself, because its patterns are the bar,
+    and the base config, because the shared review contract composes into every resolved
+    bar. Three things are read off it rather than assumed. It names exactly those two
+    files; it is the digest of their bytes, recomputed here independently; and editing
+    either by one byte moves it — which is what invalidates every live-edit record made
+    under the previous bar, the property `AGENTS.md` promises of it. The judged half has
+    the same proof in `tests/test_plan_review.py`; a fingerprint only ever patched to a
+    constant would leave stale passes standing with nothing red.
+    """
+    sources = (Path(criteria_guard.__file__), REPO_ROOT / "config" / "onejudge.base.yaml")
+    assert sources == criteria_guard.BAR_SOURCES
+    expected = hashlib.sha256()
+    for source in criteria_guard.BAR_SOURCES:
+        expected.update(source.read_bytes())
+        expected.update(b"\0")
+    before = criteria_guard.criteria_fingerprint()
+    assert before == expected.hexdigest()
+
+    copies = tuple(tmp_path / source.name for source in criteria_guard.BAR_SOURCES)
+    for source, copy in zip(criteria_guard.BAR_SOURCES, copies, strict=True):
+        copy.write_bytes(source.read_bytes())
+    monkeypatch.setattr(criteria_guard, "BAR_SOURCES", copies)
+    assert criteria_guard.criteria_fingerprint() == before
+    for copy in copies:
+        copy.write_bytes(copy.read_bytes() + b"\n# one more byte\n")
+        moved = criteria_guard.criteria_fingerprint()
+        assert moved != before, f"editing {copy.name} left the deterministic bar's digest standing"
+        before = moved
