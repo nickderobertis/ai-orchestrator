@@ -41,7 +41,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import TypedDict
 
-from orchestrator import criteria_guard, plan_review, plan_store, publication_guard
+from orchestrator import adoption_guard, criteria_guard, plan_review, plan_store, publication_guard
 from orchestrator.criteria_guard import CriteriaError
 from orchestrator.root import REPO_ROOT
 
@@ -216,7 +216,8 @@ def refusals(document: object, project: str) -> list[Refusal]:
         found.append(Refusal(node=None, field=None, reason=str(exc)))
     found.extend(
         Refusal(node=refused.node, field=refused.field, reason=refused.reason)
-        for refused in publication_guard.refusals(document)
+        for guard in (publication_guard, adoption_guard)
+        for refused in guard.refusals(document)
     )
     found.extend(_review_refusals(document, project))
     return found

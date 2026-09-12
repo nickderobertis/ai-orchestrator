@@ -850,10 +850,16 @@ the engine's loader first, then `scripts/plan-check.sh`, each refusal naming its
 naming a procedure instead of a property or resting on something outside the dispatch,
 a task carrying no review record or not the appendix verbatim, a lifecycle `title` the
 destination's own `commit-msg` hook would refuse, a `consumes` on a `local-direct`
-identity. It is written to **miss** rather than to over-refuse, so a sound node it
-refuses — a read-only research criterion naming a path with a reading verb — is
-launched precise rather than softened; a node's criteria are the one block its
-`## Acceptance criteria` heading opens.
+identity. It also refuses the release-adoption shapes a matcher can see will never
+complete — a `consumes` naming a target its producer does not resolve, a `published`
+node with no target to wait on, a `fast` node behind a release publishing where no change
+request opens, a node of this repository waiting on an artifact nothing here installs, a
+node elsewhere taking this host's own `default_target` — while whether an adoption is
+the *right* one, the goal needing it and the task naming the pin that governs the fix,
+is `just review-plan`'s judged question and never this tier's. It is written to **miss**
+rather than to over-refuse, so a sound node it refuses — a read-only research criterion
+naming a path with a reading verb — is launched precise rather than softened; a node's
+criteria are the one block its `## Acceptance criteria` heading opens.
 
 `just review-plan` spends the judged turn that clears a plan's authored content against
 `personas/planner.yaml`'s bar, and `just approve-design` records the user's approval of
