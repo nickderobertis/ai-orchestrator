@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.27.0. The whole of that reasoning —
+onepipeline 0.27.2. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.27.0. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.27.2. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,13 +323,13 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.27.0; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.27.2; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
 **A projection that keeps failing is now spaced rather than hammered.** onepipeline
 https://github.com/nickderobertis/onepipeline/pull/176, in force on the adopted
-onepipeline 0.27.0, backs a failing write-back off from a prompt first retry to a one-minute ceiling
+onepipeline 0.27.2, backs a failing write-back off from a prompt first retry to a one-minute ceiling
 instead of retrying about four times a second, resets that schedule once it recovers, and
 still retries until the projection lands; closeout still attempts the terminal projection,
 and stopping or settling stays prompt during a long backoff. The reason is GitHub's
@@ -369,28 +369,37 @@ manager's in [AGENTS.md](../AGENTS.md#your-loop-as-manager), the planner's in
 [`personas/planner.yaml`](../personas/planner.yaml), which is that dispatch's own
 system prompt and so travels into whatever repository it plans against.
 
-**`just plan` writes a lifecycle node**, so the planner it dispatches works in a
-worktree cut from the registered `ai-orchestrator-isolated` safety clone with the
-canonical checkout as its publication repository — the placement every other node
-this repository dispatches carries, and for the reason the [self-dispatch
-rule](../AGENTS.md#dogfooding-rule) gives: the launch directory is the shared
-canonical checkout, and a direct node works in it. One did. It cut a branch there,
-committed to it, and left it checked out; a finished lifecycle publication then
-failed at its last step because the publication checkout was on that branch rather
-than on its base, and returning it to the base deleted the manager's plan files,
-which that planner had force-added onto its branch from gitignored paths.
+**`just plan` writes a direct node**, so the planner it dispatches works in the checkout
+the launch was made from — the shared canonical checkout — rather than in a worktree of
+its own. It wrote a lifecycle node until the adopted engine made that shape one a planner
+cannot settle under: a lifecycle dispatch whose branch is level with its base settles
+`failed` as `empty-branch` unless the node declared `expects_no_diff`
+(https://github.com/nickderobertis/onepipeline/pull/229), and that declaration settles a
+node **without dispatching it**, refusing one that carries a persona at all — so no
+lifecycle declaration covers a dispatched node that commits nothing
+(https://github.com/nickderobertis/onepipeline/issues/238). A planner is exactly that
+node: its deliverable is a plan-store record under the exported authoring root, and its
+branch stays level with the base by design. The direct shape is the honest model of what
+it produces, and the reason the default once moved *off* it is answered in the task
+instead of by the placement. That reason was an incident: a direct planner cut a branch
+in the canonical checkout, committed to it, and left it checked out; a finished lifecycle
+publication then failed at its last step because the publication checkout was on that
+branch rather than on its base, and returning it to the base deleted the manager's plan
+files, which that planner had force-added onto its branch from gitignored paths. So
+every launch appends `PLAN_DIRECT_PLACEMENT_NOTE` to the brief, stating that the dispatch
+works in a checkout it does not own, **may write only to gitignored paths, may not
+commit, may not cut a branch, and may not leave the checkout on any branch but its
+base**, and which clause of the shared completion bar that exempts it from — the clause
+that demands every change committed, which a planner doing correct work once settled
+`task-failed` against. Nothing enforces the note, which is why it is on every launch.
 
-Three consequences a manager reads rather than derives. The planner's working
-directory is that worktree, so a brief that wants the plan back names a path that is
-**committed** — a plan written to a gitignored path there does not outlive the run.
-The launch takes the identity's repository holder like any other run of this
-repository, so a `just plan` while a run of it is live is refused as concurrent
-project work rather than queued. And `--repo` / `--execution-checkout` name a
-different registered pair, while **`--direct`** is the escape for a planning dispatch
-that must cut no worktree at all: it is the old shape, it dispatches into this shared
-checkout, and such a dispatch may write only to gitignored paths, may not commit, and
-may not leave the checkout on any branch but its base. Nothing enforces that, which
-is why the recipe says it on every launch that takes the flag.
+Two consequences a manager reads rather than derives. The planner's working directory is
+this checkout, so the plan it authors lands under the exported authoring root — the same
+`.plans/` the manager reads — and a plan written anywhere else is a plan the brief asked
+for somewhere else. And `--repo`, `--execution-checkout` and `--direct` are refused by
+name: the first two would compose the shape that fails, and the third named the only
+shape there is. `scripts/plan.sh`'s header holds the whole of the reasoning, both
+directions of it.
 
 ### The document the plan is read as, and the launch that writes it
 
@@ -411,8 +420,10 @@ gate bounded to the launch that writes a document while the plan project stays g
 any other. Its node names [`graphs/design-doc.yaml`](../graphs/design-doc.yaml) as its
 `agent_graph` and [`personas/design-doc.yaml`](../personas/design-doc.yaml) as its persona
 — a path, because a bare `design-doc` resolves against the roles compiled into
-`oneagentgraph` and reads no file of this repository's — and it takes the publication
-repository and execution checkout the flow was given. It attaches no monitor either, for
+`oneagentgraph` and reads no file of this repository's — and it is a direct node exactly
+as the planner's is, for the same reason: it writes a document into the plan store and
+never a commit, and the adopted engine fails a lifecycle dispatch that commits nothing. It
+attaches no monitor either, for
 its own version of the reason the planning launch attaches none: a one-node run that reads
 a finished plan and writes one document has no frontier for a monitor to compare against a
 plan, and it is the last step of a flow rather than the work a flow supervises. So it is
@@ -462,7 +473,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.27.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.27.2 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -586,7 +597,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.27.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.27.2 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -741,7 +752,7 @@ planner's queue was also what ended its watch — and why there is no sentinel a
 `personas/orchestrator.yaml` asks a quiet turn for words about what it read rather than
 for a formula, so a healthy watch no longer walks into that signature on purpose.
 onejudge declares a field for the contract that remains — `user.settle_on_noop`,
-documented in `onejudge` 0.7.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out
+documented in `onejudge` 0.8.1's `src/cli/config.rs` and `src/engine.rs` as the opt-out
 for "an observer instructed to answer with one fixed short sentence while it finds
 nothing", with `max_turns` left as the bound. Nothing here sets it today; that is a
 change to `personas/orchestrator.yaml` and a decision for a manager, not something this
@@ -898,7 +909,7 @@ answers with exactly the `{completion, message, reason}` object onejudge's
 
 | | Shape |
 | --- | --- |
-| onejudge 0.7.0 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
+| onejudge 0.8.1 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
 | `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
 
 Naming `onepipeline channel serve` directly as the member's `judge.command` is
@@ -909,7 +920,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.27.0 in the judge command's own environment on a real
+  measured against onepipeline 0.27.2 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -1048,7 +1059,7 @@ filter onto a real published channel, and reads what was and was not queued out 
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
 boundary; `judge` comes once the conversation ends, to score `user.done_when` —
 always, whether the supervisor ruled complete or the turn cap ran out, and
-independently of `evals` and `assessment`. Measured on onejudge 0.7.0 with a
+independently of `evals` and `assessment`. Measured on onejudge 0.8.1 with a
 `kind: command` judge that logged every op it was asked.
 
 That second one has **no configuration escape**, and the attempts are worth knowing
@@ -1124,7 +1135,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.27.0 answers
+a real run on onepipeline 0.27.2 answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
@@ -1169,7 +1180,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.27.0**, composed where the
+node dispatch of a run carries it as of onepipeline 0.27.2**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -3110,7 +3121,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.27.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.27.2 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

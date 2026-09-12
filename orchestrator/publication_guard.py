@@ -286,33 +286,6 @@ def resolve(repo: str) -> Resolved | None:
     )
 
 
-def record_repository(repo: str) -> str:
-    """What a node's ``repo`` carries so its record names the repository as the contract keeps it.
-
-    The normalized origin whenever there is one to name — spelled that way already, or
-    resolved to one by `onevcs` from an alias, a clone URL, or a checkout path — because
-    that is the value the record's own ``repositories`` list holds and the engine reads
-    a node's repository from. Anything `onevcs` resolves to a path origin, and anything
-    it cannot resolve at all, is answered as written: the first is the one case the
-    reserved ``onepipeline.repo`` key exists for, and the second is not this host's to
-    rewrite. `scripts/plan-brief.sh` asks this of every ``--repo`` a planning flow is
-    given, which is how that flow's own records come to carry the field.
-    """
-    hosted = hosted_origin(repo)
-    if hosted is not None:
-        return hosted
-    resolved = resolve(repo)
-    # llmlint: ignore-block[boundary_inputs_validated] The value passed through is the
-    # operator's own `--repo` as typed, and the launch is what rules on it: a repository
-    # the registry cannot resolve is refused by name when the plan loads, before anything
-    # is dispatched. Rewriting or refusing it here would hide what was typed from the
-    # refusal that names it.
-    if resolved is None or resolved.origin is None:
-        return repo
-    return hosted_origin(resolved.origin) or repo
-    # llmlint: ignore-end[boundary_inputs_validated]
-
-
 def destination(repo: str) -> Destination | None:
     """Where ``repo``'s work lands, or ``None`` when this host cannot resolve it.
 

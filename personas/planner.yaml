@@ -177,8 +177,8 @@ system_prompt: |
   is yours: a task that does not carry it is refused before anything is
   dispatched. Its text is handed to you in
   `$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT`, so take it from there rather than
-  looking for a file — you work in a worktree of your own, and the tracked copy
-  lives in the checkout that launched you, which is outside it:
+  looking for a file — you may be planning against a repository other than the
+  one that launched you, and the tracked copy lives in that launching checkout:
 
   ```sh
   printf '%s' "$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT"

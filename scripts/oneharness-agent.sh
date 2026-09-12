@@ -26,7 +26,7 @@
 # same seam, applied the same way and on the same two branches. Each is applied
 # twice, because the two mechanisms cover different ground: `--model` on this
 # branch's own `oneharness run` is the only one that beats the `model` a config pins
-# for the selected harness (oneharness 0.11.3 lets that config value beat
+# for the selected harness (oneharness 0.12.1 lets that config value beat
 # ONEHARNESS_MODEL), and the exported ONEHARNESS_MODEL is what carries the side's
 # choice to everything it subsequently runs. That precedence is a fact about one
 # release, so config/oneharness.version owns the literal above and
@@ -491,7 +491,7 @@ elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
                 substituted="${substituted:+$substituted,}$candidate"
             done <<<"$configured_chain"
         else
-            echo "oneharness-agent: could not read the configured harness chain from $agent_config; leaving the selection to oneharness" >&2
+            echo "oneharness-agent: could not read the configured harness chain from $agent_config (the reader's own error is above); leaving the selection to oneharness — an absent alternate identity may then be tried, so fix the file until 'oneharness config --config $agent_config' loads it" >&2
         fi
         # An empty result means the config declared no chain to narrow; leave the
         # selection alone rather than narrowing it on a guess.

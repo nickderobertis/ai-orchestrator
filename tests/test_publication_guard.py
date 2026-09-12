@@ -648,41 +648,6 @@ def test_an_answer_naming_no_origin_decides_nothing_about_the_key(
     assert [one.field for one in found] == ["title"], found
 
 
-@pytest.mark.parametrize(
-    ("written", "origin", "recorded"),
-    (
-        pytest.param("https://github.com/acme/service.git", None, HOSTED, id="a-clone-url"),
-        pytest.param(HOSTED, None, HOSTED, id="the-origin-itself"),
-        pytest.param("service", HOSTED, HOSTED, id="an-alias-of-a-hosted-identity"),
-        pytest.param("service", "/srv/service-origin", "service", id="an-alias-of-a-local-one"),
-        pytest.param("service", None, "service", id="an-alias-onevcs-answers-no-origin-for"),
-        pytest.param("elsewhere", None, "elsewhere", id="a-value-onevcs-cannot-resolve"),
-    ),
-)
-def test_what_a_flows_own_node_records_is_the_origin_wherever_there_is_one(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    written: str,
-    origin: str | None,
-    recorded: str,
-) -> None:
-    """`record_repository` is what puts `repositories` on the plan flow's own records.
-
-    A hosted spelling is normalized without asking anything; an alias is asked of
-    `onevcs`, and answered as the origin when that origin is one `repositories` can hold.
-    A path origin and a value nothing resolves are answered as written — the first is
-    what the reserved key is for, and the second is not this host's to rewrite.
-    """
-    _onevcs(
-        tmp_path,
-        monkeypatch,
-        answers={"service": (_checkout(tmp_path), Workflow.LOCAL_DIRECT)},
-        origins={} if origin is None else {"service": origin},
-    )
-
-    assert publication_guard.record_repository(written) == recorded
-
-
 def test_a_verb_that_does_not_return_is_bounded_rather_than_waited_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

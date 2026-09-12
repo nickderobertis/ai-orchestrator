@@ -83,9 +83,10 @@ INHERITED_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: The two aliases `scripts/plan.sh` defaults to, seeded against a scratch registry: the
-#: plan this recipe writes is a lifecycle node naming them, so the launch opens a real
-#: `onevcs` session and it must not be this host's.
+#: The two aliases this repository's own identity registers, seeded against a scratch
+#: registry: the nodes this flow writes are direct nodes and open no `onevcs` session,
+#: and the scratch one is what a recipe that started opening sessions again would reach
+#: rather than this host's.
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 

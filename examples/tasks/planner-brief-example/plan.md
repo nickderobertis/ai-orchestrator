@@ -1,13 +1,10 @@
 ---
-title: "feat(plan): planner-brief-example"
+title: "plan"
 project: "planner-brief-example"
 status: "todo"
-repositories: ["github.com/nickderobertis/ai-orchestrator"]
 metadata:
   "onepipeline.id": "plan"
   "onepipeline.persona": "../personas/planner.yaml"
-  "onepipeline.execution_checkout": "ai-orchestrator-isolated"
-  "orchestrator.plan-review": {"key": "6b27cbcfb4b5ae71392c41d869e06829dab132d223494e078d8706e5b3bda711", "reviewed_at": "2026-09-11T16:03:21.913489+00:00", "by": "review-plan"}
 ---
 
 # Give the read API a paginated node listing
@@ -349,3 +346,17 @@ on it and judges it by meaning: criteria that state a demand in their own words 
 and no criterion is refused for failing to use a particular phrase. Nothing reads it
 deterministically any more, because the phrase matching that did refused wordings the same
 review had just asked for.
+
+## Additional info
+
+**This dispatch works in a checkout it does not own, so it commits nothing.** It is a
+direct node, dispatched into the checkout the flow was launched from — the shared
+canonical checkout that several orchestrators use — rather than into a worktree of its
+own. So it may write only to gitignored paths, may not commit, may not cut a branch, and
+may not leave the checkout on any branch but its base.
+
+That exempts it from one clause of the shared completion bar every dispatch on this host
+is judged against — "with every change this dispatch made committed and nothing
+half-applied left behind". Here there is nothing to commit, and a clean `git status` is
+the correct and complete outcome: what this dispatch writes to a gitignored path is the
+deliverable, and committing it would be the failure rather than the proof.

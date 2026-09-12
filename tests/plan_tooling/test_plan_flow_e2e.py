@@ -12,8 +12,8 @@ the recipe writes:
   own nodes, because a review record is written by this repository's own code and never
   by a dispatched agent;
 * the dispatch is really given the plan's qualified id, which is the only way it can find
-  the plan at all — nothing hands one launch's output to the next, and a plan written to
-  an ignored path in the planner's own worktree does not outlive the run;
+  the plan at all — nothing hands one launch's output to the next, and a plan is found by
+  asking the store rather than by reading a run;
 * what that dispatch stores is afterwards **readable back out of the plan store as a
   document of that project**, with the store reporting where it is;
 * and both of them land on the **destination**, whose own locations are what the flow
@@ -60,7 +60,6 @@ from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
 import pytest
-from conftest import git
 from fake_backend import (
     AUTHOR_PLAN_ENV,
     MEMBER_OF_CONFIG,
@@ -71,7 +70,7 @@ from nx_workspace import copy_working_tree
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
+from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_copy, plan_review, plan_store
@@ -161,8 +160,9 @@ NODE_LABEL = "node"
 DESIGN_TASK_MARKER = "## What this dispatch owes"
 
 #: The one statement of the document's shape, repository-relative inside this checkout —
-#: the dispatch works in a worktree of the repository the *plan* is of, so this is a file
-#: it is sent to by name rather than one it finds underfoot.
+#: the dispatch works in the checkout the flow was launched from, which may be a checkout
+#: of the repository the *plan* is of, so this is a file it is sent to by name rather
+#: than one it finds underfoot.
 DESIGN_TEMPLATE = "config/design-doc-template.md"
 
 #: Where that template's lent block ends. The marker's own bytes, because the probe below
@@ -391,30 +391,6 @@ def _staged_draft(tmp_path: Path, stored: Stored) -> Path:
     return documents.parent
 
 
-def _tracks_the_store(identity: Identity, configuration: Path) -> None:
-    """Give the seeded repository the plan-store configuration the flow runs under.
-
-    A design-doc dispatch works in a worktree of the repository the plan is of and reaches
-    the store the way anything in that worktree does: through the `onetaskgraph.yaml` that
-    repository tracks. The seeded identity is a bare stub, so it carries none — and a
-    dispatch there would have to be *told* where the plan store is, which is the one thing
-    this journey must not tell it if the storing is to be the dispatch's own.
-
-    The file is the *running* checkout's rather than this one's, because the two are not
-    always the same file: the default-board flow below runs in a copy whose own
-    configuration is what answers for the source the recipe defaults to, and a dispatch
-    handed this checkout's copy would resolve that name somewhere else.
-    """
-    tracked = identity.execution / "onetaskgraph.yaml"
-    tracked.write_bytes(configuration.read_bytes())
-    git("add", "onetaskgraph.yaml", cwd=identity.execution)
-    git(*GIT_IDENTITY, "commit", "-qm", "chore: configure the plan store", cwd=identity.execution)
-    git("push", "-q", "origin", "main", cwd=identity.execution, env=identity.environment)
-    # The publication checkout is a clone of the same origin and must be clean at the base
-    # before a dispatch, so it is brought along rather than left a commit behind.
-    git("pull", "-q", "--ff-only", cwd=identity.publication, env=identity.environment)
-
-
 def _environment(
     tmp_path: Path,
     stored: Stored,
@@ -439,7 +415,6 @@ def _environment(
         execution=EXECUTION_ALIAS,
         origin=PLANNING_FLOW_ORIGIN,
     )
-    _tracks_the_store(identity, checkout / "onetaskgraph.yaml")
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
@@ -716,7 +691,7 @@ def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Plan
     """The one thing that dispatch cannot derive reaches it in its own effective prompt.
 
     A plan lives in a store the dispatch has to be told the address of: nothing hands one
-    node's output to a later node, and the planner's own worktree is gone by the time this
+    node's output to a later node, and the planner's own run is over by the time this
     one starts. The plan document says the recipe composed the id into the task; only the
     prompt says the dispatch was given it, which is the half a recipe can get wrong while
     every read of what it wrote still passes.

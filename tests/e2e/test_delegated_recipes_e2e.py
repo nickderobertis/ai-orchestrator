@@ -43,13 +43,11 @@ import os
 import re
 import shutil
 import subprocess
-from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, cast
 
 import plan_root_variable
 import pytest
-from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -295,22 +293,6 @@ DELEGATIONS = (
         "plan",
         (BRIEF, "--no-design-doc"),
         "uv run onepipeline start authoring:cursor-shape --dag-graph off",
-    ),
-    # The three flags that decide where the planner works are absorbed here too, in
-    # both spellings: they go into the node this recipe writes, and a copy of one
-    # reaching `onepipeline start` would be refused as an unknown argument. Which node
-    # each produces is `test_the_plan_recipe_writes_the_node_shape_it_was_asked_for`.
-    Delegation(
-        "plan",
-        (BRIEF, "--repo", "other", "--execution-checkout", "other-isolated"),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
-        then=_tail(),
-    ),
-    Delegation(
-        "plan",
-        (BRIEF, "--repo=other", "--execution-checkout=other-isolated", "--direct"),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
-        then=_tail(),
     ),
     # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
     # destination decides nothing about the planner, and everything about where the plan
@@ -742,86 +724,20 @@ class Placement(NamedTuple):
     execution: str | None
 
 
-class Registry(StrEnum):
-    """Which scratch pair a shape's `--repo` is resolved against."""
+#: What the launch has to say about where the planner works. A manager reading the
+#: receipt is the one who decides what their brief may ask it to leave behind, and it is
+#: the only place the constraints are put in front of them at the moment they apply.
+DIRECT_SAYS = (
+    "may write only to gitignored paths, may not commit, and may not leave the base branch"
+)
 
-    #: This repository's own pair, under the origin the recipe defaults to.
-    HOSTED = "hosted"
-    #: A pair whose identity is the bare origin's own path.
-    LOCAL = "local"
-
-
-class NodeShape(NamedTuple):
-    """One way of asking for a planner, and the placement the node it writes has to have."""
-
-    what: str
-    #: What the caller types after the brief.
-    arguments: tuple[str, ...]
-    #: The placement the one node must carry, or `None` for the direct shape, which
-    #: carries neither a repository nor an execution checkout.
-    placement: Placement | None
-    #: What the launch has to say about where this planner works. A manager reading the
-    #: receipt is the one who decides what their brief may ask it to leave behind, and
-    #: for the direct shape it is the only place the constraints are put in front of
-    #: them at the moment they apply.
-    says: str
-    #: The scratch pair the shape's `--repo` is resolved against, or `None` for a shape
-    #: naming none.
-    registry: Registry | None
-
-
-#: The alias `just plan` resolves this repository's origin to, and the safety clone
-#: beside it, as this host registers them. The hosted-alias shape below types the alias
-#: an operator reads off `just repos`, and the record still has to carry the origin.
-THIS_REPOSITORY = "ai-orchestrator"
-THIS_REPOSITORY_EXECUTION = "ai-orchestrator-isolated"
-
-#: A pair whose identity a normalized origin cannot hold, which is the one case the
-#: reserved key exists for — and what every scratch identity a journey registers is.
-LOCAL = "other"
-LOCAL_EXECUTION = "other-isolated"
-
-#: How the recipe places its node when nobody tells it anything, and when told this
-#: repository's alias: the same record either way, naming the origin in `repositories`.
-DEFAULT_PLACEMENT = Placement((PLANNING_FLOW_ORIGIN,), None, THIS_REPOSITORY_EXECUTION)
-
-#: The shapes, and the defaults. A planner works in a worktree cut from the registered
-#: safety clone unless a caller asks otherwise, because the alternative is the shared
-#: canonical checkout — where one cut a branch, committed, and left it checked out,
-#: failing a publication and destroying a manager's plan files. Which *record* the
-#: repository becomes is the contract's: a hosted repository is named once, in the
-#: record's own `repositories`, as its normalized origin — whether the caller typed the
-#: origin or the alias `onevcs` resolves to it — and only an identity that list cannot
-#: hold travels on `onepipeline.repo`.
-NODE_SHAPES = (
-    NodeShape(
-        "the default",
-        (),
-        DEFAULT_PLACEMENT,
-        f"worktree cut from '{THIS_REPOSITORY_EXECUTION}'",
-        Registry.HOSTED,
-    ),
-    NodeShape(
-        "this repository by its alias",
-        ("--repo", THIS_REPOSITORY, "--execution-checkout", THIS_REPOSITORY_EXECUTION),
-        DEFAULT_PLACEMENT,
-        f"worktree cut from '{THIS_REPOSITORY_EXECUTION}'",
-        Registry.HOSTED,
-    ),
-    NodeShape(
-        "a local pair",
-        ("--repo", LOCAL, "--execution-checkout", LOCAL_EXECUTION),
-        Placement((), LOCAL, LOCAL_EXECUTION),
-        f"worktree cut from '{LOCAL_EXECUTION}'",
-        Registry.LOCAL,
-    ),
-    NodeShape(
-        "--direct",
-        ("--direct",),
-        None,
-        "may write only to gitignored paths, may not commit, and may not leave the base branch",
-        None,
-    ),
+#: The three flags the flow's grammar used to carry, each refused by name now: the first
+#: two would compose a lifecycle node, which the adopted engine settles `failed` as
+#: `empty-branch` for committing nothing, and the third named the only shape there is.
+RETIRED_PLACEMENT_FLAGS = (
+    ("--repo", "other"),
+    ("--execution-checkout", "other-isolated"),
+    ("--direct",),
 )
 
 
@@ -830,7 +746,7 @@ def _placed(task_record: str) -> Placement | None:
     repositories = re.search(r"^repositories: (\[.*\])$", task_record, re.MULTILINE)
     reserved = re.search(r'"onepipeline.repo": "([^"]+)"', task_record)
     execution = re.search(r'"onepipeline.execution_checkout": "([^"]+)"', task_record)
-    if repositories is None and reserved is None:
+    if repositories is None and reserved is None and execution is None:
         return None
     return Placement(
         tuple(json.loads(repositories.group(1))) if repositories else (),
@@ -839,73 +755,62 @@ def _placed(task_record: str) -> Placement | None:
     )
 
 
-def _registry(tmp_path: Path, registry: Registry | None) -> dict[str, str]:
-    """A scratch registry holding the pair ``registry`` names, as an environment.
-
-    Never this host's, for the reason every launching journey gives: what `--repo`
-    resolves to is decided by the registry it is asked of, and a journey pointed at the
-    real one would answer differently the day somebody re-registers a checkout here.
-    """
-    match registry:
-        case None:
-            return {}
-        case Registry.HOSTED:
-            seeded_pair = seeded(
-                tmp_path / "registry",
-                publication=THIS_REPOSITORY,
-                execution=THIS_REPOSITORY_EXECUTION,
-                origin=PLANNING_FLOW_ORIGIN,
-            )
-        case Registry.LOCAL:
-            seeded_pair = seeded(
-                tmp_path / "registry", publication=LOCAL, execution=LOCAL_EXECUTION
-            )
-    return {"ONEVCS_HOME": str(seeded_pair.home), **seeded_pair.environment}
-
-
 @pytest.mark.reads_recipes
-@pytest.mark.parametrize("shape", NODE_SHAPES, ids=lambda row: row.what)
-def test_the_plan_recipe_writes_the_node_shape_it_was_asked_for(
-    tmp_path: Path, shape: NodeShape
-) -> None:
+def test_the_plan_recipe_writes_both_of_its_nodes_as_direct_nodes(tmp_path: Path) -> None:
     """Where the dispatched planner works is decided by the document, before any launch.
 
-    `tests/e2e/test_plan_recipe_e2e.py` drives the default shape all the way into a real
-    dispatch and reads the directory out of the run's journal; this is the cheap half —
-    the document itself, for each way of asking, with the published CLI doubled so no
-    planner is dispatched to prove a field. The direct shape must carry **neither**
-    field: `execution_checkout` without a `repo` names a clone nothing is cut from.
+    `tests/e2e/test_plan_recipe_e2e.py` drives the shape all the way into a real dispatch
+    and reads the directory out of the run's journal; this is the cheap half — the
+    documents themselves, with the published CLI doubled so no planner is dispatched to
+    prove a field. Each node must carry **neither** placement field: a `repo` would make
+    it a lifecycle node, which the adopted engine settles `failed` as `empty-branch` for
+    committing nothing, and `execution_checkout` without a `repo` names a clone nothing
+    is cut from.
 
     Both nodes are read, because the placement is a property of the *flow* rather than of
-    one launch: `just plan` hands its own placement to the tail, so a shape that placed
-    one of them somewhere else would put half a planning flow in the shared canonical
-    checkout this repository forbids authoring in — and the two are written by two
-    launches now, which is exactly the seam a placement can be dropped at.
-
-    The registry each shape resolves `--repo` against is a scratch one seeded for it,
-    because the record depends on what the registry answers: a hosted identity's alias
-    becomes its origin in `repositories`, and a local identity's alias stays on the
-    reserved key. `tests/e2e/test_delegated_recipes_e2e.py` doubles `uv` and nothing
-    else, so `onevcs` here is the installed one asking a real registry.
+    one launch: the two are written by two launches, which is exactly the seam a
+    placement could reappear at.
     """
     checkout, trace = _checkout(tmp_path)
-    registry = _registry(tmp_path, shape.registry)
 
-    result = _run(checkout, trace, "plan", BRIEF, *shape.arguments, env=registry)
+    result = _run(checkout, trace, "plan", BRIEF)
 
     assert result.returncode == 0, result.stderr
     for generated in GENERATED_TASKS:
         task_record = (checkout / generated).read_text(encoding="utf-8")
         placed = _placed(task_record)
-        assert placed == shape.placement, (
-            f"`just plan {' '.join(shape.arguments)}` wrote {generated} placed at {placed}, "
-            f"so that dispatch would work somewhere other than {shape.placement}: "
-            f"{task_record}"
+        assert placed is None, (
+            f"`just plan` wrote {generated} placed at {placed}, so that dispatch would be "
+            f"a lifecycle node rather than a direct one: {task_record}"
         )
-    assert shape.says in result.stderr, (
-        f"the launch said nothing about where this planner works, which for the direct "
-        f"shape is where its constraints are stated at all:\n{result.stderr}"
+    assert DIRECT_SAYS in result.stderr, (
+        f"the launch said nothing about where this planner works, which is where its "
+        f"constraints are stated at all:\n{result.stderr}"
     )
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("flag", RETIRED_PLACEMENT_FLAGS, ids=lambda row: row[0])
+def test_the_plan_recipe_refuses_a_retired_placement_flag_by_name(
+    tmp_path: Path, flag: tuple[str, ...]
+) -> None:
+    """A caller who read an older shape of this flow is told which shape every launch gets.
+
+    Refused before anything is written or launched, and refused by this recipe rather than
+    by `onepipeline start`, which has never heard of any of these and would report an
+    unknown argument that says nothing about why the flag is gone.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "plan", BRIEF, *flag)
+
+    assert result.returncode != 0, result.stdout
+    assert "no longer an option of the planning flow" in result.stderr, result.stderr
+    assert not trace.exists() or "onepipeline start" not in trace.read_text(encoding="utf-8"), (
+        f"a refused launch still reached the engine:\n{trace.read_text(encoding='utf-8')}"
+    )
+    for generated in GENERATED_TASKS:
+        assert not (checkout / generated).exists(), f"a refused launch wrote {generated}"
 
 
 class ReplyShape(NamedTuple):

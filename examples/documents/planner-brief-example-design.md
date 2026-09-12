@@ -4,8 +4,8 @@ project: planner-brief-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:d9fc7226a615c542a1db86abed3a13c8e513ea11e9a287dac35edcbf8a94fa54
   orchestrator.design-approval:
-    approved_at: 2026-09-09T04:37:50.941914+00:00
-    key: 20b2887f321811def1eb9c1607d1517c032a0a85abbd3b8889d688c9c0a5efe0
+    approved_at: 2026-09-12T03:27:19.039782+00:00
+    key: d8879571929463f98b51820be7c9e2f2aaf945e2f4f3f97cc00f1648f94398ab
 ---
 ## What
 
@@ -19,9 +19,11 @@ reading in between, and neither the manager nor the reader of the plan is well p
 
 ## Architecture
 
-One node. The planner reads the repository and writes the plan into the plan store, in an
-isolated worktree cut from the registered safety clone rather than in the shared checkout
-several orchestrators use.
+One node. The planner reads the repository and writes the plan into the plan store, as a
+direct node working in the checkout the launch was made from: it produces a record and
+never a branch, and the engine settles a lifecycle dispatch that commits nothing to its
+branch as a failure, so it is told in its task to write only to gitignored paths, commit
+nothing, and cut no branch.
 
 What happens to that plan afterwards is a second launch rather than a second node of this
 one, and the reason is ordering: the short document a person reviews the plan as has to be

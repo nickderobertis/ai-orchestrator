@@ -144,18 +144,20 @@ def _remove_project(project: str) -> None:
         tasks.rmdir()
 
 
-#: The two checkouts the generated node names, as `scripts/plan.sh` defaults them: this
-#: repository's publication checkout and the registered safety clone a planner's
-#: worktree is cut from. Every journey here seeds its own pair under these names, and
-#: under the hosted origin the recipe's default names — `PLANNING_FLOW_ORIGIN` — so the
-#: recipe's own defaults resolve against a scratch registry, never this host's. Pointing
-#: one of these launches at the real registry would have it clone, cut a worktree, and
-#: reclaim run roots in the directories live dispatches are working in.
+#: The two checkouts this repository's own identity registers, under which every journey
+#: here seeds a scratch pair — and under the hosted origin the flow's records once named,
+#: `PLANNING_FLOW_ORIGIN` — so that nothing a launch here does resolves against this
+#: host's registry. The node the recipe writes is a direct node and opens no session, so
+#: the launch itself no longer reaches a registry at all; the scratch one stays because
+#: the one thing none of these launches may do is reach this host's own, and a recipe
+#: that started opening sessions again would then do so against the scratch pair rather
+#: than in the directories live dispatches are working in.
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
 #: The `graphs/node-scope.yaml` member a dispatched plan node runs as, and the journal
-#: records that say where it was started and where its session cut a worktree.
+#: records that say where it was started and — for a lifecycle node — where its session
+#: cut a worktree. A direct node's run holds none of the second kind.
 WORKER_MEMBER = "worker"
 MEMBER_STARTED = "member-started"
 SESSION_OPENED = "session-opened"
@@ -258,10 +260,10 @@ class PlanNode(TypedDict, total=False):
     """One node a generated plan carries, in the fields this suite reads.
 
     `total=False` because a field is absent on one node or the other: only the design-doc
-    node carries `deps` and `agent_graph`, only the planner node carries `max_turns`, a
-    `--direct` launch carries no `title` or placement pair — and one absence is still the
-    point, since `done_when` is refused by the loader outright, so a generated plan
-    carrying one could never be launched at all.
+    node carries `deps` and `agent_graph`, only the planner node carries `max_turns`,
+    neither carries a placement pair — and one absence is still the point, since
+    `done_when` is refused by the loader outright, so a generated plan carrying one could
+    never be launched at all.
     """
 
     id: str
@@ -304,11 +306,9 @@ class TurnRecord(TypedDict):
 def _environment(tmp_path: Path) -> dict[str, str]:
     """The environment one `just plan` launch runs in, against a registry of its own.
 
-    The identity is seeded under the two aliases the recipe defaults to, rather than the
-    defaults being overridden per launch: what is under test is the plan this recipe
-    writes when nobody tells it anything, and a journey that passed `--repo` would be
-    proving a flag instead. Seeded for every launch, refusals included, because the one
-    thing none of them may do is reach this host's own registry.
+    The identity is seeded under the two aliases this repository's own registers, for
+    every launch, refusals included, because the one thing none of them may do is reach
+    this host's own registry — the reason `PUBLICATION_ALIAS` carries.
     """
     identity = seeded(
         tmp_path,
@@ -472,7 +472,7 @@ def _node(plan: PlanDocument, node_id: str) -> PlanNode:
 
 
 @pytest.mark.xdist_group("plan-recipe")
-def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
+def test_the_generated_plan_is_one_direct_planner_node_carrying_the_brief(
     planned: Planned,
 ) -> None:
     """The plan this launch writes is the planner node and nothing else.
@@ -485,25 +485,22 @@ def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
     A plan that grew it back would be a document written from content nobody had read.
     The planner node's own fields are the rest, and every one of them is one a
     manager would otherwise have to remember. The brief
-    reaching the node **verbatim** is the load-bearing one: it is the manager's own
-    words, in the template every task this repository dispatches is written in, and a
-    recipe that reformatted or summarized it on the way would be editing the request
-    between the two people it is passing between.
+    reaching the node **verbatim and first** is the load-bearing one: it is the
+    manager's own words, in the template every task this repository dispatches is
+    written in, and a recipe that reformatted or summarized it on the way would be
+    editing the request between the two people it is passing between. One thing follows
+    it, never woven in — the placement note, read for its own reason by
+    `test_the_launch_states_its_commit_exemption_in_the_task_it_dispatches`.
 
-    `repo` and `execution_checkout` are the pair that decides *where* the planner works,
-    and they are here because their absence cost real work. Without them the node is a
-    direct node, a direct node works in the launch directory, and that is the shared
-    canonical checkout `AGENTS.md` forbids authoring in: a planner dispatched that way
-    cut a branch there, committed, and left it checked out, which failed a finished
-    publication at its last step and destroyed the manager's own plan files. `done_when`
-    is still asserted absent for its own reason — the loader refuses a node carrying
-    one, so a generated plan with it could never be launched at all.
-
-    The repository is the **normalized origin** of this repository, read back from the
-    loaded plan's `repo` — which the engine takes from the record's own `repositories` —
-    and the record is asserted beside it: the field is there, and the reserved
-    `onepipeline.repo` key is not. An alias on that key is what left every task issue of
-    a plan filed in this repository rather than the one the work changed.
+    The node is a **direct** node: no `repo` and no `execution_checkout`. It
+    was a lifecycle node until the adopted engine made that shape one a planner cannot
+    settle under — a lifecycle dispatch that commits nothing to its branch settles
+    `failed` as `empty-branch`, and the declaration that would accept the empty branch
+    settles the node without dispatching it at all
+    (https://github.com/nickderobertis/onepipeline/issues/238) — so the record names no
+    repository either, in its own `repositories` or on the reserved key. `done_when` is
+    still asserted absent for its own reason — the loader refuses a node carrying one,
+    so a generated plan with it could never be launched at all.
     """
     plan = planned.plan
     assert plan["schema_version"] == 3, plan
@@ -512,50 +509,53 @@ def test_the_generated_plan_is_one_planner_node_isolated_and_carrying_the_brief(
     assert [node.get("id", "") for node in plan["tasks"]] == [PLANNER_NODE], plan["tasks"]
 
     node = _node(plan, PLANNER_NODE)
-    assert node["task"] == BRIEF.rstrip(), (
-        "the brief did not reach the node verbatim; the manager's words are the task:\n"
-        f"{node['task']!r}"
+    assert node["task"].startswith(BRIEF.rstrip()), (
+        "the brief did not reach the node verbatim and first; the manager's words are the "
+        f"task and everything the recipe appends comes after them:\n{node['task']!r}"
     )
     assert node["persona"] == PERSONA_REF, (
         f"the node names the persona {node['persona']!r}; a bare name resolves to a role "
         f"compiled into the tool and this repository's file is never read"
     )
     assert node["max_turns"] == TURN_BUDGET, node
-    assert node.get("repo") == PLANNING_FLOW_ORIGIN, (
-        f"the planner node names {node.get('repo')!r} as its publication repository; with "
-        f"none it is a direct node working in the shared canonical checkout: {node}"
-    )
-    assert node.get("execution_checkout") == EXECUTION_ALIAS, (
-        f"the planner node names {node.get('execution_checkout')!r} as its execution "
-        f"checkout, so its worktree is not cut from the safety clone: {node}"
-    )
+    for placement in ("repo", "execution_checkout"):
+        assert placement not in node, (
+            f"the planner node carries {placement!r}, so it is a lifecycle node — which "
+            f"the adopted engine settles `failed` as `empty-branch` for committing nothing: "
+            f"{node}"
+        )
     assert "done_when" not in node, f"a node carrying done_when is refused at load: {node}"
-    assert planned.stored_task["repositories"] == [PLANNING_FLOW_ORIGIN], (
-        f"the task record does not name the repository in its own `repositories`, so the "
-        f"plan store would file its issue in the source's repository: {planned.stored_task}"
+    assert planned.stored_task["repositories"] == [], (
+        f"the task record names a repository, so the plan store would file its issue there "
+        f"and the engine would read it as a lifecycle node: {planned.stored_task}"
     )
     assert "onepipeline.repo" not in planned.stored_task["metadata"], (
-        f"the task record still names its repository on the reserved key: {planned.stored_task}"
+        f"the task record names a repository on the reserved key: {planned.stored_task}"
     )
 
 
 @pytest.mark.xdist_group("plan-recipe")
-def test_the_dispatched_planner_works_in_a_worktree_and_not_in_the_launch_checkout(
+def test_the_dispatched_planner_works_in_the_launch_checkout_and_opens_no_session(
     planned: Planned,
 ) -> None:
     """The claim the plan document cannot make: where the planner was actually started.
 
-    A node naming a `repo` is only half the fix — the other half is that the dispatch
-    really lands in the worktree its session cut, and nothing in the document says so.
-    The run's own journal does: `onevcs` appends `session-opened` naming the worktree it
-    cut, `oneagentgraph` appends `member-started` naming the directory it started the
-    dispatched member in, and the launch directory is in the same journal to be excluded
-    against. That last exclusion is the incident: a planner started in the launch
-    directory is a planner in the shared canonical checkout, which is where it cut a
-    branch, committed to it, and left the checkout on it.
+    A node naming no `repo` is only half the fix — the other half is that the dispatch
+    really lands in the launch directory rather than in a worktree, and that nothing
+    opened a session for it, since a session is what the engine measures a branch
+    against and settles `empty-branch` over. The run's own journal answers both:
+    `oneagentgraph` appends `member-started` naming the directory it started the
+    dispatched member in, and `onevcs` appends `session-opened` for every session a
+    lifecycle node cuts — of which a direct node's run records none.
+
+    The directory is recorded as the driver names it — `.`, relative to the directory
+    the launch was made from, which is what a direct node's placement *is* — so it is
+    resolved against that directory rather than compared as a string: a lifecycle
+    node's worktree was an absolute path elsewhere, and this is the claim that it is
+    not one.
     """
     # No view reports where a member was started: `just status` carries what a node is
-    # doing and `just work-status` the session's own worktree, and neither is the
+    # doing and `just work-status` a session's own worktree, and neither is the
     # directory the harness was handed. The journal is where that is recorded.
     # llmlint: ignore[tests_mirror_real_usage] No view reports a member's start directory.
     started = [
@@ -565,19 +565,14 @@ def test_the_dispatched_planner_works_in_a_worktree_and_not_in_the_launch_checko
         and event.get("labels", {}).get("member") == WORKER_MEMBER
     ]
     assert started, "the run recorded no dispatched planner at all"
-    cut = {
-        event["payload"]["worktree"]
-        for event in planned.journal
-        if event.get("kind") == SESSION_OPENED
-    }
-    assert cut, "the run opened no lifecycle session, so the planner cut no worktree"
-    assert set(started) <= cut, (
-        f"the planner was started in {sorted(set(started) - cut)}, which no session cut; "
-        f"the sessions this run opened were {sorted(cut)}"
+    assert {(REPO_ROOT / where).resolve() for where in started} == {REPO_ROOT.resolve()}, (
+        f"the planner was started in {sorted(set(started))} rather than in the checkout "
+        f"the launch was made from, {REPO_ROOT}"
     )
-    assert str(REPO_ROOT) not in started, (
-        "the planner was started in the checkout the launch was made from, which "
-        "concurrent orchestrators share and this repository forbids authoring in"
+    cut = [event for event in planned.journal if event.get("kind") == SESSION_OPENED]
+    assert not cut, (
+        f"the run opened {len(cut)} lifecycle session(s) for a direct node, which the "
+        f"adopted engine would settle `empty-branch` over: {cut}"
     )
 
 
@@ -963,118 +958,73 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
         _remove_project(cast(str, shipped["name"]))
 
 
-#: The run a `--direct` launch is made under here, kept apart from every other launch
-#: in this module so the plan it writes is unambiguously its own.
-DIRECT_RUN = RunId("plan-recipe-direct")
-
-#: What the `--direct` task has to say, in the two parts that failed a dispatch when
-#: only one of them was said. The placement is what the recipe already printed on its
-#: own receipt; the exemption is the half that was nowhere, and it is the half a judge
-#: reads — the shared completion clause in `config/onejudge.base.yaml` demands "every
-#: change this dispatch made committed" of every dispatch alike, and a `--direct`
-#: planner may not commit at all.
+#: What every planning launch's task has to say, in the two parts that failed a dispatch
+#: when only one of them was said. The placement is what the recipe already printed on
+#: its own receipt; the exemption is the half that was nowhere, and it is the half a
+#: judge reads — the shared completion clause in `config/onejudge.base.yaml` demands
+#: "every change this dispatch made committed" of every dispatch alike, and a planner
+#: may not commit at all.
 DIRECT_PLACEMENT = "may write only to\ngitignored paths, may not commit"
 DIRECT_EXEMPTION = (
     "with every change this dispatch made committed and nothing\nhalf-applied left behind"
 )
 DIRECT_OUTCOME = "a clean `git status` is\nthe correct and complete outcome"
 
+#: What the launch's own receipt says about where the planner works.
+DIRECT_RECEIPT = "it is a direct node dispatched into this checkout"
+
 
 @pytest.mark.reads_docs
-def test_a_direct_launch_states_its_commit_exemption_in_the_task_it_dispatches(
-    tmp_path: Path, oneharness_bin: str
+@pytest.mark.xdist_group("plan-recipe")
+def test_the_launch_states_its_commit_exemption_in_the_task_it_dispatches(
+    planned: Planned,
 ) -> None:
-    """`--direct` says in the dispatched task what the shared bar would otherwise fail it for.
+    """The dispatched task says what the shared bar would otherwise fail it for.
 
-    A `--direct` dispatch works in the shared canonical checkout, so it may write only to
-    gitignored paths and may not commit — and the one completion clause every dispatch on
-    this host is judged against demands every change committed. A planner that did
-    correct, verified work settled `task-failed` against exactly that. The clause is
-    right and is shared, so it does not move; the exemption is stated in the task of the
-    one dispatch it is true of, which is the only place both the worker and its judge
-    read it.
+    A planner works in the shared canonical checkout, so it may write only to gitignored
+    paths and may not commit — and the one completion clause every dispatch on this host
+    is judged against demands every change committed. A planner that did correct,
+    verified work settled `task-failed` against exactly that. The clause is right and is
+    shared, so it does not move; the exemption is stated in the task of the dispatch it
+    is true of, which is the only place both the worker and its judge read it — and
+    since every launch composes a direct node now, that is every launch.
 
     Read out of the prompt the dispatched worker was really given, which is where a
     worker meets this and the only place it can be observed: a recipe that composed the
     task correctly and never got it as far as the dispatch would pass any read of what it
-    wrote and fail the one thing the exemption is for.
-
-    Attached rather than detached, unlike every other launch here, because the dispatch
-    *is* the subject: a detached launch returns before the turn that carries this.
+    wrote and fail the one thing the exemption is for. The module's one attached launch
+    is what recorded it.
 
     The exemption is quoted from `config/onejudge.base.yaml` through
     `shared_completion_bar()`, not restated: a task naming a bar the base config no
     longer states would exempt a dispatch from nothing.
     """
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
-    brief = tmp_path / "cursor-shape.md"
-    brief.write_text(BRIEF, encoding="utf-8")
-    # llmlint: ignore-block[e2e_not_mocked] Only the paid provider process is
-    # substituted, by `_environment`, which carries its own reason at that seam;
-    # `REAL_ONEHARNESS_BIN` points the fake backend's passthrough at the real
-    # `oneharness`, so it un-doubles rather than doubles. `just plan`, the recipe and
-    # the launch are the real ones.
-    environment = _environment(tmp_path)
-    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
-    recorded = tmp_path / "turns.jsonl"
-    environment[PROMPT_LOG_ENV] = str(recorded)
-    # llmlint: ignore-end[e2e_not_mocked]
-
-    # `--no-design-doc`, for the reason the module fixture carries it: what is under test
-    # is the task this launch dispatches, and the tail after it is about a plan a stand-in
-    # planner does not write — so every step of it would be a refusal about a project
-    # nothing authored.
-    launch = _just(
-        "plan",
-        str(brief),
-        "--name",
-        DIRECT_RUN,
-        "--direct",
-        "--no-design-doc",
-        environment=environment,
+    assert DIRECT_RECEIPT in planned.launch.stderr, (
+        "the launch did not report itself as a direct placement, so whatever it "
+        f"dispatched is not the shape this exemption is about:\n{planned.launch.stderr}"
     )
-    try:
-        assert launch.returncode == 0, f"`just plan --direct` failed:\n{launch.stderr}"
-        assert "--direct dispatches it into this checkout" in launch.stderr, (
-            "the launch did not report itself as a direct placement, so whatever it "
-            f"dispatched is not the shape this exemption is about:\n{launch.stderr}"
-        )
-        # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the
-        # only place a dispatched task is observable; no published view carries it. The
-        # fake backend writes this JSONL itself and TurnRecord states the schema it owns
-        # on both ends, so this reads a test-owned file rather than reaching past
-        # somebody else's validation.
-        turns = [
-            cast(TurnRecord, json.loads(line))
-            for line in recorded.read_text(encoding="utf-8").splitlines()
-        ]
-        # llmlint: ignore-end[tests_mirror_real_usage]
-        dispatched = [
-            _flattened(turn["prompt"]) for turn in turns if _member(turn) == WORKER_MEMBER
-        ]
-        assert dispatched, f"no dispatched turn was recorded in {recorded}"
+    dispatched = [
+        _flattened(turn["prompt"]) for turn in planned.turns if _member(turn) == WORKER_MEMBER
+    ]
+    assert dispatched, "no dispatched turn was recorded"
 
-        assert any(_flattened(BRIEF) in prompt for prompt in dispatched), (
-            "the brief did not reach the dispatch verbatim; the manager's words are the "
-            f"task and everything the recipe appends comes after them:\n{dispatched}"
+    assert any(_flattened(BRIEF) in prompt for prompt in dispatched), (
+        "the brief did not reach the dispatch verbatim; the manager's words are the "
+        f"task and everything the recipe appends comes after them:\n{dispatched}"
+    )
+    for stated, what in (
+        (DIRECT_PLACEMENT, "that it works in a checkout it does not own and may not commit"),
+        (DIRECT_EXEMPTION, "which clause of the shared bar it is exempt from"),
+        (DIRECT_OUTCOME, "what the correct outcome is instead"),
+    ):
+        assert any(_flattened(stated) in prompt for prompt in dispatched), (
+            f"the dispatched task does not say {what}, so the worker and its judge "
+            f"read the shared bar with nothing in the task that answers it:\n{dispatched}"
         )
-        for stated, what in (
-            (DIRECT_PLACEMENT, "that it works in a checkout it does not own and may not commit"),
-            (DIRECT_EXEMPTION, "which clause of the shared bar it is exempt from"),
-            (DIRECT_OUTCOME, "what the correct outcome is instead"),
-        ):
-            assert any(_flattened(stated) in prompt for prompt in dispatched), (
-                f"the dispatched task does not say {what}, so the worker and its judge "
-                f"read the shared bar with nothing in the task that answers it:\n{dispatched}"
-            )
-        assert _flattened(DIRECT_EXEMPTION) in _flattened(shared_completion_bar()), (
-            "the task quotes a demand `config/onejudge.base.yaml` no longer makes, so it "
-            f"exempts this dispatch from nothing:\n{shared_completion_bar()}"
-        )
-    finally:
-        _just("stop", DIRECT_RUN, environment=environment, seconds=60)
-        _remove_project(DIRECT_RUN)
+    assert _flattened(DIRECT_EXEMPTION) in _flattened(shared_completion_bar()), (
+        "the task quotes a demand `config/onejudge.base.yaml` no longer makes, so it "
+        f"exempts this dispatch from nothing:\n{shared_completion_bar()}"
+    )
 
 
 class Refusal(NamedTuple):
@@ -1100,30 +1050,19 @@ REFUSALS = (
     Refusal("an empty budget", ("--max-turns=",), "--max-turns was given no value"),
     Refusal("a turn budget that is not one", ("--max-turns", "soon"), "not a positive whole"),
     Refusal("a name the engine would rewrite", ("--name", "cursor.shape"), "is not a run id"),
-    # The placement flags, whose empty forms are the same shell expansion the two above
-    # guard against — and whose half-set combination is the one a caller reaches by
-    # ordering rather than by typing an empty value. Half a placement is not a smaller
-    # mistake than none: an execution checkout with no repository names a clone nothing
-    # is cut from, and a repository with no execution checkout puts the dispatch back in
-    # the shared checkout this change exists to keep it out of.
-    Refusal("an unnamed repository", ("--repo",), "--repo was given no value"),
-    Refusal("an empty repository", ("--repo=",), "--repo was given no value"),
-    Refusal("an empty separated repository", ("--repo", ""), "--repo was given no value"),
+    # The three placement flags the flow used to take, refused by name: the first two
+    # would compose the lifecycle shape the adopted engine settles `empty-branch` over,
+    # and the third named the only shape there is. Refused rather than forwarded,
+    # because `onepipeline start` has never heard of any of them and a caller typing
+    # one has read an older shape of this flow.
+    Refusal("a publication repository", ("--repo", "elsewhere"), "no longer an option"),
+    Refusal("a joined publication repository", ("--repo=elsewhere",), "no longer an option"),
     Refusal(
-        "an unnamed execution checkout",
-        ("--execution-checkout",),
-        "--execution-checkout was given no value",
+        "an execution checkout",
+        ("--execution-checkout", "elsewhere"),
+        "no longer an option",
     ),
-    Refusal(
-        "an empty execution checkout",
-        ("--execution-checkout=",),
-        "--execution-checkout was given no value",
-    ),
-    Refusal(
-        "half a placement",
-        ("--direct", "--repo", "elsewhere"),
-        "a node carries both or neither",
-    ),
+    Refusal("the direct shape named as a flag", ("--direct",), "no longer an option"),
     # A destination for a flow that stops before there is anything to copy. Refused
     # rather than ignored, because the two readings of it are opposite: one caller means
     # "finish this plan into that source" and the other means "launch the planner alone",
@@ -1493,9 +1432,9 @@ def test_the_opt_out_drops_the_tail_and_the_brief_requirement_the_tail_is_the_re
         assert [node.get("id") for node in plan["tasks"]] == [PLANNER_NODE], (
             f"`--no-design-doc` still wrote {[node.get('id') for node in plan['tasks']]}"
         )
-        assert plan["tasks"][0]["task"] == BRIEF_NAMING_NO_PLAN.rstrip(), (
-            "the one node's task is not the brief verbatim; opting out of the tail "
-            f"changes nothing about the planner:\n{plan['tasks'][0]['task']!r}"
+        assert plan["tasks"][0]["task"].startswith(BRIEF_NAMING_NO_PLAN.rstrip()), (
+            "the one node's task does not open with the brief verbatim; opting out of "
+            f"the tail changes nothing about the planner:\n{plan['tasks'][0]['task']!r}"
         )
         # And nothing after the planner ran: the tail's own run is named from this one,
         # so a ledger holding it would be the opt-out having been read as an opt-out of

@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
-from fake_backend import PROMPT_LOG_ENV
+from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from project_fixtures import project_from_plan
 from scratch_identity import Identity, seeded
 from test_worker_start_directory_e2e import FAKE_BACKEND, LAUNCHER_ENVIRONMENT
@@ -92,9 +92,36 @@ BY_ALIAS = "by-alias"
 #: inside a dispatch whose own harness session would otherwise own the run.
 LAUNCHING_SESSION = "e2e-repositories-field-dispatch"
 
+#: The phrase both tasks carry that tells the stand-in this is the turn that commits.
+#:
+#: Each node commits for the reason `test_worker_start_directory_e2e.py` gives beside
+#: its own marker: the adopted engine settles a dispatch that committed nothing to a
+#: lifecycle branch `failed` as `empty-branch`, and the declaration that would accept
+#: an empty branch settles the node without dispatching it at all — and a node that is
+#: never dispatched opens no session, which is the record this journey reads.
+COMMIT_MARKER = "Leave one file recording where you stood, and commit it."
+
+#: What each node's stand-in runs when its task carries that marker: one file named after
+#: the branch it stands on, committed where it stands. The name is the branch's because
+#: both nodes land on one base — each is a `local-direct` squash onto the same `main` —
+#: and two branches adding one path is a conflict the second publication would have to
+#: resolve; two paths is two landings. Idempotent because a supervisor may send a
+#: dispatch back for another turn, and the committer is stated because the launch is made
+#: from a module-scoped fixture, before `tests/conftest.py` has exported one.
+COMMIT_COMMANDS = [
+    [
+        "sh",
+        "-c",
+        'f="placed-$(git rev-parse --abbrev-ref HEAD | tr / -).md"; '
+        '[ -f "$f" ] || { pwd > "$f" && git add "$f" '
+        "&& git -c user.email=test@example.com -c user.name=ai-orchestrator-test "
+        "commit -qm 'feat: record where the worker stood'; }",
+    ]
+]
+
 #: The task both nodes carry. The work is not the subject; where it is placed is.
 TASK = (
-    "## What\nReport the directory you are in, changing nothing.\n\n"
+    f"## What\n{COMMIT_MARKER}\n\n"
     "## Why\nWhere the session placed this node is the subject; the work itself is not.\n\n"
     "## Acceptance criteria\n- The dispatch starts and reports.\n"
 )
@@ -258,6 +285,9 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     environment[PROMPT_LOG_ENV] = str(root / "turns.jsonl")
+    keyed = root / "commands.json"
+    keyed.write_text(json.dumps({COMMIT_MARKER: COMMIT_COMMANDS}), encoding="utf-8")
+    environment[RUN_ON_MARKER_ENV] = str(keyed)
 
     launch = subprocess.run(
         ["just", "orchestrate", project_from_plan(_plan(root))],

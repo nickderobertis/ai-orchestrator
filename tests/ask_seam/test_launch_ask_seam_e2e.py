@@ -175,9 +175,10 @@ CHANNEL_ASKER = Input(
 
 #: Not required of every launch either — only of a *planning* one, which is the launch
 #: that dispatches an agent whose whole deliverable is a plan. `onetaskgraph.yaml` roots
-#: the `authoring` source relatively and a planner works in a worktree of its own, so
-#: without this the plan it authors lands in that worktree's own copy of the directory:
-#: nothing outside the worktree reads it, and the worktree is reclaimed with the run.
+#: the `authoring` source relatively and a dispatch resolves it against its own working
+#: directory, so without this the plan it authors lands wherever the dispatch stood —
+#: which, while a planner worked in a worktree of its own, was a copy of the directory
+#: nothing outside the worktree read and the run reclaimed.
 PLAN_ROOT = Input(
     plan_root_variable.name(),
     "the directory a dispatched planner authors its plan into; a relative source root "
@@ -188,9 +189,10 @@ PLAN_ROOT = Input(
 #: Required of a planning launch for the same reason, and it carries a **value** rather
 #: than a path. Every dispatched node's task has to hold this text verbatim or
 #: `just check-plan` refuses it, and the party that copies it in is the planner — which
-#: works in a worktree of its own, while the tracked file lives in the launching checkout.
-#: A path would name a file that planner cannot open, which is what the refusal it met
-#: named, and a manager appended the appendix to a plan by hand instead.
+#: worked in a worktree of its own, while the tracked file lived in the launching
+#: checkout, and may still be planning against a checkout other than that one. A path
+#: would name a file that planner cannot open, which is what the refusal it met named,
+#: and a manager appended the appendix to a plan by hand instead.
 DISPATCH_APPENDIX = Input(
     criteria_guard.APPENDIX_ENV,
     "the operational appendix a dispatched planner copies into every task it writes; the "
@@ -957,18 +959,17 @@ def _attest(
 
 
 def _carrying_the_plan_store_configuration(identity: Identity) -> None:
-    """Give the checkout a planner's worktree is cut from this repository's store document.
+    """Give the seeded checkouts this repository's store document.
 
-    A real planning launch executes in a clone of this repository, so the worktree its
-    planner works in carries `onetaskgraph.yaml` — which is what declares the `authoring`
-    source's plugin, the half of that source a launch does not establish. The seeded
-    identity beside this is a bare repository holding a README, so without it the store
-    inside a dispatch would refuse a configuration naming a root for a source no document
-    defines, and the one thing the launch *did* establish would be unreadable from the
-    only place it was established for.
+    A planner works in the launching checkout now, which carries `onetaskgraph.yaml` —
+    what declares the `authoring` source's plugin, the half of that source a launch does
+    not establish. The seeded identity beside this is a bare repository holding a README,
+    and it is given the same document so that a recipe which started cutting worktrees
+    from it again would find the store readable there too, rather than refusing a
+    configuration naming a root for a source no document defines.
 
-    Committed and pushed, because the session that cuts the worktree clones this checkout
-    and takes its base from the origin they share.
+    Committed and pushed, because a session that cut a worktree would clone this checkout
+    and take its base from the origin they share.
     """
     execution = identity.execution
     (execution / "onetaskgraph.yaml").write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
@@ -1004,11 +1005,10 @@ def _planned(
     """
     turns, record = tmp_path / "turns.jsonl", tmp_path / "asked.json"
     environment = _environment(tmp_path, oneharness_bin, turns, record=record)
-    # The plan this recipe writes is a lifecycle node naming the two checkouts it
-    # defaults to, so the launch opens a real `onevcs` session — and it may never be
-    # this host's, whose registry a session reclaims run roots under. Seeded under those
-    # two alias names rather than overridden per launch: what these journeys drive is
-    # the recipe as an operator types it, and a `--repo` here would be proving a flag.
+    # The plan this recipe writes is a direct node, so the launch opens no `onevcs`
+    # session; the scratch registry stays because the one thing no launch here may do is
+    # reach this host's own, whose registry a session reclaims run roots under, and a
+    # recipe that started opening sessions again must do so here rather than there.
     identity = seeded(
         tmp_path,
         publication=PUBLICATION_ALIAS,
@@ -1370,9 +1370,9 @@ def test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_che
     """A planning launch's dispatch reads the launching checkout's own plan-authoring root.
 
     `onetaskgraph.yaml` roots the `authoring` source at the relative `.plans`, and a
-    planning launch dispatches its planner into a worktree of its own — so left alone,
-    every process resolves that source somewhere different and the plan the planner
-    authors lands where the launching checkout never looks. Read back out of the
+    dispatch resolves it against its own working directory — so left alone, every
+    process resolves that source for itself and a planner placed anywhere but the
+    launching checkout authors a plan where that checkout never looks. Read back out of the
     dispatch's own turn rather than off the launcher, for the reason the credential
     journey above reads a credential that way: a launcher that exported a name and a
     dispatch that received it are two different facts.

@@ -175,13 +175,14 @@ failing to use a particular phrase.
 
 Ask one further thing of a task whose criteria describe work that changes no file in the
 repository — an external side effect, a read, a measurement reported back and nothing
-else. Such a node produces an empty branch, and an empty branch goes on into
-change-request drafting unless the node declares `expects_no_diff`. So where the
-criteria describe work with no repository change in it and that field is not declared
-above, refuse the criterion that describes the no-change work and say which field is
-missing; where it *is* declared, that is the right shape for such a node and is not a
-defect. Read this off the criteria rather than the prose around them, and leave alone a
-task whose criteria do require a file to change.
+else. Such a node produces an empty branch, and the engine settles an empty branch
+`failed` as `empty-branch` unless the node declares `expects_no_diff`, which settles it
+`done` as `no-changes` without a dispatch. So where the criteria describe work with no
+repository change in it and that field is not declared above, refuse the criterion that
+describes the no-change work and say which field is missing; where it *is* declared,
+that is the right shape for such a node and is not a defect. Read this off the criteria
+rather than the prose around them, and leave alone a task whose criteria do require a
+file to change.
 
 For each acceptance criterion, name to yourself the fixture, input, or repository state
 that would make it fail. A criterion with no such state is decorative: it reads as
@@ -312,10 +313,10 @@ HUMAN = "human"
 #: Where a node declares that it expects to change no file of the repository. Authored,
 #: and keyed for the reason :data:`KIND` is: it decides which question the reviewer was
 #: asked. A node whose work is an external side effect produces an empty branch, and the
-#: engine takes an empty branch on into change-request drafting unless this says not to —
-#: so criteria describing no-change work are sound beside this field and a defect without
-#: it, and a record granted while it was absent says nothing about the node once it is
-#: there.
+#: engine settles an empty branch `failed` as `empty-branch` unless this says not to
+#: (https://github.com/nickderobertis/onepipeline/pull/229) — so criteria describing
+#: no-change work are sound beside this field and a defect without it, and a record
+#: granted while it was absent says nothing about the node once it is there.
 EXPECTS_NO_DIFF = "onepipeline.expects_no_diff"
 
 #: Where a lifecycle node states its steps. A node that runs several agent steps on one

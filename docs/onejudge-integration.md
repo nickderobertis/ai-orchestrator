@@ -91,7 +91,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.27.0,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.27.2,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -188,8 +188,23 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.11.3 is
-the adopted release, and what it changed is a **classification**: a candidate whose turn
+`config/oneharness.version` release and rejects a stale binary. Version 0.12.1 is
+the adopted release, and what it changed is **which model a controlled codex turn runs
+under**: a `run --control` turn driven over `codex app-server` now carries the selected
+candidate's own model — `[harness.codex].model`, a variant's `model`, or `--model` — on
+`thread/start`, `thread/resume` and `turn/start`, records the model the server says the
+thread runs under as `observed_model` beside the requested one, and refuses a thread the
+server would run under another model before any turn is sent, classified
+`model_mismatch` and falling through a chain as `model-mismatch`
+([oneharness#1284](https://github.com/nickderobertis/oneharness/pull/1284)). Until it,
+the control path was handed the run-level model alone, so a per-harness `model` reached
+the record and never the wire and codex ran its own default — which is how every
+codex-first supervisory side here spent Astra while its config and its record said Sol.
+The release beside it makes a stopped fallback chain say why it stopped
+([oneharness#1286](https://github.com/nickderobertis/oneharness/pull/1286)): the summary
+names the identity, its status and its diagnostic, and tells a task failure from a
+failure with no observed work and from an unclassified failure after work. The
+adoption before this one changed a **classification**: a candidate whose turn
 completed and was billed for is no longer reported as a failure, and a failed release is
 reported as one ([oneharness#1277](https://github.com/nickderobertis/oneharness/pull/1277)).
 That is the same distinction the stopped-without-work reading below is about, applied to
@@ -224,15 +239,21 @@ genuine task failure gets. From 0.10.3 a candidate that showed nothing for itsel
 so, with `fallback.stopped_without_work` and `results[].work` of `none` carrying the
 same reading into the report and the history record at schema 1.7. Both fields are
 additive and declared only on a record that *has* one, which is what keeps an older
-reader whole. **What is no longer true here is that there is such an older reader.**
+reader whole. The adopted 0.12.1 finishes the sentence side of that
+([oneharness#1286](https://github.com/nickderobertis/oneharness/pull/1286)): a
+candidate that did the task's work and failed for a cause nothing could classify now
+gets a sentence of its own rather than the task-failure one, and every stop summary
+carries the candidate's status and its own words, so which of the three stops it was is
+readable without opening the report. **What is no longer true here is that there is such an older reader.**
 Through an earlier adoption the `oneagentgraph` this host's
 [smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
 a release behind the CLI it spawns; read from both installed wheels' own SBOMs under this
-adoption, `oneagentgraph-cli` 0.3.15 is compiled against `oneharness-core` 0.12.1
-and `oneharness-cli` 0.11.3 against 0.12.2 — a release apart again, where the adoption
-before them had the pair equal. They are separate artifacts on separate cadences,
+adoption, `oneagentgraph-cli` 0.3.17 is compiled against `oneharness-core` 0.13.0
+and `oneharness-cli` 0.12.1 against 0.13.1 — a release apart again, where the adoption
+before them had the pair a release apart the other way and the one before that had it
+equal. They are separate artifacts on separate cadences,
 so read either the equality or the gap as a coincidence rather than as a rule; this pair
-has now been both, twice. Nothing
+has now been both, three times. Nothing
 about that rests on an adopter remembering to check: the pre-push hook selects
 `just smoke` for any diff touching `config/oneharness.version`, so the next bump proves
 the pairing on a real turn or does not reach the remote.
@@ -525,7 +546,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.11.3, a config's per-harness `model` **beats** the variable, while the `--model`
+0.12.1, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -540,6 +561,21 @@ $ ONEHARNESS_HARNESSES=claude-code:primary \
     --print-command --prompt hi
   claude-code:primary ran claude-opus-5        # the flag won
 ```
+
+That precedence decides what the *record* names, and until
+[oneharness#1284](https://github.com/nickderobertis/oneharness/pull/1284) it decided
+that alone on the one path every codex-first side here takes: a `--control` turn driven
+over `codex app-server` was handed the run-level model — `--model`, else a top-level
+`model` — and never the per-harness one that won above, so `thread/start` carried no
+model and codex ran its own default while the record said the config's. On the
+adopted CLI, and on the `oneharness-core` the adopted engine links, the controlled turn
+runs under the same model the precedence above resolves, the server's own answer is
+recorded beside it as `observed_model`, and a thread the server would run under
+another model is refused before any turn is sent as `model_mismatch`, falling through
+a chain as `model-mismatch`. `tests/e2e/test_controlled_turn_model_e2e.py` re-takes
+that against the installed `codex app-server` offline: a config naming
+`[harness.codex].model` and no run-level model, read off the request that reaches the
+model endpoint and off the report.
 
 So the wrapper applies each side's model **twice**: it names it on that branch's own
 `oneharness run`, which is what actually decides the turn, and it exports
@@ -644,7 +680,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.11.3, confirmed against the binary:
+candidate it ended up running — through oneharness 0.12.1, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -752,11 +788,12 @@ This is the half of the check the host can break while nothing is wrong with the
 launch path: under a concurrent e2e load, oneharness has reported `fallback harness
 … ran but did not succeed` for a harness that started and then died, and the same
 command passed standalone moments before and after. On the adopted release that
-symptom can arrive under the other summary sentence instead — a contended candidate
+symptom can arrive under another summary sentence instead — a contended candidate
 that died before a tool call or a billed token now reads as having `nothing to show
-for it`, since which of the two is printed turns on `fallback.stopped_without_work`
-rather than on the cause. Both are the same host condition and neither is a launch
-defect. Since the pre-push hook selects
+for it`, and one that died after answering as having `did the task's work and did not
+succeed`, since which of the three is printed turns on `fallback.stopped_without_work`
+and the candidate's `work` rather than on the cause. All are the same host condition
+and none is a launch defect. Since the pre-push hook selects
 this smoke whenever the pushed diff touches `scripts/`, the worker generating that
 load is usually the one whose publication it blocks. Nothing is relaxed by
 retrying: a launch path that is genuinely broken fails every attempt and still
@@ -994,7 +1031,11 @@ and it would report `control_unavailable` rather than fail loudly.
 CLI — the committed mixed-family chain taking control with each candidate on its own
 mechanism, a multi-identity chain carrying control and streaming at once, streaming
 alone opening no channel, and no graph member declaring `stream`. Every case plans with `--print-command`, so the
-proof costs no provider turn.
+proof costs no provider turn. What the bound turn then *runs under* is the other
+half of the same path, and it is the half a `--print-command` plan cannot show: the
+model on a controlled codex turn is negotiated on the app-server wire rather than on
+the argv, which is why it could carry none for as long as it did, and why the journey
+that holds it reads the wire rather than a plan.
 
 ### Dispatch inactivity watchdog
 
@@ -1017,8 +1058,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.27.0,
-> `oneagentgraph` 0.3.15, nor `onevcs` 0.19.3. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.27.2,
+> `oneagentgraph` 0.3.17, nor `onevcs` 0.19.3. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1303,7 +1344,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.7.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.7.0/docs/protocol.md)),
+([onejudge v0.8.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.8.1/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
@@ -1325,7 +1366,7 @@ member would otherwise have gone straight to a paid subscription. What is still 
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
 at `tests/e2e/fake_codex.py` — every config in this repository names `codex` first, so
 pinning that identity's binary is what keeps a suite run off a subscription. The two
-do not collide: re-measured against the adopted oneharness 0.11.3, a harness selected
+do not collide: re-measured against the adopted oneharness 0.12.1, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the
 one that matters — the same chain without `--mock-harness` runs the pinned binary — so

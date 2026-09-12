@@ -610,8 +610,8 @@ def test_editing_a_lifecycle_steps_persona_invalidates_the_record(tmp_path: Path
 def test_declaring_that_a_node_expects_no_diff_invalidates_its_record(tmp_path: Path) -> None:
     """The key covers that field, because it decides which question the reviewer was asked.
 
-    A node whose work is an external side effect changes no file, and the engine takes the
-    empty branch that leaves on into change-request drafting unless the node declares
+    A node whose work is an external side effect changes no file, and the engine settles
+    the empty branch that leaves `failed` as `empty-branch` unless the node declares
     this. So the judged turn asks whether criteria describing no-change work are declared
     that way — which makes a pass granted while the field was absent a pass over a
     different question from the one the node now poses. Driven the way an operator adds the
@@ -1043,9 +1043,10 @@ def test_the_plan_store_this_gate_writes_into_is_not_tracked() -> None:
     """No branch a dispatched worker produces can carry a review record into this checkout.
 
     This is what makes "a record is written only by this repository's own code" a
-    property rather than a convention. A dispatch works in a worktree of its own; the
-    plan root a closeout writes into is gitignored there exactly as it is here, so a
-    record written in it reaches no commit, no branch, and no publication — and there is
+    property rather than a convention. A lifecycle dispatch works in a worktree of its
+    own, and a planner works in the launching checkout under a note forbidding it to
+    commit; the plan root a closeout writes into is gitignored in either, so a record
+    written in it reaches no commit, no branch, and no publication — and there is
     no recipe, flag, or documented step by which a dispatched agent writes one either.
     """
     for source in plan_review.PLAN_SOURCES:
@@ -1216,7 +1217,6 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
         str(brief),
         "--name",
         run,
-        "--direct",
         "--no-design-doc",
         environment=environment,
         seconds=600,
@@ -1289,7 +1289,6 @@ def test_a_planning_run_that_did_not_settle_records_nothing(
         str(brief),
         "--name",
         run,
-        "--direct",
         "--no-design-doc",
         environment=environment,
         seconds=600,

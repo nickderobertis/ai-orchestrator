@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Finish a plan a planner has authored: `just finish-plan <BRIEF.md> [--to SOURCE]
-# [--name NAME] [--repo ALIAS|ORIGIN] [--execution-checkout ALIAS] [--direct] [--no-design-doc]
-# [<onepipeline start flags>]`.
+# [--name NAME] [--no-design-doc] [<onepipeline start flags>]`.
 #
 # This is the tail of the planning flow and its one implementation. `just plan` runs the
 # planner and its review closeout and then delegates to this; an operator who edited a
@@ -44,9 +43,11 @@
 # criterion back and stops.
 #
 # `--to` names the destination and defaults to the board this repository plans against;
-# `--name`, `--repo`, `--execution-checkout` and `--direct` mean what `scripts/plan.sh`
-# gives them; `--no-design-doc` stops the flow. Every other flag reaches `onepipeline
-# start` untouched.
+# `--name` means what `scripts/plan.sh` gives it; `--no-design-doc` stops the flow; and
+# the three retired placement flags are refused by name, because the design-document
+# node is a **direct** node exactly as the planner's is and for the same reason —
+# `scripts/plan.sh`'s header holds it. Every other flag reaches `onepipeline start`
+# untouched.
 #
 # llmlint: ignore-file[changed_behavior_has_e2e] What this script *decides* — the order of
 # the five steps, which of them each refusal stops at, the exit status each ends on, the
@@ -124,12 +125,6 @@ DESIGN_DOC_LIFT_CLOSE="<!-- end composed-into-the-dispatch -->"
 #: because the splice reads it three times — twice to cut the instructions around it and
 #: once to count it — and three spellings of one placeholder is a typo that fills nothing.
 DESIGN_DOC_LIFT_PLACEHOLDER="@ARCHITECTURE@"
-
-#: The change-request subject that node opens under, composed on the same terms as the
-#: planner node's and with the same releasable type: `.githooks/commit-msg` refuses a
-#: `docs:` subject, and a publication that reached that hook would be refused from the
-#: far side of a gate run.
-DESIGN_TITLE_PREFIX="feat(plan): design document for "
 
 #: The observer this launch attaches when the caller names none: nothing. A one-node run
 #: that reads a finished plan and writes one document has no frontier for a monitor to
@@ -225,14 +220,15 @@ COPY_REFUSED=5
 #: that reformatted it would be editing the manager's words on the way to the dispatch.
 #: Two things are appended after it, in this order and never woven in, so the manager's
 #: own words are always the whole of what precedes them: the instructions that are the
-#: rest of this node's task and the criteria it is judged against, and — on a `--direct`
-#: launch — the note stating where the dispatch works and which clause of the shared
-#: completion bar it is therefore exempt from.
+#: rest of this node's task and the criteria it is judged against, and the note stating
+#: where the dispatch works and which clause of the shared completion bar it is therefore
+#: exempt from. The node carries no `repo`, no `execution_checkout` and no `title`: it is
+#: a direct node, for the reason `scripts/plan.sh`'s header gives, and a direct node
+#: publishes nothing a subject could name.
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-(name, brief, node_id, persona, graph, repo, execution, title, direct_note,
- design_task) = sys.argv[1:11]
+(name, brief, node_id, persona, graph, direct_note, design_task) = sys.argv[1:8]
 task = pathlib.Path(brief).read_text(encoding="utf-8").rstrip()
 task = task + "\n\n" + design_task.strip() + "\n"
 
@@ -240,16 +236,10 @@ task = task + "\n\n" + design_task.strip() + "\n"
 # the other way round from every other dispatch on this host, and that reversal is a
 # property of the node rather than of the run.
 node = {"id": node_id, "persona": persona, "agent_graph": graph}
-if repo:
-    node["repo"] = repo
-    node["execution_checkout"] = execution
-    node["title"] = title
-else:
-    # A direct node works in the launch directory, and the shared completion bar demands
-    # every change committed. Saying so in the task is the only place the dispatch and
-    # its judge both read it.
-    task = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
-node["task"] = task
+# A direct node works in the launch directory, and the shared completion bar demands
+# every change committed. Saying so in the task is the only place the dispatch and its
+# judge both read it.
+node["task"] = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
 plan = {
     "schema_version": 3,
     "goal": {"text": f"Write the design document for the plan the manager briefed in {brief}"},
@@ -280,7 +270,7 @@ recipe() {
 }
 
 usage() {
-    echo "usage: just finish-plan <brief.md> [--to SOURCE] [--name NAME] [--repo ALIAS|ORIGIN] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
+    echo "usage: just finish-plan <brief.md> [--to SOURCE] [--name NAME] [--no-design-doc] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -317,12 +307,6 @@ fi
 shift
 
 plan_options_parse finish-plan "$@" || exit "$UNRUNNABLE"
-# The design-document node names its repository the way the planner node did: by its
-# normalized origin wherever `onevcs` resolves one, for the reason `scripts/plan-brief.sh`
-# gives beside the default.
-if [ -n "$PLAN_OPT_REPO" ]; then
-    PLAN_OPT_REPO=$(plan_repo_record_value finish-plan "$python" "$PLAN_OPT_REPO") || exit "$UNRUNNABLE"
-fi
 # The one option of the shared grammar this entry point does not own. Refused by name
 # rather than forwarded to a verb that has never heard of it: the design-document node
 # takes its persona's own budget, because a document is one read and one write rather
@@ -521,8 +505,7 @@ planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$DESIGN_DOC_NODE_ID\"
 design_plan="$plan_directory/$design_run.md"
 design_tasks="$plan_root/$PLAN_TASKS/$design_run"
 "$python" -c "$PLAN_PROGRAM" "$design_run" "$brief" "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" \
-    "$DESIGN_DOC_GRAPH" "$PLAN_OPT_REPO" "$PLAN_OPT_EXECUTION" "$DESIGN_TITLE_PREFIX$name" \
-    "$PLAN_DIRECT_PLACEMENT_NOTE" "$design_instructions" \
+    "$DESIGN_DOC_GRAPH" "$PLAN_DIRECT_PLACEMENT_NOTE" "$design_instructions" \
     | "$python" -m orchestrator.project_store "$plan_root" "$planning_metadata" >/dev/null || {
     # Reported rather than swallowed, and reported without ending the launch here: what
     # the operator has to act on is the write that failed, which the diagnostic below

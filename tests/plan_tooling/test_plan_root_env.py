@@ -1,8 +1,9 @@
 """One plan-authoring root, resolved once by the launch and read by every dispatch of it.
 
 `onetaskgraph.yaml` roots this repository's `authoring` source at the relative `.plans`,
-so every process resolves it against its own working directory — and a planning launch
-dispatches its planner into a worktree of its own. `scripts/plan-root-env.sh` is what
+so every process resolves it against its own working directory — which a planning
+launch's dispatches once did from a worktree of their own, and still do from wherever
+the launch put them. `scripts/plan-root-env.sh` is what
 makes that root a configured fact instead of a guess: it resolves the source through
 `orchestrator/plan_store.py`, refuses a root no plan could be authored into, and exports
 the one name the plan store reads it back under.

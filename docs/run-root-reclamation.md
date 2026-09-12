@@ -235,7 +235,7 @@ suggestion sends the reader to PATH and the harness install.
 
 **This repository cannot correct it.** The text belongs to `oneharness-core`:
 `crates/oneharness-core/src/io/runner.rs:490` in `fn run_job_supervised`, and again at
-`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.11.3 binary on
+`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.12.1 binary on
 this host, and a dispatch reaches the same crate as a linked library rather than
 through any script here, so nothing on this side of the boundary is in a position to
 rewrite it. The fix belongs there: when the job named a `cwd` (set at `runner.rs:457`)

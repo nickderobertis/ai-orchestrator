@@ -464,10 +464,18 @@ def test_the_same_unclassified_failure_with_work_behind_it_reads_as_work_done(
 
     This candidate fails exactly as unaccountably as the one before it — same
     absent `failure_kind`, same stopped chain, same untried identity behind it —
-    and differs only in having answered and been billed first. Under the previous
-    pin the two were one report; here they are told apart by `work` alone, and by
-    which summary sentence oneharness prints. A reading that collapsed them would
-    invite re-running work somebody already paid for.
+    and differs only in having answered and been billed first. Two pins ago the two
+    were one report; here they are told apart by `work` alone, and by which summary
+    sentence oneharness prints. A reading that collapsed them would invite re-running
+    work somebody already paid for.
+
+    Which sentence that is moved under the adopted release: through the previous pin
+    this stop borrowed `ran but did not succeed`, the sentence a task failure with a
+    named cause gets, and oneharness 0.12.1 gives it one of its own — the candidate
+    *did the task's work and did not succeed, for a cause it could not classify* —
+    beside the status it ended with and what the candidate itself said
+    (https://github.com/nickderobertis/oneharness/pull/1286). So a supervisor reading
+    the summary is told which of the three stops this was without opening the report.
     """
     turn = _codex_first_turn(
         tmp_path,
@@ -489,8 +497,13 @@ def test_the_same_unclassified_failure_with_work_behind_it_reads_as_work_done(
     # Same stop, and the identity behind it is untouched either way.
     assert "claude-code" not in turn.attempted
     assert UNREACHED_ANSWER["result"] not in turn.stdout
-    # And the operator gets the sentence that still means what it says.
-    assert "ran but did not succeed" in turn.stderr, turn.stderr
+    # And the operator gets the sentence that names this stop and no other, with the
+    # candidate's own words carried into it rather than left in the report.
+    assert "did the task's work and did not succeed, for a cause it could not classify" in (
+        turn.stderr
+    ), turn.stderr
+    assert "fake_codex: the provider answered and then failed" in turn.stderr, turn.stderr
+    assert "ran but did not succeed" not in turn.stderr, turn.stderr
     assert turn.persisted["codex"].work == "done"
 
 

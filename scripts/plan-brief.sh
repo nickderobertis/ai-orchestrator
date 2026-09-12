@@ -5,8 +5,8 @@
 # The flow is two launches with a review between them — a planner authors the plan,
 # `just review-plan` clears it, and only then is the design document written from
 # reviewed content — so it is two scripts. What they share is everything *before* either
-# of them acts: the brief is the same file, the options mean the same things, the
-# placement defaults are the same pair, and the run ids one flow uses have to be decided
+# of them acts: the brief is the same file, the options mean the same things, the node
+# each writes is placed the same way, and the run ids one flow uses have to be decided
 # together, because the second launch's name must be refused as taken before the first
 # one is made rather than an hour later.
 #
@@ -72,57 +72,46 @@ PLAN_DEFAULT_RUNS_ROOT="runs"
 # shellcheck disable=SC2034  # read by both launchers, which source this file.
 PLAN_RUN_ID_ENV="ONEPIPELINE_RUN_ID"
 
-#: The publication repository a flow's nodes carry, and the registered safety clone their
-#: worktrees are cut from. Neither is a path, because `onevcs` resolves both through its
-#: own registry and the two hosts this repository dispatches from lay these checkouts out
-#: differently — `config/onevcs.checkouts` is where each one's path is declared, and where
-#: a host that has neither is already accounted for.
+#: What every dispatch of a planning flow is told, appended to the brief as part of its
+#: own task. Both of the flow's nodes are **direct** nodes — no `repo`, no execution
+#: checkout, no branch — and this note is the text that bounds a dispatch working in a
+#: checkout it does not own. Stated as the placement plus the one clause it is exempt
+#: from, in that order: a dispatch reading only "may not commit" beside a bar demanding
+#: every change committed holds two instructions of equal authority and resolves it by
+#: guessing, which is the failure this text exists to end.
 #:
-#: The repository is its **normalized origin** and the execution checkout an **alias**,
-#: and the difference is the record each becomes. A task record names its repository in
-#: its own top-level `repositories` list, as one `host/owner/name`, which is where the
-#: engine reads a node's `repo` from and what the plan store files the task's issue by;
-#: the reserved `onepipeline.repo` key is kept for an identity that list cannot hold — a
-#: local checkout `onevcs` knows by its absolute path. `execution_checkout` has no such
-#: field and stays the alias `onevcs session open --execution-checkout` takes.
-PLAN_DEFAULT_PUBLICATION_REPO="github.com/nickderobertis/ai-orchestrator"
-PLAN_DEFAULT_EXECUTION_CHECKOUT="ai-orchestrator-isolated"
-
-#: What turns whatever `--repo` was given into the value the node's record carries:
-#: the identity's normalized origin wherever `onevcs` resolves it to one, and the value
-#: as written otherwise. `orchestrator.publication_guard.record_repository` is the one
-#: reader of that rule, shared with `just check-plan`, which refuses a hosted identity
-#: written on the reserved key — so a flow that resolved it differently would write a
-#: record its own pre-launch check refuses.
-PLAN_REPO_RECORD_PROGRAM='
-import sys
-
-from orchestrator.publication_guard import record_repository
-
-sys.stdout.write(record_repository(sys.argv[1]))
-'
-
-#: What a `--direct` dispatch is told, appended to the brief as part of its own task.
-#: Stated as the placement plus the one clause it is exempt from, in that order: a
-#: dispatch reading only "may not commit" beside a bar demanding every change committed
-#: holds two instructions of equal authority and resolves it by guessing, which is the
-#: failure this text exists to end.
+#: Why direct, when the shape a lifecycle node gives — an isolated worktree cut from a
+#: safety clone — is the one every other dispatch here gets, is `scripts/plan.sh`'s
+#: header to say. The short form: a planner and a design-document writer produce a
+#: plan-store record and never a branch, and the adopted engine settles a lifecycle
+#: dispatch that committed nothing to its branch `failed` as `empty-branch`
+#: (https://github.com/nickderobertis/onepipeline/pull/229) while the declaration that
+#: would accept the empty branch, `expects_no_diff`, settles the node without dispatching
+#: it at all — so no lifecycle declaration covers a dispatched node that commits nothing
+#: (https://github.com/nickderobertis/onepipeline/issues/238).
 # shellcheck disable=SC2034  # read by both launchers, which source this file.
 PLAN_DIRECT_PLACEMENT_NOTE="
 
 ## Additional info
 
-**This dispatch works in a checkout it does not own, so it commits nothing.** It was
-launched with \`--direct\`, which dispatches it into the shared canonical checkout that
-several orchestrators use rather than into a worktree of its own. So it may write only to
-gitignored paths, may not commit, and may not leave the checkout on any branch but its
-base.
+**This dispatch works in a checkout it does not own, so it commits nothing.** It is a
+direct node, dispatched into the checkout the flow was launched from — the shared
+canonical checkout that several orchestrators use — rather than into a worktree of its
+own. So it may write only to gitignored paths, may not commit, may not cut a branch, and
+may not leave the checkout on any branch but its base.
 
 That exempts it from one clause of the shared completion bar every dispatch on this host
 is judged against — \"with every change this dispatch made committed and nothing
 half-applied left behind\". Here there is nothing to commit, and a clean \`git status\` is
 the correct and complete outcome: what this dispatch writes to a gitignored path is the
 deliverable, and committing it would be the failure rather than the proof."
+
+#: The three placement flags the flow's grammar used to carry, refused by name below.
+#: Every launch of the flow composes a direct node now, for the reason the note above
+#: gives, so a flag that would compose a lifecycle one — or that named the direct shape
+#: as though it were the alternative — is refused rather than forwarded to a verb that has
+#: never heard of it, and the refusal says which shape every launch gets and why.
+PLAN_RETIRED_PLACEMENT_FLAGS="--repo, --execution-checkout and --direct"
 
 # Echo the whole of the brief at ``$2``, or refuse it as a brief this launch cannot read.
 #
@@ -244,26 +233,6 @@ plan_brief_project() {
     printf '%s' "$project"
 }
 
-# Echo the value a flow's node carries as its `repo`, given the caller's ``$3`` as typed.
-#
-# `--repo` takes an alias or an origin, and the record has to carry the origin wherever
-# there is one: `onevcs resolve` is what says which an alias names, and the interpreter at
-# ``$2`` is what asks it. A value `onevcs` cannot resolve passes through as written — it
-# is the launch that then refuses it, naming the registry — and so does one whose origin
-# is a path, which is the one identity the reserved `onepipeline.repo` key exists for.
-# $1 names the calling launcher so its diagnostics stay attributable.
-plan_repo_record_value() {
-    local caller=${1:?plan_repo_record_value: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
-    local python=${2-} repo=${3-} recorded
-    # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned interpreter cannot import this checkout's own package, which is a broken toolchain rather than a launch shape; `just bootstrap` is the repair and every plan journey runs on a working one.
-    # llmlint: ignore[tool_output_is_signal] The substitution captures stdout alone, so the interpreter's own diagnostic — a missing binary, an import error, a traceback — has already reached stderr whole by the time this line names the step that failed and its repair.
-    if ! recorded=$("$python" -c "$PLAN_REPO_RECORD_PROGRAM" "$repo"); then
-        echo "$caller: could not resolve the repository '$repo' this plan's nodes publish to; restore the pinned toolchain with 'just bootstrap', then retry" >&2
-        return 2
-    fi
-    printf '%s' "$recorded"
-}
-
 # Echo the run name a flow over ``$3`` runs under, given the caller's ``$2`` or nothing.
 # Derived from the brief's filename rather than from its prose: a manager renaming the
 # brief is deliberate, and a heading is not.
@@ -324,7 +293,7 @@ plan_run_is_free() {
 # other, and a caller refusing its own non-option by name says more than a parser that
 # forwarded it to a verb which has never heard of it.
 #
-# Answers through globals rather than through stdout because there are six of them and
+# Answers through globals rather than through stdout because there are five of them and
 # one is an array. $1 names the calling launcher so its diagnostics stay attributable.
 plan_options_parse() {
     local caller=${1:?plan_options_parse: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
@@ -332,8 +301,6 @@ plan_options_parse() {
     PLAN_OPT_NAME=""
     PLAN_OPT_MAX_TURNS=""
     PLAN_OPT_DESTINATION=""
-    PLAN_OPT_REPO="$PLAN_DEFAULT_PUBLICATION_REPO"
-    PLAN_OPT_EXECUTION="$PLAN_DEFAULT_EXECUTION_CHECKOUT"
     PLAN_OPT_DESIGN_DOC=1
     PLAN_OPT_FORWARDED=()
     while [ $# -gt 0 ]; do
@@ -386,44 +353,12 @@ plan_options_parse() {
                 fi
                 shift
                 ;;
-            --repo)
-                if [ $# -lt 2 ] || [ -z "$2" ]; then
-                    echo "$caller: --repo was given no value; name the repository this plan's branch publishes to, as a registered alias or its origin, or omit it for '$PLAN_DEFAULT_PUBLICATION_REPO'" >&2
-                    return 2
-                fi
-                PLAN_OPT_REPO="$2"
-                shift 2
-                ;;
-            --repo=*)
-                PLAN_OPT_REPO="${1#--repo=}"
-                if [ -z "$PLAN_OPT_REPO" ]; then
-                    echo "$caller: --repo was given no value; name the repository this plan's branch publishes to, as a registered alias or its origin, or omit it for '$PLAN_DEFAULT_PUBLICATION_REPO'" >&2
-                    return 2
-                fi
-                shift
-                ;;
-            --execution-checkout)
-                if [ $# -lt 2 ] || [ -z "$2" ]; then
-                    echo "$caller: --execution-checkout was given no value; name the safety clone this flow's worktrees are cut from, or omit it for '$PLAN_DEFAULT_EXECUTION_CHECKOUT'" >&2
-                    return 2
-                fi
-                PLAN_OPT_EXECUTION="$2"
-                shift 2
-                ;;
-            --execution-checkout=*)
-                PLAN_OPT_EXECUTION="${1#--execution-checkout=}"
-                if [ -z "$PLAN_OPT_EXECUTION" ]; then
-                    echo "$caller: --execution-checkout was given no value; name the safety clone this flow's worktrees are cut from, or omit it for '$PLAN_DEFAULT_EXECUTION_CHECKOUT'" >&2
-                    return 2
-                fi
-                shift
-                ;;
-            --direct)
-                # Both together, because a node carries the pair or neither:
-                # `execution_checkout` without a `repo` names a clone nothing is cut from.
-                PLAN_OPT_REPO=""
-                PLAN_OPT_EXECUTION=""
-                shift
+            --repo | --repo=* | --execution-checkout | --execution-checkout=* | --direct)
+                # Refused by name rather than forwarded: `onepipeline start` has never
+                # heard of any of them, and a caller typing one has read an older shape
+                # of this flow. The node is a direct node whichever was typed.
+                echo "$caller: '$1' is no longer an option of the planning flow: every launch of it composes a direct node, working in the checkout it was launched from, because the adopted engine settles a lifecycle dispatch that commits nothing 'failed' as 'empty-branch' and no declaration covers a dispatched node that commits nothing (https://github.com/nickderobertis/onepipeline/issues/238); drop $PLAN_RETIRED_PLACEMENT_FLAGS and retry" >&2
+                return 2
                 ;;
             --no-design-doc)
                 # Consumed rather than forwarded: `onepipeline start` has no such option,
@@ -445,13 +380,4 @@ plan_options_parse() {
                 ;;
         esac
     done
-    # The pair is checked after every option has been read rather than as each is read,
-    # because they may arrive in any order and `--direct` clears both: a `--direct`
-    # followed by one of them leaves half a placement, which names a clone nothing is cut
-    # from or a checkout nothing publishes to.
-    if { [ -n "$PLAN_OPT_REPO" ] && [ -z "$PLAN_OPT_EXECUTION" ]; } ||
-        { [ -z "$PLAN_OPT_REPO" ] && [ -n "$PLAN_OPT_EXECUTION" ]; }; then
-        echo "$caller: this launch would write a node placed at repo '${PLAN_OPT_REPO:-none}' and execution checkout '${PLAN_OPT_EXECUTION:-none}'; a node carries both or neither: name the missing one, or pass --direct alone for a dispatch that cuts no worktree" >&2
-        return 2
-    fi
 }

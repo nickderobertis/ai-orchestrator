@@ -34,12 +34,11 @@ from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
 import pytest
-from conftest import git
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seeded
+from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_review, plan_store
@@ -72,9 +71,11 @@ INHERITED_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: The two aliases `scripts/finish-plan.sh` defaults to, seeded here against a scratch
-#: registry rather than overridden per launch: what is under test is the project this
-#: recipe writes when nobody tells it anything.
+#: The two aliases this repository's own identity registers, seeded here against a
+#: scratch registry so nothing a flow does reaches this host's own. The node the tail
+#: writes is a direct node and opens no session, so the launch itself reaches no
+#: registry any more; the scratch one stays because a recipe that started opening
+#: sessions again must do so there rather than in the directories live dispatches use.
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
@@ -256,23 +257,6 @@ def _staged_draft(tmp_path: Path, drafted: Drafted) -> Path:
     return documents.parent
 
 
-def _tracks_the_store(identity: Identity) -> None:
-    """Give the seeded repository this checkout's own plan-store configuration.
-
-    A design-doc dispatch works in a worktree of the repository the plan is of and reaches
-    the store the way anything in that worktree does: through the `onetaskgraph.yaml` that
-    repository tracks. The seeded identity is a bare stub, so it carries none — and a
-    dispatch there would have to be *told* where the plan store is, which is the one thing
-    this journey must not tell it if the storing is to be the dispatch's own.
-    """
-    tracked = identity.execution / "onetaskgraph.yaml"
-    tracked.write_bytes((REPO_ROOT / "onetaskgraph.yaml").read_bytes())
-    git("add", "onetaskgraph.yaml", cwd=identity.execution)
-    git(*GIT_IDENTITY, "commit", "-qm", "chore: configure the plan store", cwd=identity.execution)
-    git("push", "-q", "origin", "main", cwd=identity.execution, env=identity.environment)
-    git("pull", "-q", "--ff-only", cwd=identity.publication, env=identity.environment)
-
-
 class Bench(NamedTuple):
     """One throwaway host these journeys run a flow on: its environment and its stores."""
 
@@ -290,7 +274,6 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
         execution=EXECUTION_ALIAS,
         origin=PLANNING_FLOW_ORIGIN,
     )
-    _tracks_the_store(identity)
     destination = tmp_path / "board"
     # Created rather than left to the first write: a `local-md` source canonicalizes its
     # root when it is built, so an absent one is refused as a broken source rather than
@@ -623,21 +606,23 @@ def test_the_tail_reports_the_two_locations_the_destination_itself_answers(
 
 
 @pytest.mark.xdist_group("finish-plan")
-def test_the_design_document_node_names_this_repository_in_its_records_own_field(
+def test_the_design_document_node_names_no_repository_because_it_is_a_direct_node(
     finished: Finished,
 ) -> None:
-    """The tail's node names its repository once, in `repositories`, as the normalized origin.
+    """The tail's node is a direct node, so its record names no repository anywhere.
 
     Launched with its defaults, so what is read is the record the recipe writes when
-    nobody tells it anything: the origin the flow's default names, in the record's own
-    top-level field, and nothing on the reserved `onepipeline.repo` key. That key is what
-    every plan this host wrote used to carry an alias on, which left every task issue of
-    a plan filed in this repository rather than the one the work changed.
+    nobody tells it anything: no `repositories`, nothing on the reserved
+    `onepipeline.repo` key, and no execution checkout. It is a direct node for the reason
+    the planner's is one — it writes a document into the plan store and never a commit,
+    and the adopted engine settles a lifecycle dispatch that commits nothing `failed` as
+    `empty-branch` while the declaration that would accept the empty branch settles the
+    node without dispatching it (https://github.com/nickderobertis/onepipeline/issues/238).
     """
-    assert finished.design_task["repositories"] == [PLANNING_FLOW_ORIGIN], finished.design_task
+    assert finished.design_task["repositories"] == [], finished.design_task
     metadata = finished.design_task["metadata"]
     assert "onepipeline.repo" not in metadata, metadata
-    assert metadata["onepipeline.execution_checkout"] == EXECUTION_ALIAS, metadata
+    assert "onepipeline.execution_checkout" not in metadata, metadata
 
 
 @pytest.mark.xdist_group("finish-plan")
@@ -834,9 +819,9 @@ UNRUNNABLE_FLOWS = (
         "--max-turns names the planner's budget",
     ),
     Unrunnable(
-        "half a placement",
-        ("--direct", "--repo", "other"),
-        "carries both or neither",
+        "a retired placement flag",
+        ("--direct",),
+        "no longer an option",
     ),
     Unrunnable("a run id nothing can use", ("--name", "with.dots"), "is not a run id"),
 )
@@ -1021,9 +1006,9 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
     second success line is noise the next reader learns to skip, and this one is known
     before the launch is even made.
 
-    The name and the placement are in that command rather than left to their defaults,
-    because a caller who re-ran it bare would finish the plan under a different run id and
-    against a different pair of checkouts than the one that planned it.
+    The name is in that command rather than left to its default, because a caller who
+    re-ran it bare would finish the plan under a different run id than the one that
+    planned it.
 
     It lives beside the tail rather than beside the planner's own journeys because that is
     what it is about, and because a real launch belongs behind this project's own edge.
@@ -1055,12 +1040,13 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
         assert f"--name {named}" in reported, (
             f"the handover drops the name this flow's runs are derived from:\n{reported}"
         )
-        # The placement as this launch *resolved* it: the repository by the normalized
-        # origin its record carries rather than by the alias the default names, so the
-        # tail is handed the value it would resolve to anyway.
-        assert (
-            f"--repo {PLANNING_FLOW_ORIGIN} --execution-checkout {EXECUTION_ALIAS}" in reported
-        ), f"the handover drops the placement this launch resolved:\n{reported}"
+        # No placement: both of the flow's nodes are direct nodes and the flags that once
+        # named one are refused, so a handover carrying one would refuse the tail.
+        for retired in ("--repo", "--execution-checkout", "--direct"):
+            assert retired not in reported, (
+                f"the handover names the retired flag {retired}, which the tail refuses:\n"
+                f"{reported}"
+            )
         assert f"--to {DESTINATION}" in reported, (
             f"the handover drops the destination this launch was given:\n{reported}"
         )

@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.27.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.27.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,15 +143,15 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.11.3/0.7.0 upgrade (`config/oneharness.version` and
+after the 0.12.1/0.8.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
-this paragraph whenever either pin moves. That re-check has now been made three times
+this paragraph whenever either pin moves. That re-check has now been made four times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
-could classify. For each of the two since, it was re-taken by spending a real
+could classify. For two of the three since, it was re-taken by spending a real
 `oneagentgraph smoke` turn on the adopted pair, through this repository's own agent
 wrapper and with `ONEHARNESS_HISTORY_DIR` pointed at a throwaway store, and reading the
 record it wrote: at history
@@ -159,10 +159,18 @@ schema 1.1 the `usage` block is `input_tokens`, `output_tokens`, `cache_read_tok
 `cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered. Both
 of those turns' chains selected `claude-code:alternate` first and so wrote no
 fallen-through record to compare, which the earlier re-take of the same measurement did.
-The oneharness half of this pin's own bump is a **classification** change — a completed
+The oneharness half of the bump before this one is a **classification** change — a completed
 billed turn is no longer reported as a failure — so what it could have moved is
 `status` and `failure_kind` on the record rather than the `usage` block, and neither
-moved on a turn that succeeded. Nothing an accounting reader reads is
+moved on a turn that succeeded. The oneharness half of this pin's own bump adds one
+field beside the block rather than inside it: a record carrying `observed_model` — the
+model the harness itself reported a controlled turn would run under — or classified
+`model_mismatch` declares history schema **1.8**
+(https://github.com/nickderobertis/oneharness/pull/1284), and the `usage` block is
+untouched between the two tags. That one was re-taken without a paid turn, because the
+turn that shows the field is the one `tests/e2e/test_controlled_turn_model_e2e.py`
+drives offline: a controlled codex turn against the refusing loopback endpoint, whose
+result carries `observed_model` beside the same five-key `usage` block. Nothing an accounting reader reads is
 renamed, retyped, or re-meant, which is why the boundary sentence names the pair
 these records are written under rather than the older one they were first taken on. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own

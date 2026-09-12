@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
-from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
+from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from project_fixtures import project_from_plan
 from scratch_identity import seeded
 from waits import timeout as e2e_timeout
@@ -70,6 +70,34 @@ MEMBER_SCRATCH = f"/members/{WORKER_MEMBER}/"
 #: The registered alias of the checkout a session clones from. `onevcs` takes an
 #: alias here and refuses a path, so the plan names the alias.
 EXECUTION_ALIAS = "execution"
+
+#: The phrase the task carries that tells the stand-in this is the turn that commits.
+#:
+#: The worker commits because the adopted engine fails a lifecycle dispatch whose branch
+#: is level with its base and which declared no `expects_no_diff` — `empty-branch`,
+#: https://github.com/nickderobertis/onepipeline/pull/229 — and that declaration
+#: settles a node *without* dispatching it, which is the opposite of what a journey
+#: about where a dispatch starts needs. So the stand-in does what a real worker asked
+#: for a change does: writes one file where it stands and commits it there. The commit
+#: is the evidence's second half, too — it is made in the worker's own working
+#: directory, so the branch it lands on is the branch of the worktree the worker started
+#: in.
+COMMIT_MARKER = "Leave one file recording where you stood, and commit it."
+
+#: What the stand-in runs when its task carries that marker: one file, one commit, in the
+#: directory `oneharness` served the turn in. Idempotent because a supervisor may send
+#: the dispatch back for another turn, and a second turn must not fail on a file the
+#: first one already committed. The committer is stated because the launch is made from
+#: a module-scoped fixture, before `tests/conftest.py` has exported one for the test.
+COMMIT_COMMANDS = [
+    [
+        "sh",
+        "-c",
+        "[ -f PLACEMENT.md ] || { pwd > PLACEMENT.md && git add PLACEMENT.md "
+        "&& git -c user.email=test@example.com -c user.name=ai-orchestrator-test "
+        "commit -qm 'feat: record where the worker stood'; }",
+    ]
+]
 
 #: A launching session the journey states rather than inherits: this suite runs
 #: inside a dispatch whose own harness session would otherwise own the run.
@@ -138,7 +166,7 @@ def _plan(root: Path, publication: Path) -> Path:
                         "execution_checkout": EXECUTION_ALIAS,
                         "persona": "engineer",
                         "task": (
-                            "## What\nReport the directory you are in, changing nothing.\n\n"
+                            f"## What\n{COMMIT_MARKER}\n\n"
                             "## Why\nThe journal's record of that directory is the subject; "
                             "the work itself is not.\n\n"
                             "## Acceptance criteria\n- The dispatch starts and reports.\n"
@@ -174,6 +202,9 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     prompt_log = root / "turns.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
+    keyed = root / "commands.json"
+    keyed.write_text(json.dumps({COMMIT_MARKER: COMMIT_COMMANDS}), encoding="utf-8")
+    environment[RUN_ON_MARKER_ENV] = str(keyed)
 
     launch = subprocess.run(
         [

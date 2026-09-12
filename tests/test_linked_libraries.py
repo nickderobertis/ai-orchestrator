@@ -106,6 +106,27 @@ TURN_CONTENT_FLOOR = Release(0, 3, 6)
 GATE_FREE_FLOOR = Release(0, 11, 0)
 
 
+#: The oneharness-core release that runs a controlled codex turn under its candidate's
+#: own model — https://github.com/nickderobertis/oneharness/pull/1284, cut as
+#: `oneharness-core` 0.13.0 — and refuses one the server would run elsewhere. Below it
+#: the control path was handed the run-level model alone, so a side's
+#: `[harness.codex].model` reached the record and never `thread/start`, and codex ran
+#: the default its own config named: on this host Astra at roughly ten times the weekly
+#: quota per token, recorded as Sol throughout. Every codex-first supervisory side here
+#: takes `--control`, so what this floor buys is a dispatched codex turn under
+#: `--control` running the model its side's config names, the server's own answer
+#: recorded beside it as `observed_model`, and a `model_mismatch` refusal — falling
+#: through a chain as `model-mismatch`, before any token is spent — in place of a
+#: silent substitution.
+#:
+#: Held on the *linked* core rather than on `config/oneharness.version`, because that
+#: pin is the CLI the wrapper scripts and the smoke spawn, and a dispatched member's
+#: turn goes through the core its engine links — a bump to `config/onepipeline.version`
+#: that resolved an older core would put every supervisory side back on the misrouted
+#: path while every version file on the host read current.
+CONTROL_MODEL_CORE_FLOOR = Release(0, 13, 0)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -261,6 +282,28 @@ def test_the_linked_oneagentgraph_carries_the_whole_turn_it_relays() -> None:
     )
 
 
+def test_the_linked_oneharness_core_runs_a_controlled_turn_under_its_own_model() -> None:
+    """Above the floor, a controlled codex turn runs the model its side's config names.
+
+    The regression this stops is the one that cost this host two Pro identities' weekly
+    windows in about a day each, and it is invisible from every pin in `config/`: the
+    record says the configured model whether or not the wire carried it, and
+    `config/oneharness.version` answers for the CLI the smoke spawns rather than for the
+    core a dispatched member's turn goes through. Only the linked release says which
+    path a dispatch is on. The property itself is driven for real, offline, by
+    `tests/e2e/test_controlled_turn_model_e2e.py`; this holds the engine to a core that
+    can pass it.
+    """
+    linked = Release.parse(_linked_version(UNRECONCILABLE_PIN.crate))
+
+    assert linked >= CONTROL_MODEL_CORE_FLOOR, (
+        f"the adopted engine links {UNRECONCILABLE_PIN.crate} {linked}, below the "
+        f"{CONTROL_MODEL_CORE_FLOOR} that runs a controlled codex turn under its "
+        "candidate's own model; every codex-first supervisory side dispatched under it "
+        "would run the server's own default while its record named the configured one"
+    )
+
+
 def test_the_linked_onevcs_runs_no_gate_of_its_own() -> None:
     """Above the removal, the repository's own merge path is the only verifier.
 
@@ -377,11 +420,13 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Measured 2026-08-31 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.11.2 and names the `oneharness-cli`
+#: between them would mean anything. Measured 2026-09-12 on this host's installed
+#: wheels: `config/oneharness.version` reads 0.12.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.12.1 — while the engine wheel links 0.12.2. One wheel, its own
-#: library, two numbers, and neither of them the one a dispatched turn runs through.
+#: against as 0.13.1 — which the engine wheel links too, this time. One wheel, its own
+#: library, and a number that agrees with the engine's by the coincidence of two
+#: cadences meeting: the adoption before this one measured 0.12.2 against 0.12.2 as
+#: well, and the one before that 0.12.1 against 0.12.2.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
 #: What each dependent resolves that crate at in the adopted engine. The whole
@@ -394,8 +439,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.15", core="0.12.2"),
-    LinkedCore(dependent="onejudge", dependent_version="0.7.0", core="0.12.2"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.3.17", core="0.13.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.8.1", core="0.13.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -530,8 +575,8 @@ def test_the_oneharness_pin_names_an_artifact_the_engine_does_not_link() -> None
     installed wheels, that instruction is wrong: the engine does link one core now,
     and the pin still cannot be reconciled, because `config/oneharness.version` names
     the `oneharness-cli` wheel and the linked crate is `oneharness-core`. Those are
-    separate artifacts on separate cadences — the installed CLI reads 0.11.2 and its
-    own SBOM declares the core it is compiled against as 0.12.1 — so an equality
+    separate artifacts on separate cadences — the installed CLI read 0.11.2 and its
+    own SBOM declared the core it is compiled against as 0.12.1 — so an equality
     between them would assert that two artifacts carry one number.
 
     So the property gated is the one that was always the real reason and was only ever
@@ -612,8 +657,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.12.1", "0.12.2"),
-        "onejudge-cli": ("0.12.1", "0.12.2"),
+        "oneagentgraph-cli": ("0.13.0", "0.13.1"),
+        "onejudge-cli": ("0.13.0", "0.13.1"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

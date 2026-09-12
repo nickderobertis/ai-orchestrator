@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch a planner on a manager-written brief and finish the plan it writes: `just plan
-# <BRIEF.md> [--name NAME] [--max-turns N] [--to SOURCE] [--repo ALIAS|ORIGIN]
-# [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]`.
+# <BRIEF.md> [--name NAME] [--max-turns N] [--to SOURCE] [--no-design-doc]
+# [<onepipeline start flags>]`.
 #
 # The manager's job is writing the brief and reviewing what comes back, not
 # assembling a plan project by hand. So this recipe writes the project, and the one shape
@@ -22,9 +22,9 @@
 #     second launch, and an hour of planning must not end at a name collision.
 #   * **The operational appendix is exported into the launch environment**, as text
 #     rather than as a path. Every dispatched task must carry it verbatim and the
-#     planner is what copies it in, but a planner works in a worktree of its own while
-#     the tracked file lives here — so a path names a file it cannot open, and the
-#     refusal it then meets named that same path.
+#     planner is what copies it in, but a planner may plan against a checkout other
+#     than the one holding the tracked file — so a path names a file it cannot open,
+#     and the refusal it then met named that same path.
 #   * **`ORCHESTRATOR_ASK_MANAGER` is exported into the launch environment**, holding
 #     the path of `scripts/ask-manager.sh`, which is how the dispatched planner stops
 #     and asks rather than guessing at a decision fork. A launch that dropped it would
@@ -35,10 +35,10 @@
 #   * **The plan-authoring root is resolved once and exported**, so every dispatch of
 #     this launch reads the same directory rather than resolving a relative source root
 #     against whatever working directory it happens to have. `onetaskgraph.yaml` roots
-#     the `authoring` source at the relative `.plans`, and the planner below works in a
-#     worktree of its own — so without this the plan it authors lands in that worktree's
-#     own copy of the directory, which nothing outside the worktree reads and which is
-#     reclaimed with the worktree. Established through `scripts/plan-root-env.sh`, which
+#     the `authoring` source at the relative `.plans`, and a dispatch resolves that
+#     against its own working directory — which, while the planner worked in a worktree
+#     of its own, was that worktree's own copy of the directory, read by nothing outside
+#     it and reclaimed with it. Established through `scripts/plan-root-env.sh`, which
 #     is the one place that variable's name and value are composed, and taken here
 #     before anything is written so a checkout whose authoring source is not a writable
 #     root is refused rather than left holding a plan nothing will find. **The project
@@ -51,40 +51,51 @@
 #     monitor`: rendering a surface is not reading it, and only `channel-next`
 #     consumes one — a planner's blocking question is answered there or not at all.
 #
-# **It is one lifecycle node, so the planner works in an isolated worktree.** That is
-# the one thing about this recipe that is not merely convenience, and it was learned
-# the expensive way. A node with no `repo` is a *direct* node, and a direct node works
-# in the launch directory — which for this recipe is the shared canonical checkout the
-# self-dispatch rule in `AGENTS.md` forbids authoring in, because concurrent
-# orchestrators use it and direct edits race them. A planner dispatched that way cut a
-# branch in the canonical checkout, committed to it, and left it checked out; a
-# finished lifecycle publication then failed at its last step because the publication
-# checkout was on that branch rather than on its base, and returning it to the base
-# deleted the manager's own plan files, which the planner had force-added onto its
-# branch from gitignored paths. So the node carries `repo` — the publication checkout
-# this repository is published from — and `execution_checkout`, the registered safety
-# clone its worktree is cut from, exactly as every other node this repository
-# dispatches does.
+# **It is one direct node, so the planner works in the checkout the launch was made
+# from.** That is the one thing about this recipe that is not merely convenience, and it
+# has been decided both ways, each time the expensive way. A node with no `repo` is a
+# *direct* node, and a direct node works in the launch directory — which for this recipe
+# is the shared canonical checkout the self-dispatch rule in `AGENTS.md` forbids
+# authoring in, because concurrent orchestrators use it and direct edits race them. A
+# planner dispatched that way once cut a branch in the canonical checkout, committed to
+# it, and left it checked out; a finished lifecycle publication then failed at its last
+# step because the publication checkout was on that branch rather than on its base, and
+# returning it to the base deleted the manager's own plan files, which the planner had
+# force-added onto its branch from gitignored paths. So the node moved to a lifecycle
+# shape — `repo` plus `execution_checkout`, a worktree cut from the registered safety
+# clone, exactly as every other node this repository dispatches — and stayed there until
+# the adopted engine made that shape one a planner cannot settle under.
 #
-# Two consequences a caller should know. The planner's working directory is that
-# worktree and not this checkout, so a plan written to a gitignored path there does not
-# outlive the run — a brief wanting the plan back names a path that is committed, or
-# the manager reads it off the branch. And `--repo` / `--execution-checkout` are here
-# for a caller planning against a differently registered host, and for the journeys
-# that drive this recipe against a scratch identity rather than against this host's own
-# checkouts.
+# **Why it is back on the direct shape**: onepipeline settles a lifecycle dispatch whose
+# branch is level with its base `failed` as `empty-branch` unless the node declared
+# `expects_no_diff` (https://github.com/nickderobertis/onepipeline/pull/229) — and that
+# declaration settles a node **without dispatching it**, refusing one that carries a
+# persona at all, so no lifecycle declaration covers a dispatched node that commits
+# nothing (https://github.com/nickderobertis/onepipeline/issues/238). A planner is
+# exactly that node: its whole deliverable is a plan-store record under the exported
+# authoring root, and it leaves its branch level with the base by design. Under the
+# lifecycle shape every `just plan` on the adopted engine settled `failed`, and so did
+# every design-document launch in `scripts/finish-plan.sh`, which composes its node the
+# same way. The direct shape is the honest model of what these two dispatches produce —
+# a record, never a branch — and the incident above is answered in the task rather than
+# by the placement: `PLAN_DIRECT_PLACEMENT_NOTE` is appended to the brief of every
+# launch, stating that the dispatch works in a checkout it does not own, **may write only
+# to gitignored paths, may not commit, may not cut a branch, and may not leave the
+# checkout on any branch but its base**, and which clause of the shared completion bar
+# that exempts it from. That last half is not decoration: the shared completion clause in
+# `config/onejudge.base.yaml` demands "every change this dispatch made committed" of
+# every dispatch alike, and a planner that did correct, verified work settled
+# `task-failed` against exactly that before the note said otherwise. The shared clause is
+# right, is shared, and does not move; the exemption belongs in the task of the dispatch
+# it is true of.
 #
-# `--direct` is the old shape, kept for a planning dispatch that must not cut a
-# worktree at all — it costs the clone, and a planner authoring nothing has no branch
-# to leave. It is a working directory nobody owns exclusively, so a dispatch launched
-# that way **may write only to gitignored paths, may not commit, and may not leave the
-# checkout on any branch but its base.** That is now in the dispatched task rather than
-# only here: `PLAN_DIRECT_PLACEMENT_NOTE` is appended to the brief for a `--direct`
-# launch, because the shared completion clause in `config/onejudge.base.yaml` demands
-# "every change this dispatch made committed" of every dispatch alike and a `--direct` one
-# may not commit at all. A planner that did correct, verified work settled `task-failed`
-# against exactly that. The shared clause is right, is shared, and does not move; the
-# exemption belongs in the task of the one dispatch it is true of.
+# What a caller gives up is the choice of placement: `--repo`, `--execution-checkout`
+# and `--direct` are refused by name in `scripts/plan-brief.sh`, because the first two
+# would compose the shape that fails and the third named the only shape there is. The
+# journeys that drive this recipe need no scratch identity for the launch itself any
+# more — a direct node opens no session — and the authoring root still comes from the
+# variable `scripts/plan-root-env.sh` exports, so the plan lands where the manager reads
+# it whichever directory the planner stood in.
 #
 # The journal, the ownership row, the planner surfaces, and the run's place in the DAG
 # UI are `onepipeline start`'s own — the ledger it writes and the channel it serves —
@@ -126,9 +137,9 @@
 # of the tail would be about a project nothing has written. The launch says so and prints
 # the command that finishes it once the planner has settled.
 #
-# `--name`, `--max-turns`, `--to`, `--repo`, `--execution-checkout`, `--direct` and
-# `--no-design-doc` are consumed here; every other flag is passed to `onepipeline start`
-# untouched, `--dag-graph` included.
+# `--name`, `--max-turns`, `--to` and `--no-design-doc` are consumed here, and the three
+# retired placement flags are refused by name; every other flag is passed to
+# `onepipeline start` untouched, `--dag-graph` included.
 set -euo pipefail
 
 #: What the project this launch writes says about itself: it is the plan a *planning*
@@ -169,18 +180,6 @@ PLAN_SOURCE="authoring"
 #: The persona ref the planner node carries. A path, deliberately — see the header.
 PLANNER_PERSONA="../personas/planner.yaml"
 
-#: The subject a lifecycle node's change request opens under, which the plan schema
-#: requires of one and which a squash-merged publication leaves on the base branch as
-#: its only commit. It is composed rather than asked for, because the caller wrote a
-#: brief rather than a commit: `feat` because this repository releases from a plan the
-#: way it releases from any other tracked source, and the run's own name as the summary,
-#: which is the one thing about this dispatch a reader of the base would want.
-#:
-#: A planner that authors nothing commits nothing and publishes nothing, so this is
-#: usually a subject nobody ever reads — and that is the case it exists for: the node
-#: that does leave a commit must not be the one discovering there is no subject for it.
-TITLE_PREFIX="feat(plan): "
-
 #: The observer this launch attaches when the caller names none: nothing — see the
 #: header for why a planning run in particular is the wrong run to watch that way.
 #: Named rather than left to `onepipeline start`'s own default of `off`, so the
@@ -210,26 +209,21 @@ NODE_ID="plan"
 # dispatches is written in, so anything that reformatted it would be editing the
 # manager's words on the way to the dispatch. One thing is appended after it, never
 # woven in, so the manager's own words are always the whole of what precedes it:
-# `PLAN_DIRECT_PLACEMENT_NOTE` on a `--direct` launch, which states where that dispatch
-# works and which clause of the shared completion bar it is therefore exempt from.
+# `PLAN_DIRECT_PLACEMENT_NOTE`, which states where the dispatch works and which clause
+# of the shared completion bar it is therefore exempt from. The node carries no `repo`,
+# no `execution_checkout` and no `title`: it is a direct node, for the reason the header
+# gives, and a direct node publishes nothing a subject could name.
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-(name, brief, persona, node_id, turns, repo, execution, title,
- direct_note) = sys.argv[1:10]
+(name, brief, persona, node_id, turns, direct_note) = sys.argv[1:7]
 task = pathlib.Path(brief).read_text(encoding="utf-8")
 
+# A direct node works in the launch directory, and the shared completion bar demands
+# every change committed. Saying so in the task is the only place the dispatch and its
+# judge both read it.
 node = {"id": node_id, "persona": persona}
-if repo:
-    node["repo"] = repo
-    node["execution_checkout"] = execution
-    node["title"] = title
-else:
-    # A direct node works in the launch directory, and the shared completion bar
-    # demands every change committed. Saying so in the task is the only place the
-    # dispatch and its judge both read it.
-    task = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
-node["task"] = task
+node["task"] = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
 if turns:
     node["max_turns"] = int(turns)
 plan = {
@@ -247,7 +241,7 @@ fail() {
 }
 
 usage() {
-    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--to SOURCE] [--repo ALIAS|ORIGIN] [--execution-checkout ALIAS] [--direct] [--no-design-doc] [<onepipeline start flags>]" >&2
+    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--to SOURCE] [--no-design-doc] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -285,13 +279,6 @@ fi
 shift
 
 plan_options_parse plan "$@" || exit 2
-# The record carries the repository's normalized origin wherever `onevcs` resolves one,
-# so `--repo` may be typed as the alias `just repos` lists and the node still names its
-# repository in the record's own `repositories`. Resolved once here and handed on to the
-# tail already resolved, which asks the same question and gets the same answer.
-if [ -n "$PLAN_OPT_REPO" ]; then
-    PLAN_OPT_REPO=$(plan_repo_record_value plan "$python" "$PLAN_OPT_REPO") || exit 2
-fi
 if [ -n "$PLAN_OPT_MAX_TURNS" ]; then
     [[ "$PLAN_OPT_MAX_TURNS" =~ ^[1-9][0-9]*$ ]] || fail "--max-turns is '$PLAN_OPT_MAX_TURNS', which is not a positive whole number of turns" \
         "give it a count like 40, or omit it for the persona's own budget"
@@ -329,11 +316,6 @@ if [ "$PLAN_OPT_DESIGN_DOC" -eq 1 ]; then
     plan_run_is_free plan "$(plan_design_run "$name")" || exit 2
     tail_arguments+=(--name "$name")
     [ -z "$PLAN_OPT_DESTINATION" ] || tail_arguments+=(--to "$PLAN_OPT_DESTINATION")
-    if [ -n "$PLAN_OPT_REPO" ]; then
-        tail_arguments+=(--repo "$PLAN_OPT_REPO" --execution-checkout "$PLAN_OPT_EXECUTION")
-    else
-        tail_arguments+=(--direct)
-    fi
 elif [ -n "$PLAN_OPT_DESTINATION" ]; then
     fail "--to names the destination the tail copies this plan into, and --no-design-doc stops the flow before there is anything to copy" \
         "drop one of the two: --to alone finishes the plan into that destination, and --no-design-doc alone launches the planner and stops"
@@ -378,7 +360,7 @@ plan="$plan_directory/$name.md"
 plan_task_records="$plan_root/$PLAN_TASKS/$name"
 planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$NODE_ID\"]}"
 "$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$PLAN_OPT_MAX_TURNS" \
-    "$PLAN_OPT_REPO" "$PLAN_OPT_EXECUTION" "$TITLE_PREFIX$name" "$PLAN_DIRECT_PLACEMENT_NOTE" \
+    "$PLAN_DIRECT_PLACEMENT_NOTE" \
     | "$python" -m orchestrator.project_store "$plan_root" "$planning_metadata" >/dev/null || {
     # Reported rather than swallowed, and reported without ending the launch here: what
     # the operator has to act on is the write that failed, which the diagnostic below
@@ -400,11 +382,7 @@ planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$NODE_ID\"]}"
 # decides what a brief may ask it to leave behind, so a manager reading the receipt is
 # the reader who needs it — and a second line on a successful launch is noise the next
 # reader learns to skip.
-if [ -n "$PLAN_OPT_REPO" ]; then
-    placement="it works in a worktree cut from '$PLAN_OPT_EXECUTION', so a plan written to a gitignored path there does not outlive the run"
-else
-    placement="--direct dispatches it into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
-fi
+placement="it is a direct node dispatched into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
 # What a detached launch owes beside the receipt, folded into that one line rather than
 # printed after the launch: `--detach` hands back before the plan exists, so the tail
 # cannot run and the operator has to run it themselves once the planner has settled. It is

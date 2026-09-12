@@ -182,9 +182,8 @@ orchestrate *args:
     @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else defaults=(); for pair in "--dag-graph graphs/dag-scope.yaml" "--pr-author-graph graphs/pr-author.yaml"; do read -r flag ref <<<"$pair"; named=; for argument in "$@"; do if [[ "$argument" == "$flag" || "$argument" == "$flag"=* ]]; then named=1; break; fi; done; [[ -n "$named" ]] || defaults+=("$flag" "$ref"); done; ./scripts/onepipeline.sh start "$@" ${defaults[@]+"${defaults[@]}"}; fi
 
 # Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
-# [--max-turns N] [--repo ALIAS] [--execution-checkout ALIAS] [--direct]
-# [--no-design-doc] [<onepipeline start flags>]`. Those six flags are the recipe's own;
-# everything else reaches `onepipeline start` untouched.
+# [--max-turns N] [--to SOURCE] [--no-design-doc] [<onepipeline start flags>]`. Those
+# four flags are the recipe's own; everything else reaches `onepipeline start` untouched.
 #
 # It writes the local project rather than asking a manager to remember its shape;
 # `scripts/plan.sh` states what has to be right about that shape and why. The
@@ -193,18 +192,20 @@ orchestrate *args:
 # recipe owns the plan's `name`, so it refuses one already taken rather than letting
 # the engine mint a different id than the one it printed.
 #
-# The node it writes is a **lifecycle** node, so the planner works in a worktree cut
-# from the registered `ai-orchestrator-isolated` safety clone rather than in this
-# shared checkout — which the self-dispatch rule in `AGENTS.md` forbids authoring in,
-# and which a direct planner dispatch cut a branch in, committed to, and left checked
-# out, failing a finished publication and destroying a manager's plan files. `--repo`
-# and `--execution-checkout` name a different registered pair.
-#
-# `--direct` keeps the old shape for a planning dispatch that must cut no worktree at
-# all. It is a working directory nobody owns exclusively, so such a dispatch **may
-# write only to gitignored paths, may not commit, and may not leave the checkout on
-# any branch but its base**; nothing enforces that, which is why the recipe says it on
-# every launch that takes the flag.
+# The node it writes is a **direct** node, so the planner works in this shared checkout
+# rather than in a worktree of its own. It was a lifecycle node — a worktree cut from
+# the registered `ai-orchestrator-isolated` safety clone — until the adopted engine made
+# that shape one a planner cannot settle under: a lifecycle dispatch that commits nothing
+# to its branch settles `failed` as `empty-branch`, and the declaration that would accept
+# the empty branch settles the node without dispatching it at all
+# (https://github.com/nickderobertis/onepipeline/issues/238). A planner produces a
+# plan-store record and never a branch, so the direct shape is the honest one, and the
+# incident that once moved the default off it — a direct planner cut a branch here,
+# committed to it, and left it checked out — is answered in the task instead: every
+# launch appends the note that such a dispatch **may write only to gitignored paths, may
+# not commit, may not cut a branch, and may not leave the checkout on any branch but its
+# base**. `--repo`, `--execution-checkout` and `--direct` are refused by name;
+# `scripts/plan.sh` holds the whole of the reasoning.
 #
 # Unlike `just orchestrate` it names `--dag-graph off`: the ledger, the surfaces and
 # the DAG UI place are `onepipeline start`'s own, so what an observer would add to a
@@ -227,8 +228,7 @@ plan *args:
     @./scripts/plan.sh "$@"
 
 # Finish a plan a planner has already authored: `just finish-plan <brief.md> [--to SOURCE]
-# [--name NAME] [--repo ALIAS] [--execution-checkout ALIAS] [--direct] [--no-design-doc]
-# [<onepipeline start flags>]`.
+# [--name NAME] [--no-design-doc] [<onepipeline start flags>]`.
 #
 # This is the tail of the planning flow and its one implementation — `just plan` runs the
 # planner and then delegates to exactly this, so the two entry points cannot drift. Run it
