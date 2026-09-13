@@ -1164,7 +1164,9 @@ def test_a_brief_filename_is_sanitized_into_the_run_id_the_engine_would_mint(
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     brief = tmp_path / "cursor.shape.md"
-    brief.write_text(BRIEF, encoding="utf-8")
+    # Declaring a plan other than the run this filename derives, because a launch whose
+    # run name is the declared project's own id is refused before anything is written.
+    brief.write_text(BRIEF.replace(PLAN_PROJECT, "authoring:cursor-shape-plan"), encoding="utf-8")
     environment = _environment(tmp_path)
 
     launch = _just("plan", str(brief), "--detach", environment=environment)

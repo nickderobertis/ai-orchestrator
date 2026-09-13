@@ -139,8 +139,16 @@ WRAPPER_SCRIPTS = (
 BRIEF = "briefs/cursor-shape.md"
 
 
-#: The plan `just plan` writes and every step after it is about, in this checkout.
-PLAN_PROJECT = "authoring:cursor-shape"
+#: The plan the brief declares, which the planner authors and every step after it is
+#: about, in this checkout. Its native id differs from the run name `BRIEF` derives,
+#: because a launch whose run name *is* that id is refused: the project the launch
+#: writes and the plan its planner authors would be one record.
+PLAN_PROJECT = "authoring:listing-cursor"
+
+#: A brief whose declared plan project is the run name its own filename derives, which
+#: is the launch `just plan` refuses before it writes or launches anything.
+COLLIDING_BRIEF = "briefs/cursor-colour.md"
+COLLIDING_PROJECT = "authoring:cursor-colour"
 
 #: The run the design-document launch is made under, derived from the flow's own name.
 DESIGN_PROJECT = "authoring:cursor-shape-design"
@@ -327,13 +335,13 @@ DELEGATIONS = (
     Delegation(
         "finish-plan",
         (BRIEF, "--to", "elsewhere"),
-        "uv run orchestrator-review-plan authoring:cursor-shape",
+        "uv run orchestrator-review-plan authoring:listing-cursor",
         then=(
-            "uv run orchestrator-check-plan authoring:cursor-shape",
+            "uv run orchestrator-check-plan authoring:listing-cursor",
             "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
             "uv run onepipeline start authoring:cursor-shape-design --dag-graph off",
-            "uv run orchestrator-copy-plan authoring:cursor-shape --to elsewhere",
-            "uv run orchestrator-plan-locations authoring:cursor-shape --in elsewhere",
+            "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
+            "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
         ),
     ),
     Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
@@ -593,9 +601,15 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
         # The plan the launch's `design-doc` node reads. A brief without one is refused
         # before anything is delegated, which for every row below would be the wrong
         # ending: what they are about is where a recipe lands, not what a brief owes.
-        "Plan project: authoring:cursor-shape\n\n"
+        f"Plan project: {PLAN_PROJECT}\n\n"
         "## Why\nThe view cannot deep-link "
         "without it.\n\n## Acceptance criteria\n- The shape is stated.\n"
+    )
+    (checkout / COLLIDING_BRIEF).write_text(
+        "## What\nDecide the cursor's colour.\n\n"
+        f"Plan project: {COLLIDING_PROJECT}\n\n"
+        "## Why\nThe view cannot theme "
+        "without it.\n\n## Acceptance criteria\n- The colour is stated.\n"
     )
     trace = checkout / "trace"
     uv = checkout / "bin/uv"
@@ -824,6 +838,165 @@ def test_the_plan_recipe_refuses_a_retired_placement_flag_by_name(
     )
     for generated in GENERATED_TASKS:
         assert not (checkout / generated).exists(), f"a refused launch wrote {generated}"
+
+
+class Collision(NamedTuple):
+    """One launch whose run name is its brief's declared plan project's native id."""
+
+    what: str
+    invocation: tuple[str, ...]
+    #: The run name the launch would have used, which is also that native id.
+    run: str
+    #: The brief's declared plan project, qualified.
+    project: str
+
+
+#: Every way a run name reaches the declared project's id: given with `--name` in either
+#: spelling, derived from a brief named after its plan, and derived under the opt-out,
+#: which drops the requirement to declare a plan but not the collision of one declared.
+COLLISIONS = (
+    Collision("a derived name", (COLLIDING_BRIEF,), "cursor-colour", COLLIDING_PROJECT),
+    Collision(
+        "a given name",
+        (BRIEF, "--name", "listing-cursor"),
+        "listing-cursor",
+        PLAN_PROJECT,
+    ),
+    Collision(
+        "a joined given name, detached",
+        (BRIEF, "--name=listing-cursor", "--detach"),
+        "listing-cursor",
+        PLAN_PROJECT,
+    ),
+    Collision(
+        "a derived name with no design document",
+        (COLLIDING_BRIEF, "--no-design-doc"),
+        "cursor-colour",
+        COLLIDING_PROJECT,
+    ),
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("collision", COLLISIONS, ids=lambda row: row.what)
+def test_the_plan_recipe_refuses_a_run_named_as_the_plan_it_authors(
+    tmp_path: Path, collision: Collision
+) -> None:
+    """A planning run and the plan it authors are never launched as one project.
+
+    The launch writes its own project as `authoring:<run>`, and the planner authors the
+    project the brief declares. Named alike, they are one record: the planner's plan
+    lands over the launch's project, and the run's settlement write-back then rewrites
+    that plan with the planning run's goal and node. So the launch is refused before it
+    writes a record or reaches the engine, naming both values and the remedy.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "plan", *collision.invocation)
+
+    assert result.returncode != 0, f"{collision.what} launched:\n{result.stderr}"
+    stated = [line for line in result.stderr.splitlines() if line.startswith("plan: ")]
+    assert len(stated) == 1, result.stderr
+    (refusal,) = stated
+    assert f"the run name '{collision.run}'" in refusal, refusal
+    native = collision.project.split(":", 1)[1]
+    assert f"'{native}', the native id of the brief's plan project '{collision.project}'" in (
+        refusal
+    ), refusal
+    assert "; pass --name with a run name other than" in refusal, refusal
+    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
+    assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
+    written = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*"))
+    assert written == [], f"a refused launch wrote plan records: {written}"
+
+
+@pytest.mark.reads_recipes
+def test_the_plan_recipe_launches_a_brief_named_after_its_plan_under_another_name(
+    tmp_path: Path,
+) -> None:
+    """The remedy the refusal names works: the same brief under another `--name` launches.
+
+    Its planning project is written under the name given, and the plan the brief declares
+    is left for the planner to author, so the two are separate records.
+    """
+    checkout, trace = _checkout(tmp_path)
+    run = "cursor-colour-planning"
+
+    result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--name", run, "--detach")
+
+    assert result.returncode == 0, result.stderr
+    published = f"uv run onepipeline start authoring:{run} --detach --dag-graph off"
+    assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
+    assert (checkout / ".plans" / "projects" / f"{run}.md").is_file(), result.stderr
+    native = COLLIDING_PROJECT.split(":", 1)[1]
+    assert not (checkout / ".plans" / "projects" / f"{native}.md").exists(), (
+        f"the launch wrote the plan its planner authors, {COLLIDING_PROJECT}, itself"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_the_plan_recipe_launches_a_run_named_as_a_plan_in_another_source(
+    tmp_path: Path,
+) -> None:
+    """A declared plan in another source is another record, whatever its native id.
+
+    The launch writes `authoring:<run>`, so a brief declaring `plans:<run>` names a
+    project in a different store: the two cannot overwrite each other, and the launch
+    proceeds under the name its filename derives.
+    """
+    checkout, trace = _checkout(tmp_path)
+    native = COLLIDING_PROJECT.split(":", 1)[1]
+    elsewhere = f"plans:{native}"
+    (checkout / COLLIDING_BRIEF).write_text(
+        "## What\nDecide the cursor's colour.\n\n"
+        f"Plan project: {elsewhere}\n\n"
+        "## Why\nThe view cannot theme without it.\n\n"
+        "## Acceptance criteria\n- The colour is stated.\n"
+    )
+
+    result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--detach")
+
+    assert result.returncode == 0, result.stderr
+    assert "the native id of the brief's plan project" not in result.stderr, result.stderr
+    published = f"uv run onepipeline start authoring:{native} --detach --dag-graph off"
+    assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
+    assert (checkout / ".plans" / "projects" / f"{native}.md").is_file(), result.stderr
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("declaration", "names"),
+    (
+        (f"Plan project: {PLAN_PROJECT}\nPlan project: {COLLIDING_PROJECT}", "names 2 plan"),
+        ("Plan project: cursor-colour", "is not a qualified id"),
+    ),
+    ids=("two plan projects", "an unqualified plan project"),
+)
+def test_the_plan_recipe_opt_out_still_refuses_a_plan_project_it_cannot_compare(
+    tmp_path: Path, declaration: str, names: str
+) -> None:
+    """`--no-design-doc` drops the need to declare a plan, not the reading of one declared.
+
+    The opt-out's planner still authors into whatever the brief declares, so a declaration
+    this launch could not read would be one it could not compare with its run name: a
+    second line naming the run's own project would pass unseen. So an unusable one is
+    refused under the opt-out as it is without it, before anything is written or launched.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / COLLIDING_BRIEF).write_text(
+        f"## What\nDecide the cursor's colour.\n\n{declaration}\n\n"
+        "## Why\nThe view cannot theme without it.\n\n"
+        "## Acceptance criteria\n- The colour is stated.\n"
+    )
+
+    result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--no-design-doc")
+
+    assert result.returncode != 0, f"an unusable declaration launched:\n{result.stderr}"
+    assert names in result.stderr, result.stderr
+    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
+    assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
+    written = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*"))
+    assert written == [], f"a refused launch wrote plan records: {written}"
 
 
 class ReplyShape(NamedTuple):

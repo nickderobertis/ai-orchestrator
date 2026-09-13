@@ -200,9 +200,14 @@ plan_brief_is_a_task() {
 # Echo the qualified plan project ``$2`` declares, or refuse it. Every line is read
 # rather than stopping at the first, because two declarations are ambiguous and taking
 # the earlier one silently points a later step at a plan its author may not have meant.
+#
+# With ``$3`` reading `optional`, a brief declaring no plan project echoes nothing and is
+# not refused, for a caller with no use for one; a declaration that is there is still
+# held to being exactly one qualified id, because an unusable one is a wrong line in the
+# brief whoever reads it.
 plan_brief_project() {
     local caller=${1:?plan_brief_project: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
-    local brief=${2-} line declared=0 project="" content
+    local brief=${2-} requirement=${3-} line declared=0 project="" content
     # Split from content this already holds rather than read straight off the file. The
     # `|| [ -n "$line" ]` this replaces was there to catch a final line with no newline,
     # and it caught a failed read as one too: `read` answers both with 1, so a brief whose
@@ -217,6 +222,9 @@ plan_brief_project() {
             project="${BASH_REMATCH[1]}"
         fi
     done <<< "$content"
+    if [ "$declared" -eq 0 ] && [ "$requirement" = "optional" ]; then
+        return 0
+    fi
     if [ "$declared" -eq 0 ]; then
         echo "$caller: the brief '$brief' names no plan project, so nothing after the planner has a plan to read; add a line reading '$PLAN_PROJECT_LINE' naming the qualified project this plan is written to, or pass --no-design-doc to stop after the planner" >&2
         return 2

@@ -301,15 +301,16 @@ for argument in ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"}; do
     esac
 done
 
-# The whole of what this parses out of a brief, and it is parsed for the tail rather
-# than for this launch: everything else in that file is the manager's prose and reaches
-# the dispatch untouched. Read after the flags rather than beside the section checks
-# above, because `--no-design-doc` decides whether it is required at all — with no tail
-# there is nothing that needs one, so demanding it would refuse a launch that has no use
-# for the answer.
+# The whole of what this parses out of a brief: the plan project it declares, which the
+# tail finishes and which this launch compares with its own run name below. Everything
+# else in that file is the manager's prose and reaches the dispatch untouched. Read after
+# the flags rather than beside the section checks above, because `--no-design-doc` decides
+# whether it is required at all — with no tail there is nothing that needs one, so
+# demanding it would refuse a launch that has no use for the answer.
 tail_arguments=()
+declared_project=""
 if [ "$PLAN_OPT_DESIGN_DOC" -eq 1 ]; then
-    plan_brief_project plan "$brief" >/dev/null || exit 2
+    declared_project=$(plan_brief_project plan "$brief") || exit 2
     # Both of this flow's run ids, refused as taken here rather than by the tail an hour
     # from now. The tail derives its own the same way, from the same helper, so what is
     # checked is the id it will actually use.
@@ -319,6 +320,24 @@ if [ "$PLAN_OPT_DESIGN_DOC" -eq 1 ]; then
 elif [ -n "$PLAN_OPT_DESTINATION" ]; then
     fail "--to names the destination the tail copies this plan into, and --no-design-doc stops the flow before there is anything to copy" \
         "drop one of the two: --to alone finishes the plan into that destination, and --no-design-doc alone launches the planner and stops"
+else
+    # Read without being required: nothing after the planner needs the declaration, so a
+    # brief declaring none is not refused for it. A declaration that is there is still
+    # validated and compared below, because the planner authors into it either way — and
+    # a duplicate or unqualified one left unread could hide the collision refused below.
+    declared_project=$(plan_brief_project plan "$brief" optional) || exit 2
+fi
+
+# The planning project this launch writes is `$PLAN_SOURCE:$name`, and the planner is
+# briefed to author its plan into the project the brief declares. When those are one
+# project they are one record: the planner's plan is written over this launch's project,
+# and the run's settlement write-back then rewrites the plan it just produced with the
+# planning run's goal and node. So the two are refused as equal here, before any record
+# is written — and for a derived name as much as a given one, since a brief named after
+# its plan derives exactly that name.
+if [ "$declared_project" = "$PLAN_SOURCE:$name" ]; then
+    fail "the run name '$name' equals '$name', the native id of the brief's plan project '$declared_project', so the planning project this launch writes and the plan its planner authors would be one record, and the run's settlement would overwrite that plan" \
+        "pass --name with a run name other than '$name'"
 fi
 
 plan_run_is_free plan "$name" || exit 2
