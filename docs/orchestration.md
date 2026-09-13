@@ -1876,6 +1876,14 @@ correction. AGENTS.md, under "Answering on the channel", is the contract for wha
 carrier is asked, how the effective task is composed, and why a node nothing dispatches
 from is read by neither tier.
 
+Ahead of both, every node an envelope results in — what an `add` states, and what a
+`retry` or `requeue` returns with its overrides folded in — is held to the structural
+rules `just check-plan` applies to a plan's nodes (`orchestrator/structural_guard.py`
+lists them once for both tiers), over the graph the whole envelope leaves. A node either
+tier's rules refuse — a `requeue` amending `adoption: fast` onto a node publishing
+`local-direct` behind a releasing dependency is the case that motivated it — exits 2 with
+that rule's own message and sends nothing.
+
 An edit that passes submission can still lose a race to the frontier it was
 validated against — the log a submitter reads lags the live frontier — and that
 case is a synchronous rejection to the caller that issued it, not a proposal to

@@ -1236,6 +1236,38 @@ def test_a_task_rebuilt_from_a_stale_appendix_is_refused(tmp_path: Path) -> None
     assert str(REPO_ROOT / APPENDIX) in refused.stderr, refused.stderr
 
 
+def test_a_task_opening_its_notes_under_a_longer_heading_is_refused_naming_the_one_to_write(
+    tmp_path: Path,
+) -> None:
+    """The heading a launch accepted and a retry could not restate, refused before launch.
+
+    The live-edit check reads a task's own grants only under a line reading exactly
+    `## Additional info`, so a task whose author wrote `## Additional info for this node`
+    launched granting early publication and was read as granting nothing when a retry
+    restated it. The same task under the exact heading is accepted.
+    """
+    own = "The change request may be published early."
+    plan = _plan(tmp_path, STATES_ITS_BAR, own=own)
+    accepted = _check_plan(plan)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    exact = f"## Additional info\n\n{own}"
+    assert exact in document["tasks"][0]["task"], "the task no longer opens its own notes"
+    document["tasks"][0]["task"] = document["tasks"][0]["task"].replace(
+        exact, f"## Additional info for this node\n\n{own}", 1
+    )
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    refused = _check_plan(plan)
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "'## Additional info for this node'" in refused.stderr, refused.stderr
+    assert "exactly `## Additional info`" in refused.stderr, refused.stderr
+    assert "a `retry` or `requeue` restating this task loses every grant" in refused.stderr, (
+        refused.stderr
+    )
+
+
 def test_a_plan_that_cannot_be_read_is_not_reported_as_a_refusal(tmp_path: Path) -> None:
     """Exit 2, because no project was read and therefore nothing was judged."""
     unreadable = _check_plan(tmp_path / "absent.json")

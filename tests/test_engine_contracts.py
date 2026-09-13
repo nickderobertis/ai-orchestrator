@@ -2487,6 +2487,11 @@ def test_the_run_state_a_live_edit_composes_onto_is_read_as_the_engine_writes_it
         )
     node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
     node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
+    assert node_fields == live_edit_check.NODE_FIELDS, (
+        f"onepipeline {ONEPIPELINE.ref}'s Node fields changed, so the live structural "
+        f"preflight's command validation drifted: engine={sorted(node_fields)}, "
+        f"check={sorted(live_edit_check.NODE_FIELDS)}"
+    )
     assert live_edit_check.AMENDMENT in node_fields, (
         f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field a live edit's "
         f"amendment is read from; it declares {sorted(node_fields)}"
@@ -2582,6 +2587,90 @@ def test_the_effective_task_a_live_edit_is_keyed_on_is_composed_as_the_engine_co
         f"onepipeline {ONEPIPELINE.ref} no longer folds a requeue as `parked` removed and "
         "every override written over its field; re-read `NodeRequeued` and correct "
         "`orchestrator.live_edit_check._requeued`"
+    )
+
+
+#: Which `add` and `retry` the engine refuses for their target, and how it moves a node's
+#: `deps` and `consumes` under the three edits that move edges — each at the declaration
+#: in `src/edits.rs` that `orchestrator.live_edit_check.resulting_graph` restates.
+EDGE_FOLDS = {
+    "an add of an id the graph already holds is refused": re.compile(
+        r"fn compile_add\(graph: &mut Graph, node: &Node\) -> Result<Vec<Operation>> \{\s*"
+        r"if graph\.contains\(&node\.id\) \{\s*"
+        r"return Err\(refuse\(format!\(\"add: node '\{\}' already exists\""
+    ),
+    "a retry of a node the graph does not hold is refused": re.compile(
+        r"let Some\(target\) = graph\.get\(id\)\.cloned\(\) else \{\s*"
+        r"return Err\(refuse\(format!\(\"retry: no node '\{id\}'\"\)\)\);"
+    ),
+    "a retry onto a replacement id the graph already holds is refused": re.compile(
+        r"if graph\.contains\(&replacement\.id\) \{\s*"
+        r"return Err\(refuse\(format!\(\s*\"retry: replacement id '\{\}' must be new\""
+    ),
+    "a retry's replacement stating no deps inherits the superseded node's deps and consumes": (
+        re.compile(
+            r"if replacement\.deps\.is_empty\(\) \{\s*"
+            r"replacement\.deps = target\.deps\.clone\(\);.*?"
+            r"replacement\.consumes\.clone_from\(&target\.consumes\);",
+            re.DOTALL,
+        )
+    ),
+    "a retry redirects each dependent onto the replacement, its consumes entry rekeyed": (
+        re.compile(
+            r"for dep in &mut node\.deps \{\s*if dep == id \{\s*"
+            r"dep\.clone_from\(&replacement\.id\);\s*\}\s*\}\s*"
+            r"carried = node\.consumes\.remove\(id\);\s*"
+            r"if let Some\(carried\) = carried\.clone\(\) \{\s*"
+            r"node\.consumes\.insert\(replacement\.id\.clone\(\), carried\);",
+            re.DOTALL,
+        )
+    ),
+    "a retry removes the superseded node": re.compile(
+        r"graph\.remove\(id\);\s*operations\.push\(Operation::NodeDropped \{\s*"
+        r"node: id\.to_string\(\),\s*dependents: Dependents::Detach,",
+        re.DOTALL,
+    ),
+    "a cascading drop removes every dependent, recursively": re.compile(
+        r"Dependents::Drop => \{\s*let mut pending = direct;\s*"
+        r"while let Some\(candidate\) = pending\.pop\(\) \{.*?"
+        r"pending\.extend\(graph\.dependents_of\(&candidate\)\);",
+        re.DOTALL,
+    ),
+    "a detaching drop removes each dependent's edge and consumes entry": re.compile(
+        r"Dependents::Detach => \{.*?node\.deps\.retain\(\|dep\| dep != id\);.*?"
+        r"node\.consumes\.remove\(id\);",
+        re.DOTALL,
+    ),
+    "a dropped node is consumed by no remaining node": re.compile(
+        r"Operation::NodeDropped \{ node, \.\. \} => \{\s*graph\.remove\(node\);.*?"
+        r"other\.consumes\.remove\(node\);",
+        re.DOTALL,
+    ),
+    "a reparent replaces deps and keeps only the consumes keyed on one of them": re.compile(
+        r"Operation::Reparent \{ node, to, \.\. \} => \{\s*"
+        r"if let Some\(node\) = graph\.get_mut\(node\) \{\s*"
+        r"node\.deps\.clone_from\(to\);\s*"
+        r"node\.consumes\.retain\(\|dep, _\| to\.iter\(\)\.any\(\|d\| d == dep\)\);",
+        re.DOTALL,
+    ),
+}
+
+
+@pytest.mark.parametrize("fold", EDGE_FOLDS, ids=lambda fold: fold)
+def test_the_graph_a_live_edit_is_checked_over_is_folded_as_the_engine_folds_it(
+    fold: str,
+) -> None:
+    """The structural rules a reply's resulting nodes are held to read `deps` and
+    `consumes`, so how a `retry`, a `drop` and a `reparent` move them is restated in
+    `orchestrator/live_edit_check.py` and held here to the engine's source at the pinned
+    release. A release that moved one would have the check ask the rules about a graph the
+    engine never commits — accepting a reply that lands a refusable node, or refusing one
+    that does not.
+    """
+    assert EDGE_FOLDS[fold].search(_source(ONEPIPELINE, "edits.rs")) is not None, (
+        f"onepipeline {ONEPIPELINE.ref}'s `edits.rs` no longer declares that {fold}; re-read "
+        "`compile_add`, `compile_retry`, `compile_drop` and `apply`, and correct "
+        "`orchestrator.live_edit_check.resulting_graph`"
     )
 
 

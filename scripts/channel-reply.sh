@@ -373,6 +373,7 @@ fi
 # it and for the same reason: an inherited value is a directory this interpreter would
 # import from, and an empty entry there means whatever directory a manager replied from.
 edit_status=0
+structural_prefix="live-edit-check:structural-refusal:"
 # llmlint: ignore[tool_output_is_signal] The check's stderr flows through on purpose, and it carries one sentence in one state: a run root that is not this ledger's, or a register that could not be kept, so that the next reply re-reads what this one cleared. Either is a saving that silently stopped happening, which nobody would look for; it is printed beside a successful reply for the same reason the `queued` advice below is, and on no other outcome.
 edit_said=$(PATH="$check_path" PYTHONPATH="$root" "$python" -m orchestrator.live_edit_check "$run_root" \
     <"$staged") || edit_status=$?
@@ -402,6 +403,17 @@ case "$edit_status" in
         fail "the task prose in this reply to run $run could not be judged: $edit_said" \
             "nothing was sent, so no other command in this envelope was applied either; every resulting task in it that already cleared the bar is recorded, so once the harness answers — 'oneharness doctor' says why it did not — send the whole envelope again unchanged"
         ;;
+    4) if [[ "$edit_said" == "$structural_prefix"* ]]; then
+        edit_said=${edit_said#"$structural_prefix"}
+        # A node the envelope results in is one `just check-plan` would refuse for its
+        # fields rather than its prose — where it publishes, what it waits on — so the
+        # refusal is that rule's own message and the repair is the node's fields.
+        fail "this reply to run $run results in a node this host's structural plan rules refuse — $edit_said" \
+            "nothing was sent, so no other command in this envelope was applied either; correct the field each refusal names and send the whole envelope again"
+        else
+            fail "the task prose in this reply to run $run could not be judged against the criteria bar: $python exited $edit_status saying: $edit_said" \
+                "restore the pinned toolchain with 'just bootstrap', then retry"
+        fi ;;
     *)
         # Reachable only when the check itself could not run and said something anyway,
         # which is a broken interpreter's own diagnostic on stdout rather than a verdict —

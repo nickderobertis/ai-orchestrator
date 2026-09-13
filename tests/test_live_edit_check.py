@@ -33,8 +33,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from onevcs_stand_in import install_three_verb_stand_in, release_answer
 
-from orchestrator import live_edit_check, plan_review, plan_store
+from orchestrator import adoption_guard, live_edit_check, plan_review, plan_store
 from orchestrator.criteria_guard import (
     APPENDIX,
     CRITERIA_HEADING,
@@ -52,6 +53,8 @@ from orchestrator.live_edit_check import (
     LAUNCH_PLAN,
     REFUSED,
     REGISTER,
+    STRUCTURAL_WIRE_PREFIX,
+    STRUCTURALLY_REFUSED,
     UNANSWERED,
     Judge,
     Nodes,
@@ -59,7 +62,9 @@ from orchestrator.live_edit_check import (
     ReviewUnanswered,
     amended,
     main,
+    resulting_graph,
     reviewables,
+    structural_refusal,
 )
 from orchestrator.plan_review import Finding, Verdict
 from orchestrator.root import REPO_ROOT
@@ -891,12 +896,15 @@ def test_a_run_with_no_usable_checkpoint_is_folded_from_its_launch_plan(tmp_path
     assert Nodes.read(tmp_path / "nowhere").get("work") is None
 
 
-def test_a_requeue_folded_from_the_journal_drops_parked_and_keeps_the_rest(tmp_path: Path) -> None:
-    """The fold is the engine's: `parked` is removed and every override written over its field."""
-    plan = [
-        {"id": "work", "persona": "engineer", "task": _task(), "parked": True, "deps": ["gate"]}
+def test_a_park_and_requeue_folded_from_the_journal_leave_the_requeued_node_unparked(
+    tmp_path: Path,
+) -> None:
+    """The engine's journal first parks the node, then requeue removes that transient field."""
+    plan = [{"id": "work", "persona": "engineer", "task": _task(), "deps": ["gate"]}]
+    ops = [
+        [{"kind": "node-parked", "node": "work"}],
+        [{"kind": "node-requeued", "node": "work", "amend": {"task": "changed"}}],
     ]
-    ops = [[{"kind": "node-requeued", "node": "work", "amend": {"task": "changed"}}]]
 
     current = Nodes.read(_run(tmp_path, plan=plan, journal=ops))
 
@@ -1624,3 +1632,276 @@ def test_a_live_edit_spends_no_plan_level_turn_and_reads_no_plan_level_record(
     (prompt,) = judge.prompts
     assert prompt.startswith(plan_review.REVIEW_PROMPT), prompt
     assert plan_review.PLAN_REVIEW_PROMPT not in prompt
+
+
+#: A producer declaring the wheel this host installs, as `onevcs release targets` answers
+#: for its repository — which is what makes a dependency landing there one that releases.
+RELEASING = release_answer("id/library", ("pypi", "pypi:onepipeline-cli"))
+
+#: The node whose repository releases, as a run's graph holds it.
+PRODUCER_NODE: dict[str, object] = {
+    "id": "producer",
+    "title": "feat: release the library",
+    "repo": "library",
+}
+
+
+def _consumer_node(**fields: object) -> dict[str, object]:
+    """A node landing in `service` behind the producer, waiting on its release."""
+    return {
+        "id": "consumer",
+        "persona": "engineer",
+        "title": "feat: adopt the release",
+        "repo": "service",
+        "deps": ["producer"],
+        "adoption": "published",
+        "task": _task(),
+        **fields,
+    }
+
+
+def _releasing_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`onevcs` answering that both repositories publish `local-direct` and `library` releases."""
+    return install_three_verb_stand_in(
+        tmp_path / "onevcs",
+        monkeypatch,
+        releases={"library": RELEASING, "service": release_answer("id/service")},
+        resolved={
+            "library": ("/checkouts/library", "local-direct"),
+            "service": ("/checkouts/service", "local-direct"),
+        },
+    )
+
+
+def _requeue(node: str, **overrides: object) -> dict[str, object]:
+    """One `requeue` of ``node`` carrying ``overrides`` as its partial node amendment."""
+    return {"op": "requeue", "id": node, "amend": overrides}
+
+
+def _checked(root: Path, envelope: object, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+    """The check's exit status and stdout, through `main` as the recipe spawns it.
+
+    The judge is scripted with nothing, so a journey here fails the moment a turn is spent:
+    a structural refusal is asked before any, and a requeue whose overrides change no task
+    owes none.
+    """
+    stdin, sys.stdin = sys.stdin, io.StringIO(json.dumps(envelope))
+    try:
+        status = main(argv=[str(root)], judge=ScriptedJudge())
+    finally:
+        sys.stdin = stdin
+    return status, capsys.readouterr().out
+
+
+def test_a_requeue_amending_fast_onto_a_local_direct_node_behind_a_release_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The incident: the live tier accepted this, and the node failed at its last step.
+
+    The parked node adopts `published`; the requeue folds `adoption: fast` over it, and
+    the node it returns publishes `local-direct` behind a dependency that releases — the
+    shape `orchestrator/adoption_guard.py` refuses at the plan tier. It is refused here in
+    that rule's own words, before anything is judged or recorded.
+    """
+    _releasing_host(tmp_path, monkeypatch)
+    root = _run(tmp_path, plan=[PRODUCER_NODE, _consumer_node(parked=True)])
+
+    status, said = _checked(root, _envelope(_requeue("consumer", adoption="fast")), capsys)
+
+    assert status == STRUCTURALLY_REFUSED, said
+    (plan_tier,) = adoption_guard.refusals(
+        {"tasks": [PRODUCER_NODE, _consumer_node(adoption="fast")]}
+    )
+    assert said == (
+        f"{STRUCTURAL_WIRE_PREFIX}node 'consumer', as this reply leaves it: adoption: "
+        f"{plan_tier.reason}"
+    )
+    assert "adopts `fast`" in said and "'local-direct'" in said, said
+    assert not (root / REGISTER).exists(), "a structurally refused reply recorded a pass"
+
+
+def test_the_same_requeue_publishing_where_a_change_request_opens_is_not_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The correction the refusal names is accepted, after the rules really asked `onevcs`."""
+    asked = _releasing_host(tmp_path, monkeypatch)
+    root = _run(tmp_path, plan=[PRODUCER_NODE, _consumer_node(parked=True)])
+    envelope = _envelope(_requeue("consumer", adoption="fast", merge_policy="change-open"))
+
+    assert _checked(root, envelope, capsys) == (0, "")
+    assert "release targets library --json" in asked.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("command", "named"),
+    (
+        ({"op": "add", "node": _consumer_node(id="added", adoption="fast")}, "added"),
+        (
+            {"op": "retry", "id": "consumer", "node": _consumer_node(id="again", adoption="fast")},
+            "again",
+        ),
+    ),
+    ids=("add", "retry"),
+)
+def test_an_added_node_and_a_retrys_replacement_are_held_to_the_same_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: dict[str, object], named: str
+) -> None:
+    """Every op that results in a whole node is asked, over the graph the reply leaves."""
+    _releasing_host(tmp_path, monkeypatch)
+    current = Nodes.read(_run(tmp_path, plan=[PRODUCER_NODE, _consumer_node()]))
+
+    refused = structural_refusal(_envelope(command), current)
+
+    assert refused is not None
+    assert refused.startswith(f"node {named!r}, as this reply leaves it: adoption: "), refused
+
+
+def test_a_node_the_reply_leaves_as_it_was_is_not_this_replys_to_answer_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusable bystander does not refuse a reply about another node, and is refusable."""
+    _releasing_host(tmp_path, monkeypatch)
+    plan = [
+        PRODUCER_NODE,
+        _consumer_node(parked=True),
+        _consumer_node(id="bystander", adoption="fast", parked=True),
+    ]
+    current = Nodes.read(_run(tmp_path, plan=plan))
+
+    corrected = _requeue("consumer", adoption="fast", merge_policy="change-open")
+    assert structural_refusal(_envelope(corrected), current) is None
+    assert structural_refusal(_envelope(_requeue("bystander")), current) is not None
+
+
+def test_a_reply_resulting_in_no_node_asks_onevcs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A note, an amendment, a cancel, and a requeue of a node the run lacks result in none."""
+    asked = _releasing_host(tmp_path, monkeypatch)
+    current = Nodes.read(_run(tmp_path, plan=[PRODUCER_NODE, _consumer_node()]))
+    envelope = _envelope(
+        _amend(SOUND, "consumer"),
+        _note("Keep going.", node="consumer"),
+        {"op": "cancel", "id": "consumer", "reason": "park it"},
+        _requeue("absent", adoption="fast"),
+    )
+
+    assert structural_refusal(envelope, current) is None
+    assert structural_refusal("not an envelope") is None
+    assert not asked.exists(), asked.read_text(encoding="utf-8")
+
+
+def test_the_graph_a_reply_leaves_folds_every_command_in_order() -> None:
+    """Each command reads what the one before it did, as the engine applies them.
+
+    A requeue folds over its node and a retry then replaces it and redirects its
+    dependent; an added node is reparented; a cascading drop takes its dependents with it
+    and a detaching one takes only their edges; a node added and dropped in one reply is
+    not one it results in; and every command naming nothing the graph holds, or stating
+    no shape the engine accepts, moves nothing. The run's own nodes are left untouched.
+    """
+    held = {
+        "gate": {"id": "gate", "kind": "human"},
+        "work": {"id": "work", "deps": ["gate"], "parked": True},
+        "after": {"id": "after", "deps": ["work"]},
+        "tail": {"id": "tail", "deps": ["after", "gate"]},
+        "loose": {"id": "loose", "deps": ["gate"]},
+    }
+    current = Nodes(json.loads(json.dumps(held)))
+    envelope = _envelope(
+        _requeue("work", adoption="fast"),
+        {"op": "retry", "id": "work", "node": {"id": "work-2", "deps": ["gate"]}},
+        {"op": "add", "node": {"id": "fresh", "deps": ["work-2"]}},
+        {"op": "reparent", "id": "fresh", "deps": ["gate"]},
+        {"op": "requeue", "id": "fresh", "amend": "not overrides"},
+        {"op": "drop", "id": "after", "dependents": "drop"},
+        {"op": "drop", "id": "gate", "dependents": "detach"},
+        {"op": "add", "node": {"id": "doomed"}},
+        {"op": "drop", "id": "doomed", "dependents": "detach"},
+        {"op": "add", "node": {"task": "no id"}},
+        {"op": "reparent", "id": "absent", "deps": []},
+        "not a command",
+    )
+
+    graph, resulting = resulting_graph(envelope, current)
+
+    assert graph == {
+        "work-2": {"id": "work-2", "deps": []},
+        "fresh": {"id": "fresh", "deps": []},
+        "loose": {"id": "loose", "deps": []},
+    }
+    assert resulting == ["work-2", "fresh"]
+    assert current.nodes == held
+    assert resulting_graph({"version": 2}, current) == (held, [])
+
+
+def test_a_command_the_engine_refuses_for_its_target_moves_nothing() -> None:
+    """A retry of an absent node, a retry onto an id the graph holds, and an add of one.
+
+    Each is refused by the engine for its target, so none results in a node the rules
+    are asked about — a replacement for a node that is not there would otherwise be
+    refused here for fields no committed graph will ever carry.
+    """
+    held = {
+        "gate": {"id": "gate", "kind": "human"},
+        "work": {"id": "work", "deps": ["gate"]},
+    }
+    current = Nodes(json.loads(json.dumps(held)))
+    envelope = _envelope(
+        {"op": "retry", "id": "absent", "node": {"id": "ghost", "deps": ["work"]}},
+        {"op": "retry", "id": "work", "node": {"id": "gate"}},
+        {"op": "add", "node": {"id": "work", "deps": []}},
+        {"op": "add", "node": {"id": "unknown", "surprise": True}},
+        {"op": "add", "node": {"id": "extra"}, "surprise": True},
+        {"op": "requeue", "id": "work", "amend": {"adoption": "fast"}},
+        {"op": "requeue", "id": "gate", "amend": {"id": "rewritten"}},
+        {"op": "reparent", "id": "work", "deps": ["gate", 7]},
+        {"op": "reparent", "id": "work", "deps": [], "surprise": True},
+        {"op": "drop", "id": "gate", "dependents": "unknown"},
+        {"op": "drop", "id": "gate", "dependents": "detach", "surprise": True},
+    )
+
+    assert resulting_graph(envelope, current) == (held, [])
+
+
+def test_the_graph_a_reply_leaves_carries_deps_and_consumes_as_the_engine_does() -> None:
+    """The fields the adoption rules read move with the edges, as `edits.rs` moves them.
+
+    A retry whose replacement states no deps inherits the superseded node's `deps` and
+    `consumes`, and a dependent redirected onto it takes its `consumes` entry along; a
+    reparent keeps only the `consumes` keyed on a dependency it still names; and a node
+    that leaves the graph is consumed by nothing — its detached dependents lose the edge
+    and the entry, and a node that consumed it without the edge loses the entry too. The
+    run's own records are left untouched.
+    """
+    held = {
+        "producer": {"id": "producer", "repo": "library"},
+        "gate": {"id": "gate", "kind": "human"},
+        "work": {"id": "work", "deps": ["producer"], "consumes": {"producer": "pypi"}},
+        "after": {"id": "after", "deps": ["work"], "consumes": {"work": "pypi"}},
+        "keep": {"id": "keep", "deps": ["producer", "gate"], "consumes": {"producer": "pypi"}},
+        "stale": {"id": "stale", "consumes": {"producer": "pypi"}},
+        "bare": {"id": "bare", "deps": ["gate"]},
+        "plain": {"id": "plain", "deps": ["gate"]},
+    }
+    current = Nodes(json.loads(json.dumps(held)))
+    envelope = _envelope(
+        {"op": "retry", "id": "plain", "node": {"id": "plain-2"}},
+        {"op": "retry", "id": "work", "node": {"id": "work-2"}},
+        {"op": "reparent", "id": "keep", "deps": ["gate"]},
+        {"op": "drop", "id": "producer", "dependents": "detach"},
+    )
+
+    graph, resulting = resulting_graph(envelope, current)
+
+    assert graph == {
+        "gate": {"id": "gate", "kind": "human"},
+        "work-2": {"id": "work-2", "deps": [], "consumes": {}},
+        "after": {"id": "after", "deps": ["work-2"], "consumes": {"work-2": "pypi"}},
+        "keep": {"id": "keep", "deps": ["gate"], "consumes": {}},
+        "stale": {"id": "stale", "consumes": {}},
+        "bare": {"id": "bare", "deps": ["gate"]},
+        "plain-2": {"id": "plain-2", "deps": ["gate"]},
+    }
+    assert resulting == ["plain-2", "work-2"]
+    assert current.nodes == held

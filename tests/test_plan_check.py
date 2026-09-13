@@ -196,6 +196,58 @@ def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_
     assert "the dispatch cannot do" in refusal["reason"]
 
 
+def _with_own_notes(heading: str) -> str:
+    """A task whose author wrote notes of their own under ``heading``, above the appendix."""
+    return (
+        f"## What\n\nAdd it.\n\n## Acceptance criteria\n\n{COMPLETE}\n\n"
+        f"{heading}\n\nThe change request may be published early.\n\n{APPENDIX}"
+    )
+
+
+@pytest.mark.parametrize(
+    "heading",
+    (
+        "## Additional info for this node",
+        "## Additional information",
+        "## additional info",
+        "##Additional info",
+    ),
+)
+def test_a_task_opening_its_notes_under_a_longer_heading_is_refused_naming_the_one_to_write(
+    project_record: dict[str, object], heading: str
+) -> None:
+    """The live-edit check reads a task's own grants under exactly one heading line.
+
+    So a task written under any other spelling of it launches with grants a retry
+    restating it would lose; both plan-tier paths refuse it, naming the heading as
+    written, the heading to write, and what a retry would lose.
+    """
+    document = _planned(project_record, _document(_reviewed(_node(task=_with_own_notes(heading)))))
+
+    (refusal,) = plan_check.refusals(document, "s:p")
+
+    assert refusal["node"] == "route"
+    assert refusal["field"] == "task"
+    assert repr(heading) in refusal["reason"], refusal["reason"]
+    assert "exactly `## Additional info`" in refusal["reason"], refusal["reason"]
+    assert "a `retry` or `requeue` restating this task loses every grant" in refusal["reason"]
+    with pytest.raises(criteria_guard.CriteriaError, match="exactly `## Additional info`"):
+        criteria_guard.check_plan(document)
+
+
+@pytest.mark.parametrize(
+    "heading", ("## Additional info", "## Additional info  ", "### Additional info for this node")
+)
+def test_a_task_opening_its_notes_under_the_exact_heading_is_not_refused_for_it(
+    project_record: dict[str, object], heading: str
+) -> None:
+    """The live tier reads trailing blanks as the heading, and a level-3 heading is not one."""
+    document = _planned(project_record, _document(_reviewed(_node(task=_with_own_notes(heading)))))
+
+    assert plan_check.refusals(document, "s:p") == []
+    assert criteria_guard.check_plan(document) == 1
+
+
 def test_a_task_whose_issue_body_would_exceed_the_boards_limit_is_refused_against_its_task(
     project_record: dict[str, object],
 ) -> None:

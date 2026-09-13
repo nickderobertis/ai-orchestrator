@@ -101,7 +101,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from orchestrator import adoption_guard, plan_review, plan_store, publication_guard, task_body
+from orchestrator import (
+    adoption_guard,
+    plan_review,
+    plan_store,
+    publication_guard,
+    structural_guard,
+    task_body,
+)
 from orchestrator.root import REPO_ROOT
 
 #: The operational text every dispatched task carries, and the one source a plan
@@ -1330,6 +1337,39 @@ def check_appendix(task: str, node_id: str) -> None:
         )
 
 
+#: A level-2 heading line naming the task's own notes, however it is spelled after the
+#: two words: `## Additional info for this node`, `## Additional information`, `##
+#: additional info`. Every one of them is refused by :func:`check_notes_heading` unless
+#: it is exactly the heading :data:`_OPENS_ADDITIONAL_INFO` reads.
+_NOTES_HEADING = re.compile(r"^##[ \t]*additional info[^\n]*$", re.IGNORECASE | re.MULTILINE)
+
+
+def check_notes_heading(task: str, node_id: str) -> None:
+    """Raise :class:`CriteriaError` if ``task`` opens its notes under a variant heading.
+
+    :func:`own_additional_info` reads a task's own grants only under a line reading
+    exactly ``## Additional info``, and it is written to miss, so a task whose author
+    wrote ``## Additional info for this node`` launches with every grant it made and is
+    read as granting nothing the moment a `retry` or `requeue` restates it — the live-edit
+    check refuses the replacement for the grant its task visibly makes. That narrow reader
+    is the one that stays: this plan tier is the side that moves, because the repair is a
+    one-line rename its author can make before launch, and a warning would let through
+    exactly the launch that later cannot be retried.
+    """
+    for opened in _NOTES_HEADING.finditer(task):
+        line = opened.group(0).rstrip(" \t")
+        if line == "## Additional info":
+            continue
+        raise CriteriaError(
+            f"{node_id}: task opens its own notes under the heading {line!r}, and a task's "
+            f"own notes are read only under a line reading exactly `## Additional info`. "
+            f"Write `## Additional info` alone on that line and move anything after it into "
+            f"the section's first sentence: under any other heading the live-edit check "
+            f"reads the section as absent, so a `retry` or `requeue` restating this task "
+            f"loses every grant those notes make."
+        )
+
+
 #: Everything that decides an answer :func:`check_whole_task` and :func:`check_amendment`
 #: give, hashed together so that a record of a pass is a claim about content **under a
 #: bar** rather than about content alone. Its own source, because the patterns above
@@ -1486,9 +1526,9 @@ def check_plan(plan: object) -> int:
 
     The criteria first and this host's publication policy after, which is the order the
     two cost a plan's author: a criterion its own judge would fail on is a wrong bar
-    whatever repository it lands in, and where it lands is what
-    :mod:`orchestrator.publication_guard` then asks about — and whether the release it
-    waits on could ever arrive there is :mod:`orchestrator.adoption_guard`'s, asked last.
+    whatever repository it lands in, and where it lands and whether the release it waits
+    on could ever arrive there are the structural rules
+    :data:`orchestrator.structural_guard.GUARDS` lists, which the live-edit check reads too.
     Whether the `plans` board would take each task's issue body is
     :mod:`orchestrator.task_body`'s, and :func:`check_directly` asks it of the store's
     records rather than of ``plan``: the plan :func:`orchestrator.plan_store.read_plan`
@@ -1498,9 +1538,9 @@ def check_plan(plan: object) -> int:
     for node in dispatched_nodes(plan):
         check(node.task, node.id, resolve_bar(node.persona))
         check_appendix(node.task, node.id)
+        check_notes_heading(node.task, node.id)
         checked += 1
-    publication_guard.check_plan(plan)
-    adoption_guard.check_plan(plan)
+    structural_guard.check_plan(plan)
     return checked
 
 

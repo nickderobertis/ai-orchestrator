@@ -16,13 +16,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from onevcs_stand_in import install_three_verb_stand_in as _onevcs
+from onevcs_stand_in import release_answer as _answer
+from onevcs_stand_in import stand_in as _stand_in
 from scratch_identity import registered
 
 from orchestrator import adoption_guard
@@ -53,101 +54,6 @@ CRATE = ("crate", "crate:onepipeline")
 
 #: The origin a made-here checkout stands in as this host's own repository under.
 OWN = "github.com/acme/harness"
-
-
-def _answer(
-    identity: str,
-    *declared: tuple[str, str],
-    adoption: str | None = None,
-    default: str | None = None,
-    probed: bool = False,
-) -> dict[str, Any]:
-    """One `release targets --json` answer, in the shape the installed `onevcs` writes.
-
-    ``probed`` writes the artifact id on each target's probe alone rather than in the
-    declaration, which is where the verb carries it for a target the host override adds.
-    """
-    answer: dict[str, Any] = {
-        "identity": identity,
-        "targets": [
-            {"name": name, "style": "automated", "probe": {"args": [artifact]}}
-            for name, artifact in declared
-        ],
-        "sources": {},
-    }
-    if not probed:
-        answer["declaration"] = {
-            "state": "declared",
-            "declared": {"target": [{"id": artifact, "name": name} for name, artifact in declared]},
-        }
-    if adoption is not None:
-        answer["adoption"] = adoption
-    if default is not None:
-        answer["default_target"] = default
-    return answer
-
-
-def _stand_in(root: Path, monkeypatch: pytest.MonkeyPatch, program: str) -> None:
-    """Put one Python program on PATH under the name `onevcs`, first."""
-    binary = root / "bin"
-    binary.mkdir(parents=True, exist_ok=True)
-    written = binary / "onevcs"
-    written.write_text(f"#!{sys.executable}\n{program}", encoding="utf-8")
-    written.chmod(written.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("PATH", f"{binary}{os.pathsep}{os.environ['PATH']}")
-
-
-def _onevcs(
-    root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    releases: dict[str, Any],
-    resolved: dict[str, tuple[str, str]] | None = None,
-) -> Path:
-    """A stand-in `onevcs` answering the three verbs this module asks, for named repos.
-
-    ``releases`` maps a repository to what `release targets --json` prints for it — a
-    dict, or the literal text when a test needs something that is not JSON; ``resolved``
-    maps a repository to the origin `resolve` answers and the policy `rules check`
-    answers. Anything else exits 2, as the real one does for an unregistered repository.
-    The path answered is the log every invocation is appended to, for the test that
-    counts them.
-    """
-    log = root / "asked.log"
-    answers = {
-        repo: answer if isinstance(answer, str) else json.dumps(answer)
-        for repo, answer in releases.items()
-    }
-    policies = {
-        repo: (
-            json.dumps(
-                {"identity": f"id/{repo}", "publication_checkout": str(root), "origin": origin}
-            ),
-            f"repo: {repo}\nidentity: id/{repo}\npublication: {workflow} (from rule 1)\n",
-        )
-        for repo, (origin, workflow) in (resolved or {}).items()
-    }
-    _stand_in(
-        root,
-        monkeypatch,
-        "import sys\n"
-        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
-        f"releases = {answers!r}\n"
-        f"policies = {policies!r}\n"
-        "verb = sys.argv[1:]\n"
-        "if verb[:2] == ['release', 'targets'] and verb[3:] == ['--json']:\n"
-        "    found = releases.get(verb[2])\n"
-        "elif verb[:1] == ['resolve'] and len(verb) == 2:\n"
-        "    found = policies.get(verb[1], (None, None))[0]\n"
-        "elif verb[:2] == ['rules', 'check'] and len(verb) == 3:\n"
-        "    found = policies.get(verb[2], (None, None))[1]\n"
-        "else:\n"
-        "    found = None\n"
-        "if found is None:\n"
-        "    raise SystemExit(2)\n"
-        "sys.stdout.write(found)\n",
-    )
-    return log
 
 
 def _own_checkout(

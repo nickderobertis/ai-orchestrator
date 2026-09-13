@@ -42,11 +42,10 @@ from pathlib import Path
 from typing import TypedDict
 
 from orchestrator import (
-    adoption_guard,
     criteria_guard,
     plan_review,
     plan_store,
-    publication_guard,
+    structural_guard,
     task_body,
 )
 from orchestrator.criteria_guard import CriteriaError
@@ -145,6 +144,7 @@ def _node_refusals(document: object) -> Iterator[Refusal]:
         try:
             criteria_guard.check(node.task, node.id, bar)
             criteria_guard.check_appendix(node.task, node.id)
+            criteria_guard.check_notes_heading(node.task, node.id)
         except CriteriaError as exc:
             yield Refusal(node=node.id, field="task", reason=_reason(node.id, exc))
 
@@ -265,10 +265,15 @@ def refusals(document: object, project: str) -> list[Refusal]:
         found.extend(_node_refusals(document))
     except CriteriaError as exc:
         found.append(Refusal(node=None, field=None, reason=str(exc)))
+    # The structural rules are the list the live-edit check reads too; the board's
+    # issue-body limit is this tier's alone, because a live edit never becomes an issue.
     found.extend(
         Refusal(node=refused.node, field=refused.field, reason=refused.reason)
-        for guard in (publication_guard, adoption_guard, task_body)
-        for refused in guard.refusals(document)
+        for refused in structural_guard.refusals(document)
+    )
+    found.extend(
+        Refusal(node=refused.node, field=refused.field, reason=refused.reason)
+        for refused in task_body.refusals(document)
     )
     found.extend(_review_refusals(document, project))
     whole = _plan_review_refusal(document, named)

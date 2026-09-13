@@ -37,9 +37,25 @@ stdin and the run's own root, when the recipe could compose one, is the first ar
 Exit ``0`` means send it; exit ``1`` means refuse it, with the reason and nothing else on
 stdout; exit ``3`` means the judged turn a resulting task needed could not answer, with
 that reason on stdout — nothing is known about the text, nothing is sent, and the repair
-is to send the envelope again once the harness answers rather than to correct it. Any
-other status is this check having failed to run, which the recipe reports as such rather
-than as a verdict — so a non-zero exit here is never silent and never empty.
+is to send the envelope again once the harness answers rather than to correct it; exit
+``4`` means a node the envelope results in is refused by a structural rule, with every
+such refusal on stdout. Any other status is this check having failed to run, which the
+recipe reports as such rather than as a verdict — so a non-zero exit here is never silent
+and never empty.
+
+**A resulting node is held to the plan tier's structural rules as well as its prose.**
+What an `add` states, and what a `retry` or `requeue` returns with its overrides folded in
+the way the engine folds them, is a node like any a plan carries — its `adoption`,
+`consumes`, `merge_policy`, `repo`, `deps` and `title` decide where it publishes and what
+it waits on — so it is held to :data:`orchestrator.structural_guard.GUARDS`, the one list
+`just check-plan` reads, over the graph the whole envelope leaves: a dependency's
+repository and release targets resolve as they do for a plan. It is asked first and never
+recorded: its answer is `onevcs`'s about this host, not a property of text a register
+could key, and it spends no provider turn, so an envelope it refuses spends none either.
+The incident it exists for is a `requeue` amending `adoption: fast` onto a node publishing
+`local-direct` behind a releasing dependency, which this check accepted and which then
+failed an hour of work at its last step on the refusal :mod:`orchestrator.adoption_guard`
+already carried.
 
 **Four ops state task prose and a fifth may carry one criterion — which is the engine's
 own answer rather than this module's.** The live-edit table in `docs/orchestration.md`
@@ -116,12 +132,12 @@ import hashlib
 import json
 import os
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple, Protocol, TypedDict
 
-from orchestrator import plan_review
+from orchestrator import plan_review, structural_guard
 from orchestrator.criteria_guard import (
     CriteriaError,
     check_amendment,
@@ -192,13 +208,14 @@ CHECKPOINT_COVERAGE = ("coverage", "bytes")
 
 #: The compiled operations of a committed command's record that move what a node's
 #: dispatch reads, and the fields each is read for — `onepipeline`'s `Operation` enum,
-#: serialized by `kind` in kebab case, at the four variants that fold a node: added
-#: whole, dropped, its task amended, requeued with overrides. Restated as data rather
+#: serialized by `kind` in kebab case, at the five variants that fold a node: added
+#: whole, dropped, parked, its task amended, requeued with overrides. Restated as data rather
 #: than as patterns so that `tests/test_engine_contracts.py` can hold every kind and
 #: every field to the engine's declaration.
 FOLDED: dict[str, tuple[str, ...]] = {
     "node-added": ("node",),
     "node-dropped": ("node",),
+    "node-parked": ("node",),
     "task-amended": ("node", "text"),
     "node-requeued": ("node", "amend"),
 }
@@ -237,6 +254,52 @@ REFUSED = 1
 #: repair is different from a refusal's: a refusal is corrected, this is re-sent once the
 #: harness answers, and the recipe says which. The reason is on stdout as a refusal's is.
 UNANSWERED = 3
+
+#: The exit status the recipe reads as a **structural** refusal: a node the envelope
+#: results in is one a rule of :data:`orchestrator.structural_guard.GUARDS` refuses. A
+#: status of its own because what is wrong is a node's fields rather than task prose a
+#: judge would read, and the recipe's sentence for a prose refusal would say otherwise.
+STRUCTURALLY_REFUSED = 4
+
+#: The wire marker that lets ``channel-reply`` distinguish this module's structural
+#: verdict from an interpreter that happens to exit 4 after writing a diagnostic. The
+#: recipe removes it before presenting the guard's own refusal message to the manager.
+STRUCTURAL_WIRE_PREFIX = "live-edit-check:structural-refusal:"
+
+#: Every field the pinned engine's ``Node`` accepts. Commands carrying anything else
+#: are left to the engine's authoritative decoder instead of letting a node that can
+#: never be committed influence this preflight. ``tests/test_engine_contracts.py``
+#: reconciles this set with the release source.
+NODE_FIELDS = frozenset(
+    {
+        "id",
+        "kind",
+        "task",
+        "persona",
+        "deps",
+        "max_turns",
+        "expects_no_diff",
+        "context",
+        "amendment",
+        "parked",
+        "executor",
+        "agent_graph",
+        "repo",
+        "repo_type",
+        "workflow",
+        "merge_policy",
+        "base_branch",
+        "branch",
+        "title",
+        "body",
+        "draft",
+        "execution_checkout",
+        "steps",
+        "resume",
+        "adoption",
+        "consumes",
+    }
+)
 
 
 class Judge(Protocol):
@@ -373,12 +436,11 @@ def _requeued(existing: Mapping[str, object], overrides: Mapping[str, object]) -
 def _fold(nodes: dict[str, dict[str, object]], operation: Mapping[str, object]) -> None:
     """Apply one compiled operation of a committed record to ``nodes``.
 
-    The four operations of :data:`FOLDED`, folded as the engine's own replay folds them:
-    a node added whole, a node dropped, a task amended — the last amendment recorded is
-    the node's — and a node requeued with overrides merged onto it. Every other
-    operation moves edges, notes or settlements, none of which is the task a judge
-    reads, and a record whose fields are not the shapes the engine writes is passed
-    over rather than guessed at.
+    The five operations of :data:`FOLDED`, folded as the engine's own replay folds them:
+    a node added whole, dropped, parked, amended, or requeued. The park matters because
+    it is the engine precondition for a later requeue. Every other operation moves
+    edges, notes or settlements that this check does not read, and a record whose fields
+    are not the shapes the engine writes is passed over rather than guessed at.
     """
     kind = operation.get("kind")
     if not isinstance(kind, str) or kind not in FOLDED:
@@ -394,6 +456,8 @@ def _fold(nodes: dict[str, dict[str, object]], operation: Mapping[str, object]) 
             nodes[whole["id"]] = {str(key): value for key, value in whole.items()}
         case {"node": str() as node} if kind == "node-dropped" and node in nodes:
             nodes.pop(node)
+        case {"node": str() as node} if kind == "node-parked" and node in nodes:
+            nodes[node]["parked"] = True
         case {"node": str() as node, "text": str() as text} if (
             kind == "task-amended" and node in nodes
         ):
@@ -918,6 +982,200 @@ def refusal(
     return None
 
 
+def _consumes_keeping(node: dict[str, object], keep: Callable[[str], str | None]) -> None:
+    """Rewrite ``node``'s `consumes` keys through ``keep``, dropping a key it answers `None` for.
+
+    Assigned rather than mutated, so a mapping the run's own node record still holds is
+    never changed underneath it; a node carrying no `consumes` mapping is left as it is.
+    """
+    consumes = node.get("consumes")
+    if not isinstance(consumes, Mapping):
+        return
+    kept: dict[str, object] = {}
+    for key, value in consumes.items():
+        renamed = keep(str(key))
+        if renamed is not None:
+            kept[renamed] = value
+    node["consumes"] = kept
+
+
+def _renaming(old: str, new: str) -> Callable[[str], str | None]:
+    """A `consumes` key rewrite moving the entry keyed on ``old`` onto ``new``."""
+    return lambda key: new if key == old else key
+
+
+def _keeping_only(kept: Sequence[str]) -> Callable[[str], str | None]:
+    """A `consumes` key rewrite keeping only the entries keyed on one of ``kept``."""
+    return lambda key: key if key in kept else None
+
+
+def _without(graph: dict[str, dict[str, object]], dropped: str, *, cascade: bool) -> None:
+    """Remove ``dropped`` from ``graph``, and its dependents with it or its edges to them.
+
+    A `drop`'s two dispositions, as the engine's `compile_drop` applies them: `drop`
+    removes every node depending on it, recursively, and `detach` removes only the edge
+    each one held. Either way no remaining node consumes a node that has left, which is
+    the engine's `NodeDropped` fold.
+    """
+    graph.pop(dropped, None)
+    for node_id, node in list(graph.items()):
+        deps = node.get("deps")
+        if isinstance(deps, list) and dropped in deps and cascade:
+            _without(graph, node_id, cascade=True)
+            continue
+        if isinstance(deps, list) and dropped in deps:
+            node["deps"] = [one for one in deps if one != dropped]
+        _consumes_keeping(node, lambda key: None if key == dropped else key)
+
+
+# llmlint: ignore[modern_domain_modeling] The graph is the engine's own open node records,
+# handed straight back to the structural guards as the plan document they read leniently —
+# the representation `Nodes` already holds them in. A typed node model here would be a
+# second declaration of the engine's schema, and would drop the fields the guards read
+# that such a model did not name (`metadata`, `consumes`, whatever a later release adds).
+def resulting_graph(
+    envelope: object, current: Nodes
+) -> tuple[dict[str, dict[str, object]], list[str]]:
+    """The graph ``envelope`` leaves on the run, and the ids of the nodes it results in.
+
+    Every command is folded in order onto the run's current nodes, so a later command
+    reads what an earlier one did, and each is folded as the engine's `edits.rs` compiles
+    and applies it, `consumes` included — because the adoption rules read it: an `add`
+    puts its node in; a `retry` puts its replacement in place of the node it names — the
+    replacement inheriting that node's `deps` and `consumes` when it states no deps of its
+    own — and redirects that node's dependents to it, their `consumes` rekeyed with them;
+    a `requeue` folds its overrides onto the parked node exactly as :func:`_requeued` does;
+    a `reparent` replaces a node's `deps` and keeps only the `consumes` keyed on one of
+    them; and a `drop` removes a node as its `dependents` disposition says.
+    `tests/test_engine_contracts.py` holds each of those folds to the engine's source at
+    the pinned release. The nodes it results in are the ones an `add`, a `retry` or a
+    `requeue` returned and that the envelope left in the graph. A command naming a node
+    the graph does not hold, or stating a shape the engine refuses, moves nothing — that
+    refusal is `onepipeline reply`'s to make, naming what it received.
+    """
+    graph = {node_id: dict(node) for node_id, node in current.nodes.items()}
+    resulting: list[str] = []
+    match envelope:
+        case {"commands": [*commands]}:
+            pass
+        case _:
+            return graph, resulting
+    for command in commands:
+        match command:
+            # Guards on the op rather than value patterns, for the reason `reviewables`
+            # gives: a bare name in a pattern binds.
+            # An `add` of an id the graph holds, and a `retry` of a node it does not hold
+            # or onto an id it does, are refused by the engine for their target, so each
+            # moves nothing here rather than checking a node that will never be committed.
+            case {"op": op, "node": Mapping() as node} if (
+                op == "add"
+                and set(command) == {"op", "node"}
+                and set(node) <= NODE_FIELDS
+                and isinstance(node.get("id"), str)
+                and node["id"] not in graph
+            ):
+                graph[node["id"]] = {str(key): value for key, value in node.items()}
+                resulting.append(node["id"])
+            case {"op": op, "id": str() as old, "node": Mapping() as node} if (
+                op == "retry"
+                and set(command) == {"op", "id", "node"}
+                and set(node) <= NODE_FIELDS
+                and old in graph
+                and isinstance(node.get("id"), str)
+                and node["id"] not in graph
+            ):
+                new = node["id"]
+                replacement = {str(key): value for key, value in node.items()}
+                superseded = graph.pop(old, None)
+                if superseded is not None and not replacement.get("deps"):
+                    inherited = superseded.get("deps")
+                    replacement["deps"] = list(inherited) if isinstance(inherited, list) else []
+                    if "consumes" in superseded:
+                        replacement["consumes"] = superseded["consumes"]
+                for other in graph.values():
+                    deps = other.get("deps")
+                    if isinstance(deps, list) and old in deps:
+                        other["deps"] = [new if one == old else one for one in deps]
+                        _consumes_keeping(other, _renaming(old, new))
+                graph[new] = replacement
+                resulting.append(new)
+            case {"op": op, "id": str() as named} if (
+                op == "requeue"
+                and set(command) <= {"op", "id", "amend"}
+                and set(command) >= {"op", "id"}
+                and named in graph
+                and graph[named].get("parked") is True
+                and (
+                    "amend" not in command
+                    or (
+                        isinstance(command["amend"], Mapping)
+                        and set(command["amend"]) <= NODE_FIELDS - {"id", "deps"}
+                    )
+                )
+            ):
+                overrides = command.get("amend")
+                graph[named] = _requeued(
+                    graph[named], overrides if isinstance(overrides, Mapping) else {}
+                )
+                resulting.append(named)
+            case {"op": op, "id": str() as named, "deps": [*deps]} if (
+                op == "reparent"
+                and set(command) == {"op", "id", "deps"}
+                and all(isinstance(one, str) for one in deps)
+                and named in graph
+            ):
+                kept = list(deps)
+                graph[named]["deps"] = kept
+                _consumes_keeping(graph[named], _keeping_only(kept))
+            case {"op": op, "id": str() as named, "dependents": disposition} if (
+                op == "drop"
+                and set(command) == {"op", "id", "dependents"}
+                and isinstance(disposition, str)
+                and disposition in {"drop", "detach"}
+                and named in graph
+            ):
+                _without(graph, named, cascade=command.get("dependents") == "drop")
+            case _:
+                continue
+    return graph, [node_id for node_id in dict.fromkeys(resulting) if node_id in graph]
+
+
+def structural_refusal(envelope: object, current: Nodes | None = None) -> str | None:
+    """Every structural refusal of a node ``envelope`` results in, or ``None`` for none.
+
+    The rules are :data:`orchestrator.structural_guard.GUARDS`, the list `just check-plan`
+    reads, asked over the resulting nodes and the dependencies they name — which is what
+    lets a rule about a dependency's repository resolve it as it would in a plan — and
+    only a refusal *of a resulting node* is reported: a node the envelope leaves as it was
+    is not this reply's to answer for. Every one rather than the first, for the reason
+    :func:`orchestrator.publication_guard.refusals` gives, and each in its rule's own
+    words, naming the node and the field to correct.
+
+    An envelope resulting in no node asks nothing, so a note, an amendment or a
+    cancellation spends no `onevcs` call.
+    """
+    graph, resulting = resulting_graph(envelope, Nodes({}) if current is None else current)
+    if not resulting:
+        return None
+    asked = dict.fromkeys(resulting)
+    for node_id in resulting:
+        deps = graph[node_id].get("deps")
+        asked.update(
+            dict.fromkeys(one for one in (deps if isinstance(deps, list) else []) if one in graph)
+        )
+    refused = [
+        found
+        for found in structural_guard.refusals({"tasks": [graph[node_id] for node_id in asked]})
+        if found.node in resulting
+    ]
+    if not refused:
+        return None
+    return "\n".join(
+        f"node {found.node!r}, as this reply leaves it: {found.field}: {found.reason}"
+        for found in refused
+    )
+
+
 def _run_root(argument: str | None) -> Path | None:
     """The run root the argument names, or ``None`` when it names none.
 
@@ -968,10 +1226,21 @@ def main(argv: Sequence[str] | None = None, judge: Judge = plan_review.verdict) 
     except ValueError:
         return 0
     run_root = _run_root(root)
+    current = Nodes.read(run_root)
+    # llmlint: ignore[boundary_inputs_validated] Asked in front of `onepipeline reply` on
+    # purpose, exactly as the prose tiers below are: this is the one place a node an
+    # envelope results in can be held to the plan tier's rules before it is sent. Every
+    # command field `resulting_graph` acts on is narrowed by the pattern that reads it and
+    # every node field by the guard that reads it; a shape neither reads moves nothing and
+    # is left to the verb, which refuses it naming what it received.
+    structural = structural_refusal(envelope, current)
+    if structural is not None:
+        sys.stdout.write(f"{STRUCTURAL_WIRE_PREFIX}{structural}")
+        return STRUCTURALLY_REFUSED
     register = Register(None if run_root is None else run_root / REGISTER)
     status = REFUSED
     try:
-        reason = refusal(envelope, register, judge, Nodes.read(run_root))
+        reason = refusal(envelope, register, judge, current)
     except ReviewUnanswered as unanswered:
         # What cleared before the turn that answered nothing is still a pass over text,
         # so it is kept; the envelope is not sent, and the recipe says why and what to do.
