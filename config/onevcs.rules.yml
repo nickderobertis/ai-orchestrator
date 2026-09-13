@@ -136,6 +136,10 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: onepipeline}
     publication: change-auto
     approvals: none

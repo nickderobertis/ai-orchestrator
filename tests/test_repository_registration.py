@@ -14,6 +14,16 @@ Content is the whole subject: a checkout path is a claim about a directory outsi
 this tree. What policy the files resolve is `tests/e2e/test_repo_registry_apply_e2e.py`'s,
 and reconciling them against the working copies this host really has is the uncached
 `orchestrator:test-checkouts` tier's.
+
+Why a tracked checkout entry is proven this way and not by a journey that registers it:
+the path names one of this host's own clones, which a test may neither register nor
+publish from — registering it would write the host's live registry, the one every
+concurrent run resolves through. So the registration journey that does run
+(`test_repo_registry_apply_e2e.py`'s `ruled` fixture) registers a scratch checkout
+carrying each ruled identity's real origin through the real recipe, and what is left for
+this module is exactly what only the tracked bytes can say: that the path is a path this
+host composes, that the identity it names has a rule above the reviewed default, and
+that the two files agree.
 """
 
 from __future__ import annotations
