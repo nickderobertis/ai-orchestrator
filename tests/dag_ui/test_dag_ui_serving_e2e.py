@@ -152,6 +152,9 @@ TURN_USAGE_FIGURES = (
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
 TIMELINE_SCHEMA_VERSION = 8
+#: The envelope's telemetry schema, restated for the same reason and moved with the same
+#: paragraph.
+TELEMETRY_SCHEMA_VERSION = 16
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -368,6 +371,11 @@ def test_the_timeline_this_repository_documents_is_what_the_reader_answers(
     assert timeline["timeline_schema_version"] == TIMELINE_SCHEMA_VERSION, (
         f"the reader answers timeline schema {timeline['timeline_schema_version']}, and "
         f"docs/telemetry.md documents {TIMELINE_SCHEMA_VERSION}; re-measure that "
+        "paragraph against what this release serves and move both together"
+    )
+    assert timeline["telemetry_schema_version"] == TELEMETRY_SCHEMA_VERSION, (
+        f"the reader answers telemetry schema {timeline['telemetry_schema_version']}, and "
+        f"docs/telemetry.md documents {TELEMETRY_SCHEMA_VERSION}; re-measure that "
         "paragraph against what this release serves and move both together"
     )
 

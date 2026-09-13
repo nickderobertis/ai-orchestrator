@@ -14,6 +14,9 @@
 
 # Which backend runs the harness and plays the judge / simulated user. Harness and
 # model SELECTION for both sides lives in the oneharness config files, not here.
+# A judge side may be a list of judges only through a `kind: onejudge` member's `judge:`
+# list in a graph, never here (shape: onejudge docs/judges.md, oneagentgraph docs/contract.md).
+# This host stacks none, so every dispatch keeps the one simulated user below.
 provider:
   kind: oneharness
   bin: oneharness

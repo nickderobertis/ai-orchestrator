@@ -58,7 +58,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.19.0"}
+{"status":"ok","onepipeline_version":"0.29.0"}
 ```
 
 That release is the reader's own, and it is **not**
@@ -67,11 +67,13 @@ separately, and the reader links whatever its release was built against. So the
 two are expected to differ; what the field is for is being able to say which
 reader is answering rather than assuming it.
 
-**Today they differ the other way round from the way they used to, and the reading to
-carry is that neither number constrains the other**: the adopted `onepipeline-ui` 0.7.2
-statically links onepipeline 0.19.0 while `config/onepipeline.version` reads 0.29.0, so
-the reader answers runs through an engine ten minor releases behind the CLI a dispatch
-runs.
+**Today the two coincide, and the reading to carry is still that neither number
+constrains the other**: the adopted `onepipeline-ui` 0.7.3 statically links onepipeline
+0.29.0, and `config/onepipeline.version` reads 0.29.0 too. That is an adoption made
+together rather than a rule: the reader was moved with the engine because a reader
+linking an older onejudge than the one writing a run's reports refuses the newer report
+schema and renders no transcript. Through the adoption before this one the reader linked
+onepipeline 0.19.0 while the CLI a dispatch ran was nine minor releases ahead.
 It was the reverse for two adoptions — the engine pin was held at 0.18.4 for a
 settlement write-back defect that had nothing to do with reading runs, and the
 Observatory was adopted anyway because the reader carries its own engine. That hold is
@@ -86,7 +88,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.7.2**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.7.3**, the release `config/onepipeline-ui.version` pins, carries
 what 0.6.3 added: it shows which release carried each landed node, alongside every
 release event.
 Opening a node whose dependency was adopted `published` shows what it waited on and
@@ -206,12 +208,12 @@ over this host's own root a first page of the run list answered in 17 to 40 seco
 *warm*, a run detail or a run-scoped timeline in about 20, and a browser — one page
 load, one `/api/v2/events` subscription, one run list, then the selected run's detail
 and timeline — sat on `Loading execution history…` for over a minute and a half before
-showing anything. **0.7.0 bounds that** — and the adopted 0.7.2 keeps it, which is why the numbers below
+showing anything. **0.7.0 bounds that** — and the adopted 0.7.3 keeps it, which is why the numbers below
 are that release's rather than this pin's — and it is the difference between a view an
 operator opens and one they avoid: on the same root the same request answers in
 **0.09-0.17 s** warm, against 41 s on the first cold one; a run detail in
-**0.01-0.32 s**; and a live run's run-scoped timeline in **0.14 s**. Its
-`telemetry_schema_version` is 15 where 0.6.5 served 14. What has *not* changed is the
+**0.01-0.32 s**; and a live run's run-scoped timeline in **0.14 s**. 0.7.0's
+`telemetry_schema_version` was 15 where 0.6.5 served 14. What has *not* changed is the
 page size: `limit` is capped at 50, so a several-hundred-run answer is still
 cursor-paged.
 

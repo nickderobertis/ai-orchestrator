@@ -789,8 +789,8 @@ changes, and both are in force on this host:
   survived; the `paced-conversations` release (0.3.19) let a `kind: onejudge` member
   carry a `schedule` that paces one conversation rather than starting a second, with a
   hold that keeps the heartbeat and the activity clock alive and ends early on a note.
-  The `onepipeline` this host adopts links 0.4.0, which `tests/test_linked_libraries.py`
-  reads off the installed wheel's SBOM.
+  The `onepipeline` this host adopts links a release carrying both — 0.4.0 at this
+  adoption — which `tests/test_linked_libraries.py` reads off the installed wheel's SBOM.
 - **`onepipeline`** — the observer relaunch, which 0.21.1 already carried
   (https://github.com/nickderobertis/onepipeline/pull/197): a driver keeps an observer
   watching a live run and records why one ended, which is what `OBSERVER DEAD` and

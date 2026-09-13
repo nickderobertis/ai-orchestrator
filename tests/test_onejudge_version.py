@@ -13,7 +13,9 @@ from orchestrator.root import REPO_ROOT
 # explicit list aligned with unavoidable human-readable version literals, such
 # as links to versioned external documentation.
 ONEJUDGE_VERSION_REFERENCE_COUNTS = {
-    Path("docs/onejudge-integration.md"): 2,
+    # Two links, each spelled once in its text and once in its URL: the command protocol a
+    # stand-in speaks, and the judge-list shape a graph member's `judge:` may take.
+    Path("docs/onejudge-integration.md"): 4,
     # The dag-scope graph names the release whose onejudge cannot serve the
     # planner channel as a command provider. Dating that observation is what makes
     # it honest, and it is exactly the literal an upgrade has to re-measure.

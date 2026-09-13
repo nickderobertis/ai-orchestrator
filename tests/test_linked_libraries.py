@@ -160,6 +160,12 @@ TURN_PROVENANCE_FLOOR = Release(0, 3, 16)
 #: which re-ask a supervisor whose answer nothing could act on instead of failing the
 #: member on it.
 SUPERVISOR_REASK_FLOOR = Release(0, 8, 0)
+#: onejudge https://github.com/nickderobertis/onejudge/pull/80 (`eacb4cf9`), first cut as
+#: 0.9.0, and https://github.com/nickderobertis/onejudge/pull/82 (`12ed44a5`), cut as
+#: 0.10.0: `JudgePanel` behind `judges:`, with `judge:` its one-element shorthand;
+#: `LlmlintProvider` behind a judge entry's `kind: llmlint`; and `JudgedTurn` /
+#: `JudgeDecision` on the report's `judge_decisions`.
+JUDGE_PANEL_FLOOR = Release(0, 10, 0)
 #: oneharness https://github.com/nickderobertis/oneharness/pull/1286 (`66e868f5`), cut
 #: as `oneharness-core` 0.13.1 and `oneharness-cli` 0.12.1: `fallback.rs` decides what
 #: an unclassified failure stops and `report::FallbackReport::stopped_without_work`
@@ -382,6 +388,28 @@ def test_the_linked_onevcs_lets_a_session_open_its_own_draft() -> None:
         "lets a session open its change request as a draft it holds; a worker granted the "
         "appendix's early-publication carve-out would have no verb to publish its draft "
         "through, and the closeout no draft to finish"
+    )
+
+
+def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
+    """Above the floor, a graph naming `judges:` reaches a onejudge that can run it.
+
+    What the floor buys is three things a dispatched member's own onejudge has to carry:
+    a judge side that can be a list, its judges run concurrently with the failing ones'
+    messages combined and attributed; an `llmlint` judge kind; and per-judge decisions on
+    the report. Held on the *linked* copy because that is what a dispatch settles on — a
+    bump to `config/onepipeline.version` that resolved an older onejudge would leave every
+    pin on this host reading current, and would fail only when a graph first named
+    `judges:`, as a config error on a member. `tests/e2e/test_judge_panel_e2e.py` drives
+    the property itself through the pinned CLI; this holds the engine to a onejudge that
+    has it.
+    """
+    linked = Release.parse(_linked_version("onejudge"))
+
+    assert linked >= JUDGE_PANEL_FLOOR, (
+        f"the adopted engine links onejudge {linked}, below the {JUDGE_PANEL_FLOOR} that "
+        "lets a judge side be a list, adds the `llmlint` judge kind, and records per-judge "
+        "decisions on the report; a graph naming `judges:` would be refused at dispatch"
     )
 
 

@@ -106,6 +106,46 @@ forward on file-level evidence instead — the accounts that did named
 `src/agentgraph.rs`, a path the linked `oneagentgraph` has not carried since before
 0.2.18.
 
+### The judge side may be a list of judges
+
+The pinned onejudge accepts a judge side that is a **list** of judges rather than one:
+an LLM simulated user, an `llmlint` run over the worker's tree, a custom command
+speaking onejudge's command protocol, or several of any of them. Every judge runs
+against the same worker turn at once and the panel waits for all of them; when any says
+the work is not done, the worker gets one message combining the failing judges' own
+instructions, each under a ``## Judge `<label>` (<kind>)`` header, and the report's
+`judge_decisions` records which judge decided what on each turn. A single `judge:` is
+the one-element shorthand for the list.
+
+This host would reach it through a `kind: onejudge` member's `judge:` in a graph,
+written as a list, and never through a persona — a persona may not carry `provider`,
+and `oneagentgraph` refuses one that does:
+
+```yaml
+members:
+  worker:
+    kind: onejudge
+    base_config: ./onejudge.base.yaml
+    agent: {oneharness_config: ./oneharness.toml}
+    judge:                                            # one side, as every graph here writes it — or a list
+      - oneharness_config: ./oneharness.judge.toml    # a harness side: optional `model`, `label`
+      - kind: llmlint                                 # an llmlint side: optional `config`, `bin`, `diff_base`, `args`, `label`
+        config: ./llmlint.yml
+        diff_base: origin/main
+      - command: [my-judge, --flag]                   # a command side: optional `label`
+```
+
+**This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
+`oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
+side, and every dispatch keeps its single simulated user; stacking one is a change to a
+graph and a manager's decision. The shape is stated in [onejudge v0.10.0's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.10.0/docs/judges.md)
+— the config, how a panel decides, and what each surface carries per judge — and, for a
+graph member, in [oneagentgraph v0.4.0's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.0/docs/contract.md).
+`tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
+list, a single `judge:`, and a single provider, offline.
+
 ## Provider wiring
 
 This repository uses three onejudge provider arrangements:

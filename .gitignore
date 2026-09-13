@@ -58,9 +58,12 @@ dist/
 /.logs/
 
 # The fold checkpoint the engine resumes a run's state from instead of replaying its
-# journal. It is derived, it is written by a **reader** — `just status`, `just host`,
-# `onepipeline watch` — and the recorded runs under `tests/fixtures/timeline-runs/` are
-# what this suite drives those readers over, so without this every such read leaves the
-# working tree dirty and moves the `recipeWorkspace` key those fixtures are part of.
-# Deleting one costs the next read its fold and nothing else.
+# journal, and the run summary it caches beside it (`summary.json`: a reader folds a run
+# once and caches what it folded). Both are derived, both are written by a **reader** —
+# `just status`, `just host`, `just runs`, `onepipeline watch` — and the recorded runs
+# under `tests/fixtures/timeline-runs/` are what this suite drives those readers over, so
+# without this every such read leaves the working tree dirty and moves the
+# `recipeWorkspace` key those fixtures are part of. Deleting one costs the next read its
+# fold and nothing else.
 /tests/fixtures/**/checkpoint.json
+/tests/fixtures/**/summary.json

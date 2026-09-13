@@ -177,7 +177,13 @@ half of the bump after that one, 0.8.1 to 0.10.0, moves no record writer at all:
 SBOM, and `tests/test_linked_libraries.py` holds both numbers — so it too was
 re-taken without a turn. Nothing an accounting reader reads is
 renamed, retyped, or re-meant, which is why the boundary sentence names the pair
-these records are written under rather than the older one they were first taken on. `dispatches`,
+these records are written under rather than the older one they were first taken on.
+The onejudge half of that pair has since moved to 0.10.0 with the oneharness half and
+the `oneharness-core` both engines link unchanged, so the record the `usage` block is
+read from is written by the same release as before; what that onejudge release adds is a
+judge side that can be a list, whose judges' usage it **sums** into the one `judge` party
+(onejudge's own `judges.md`: *Usage is summed across judges*) — and this host stacks
+none, so `judge` still counts one simulated user. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 
@@ -262,15 +268,19 @@ served them.
    watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.7.2**, the release `config/onepipeline-ui.version` pins —
-   a measurement rather than a reading, because that crate has no registered checkout
-   on this host and its CLI dumps no schema, so a bump is what re-opens this
-   paragraph: `telemetry_schema_version` 15 on the envelope, where 0.6.5 served 14;
-   `timeline_schema_version` 8, where 0.7.0 served 7; spans of kind `run`, `dispatch`, `node`,
+   **`onepipeline-api` 0.7.3**, the release `config/onepipeline-ui.version` pins —
+   a measurement rather than a reading, because its CLI dumps no schema, so a bump is
+   what re-opens this paragraph: `telemetry_schema_version` 16 on the envelope, where
+   0.7.2 served 15 and 0.6.5 served 14; `timeline_schema_version` 8, where 0.7.0 served
+   7 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
+   answer); spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here; no run read served the `dispatching` this paragraph used to name.
+   On 0.7.3 this was re-read against the recorded runs under
+   `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
+   and every span kind but `human-wait`, which none of those runs records.
    **The dispatch tier is two span kinds, and confusing them is the easy mistake.** A
    **`dispatch`** span is one supervisory conversation, parented on the *run*, with an
    `agent_role` of `orchestrator` (the monitor) or `check-in` (the pacemaker), a
@@ -368,7 +378,7 @@ served them.
    https://github.com/nickderobertis/onepipeline-ui/pull/44 describes, met on this
    host's own data.
    **What 0.7.2 changed for a reader is one number, and the rest of that release is
-   the browser bundle's.** Serving one runs root from a 0.7.0 and the adopted 0.7.2
+   the browser bundle's.** Serving one runs root from a 0.7.0 and a 0.7.2
    `onepipeline-api` at once — the three runs under `tests/fixtures/timeline-runs/`
    that carry a run-scope timeline — the whole delta is `timeline_schema_version` 7
    becoming 8. Every other byte of the run-scope timeline is identical, the
