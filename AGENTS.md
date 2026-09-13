@@ -856,8 +856,12 @@ node with no target to wait on, a `fast` node behind a release publishing where 
 request opens, a node of this repository waiting on an artifact nothing here installs, a
 node elsewhere taking this host's own `default_target` — while whether an adoption is
 the *right* one, the goal needing it and the task naming the pin that governs the fix,
-is `just review-plan`'s judged question and never this tier's. It is written to **miss**
-rather than to over-refuse, so a sound node it refuses — a read-only research criterion
+is `just review-plan`'s judged question and never this tier's. And it refuses a task
+whose issue body, as `orchestrator/task_body.py` composes and measures it, would exceed
+the limit GitHub puts on one, warning on stderr from the threshold that module declares,
+because `just copy-plan` onto the `plans` board is otherwise the first thing to say so
+and the last step of the flow. It is written to **miss** rather than to over-refuse, so a
+sound node it refuses — a read-only research criterion
 naming a path with a reading verb — is launched precise rather than softened; a node's
 criteria are the one block its `## Acceptance criteria` heading opens.
 

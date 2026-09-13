@@ -48,7 +48,7 @@ from project_fixtures import project_from_plan, reviewed
 from scratch_identity import registered, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import host_installs, plan_store
+from orchestrator import host_installs, plan_store, task_body
 from orchestrator.criteria_guard import (
     APPENDIX,
     APPENDIX_ENV,
@@ -2061,6 +2061,116 @@ def test_the_registered_check_run_with_no_project_names_the_command_shape(
         assert "just review-plan <source>:<project>" in refusal["reason"], refusal
     (whole,) = [one for one in refusals if one["node"] is None]
     assert "for want of a project id" in whole["reason"], whole
+
+
+def _padded(root: Path, size: int) -> Path:
+    """A sound plan whose one dispatched task's content runs to at least ``size`` characters.
+
+    Padded below the appendix, under the `## Planner context` heading the engine appends a
+    carried note under, rather than inside the criteria: what is being measured is the
+    issue body, and a task refused for its size has to be one every other check accepts.
+    The metadata slot the store's map adds is not padded for, so a plan padded to a
+    threshold measures a little over it once the review record is in the map.
+    """
+    sentence = "Context carried from an earlier dispatch of this node. "
+    bare = _task(STATES_ITS_BAR)
+    heading = "\n## Planner context\n\n"
+    repeated = sentence * (max(size - len(bare) - len(heading), 0) // len(sentence) + 1)
+    return _plan(root, STATES_ITS_BAR, appended=heading + repeated)
+
+
+#: How both paths report the figure, the direct one carrying the field beside the node.
+MEASURED = re.compile(
+    r"route: (?:task: )?its composed issue body measures (?P<size>[\d,]+) characters"
+)
+
+
+def _reported_size(stderr: str) -> int:
+    found = MEASURED.search(stderr)
+    assert found is not None, stderr
+    return int(found["size"].replace(",", ""))
+
+
+def test_a_task_whose_issue_body_the_board_would_refuse_is_refused_before_the_copy(
+    tmp_path: Path,
+) -> None:
+    """The size refusal, on both paths, naming the task, its size, the limit and the gap.
+
+    The plan is otherwise sound, reviewed through the real recipe, and refused for the one
+    thing the `plans` board would refuse it for at the last step of the flow: an issue
+    body over GitHub's limit. The size printed is the body composed from the record
+    the store holds — content and the map carrying the review record — which is the body
+    `just copy-plan` would send.
+    """
+    project = project_from_plan(_padded(tmp_path, task_body.BODY_LIMIT + 2_000))
+    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
+    # engine carrying no `plan check`, for the reason `_older_engine` states.
+    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    through = _check_project(project)
+    directly = _check_project(project, environment=direct)
+
+    _, records = plan_store.read_project(project)
+    (measured,) = [body for body in task_body.record_bodies(records) if body.node == "route"]
+    assert measured.size > task_body.BODY_LIMIT, measured
+    for refused in (through, directly):
+        assert refused.returncode == 1, refused.stdout + refused.stderr
+        assert refused.stdout == "", refused.stdout
+        assert _reported_size(refused.stderr) == measured.size, refused.stderr
+        assert f"{task_body.BODY_LIMIT:,}-character limit" in refused.stderr, refused.stderr
+        assert task_body.UNMEASURED in refused.stderr, refused.stderr
+    assert "check-plan: scripts/plan-check.sh: route: task: " in through.stderr, through.stderr
+    assert "check-plan: route: task: " in directly.stderr, directly.stderr
+
+
+def test_a_task_between_the_thresholds_is_accepted_with_a_warning_on_stderr(
+    tmp_path: Path,
+) -> None:
+    """From the warning threshold a task is warned about and still accepted, on both paths.
+
+    The warning is the wrapper's rather than the registered check's, because the verb
+    swallows an accepting check's stderr: so it is asserted at the recipe, beside the
+    accepted line on stdout, naming the task, its size and the limit that size is a
+    fraction of.
+    """
+    project = project_from_plan(_padded(tmp_path, task_body.WARN_FROM + 2_000))
+    # llmlint: ignore-block[e2e_not_mocked] The direct path is reached only against an
+    # engine carrying no `plan check`, for the reason `_older_engine` states.
+    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    through = _check_project(project)
+    directly = _check_project(project, environment=direct)
+
+    _, records = plan_store.read_project(project)
+    (measured,) = [body for body in task_body.record_bodies(records) if body.node == "route"]
+    assert task_body.WARN_FROM <= measured.size <= task_body.BODY_LIMIT, measured
+    for accepted in (through, directly):
+        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+        assert "check-plan: warning: route: " in accepted.stderr, accepted.stderr
+        assert _reported_size(accepted.stderr) == measured.size, accepted.stderr
+        assert f"of the {task_body.BODY_LIMIT:,}-character limit" in accepted.stderr, (
+            accepted.stderr
+        )
+    assert THROUGH_THE_ENGINE in through.stdout, through.stdout
+    assert "carries no `plan check`" in directly.stdout, directly.stdout
+
+
+def test_a_task_below_the_warning_threshold_draws_no_warning(tmp_path: Path) -> None:
+    """The ordinary plan — the appendix and a page of task — is accepted in silence."""
+    project = project_from_plan(_plan(tmp_path, STATES_ITS_BAR))
+
+    accepted = _check_project(project)
+
+    _, records = plan_store.read_project(project)
+    (measured,) = [body for body in task_body.record_bodies(records) if body.node == "route"]
+    assert measured.size < task_body.WARN_FROM, measured
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "1 dispatched node(s)" in accepted.stdout, accepted.stdout
+    assert "warning" not in accepted.stderr, accepted.stderr
+    assert "issue body" not in accepted.stderr, accepted.stderr
 
 
 #: A `commit-msg` hook of the shape a repository this host publishes to really carries:

@@ -22,6 +22,7 @@ refusal attributable to one cause.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -40,7 +41,7 @@ from criteria_examples import (
     STATES_THE_PROPERTY_INSTEAD,
 )
 
-from orchestrator import criteria_guard, plan_check, plan_review, plan_store
+from orchestrator import criteria_guard, plan_check, plan_review, plan_store, task_body
 from orchestrator.criteria_guard import (
     APPENDIX_ENV,
     AUTHORIZATIONS,
@@ -794,6 +795,48 @@ def test_the_command_refuses_a_plan_that_does_not(
 
     assert check_directly("authoring:incomplete") == 1
     assert "check-plan:" in capsys.readouterr().err
+
+
+def test_the_command_refuses_a_task_whose_issue_body_the_board_would_refuse(
+    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The direct path refuses the size the spawned check refuses, naming the same three things.
+
+    Over the store's records rather than the assembled plan, because the plan
+    `read_plan` assembles carries no metadata map and the map is part of the body: the
+    node's own task here is sound, and the record beside it is what is over the limit.
+    """
+    padded = _task(COMPLETE) + "\n## Planner context\n\n" + "Carried context. " * 4_000
+    plan = _plan(persona="engineer", task=_task(COMPLETE))
+    record = dataclasses.replace(_reviewable(), content=padded)
+    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [record]))
+
+    assert check_directly("authoring:padded") == 1
+    reported = capsys.readouterr().err
+    assert reported.startswith("check-plan: probe: task: its composed issue body"), reported
+    assert f"{task_body.BODY_LIMIT:,}-character limit" in reported, reported
+
+
+def test_the_command_warns_about_a_task_between_the_thresholds_and_accepts_it(
+    appendix: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_record: dict[str, object],
+) -> None:
+    """Warned over the records, whose map is the one the copy sends, and still accepted."""
+    plan = _planned(project_record, _plan(persona="engineer", task=_task(COMPLETE)))
+    large = dataclasses.replace(_reviewable(), content="x" * task_body.WARN_FROM)
+    key = plan_review.review_key(large, plan_review.bar_fingerprint())
+    warned = dataclasses.replace(
+        large, metadata={**large.metadata, plan_review.RECORD_KEY: {"key": key}}
+    )
+    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [warned]))
+
+    assert check_directly("authoring:probe") == 0
+    captured = capsys.readouterr()
+    assert captured.err.startswith("check-plan: warning: probe: "), captured.err
+    assert f"{task_body.BODY_LIMIT:,}-character limit" in captured.err, captured.err
+    assert "carries a review record" in captured.out, captured.out
 
 
 def test_the_command_reports_a_checkout_that_cannot_answer_what_the_bar_is(

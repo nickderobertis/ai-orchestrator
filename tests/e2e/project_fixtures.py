@@ -65,8 +65,12 @@ _PAID_PROVIDER_GUARD = helper("no-paid-provider")
 _PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
 
 #: Where the review turns this fixture spends keep their harness history, so they do not
-#: land in the host's. One directory per test process, created on first use.
-_HISTORY = Path(tempfile.mkdtemp(prefix="ai-orchestrator-fixture-history-"))
+#: land in the host's. One directory per process that imports this module, created at
+#: import, and removed by the `TemporaryDirectory` finalizer when the interpreter that
+#: imported it exits — the object is held at module scope for exactly that lifetime.
+#: `tests/test_fixture_history_lifetime.py` starts a real interpreter and reads both ends.
+_HISTORY_DIR = tempfile.TemporaryDirectory(prefix="ai-orchestrator-fixture-history-")
+_HISTORY = Path(_HISTORY_DIR.name)
 
 
 def local_project(content: str, name: str) -> str:

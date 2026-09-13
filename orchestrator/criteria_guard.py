@@ -101,7 +101,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from orchestrator import adoption_guard, plan_review, plan_store, publication_guard
+from orchestrator import adoption_guard, plan_review, plan_store, publication_guard, task_body
 from orchestrator.root import REPO_ROOT
 
 #: The operational text every dispatched task carries, and the one source a plan
@@ -1489,6 +1489,10 @@ def check_plan(plan: object) -> int:
     whatever repository it lands in, and where it lands is what
     :mod:`orchestrator.publication_guard` then asks about — and whether the release it
     waits on could ever arrive there is :mod:`orchestrator.adoption_guard`'s, asked last.
+    Whether the `plans` board would take each task's issue body is
+    :mod:`orchestrator.task_body`'s, and :func:`check_directly` asks it of the store's
+    records rather than of ``plan``: the plan :func:`orchestrator.plan_store.read_plan`
+    assembles carries no metadata map, and the map is part of the body.
     """
     checked = 0
     for node in dispatched_nodes(plan):
@@ -1604,10 +1608,12 @@ def check_directly(project: str) -> int:
         return 2
     try:
         checked = check_plan(plan)
+        task_body.check_records(records)
     except (
         CriteriaError,
         publication_guard.PublicationError,
         adoption_guard.AdoptionError,
+        task_body.BodyError,
     ) as exc:
         print(f"check-plan: {exc}", file=sys.stderr)
         return 1
@@ -1656,5 +1662,9 @@ def check_directly(project: str) -> int:
         print(f"check-plan: {whole}", file=sys.stderr)
     if unreviewed or whole is not None:
         return 1
+    # Over the records rather than the plan, the way `orchestrator/plan_check.py` warns
+    # after the verb accepts: the two paths then measure one body from one map.
+    for warned in task_body.warnings(records):
+        print(warned, file=sys.stderr)
     print(accepted(Counted(checked), DIRECTLY))
     return 0

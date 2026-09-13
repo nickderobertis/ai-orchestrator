@@ -20,7 +20,7 @@ import subprocess
 import pytest
 from criteria_examples import RELEASED_ELSEWHERE
 
-from orchestrator import criteria_guard, plan_check, plan_review, plan_store
+from orchestrator import criteria_guard, plan_check, plan_review, plan_store, task_body
 
 #: A synthetic appendix, for the reason `tests/test_criteria_guard.py` states: reading
 #: the tracked one would put these in the whole-workspace tier, where coverage is not
@@ -194,6 +194,26 @@ def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_
     # The node id is the refusal's own field, so the reason does not open with it again.
     assert not refusal["reason"].startswith("route: ")
     assert "the dispatch cannot do" in refusal["reason"]
+
+
+def test_a_task_whose_issue_body_would_exceed_the_boards_limit_is_refused_against_its_task(
+    project_record: dict[str, object],
+) -> None:
+    """The size refusal reaches the verb the way every other guard's does.
+
+    Measured over the document's own `task` and `metadata`, which is the body the copy
+    would send: the padding sits below the appendix, so the criteria are sound and the
+    one refusal is about the size.
+    """
+    padded = _task() + "\n## Planner context\n\n" + "Carried context. " * 4_000
+    document = _planned(project_record, _document(_reviewed(_node(task=padded))))
+
+    (refusal,) = plan_check.refusals(document, "s:p")
+
+    assert refusal["node"] == "route"
+    assert refusal["field"] == "task"
+    assert f"{task_body.BODY_LIMIT:,}-character limit" in refusal["reason"]
+    assert task_body.UNMEASURED in refusal["reason"]
 
 
 def test_a_node_whose_persona_cannot_resolve_is_refused_against_its_persona(
@@ -504,7 +524,9 @@ def test_an_accepted_plan_reports_the_path_that_read_it(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _verb(monkeypatch, 0, ACCEPTED)
-    monkeypatch.setattr(plan_check, "dispatched_in", lambda _: criteria_guard.Counted(3))
+    monkeypatch.setattr(
+        plan_check, "dispatched_in_with_records", lambda _: (criteria_guard.Counted(3), [])
+    )
 
     assert plan_check.check_through_engine("s:p", "/new/onepipeline") == 0
     read = capsys.readouterr().out
@@ -530,7 +552,34 @@ def test_a_plan_the_engine_accepted_is_counted_by_re_reading_its_project(
         ),
     )
 
-    assert plan_check.dispatched_in("s:p") == criteria_guard.Counted(1)
+    assert plan_check.dispatched_in_with_records("s:p") == (criteria_guard.Counted(1), [])
+
+
+def test_a_task_between_the_thresholds_is_warned_about_on_stderr_and_still_accepted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The warning is the wrapper's, because the verb swallows an accepting check's stderr.
+
+    Read off the records the wrapper re-reads for its count, so the map measured is the
+    store's own — the review record included — and printed before the accepted line.
+    """
+    _verb(monkeypatch, 0, ACCEPTED)
+    warned = plan_store.StoreTask(
+        qualified_id=plan_store.QualifiedTaskId("s:p/route"),
+        node_id=plan_store.NodeId("route"),
+        title="feat: add the route",
+        content="x" * task_body.WARN_FROM,
+        metadata={"onepipeline.id": "route"},
+        repositories=[],
+        deps=(),
+    )
+    monkeypatch.setattr(plan_store, "read_project", lambda _: ({"tasks": [_node()]}, [warned]))
+
+    assert plan_check.check_through_engine("s:p", "/new/onepipeline") == 0
+    captured = capsys.readouterr()
+    assert captured.err.startswith("check-plan: warning: route: "), captured.err
+    assert f"{task_body.BODY_LIMIT:,}-character limit" in captured.err, captured.err
+    assert "1 dispatched node(s)" in captured.out, captured.out
 
 
 def test_a_project_this_command_cannot_re_read_leaves_the_count_unknown(

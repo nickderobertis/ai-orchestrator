@@ -41,7 +41,14 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import TypedDict
 
-from orchestrator import adoption_guard, criteria_guard, plan_review, plan_store, publication_guard
+from orchestrator import (
+    adoption_guard,
+    criteria_guard,
+    plan_review,
+    plan_store,
+    publication_guard,
+    task_body,
+)
 from orchestrator.criteria_guard import CriteriaError
 from orchestrator.root import REPO_ROOT
 
@@ -260,7 +267,7 @@ def refusals(document: object, project: str) -> list[Refusal]:
         found.append(Refusal(node=None, field=None, reason=str(exc)))
     found.extend(
         Refusal(node=refused.node, field=refused.field, reason=refused.reason)
-        for guard in (publication_guard, adoption_guard)
+        for guard in (publication_guard, adoption_guard, task_body)
         for refused in guard.refusals(document)
     )
     found.extend(_review_refusals(document, project))
@@ -370,8 +377,10 @@ def _listed(answer: object, key: str) -> list[object]:
     return list(held) if isinstance(held, list) else []
 
 
-def dispatched_in(project: str) -> criteria_guard.Counted:
-    """How many nodes of ``project`` dispatch an agent, re-read from the store.
+def dispatched_in_with_records(
+    project: str,
+) -> tuple[criteria_guard.Counted, list[plan_store.StoreTask]]:
+    """How many nodes of ``project`` dispatch an agent, and its records, re-read from the store.
 
     **Read here rather than reported back by the registered check.** The only channel a
     spawned check has to the wrapper that registered it is a file, and a file whose path
@@ -389,12 +398,20 @@ def dispatched_in(project: str) -> criteria_guard.Counted:
     So a project this cannot re-read is answered as an unknown count rather than as a
     refusal: the plan was accepted, and a command that turned its own reader's limits
     into a verdict would be doing exactly what it stopped doing.
+
+    The records come back beside the count because the same read answers a second
+    question the spawned check cannot: which tasks to warn about for the size of their
+    issue body. The verb swallows a registered check's stderr when the check exits 0, so
+    :func:`orchestrator.task_body.warnings` is printed here, over these records, and a
+    project this cannot re-read is warned about no more than it is counted.
     """
+    records: list[plan_store.StoreTask] = []
     try:
-        plan, _ = plan_store.read_project(project)
-        return criteria_guard.Counted(sum(1 for _ in criteria_guard.dispatched_nodes(plan)))
+        plan, records = plan_store.read_project(project)
+        counted = criteria_guard.Counted(sum(1 for _ in criteria_guard.dispatched_nodes(plan)))
     except (OSError, ValueError, CriteriaError) as exc:
-        return criteria_guard.Counted(None, str(exc))
+        return criteria_guard.Counted(None, str(exc)), records
+    return counted, records
 
 
 def check_through_engine(project: str, engine: str) -> int:
@@ -461,7 +478,10 @@ def check_through_engine(project: str, engine: str) -> int:
                 file=sys.stderr,
             )
         return completed.returncode if completed.returncode in {1, 2} else 2
-    print(criteria_guard.accepted(dispatched_in(project), criteria_guard.THROUGH_ENGINE))
+    counted, records = dispatched_in_with_records(project)
+    for warned in task_body.warnings(records):
+        print(warned, file=sys.stderr)
+    print(criteria_guard.accepted(counted, criteria_guard.THROUGH_ENGINE))
     return 0
 
 
