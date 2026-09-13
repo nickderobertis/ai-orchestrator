@@ -38,6 +38,8 @@ from nx_inputs import (
     RECIPE_WORKSPACE,
     UNWATCHED_ROOT,
     UNWATCHED_WORKSPACE,
+    WRITEBACK_BUDGET_ROOT,
+    WRITEBACK_BUDGET_WORKSPACE,
     covers,
     named_input_globs,
     repository_relative,
@@ -108,6 +110,7 @@ OWNED_PROJECTS = {
     DAG_UI_ROOT: OwnedProject(key=DAG_UI_WORKSPACE, docs_tier=False),
     UNWATCHED_ROOT: OwnedProject(key=UNWATCHED_WORKSPACE, docs_tier=False),
     MERGE_POLICY_ROOT: OwnedProject(key=MERGE_POLICY_WORKSPACE, docs_tier=False),
+    WRITEBACK_BUDGET_ROOT: OwnedProject(key=WRITEBACK_BUDGET_WORKSPACE, docs_tier=False),
 }
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes

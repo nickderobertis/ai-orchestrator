@@ -187,8 +187,29 @@ NOTE_PROVENANCE_LANDINGS = (
     ),
 )
 
+#: The engine half of https://github.com/nickderobertis/ai-orchestrator/issues/855's first
+#: fix: the settlement write-back's `project copy` allowed a deadline scaled by the items it
+#: writes rather than a fixed minute. `root-causes-539-fixes` settled 18/18 with its board
+#: behind it because a 34-item copy outgrew that minute, and a pin naming a release without
+#: this landing leaves every larger plan's board to the same end.
+#: `tests/writeback_budget/test_adopted_engine_bounds_the_writeback_copy_e2e.py` observes
+#: the installed engine doing it.
+WRITEBACK_BUDGET_LANDINGS = (
+    Landing(
+        node="op-writeback-budget",
+        change_request=248,
+        commit="ac35a1b",
+        did=("bound the settlement copy per item, and let a launch set the per-item budget"),
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
-LANDINGS = (*SUPERVISION_WINDOW_LANDINGS, *ROOT_CAUSES_LANDINGS, *NOTE_PROVENANCE_LANDINGS)
+LANDINGS = (
+    *SUPERVISION_WINDOW_LANDINGS,
+    *ROOT_CAUSES_LANDINGS,
+    *NOTE_PROVENANCE_LANDINGS,
+    *WRITEBACK_BUDGET_LANDINGS,
+)
 
 
 class Awaiting(NamedTuple):

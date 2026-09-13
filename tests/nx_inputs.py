@@ -66,6 +66,16 @@ UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 #: journeys hold to the launcher: a prose-only diff of one of those selects this project,
 #: because its verdict is about that prose.
 MERGE_POLICY_WORKSPACE = "mergePolicyWorkspace"
+#: The key the `writeback-budget` project's one tier is memoized on. Files rather than
+#: trees, for the reason `unwatchedWorkspace` names: its journey spends a real launch and
+#: holds two store copies past a minute each, so every path in the key it never reads
+#: makes an unrelated edit pay for several minutes. Measured the same way — the tier
+#: traced under `strace -f -e trace=openat,execve`, its opened paths intersected with what
+#: git tracks — so the key is the launch machinery a `just orchestrate` reaches through
+#: `scripts/onepipeline.sh`, every pin in `config/` (which engine answers is the verdict),
+#: the graphs and harness configs the engine reads at launch, the plan-store stand-in the
+#: engine spawns, and the modules the test imports.
+WRITEBACK_BUDGET_WORKSPACE = "writebackBudgetWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
 #: `just telemetry-server` drive and read — those two recipes and the scripts they
 #: reach, the address both resolve each other through, the pins that decide which
@@ -194,6 +204,19 @@ MERGE_POLICY_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 MERGE_POLICY_ROOT = "tests/merge_policy"
+
+#: The project whose test target owns the journey that holds the adopted engine to the
+#: settlement copy deadline its items earn — a real launch whose store copies are held
+#: past the sixty-second floor and past the computed deadline. A project of its own for
+#: the reason `unwatched` is: a real launch and minutes of held copies are a cost
+#: `nx affected` can only keep off an unrelated edit where it is a separate project.
+WRITEBACK_BUDGET_PROJECT = "writeback-budget"
+#: That project's one test target. One rather than two, as `unwatched` has one: nothing
+#: here reads this repository's prose.
+WRITEBACK_BUDGET_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore. Path-selected, as
+#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+WRITEBACK_BUDGET_ROOT = "tests/writeback_budget"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

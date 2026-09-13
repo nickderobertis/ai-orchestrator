@@ -67,6 +67,8 @@ from nx_inputs import (
     UNCONDITIONAL_TARGETS,
     UNWATCHED_ROOT,
     UNWATCHED_SCOPED,
+    WRITEBACK_BUDGET_ROOT,
+    WRITEBACK_BUDGET_SCOPED,
     covers,
     named_input_globs,
     repository_relative_globs,
@@ -833,7 +835,7 @@ def _collected(selection: list[str]) -> set[str]:
 
 
 #: Every tier that runs part of this suite, as the file and target that declares it.
-#: Eleven, across seven projects, and every one of them is a target of the project whose
+#: Twelve, across eight projects, and every one of them is a target of the project whose
 #: directory holds the tests it collects: the `plan-tooling` project owns the host-tool
 #: journeys over the plan surface in two targets — one keyed on what they read, one on
 #: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
@@ -842,8 +844,9 @@ def _collected(selection: list[str]) -> set[str]:
 #: `plan-store-install` project owns the journeys that race real installs for a real lock
 #: in one, the `unwatched` project owns the journeys over the verb a `Stop` hook reads
 #: and the hook itself in one, the `merge-policy` project owns the journeys that hold
-#: the restated `merge_policy` vocabulary to the launcher in one, and the orchestrator
-#: project owns the rest in four.
+#: the restated `merge_policy` vocabulary to the launcher in one, the `writeback-budget`
+#: project owns the journey that holds the adopted engine to the copy deadline its items
+#: earn in one, and the orchestrator project owns the rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
@@ -852,6 +855,7 @@ SUITE_TIERS = (
     (f"{PLAN_STORE_INSTALL_ROOT}/project.json", PLAN_STORE_INSTALL_SCOPED),
     (f"{UNWATCHED_ROOT}/project.json", UNWATCHED_SCOPED),
     (f"{MERGE_POLICY_ROOT}/project.json", MERGE_POLICY_SCOPED),
+    (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),

@@ -26,7 +26,7 @@
 # gate run and fails if `{task}` reached it literally,
 # tests/e2e/test_observer_graph_liveness_e2e.py reads the paced fields back off a real
 # launch, and the range is re-read off the pinned binary at each adoption, which
-# refuses 0 and 10 by naming it. oneagentgraph 0.3.19 reads 1 through 9.
+# refuses 0 and 10 by naming it. oneagentgraph 0.4.0 reads 1 through 9.
 version: 9
 name: dag-scope
 members:
@@ -52,7 +52,7 @@ members:
     # a filter rather than named directly. The two halves already agree on the
     # response — `serve` answers with exactly the `{completion, message, reason}`
     # object onejudge's `supervisor` op expects, and the filter passes it through
-    # untouched. They disagree on the request: onejudge 0.8.1 writes
+    # untouched. They disagree on the request: onejudge 0.10.0 writes
     # `{"op":"supervisor", …}` while `serve` reads `{kind, message, blocking?,
     # node?}`, so naming `serve` directly here is refused with `the observer emitted
     # a bad frame: unknown field 'op'` and the member dies on its first turn.
@@ -120,7 +120,7 @@ members:
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
   # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
   # launcher identity —
-  # measured against onepipeline 0.28.2 on both of that member's sides, by dumping
+  # measured against onepipeline 0.29.0 on both of that member's sides, by dumping
   # each one's whole environment on a real launch. `{task}` is still what this member
   # is written against: it is this graph's own contract rather than a per-release
   # export, and it carries the run's goal as well as its id.

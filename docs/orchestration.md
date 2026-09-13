@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.28.2. The whole of that reasoning —
+onepipeline 0.29.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.28.2. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.29.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,13 +323,13 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.28.2; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.29.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
 **A projection that keeps failing is now spaced rather than hammered.** onepipeline
 https://github.com/nickderobertis/onepipeline/pull/176, in force on the adopted
-onepipeline 0.28.2, backs a failing write-back off from a prompt first retry to a one-minute ceiling
+onepipeline 0.29.0, backs a failing write-back off from a prompt first retry to a one-minute ceiling
 instead of retrying about four times a second, resets that schedule once it recovers, and
 still retries until the projection lands; closeout still attempts the terminal projection,
 and stopping or settling stays prompt during a long backoff. The reason is GitHub's
@@ -341,6 +341,28 @@ anything in the paragraph below — see [Where a plan of this repository
 lives](../AGENTS.md#where-a-plan-of-this-repository-lives) for the other half of that
 limiter, which is the plan-store repair this host adopts beside this one, and for what
 this host accepts in order to run it.
+
+**A copy is allowed the deadline its items earn.** Every store command the write-back
+runs used to be killed at one fixed minute, and the `project copy` that writes a
+projection writes one item per plan node, so a large enough plan outgrew it: a run could
+settle every node with its board left behind by a copy killed mid-write. onepipeline
+https://github.com/nickderobertis/onepipeline/pull/248, in force on the adopted engine,
+bounds that copy at `max(60 s, per-item budget × items)` instead, and leaves the reads on
+the sixty-second deadline. The per-item budget is ten seconds unless a launch names one —
+`--writeback-item-budget`, then `ONEPIPELINE_WRITEBACK_ITEM_BUDGET`, then the launch
+config's `writeback_item_budget`, in that order — and the budget a launch resolved is
+recorded on the run's `launch.json`, so a driver adopted later bounds its copies the same
+way. `just orchestrate` names none, so this host runs the shipped default. A copy that
+outlasts its deadline is refused with the arithmetic that set it — `project-copy exceeded
+100 seconds (10 items × 10 seconds per item)`, or `(the 60 second floor; … is less)` where
+the floor governed — both on the driver's stderr line below and on the finding the run
+raises, which names the items the copy was carrying.
+`tests/writeback_budget/test_adopted_engine_bounds_the_writeback_copy_e2e.py` holds it on
+a real launch of a ten-item plan with one node's turn held open by the suite's stand-in
+backend, so the driver stays alive to enforce a deadline: a copy held past the floor
+lands with nothing reported, and one held past a hundred seconds is killed and reported
+with exactly that arithmetic. The same journey fails on the release before the landing,
+whose driver kills the first copy at sixty seconds.
 
 **But write-back is best-effort, and a green run therefore proves nothing about the
 plan store.** It runs on its own worker off the reconcile loop, store reads never
@@ -473,7 +495,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.28.2 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.29.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -601,7 +623,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.28.2 by dumping both sides of a monitor member's whole
+  against onepipeline 0.29.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -767,7 +789,7 @@ changes, and both are in force on this host:
   survived; the `paced-conversations` release (0.3.19) let a `kind: onejudge` member
   carry a `schedule` that paces one conversation rather than starting a second, with a
   hold that keeps the heartbeat and the activity clock alive and ends early on a note.
-  The `onepipeline` this host adopts links 0.3.19, which `tests/test_linked_libraries.py`
+  The `onepipeline` this host adopts links 0.4.0, which `tests/test_linked_libraries.py`
   reads off the installed wheel's SBOM.
 - **`onepipeline`** — the observer relaunch, which 0.21.1 already carried
   (https://github.com/nickderobertis/onepipeline/pull/197): a driver keeps an observer
@@ -796,7 +818,7 @@ planner's queue was also what ended its watch — and why there is no sentinel a
 `personas/orchestrator.yaml` asks a quiet turn for words about what it read rather than
 for a formula, so a healthy watch no longer walks into that signature on purpose.
 onejudge declares a field for the contract that remains — `user.settle_on_noop`,
-documented in `onejudge` 0.8.1's `src/cli/config.rs` and `src/engine.rs` as the opt-out
+documented in `onejudge` 0.10.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out
 for "an observer instructed to answer with one fixed short sentence while it finds
 nothing", with `max_turns` left as the bound. Nothing here sets it today; that is a
 change to `personas/orchestrator.yaml` and a decision for a manager, not something this
@@ -934,7 +956,7 @@ answers with exactly the `{completion, message, reason}` object onejudge's
 
 | | Shape |
 | --- | --- |
-| onejudge 0.8.1 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
+| onejudge 0.10.0 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
 | `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
 
 Naming `onepipeline channel serve` directly as the member's `judge.command` is
@@ -945,7 +967,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.28.2 in the judge command's own environment on a real
+  measured against onepipeline 0.29.0 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -1084,7 +1106,7 @@ filter onto a real published channel, and reads what was and was not queued out 
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
 boundary; `judge` comes once the conversation ends, to score `user.done_when` —
 always, whether the supervisor ruled complete or the turn cap ran out, and
-independently of `evals` and `assessment`. Measured on onejudge 0.8.1 with a
+independently of `evals` and `assessment`. Measured on onejudge 0.10.0 with a
 `kind: command` judge that logged every op it was asked.
 
 That second one has **no configuration escape**, and the attempts are worth knowing
@@ -1160,7 +1182,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.28.2 answers
+a real run on onepipeline 0.29.0 answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
@@ -1205,7 +1227,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.28.2**, composed where the
+node dispatch of a run carries it as of onepipeline 0.29.0**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -3190,7 +3212,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.28.2 rather than restating it independently.
+declaration as it stands in onepipeline 0.29.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`
