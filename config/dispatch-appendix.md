@@ -290,6 +290,20 @@ failed for exactly that: its own criteria required its assertions be observed fa
 the resulting-tree property above was read as forbidding the citation that requirement
 produces.
 
+**A commit that cannot affect a check leaves that check's evidence standing.** *Could have
+invalidated it* is a condition, and a commit that fails it does not reach the claim — so a
+run taken before a later commit is still evidence for the tree after it, provided the
+report names that commit and says why it is inert for that check. What decides it is what
+the check reads, never what kind of change the commit is. A comment-only or
+documentation-only commit to content a check does not read is inert for that check; the
+same comment is not inert for a check that reads comments, which a judged lint does, so
+that one is re-run or named as not re-checked. A commit touching anything a check reads is
+not inert for it, however small. Two dispatches of one node, about 45 minutes each, were
+refused over nothing but a comment-only final commit after their cited check runs, with no
+change in whether either tree was correct, and the manager had to send *re-run after every
+commit* three separate times to get past it: read as absolute, the conditional rule above
+is one no worker can meet, because every commit comes after the last run.
+
 The ordering demand this replaces — that the report come after everything else, and that
 anything found later be repaired and the whole report written again — is **withdrawn**. It
 failed six of fourteen nodes in one workstream, each with complete committed work, a green

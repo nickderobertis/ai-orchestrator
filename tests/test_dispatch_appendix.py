@@ -168,6 +168,42 @@ THE_CITATION_SAYS_WHICH_IT_IS = re.compile(
     r"provided\s+the\s+citation\s+says\s+which\s+it\s+is", re.IGNORECASE
 )
 
+#: The limit of *could have invalidated it*, which judges read as absolute: a commit that
+#: cannot affect a check leaves that check's evidence standing. Held in the parts a worker
+#: and a judge each act on — the allowance, the report naming the commit and why it is
+#: inert, the bound being what the check reads, and that bound cutting both ways: a
+#: comment is inert for a check that does not read it and not for one that does.
+INERT_COMMIT_LEAVES_EVIDENCE_STANDING = re.compile(
+    r"commit\s+that\s+cannot\s+affect\s+a\s+check\s+leaves\s+that\s+check's\s+evidence"
+    r"\s+standing",
+    re.IGNORECASE,
+)
+THE_REPORT_NAMES_THE_INERT_COMMIT = re.compile(
+    r"provided\s+the\s+report\s+names\s+that\s+commit\s+and\s+says\s+why\s+it\s+is\s+inert",
+    re.IGNORECASE,
+)
+BOUNDED_BY_WHAT_THE_CHECK_READS = re.compile(
+    r"what\s+decides\s+it\s+is\s+what\s+the\s+check\s+reads", re.IGNORECASE
+)
+UNREAD_COMMENTS_ARE_INERT = re.compile(
+    r"comment-only\s+or\s+documentation-only\s+commit\s+to\s+content\s+a\s+check\s+does"
+    r"\s+not\s+read\s+is\s+inert",
+    re.IGNORECASE,
+)
+READ_COMMENTS_ARE_NOT_INERT = re.compile(
+    r"not\s+inert\s+for\s+a\s+check\s+that\s+reads\s+comments", re.IGNORECASE
+)
+
+#: The three incidents the claims section records, in the order it records them: a node
+#: correctly failed for a claim about a run that never happened, a node failed for citing
+#: the induced failure its own criteria required, and two dispatches refused over a
+#: comment-only final commit.
+RECORDED_INCIDENTS = (
+    re.compile(r"one\s+node\s+of\s+this\s+host's\s+history\s+was\s+correctly\s+failed\s+for\s+it"),
+    re.compile(r"One\s+node\s+of\s+this\s+host\s+was\s+failed\s+for\s+exactly\s+that"),
+    re.compile(r"refused\s+over\s+nothing\s+but\s+a\s+comment-only\s+final\s+commit"),
+)
+
 #: The withdrawn demand, in the two forms a worker would act on. Held as an absence
 #: because the file said both of these and six nodes with complete, green work were
 #: failed against them; prose that no longer argues for the rule but still states it is
@@ -556,6 +592,72 @@ def test_what_a_dispatch_claims_is_stated_as_the_property_it_must_have(appendix:
             "the only reading left of what a report owes, and that demand failed six "
             "nodes whose work was complete and green"
         )
+
+
+def test_a_commit_that_cannot_affect_a_check_leaves_its_evidence_standing(
+    appendix: str,
+) -> None:
+    """The conditional rule's limit, stated where judges had read the rule as absolute.
+
+    *Do not carry a claim forward across a change that could have invalidated it* is a
+    condition, and two dispatches of about 45 minutes each were refused over a
+    comment-only final commit anyway: read as absolute it is unsatisfiable, because every
+    commit comes after the last check run. So the file says what the condition excludes,
+    bounded by what the check reads rather than by the kind of change — which is what keeps
+    it from becoming a licence, since the same comment is not inert for a judged lint that
+    reads it — and the report owes the commit's name and why it is inert.
+
+    Held after the conditional rule and as the third of the section's recorded incidents,
+    because the clause limits that rule rather than replacing it, and the two earlier
+    incidents are the reasons the rest of the section stands.
+    """
+    section = appendix[: appendix.index(STATE_THE_BAR)]
+    for stated, missing in (
+        (
+            INERT_COMMIT_LEAVES_EVIDENCE_STANDING,
+            "that a commit which cannot affect a check leaves that check's evidence standing",
+        ),
+        (
+            THE_REPORT_NAMES_THE_INERT_COMMIT,
+            "that the report names that commit and says why it is inert",
+        ),
+        (BOUNDED_BY_WHAT_THE_CHECK_READS, "that what the check reads decides whether it is"),
+        (
+            UNREAD_COMMENTS_ARE_INERT,
+            "that a comment- or documentation-only commit to content a check does not read "
+            "is inert for that check",
+        ),
+        (
+            READ_COMMENTS_ARE_NOT_INERT,
+            "that the same comment is not inert for a check that reads comments",
+        ),
+    ):
+        assert stated.search(section), (
+            f"{APPENDIX} no longer says {missing}. Without it, judges read 'a change that "
+            "could have invalidated it' as every commit, and two dispatches with correct "
+            "trees were refused over a comment-only final commit"
+        )
+
+    conditional = RERUN_WHAT_A_CHANGE_COULD_HAVE_BROKEN.search(section)
+    allowance = INERT_COMMIT_LEAVES_EVIDENCE_STANDING.search(section)
+    assert conditional is not None and allowance is not None
+    assert conditional.start() < allowance.start(), (
+        f"{APPENDIX} states the inert-commit allowance before the conditional rule it limits"
+    )
+
+    recorded = [incident.search(section) for incident in RECORDED_INCIDENTS]
+    unrecorded = [
+        incident.pattern
+        for incident, found in zip(RECORDED_INCIDENTS, recorded, strict=True)
+        if found is None
+    ]
+    assert not unrecorded, (
+        f"{APPENDIX}'s claims section no longer records all three of its incidents: {unrecorded}"
+    )
+    starts = [found.start() for found in recorded if found is not None]
+    assert starts == sorted(starts), (
+        f"{APPENDIX} records the comment-only-commit incident before the two it follows"
+    )
 
 
 def test_the_appendix_no_longer_orders_where_the_completion_report_sits(

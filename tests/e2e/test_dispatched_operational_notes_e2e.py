@@ -29,6 +29,11 @@ finished work is true of the tree as it finally stands — and is no longer told
 report must be its last output, which is the demand that failed six further nodes with
 complete committed work and no acceptance criterion unmet.
 
+One rule is read off the **judge** side as well, because the judge is the party that
+misread it: that a commit which cannot affect a check leaves that check's evidence
+standing, bounded by what the check reads. Two dispatches with correct trees were refused
+over a comment-only final commit before the appendix said so.
+
 A worker is told never to signal a process it did not identify by PID — stated *before*
 any reasoning about how a pattern matches, because the old text argued only from `pgrep
 -f`'s self-match and `pkill -x`, which does not self-match, is the more dangerous form;
@@ -59,6 +64,7 @@ from test_dispatch_appendix import (
     AMBIGUOUS_IN_FLIGHT,
     AN_INDUCED_FAILURE_IS_EVIDENCE,
     BACKGROUNDED,
+    BOUNDED_BY_WHAT_THE_CHECK_READS,
     CAPTURED_AT_LAUNCH,
     CHAINED_INVOCATION,
     CLAIMS_TRUE_OF_THE_FINAL_TREE,
@@ -69,12 +75,14 @@ from test_dispatch_appendix import (
     EXCLUDES_ONLY_ITSELF,
     FIXED_PORT_REASON,
     GATE_FUNCTION,
+    INERT_COMMIT_LEAVES_EVIDENCE_STANDING,
     MATCHES_COMMAND_LINES,
     NARROWEST_SCOPE,
     NEVER_PATTERN_KILL,
     PER_INVOCATION_PATH,
     PID_FROM_A_PATTERN,
     POLLING,
+    READ_COMMENTS_ARE_NOT_INERT,
     REPORT_IS_LAST,
     REPORTED_AFRESH,
     RERUN_THAT_CHECK,
@@ -84,6 +92,8 @@ from test_dispatch_appendix import (
     SILENCE_DOES_NOT_SATISFY_IT,
     TARGETED_CHECKS,
     THE_CITATION_SAYS_WHICH_IT_IS,
+    THE_REPORT_NAMES_THE_INERT_COMMIT,
+    UNREAD_COMMENTS_ARE_INERT,
     UNRECHECKED_CLAIMS_ARE_NAMED,
     WAITED_ON,
     WIDE_BAR,
@@ -390,6 +400,77 @@ def test_a_dispatched_worker_is_told_its_claims_must_hold_of_the_finished_tree(
         assert stated.search(dispatched_notes), (
             f"the notes a dispatch carries no longer say {missing}"
         )
+
+
+@pytest.fixture(scope="module")
+def judged_notes(dispatched: Dispatched) -> str:
+    """The operational text the dispatched worker's judge was handed, off its own turn."""
+    judging = [
+        turn.prompt
+        for turn in dispatched.turns
+        if (member := MEMBER_OF_CONFIG.search(turn.config)) is not None
+        and member.group(1) == WORKER_MEMBER
+        and Path(turn.config).name == JUDGE_CONFIG_NAME
+        and TASK_MARKER in turn.prompt
+    ]
+    assert judging, (
+        "no judge of this run's dispatched worker was handed that worker's task, so "
+        f"nothing here reads what the judge decides against:\n{dispatched.launch.stdout}\n"
+        f"{dispatched.launch.stderr}"
+    )
+    return judging[0]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] reuses the module's one run
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] reads_docs keys its inputs
+# This assertion adds no orchestration journey or expensive edge: it reads the module-scoped
+# `dispatched_run` the module's existing tests already launch once, and `reads_docs`
+# correctly keys that shared run to the tracked appendix it composes into the prompt. Two
+# blocks rather than one line-scoped directive, because the two rule names alone overrun
+# the line limit and a line-scoped directive covers only the single line below it.
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_workers_judge_is_told_an_inert_commit_leaves_evidence_standing(
+    judged_notes: str,
+) -> None:
+    """The limit of *could have invalidated it*, read off the prompt the judge was handed.
+
+    The worker is not the party that misread it: two dispatches of about 45 minutes each
+    were refused by their judges over a comment-only final commit, the worker's evidence
+    being complete. So what is asserted is that the judge side of a real dispatch is
+    handed the clause — a commit that cannot affect a check leaves that check's evidence
+    standing, bounded by what the check reads, provided the report names that commit and
+    why it is inert — beside the conditional rule it limits.
+    """
+    for stated, missing in (
+        (
+            RERUN_WHAT_A_CHANGE_COULD_HAVE_BROKEN,
+            "that a change which could have invalidated a claim is re-run against",
+        ),
+        (
+            INERT_COMMIT_LEAVES_EVIDENCE_STANDING,
+            "that a commit which cannot affect a check leaves that check's evidence standing",
+        ),
+        (
+            THE_REPORT_NAMES_THE_INERT_COMMIT,
+            "that the report names that commit and says why it is inert",
+        ),
+        (BOUNDED_BY_WHAT_THE_CHECK_READS, "that what the check reads decides whether it is"),
+        (
+            UNREAD_COMMENTS_ARE_INERT,
+            "that a comment- or documentation-only commit to content a check does not read "
+            "is inert for that check",
+        ),
+        (
+            READ_COMMENTS_ARE_NOT_INERT,
+            "that the same comment is not inert for a check that reads comments",
+        ),
+    ):
+        assert stated.search(judged_notes), (
+            f"the judge of a dispatched worker is no longer handed {missing}, so it reads "
+            "any commit after the last check run as invalidating that run"
+        )
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 @pytest.mark.xdist_group("dispatched-operational-notes")
