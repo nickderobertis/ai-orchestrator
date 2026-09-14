@@ -19,3 +19,10 @@ sources:
       project_number: 2
       repository: nickderobertis/ai-orchestrator
       token_env: GH_PROJECTS_TOKEN
+      status_mapping:
+        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
+        # source of the option `unknown` is written to; its other party is the live board,
+        # which no check here may read or write, since that needs the board's credential. A
+        # board without the option is refused by name at the next write-back or plan copy.
+        unknown: Needs attention
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]

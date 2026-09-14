@@ -34,12 +34,13 @@ from plan_store_pin import (
     held_below_the_pacing_floor,
 )
 from published_tools import ONETASKGRAPH_BIN
+from registered_checkouts import registered_checkouts
 from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
-from orchestrator.project_store import frontmatter, write_plan_project
+from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
@@ -260,8 +261,9 @@ _FieldOptionId = NewType("_FieldOptionId", str)
 _RepositoryNodeId = NewType("_RepositoryNodeId", str)
 #: The board field the source owns and reads a copy's origin back out of, and the
 #: `Status` field every board carries. A category this board cannot represent refuses
-#: the write naming it, so the options below are the three the shipped mapping reaches
-#: by name; `done` and `cancelled` close the issue instead and need no option.
+#: the write naming it, so the options below are the `plans` board's own: the three the
+#: shipped mapping reaches by name, `Done`, which a closed `done` issue selects by its
+#: spelling, and `Needs attention`, which `onetaskgraph.yaml` sends `unknown` to.
 ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 ORIGIN_FIELD_ID = _FieldNodeId("FIELD_origin")
 STATUS_FIELD_ID = _FieldNodeId("FIELD_status")
@@ -276,10 +278,21 @@ class _StatusOption:
         return {"id": self.id, "name": self.name}
 
 
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The stand-in board answers
+# the option `onetaskgraph.yaml` names, because the journey asserts that name reaches the
+# wire. Reconciling it against the live board would take the board credential no test may use.
+NEEDS_ATTENTION = _StatusOption(id=_FieldOptionId("OPT_attention"), name="Needs attention")
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 STATUS_OPTIONS: tuple[_StatusOption, ...] = (
-    _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
     _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
     _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live board's own
+    # option, answered so the stand-in carries the options the task names; reconciling it
+    # against that board would take the board credential no test may use.
+    _StatusOption(id=_FieldOptionId("OPT_done"), name="Done"),
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
+    NEEDS_ATTENTION,
 )
 #: The node id the fixture answers each repository it knows with, one per `owner/name`.
 #: The journeys assert which of these reaches `createIssue`, which is the whole of what
@@ -1532,6 +1545,201 @@ def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+class _ProjectedStatus(StrEnum):
+    """Every word onepipeline's settlement write-back projects a node's state onto.
+
+    A copy of the engine's declaration rather than a read of it, so the journey below
+    needs no checkout; the check after it is what holds the copy to `ProjectedStatus` at
+    the release this host pins.
+    """
+
+    TODO = "todo"
+    IN_PROGRESS = "in progress"
+    DONE = "done"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    PROVIDER_FAILED = "provider-failed"
+    PARKED = "parked"
+    SKIPPED = "skipped"
+
+
+#: The words onetaskgraph's category vocabulary lacks, so each classifies `unknown` —
+#: which the `plans` board refused outright until `onetaskgraph.yaml` gave it an option.
+OUTSIDER_STATUSES = frozenset(
+    {
+        _ProjectedStatus.FAILED,
+        _ProjectedStatus.PROVIDER_FAILED,
+        _ProjectedStatus.PARKED,
+        _ProjectedStatus.SKIPPED,
+    }
+)
+#: The spelling an ambient override of the `plans` source's mapping would take, removed
+#: from the journey's environment so the committed file is the mapping applied.
+STATUS_MAPPING_ENV_PREFIX = "ONETASKGRAPH_SOURCES__PLANS__CONFIG__STATUS_MAPPING"
+
+
+def _write_projected_project(root: Path) -> dict[str, _ProjectedStatus]:
+    """Write one local task per projected word, returning each task's title and word.
+
+    Rendered through the store writer every plan goes through and then given its word,
+    because that writer files every task `todo`; the word is written the way the
+    write-back writes it, as the record's own `status`.
+    """
+    titled = {f"projected {status.value}": status for status in _ProjectedStatus}
+    plan = PlanDocument(
+        name=LOCAL_PROJECT,
+        tasks=[
+            PlanNode(id=status.value.replace(" ", "-"), title=title)
+            for title, status in titled.items()
+        ],
+    )
+    write_plan_project(root, plan)
+    for task in (root / "tasks" / LOCAL_PROJECT).glob("*.md"):
+        text = task.read_text(encoding="utf-8")
+        title = next(t for t in titled if f"title: {json.dumps(t)}\n" in text)
+        word = json.dumps(titled[title].value)
+        task.write_text(text.replace('status: "todo"\n', f"status: {word}\n", 1), encoding="utf-8")
+    return titled
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
+# inputs as every journey beside it — the installed plan-store CLI driven against the
+# loopback board — so `nx affected` already selects this module together, and a project of
+# one function would buy no selection. It runs in `orchestrator:test`, keyed `codeWorkspace`.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
+# the edge it pays is the one every other CLI-spawning journey in this file already pays.
+def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_board(
+    tmp_path: Path,
+) -> None:
+    """A failed, parked or skipped node is filed under `Needs attention`, never refused.
+
+    The committed `onetaskgraph.yaml` is what is exercised: the copy runs from this
+    checkout with only the endpoint and credential pointed at the fixture, and any
+    ambient `status_mapping` override is removed so the mapping written there is the one
+    applied. A copy writes a task's status through the same classification and mapping a
+    settlement write-back does, so each word is fed as a task's status, and what is read
+    is the Status option each task's board row is set to.
+
+    The category words ride along as the control for the one property a single option
+    for `unknown` could break: that no option is written for two categories.
+    """
+    titled = _write_projected_project(tmp_path)
+    environment = _plan_environment(tmp_path)
+    for name in [name for name in environment if name.startswith(STATUS_MAPPING_ENV_PREFIX)]:
+        del environment[name]
+    # llmlint: ignore[e2e_not_mocked] The live `plans` board is the one boundary this
+    # journey must not reach: a write to it lands on the board holding this repository's
+    # real plans and needs a credential no test may use. What is doubled stops at the wire
+    # — the recipe, the installed CLI and the committed configuration are real — for the
+    # reason the fixture's own directive gives.
+    with _serving_board() as remote:
+        environment.update(remote)
+        environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
+        copied = subprocess.run(
+            ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert "is disabled for source plans" not in copied.stderr, copied.stderr
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    word_of_item = {
+        issue.item_id: titled[issue.title] for issue in BOARD.created if issue.title in titled
+    }
+    assert set(word_of_item.values()) == set(_ProjectedStatus), (
+        f"the copy has to file one issue per projected word, and it filed {word_of_item}"
+    )
+    option_names = {option.id: option.name for option in STATUS_OPTIONS}
+    written: dict[str, set[_ProjectedStatus]] = {}
+    for request in _GitHubFixture.requests:
+        if request.operation is not _Operation.UPDATE_FIELD:
+            continue
+        if request.input_value("fieldId") != STATUS_FIELD_ID:
+            continue
+        word = word_of_item.get(_BoardItemId(str(request.input_value("itemId"))))
+        if word is None:
+            continue
+        value = request.input_value("value")
+        assert isinstance(value, dict), value
+        option = option_names[_FieldOptionId(str(value.get("singleSelectOptionId")))]
+        written.setdefault(option, set()).add(word)
+
+    assert written.get(NEEDS_ATTENTION.name, set()) == set(OUTSIDER_STATUSES), (
+        f"every word outside the category vocabulary has to be written as the "
+        f"{NEEDS_ATTENTION.name!r} option and no category word with them; the copy wrote {written}"
+    )
+    shared = {option: words for option, words in written.items() if len(words) > 1}
+    assert shared.keys() == {NEEDS_ATTENTION.name}, (
+        f"only `unknown`'s words may share an option, and the copy wrote {written}"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+ONEPIPELINE_IDENTITY = "github.com/nickderobertis/onepipeline"
+#: `ProjectedStatus` in onepipeline's `src/writeback.rs`, its variants, and each one's
+#: serde rename, which is the word the write-back sends.
+PROJECTED_STATUS_DECLARATION = re.compile(r"\nenum ProjectedStatus \{(?P<body>.*?)\n\}", re.DOTALL)
+PROJECTED_STATUS_VARIANT = re.compile(r"^\s*([A-Z]\w*),\s*$", re.MULTILINE)
+PROJECTED_STATUS_WORD = re.compile(r'#\[serde\(rename = "([^"]+)"\)\]')
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is not a
+# narrower tier of a memoized one: it moves this check into the uncached
+# `orchestrator:test-checkouts`, because its subject — onepipeline's source at the pinned
+# release — is outside this workspace and no `nx.json` key could name it.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason: a
+# project edge of its own is what earns a memo, and a memo is what this check must not have.
+@pytest.mark.reads_checkouts
+def test_the_projected_words_the_board_journey_feeds_are_the_engines_own() -> None:
+    """`_ProjectedStatus` is onepipeline's `ProjectedStatus`, word for word.
+
+    Read at the release `config/onepipeline.version` pins, because that is the engine a
+    run's write-back comes from; a word the engine adds, drops or respells would
+    otherwise leave the journey above proving the mapping for a vocabulary nothing sends.
+    A failure rather than a skip when no checkout is held, for the reason
+    `tests/test_engine_contracts.py` gives: a drift gate that reconciles nothing passes.
+    """
+    checkout = registered_checkouts().get(ONEPIPELINE_IDENTITY)
+    assert checkout is not None, (
+        f"no registered checkout of {ONEPIPELINE_IDENTITY} on this host; clone it into a "
+        "path config/onevcs.checkouts lists"
+    )
+    pinned = f"v{(REPO_ROOT / 'config' / 'onepipeline.version').read_text('utf-8').strip()}"
+    shown = subprocess.run(
+        ["git", "-C", str(checkout), "show", f"{pinned}:src/writeback.rs"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    declaration = PROJECTED_STATUS_DECLARATION.search(shown.stdout)
+    assert declaration is not None, (
+        f"onepipeline {pinned} no longer declares `enum ProjectedStatus` in src/writeback.rs"
+    )
+    variants = PROJECTED_STATUS_VARIANT.findall(declaration.group("body"))
+    declared = PROJECTED_STATUS_WORD.findall(declaration.group("body"))
+    assert variants and len(declared) == len(variants), (
+        f"onepipeline {pinned} declares variants {variants} with renames {declared}; every "
+        "variant has to carry the rename this check reads its word from"
+    )
+    copied = {status.value for status in _ProjectedStatus}
+    assert sorted(declared) == sorted(copied), (
+        f"onepipeline {pinned} projects {sorted(declared)}, and _ProjectedStatus holds "
+        f"{sorted(copied)}: missing {sorted(set(declared) - copied)}, "
+        f"invented {sorted(copied - set(declared))}"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
