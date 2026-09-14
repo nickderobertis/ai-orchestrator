@@ -33,8 +33,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
+import plan_root_variable
 import pytest
-from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
+from fake_backend import (
+    ENVIRONMENT_KEYS_ENV,
+    JUDGE_CONFIG_NAME,
+    PROMPT_LOG_ENV,
+    RUN_ON_MARKER_ENV,
+    RecordedTurn,
+)
 from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
@@ -107,6 +114,18 @@ DRAFT_SOURCE = "draft"
 
 #: The key `onetaskgraph` stamps on a record it created by copying, naming what it copied.
 ORIGIN_KEY = "onetaskgraph.origin"
+
+#: What a design-doc dispatch drafting into the fixture store names its document, and what
+#: one drafting into the authoring store has to name it: the id the tail fixes in its task,
+#: which is the one file its judge is pointed at.
+FIXTURE_DOCUMENT_SUFFIX = "-document"
+DESIGN_DOCUMENT_SUFFIX = "-design"
+
+#: The variable onejudge takes a judge's artifact list from, recorded on every judge-side
+#: turn. It is held to the one the launch really sets by the authoring journey below, which
+#: asserts the recorded value is the document's path — so a name here that drifted from the
+#: script's fails there rather than letting the absence asserted beside it pass vacuously.
+JUDGE_ARTIFACTS_ENV = "ONEJUDGE_ARTIFACTS"
 
 #: The exit statuses `scripts/finish-plan.sh` answers with, which are its whole contract to
 #: a caller that reads only the status. Restated here as literals rather than imported from
@@ -184,8 +203,19 @@ def _task(criteria: str) -> str:
     )
 
 
-def _draft(name: str, criteria: str = STATES_ITS_BAR) -> Drafted:
-    """Draft an unreviewed plan into the fixture store, with no design document yet.
+def _draft(
+    name: str,
+    criteria: str = STATES_ITS_BAR,
+    *,
+    root: Path = FIXTURE_ROOT,
+    source: str = FIXTURE_SOURCE,
+    document_suffix: str = FIXTURE_DOCUMENT_SUFFIX,
+) -> Drafted:
+    """Draft an unreviewed plan into a local store, with no design document yet.
+
+    The fixture store unless a journey names another: the authoring store is the one a
+    planner really writes into, and the one whose design document the tail points its
+    judge at.
 
     Deliberately not `project_fixtures.local_project`, which writes a design document and
     approves it: what this flow *produces* is that document, so a plan arriving with one
@@ -198,7 +228,7 @@ def _draft(name: str, criteria: str = STATES_ITS_BAR) -> Drafted:
     """
     native = f"test-{os.getpid()}-{name}"
     write_plan_project(
-        FIXTURE_ROOT,
+        root,
         {
             "schema_version": 3,
             "goal": {"text": "Deliver the paginated listing"},
@@ -216,10 +246,10 @@ def _draft(name: str, criteria: str = STATES_ITS_BAR) -> Drafted:
     )
     return Drafted(
         project=native,
-        qualified=f"{FIXTURE_SOURCE}:{native}",
+        qualified=f"{source}:{native}",
         task_title="feat: page the node listing",
-        document=f"{native}-document",
-        document_path=FIXTURE_ROOT / "documents" / f"{native}-document.md",
+        document=f"{native}{document_suffix}",
+        document_path=root / "documents" / f"{native}{document_suffix}.md",
     )
 
 
@@ -330,7 +360,8 @@ def _stores_the_document(bench: Bench, drafted: Drafted) -> None:
                         "copy",
                         f"{DRAFT_SOURCE}:{drafted.document}",
                         "--to",
-                        FIXTURE_SOURCE,
+                        # The plan's own source, which is where the task says it goes.
+                        drafted.qualified.partition(":")[0],
                     ]
                 ]
             }
@@ -339,6 +370,7 @@ def _stores_the_document(bench: Bench, drafted: Drafted) -> None:
     )
     bench.environment[RUN_ON_MARKER_ENV] = str(keyed)
     bench.environment[PROMPT_LOG_ENV] = str(bench.tmp_path / f"turns-{drafted.project}.jsonl")
+    bench.environment[ENVIRONMENT_KEYS_ENV] = JUDGE_ARTIFACTS_ENV
 
 
 def _brief(tmp_path: Path, drafted: Drafted, name: str = "cursor-shape") -> Path:
@@ -623,6 +655,135 @@ def test_the_design_document_node_names_no_repository_because_it_is_a_direct_nod
     metadata = finished.design_task["metadata"]
     assert "onepipeline.repo" not in metadata, metadata
     assert "onepipeline.execution_checkout" not in metadata, metadata
+
+
+def _judge_turns(bench: Bench, drafted: Drafted) -> list[RecordedTurn]:
+    """Every turn the design-doc dispatch's judge side took, as the stand-in was handed it.
+
+    The prompt log is the only record of it: the published stream reports that a
+    supervisor turn happened and what it ruled, never the prompt it ruled on — which is why
+    `tests/e2e/test_design_doc_graph_e2e.py` reads the same record. The review's judged
+    turn goes through the codex stand-in and never reaches this log, so every judge-side
+    turn here is the design run's.
+    """
+    log = bench.tmp_path / f"turns-{drafted.project}.jsonl"
+    lines = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
+    # Test-owned on both ends: `fake_backend.py` declares the record and writes it.
+    turns = [cast(RecordedTurn, json.loads(line)) for line in lines]
+    # llmlint: ignore[tests_mirror_real_usage] No view carries a supervisor's delivered prompt.
+    judged = [turn for turn in turns if Path(turn["config"] or "").name == JUDGE_CONFIG_NAME]
+    assert judged, (
+        f"the design run's judge side took no turn at all:\n{json.dumps(turns, indent=2)}"
+    )
+    return judged
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_a_plan_outside_the_authoring_store_hands_its_judge_no_artifact(
+    finished: Finished,
+) -> None:
+    """Only the authoring store's root is resolved by the launch, so only it names a file.
+
+    This fixture's plan is held in the fixture store, where its document is stored too, so
+    a path under the exported authoring root would name a file that plan never has. The
+    judge is handed no artifact list at all rather than a wrong one: neither the document's
+    own path nor the one the authoring rule would have composed reaches its prompt.
+    """
+    authoring_path = f"/documents/{finished.drafted.project}{DESIGN_DOCUMENT_SUFFIX}.md"
+    # llmlint: ignore-block[tests_mirror_real_usage] What a judge side is handed is the
+    # subject, and no user-facing view carries it: the published stream reports a supervisor
+    # turn and its ruling, never its prompt or the environment its harness ran under, so the
+    # doubled backend's record is the only reading of it (the one this node's criteria name).
+    for turn in _judge_turns(finished.bench, finished.drafted):
+        assert turn["environment"].get(JUDGE_ARTIFACTS_ENV) is None, turn["environment"]
+        assert authoring_path not in turn["prompt"], turn["prompt"]
+        assert str(finished.drafted.document_path) not in turn["prompt"], turn["prompt"]
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This launch is behind the
+# edge every other launch of this module already is — `plan-tooling`, the project that owns
+# this repository's plan-flow journeys — and this change moves no input of it. What the
+# journey proves is `scripts/finish-plan.sh` itself, which is one of the files that edge
+# keys on, so a narrower edge would skip it on the change it exists to catch.
+@pytest.mark.xdist_group("finish-plan")
+def test_the_design_document_judge_is_handed_its_own_projects_document_under_the_authoring_root(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The judge is told where the document is, because git can never show it.
+
+    The authoring root is gitignored, so the judge's only evidence about the tree —
+    `git_status` and `git_diff` — reports nothing about a document written there, and one
+    dispatch of this role spent its evidence-tool retries asking `git_status` about it. So
+    the prompt the judge side is actually handed has to carry the document's own path,
+    resolved under the root the launch exported — pointed somewhere other than this
+    checkout's own `.plans` here, so a path composed from the checkout could not pass — and
+    no other project's document, although another project's is standing in the same flat
+    directory.
+
+    The dispatch stores its document under the id the tail's task fixed, and the file
+    existing at the path the judge was handed is what says the two agree.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    bench.environment[plan_root_variable.name()] = str(authoring)
+    drafted = _draft(
+        "finish-plan-judge-artifact",
+        root=authoring,
+        source=AUTHORING_SOURCE,
+        document_suffix=DESIGN_DOCUMENT_SUFFIX,
+    )
+    neighbour = (
+        authoring / "documents" / f"test-{os.getpid()}-another-plan{DESIGN_DOCUMENT_SUFFIX}.md"
+    )
+    neighbour.parent.mkdir(parents=True, exist_ok=True)
+    neighbour.write_text(
+        '---\ntitle: "Design: another plan"\nproject: "another-plan"\n---\n\nIts own.\n',
+        encoding="utf-8",
+    )
+    _stores_the_document(bench, drafted)
+    named = RunId("finish-plan-e2e-judge-artifact")
+
+    try:
+        finish = _just(
+            "finish-plan",
+            str(_brief(tmp_path, drafted)),
+            "--name",
+            named,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+    finally:
+        _stop(bench, f"{named}{DESIGN_RUN_SUFFIX}")
+
+    assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
+    assert drafted.document_path.is_file(), (
+        f"the dispatch stored no document at {drafted.document_path}, the path its judge "
+        f"is handed; the authoring root holds {_records(authoring)}"
+    )
+    # llmlint: ignore-block[tests_mirror_real_usage] The prompt a judge side is actually handed
+    # is what this node's criteria require captured, and the doubled backend's record is the
+    # only place it exists: the published stream never carries a supervisor's prompt or the
+    # environment its harness ran under.
+    for turn in _judge_turns(bench, drafted):
+        assert str(drafted.document_path) in turn["prompt"], (
+            f"the judge was not handed {drafted.document_path}, so it has nothing to read "
+            f"but what git shows it:\n{turn['prompt']}"
+        )
+        assert neighbour.name not in turn["prompt"], (
+            f"the judge was handed another project's document, {neighbour}:\n{turn['prompt']}"
+        )
+        assert turn["environment"].get(JUDGE_ARTIFACTS_ENV) == str(drafted.document_path), turn[
+            "environment"
+        ]
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("finish-plan")

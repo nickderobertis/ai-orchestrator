@@ -51,10 +51,14 @@
 #
 # llmlint: ignore-file[changed_behavior_has_e2e] What this script *decides* — the order of
 # the five steps, which of them each refusal stops at, the exit status each ends on, the
-# one-node project the design launch runs, and the two locations it reports — is driven end
+# one-node project the design launch runs, the file that launch's judge is pointed at (and
+# the plan outside the authoring source whose judge is pointed at none), and the two
+# locations it reports — is driven end
 # to end in tests/plan_tooling/test_finish_plan_recipe_e2e.py against real stores and a real
-# launch, and by tests/plan_tooling/test_plan_flow_e2e.py through `just plan`. What remains
-# uncovered is one kind of thing and only that kind: guards over a broken checkout, which
+# launch, and by tests/plan_tooling/test_plan_flow_e2e.py through `just plan`. One guard is
+# uncovered for another reason and says why at its own site: the refusal of a plan id whose
+# path component would leave the documents directory, which the store refuses first. Past
+# it, what remains uncovered is one kind of thing and only that kind: guards over a broken checkout, which
 # every step here carries because it runs from a worktree or a publication clone that may
 # not be provisioned. A missing or unloadable helper, an unprovisioned plan-store CLI, an
 # unwritable plan-authoring root, and a verb that cannot run at all are each driven one
@@ -85,6 +89,35 @@ PLAN_RECORDS="projects"
 #: reaches when a write fails partway.
 PLAN_TASKS="tasks"
 PLAN_SOURCE="authoring"
+#: Where a local Markdown source keeps its documents under that same root, beside the two
+#: directories above: flat, one file per document id, every project's documents together.
+PLAN_DOCUMENTS="documents"
+
+#: The document id the design-doc dispatch stores its document under: the plan's own
+#: native id with this appended, which is the name every design document on this host
+#: already carried before anything asked for it. It is fixed in the task rather than left
+#: to the dispatch because the judge below is pointed at one file, and a document stored
+#: under any other name is one that judge is told does not exist.
+DESIGN_DOC_ID_SUFFIX="-design"
+
+#: How the design-doc dispatch's judge is told where its subject is. The document is
+#: written under the gitignored plan-authoring root, so the only evidence a judge can ask
+#: for about the tree — `git_status` and `git_diff` — can never show it: one dispatch of
+#: this role asked `git_status` six turns running about a document it could not see, and
+#: spent its evidence-tool retries doing so. onejudge's `user.artifacts` names paths the
+#: judge-side prompts list to be read with the file-reading tools instead, and this is
+#: that list's environment override.
+#:
+#: The override rather than a `user.artifacts` entry in `personas/design-doc.yaml`,
+#: because only the override can name what a real launch writes. A persona is one static
+#: file for every launch, so it could name the documents directory at most — every
+#: project's documents, listed to a judge reviewing one of them — and a relative entry
+#: there resolves against the judge's worktree, which is this checkout, so it would stop
+#: naming the authoring root the moment that root is pointed anywhere else. This launch
+#: knows the resolved root and the project, so it names the one file. The judge's
+#: evidence-tool retry limit is deliberately left alone: this gives the judge a subject it
+#: can see, not more attempts at one it cannot.
+JUDGE_ARTIFACTS_ENV="ONEJUDGE_ARTIFACTS"
 
 #: The node this launch writes, which is what `just status` and the DAG UI label the
 #: dispatch. It is also what names that record on disk, because a local Markdown source
@@ -193,8 +226,8 @@ rather than only behind the pointer above.
   no others, satisfying every property it states of them.
 @ARCHITECTURE@
 - That document is stored as a document of that plan's own project, in the same plan
-  store the plan itself is in, so a reader finds it beside the plan rather than in a
-  directory only this dispatch knows about.
+  store the plan itself is in, under the document id \`@DOCUMENT_ID@\`, so a reader finds
+  it beside the plan rather than in a directory only this dispatch knows about.
 - Every task of that plan has one row in the document's planned-tasks table, and each row
   points at its task using the location the store reports for that task — read back out
   of the store, never composed by hand.
@@ -477,8 +510,38 @@ plan_directory="$plan_root/$PLAN_RECORDS"
 mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not be created" \
     "check that the plan-authoring root is a directory this launch may write into, then retry"
 
+plan_source=${plan_project%%:*}
+design_document_id="${plan_project#*:}$DESIGN_DOC_ID_SUFFIX"
+
+# The design document's file, for the judge — named only for a plan in the authoring
+# source, because that is the one source whose root this launch resolved and exported
+# above, and the document is stored in the plan's own source: a plan held anywhere else
+# would have its judge pointed at a file under a root that plan is not in. Made absolute
+# against this directory, which is what every write of this script resolves a relative
+# root against, rather than left to resolve against the judge's worktree.
+#
+# The project half of the brief's id is whatever the store calls a project, `/` included —
+# a local store resolves `sub/x` to a nested record and keeps its documents nested the
+# same way, so that path is right — but a component that is empty, `.` or `..` would carry
+# the path out of the documents directory, and is refused before anything is launched.
+judge_artifacts=()
+if [ "$plan_source" = "$PLAN_AUTHORING_SOURCE" ]; then
+    case "/${plan_project#*:}/" in
+        # llmlint: ignore[changed_behavior_has_e2e] Unreachable through this flow as the store stands: the review above reads the project out of the store first, and a local store answers `no project with that id` for every id with an empty, `.` or `..` component (measured against a store holding `projects/sub/x.md`: `st:sub/x` resolves, `st:../store/projects/sub/x` does not), which that step reports as a plan that could not be reviewed. It guards the path against a store that ever resolves one.
+        *//* | */./* | */../*)
+            fail "the plan project '$plan_project' has an empty, '.' or '..' path component, so its design document's path would leave $PLAN_DOCUMENTS/" \
+                "name the plan by the id the store lists it under ('just plans project list --source $PLAN_AUTHORING_SOURCE'), then retry" ;;
+    esac
+    case $plan_root in
+        /*) documents_root=$plan_root ;;
+        *) documents_root="$PWD/$plan_root" ;;
+    esac
+    judge_artifacts=("$JUDGE_ARTIFACTS_ENV=$documents_root/$PLAN_DOCUMENTS/$design_document_id.md")
+fi
+
 design_instructions="${DESIGN_DOC_INSTRUCTIONS//@PLAN_PROJECT@/$plan_project}"
 design_instructions="${design_instructions//@TEMPLATE@/$DESIGN_DOC_TEMPLATE}"
+design_instructions="${design_instructions//@DOCUMENT_ID@/$design_document_id}"
 # `@ARCHITECTURE@` is spliced rather than substituted, because what fills it is somebody
 # else's bytes and has to arrive verbatim. A `//` replacement would not leave it so: bash
 # 5.2 enables `patsub_replacement`, which reads `&` in a *replacement* as the matched
@@ -529,8 +592,11 @@ echo "finish-plan: launching run $design_run to write the design document for $p
 # directly, because that is where this launch's identity is established: a run launched
 # without it records `unknown`, and `just runs --mine` and `just stop` then disown it.
 launch_status=0
-# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is an attached launch, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are its own; and the two array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
-"$script_dir/onepipeline.sh" start "$PLAN_SOURCE:$design_run" \
+# The judge's artifacts reach the launch through `env` rather than `export`, so they are
+# this launch's alone: the copy and the report after it run no judge, and a list left in
+# this shell would be inherited by anything a later step spawns.
+# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is an attached launch, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are its own; and the three array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
+env ${judge_artifacts[@]+"${judge_artifacts[@]}"} "$script_dir/onepipeline.sh" start "$PLAN_SOURCE:$design_run" \
     ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} || launch_status=$?
 if [ "$launch_status" -ne 0 ]; then
     echo "finish-plan: run $design_run did not settle, so nothing was copied into '$destination'; read it with 'just channel-next $design_run', and run this command again once the document is written" >&2
