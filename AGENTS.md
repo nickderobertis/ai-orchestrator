@@ -125,10 +125,14 @@ failure words — `checks-failed` and its siblings in the outcome vocabulary
 `tests/test_engine_contracts.py` holds to the engine — say the publication reached the
 merge path and got no verdict it could act on, and they arrive already retried, the
 engine having re-dispatched onto the *same* branch with the reason and `onevcs`'s
-evidence until its budget was spent. Read one as a branch that exists, carries a tree
-the merge path would not pass, and has been worked several times — never as a node to
-`retry` blind, since a retry naming no branch cuts a fresh one beside committed work
-with the refusal still standing. `pushed-unverified` is the one that is not a refusal:
+evidence until its budget was spent. Read a refusal among them as a branch that exists,
+carries a tree the merge path would not pass, and has been worked several times — never
+as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
+committed work with the refusal still standing. `checks-unsettled` is not a verdict on
+the tree: a required check with no verdict ends there, whether it was still pending when
+the watch's bound elapsed or completed `cancelled` or `stale`, which the linked `onevcs`
+reads as no verdict rather than as red — so re-run that check on the host before reading
+the branch as refused. `pushed-unverified` is the one that is not a refusal:
 the push reached the remote and the merge path could not then be read, so the work is on
 the origin with its verdict outstanding — read the change request on the host, never
 publish again.
@@ -310,7 +314,14 @@ wait on a person nothing here performs, prompts for, or acknowledges, so the man
 reading that surface is the person who has to act, or find who will. **A probe is not a
 gate**: it answers what version is out and never refuses a publication; "not answered"
 is not "not released", and a held node stays held on it; a human step awaited is a
-third answer, folded into neither. **Whether a release exists is read from the registry
+third answer, folded into neither. **A hold on a landing `onevcs` did not witness never
+releases on its own**: with no release baseline captured at landing — the landing was
+never probed, or its probe did not answer then — no later probe answer can say which
+release carries the work, so the hold answers "not answered" for ever. Confirm the
+release on the registry, then answer the hold with `onevcs release acknowledge
+<REFERENCE> --target <NAME> --version <VERSION>` on its automated target, which the
+hold reads as released; a landing whose probed baseline was established refuses the
+acknowledgement and names its probe. **Whether a release exists is read from the registry
 and nothing else**, because a verification badge folds several jobs into one verdict and
 a tag-against-registry comparison reads every publication still in flight as a failure.
 A producer declaration is read at the publication checkout's base, so a checkout left

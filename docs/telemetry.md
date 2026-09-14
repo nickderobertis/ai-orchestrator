@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.29.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.29.3 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.12.1/0.10.0 upgrade (`config/oneharness.version` and
+after the 0.12.1/0.11.0 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -183,7 +183,11 @@ the `oneharness-core` both engines link unchanged, so the record the `usage` blo
 read from is written by the same release as before; what that onejudge release adds is a
 judge side that can be a list, whose judges' usage it **sums** into the one `judge` party
 (onejudge's own `judges.md`: *Usage is summed across judges*) — and this host stacks
-none, so `judge` still counts one simulated user. `dispatches`,
+none, so `judge` still counts one simulated user. It has since moved to 0.11.0 on the
+same terms: `onejudge-cli` 0.11.0 is compiled against `oneharness-core` 0.13.0 and the
+engine wheel still links 0.13.1, read off each wheel's own SBOM, and the report onejudge
+writes stays at schema 12 on both tags; what 0.11.0 adds is `user.artifacts`, which names
+files in a judge's prompt and writes nothing into a record's `usage`. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 

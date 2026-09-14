@@ -174,6 +174,26 @@ JUDGE_PANEL_FLOOR = Release(0, 10, 0)
 CHAIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 1)
 
 
+#: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
+#: linked-library fixes, which the engine linked in
+#: https://github.com/nickderobertis/onepipeline/pull/283 (`ed6e188`), first cut as 0.29.3.
+#:
+#: onevcs https://github.com/nickderobertis/onevcs/pull/143 (`f7f9a98`), first cut as
+#: 0.22.0: `host::Check::no_verdict`, which reads a required check the host completed
+#: `cancelled` or `stale` as no verdict rather than as red, so a publication over one
+#: settles `checks-unsettled`; and `ReleaseSource::Acknowledged`, the answer a
+#: `release acknowledge` on an automated landing with no baseline records.
+NO_VERDICT_ONEVCS_FLOOR = Release(0, 22, 0)
+#: onejudge https://github.com/nickderobertis/onejudge/pull/86 (`3420b44`), first cut as
+#: 0.11.0: `SimulatedUser::artifacts` behind `user.artifacts`, and `provider::artifacts_prompt`,
+#: which names each resolved path in every judge-side prompt.
+NAMED_ARTIFACTS_ONEJUDGE_FLOOR = Release(0, 11, 0)
+#: oneagentgraph https://github.com/nickderobertis/oneagentgraph/pull/111 (`18daa25`), first
+#: cut as 0.4.1: the release linking that onejudge, which is what lets a `kind: onejudge`
+#: member's `user.artifacts` reach its judge.
+ARTIFACTS_ONEAGENTGRAPH_FLOOR = Release(0, 4, 1)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -528,8 +548,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.0", core="0.13.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.10.0", core="0.13.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.1", core="0.13.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.11.0", core="0.13.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -794,6 +814,45 @@ def test_the_linked_sibling_carries_this_plans_change_to_it(
     assert linked >= floor, (
         f"the adopted engine links {crate} {linked}, below the {floor} that {carries}; "
         "the pins reconcile and the change is not in force"
+    )
+
+
+@pytest.mark.parametrize(
+    ("crate", "floor", "carries"),
+    [
+        (
+            "onevcs",
+            NO_VERDICT_ONEVCS_FLOOR,
+            "reads a cancelled required check as no verdict and accepts an acknowledged baseline",
+        ),
+        (
+            "onejudge",
+            NAMED_ARTIFACTS_ONEJUDGE_FLOOR,
+            "names the `user.artifacts` a judge reads directly",
+        ),
+        (
+            "oneagentgraph",
+            ARTIFACTS_ONEAGENTGRAPH_FLOOR,
+            "links the onejudge that knows `user.artifacts`",
+        ),
+    ],
+    ids=("onevcs", "onejudge", "oneagentgraph"),
+)
+def test_the_linked_sibling_carries_the_issue_1004_fix_to_it(
+    crate: str, floor: Release, carries: str
+) -> None:
+    """Each linked sibling is at or past the release carrying that plan's fix to it.
+
+    Held on the *linked* copy for the reason the test above gives: the CLI pins can all
+    read current over an engine that resolved the siblings from before these fixes, and a
+    dispatch would then spend a publication on a cancelled check and hand a judge no
+    artifact while nothing on this host said so.
+    """
+    linked = Release.parse(_linked_version(crate))
+
+    assert linked >= floor, (
+        f"the adopted engine links {crate} {linked}, below the {floor} that {carries}; "
+        "the pins reconcile and the fix is not in force"
     )
 
 

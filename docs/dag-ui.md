@@ -67,13 +67,15 @@ separately, and the reader links whatever its release was built against. So the
 two are expected to differ; what the field is for is being able to say which
 reader is answering rather than assuming it.
 
-**Today the two coincide, and the reading to carry is still that neither number
-constrains the other**: the adopted `onepipeline-ui` 0.7.3 statically links onepipeline
-0.29.0, and `config/onepipeline.version` reads 0.29.0 too. That is an adoption made
-together rather than a rule: the reader was moved with the engine because a reader
-linking an older onejudge than the one writing a run's reports refuses the newer report
-schema and renders no transcript. Through the adoption before this one the reader linked
-onepipeline 0.19.0 while the CLI a dispatch ran was nine minor releases ahead.
+**Today the two differ by three patch releases, and the reading to carry is still that
+neither number constrains the other**: the adopted `onepipeline-ui` 0.7.3 statically
+links onepipeline 0.29.0 and onejudge 0.10.0, while `config/onepipeline.version` reads
+0.29.3, whose engine writes a run's reports through onejudge 0.11.0. The reader was last
+moved with the engine because a reader linking an older onejudge than the one writing a
+run's reports refuses a newer report schema and renders no transcript; onejudge 0.11.0
+writes the same report schema, 12, as 0.10.0, so that reason does not apply to this gap.
+Through an earlier adoption the reader linked onepipeline 0.19.0 while the CLI a dispatch
+ran was nine minor releases ahead.
 It was the reverse for two adoptions — the engine pin was held at 0.18.4 for a
 settlement write-back defect that had nothing to do with reading runs, and the
 Observatory was adopted anyway because the reader carries its own engine. That hold is
@@ -147,7 +149,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.0**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.1**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

@@ -51,6 +51,7 @@ import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 
@@ -158,7 +159,7 @@ RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 #: those are the two degradations the score path has to survive.
 ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
-#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.10.0
+#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.11.0
 #: with a `kind: command` judge that logged every op it was asked. No `task`, no `session`
 #: — which is why the run is read from the environment. That release also writes an
 #: optional `evidence` beside these, which the filter does not read and this frame
@@ -176,6 +177,21 @@ SCORING_FRAME = {
 #: member, and which member died is the whole question here.
 MEMBER_DIED = "member-died"
 MEMBER_LABEL = "member"
+
+#: The one death a settled run's teardown can record, and how it is told apart from a
+#: death this journey guards against. Once the run settles, the driver writes the
+#: observer graph's `signals/stop`; `oneagentgraph` reads that file as a cancellation
+#: request, and a member it reaches **inside** a turn rather than in its hold between
+#: turns is recorded `member-died` with this cause. Under this journey's one-second
+#: hold a turn is in flight at that moment often enough to fail a healthy run, on the
+#: old pins and the new alike. Both deaths guarded here are provider or protocol
+#: failures before settlement, and neither carries this cause.
+TEARDOWN_CAUSE = "cancelled"
+STOP_SIGNAL = "signals/stop"
+
+#: The rendered launch line that settles a node: `<ts>  graph:<node>  node-settled …`.
+#: The last of them is when the run settled, which a teardown stop has to follow.
+NODE_SETTLED = "node-settled"
 
 
 class ReplyAnswer(NamedTuple):
@@ -210,6 +226,9 @@ class Watched(NamedTuple):
     #: `oneagentgraph` owns this envelope and this journey reads two keys out of it —
     #: restating the rest here would be a second copy of somebody else's schema.
     graph_events: list[dict[str, Any]]
+    #: When the driver asked each observer graph to stop, keyed by the graph's stream,
+    #: which is the directory `oneagentgraph` wrote that graph's state under.
+    stop_requests: dict[str, datetime]
     #: How the attached launch ended, and what it printed on the way.
     settlement: str
 
@@ -453,6 +472,49 @@ def _graph_events(scratch: Path) -> list[dict[str, Any]]:
     return events
 
 
+def _stop_requests(scratch: Path) -> dict[str, datetime]:
+    """When the driver wrote each observer graph's stop request, to the millisecond.
+
+    Read off the file itself because that file *is* the request `oneagentgraph` acts on,
+    and it records no event of its own. Truncated to the millisecond the graph's own
+    event timestamps carry, so a death in the same millisecond still reads as following
+    it.
+    """
+    requests = {}
+    # llmlint: ignore[tests_mirror_real_usage] No operator view records the stop request.
+    for stop in scratch.glob(f"dag-scope-*/{STOP_SIGNAL}"):
+        written = datetime.fromtimestamp(stop.stat().st_mtime, tz=UTC)
+        requests[stop.parent.parent.name] = written.replace(
+            microsecond=written.microsecond // 1000 * 1000
+        )
+    return requests
+
+
+def _last_node_settled(settlement: str) -> datetime | None:
+    """When the launch rendered its last node settling, which is when the run settled."""
+    settled = [
+        datetime.fromisoformat(fields[0])
+        for fields in (line.split() for line in settlement.splitlines())
+        if len(fields) > 2 and fields[1].startswith("graph:") and fields[2] == NODE_SETTLED
+    ]
+    return max(settled, default=None)
+
+
+def _settlement_teardown(event: dict[str, Any], watched: Watched) -> bool:
+    """Whether a death is the settled run's own teardown rather than a lost watcher.
+
+    All three have to hold: the cause is the cancellation a stop request produces, the
+    death came at or after that graph's stop request, and the request came after the
+    run's last node settled. A stop requested while nodes were still settling is a
+    watcher lost before the end, and fails exactly as any other death does.
+    """
+    stop = watched.stop_requests.get(str(event.get("stream")))
+    settled = _last_node_settled(watched.settlement)
+    if event.get("payload", {}).get("cause") != TEARDOWN_CAUSE or stop is None or settled is None:
+        return False
+    return settled <= stop <= datetime.fromisoformat(str(event.get("ts")))
+
+
 @pytest.fixture(scope="module")
 def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Watched]:
     """Launch one run, supervise it with edits alone, and settle it.
@@ -554,6 +616,7 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
                     "monitor", RUN, "--filter", "monitor", environment=environment, seconds=60
                 ).stdout,
                 graph_events=_graph_events(scratch),
+                stop_requests=_stop_requests(scratch),
                 settlement=printed.read_text("utf-8"),
             )
         finally:
@@ -735,11 +798,17 @@ def test_the_monitor_lives_to_the_graphs_settlement(watched: Watched) -> None:
         f"the launch did not report the run settling, so there is no settlement to have "
         f"survived to:\n{watched.settlement}"
     )
+    # Every death counts but the settled run's own teardown (`_settlement_teardown`): a
+    # stop the driver wrote after the last node settled that reached the member inside a
+    # turn. That one is the settlement this case asserts survival to, not a loss before
+    # it — and without this, the race between that stop and a one-second hold failed
+    # healthy runs on the old pins and the new alike.
     died = [
         event
         for event in watched.graph_events
         if event.get("kind") == MEMBER_DIED
         and event.get("labels", {}).get(MEMBER_LABEL) == MONITOR_MEMBER
+        and not _settlement_teardown(event, watched)
     ]
     assert not died, (
         f"the `{MONITOR_MEMBER}` member did not survive this run; the graph recorded "
