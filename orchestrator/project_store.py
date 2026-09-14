@@ -33,6 +33,13 @@ class PlanDocument(TypedDict):
 #: no plan declared.
 ENGINE_PREFIX = "onepipeline."
 
+#: The two directories of a local-md root a record sits in: `<root>/projects/<project>.md`
+#: and `<root>/tasks/<project>/<task>.md`. Named once here, where the layout is written,
+#: because `orchestrator/plan_store.py` resolves a record to a path and a path back to its
+#: root through the same two names.
+PROJECTS_DIRECTORY = "projects"
+TASKS_DIRECTORY = "tasks"
+
 #: The shape of a normalized origin — `host/owner/name` — which is the one value a task
 #: record's top-level `repositories` list can hold. The scheme and a `.git` suffix are
 #: what a clone URL carries beyond it, so both are dropped before the shape is asked.
@@ -214,7 +221,7 @@ def render_plan_project(
         fields["metadata"] = {"onepipeline.id": node_id} | {
             f"onepipeline.{key}": value for key, value in node.items()
         }
-        rendered[Path("tasks") / project / f"{node_slug}.md"] = frontmatter(fields, body)
+        rendered[Path(TASKS_DIRECTORY) / project / f"{node_slug}.md"] = frontmatter(fields, body)
     # The project document is rendered last, and `write_plan_project` writes in this
     # order, because a root is read concurrently with being written: a local Markdown
     # source that finds a project document opens the task directory below it, and one
@@ -224,7 +231,7 @@ def render_plan_project(
     # root to swap in: its document stays visible while its task files are rewritten one
     # at a time, so a reader can catch a mixed record. What the order still buys there is
     # that a replacement which fails leaves the reader the project it already had.
-    rendered[Path("projects") / f"{project}.md"] = frontmatter(
+    rendered[Path(PROJECTS_DIRECTORY) / f"{project}.md"] = frontmatter(
         {"title": name, "status": "todo", "metadata": metadata},
         f"Execution plan {project}.",
     )
@@ -241,7 +248,7 @@ def write_plan_project(
 ) -> str:
     """Write a rendered project under one local-md root and return its native id."""
     rendered = render_plan_project(plan, native_id=native_id, project_metadata=project_metadata)
-    document = next(path for path in rendered if path.parent == Path("projects"))
+    document = next(path for path in rendered if path.parent == Path(PROJECTS_DIRECTORY))
     project = document.stem
     for relative, content in rendered.items():
         if relative == document:
@@ -249,8 +256,10 @@ def write_plan_project(
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content, encoding="utf-8")
-    task_directory = root / "tasks" / project
-    current_tasks = {root / path for path in rendered if path.parent == Path("tasks") / project}
+    task_directory = root / TASKS_DIRECTORY / project
+    current_tasks = {
+        root / path for path in rendered if path.parent == Path(TASKS_DIRECTORY) / project
+    }
     if task_directory.is_dir():
         for existing in task_directory.iterdir():
             if existing.is_file() and existing not in current_tasks:

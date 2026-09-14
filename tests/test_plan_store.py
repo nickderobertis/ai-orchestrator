@@ -355,6 +355,53 @@ def test_a_record_whose_metadata_block_is_followed_by_more_frontmatter_keeps_it(
     )
 
 
+@pytest.mark.parametrize(
+    "record", ["documents/demo.md", "demo.md", "tasks/demo.md", "projects/demo/route.md"]
+)
+def test_a_record_in_neither_layout_is_refused_rather_than_staged_by_guess(
+    record: str, tmp_path: Path
+) -> None:
+    """Where a replacement is staged is decided from the layout, so no layout is no write."""
+    document = tmp_path / "store" / record
+    document.parent.mkdir(parents=True, exist_ok=True)
+    document.write_text(RECORD, encoding="utf-8")
+    with pytest.raises(OSError) as refused:
+        plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    assert str(refused.value).startswith(f"{document} is in neither record layout")
+    assert "`<root>/projects/<project>.md` or `<root>/tasks/<project>/<task>.md`" in str(
+        refused.value
+    )
+    assert document.read_text(encoding="utf-8") == RECORD
+    written = Path("store", record)
+    assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == sorted(
+        [*written.parents][:-1] + [written]
+    ), "a refused write still left a staged file behind"
+
+
+def test_a_replacement_whose_rename_is_refused_leaves_nothing_staged_at_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The root admits the staged file where the record's directory refuses the rename.
+
+    Staging beside the record failed before anything was created in a directory nothing
+    may write into; staged at the root, the file exists before the rename is refused, and
+    that root is shared by every writer of the store.
+    """
+    document = _written(tmp_path, monkeypatch)
+    directory = document.parent
+    before = directory.stat().st_mode
+    directory.chmod(0o500)
+    try:
+        with pytest.raises(PermissionError):
+            plan_store.write_metadata(document, "orchestrator.plan-review", {"key": "abc"})
+    finally:
+        directory.chmod(before)
+    assert document.read_text(encoding="utf-8") == RECORD
+    assert sorted(path.name for path in (tmp_path / "store").iterdir()) == ["tasks"], (
+        "a refused rename left its staged file at the source root"
+    )
+
+
 def test_a_source_holding_no_root_yet_lists_no_projects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

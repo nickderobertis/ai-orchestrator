@@ -57,7 +57,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, NewType
 
-from orchestrator.project_store import frontmatter, metadata_entry
+from orchestrator.project_store import (
+    PROJECTS_DIRECTORY,
+    TASKS_DIRECTORY,
+    frontmatter,
+    metadata_entry,
+)
 from orchestrator.root import REPO_ROOT
 
 #: The standalone plan-store CLI this host spawns. `config/onetaskgraph.version` pins
@@ -848,7 +853,7 @@ def task_document(source: str, native_task_id: str) -> Path:
             f"task id {native_task_id!r} is not a local record's `<project>/<task>`, so the "
             f"document holding it cannot be named"
         )
-    document = source_root(source) / "tasks" / project / f"{task}.md"
+    document = source_root(source) / TASKS_DIRECTORY / project / f"{task}.md"
     if not document.is_file():
         raise OSError(f"task {source}:{native_task_id} has no record at {document}")
     return document
@@ -870,7 +875,7 @@ def project_document(source: str, native_project_id: str) -> Path:
             f"project id {native_project_id!r} is not a local record's own name, so the "
             f"document holding it cannot be named"
         )
-    document = source_root(source) / "projects" / f"{native_project_id}.md"
+    document = source_root(source) / PROJECTS_DIRECTORY / f"{native_project_id}.md"
     if not document.is_file():
         raise OSError(f"project {source}:{native_project_id} has no record at {document}")
     return document
@@ -1086,20 +1091,56 @@ def _replace(document: Path, content: str) -> None:
     A local Markdown source opens a project's task directory and reads every file in
     it, so a reader that arrives mid-write does not see a shorter file — it sees a
     record whose frontmatter is truncated, and refuses the whole walk.
+
+    The whole file is staged at the source root rather than beside the record, because a
+    reader walking the record's directory lists the staged file, and when the rename
+    takes it away before the reader opens it, the walk is refused: `the source returned
+    data this interface cannot represent: … (os error 2)`. No walk lists the root's own
+    entries, and a rename within one root never crosses a filesystem.
+
+    A rename that fails removes what it staged. The root can admit a file while the
+    record's own directory refuses one, so the staging succeeds exactly where the rename
+    is then refused, and the source root is shared by every writer of the store.
     """
-    handle, temporary = tempfile.mkstemp(dir=str(document.parent), suffix=".tmp")
+    handle, temporary = tempfile.mkstemp(dir=str(_record_root(document)), suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as opened:
             opened.write(content)
-    except OSError:  # pragma: no cover - the filesystem failing mid-write
+        os.replace(temporary, document)
+    except OSError:
         Path(temporary).unlink(missing_ok=True)
         raise
-    os.replace(temporary, document)
+
+
+def _record_root(document: Path) -> Path:
+    """The source root holding ``document``, in either layout :func:`project_document`
+    and :func:`task_document` name: `<root>/projects/<project>.md` or
+    `<root>/tasks/<project>/<task>.md`.
+
+    The task layout is read first because `projects` is a project name
+    :data:`RECORD_COMPONENT` admits: read the other way, a task of that project would
+    stage in `<root>/tasks/`, which a walk lists to find its projects.
+
+    Refused rather than guessed for any other path: the answer is a directory a file is
+    then created in, so a record in neither layout would stage it somewhere this cannot
+    say a walk of the source never lists.
+    """
+    parent = document.parent
+    if parent.parent.name == TASKS_DIRECTORY:
+        return parent.parent.parent
+    if parent.name == PROJECTS_DIRECTORY:
+        return parent.parent
+    raise OSError(
+        f"{document} is in neither record layout of a local source — "
+        f"`<root>/{PROJECTS_DIRECTORY}/<project>.md` or "
+        f"`<root>/{TASKS_DIRECTORY}/<project>/<task>.md` — so where its replacement may be "
+        f"staged cannot be decided"
+    )
 
 
 def local_projects(source: str) -> list[str]:
     """Every project ``source`` holds, as qualified ids; none when it holds no root."""
-    root = source_root(source) / "projects"
+    root = source_root(source) / PROJECTS_DIRECTORY
     if not root.is_dir():
         return []
     return sorted(f"{source}:{document.stem}" for document in root.glob("*.md"))
