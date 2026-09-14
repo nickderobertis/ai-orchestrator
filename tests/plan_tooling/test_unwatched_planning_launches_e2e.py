@@ -100,6 +100,13 @@ DESTINATION = "destination"
 RUN = "unwatched-planning-flow"
 DESIGN_RUN = f"{RUN}-design"
 
+#: Every journey here reads the one module-scoped flow, so all of them run on one worker.
+#: Without a group `--dist loadgroup` spreads the parametrized cases across workers, and
+#: each worker then runs a flow of its own under these same run ids in this checkout's
+#: one `.plans`: one flow's teardown unlinked `.plans/projects/{DESIGN_RUN}.md` while the
+#: other's tail was launching it, which the store reports as `no project with that id`.
+pytestmark = pytest.mark.xdist_group("unwatched-planning")
+
 #: How long each stand-in turn takes. The two runs are unsettled only while their own
 #: dispatch is working, so this is what gives a poll something to see — and it is a
 #: property of the *journey* rather than of the flow: a real turn takes minutes.

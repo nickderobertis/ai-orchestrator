@@ -1623,10 +1623,11 @@ def _plans_json(environment: dict[str, str], *args: str) -> subprocess.Completed
     )
 
 
-# llmlint: ignore-block[shell_test_tiers_stay_split] None of these three is a shell test: each
-# is a Python journey spawning the installed plan-store CLI, as every journey beside it is,
-# and this repository splits its test tiers by pytest marker rather than by Nx project — the
-# block above `test_adopted_archive_binary_and_authoring_ignore_are_in_force` gives why.
+# llmlint: ignore-block[shell_test_tiers_stay_split] None of the journeys up to this block's end
+# is a shell test: each is a Python journey spawning the installed plan-store CLI, as every
+# journey beside it is, and this repository splits its test tiers by pytest marker rather than
+# by Nx project — the block above `test_adopted_archive_binary_and_authoring_ignore_are_in_force`
+# gives why.
 def test_a_member_copy_writes_the_named_member_and_leaves_the_rest_untouched(
     tmp_path: Path,
 ) -> None:
@@ -1701,6 +1702,138 @@ def test_a_refused_verb_under_json_writes_a_failure_document(tmp_path: Path) -> 
     assert failure["class"] == "refused", (
         f"a task the source does not hold is a refusal, and this said {failure}"
     )
+
+
+COMMENTS_PROJECT = _ProjectId("comments")
+COMMENTED_TASK = _NodeId("commented")
+#: The line a `local-md` task file opens each comment's block with, naming the comment's
+#: id. What follows it, up to the next one, is the block that comment is rendered as.
+COMMENT_OPENED = re.compile(r'<!-- onetaskgraph:comment id="([^"]+)"[^>]*-->')
+
+
+def _comment_blocks(record: Path) -> dict[str, str]:
+    """Each comment the task file's `## Comments` section holds, by id, in file order."""
+    _, heading, section = record.read_text(encoding="utf-8").partition("\n## Comments\n")
+    if not heading:
+        return {}
+    parts = COMMENT_OPENED.split(section)
+    return {
+        comment_id: block.strip()
+        for comment_id, block in zip(parts[1::2], parts[2::2], strict=True)
+    }
+
+
+# llmlint: ignore-block[modern_domain_modeling] A listed comment's fields have one source, the
+# `CommentList` schema the installed CLI emits and `_conforming` validates against, for the
+# reason the block around `_conforming` gives: a named model of them here was refused by
+# `contracts_have_one_source_or_a_drift_gate` as a second copy of that contract.
+def _listed_comments(environment: dict[str, str], task: str) -> list[tuple[str, str]]:
+    """Each comment `task comment list` answers for the task as `(id, body)`, oldest first.
+
+    Read off the document `_conforming` has already held to the published schema, which is
+    what declares those fields, so the pair names no field of its own.
+    """
+    listed = _plans_json(environment, "task", "comment", "list", task)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    comments = _conforming(listed.stdout, "CommentList")["comments"]
+    assert isinstance(comments, list)
+    return [(comment["id"], comment["body"]) for comment in comments]
+
+
+# llmlint: ignore-end[modern_domain_modeling]
+
+
+def test_a_task_comment_is_added_listed_edited_and_deleted_on_a_local_task(
+    tmp_path: Path,
+) -> None:
+    """`task comment add`, `list`, `edit` and `delete` on a `local-md` task.
+
+    Every comment the follow-up agent leaves on a board goes through these verbs, so
+    each is held to what it leaves behind rather than to its exit code: what `list`
+    answers next, and the block the task's own file carries. Two comments are written so
+    an edit and a delete can each be seen to touch the one they name and no other.
+    """
+    root = tmp_path / "authoring"
+    root.mkdir()
+    environment = _plan_environment(root)
+    write_plan_project(
+        root,
+        PlanDocument(
+            name=COMMENTS_PROJECT,
+            tasks=[
+                PlanNode(
+                    id=COMMENTED_TASK,
+                    title="feat: commented task",
+                    task="## What\nA task to comment on.\n",
+                )
+            ],
+        ),
+    )
+    task = f"{AUTHORING_SOURCE}:{COMMENTS_PROJECT}/{COMMENTED_TASK}"
+    record = next((root / "tasks").rglob(f"{COMMENTED_TASK}.md"))
+
+    def body_file(name: str, body: str) -> str:
+        path = tmp_path / f"{name}.md"
+        path.write_text(body, encoding="utf-8")
+        return str(path)
+
+    def added(name: str, body: str) -> str:
+        result = _plans_json(
+            environment, "task", "comment", "add", task, "--body-file", body_file(name, body)
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        comment = _conforming(result.stdout, "Comment")
+        assert comment["body"] == body, f"`add` answered a body other than the one sent: {comment}"
+        assert isinstance(comment["id"], str)
+        return comment["id"]
+
+    kept_body = "Root cause: the watch filtered its own line.\n\nSeen in `just status`.\n"
+    changed_body = "Duplicate of the issue already open.\n"
+    kept = added("kept", kept_body)
+    changed = added("changed", changed_body)
+
+    assert _listed_comments(environment, task) == [(kept, kept_body), (changed, changed_body)]
+    blocks = _comment_blocks(record)
+    assert list(blocks) == [kept, changed], f"the task file holds {list(blocks)}"
+    assert kept_body.strip() in blocks[kept], blocks[kept]
+    assert changed_body.strip() in blocks[changed], blocks[changed]
+
+    edited_body = "Same root cause as the open issue; commenting there instead.\n"
+    edit = _plans_json(
+        environment,
+        *("task", "comment", "edit", task, changed),
+        *("--body-file", body_file("edited", edited_body)),
+    )
+    assert edit.returncode == 0, edit.stdout + edit.stderr
+    edited = _conforming(edit.stdout, "Comment")
+    assert (edited["id"], edited["body"]) == (changed, edited_body), edited
+
+    assert _listed_comments(environment, task) == [(kept, kept_body), (changed, edited_body)]
+    after_edit = _comment_blocks(record)
+    assert list(after_edit) == [kept, changed], f"the task file holds {list(after_edit)}"
+    assert after_edit[kept] == blocks[kept], "an edit of one comment rewrote another's block"
+    assert edited_body.strip() in after_edit[changed], after_edit[changed]
+    assert changed_body.strip() not in after_edit[changed], after_edit[changed]
+
+    delete = _plans_json(environment, "task", "comment", "delete", task, changed)
+    assert delete.returncode == 0, delete.stdout + delete.stderr
+    assert _conforming(delete.stdout, "DeletedComment")["deleted"] == changed
+
+    assert _listed_comments(environment, task) == [(kept, kept_body)]
+    after_delete = _comment_blocks(record)
+    assert after_delete == {kept: after_edit[kept]}, (
+        f"deleting one comment has to leave the other's block exactly as it was: {after_delete}"
+    )
+
+    settled = record.read_bytes()
+    again = _plans_json(environment, "task", "comment", "delete", task, changed)
+    assert again.returncode == 1, again.stdout + again.stderr
+    failure = _conforming(again.stdout, "FailureDocument")["failure"]
+    assert isinstance(failure, dict)
+    assert failure["class"] == "refused", (
+        f"deleting a comment the task no longer holds is a refusal, and this said {failure}"
+    )
+    assert record.read_bytes() == settled, "a refused delete still rewrote the task file"
 
 
 # llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for

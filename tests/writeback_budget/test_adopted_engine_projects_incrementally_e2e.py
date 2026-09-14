@@ -280,7 +280,7 @@ def test_a_projection_carries_only_what_changed_and_a_refusal_waits_for_the_grap
     created = _destination(driven)[ADDED_NODE]
     # llmlint: ignore[tests_mirror_real_usage] A local Markdown destination is edited
     # through its own files, as the retitle above is, and the provisioned onetaskgraph
-    # 0.2.30 offers no verb that removes a task: removing its record is how a person
+    # 0.2.31 offers no verb that removes a task: removing its record is how a person
     # removes one, and a removed task is what makes the store refuse the next copy.
     created.record.unlink()
     calls = store_calls(driven)

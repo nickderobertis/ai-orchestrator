@@ -16,6 +16,7 @@ that the reader found nothing.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -95,9 +96,16 @@ def test_the_board_source_is_left_exactly_as_it_was(setting: str, expected: str)
 
 def _resolved_configuration() -> dict[str, object]:
     """Every setting the installed CLI resolves out of this checkout's own file."""
+    # A launch exports `ONETASKGRAPH_SOURCES__…` names (the run's `drafts` root among
+    # them), and the store layers every `ONETASKGRAPH_` name over the file, so reading
+    # the file alone means handing the CLI none of them.
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("ONETASKGRAPH_")
+    }
     result = subprocess.run(
         [str(ONETASKGRAPH_BIN), "--json", "config", "show"],
         cwd=REPO_ROOT,
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
