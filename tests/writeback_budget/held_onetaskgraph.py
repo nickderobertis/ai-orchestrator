@@ -18,9 +18,11 @@ Three environment variables steer it:
   it does not, the copy is not held. Read per call, so a journey moves the hold between
   copies of one live run without restarting anything.
 * ``HELD_ONETASKGRAPH_LOG`` names a file this appends one JSON line to as each call starts
-  and another as it answers. A call the engine killed inside its hold has a `started` line
-  and no `answered` one, which is how a journey tells a copy that was allowed to finish
-  from one that was not, without trusting the engine's account of its own deadline.
+  and another as it answers, each carrying the call's whole argument list. A call the
+  engine killed inside its hold has a `started` line and no `answered` one, which is how a
+  journey tells a copy that was allowed to finish from one that was not, without trusting
+  the engine's account of its own deadline; and the arguments are how a journey reads
+  which tasks a copy named, without trusting the engine's account of what it carried.
 """
 
 from __future__ import annotations
@@ -67,10 +69,10 @@ def main() -> int:
     arguments = sys.argv[1:]
     verb = " ".join(arguments[:2])
     held = _held_seconds(hold) if tuple(arguments[:2]) == COPY else 0
-    _record(log, event="started", verb=verb, held=held)
+    _record(log, event="started", verb=verb, args=arguments, held=held)
     time.sleep(held)
     answered = subprocess.run([real, *arguments], check=False)
-    _record(log, event="answered", verb=verb, held=held, exit=answered.returncode)
+    _record(log, event="answered", verb=verb, args=arguments, held=held, exit=answered.returncode)
     return answered.returncode
 
 

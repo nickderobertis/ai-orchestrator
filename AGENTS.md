@@ -389,7 +389,15 @@ nobody having approved the document.
 **A green run proves nothing about the board.** The settlement write-back is best-effort
 and off the reconcile loop: a projection that never landed settles the run exactly like
 one that did, with one line on the driver's stderr. `just results`, `just status`, and
-the run journal are the record. A `just copy-plan` refused for a rate limit is GitHub's
+the run journal are the record. A projection carries only the nodes that changed, and is
+whole only for a driver's first, the attempt after a failure, or a store offering no
+`--member`; its copy deadline counts the items it carries. One the store refuses is
+reported once and projected again only when the graph next changes, while any other
+failure is retried, spaced to a one-minute ceiling. The engine records every attempt as one
+line of `writeback-projections.jsonl` in the run's directory, and that line is what the
+attempt cost: the items it carried, its outcome and failure class, its duration, and `spent`
+where the store meters.
+A `just copy-plan` refused for a rate limit is GitHub's
 **secondary** limiter — a burst limiter over content-creating requests that `gh api
 rate_limit` does not report and every retry extends — answered by leaving the board
 alone and by the source's pacing setting, never by a wider token.

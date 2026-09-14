@@ -70,7 +70,7 @@ reader is answering rather than assuming it.
 **Today the two differ by three patch releases, and the reading to carry is still that
 neither number constrains the other**: the adopted `onepipeline-ui` 0.7.3 statically
 links onepipeline 0.29.0 and onejudge 0.10.0, while `config/onepipeline.version` reads
-0.29.3, whose engine writes a run's reports through onejudge 0.11.0. The reader was last
+0.29.4, whose engine writes a run's reports through onejudge 0.11.0. The reader was last
 moved with the engine because a reader linking an older onejudge than the one writing a
 run's reports refuses a newer report schema and renders no transcript; onejudge 0.11.0
 writes the same report schema, 12, as 0.10.0, so that reason does not apply to this gap.

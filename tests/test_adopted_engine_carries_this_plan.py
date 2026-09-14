@@ -203,12 +203,35 @@ WRITEBACK_BUDGET_LANDINGS = (
     ),
 )
 
+#: The engine half of the write-back quota plan: the settlement write-back was what spent
+#: this host's GraphQL allowance, retrying a projection the store had refused on a timer
+#: and copying every node of the plan to change one. `op-incremental-projection`'s work was
+#: delivered by its retry, `op-incremental-projection-2`, on the same branch, and is recorded
+#: under the node id for the reason `Landing.node` gives.
+#: `tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` observes the
+#: installed engine doing both.
+WRITEBACK_QUOTA_LANDINGS = (
+    Landing(
+        node="op-refusal-not-retried",
+        change_request=285,
+        commit="1395d4294c3791562f3acc5cf647188a615ae54d",
+        did="report a projection the store refused once, and retry it only when the graph changes",
+    ),
+    Landing(
+        node="op-incremental-projection",
+        change_request=287,
+        commit="fbb7e6c48d181805336952287664a28be6412ed2",
+        did="copy only the nodes that changed, and record every attempt on the run",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
     *ROOT_CAUSES_LANDINGS,
     *NOTE_PROVENANCE_LANDINGS,
     *WRITEBACK_BUDGET_LANDINGS,
+    *WRITEBACK_QUOTA_LANDINGS,
 )
 
 

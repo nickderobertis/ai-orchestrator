@@ -205,9 +205,10 @@ MERGE_POLICY_SCOPED = "test"
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 MERGE_POLICY_ROOT = "tests/merge_policy"
 
-#: The project whose test target owns the journey that holds the adopted engine to the
-#: settlement copy deadline its items earn — a real launch whose store copies are held
-#: past the sixty-second floor and past the computed deadline. A project of its own for
+#: The project whose test target owns the journeys that hold the adopted engine's
+#: settlement write-back to what it does on a real launch — a copy held past the
+#: sixty-second floor and past the deadline its items earn, and a projection carrying only
+#: the nodes that changed and waiting for the graph after a refusal. A project of its own for
 #: the reason `unwatched` is: a real launch and minutes of held copies are a cost
 #: `nx affected` can only keep off an unrelated edit where it is a separate project.
 WRITEBACK_BUDGET_PROJECT = "writeback-budget"
