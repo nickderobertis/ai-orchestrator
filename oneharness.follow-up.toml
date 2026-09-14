@@ -1,0 +1,96 @@
+# The follow-up agent's side: the one single-sided member of `graphs/follow-up.yaml`,
+# which `just follow-ups <run-id>` dispatches after a run to verify that run's drafted
+# follow-ups, group them by root cause, and put the verified tickets on the `followups`
+# board. It has no judge side, so this is the only harness config its turn reads.
+#
+# Its own file rather than `oneharness.judge.toml`, although it mirrors that file's chain
+# order and per-identity model pins verbatim, for the reason every side here has its own:
+# three things differ, and a shared file could hold none of them without moving the
+# judge too.
+#
+#   * a finite `timeout`, because the turn runs after settlement and nothing else is
+#     watching it — an unbounded deadline would leave a wedged verification alive forever;
+#   * `GH_PROJECTS_TOKEN` is unmasked on every identity, because this role's whole
+#     deliverable is reading and writing the `followups` board through `onetaskgraph`.
+#     Every other mask the judge file declares is kept;
+#   * its turns stream to the views, so a manager can watch the verification as it goes.
+#
+# `tests/e2e/test_oneharness_timeout_e2e.py` holds the chain, the pins, the deadline and
+# the streaming against the judge file's effective values, and
+# `tests/e2e/test_dispatch_environment_e2e.py` reads the unmasked token out of a real turn
+# on every identity.
+
+run_mode = "fallback"
+
+# A bounded job — read the drafts, verify each against the trees, write and copy the
+# tickets — whose size grows with the run's drafts, so an hour rather than the pacemaker's
+# four minutes.
+timeout = 3600
+
+# Streamed, so the tool transcript reaches the views as it happens rather than after a
+# turn that runs for many minutes.
+stream = true
+
+history = true
+history_labels = { role = "agent", agent_role = "follow-up" }
+
+# The judge file's chain, in the judge file's order: codex first, then the alternate
+# Claude subscriptions, the primary one last.
+harnesses = [
+    "codex:primary",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
+
+[harness.codex]
+model = "gpt-5.6-sol"
+
+[harness.codex.variant.primary]
+model = "gpt-5.6-sol"
+# The same runtime-directory repoint every dispatched side carries; see
+# `oneharness.judge.toml`.
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME", XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = ["OPENAI_API_KEY"]
+
+[harness.claude-code]
+env = { IS_SANDBOX = "1" }
+
+[harness.claude-code.variant.alternate]
+model = "claude-sonnet-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+model = "claude-sonnet-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR", XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.primary]
+model = "claude-sonnet-5"
+# Claude's default config directory is the primary subscription. Mask every
+# higher-precedence credential selector and any inherited alternate directory.
+unset_env = [
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }

@@ -7,7 +7,7 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Seven environment variables steer it, and each exists because a journey has to
+Eight environment variables steer it, and each exists because a journey has to
 tell one outcome from another deterministically:
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
@@ -43,6 +43,16 @@ tell one outcome from another deterministically:
   not on that member's path at all. The provider binary is, and this is it. Both
   single-sided members here take that path: the ``check-in`` pacemaker and
   ``graphs/pr-author.yaml``'s drafter.
+* ``FAKE_CODEX_RUN_ON_MARKER`` names a JSON file mapping a marker to the argument
+  vectors a turn whose prompt carries that marker runs, in order, where the turn runs.
+  It is ``tests/e2e/fake_backend.py``'s ``FAKE_BACKEND_RUN_ON_MARKER`` at the one seam a
+  single-sided member still reaches: ``graphs/follow-up.yaml``'s follow-up agent is
+  such a member, and what that agent *does* is run programs — write a ticket, validate
+  it, copy it onto a board — so this substitutes the model's choice of commands and
+  nothing below it. The programs are the real ones and every record they leave is theirs.
+  ``FAKE_CODEX_RUN_ON_MARKER_LOG`` beside it names a file each command's argv, exit status
+  and output are appended to, one JSON line apiece: this process's own stderr reaches no
+  record a journey can read, so that file is how a failed command explains itself.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -51,6 +61,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -136,22 +147,79 @@ def record_launch() -> int | None:
     return len(path.read_text(encoding="utf-8").splitlines())
 
 
-def record_prompt(argv: list[str]) -> None:
-    """Append the prompt this launch was given, when a journey asked for it.
+def read_prompt(argv: list[str]) -> str | None:
+    """The prompt this launch was given, or None when a journey asked for no reading of it.
 
     codex takes its prompt as the last positional word of `exec --json <prompt>`,
     which is the argv oneharness builds and `tests/e2e/test_orchestrate_launch_e2e.py`
     reads back; nothing is inferred from flags this stand-in does not implement. The
     one other spelling codex accepts is `-`, which says the prompt is on stdin — what
     oneharness hands over when a prompt outgrows a command line, as a plan reviewed
-    whole does — so that word is read through rather than recorded as the prompt.
+    whole does — so that word is read through rather than taken as the prompt. Read
+    once, because stdin can be read once, and only when something reads the prompt.
     """
+    wanted = ("FAKE_CODEX_PROMPT_LOG", "FAKE_CODEX_RUN_ON_MARKER")
+    if not argv or not any(os.environ.get(name) for name in wanted):
+        return None
+    return sys.stdin.read() if argv[-1] == "-" else argv[-1]
+
+
+def record_prompt(prompt: str | None) -> None:
+    """Append the prompt this launch was given, when a journey asked for it."""
     log = os.environ.get("FAKE_CODEX_PROMPT_LOG")
-    if log is None or not argv:
+    if log is None or prompt is None:
         return
-    prompt = sys.stdin.read() if argv[-1] == "-" else argv[-1]
     with Path(log).open("a", encoding="utf-8") as stream:
         stream.write(json.dumps({"prompt": prompt}) + "\n")
+
+
+def run_on_marker(argv: list[str], prompt: str | None) -> None:
+    """Run the commands a turn whose prompt carries a scripted marker would have run.
+
+    Where the turn runs: the directory codex is told with `--cd`/`-C` when oneharness names
+    one, and this process's own working directory otherwise. A command that fails is
+    reported on stderr and the turn still answers, because what a journey reads is what
+    the commands did, never this turn's exit status.
+    """
+    instruction = os.environ.get("FAKE_CODEX_RUN_ON_MARKER")
+    if not instruction or prompt is None:
+        return
+    keyed = json.loads(Path(instruction).read_text(encoding="utf-8"))
+    cwd = next(
+        (argv[at + 1] for at, word in enumerate(argv[:-1]) if word in ("-C", "--cd")),
+        None,
+    )
+    for marker, commands in keyed.items():
+        if marker not in prompt:
+            continue
+        for command in commands:
+            ran = subprocess.run(  # noqa: S603 - a real program, where the turn runs it
+                command,
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            if ran.returncode != 0:
+                print(
+                    f"fake_codex: {command} exited {ran.returncode}\n{ran.stdout}{ran.stderr}",
+                    file=sys.stderr,
+                )
+            if log := os.environ.get("FAKE_CODEX_RUN_ON_MARKER_LOG"):
+                with Path(log).open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "command": command,
+                                "cwd": cwd or os.getcwd(),
+                                "status": ran.returncode,
+                                "stdout": ran.stdout,
+                                "stderr": ran.stderr,
+                            }
+                        )
+                        + "\n"
+                    )
 
 
 def turn(launches: int | None) -> tuple[TurnEvent, ...]:
@@ -167,8 +235,10 @@ def hold() -> None:
 
 
 def main() -> int:
-    record_prompt(sys.argv[1:])
+    prompt = read_prompt(sys.argv[1:])
+    record_prompt(prompt)
     launches = record_launch()
+    run_on_marker(sys.argv[1:], prompt)
     hold()
     unavailable = int(os.environ.get("FAKE_CODEX_UNAVAILABLE_ATTEMPTS") or "0")
     if launches is not None and launches <= unavailable:

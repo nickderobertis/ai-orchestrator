@@ -110,6 +110,20 @@ DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:primary",
 ]
 
+#: The follow-up agent's graph and its one single-sided member, whose config is the judge's
+#: routing verbatim — chain order and every identity's model — with three chosen
+#: differences: a finite deadline, because it runs after settlement with nothing watching
+#: it; streaming, so its turns reach the views; and no mask on the board credential, since
+#: its whole deliverable is the `followups` board. `oneharness.follow-up.toml` says why.
+FOLLOW_UP_GRAPH = REPO_ROOT / "graphs" / "follow-up.yaml"
+FOLLOW_UP_MEMBER = "worker"
+FOLLOW_UP_DEADLINE_SECONDS = 3600
+
+#: The credential that config alone leaves unmasked, and the one field besides the three
+#: above it may differ from the judge's in: the history labels that say which side ran.
+BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
+FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness"}
+
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
     """Map each graph member to its own scalar settings, nested side keys dotted.
@@ -192,6 +206,18 @@ def _without_sources(node: Any) -> Any:
             return {key: _without_sources(value) for key, value in node.items() if key != "source"}
         case list():
             return [_without_sources(value) for value in node]
+        case _:
+            return node
+
+
+def _unmasked(node: Any, name: str) -> Any:
+    """``node`` with ``name`` taken out of every `unset_env` list it holds."""
+    match node:
+        case {"unset_env": {"value": list(masked)}, **rest}:
+            kept = [one for one in masked if one != name]
+            return {**_unmasked(rest, name), "unset_env": {"value": kept}}
+        case dict():
+            return {key: _unmasked(value, name) for key, value in node.items()}
         case _:
             return node
 
@@ -310,7 +336,7 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all nine turn configs together from oneharness's effective values."""
+    """Prove all ten turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
@@ -318,13 +344,15 @@ def test_every_side_resolves_its_intended_effective_deadline(
     design_doc_reviewer = _named_config(
         DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "judge.oneharness_config"
     )
-    own = {monitor, pacemaker, drafter, PLAN_REVIEW_CONFIG, writer, design_doc_reviewer}
-    assert len(own) == 6, (
+    follow_up = _named_config(FOLLOW_UP_GRAPH, FOLLOW_UP_MEMBER, "oneharness_config")
+    own = {monitor, pacemaker, drafter, PLAN_REVIEW_CONFIG, writer, design_doc_reviewer, follow_up}
+    assert len(own) == 7, (
         f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), the "
         f"pr-author drafter ({drafter}), the plan reviewer ({PLAN_REVIEW_CONFIG}), the "
-        f"design-doc writer ({writer}) and the design-doc reviewer "
-        f"({design_doc_reviewer}) must each name their own oneharness config; re-sharing "
-        "one is what gives a scheduled member no deadline, which fails silently"
+        f"design-doc writer ({writer}), the design-doc reviewer "
+        f"({design_doc_reviewer}) and the follow-up agent ({follow_up}) must each name "
+        "their own oneharness config; re-sharing one is what gives a scheduled member no "
+        "deadline, which fails silently"
     )
 
     configs = {
@@ -337,6 +365,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "reviewer": PLAN_REVIEW_CONFIG,
         "design-doc writer": writer,
         "design-doc reviewer": design_doc_reviewer,
+        "follow-up": follow_up,
     }
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
@@ -419,6 +448,39 @@ def test_every_side_resolves_its_intended_effective_deadline(
             "identities with the primary Claude subscription last, so a dropped one is a "
             "quota this host loses entirely"
         )
+
+    assert effective["follow-up"]["timeout"] == {
+        "value": FOLLOW_UP_DEADLINE_SECONDS,
+        "source": str(follow_up),
+    }, (
+        f"the follow-up agent must retain its explicit finite {FOLLOW_UP_DEADLINE_SECONDS}-"
+        "second deadline: it runs after settlement with nothing watching it, so an unbounded "
+        "turn can only ever mean a wedged verification left alive"
+    )
+    assert effective["follow-up"]["stream"]["value"] is True, (
+        "oneharness.follow-up.toml must stream, so the follow-up agent's turns reach the views"
+    )
+    assert effective["follow-up"]["harnesses"]["value"] == effective["judge"]["harnesses"]["value"]
+    follow_up_routing = _without_sources(effective["follow-up"])
+    judge_routing = _without_sources(effective["judge"])
+    differing = {
+        field
+        for field in follow_up_routing
+        if field != "config_files" and follow_up_routing[field] != judge_routing[field]
+    }
+    assert differing <= FOLLOW_UP_DIFFERENCES, (
+        "oneharness.follow-up.toml must be oneharness.judge.toml's routing with only the "
+        f"deadline, streaming, labels and board-credential masks changed; these also differ: "
+        f"{sorted(differing - FOLLOW_UP_DIFFERENCES)}"
+    )
+    assert _unmasked(judge_routing["harness"], BOARD_CREDENTIAL) == follow_up_routing["harness"], (
+        "every identity of oneharness.follow-up.toml must carry oneharness.judge.toml's model, "
+        "environment and masks exactly, less the mask on the board credential alone"
+    )
+    assert BOARD_CREDENTIAL not in json.dumps(follow_up_routing["harness"]), (
+        "an identity of oneharness.follow-up.toml still masks the board credential, which "
+        "the follow-up agent copies its tickets onto the board with"
+    )
 
     # The split duplicated a routing, so hold the copy to one intended difference.
     # Anything else that drifts here is a pacemaker quietly authenticating, billing,

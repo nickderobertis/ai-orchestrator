@@ -1770,6 +1770,21 @@ that cannot be met, a finding the planner should act on now — still goes over 
 immediately: a worker's blocking question to its manager, the monitor's
 `finding`, the pacemaker's update, a planner's exceptions. A draft never stands in for any
 of them.
+
+After the run, `just follow-ups <run-id>` dispatches the follow-up agent over its drafts:
+one direct node under `graphs/follow-up.yaml`, a single-sided member with no judge on
+`oneharness.follow-up.toml`, given the task `config/follow-up-task.md` composes. It
+verifies each draft against the registered checkouts' `origin/<base>`, writes one verified
+ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies each onto
+the `followups` GitHub Projects board, where every session's tickets accumulate —
+commenting on another run's open issue for the same root cause instead of filing a second.
+`orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
+ownership on that board: a run changes only the issues its own tickets created and the
+comments whose marker names it. The recipe refuses a run something is still driving,
+launches nothing for a run holding no drafts or tickets, and checks every ticket once an
+attached run settles. `--feedback FILE` re-dispatches over the same run with the manager's
+words in the task, `--detach` returns at the launch record printing the follow-up run and
+its watch command, and `--to SOURCE` copies onto another configured source.
 `monitor` renders `ACK REQUIRED` while any blocking surface, including closeout,
 awaits a reply.
 

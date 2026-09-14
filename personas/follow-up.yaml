@@ -1,0 +1,7 @@
+# llmlint: ignore-file[changed_behavior_has_e2e] Nothing layers this file: `graphs/follow-up.yaml`'s worker is single-sided `kind: oneharness` and names it for its label alone, so the task `scripts/follow-ups.sh` composes from `config/follow-up-task.md` is the whole of what the model is given. tests/test_follow_up_agent_arrangement.py holds that arrangement, and tests/plan_tooling/test_follow_ups_recipe_e2e.py reads the composed task out of a real dispatch of the shipped graph.
+name: follow-up
+system_prompt: |
+  Verify the follow-up drafts a finished run left behind, group what stands by root
+  cause, and put one verified ticket per root cause on the follow-ups board. The task
+  `just follow-ups` composes is the whole statement of where the drafts, the trees and
+  the board are, the shape a ticket is written to, and who owns what on the board.

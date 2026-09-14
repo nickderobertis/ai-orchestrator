@@ -81,11 +81,16 @@ def _configs_named_by(graph: str) -> tuple[str, ...]:
 #: recipes, so these are the ones that repoint the runtime directory.
 DISPATCH_CONFIGS = _configs_named_by("graphs/node-scope.yaml")
 
-#: The configs of the one member whose dispatch reads the plan store — the two sides
-#: `graphs/design-doc.yaml` names — so these keep the board credential.
-#: `scripts/finish-plan.sh` composes a task telling that member to read the whole plan
-#: out of the store through `onetaskgraph`, which is what a credential is for.
-PLAN_STORE_CONFIGS = _configs_named_by("graphs/design-doc.yaml")
+#: The configs of the members whose dispatch reads the plan store, so these keep the board
+#: credential: the two sides `graphs/design-doc.yaml` names, because
+#: `scripts/finish-plan.sh` composes a task telling that member to read the whole plan out
+#: of the store through `onetaskgraph`; and the one `graphs/follow-up.yaml` names, because
+#: `scripts/follow-ups.sh` composes a task whose whole deliverable is reading and writing
+#: the `followups` board. A credential is what both are for.
+PLAN_STORE_CONFIGS = (
+    *_configs_named_by("graphs/design-doc.yaml"),
+    *_configs_named_by("graphs/follow-up.yaml"),
+)
 
 #: The credential a dispatch must not carry unless its role reads the plan store, and
 #: the nomination that travels with it either way. Keeping the second is deliberate: a
@@ -293,9 +298,12 @@ def test_a_role_that_reads_the_plan_store_keeps_the_board_credential(
 ) -> None:
     """The other direction: the mask must not have been written everywhere.
 
-    `scripts/finish-plan.sh` tells this role to read the whole plan out of the store
-    through `onetaskgraph`, and a board is what that store may be — so a masked
-    credential here would fail the dispatch rather than protect anything.
+    `scripts/finish-plan.sh` tells the design-document role to read the whole plan out of
+    the store through `onetaskgraph`, and `scripts/follow-ups.sh` tells the follow-up agent
+    to copy its tickets onto the `followups` board and comment there — a board is what that
+    store may be, so a masked credential here would fail the dispatch rather than protect
+    anything. Every identity of each chain, because the one reached once the others are
+    spent is the one nobody watches.
     """
     recorded = _turn(tmp_path, oneharness_bin, candidate)
 

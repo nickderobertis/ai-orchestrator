@@ -30,3 +30,10 @@ sources:
         # board without the option is refused by name at the next write-back or plan copy.
         unknown: Needs attention
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+  followups:
+    plugin: github-projects
+    config:
+      owner: nickderobertis
+      project_number: 3
+      repository: nickderobertis/ai-orchestrator
+      token_env: GH_PROJECTS_TOKEN

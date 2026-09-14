@@ -919,3 +919,84 @@ def test_every_shipped_example_project_carries_an_approved_design_document() -> 
         "shipped example projects this repository documents as launchable would be refused "
         "a launch:\n" + "\n".join(f"  - {reason}" for reason in unapproved)
     )
+
+
+def _follow_ups_stamp(*nodes: str) -> Mapping[str, object]:
+    """The metadata `scripts/follow-ups.sh` writes onto the project a follow-ups launch makes."""
+    return {
+        design_approval.PLAN_KIND: {
+            design_approval.STAMP_KIND: design_approval.FOLLOW_UPS,
+            design_approval.STAMP_NODES: list(nodes),
+        }
+    }
+
+
+def test_a_follow_ups_launch_is_exempt_for_its_one_node_and_the_gate_says_so(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    """There is no plan to read that project as, so its one node launches unapproved — said."""
+    _project(monkeypatch, _follow_ups_stamp("follow-ups"))
+    _tasks(monkeypatch, "follow-ups")
+    _holds(monkeypatch)
+
+    assessed = design_approval.assess("authoring:run-1-follow-ups")
+
+    assert assessed.refusal is None
+    assert assessed.exemption is not None
+    assert "is the project a follow-ups launch writes" in assessed.exemption
+    assert "(follow-ups)" in assessed.exemption
+    assert "drafted follow-ups" in assessed.exemption
+    assert design_approval.stamped_launch("authoring:run-1-follow-ups") == (
+        design_approval.StampedLaunch(design_approval.FOLLOW_UPS, frozenset({NodeId("follow-ups")}))
+    )
+    assert design_approval.planning_launch("authoring:run-1-follow-ups") is None, (
+        "a follow-ups stamp is not a planning launch, whatever reads it as one"
+    )
+
+
+def test_a_follow_ups_project_that_gained_a_second_node_is_refused_like_any_other(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    _project(monkeypatch, _follow_ups_stamp("follow-ups"))
+    _tasks(monkeypatch, "follow-ups", "work-somebody-added")
+    _holds(monkeypatch)
+
+    assessed = design_approval.assess("authoring:run-1-follow-ups")
+
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "holds no design document" in assessed.refusal
+    assert "1 task(s) that launch never wrote (work-somebody-added)" in assessed.refusal
+    assert "stamped as the project a follow-ups launch writes" in assessed.refusal
+
+
+def test_a_follow_ups_stamp_naming_a_node_the_project_does_not_hold_is_refused(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+) -> None:
+    _project(monkeypatch, _follow_ups_stamp("follow-ups"))
+    _tasks(monkeypatch, "something-else")
+    _holds(monkeypatch)
+
+    assessed = design_approval.assess("authoring:run-1-follow-ups")
+
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "claims 1 node(s) the project does not hold (follow-ups)" in assessed.refusal
+
+
+@pytest.mark.parametrize("nodes", [(), ("follow-ups", "second")], ids=["none", "two"])
+def test_a_follow_ups_stamp_naming_anything_but_one_node_bounds_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    template: design_approval.TemplateFingerprint,
+    nodes: tuple[str, ...],
+) -> None:
+    """That launch writes one node, so a stamp of its kind naming more is no claim at all."""
+    _project(monkeypatch, _follow_ups_stamp(*nodes))
+    _tasks(monkeypatch, *nodes)
+    _holds(monkeypatch)
+
+    assert design_approval.stamped_launch("authoring:run-1-follow-ups") is None
+    assessed = design_approval.assess("authoring:run-1-follow-ups")
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "follow-ups launch" not in assessed.refusal

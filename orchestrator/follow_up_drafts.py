@@ -289,9 +289,14 @@ def checked_paths(paths: Sequence[str]) -> tuple[str, ...]:
     return tuple(paths)
 
 
-def _sections(body: str) -> list[tuple[str, str]]:
-    """Every level-2 heading of ``body`` outside a code fence, with the text under it."""
-    sections: list[tuple[str, list[str]]] = []
+def sections(body: str) -> list[tuple[str, str]]:
+    """Every level-2 heading of ``body`` outside a code fence, with the text under it.
+
+    Public because a verified ticket's body is held to its headings the same way, by
+    `orchestrator/follow_up_tickets.py`, and a second reading of a fence would be a second
+    answer to which `## ` line is a heading.
+    """
+    found: list[tuple[str, list[str]]] = []
     fence: str | None = None
     for line in body.split("\n"):
         opened = FENCE.match(line)
@@ -302,17 +307,17 @@ def _sections(body: str) -> list[tuple[str, str]]:
             elif marker[0] == fence[0] and len(marker) >= len(fence):
                 fence = None
         elif fence is None and (heading := HEADING.fullmatch(line)) is not None:
-            sections.append((heading["name"], []))
+            found.append((heading["name"], []))
             continue
-        if sections:
-            sections[-1][1].append(line)
-    return [(name, "\n".join(lines)) for name, lines in sections]
+        if found:
+            found[-1][1].append(line)
+    return [(name, "\n".join(lines)) for name, lines in found]
 
 
 def checked_body(body: str) -> str:
     """``body`` trimmed, when it carries every required heading in order, each with content."""
-    sections = _sections(body)
-    names = [name for name, _ in sections]
+    found = sections(body)
+    names = [name for name, _ in found]
     after = 0
     for required in HEADINGS:
         try:
@@ -324,7 +329,7 @@ def checked_body(body: str) -> str:
                 + "; a draft's body carries `## What happened`, `## Where`, `## Why it is out "
                 "of scope` and `## Evidence`, in that order, each with content"
             ) from None
-        if not sections[at][1].strip():
+        if not found[at][1].strip():
             raise Refused(
                 f"the body's `## {required}` section is empty; say under it what the draft "
                 "needs a verifier to read"

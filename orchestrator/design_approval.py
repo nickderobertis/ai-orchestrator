@@ -35,7 +35,10 @@ for the identifier that did exactly that.
 
 **One exemption exists, and what it is scoped to is the half worth reading.** A planning
 *launch* is exempt, because that run's output is the plan and the document it will be read
-as does not exist until the run has written one. That is a statement about a launch with
+as does not exist until the run has written one. The one-node project `just follow-ups`
+writes is exempt on the same terms and under the same bound, stamped as its own kind: its
+one node verifies a finished run's drafted follow-ups, and there is no plan for a person to
+read it as. That is a statement about a launch with
 nothing to approve yet, and it stops being true of the project the moment either half of it
 does — so the exemption is bounded by both halves rather than by the stamp alone:
 
@@ -101,9 +104,13 @@ TEMPLATE = Path("config") / "design-doc-template.md"
 #: engine never sees it, and `orchestrator/plan_store.py`'s `read_plan` drops it.
 PLAN_KIND = "orchestrator.plan-kind"
 
-#: The one kind :data:`PLAN_KIND` names. Every other project — and one that says nothing —
-#: is gated.
+#: The kinds :data:`PLAN_KIND` names that are exempt. Every other project — and one that
+#: says nothing — is gated. `scripts/plan.sh` and `scripts/finish-plan.sh` stamp the first;
+#: `scripts/follow-ups.sh` stamps the second, whose launch dispatches exactly one node, so a
+#: stamp of that kind naming more than one bounds nothing and exempts nothing.
 PLANNING = "planning"
+FOLLOW_UPS = "follow-ups"
+EXEMPT_KINDS = (PLANNING, FOLLOW_UPS)
 
 #: The field of that stamp naming the kind, and the field naming the node ids the launch
 #: wrote. The second is what bounds the exemption to the launch it was written for, and
@@ -121,6 +128,22 @@ STAMP_NODES = "nodes"
 #: the stamp's shape directly — which is what :func:`planning_launch` does — needs this
 #: rather than a second copy of the spellings beside the constants above.
 _STAMP = SimpleNamespace(key=PLAN_KIND, kind=STAMP_KIND, nodes=STAMP_NODES, planning=PLANNING)
+
+#: What each exempt kind's launch is, in the words a reader gets.
+_LAUNCHES = {
+    PLANNING: (
+        "the plan a planning launch is writing",
+        "that run's output is the plan, and the document it will be read as does not exist "
+        "until it has written one",
+        "the plan a planning launch writes",
+    ),
+    FOLLOW_UPS: (
+        "the project a follow-ups launch writes",
+        "its one node verifies a finished run's drafted follow-ups, and there is no plan for "
+        "a person to read it as",
+        "the project a follow-ups launch writes",
+    ),
+}
 
 #: The recipe that records an approval, named in every refusal that wants one.
 RECIPE = "just approve-design"
@@ -149,6 +172,13 @@ class Assessment(NamedTuple):
     #: Why it is launched with no approved design document, when it is. The exemption in
     #: the words a reader gets, so a launch that acted on one says so.
     exemption: str | None = None
+
+
+class StampedLaunch(NamedTuple):
+    """The exempt launch a project's stamp describes: its kind, and the nodes it dispatches."""
+
+    kind: str
+    nodes: frozenset[NodeId]
 
 
 class Approved(NamedTuple):
@@ -269,10 +299,10 @@ def one_document(project: str, documents: Sequence[StoreDocument]) -> StoreDocum
     return documents[0]
 
 
-def planning_launch(project: str) -> frozenset[NodeId] | None:
-    """The node ids the planning launch that wrote ``project`` dispatches, or ``None``.
+def stamped_launch(project: str) -> StampedLaunch | None:
+    """The exempt launch that wrote ``project``, or ``None``.
 
-    ``None`` for every project stating no planning stamp, and for one whose stamp this
+    ``None`` for every project stating no exempt stamp, and for one whose stamp this
     cannot read — an unreadable claim to an exemption is answered as no claim at all,
     which is the direction :func:`recorded` takes for the same reason: the project is then
     gated, which is what an unreadable exemption means anyway.
@@ -287,18 +317,23 @@ def planning_launch(project: str) -> frozenset[NodeId] | None:
     **A node claimed twice is answered as no claim at all**, for the reason every other
     unreadable shape is. A launch dispatches each of its nodes once, so a repeated id is
     not a set of ids any launch wrote; reading it charitably means collapsing it, and what
-    the exemption would then report as the launch's nodes is not what the stamp says.
+    the exemption would then report as the launch's nodes is not what the stamp says. So is
+    a :data:`FOLLOW_UPS` stamp naming anything but one node, because that launch writes one.
     """
     match plan_store.project_record(project).get("metadata"):
         # A guard rather than a pattern over the elements: a sequence pattern says how many
         # there are, and what is asked here is of every one of them however many that is.
-        case {_STAMP.key: {_STAMP.kind: _STAMP.planning, _STAMP.nodes: [*written]}} if all(
-            isinstance(node, str) for node in written
-        ) and len(set(written)) == len(written):
+        case {_STAMP.key: {_STAMP.kind: str() as kind, _STAMP.nodes: [*written]}} if (
+            kind in EXEMPT_KINDS
+            and all(isinstance(node, str) for node in written)
+            and len(set(written)) == len(written)
+            and (kind != FOLLOW_UPS or len(written) == 1)
+        ):
             # An empty list is answered with the shapes below rather than as an exemption
             # over an empty project: a stamp that names no node bounds the exemption to
             # nothing, and a launch this cannot bound is one this must not exempt.
-            return frozenset(NodeId(node) for node in written) or None
+            nodes = frozenset(NodeId(node) for node in written)
+            return StampedLaunch(kind, nodes) if nodes else None
         # Every other shape at once, which is the whole of what "cannot read it" means
         # here: a project stating no stamp, one whose stamp is not a mapping at all, one
         # naming another kind, and one whose `nodes` is absent, is not a sequence, holds
@@ -307,7 +342,17 @@ def planning_launch(project: str) -> frozenset[NodeId] | None:
             return None
 
 
-def exemption(project: str, written: frozenset[NodeId]) -> str:
+def planning_launch(project: str) -> frozenset[NodeId] | None:
+    """The node ids the planning launch that wrote ``project`` dispatches, or ``None``.
+
+    :func:`stamped_launch` narrowed to the :data:`PLANNING` kind, which is every reading of
+    the stamp that is not the gate's own.
+    """
+    stamped = stamped_launch(project)
+    return stamped.nodes if stamped is not None and stamped.kind == PLANNING else None
+
+
+def exemption(project: str, written: frozenset[NodeId], kind: str = PLANNING) -> str:
     """Why a launch of ``project`` is not asked for an approved design document.
 
     Stated in the reader's words rather than reported as a flag, because this is the one
@@ -315,11 +360,11 @@ def exemption(project: str, written: frozenset[NodeId]) -> str:
     be indistinguishable from an approval.
     """
     named = ", ".join(sorted(written))
+    launch, reason, _ = _LAUNCHES[kind]
     return (
-        f"{project} is the plan a planning launch is writing: it holds exactly the "
+        f"{project} is {launch}: it holds exactly the "
         f"{len(written)} node(s) that launch dispatches ({named}) and no design document "
-        f"yet, so it is launched without an approved one — that run's output is the plan, "
-        f"and the document it will be read as does not exist until it has written one. It "
+        f"yet, so it is launched without an approved one — {reason}. It "
         f"stops being exempt as soon as either of those is no longer true"
     )
 
@@ -329,8 +374,9 @@ def lapsed(
     beyond: Sequence[NodeId],
     unheld: Sequence[NodeId],
     documents: Sequence[StoreDocument],
+    kind: str = PLANNING,
 ) -> str:
-    """Why ``project``'s planning stamp no longer exempts it, said beside the refusal.
+    """Why ``project``'s exempt stamp no longer exempts it, said beside the refusal.
 
     A planning project asked for an approval reads like the gate mis-firing unless the
     lapse is named, and naming it is also what makes the bound legible from outside: the
@@ -356,7 +402,7 @@ def lapsed(
     if documents:
         ended.append(f"it holds {len(documents)} design document(s), so there is something to read")
     return (
-        f"({project} is stamped as the plan a planning launch writes, which is exempt from "
+        f"({project} is stamped as {_LAUNCHES[kind][2]}, which is exempt from "
         f"this gate — but only for that launch, and {' and '.join(ended)}.)"
     )
 
@@ -400,17 +446,17 @@ def assess(project: str) -> Assessment:
     which falls out of asking for it before the exemption is granted: the store's own
     words become the refusal, because a bound this cannot check is one that cannot hold.
     """
-    written = planning_launch(project)
+    stamped = stamped_launch(project)
     note: str | None = None
     try:
         documents = plan_store.read_documents(project)
-        if written is not None:
+        if stamped is not None:
             held = frozenset(task.node_id for task in plan_store.read_tasks(project))
-            beyond = tuple(sorted(held - written))
-            unheld = tuple(sorted(written - held))
+            beyond = tuple(sorted(held - stamped.nodes))
+            unheld = tuple(sorted(stamped.nodes - held))
             if not beyond and not unheld and not documents:
-                return Assessment(exemption=exemption(project, written))
-            note = lapsed(project, beyond, unheld, documents)
+                return Assessment(exemption=exemption(project, stamped.nodes, stamped.kind))
+            note = lapsed(project, beyond, unheld, documents, stamped.kind)
         document = one_document(project, documents)
     except OSError as exc:
         return Assessment(refusal=stated(str(exc), note))

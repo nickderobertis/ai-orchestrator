@@ -67,30 +67,69 @@ def test_the_check_names_both_sources_and_the_root_when_two_are_shared() -> None
     )
 
 
+#: The five values each GitHub Projects board this repository writes to is declared with,
+#: which are never repointed. Literals rather than read from anywhere, because they are
+#: the values this gate holds the file to.
+BOARDS = {
+    "plans": {
+        "plugin": "github-projects",
+        "owner": "nickderobertis",
+        "project_number": "2",
+        "repository": "nickderobertis/ai-orchestrator",
+        "token_env": "GH_PROJECTS_TOKEN",
+    },
+    "followups": {
+        "plugin": "github-projects",
+        "owner": "nickderobertis",
+        "project_number": "3",
+        "repository": "nickderobertis/ai-orchestrator",
+        "token_env": "GH_PROJECTS_TOKEN",
+    },
+}
+
+
 @pytest.mark.parametrize(
-    ("setting", "expected"),
+    ("source", "setting", "expected"),
     [
-        ("plugin", "github-projects"),
-        ("owner", "nickderobertis"),
-        ("project_number", "2"),
-        ("repository", "nickderobertis/ai-orchestrator"),
-        ("token_env", "GH_PROJECTS_TOKEN"),
+        (source, setting, expected)
+        for source, settings in BOARDS.items()
+        for setting, expected in settings.items()
     ],
 )
-def test_the_board_source_is_left_exactly_as_it_was(setting: str, expected: str) -> None:
-    """`plans` keeps every value it carried before, during and after the retreat.
+def test_the_board_source_is_left_exactly_as_it_was(
+    source: str, setting: str, expected: str
+) -> None:
+    """Each board keeps every value it carries.
 
-    The retreat to a local Markdown store was designed to be undone by subtraction, and
-    that only worked because `plans` was left alone throughout: it was deleted rather
-    than repointed back. This survives the retirement because the reason outlives it — a
-    live run's settlements are projected back to the project it was launched from, so
-    repointing this source moves a running plan's store out from under it.
+    `plans`: the retreat to a local Markdown store was designed to be undone by
+    subtraction, and that only worked because `plans` was left alone throughout: it was
+    deleted rather than repointed back. This survives the retirement because the reason
+    outlives it — a live run's settlements are projected back to the project it was
+    launched from, so repointing this source moves a running plan's store out from under
+    it.
+
+    `followups`: every session's verified tickets accumulate on that one board, and a
+    follow-up run finds an open issue for its root cause by searching it — so repointing
+    this source splits the accumulated tickets across two boards and every later run
+    duplicates what the first one already filed.
     """
-    board = read_plan_sources(_configuration())["plans"]
+    board = read_plan_sources(_configuration())[source]
     actual = board.plugin if setting == "plugin" else board.settings.get(setting)
     assert actual == expected, (
-        f"onetaskgraph.yaml's `plans` source names {setting} {actual!r} where it carried "
-        f"{expected!r}; this is the source this repository plans against"
+        f"onetaskgraph.yaml's `{source}` source names {setting} {actual!r} where it carried "
+        f"{expected!r}; this is a board this repository writes to, and it is never repointed"
+    )
+
+
+def test_the_follow_ups_board_is_no_default_source() -> None:
+    """`followups` is read only by a command that names it.
+
+    Every read that names no source is a plan listing — how `just check-plan` and the
+    engine's own loader list a project's tasks — and a verified follow-up ticket is not a
+    plan, so the board stays out of `default_sources`.
+    """
+    assert "followups" not in read_default_sources(_configuration()), (
+        "the followups board is among default_sources, so every plan listing reads it"
     )
 
 

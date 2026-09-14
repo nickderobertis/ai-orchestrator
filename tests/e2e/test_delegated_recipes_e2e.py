@@ -101,6 +101,9 @@ WRAPPER_SCRIPTS = (
     "follow-up-env.sh",
     "follow-up-draft.sh",
     "follow-up.sh",
+    # `just follow-ups` writes a one-node direct project and launches it through the same
+    # wrapper, having counted the run's drafts under the root `follow-up-env.sh` exports.
+    "follow-ups.sh",
     # And the operational appendix every dispatched task must carry, which `just plan`
     # hands its planner as text rather than as a path into a checkout that planner cannot
     # see. It reads `config/dispatch-appendix.md`, which `_checkout` copies beside it.
@@ -2780,3 +2783,60 @@ def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
         "the command ran without the checkout's credentials established, so the store "
         "was handed whatever this process held"
     )
+
+
+#: The task template `just follow-ups` composes its node's task from. Written rather than
+#: copied, for the reason the design template above is: what the template *says* is
+#: `tests/plan_tooling/`'s to assert against a real dispatch, and these journeys are about
+#: where the recipe lands and what it delegates. Every placeholder the composer requires is
+#: in it, because a template missing one is refused before anything is delegated.
+FOLLOW_UPS_TEMPLATE = "config/follow-up-task.md"
+FOLLOW_UPS_TEMPLATE_TEXT = (
+    "Verify run @RUN@ onto @BOARD@ from @DRAFTS_ROOT@; validate with @VALIDATE@ in @CHECKOUT@.\n"
+    "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\n"
+)
+
+
+@pytest.mark.reads_recipes
+def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
+    tmp_path: Path,
+) -> None:
+    """`just follow-ups run-1` writes `authoring:run-1-follow-ups` and launches it, gated.
+
+    One direct node naming `graphs/follow-up.yaml`, launched on `--dag-graph off` with no
+    other flag. A second launch while a run root already holds the first id launches the
+    same project under the next free id, which the project's `name` — the run id the engine
+    mints — carries.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / FOLLOW_UPS_TEMPLATE).write_text(FOLLOW_UPS_TEMPLATE_TEXT, encoding="utf-8")
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+    launched = (
+        "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+        "uv run onepipeline start authoring:run-1-follow-ups --dag-graph off",
+    )
+
+    first = _run(checkout, trace, "follow-ups", "run-1")
+
+    assert first.returncode == 0, first.stderr
+    assert trace.read_text().splitlines() == list(launched)
+    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    assert 'title: "run-1-follow-ups"' in project
+    assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
+    node = (checkout / ".plans/tasks/run-1-follow-ups/follow-ups.md").read_text(encoding="utf-8")
+    assert '"onepipeline.agent_graph": "graphs/follow-up.yaml"' in node
+    assert '"onepipeline.persona": "../personas/follow-up.yaml"' in node
+    front_matter = node.split("---\n", 2)[1]
+    assert '"onepipeline.repo"' not in front_matter, "a direct node names no repository"
+    assert "repositories:" not in front_matter, "a direct node names no repository"
+    assert f"Verify run run-1 onto followups from {checkout / '.follow-ups'}" in node
+
+    (checkout / "runs" / "run-1-follow-ups").mkdir(parents=True)
+    second = _run(checkout, trace, "follow-ups", "run-1")
+
+    assert second.returncode == 0, second.stderr
+    assert trace.read_text().splitlines() == [*launched, *launched]
+    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    assert 'title: "run-1-follow-ups-2"' in project
