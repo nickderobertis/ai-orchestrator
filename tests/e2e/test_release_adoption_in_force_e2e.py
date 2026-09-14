@@ -149,7 +149,7 @@ DECLARING_IDENTITIES = {
     "github.com/nickderobertis/oneharness": 6,
     "github.com/nickderobertis/onejudge": 3,
     # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
-    "github.com/nickderobertis/onemessagebus": 4,
+    "github.com/nickderobertis/onemessagebus": 6,
     "github.com/nickderobertis/onepipeline": 3,
     "github.com/nickderobertis/onepipeline-ui": 4,
     "github.com/nickderobertis/onetaskgraph": 5,

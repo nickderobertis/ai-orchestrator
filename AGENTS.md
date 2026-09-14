@@ -380,9 +380,16 @@ one that did, with one line on the driver's stderr. `just results`, `just status
 the run journal are the record. A `just copy-plan` refused for a rate limit is GitHub's
 **secondary** limiter — a burst limiter over content-creating requests that `gh api
 rate_limit` does not report and every retry extends — answered by leaving the board
-alone and by the source's pacing setting, never by a wider token. Record the plan-store
-CLI's version beside any board measurement, because a board read that does not name the
-release it was taken on is a read about whichever binary answered.
+alone and by the source's pacing setting, never by a wider token.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The dated discrepancy, the two commands whose outputs disagreed and both figures are content this paragraph is required to carry as the reason for the rule before them; the command is named as which endpoint answers, not as a measurement procedure a recipe would own. -->
+**Read the GraphQL allowance through GraphQL's own `rateLimit` field**, never through the
+`graphql` figure `gh api rate_limit` prints: on 2026-09-13, on this host's board token,
+`gh api rate_limit` reported `graphql.used: 0` while `gh api graphql -f query='{
+rateLimit { used } }'` reported 251.
+<!-- dated-claim: incident what two commands answered for one token on one day, kept as the reason the allowance is read through GraphQL rather than as a claim about what GitHub's REST figure reports now -->
+<!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
+Record the plan-store CLI's version beside any board measurement, because a board read
+that does not name the release it was taken on is a read about whichever binary answered.
 
 ## Your loop as manager
 

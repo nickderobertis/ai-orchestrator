@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NewType, TypedDict
 
+import jsonschema
 import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV
@@ -1546,6 +1547,195 @@ def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+def _emitted_schema(root: str) -> Mapping[str, object]:
+    """One root of the schema bundle the provisioned CLI emits about its own output.
+
+    Read from the running binary rather than kept here: that bundle is generated from the
+    types the CLI serialises, so a document validated against it is validated against the
+    release this checkout installed, and a copy of it in this file would drift from the
+    next one in silence.
+    """
+    emitted = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "schema"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert emitted.returncode == 0, emitted.stderr
+    roots = json.loads(emitted.stdout)["roots"]
+    assert root in roots, f"onetaskgraph {ADOPTED} emits no {root} schema: {sorted(roots)}"
+    schema = roots[root]
+    assert isinstance(schema, dict)
+    return schema
+
+
+# llmlint: ignore-block[modern_domain_modeling] These documents' shape has one source, the
+# schema the installed CLI emits, and every read here is validated against it. A typed
+# restatement in this file is a second copy of that contract, which
+# `contracts_have_one_source_or_a_drift_gate` refused at this site twice, key gate and all.
+def _conforming(document: str, root: str) -> dict[str, object]:
+    parsed = json.loads(document)
+    jsonschema.validate(parsed, _emitted_schema(root))
+    assert isinstance(parsed, dict)
+    return parsed
+
+
+# llmlint: ignore-end[modern_domain_modeling]
+
+
+#: The project the member journey copies, and its two tasks: the one a `--member` copy
+#: names and the one it leaves out.
+MEMBERS_PROJECT = _ProjectId("members")
+NAMED_MEMBER = "named"
+UNNAMED_MEMBER = "unnamed"
+#: The second committed `local-md` source, which the member journey copies into. Pointed
+#: at a directory of the journey's own for the reason the authoring root is.
+EXAMPLES_SOURCE = "examples"
+EXAMPLES_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{EXAMPLES_SOURCE.upper()}__CONFIG__ROOT"
+
+
+def _write_members_project(root: Path, revision: str) -> None:
+    plan = PlanDocument(
+        name=MEMBERS_PROJECT,
+        tasks=[
+            PlanNode(
+                id=member,
+                title=f"feat: {member} member",
+                task=f"## What\nThe {member} member, {revision}.\n",
+            )
+            for member in (NAMED_MEMBER, UNNAMED_MEMBER)
+        ],
+    )
+    write_plan_project(root, plan)
+
+
+def _plans_json(environment: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    """One plan-store verb under `--json`, run as an operator runs it: `just plans`."""
+    return subprocess.run(
+        ["just", "plans", *args, "--json"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] None of these three is a shell test: each
+# is a Python journey spawning the installed plan-store CLI, as every journey beside it is,
+# and this repository splits its test tiers by pytest marker rather than by Nx project — the
+# block above `test_adopted_archive_binary_and_authoring_ignore_are_in_force` gives why.
+def test_a_member_copy_writes_the_named_member_and_leaves_the_rest_untouched(
+    tmp_path: Path,
+) -> None:
+    """`project copy --member` between the two committed `local-md` sources.
+
+    The write-back projects one settled node at a time, and what makes that cheap is a
+    copy that reads and writes the project and that node alone. So the unnamed member is
+    given a change of its own before the member copy runs: a copy that still walked every
+    task would carry it into the destination, and its record staying byte-for-byte what
+    the first copy wrote is what says it was not written.
+
+    A local source meters no requests, so its report carries no `spent` at all — absent
+    rather than zero, which is what tells a caller nothing was metered from a copy that
+    cost nothing.
+    """
+    authoring, examples = tmp_path / "authoring", tmp_path / "examples"
+    authoring.mkdir()
+    examples.mkdir()
+    environment = _plan_environment(authoring)
+    environment[EXAMPLES_ROOT_ENV] = str(examples)
+    project = f"{AUTHORING_SOURCE}:{MEMBERS_PROJECT}"
+
+    _write_members_project(authoring, "first revision")
+    whole = _plans_json(environment, "project", "copy", project, "--to", EXAMPLES_SOURCE)
+    assert whole.returncode == 0, whole.stdout + whole.stderr
+    unnamed_record = next((examples / "tasks").rglob(f"{UNNAMED_MEMBER}.md"))
+    named_record = next((examples / "tasks").rglob(f"{NAMED_MEMBER}.md"))
+    unnamed_before = unnamed_record.read_bytes()
+
+    _write_members_project(authoring, "second revision")
+    member = _plans_json(
+        environment,
+        *("project", "copy", project, "--to", EXAMPLES_SOURCE),
+        *("--member", f"{project}/{NAMED_MEMBER}"),
+    )
+
+    assert member.returncode == 0, member.stdout + member.stderr
+    report = _conforming(member.stdout, "CopyReport")
+    items = report["items"]
+    assert isinstance(items, list)
+    assert [item["source"] for item in items] == [project, f"{project}/{NAMED_MEMBER}"], (
+        f"a member copy reports the project and the member it names, and nothing else: {items}"
+    )
+    assert "second revision" in named_record.read_text(encoding="utf-8"), (
+        "the named member's change did not reach its destination record"
+    )
+    unnamed_source = next((authoring / "tasks").rglob(f"{UNNAMED_MEMBER}.md"))
+    assert "second revision" in unnamed_source.read_text(encoding="utf-8"), (
+        "the unnamed member has no pending change to leave behind"
+    )
+    assert unnamed_record.read_bytes() == unnamed_before, (
+        "a member copy rewrote the destination record of a task it did not name"
+    )
+    assert "spent" not in report, (
+        f"a copy between two local sources meters nothing, so it reports no `spent`: {report}"
+    )
+
+
+def test_a_refused_verb_under_json_writes_a_failure_document(tmp_path: Path) -> None:
+    """What a caller reads off stdout when the store refuses, instead of parsing stderr.
+
+    The write-back decides whether to try again from this document's `class`: `refused`
+    is an answer repeating the request cannot change, which is the one a caller must not
+    spend another attempt on.
+    """
+    environment = _plan_environment(tmp_path)
+    refused = _plans_json(environment, "task", "show", f"{AUTHORING_SOURCE}:absent/task")
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    failure = _conforming(refused.stdout, "FailureDocument")["failure"]
+    assert isinstance(failure, dict)
+    assert failure["class"] == "refused", (
+        f"a task the source does not hold is a refusal, and this said {failure}"
+    )
+
+
+# llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for
+# the reason the block around `_Board` above gives; the installed `onetaskgraph`, `just
+# plans` and the committed `plans` source are real, and `spent` is read off their stdout.
+def test_a_copy_onto_the_board_reports_what_it_spent(tmp_path: Path) -> None:
+    """A board copy says how many requests it sent and what they cost the GraphQL budget.
+
+    Held to the requests the fixture board actually served for this one command, because
+    a report that estimated its own count would read as an answer while saying nothing
+    about the allowance this host keeps running out of.
+    """
+    _write_local_project(tmp_path)
+    with _serving_board() as remote:
+        environment = _plan_environment(tmp_path)
+        environment.update(remote)
+        copied = _plans_json(environment, "project", "copy", LOCAL_QUALIFIED, "--to", "plans")
+        served = len(_GitHubFixture.requests)
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    report = _conforming(copied.stdout, "CopyReport")
+    spent = report.get("spent")
+    assert isinstance(spent, dict), f"a board copy has to report what it spent: {report}"
+    assert spent["requests"] == served, (
+        f"the copy reported {spent['requests']} requests where the board served {served}"
+    )
+    budgets = spent["budgets"]
+    assert isinstance(budgets, list)
+    assert any(entry["budget"] == "graphql" for entry in budgets), (
+        f"a board copy spends the GraphQL budget, and its report names only {budgets}"
+    )
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 class _ProjectedStatus(StrEnum):
