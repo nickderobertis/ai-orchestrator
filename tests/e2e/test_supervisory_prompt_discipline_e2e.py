@@ -172,25 +172,38 @@ THE_RECORD_THAT_GROUNDS_A_RULING = "`edit-committed` event carrying that command
 #: are paced five minutes apart by `graphs/dag-scope.yaml`, and the streams it watches
 #: move at some 300 worker events an hour, so a turn that read a fixed tail either missed
 #: most of what landed or re-judged what the previous turn had already read. The cursor
-#: is a file in the member's own scratch holding the timestamp of the last line read —
-#: named on both sides, because a bar that requires "the stream since the cursor" of an
-#: agent never told which file that is holds it to a file it cannot find.
-CURSOR_FILE = "monitor.cursor"
+#: is the verb's own: every `onepipeline monitor` read ends in one resume line, and
+#: `--cursor` resumes from it — named on both sides, because a bar that requires "the
+#: stream since the resume line" of an agent never told what that line looks like holds
+#: it to a line it cannot find.
+RESUME_LINE = "-- cursor"
+CURSOR_OPTION = "--cursor"
 READ_FROM_A_CURSOR = OnBothSides(
     monitor="read the stream from a cursor, never from a tail",
-    review="Require the stream **since the cursor** as the evidence",
+    review="Require the stream **since the previous turn's resume line** as the evidence",
 )
-#: What happens when the cursor is not there to read: a bounded tail, and the turn goes
-#: on. Both halves, because the failure this guards is a monitor that treated its own
-#: missing or garbled scratch file as a reason to fail the turn, and a reviewer that
+#: Where the cursor comes from: the resume line the previous turn's read ended with,
+#: which the held conversation keeps. It replaced a cursor file in the member's working
+#: directory — which is the launch directory, a publication checkout on this host, whose
+#: next `local-direct` landing was refused over the two files the persona had it write.
+CURSOR_CARRIED_FROM_THE_RESUME_LINE = OnBothSides(
+    monitor="Carry the cursor from the resume line your previous turn's read ended with",
+    review="since the resume line its previous turn's read ended with",
+)
+#: What the member may not do to keep it, on both sides for that incident's sake.
+WRITES_NO_FILE = OnBothSides(
+    monitor="write no file, there or anywhere else",
+    review="Reject a turn that wrote a file",
+)
+#: The files that incident left, which neither side may name as somewhere to write again.
+RETIRED_CURSOR_FILES = ("monitor.cursor", "monitor.batch")
+#: What happens when there is no cursor to read from, or the verb refuses the one given:
+#: a bounded tail, and the turn goes on. Both halves, because the failure this guards is
+#: a monitor that treated a refusal as a reason to fail the turn, and a reviewer that
 #: would then have rejected the fallback the agent was told to take.
 CURSOR_FALLS_BACK_TO_A_TAIL = OnBothSides(
-    monitor="is treated exactly as absent rather than failing the turn",
-    review="reject a turn that failed rather than falling back",
-)
-CURSOR_WRITTEN_BACK = OnBothSides(
-    monitor="then writes the last line's timestamp back",
-    review="to have written the cursor forward",
+    monitor="the command then falls back to a bounded tail",
+    review="reads a bounded tail and says so; accept that",
 )
 
 #: The monitor's discipline on what a turn is allowed to say. Three halves now, because
@@ -935,10 +948,10 @@ def test_the_monitor_is_told_to_read_the_stream_from_a_cursor(monitored: Monitor
     and this host's recorded runs show what a monitor did with the stream before that:
     every turn piped `onepipeline monitor` through a fixed `tail -N`. At one turn per five
     minutes that reads a few of the 25–50 events that landed and re-reads them next turn.
-    So the persona names a cursor file in the member's own scratch, tells the agent to read
-    everything after the timestamp it holds and write the last one back, and tells it what
-    to do when the file is absent or garbled — read a bounded tail and go on — rather than
-    fail the turn on its own bookkeeping.
+    So the persona tells the agent to carry the cursor from the resume line its previous
+    turn's read ended with, to write no file for it, and what to do when there is no
+    cursor or the verb refuses it — read a bounded tail and go on — rather than fail the
+    turn. `tests/e2e/test_monitor_cursor_e2e.py` runs the command this prose spells.
 
     Both sides, for the reason every two-sided rule here is: a reading rule stated only to
     the agent is advice, and one stated only to the reviewer is enforced against an agent
@@ -951,15 +964,25 @@ def test_the_monitor_is_told_to_read_the_stream_from_a_cursor(monitored: Monitor
     review = _flat(monitored.review_bar)
 
     for side, prose in (("agent", agent), ("review", review)):
-        assert CURSOR_FILE in prose, (
-            f"the monitor's {side} side no longer names the cursor file `{CURSOR_FILE}`, so "
-            f"a transcript reader cannot tell what the member is writing to:\n{prose}"
-        )
+        for named in (RESUME_LINE, CURSOR_OPTION):
+            assert named in prose, (
+                f"the monitor's {side} side no longer names `{named}`, so the cursor it "
+                f"is held to is not the one the verb prints and reads:\n{prose}"
+            )
+        for retired in RETIRED_CURSOR_FILES:
+            assert retired not in prose, (
+                f"the monitor's {side} side names `{retired}` again, the file whose "
+                f"presence in a publication checkout refused its landing:\n{prose}"
+            )
     for named, phrase in (
         ("to read the detailed stream from a cursor rather than a tail", READ_FROM_A_CURSOR),
-        ("to write the cursor forward after each read", CURSOR_WRITTEN_BACK),
         (
-            "to treat an absent, unreadable or non-timestamp cursor as a bounded tail",
+            "to carry the cursor from its previous turn's resume line",
+            CURSOR_CARRIED_FROM_THE_RESUME_LINE,
+        ),
+        ("to write no file for it", WRITES_NO_FILE),
+        (
+            "to read a bounded tail when there is no cursor or it is refused",
             CURSOR_FALLS_BACK_TO_A_TAIL,
         ),
     ):

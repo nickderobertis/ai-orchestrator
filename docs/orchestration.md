@@ -731,9 +731,13 @@ journals rather than claims about a release, so nothing re-takes them.
 <!-- dated-claim: incident the measurement that decided the 300-second hold, read off this host's accumulated journals at the time; a later reader recounts them by re-reading the runs root -->
 The streams the monitor watches move at roughly 300 worker events an hour, so at one turn
 per five minutes some 25–50 events land between turns, which is why the persona reads
-the detailed stream from a cursor rather than a tail: a file in the member's own scratch
-holding the timestamp of the last line read, a bounded tail when the file is absent or
-garbled, and the cursor written forward after each read.
+the detailed stream from a cursor rather than a tail. It keeps no file for it: every
+`onepipeline monitor` read ends in a `-- cursor 1:<run>:<byte>` resume line, each turn
+reads `--cursor` from the line its previous turn ended with, which the held conversation
+keeps, and a first turn or a refused cursor reads a bounded tail. The member's working
+directory is the launch directory — often a publication checkout — so a file written
+there is one that checkout's next publication is refused over, which is how the cursor
+file this replaced blocked a `local-direct` landing.
 
 **The reader still refuses a document nothing holds open, and the refusal now names the
 declaration.** Remove the monitor's `background: false` from the shipped document and

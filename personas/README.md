@@ -260,9 +260,10 @@ fails if either stops loading.
 document paces it: the conversation opens with the wave and is then held between
 turns, for the period the `schedule` on that member states, rather than taking its
 next turn the moment its judge answers. The persona is written for that cadence — it
-reads the detailed stream from a cursor file in the member's own scratch, named in the
-persona, rather than from a tail, because a fixed tail either misses most of what lands
-between paced turns or re-reads what the previous turn judged — and its `max_turns`
+reads the detailed stream from the `-- cursor` resume line its previous turn's read ended
+with, rather than from a tail, because a fixed tail either misses most of what lands
+between paced turns or re-reads what the previous turn judged; it writes no file, since
+its working directory may be a checkout — and its `max_turns`
 derivation is restated at the paced rate where the value is declared. `check-in` keeps
 its resettable schedule and, being a scheduled member that declares nothing, is
 background: it fires inside the monitor's holds. `tests/e2e/test_observer_graph_liveness_e2e.py`

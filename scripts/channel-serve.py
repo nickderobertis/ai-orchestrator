@@ -246,8 +246,8 @@ TURN_TAKEN_ACKNOWLEDGED = (
     "nobody. A report reaches the planner only as a `finding` op in an "
     "`onepipeline reply` envelope, which arrives once and carries the node it is "
     "about. Your next turn opens after the graph's hold, and reads the detailed "
-    "stream from your cursor: everything that landed since the timestamp "
-    "`monitor.cursor` holds, not the last few lines."
+    "stream from your cursor: everything that landed since the `-- cursor` resume "
+    "line your read this turn ended with, not the last few lines."
 )
 
 #: And why that ruling is a non-completion, for the reader who meets it in a transcript.

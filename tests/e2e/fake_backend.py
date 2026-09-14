@@ -70,6 +70,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -214,6 +216,133 @@ AUTHOR_PLAN_ENV = "FAKE_BACKEND_AUTHOR_PLAN"
 #: which is what a claim would otherwise be hiding — and what a claim would cost is a
 #: second node's commands being swallowed by the first node's having consumed the file.
 RUN_ON_MARKER_ENV = "FAKE_BACKEND_RUN_ON_MARKER"
+
+#: Optionally have the dag-scope MONITOR's agent turn run the stream read its own
+#: effective prompt spells, carrying the cursor from one turn to the next.
+#:
+#: What a monitor does on a turn is run `onepipeline monitor` from the resume line its
+#: previous turn's read ended with. A real provider keeps that line in the held
+#: conversation; the prompt a turn arrives with here does not carry it, because the graph
+#: hands each turn only its new message and the provider session holds the rest. So this
+#: names a JSONL file standing in for that conversation and for nothing else: each turn
+#: appends what it said, and the next turn of the same session reads its resume line back
+#: out of it. The command is the `sh` block of the member's own `--system` prompt, run
+#: where the turn runs — `--cwd`, which is the launch directory — through whichever
+#: `onepipeline` the member's PATH resolves. So a prompt that wrote a file, or spelled a
+#: read the verb refuses, is exactly what a journey reading this sees.
+MONITOR_READS_ENV = "FAKE_BACKEND_MONITOR_READS"
+#: Which of those turns, counted from 1 per session and comma-separated, are handed a
+#: cursor the verb refuses in place of the carried one. The model's choice of cursor is
+#: the decision substituted; the refusal, and the fallback it takes, are the real ones.
+MONITOR_REFUSED_TURNS_ENV = "FAKE_BACKEND_MONITOR_REFUSED_TURNS"
+REFUSED_CURSOR = "1:not-the-watched-run:0"
+MONITOR_MEMBER = "monitor"
+#: Where a turn's conversation handle arrives, which is what says two turns are one
+#: conversation.
+SESSION_FLAG = "--session"
+#: A fenced shell block of the composed system prompt, the one assignment in it this
+#: stand-in fills in with the cursor it carries, and the resume line a read ends with.
+SHELL_BLOCK = re.compile(r"^```sh\n(?P<body>.*?)^```", re.MULTILINE | re.DOTALL)
+CURSOR_ASSIGNMENT = re.compile(r"^CURSOR='[^'\n]*'$", re.MULTILINE)
+RESUME_LINE = re.compile(r"^-- cursor (\S+)$", re.MULTILINE)
+#: What a carried cursor has to be spelled as before it is handed to the shell; anything
+#: else is carried as no cursor, which the prompt's own read refuses and falls back from.
+CURSOR_SPELLING = re.compile(r"1:[A-Za-z0-9_.-]+:[0-9]+")
+#: What the monitor says above what its read rendered: words, so the turn is a quiet one.
+MONITOR_READ_PREAMBLE = "read the detailed stream since my cursor; nothing needed raising"
+#: The environment a read turn records, which is what a later turn of the same member
+#: has to be given to be that member — `XDG_STATE_HOME` among it, because the member's
+#: session store, and the `--control` socket in it, live under that directory.
+MONITOR_ENVIRONMENT_KEYS = ("ONEPIPELINE_RUN_ID", "ONEPIPELINE_RUNS_DIR", "PATH", "XDG_STATE_HOME")
+
+
+class MonitorRead(TypedDict):
+    """One monitor turn's read, as `MONITOR_READS_ENV` records it."""
+
+    session: str
+    turn: int
+    cursor: str
+    cwd: str | None
+    onepipeline: str | None
+    status: int | None
+    output: str
+    answer: str
+    argv: list[str]
+    environment: dict[str, str | None]
+
+
+def monitor_reads(log: Path) -> list[MonitorRead]:
+    """Every read turn recorded so far, oldest first; `[]` before the first."""
+    if not log.is_file():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _read_the_stream(
+    original: list[str], config: str | None, system: str, cwd: str | None
+) -> str | None:
+    """Run the monitor's own stream read for this turn and return what the turn says.
+
+    `None` when this turn is not a monitor read turn at all, so the caller answers it the
+    way it answers every other turn.
+    """
+    log = os.environ.get(MONITOR_READS_ENV)
+    named = MEMBER_OF_CONFIG.search(config or "")
+    if not log or named is None or named.group(1) != MONITOR_MEMBER:
+        return None
+    session = _flag(original, SESSION_FLAG) or config or ""
+    earlier = [read for read in monitor_reads(Path(log)) if read["session"] == session]
+    turn = len(earlier) + 1
+    carried = RESUME_LINE.findall(earlier[-1]["answer"]) if earlier else []
+    cursor = carried[-1] if carried and CURSOR_SPELLING.fullmatch(carried[-1]) else ""
+    if str(turn) in os.environ.get(MONITOR_REFUSED_TURNS_ENV, "").split(","):
+        cursor = REFUSED_CURSOR
+    spelled = [
+        block.group("body")
+        for block in SHELL_BLOCK.finditer(system)
+        if "onepipeline monitor" in block.group("body")
+        and CURSOR_ASSIGNMENT.search(block.group("body"))
+    ]
+    status: int | None = None
+    if len(spelled) != 1:
+        output = (
+            f"fake_backend: the monitor's system prompt spells {len(spelled)} cursor reads "
+            "(a `sh` block running `onepipeline monitor` with one `CURSOR='…'` line), not one"
+        )
+    else:
+        assigned = f"CURSOR={shlex.quote(cursor)}"
+        script = CURSOR_ASSIGNMENT.sub(lambda _: assigned, spelled[0], count=1)
+        # llmlint: ignore[no_injection_from_untrusted_input] Running the shell the member's
+        # own system prompt spells is the model's action this stand-in substitutes for, so
+        # the prompt is the program by design; the one value spliced in is shell-quoted.
+        ran = subprocess.run(  # noqa: S603 - the prompt's own command, where the turn runs
+            ["bash", "-c", script],
+            cwd=cwd or None,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+        status, output = ran.returncode, ran.stdout
+    answer = f"{MONITOR_READ_PREAMBLE}\n\n{output}"
+    resolved = shutil.which("onepipeline")
+    read: MonitorRead = {
+        "session": session,
+        "turn": turn,
+        "cursor": cursor,
+        "cwd": cwd,
+        "onepipeline": str(Path(resolved).resolve()) if resolved else None,
+        "status": status,
+        "output": output,
+        "answer": answer,
+        "argv": original,
+        "environment": {key: os.environ.get(key) for key in MONITOR_ENVIRONMENT_KEYS},
+    }
+    with Path(log).open("a", encoding="utf-8") as recorded:
+        recorded.write(json.dumps(read) + "\n")
+    return answer
+
 
 #: Optionally hold every two-party AGENT turn open this many seconds before answering.
 #:
@@ -453,6 +582,7 @@ def main(argv: list[str]) -> int:
     if not argv or argv[0] != "run":
         print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
         return 2
+    original = list(argv)
     argv, prompt = _prompt(argv)
     config = _flag(argv, CONFIG_FLAG)
     system = _flag(argv, SYSTEM_FLAG) or ""
@@ -506,6 +636,10 @@ def main(argv: list[str]) -> int:
     # something else entirely.
     if scripted_answer is not None:
         return _answer(argv, scripted_answer)
+    # Before the single-sided branch for the same reason as the scripted answer above.
+    read = _read_the_stream(original, config, system, _flag(argv, CWD_FLAG))
+    if read is not None:
+        return _answer(argv, read)
     if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
         return _answer(argv, PACEMAKER_REPORT)
     _ask_manager(config)

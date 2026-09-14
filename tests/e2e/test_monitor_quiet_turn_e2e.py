@@ -66,7 +66,7 @@ from test_orchestrate_launch_e2e import (
     _lost_turn_transcript,
 )
 from test_orchestrate_launch_e2e import _environment as _launched_environment
-from test_supervisory_prompt_discipline_e2e import CURSOR_FILE
+from test_supervisory_prompt_discipline_e2e import RESUME_LINE
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -98,7 +98,7 @@ SAID_ON_A_QUIET_TURN = "read the detailed stream; nothing needed raising this tu
 #: the monitor's conversation with a hold between turns, so an acknowledgement that
 #: told the member to keep reading *now* would be an instruction to spend the turn it
 #: has just finished; what it says instead is that the next turn opens after the hold
-#: and reads the stream from the cursor file the persona keeps — `CURSOR_FILE`, which
+#: and reads the stream from the resume line the persona carries — `RESUME_LINE`, which
 #: `tests/e2e/test_supervisory_prompt_discipline_e2e.py` reads off a real launch's
 #: effective prompt, so the answer and the instruction it refers to are one name.
 NEXT_TURN_OPENS_AFTER_THE_HOLD = "next turn opens after the graph's hold"
@@ -345,9 +345,9 @@ def test_a_monitor_turn_that_produced_content_costs_the_planner_no_surface(
         f"{case} was answered as if the monitor's next turn were now, and the graph holds "
         f"that conversation between turns: {ruling}"
     )
-    assert f"`{CURSOR_FILE}`" in ruling["message"], (
-        f"{case} was answered without telling the monitor to read its next turn from "
-        f"`{CURSOR_FILE}`, the cursor the persona keeps: {ruling}"
+    assert f"`{RESUME_LINE}`" in ruling["message"], (
+        f"{case} was answered without telling the monitor to read its next turn from the "
+        f"`{RESUME_LINE}` resume line the persona carries: {ruling}"
     )
 
 
