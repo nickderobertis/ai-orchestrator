@@ -10,6 +10,9 @@ __pycache__/
 !/.env.example
 # Local Markdown plan authoring; onetaskgraph copies finished plans to the remote store.
 /.plans/
+# Unverified follow-up drafts (the `drafts` plan source); a follow-up agent verifies them
+# after a run, and nothing here is repository content.
+/.follow-ups/
 # uv
 # (uv.lock IS committed)
 

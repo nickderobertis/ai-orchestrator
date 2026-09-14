@@ -59,6 +59,7 @@ from shared_dispatch_bar import (
 from test_dispatch_appendix import WIDE_BAR
 
 from orchestrator.criteria_guard import APPENDIX, CRITERIA_HEADING
+from orchestrator.root import REPO_ROOT
 
 #: The whole shared completion bar, so that changing it is a change to this file too.
 #: What is left of it is the task's own criteria plus one clause about the tree the
@@ -305,6 +306,74 @@ def test_the_preamble_sends_a_reader_to_the_one_place_that_does_state_them() -> 
         f"{CRITERIA_HEADING}, which is what says what those checks have to show:\n"
         f"{preamble}"
     )
+
+
+#: The preamble's one sentence about follow-ups, in the two routes it has to name: the
+#: drafting command and where its shape is stated, and the channel for what cannot wait.
+FOLLOW_UP_POINTER = re.compile(
+    r"`\$ORCHESTRATOR_FOLLOW_UP_DRAFT`\s+\(its\s+`--help`\s+gives\s+the\s+shape"
+)
+BLOCKING_ROUTE = re.compile(r"ask\s+your\s+manager\s+now\s+over\s+`\$ORCHESTRATOR_ASK_MANAGER`")
+#: Where follow-ups used to be sent, and where nothing ever read them.
+FINAL_MESSAGE = re.compile(r"final\s+message", re.IGNORECASE)
+
+
+def test_the_preamble_sends_follow_ups_to_the_drafting_command_and_blockers_to_the_channel() -> (
+    None
+):
+    """A follow-up is drafted, anything blocking is asked now, and nothing goes in a report.
+
+    The preamble is the only statement a dispatch whose task predates the appendix's
+    drafting rule still gets, so its pointer at the command's `--help` has to be enough on
+    its own — and it names the channel beside it, because a pointer at drafts alone reads
+    as the place for everything a worker notices.
+
+    A structural read, and a deliberate one: which route a model then takes is the paid
+    model's, which no journey here drives. That the preamble carrying this sentence reaches
+    a real worker verbatim is `tests/e2e/test_orchestrate_launch_e2e.py`'s, and that the
+    command it names works from inside a real dispatch is
+    `tests/ask_seam/test_follow_up_drafts_launch_e2e.py`'s.
+    """
+    preamble = " ".join(shared_agent_preamble().split())
+    assert FOLLOW_UP_POINTER.search(preamble), (
+        f"{BASE_CONFIG}'s `system_prompt` does not point follow-ups at "
+        f"$ORCHESTRATOR_FOLLOW_UP_DRAFT and its --help:\n{preamble}"
+    )
+    assert BLOCKING_ROUTE.search(preamble), (
+        f"{BASE_CONFIG}'s `system_prompt` points at drafting without the route for what "
+        f"cannot wait:\n{preamble}"
+    )
+    assert not FINAL_MESSAGE.search(preamble), (
+        f"{BASE_CONFIG}'s `system_prompt` still sends something to a final message, which "
+        f"nothing reads:\n{preamble}"
+    )
+
+
+#: A repository path a comment cites, as this repository spells one.
+CITED_PATH = re.compile(r"\b(?:tests|scripts|orchestrator|config|graphs|personas|docs)/[\w./-]*\w")
+
+
+def test_the_base_config_asks_no_judge_for_an_assessment_and_cites_only_real_files() -> None:
+    """The judge's follow-up list is gone, and no directive vouches for it through files.
+
+    `assessment` asked every judge to summarise follow-ups into a report no view opens;
+    drafts replaced it. The file-scoped directive that excused it cited three journeys
+    that did not exist, so every path a remaining directive cites is held to existing.
+    That no real dispatch's judge is asked one is read off the merged config a real launch
+    wrote, by `tests/e2e/test_orchestrate_launch_e2e.py`.
+    """
+    document = (REPO_ROOT / BASE_CONFIG).read_text(encoding="utf-8")
+    assert re.search(r"^assessment:", document, re.MULTILINE) is None, (
+        f"{BASE_CONFIG} declares an `assessment` again; follow-ups are drafted with "
+        "$ORCHESTRATOR_FOLLOW_UP_DRAFT, not summarised by a judge"
+    )
+    # Spelled in two pieces, because the judged lint reads the whole phrase anywhere in a
+    # file as a directive of its own.
+    for directive in re.findall("llm" + r"lint: ignore[^\n]*", document):
+        for cited in CITED_PATH.findall(directive):
+            assert (REPO_ROOT / cited).exists(), (
+                f"{BASE_CONFIG}'s directive cites {cited}, which does not exist: {directive}"
+            )
 
 
 def test_the_preamble_scopes_its_one_completion_clause_to_the_change() -> None:

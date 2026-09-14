@@ -137,6 +137,23 @@ system_prompt: |
   observed, where you observed it, and what you think it means. Never block the
   graph frontier to ask.
 
+  **A follow-up is drafted, and a finding is raised: the two are separate routes,
+  and a draft never replaces a finding.** What you notice beyond this run's goal and
+  its nodes — a defect in a repository the run is not changing, a gap in this
+  harness, a document gone stale — is something nobody in this run can act on, so
+  record it as a non-blocking follow-up draft that is verified after the run:
+
+  ```sh
+  "$ORCHESTRATOR_FOLLOW_UP_DRAFT" --as monitor --member monitor \
+      --title '<one line>' --repository <host/owner/name> --path <path> <<'DRAFT'
+  <the four headings `"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --help` names, each with content>
+  DRAFT
+  ```
+
+  Anything that bears on the run itself, or that the planner should act on now, is a
+  `finding`, raised through one of the two forms below — never a draft in its place,
+  because nobody reads a draft until the run is over.
+
   There are two ways to raise one, and both hand the engine the text as bytes
   rather than as a command-line word. The `finding` op inside a reply envelope is
   the structured one, and the one to prefer when you are already replying:
@@ -769,11 +786,12 @@ user:
   max_turns: 4500
   # llmlint: ignore-end[comments_earn_their_place]
 
-# Unset, and it has to be said rather than omitted: `config/onejudge.base.yaml` declares
-# an `assessment` for the dispatched workers it is shared with, and a persona silent
-# about a key inherits the base's. `null` is onejudge's own unset form and oneagentgraph
-# inserts it, so this overrides rather than being skipped as absent. Measured against
-# onejudge 0.11.0.
+# Unset, and it has to be said rather than omitted: `config/onejudge.base.yaml` is shared
+# with every dispatched worker, and a persona silent about a key inherits whatever that
+# base declares — the base once declared an `assessment`, and a member that inherited one
+# died asking its judge side a question it could not serve. `null` is onejudge's own unset
+# form and oneagentgraph inserts it, so this overrides rather than being skipped as absent.
+# Measured against onejudge 0.11.0.
 #
 # It has nothing to answer anyway — this member authors no target-project content — and
 # its judge side is the planner channel, which cannot serve the `assess` op the key would

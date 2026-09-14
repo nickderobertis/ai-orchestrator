@@ -547,6 +547,18 @@ results *args:
 transcript *args:
     @./scripts/onepipeline.sh transcript "$@"
 
+# Record an unverified, non-blocking follow-up against a run, as its manager:
+# `just follow-up <run-id> --title TITLE --repository HOST/OWNER/NAME [--path PATH]... < body.md`.
+#
+# The same draft a dispatch writes through `$ORCHESTRATOR_FOLLOW_UP_DRAFT`, stored in the
+# `drafts` plan source under that run's draft project: `scripts/follow-up.sh` establishes
+# the seam the way a launch does and runs the one drafting command as the manager.
+# `just follow-up --help` states the body's headings and what is stamped. Anything the run
+# needs decided now is a channel reply, never a draft.
+[doc('Draft an unverified, non-blocking follow-up against a run as its manager; the body is read from stdin.')]
+follow-up *args:
+    @./scripts/follow-up.sh "$@"
+
 # Register a repository checkout alias. Publication policy and approvals come from
 # the rules file the identity matches rather than from flags here; `onevcs` detects
 # the gate the checkout itself carries, which is a different thing and not the routing.

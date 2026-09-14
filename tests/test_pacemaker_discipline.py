@@ -87,6 +87,26 @@ RULES = (
         graph="read it a second time before you escalate to a terminal verdict",
         persona="read it a second time before you escalate to a terminal verdict",
     ),
+    Rule(
+        name="the update reports how many follow-up drafts the run holds, and their titles",
+        graph="Report how many follow-up drafts the run's draft project holds and their titles",
+        persona="Report how many follow-up drafts the run's draft project holds and their titles",
+    ),
+    Rule(
+        name="read from the draft root the launch exported, through the plan store",
+        graph="`onetaskgraph task list --source drafts --project <run-id> --json`",
+        persona="`onetaskgraph task list --source drafts --project <run-id> --json`",
+    ),
+    Rule(
+        name="the pacemaker may draft a non-blocking follow-up itself, as itself",
+        graph='`"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --as pacemaker --member check-in`',
+        persona='`"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --as pacemaker --member check-in`',
+    ),
+    Rule(
+        name="and anything the planner must act on now stays in the update, never only a draft",
+        graph="anything the planner must act on now stays in this update, never only in a draft",
+        persona="anything the planner must act on now stays in this update, never only in a draft",
+    ),
 )
 
 

@@ -1003,6 +1003,52 @@ def test_the_appendix_tells_a_worker_to_ask_rather_than_stop(appendix: str) -> N
     )
 
 
+#: The drafting rule, in what it has to say: the command, where its shape is stated, that a
+#: draft is unverified and is not the completion report, that a list at the end of a final
+#: message is not a place follow-ups go, and the blocking half beside it.
+DRAFT_COMMAND = re.compile(r"\$ORCHESTRATOR_FOLLOW_UP_DRAFT")
+DRAFTING_RULE = (
+    ("names where the shape is stated", re.compile(r"`--help`")),
+    ("says what earns a draft", re.compile(r"outside\s+your\s+subtask", re.IGNORECASE)),
+    ("counts the harness and agent context", re.compile(r"improvement\s+to\s+this\s+harness")),
+    ("says a draft is unverified", re.compile(r"\bunverified\b", re.IGNORECASE)),
+    ("says a draft is not the report", re.compile(r"not\s+your\s+completion\s+report")),
+    ("refuses the end-of-message list", re.compile(r"end\s+of\s+your\s+last\s+message")),
+    ("sends anything blocking over the seam", ASK_SEAM),
+    ("never drafts in its place", re.compile(r"never\s+drafted\s+in\s+its\s+place")),
+)
+
+
+@pytest.mark.parametrize(
+    ("what", "stated_by"), DRAFTING_RULE, ids=[row[0] for row in DRAFTING_RULE]
+)
+def test_the_appendix_states_the_drafting_rule_once_beside_the_blocking_route(
+    appendix: str, what: str, stated_by: re.Pattern[str]
+) -> None:
+    """One paragraph says when to draft a follow-up, and says the channel half beside it.
+
+    Follow-ups used to be noted at the end of a worker's final message and summarised by a
+    judge into a report nobody opened. What replaces that is a command — so the rule names
+    it, and names the other route in the same breath, because a draft read after the run is
+    the wrong place for anything the manager needed now. Once, because this file is the one
+    statement of dispatch policy and a second paragraph is a second answer.
+
+    A read of the file, and deliberately no more: whether a model drafts or asks is the
+    paid model's, which nothing here drives. That this paragraph reaches a real worker
+    intact is `tests/e2e/test_dispatched_operational_notes_e2e.py`'s, and that the command
+    it names works from inside a real dispatch is
+    `tests/ask_seam/test_follow_up_drafts_launch_e2e.py`'s.
+    """
+    paragraphs = [block for block in appendix.split("\n\n") if DRAFT_COMMAND.search(block)]
+    assert len(paragraphs) == 1, (
+        f"{APPENDIX} names $ORCHESTRATOR_FOLLOW_UP_DRAFT in {len(paragraphs)} paragraphs; the "
+        "drafting rule is stated once"
+    )
+    assert stated_by.search(" ".join(paragraphs[0].split())), (
+        f"{APPENDIX}'s drafting rule no longer {what}:\n{paragraphs[0]}"
+    )
+
+
 def test_the_appendix_says_a_rate_limit_gh_disagrees_with_is_the_secondary_one(
     appendix: str,
 ) -> None:

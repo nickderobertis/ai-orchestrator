@@ -1897,8 +1897,8 @@ def test_a_retry_and_a_requeue_state_whole_tasks_and_are_read_as_an_add_is(
     task earns. A parked node is not one the engine lets a `retry` supersede, so the
     `retry` here proves only that this check refuses its replacement task before the
     graph is asked anything; `tests/test_live_edit_check.py` reads each op's shape.
-    Beside them, an `add` of a node nothing dispatches from — the ordinary way a manager
-    records a follow-up — lands with no turn spent and nothing read.
+    Beside them, an `add` of a node nothing dispatches from — a journal bookmark a manager
+    adds mid-run — lands with no turn spent and nothing read.
     """
     parked = _reply(
         replying,

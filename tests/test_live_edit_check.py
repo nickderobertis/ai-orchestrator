@@ -441,7 +441,7 @@ def test_a_note_and_an_op_carrying_no_task_prose_are_passed_over() -> None:
 def test_a_node_nothing_dispatches_from_is_passed_over() -> None:
     """A node declaring `expects_no_diff` settles without a worker, so no judge reads it.
 
-    The ordinary way a manager records a follow-up mid-run is `{"task": "Report.",
+    The way a manager adds a journal bookmark mid-run is `{"task": "Report.",
     "expects_no_diff": true}` — a node with no persona and no acceptance criteria, which
     the engine settles `done (no-changes)` without a dispatch. Read as a whole task it
     was refused for the criteria it has no reader for, which refused every such `add`

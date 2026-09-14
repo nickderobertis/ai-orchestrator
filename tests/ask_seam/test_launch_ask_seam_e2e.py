@@ -93,6 +93,12 @@ INHERITED_ENVIRONMENT = (
     # dispatch it makes, where a gate over the engine composing one would then pass
     # on a value the engine never composed.
     "ONEPIPELINE_CHANNEL_ASKER",
+    # The enclosing dispatch's session. A lifecycle dispatch carries its own worktree's
+    # token, and the engine sets it only on a dispatch it opens a session for — so a
+    # direct dispatch of a launch made from inside one inherits the outer token, and the
+    # journey asserting a direct dispatch is given no session fails on the suite's own
+    # environment rather than on anything the launch did.
+    "ONEVCS_SESSION",
     "ORCHESTRATOR_ASK_MANAGER",
     # The plan-authoring root a *planning* launch exports. Read from the one place that
     # composes it rather than spelled here. A journey that kept the enclosing dispatch's

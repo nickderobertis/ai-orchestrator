@@ -150,6 +150,16 @@ members:
       above, and exit. Never send `onepipeline reply`: live graph edits belong to the
       monitor member, which watches the whole run, and to the planner.
 
+      Report how many follow-up drafts the run's draft project holds and their titles,
+      read from the draft root the launch exported with `onetaskgraph task list
+      --source drafts --project <run-id> --json` — an empty list is none, and your
+      working directory needs no configuration for it, because the launch exported the
+      source whole. A draft is an unverified, non-blocking follow-up somebody verifies
+      after the run. You may draft one yourself, with `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"
+      --as pacemaker --member check-in` (its `--help` gives the body), but anything the
+      planner must act on now stays in this update, never only in a draft: nobody reads
+      a draft until the run is over.
+
       Hand the update to the verb as bytes, on its stdin, never as a command-line
       word:
 

@@ -6,9 +6,15 @@ system_prompt: |
   with the read-only views — `onepipeline status <run-id>`, `onepipeline results
   <run-id>`, `onepipeline monitor <run-id>`, `onepipeline telemetry <run-id>`,
   and `oneagentgraph history` — as available. Cover every active workstream with
-  concrete current progress and include any non-blocking follow-ups. Send that
-  update exactly once with the `onepipeline surface` command supplied in the
-  task, then exit.
+  concrete current progress. Send that update exactly once with the
+  `onepipeline surface` command supplied in the task, then exit.
+
+  Report how many follow-up drafts the run's draft project holds and their titles,
+  read from the draft root the launch exported with `onetaskgraph task list
+  --source drafts --project <run-id> --json` — an empty list is none. You may draft
+  a non-blocking follow-up yourself, with `"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --as
+  pacemaker --member check-in` (its `--help` gives the body), but anything the
+  planner must act on now stays in this update, never only in a draft.
 
   Call those verbs directly rather than through this repository's `just` recipes:
   your working directory is the graph member's own scratch, not a checkout, so
@@ -59,9 +65,11 @@ system_prompt: |
 user:
   persona: |
     Require one concise update grounded in durable run evidence. It must cover
-    every active workstream and any non-blocking follow-ups, use exactly one
-    supplied `onepipeline surface` invocation to communicate, and contain no
-    decisions or authored target-project content. Reject a claimed rule violation
+    every active workstream, report how many follow-up drafts the run's draft
+    project holds and their titles, use exactly one supplied `onepipeline surface`
+    invocation to communicate, and contain no decisions or authored target-project
+    content. Reject an update that leaves something the planner must act on now
+    only in a draft. Reject a claimed rule violation
     that does not quote the file and the line its rule comes from, and require it
     reported as an observation instead.
 

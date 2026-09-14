@@ -24,6 +24,13 @@
 # last place that can put it there, and `start` and `adopt` are every shape of launch
 # this repository has. `scripts/ask-manager-env.sh` owns the path and the refusal.
 #
+# For the same reason a launch carries the follow-up drafting seam: the absolute root of
+# the `drafts` plan source and the command every party drafts a non-blocking follow-up
+# with. `scripts/follow-up-env.sh` owns both names, both values and the refusal. It runs
+# after the design-approval gate below: the root is resolved through the plan-store CLI
+# healed before that gate, and a store that cannot be read at all is the gate's to report,
+# under its own exit status, rather than this seam's.
+#
 # Detection is from the exported environment and never from process ancestry,
 # and a session nothing identifies stays unidentified: a run misattributed to a
 # planner who did not launch it is worse than one attributed to nobody.
@@ -51,9 +58,12 @@ if [ -z "${ONEPIPELINE_LAUNCHER_SESSION:-}" ]; then
 fi
 
 # Only a launch starts harnesses; a read-only view must not create a directory or
-# refuse on an indirection it never uses.
+# refuse on an indirection it never uses. `launching` carries this arm's answer past the
+# design-approval gate below, so which verbs are a launch is decided here once.
+launching=false
 case "${1:-}" in
     start | adopt)
+        launching=true
         credentials_helper="$script_dir/credentials-env.sh"
         if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
             echo "onepipeline: required helper is not a readable regular file: $credentials_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
@@ -118,6 +128,22 @@ esac
 # that could not be read at all.
 if [ "${1:-}" = start ]; then
     uv run orchestrator-launch-gate "${@:2}" || exit "$?"
+fi
+
+# The follow-up drafting seam, after the gate and for the launch shapes the arm above
+# decided; the header says why it waits for the gate.
+if [ "$launching" = true ]; then
+    follow_up_helper="$script_dir/follow-up-env.sh"
+    if [ ! -f "$follow_up_helper" ] || [ ! -r "$follow_up_helper" ]; then
+        echo "onepipeline: required helper is not a readable regular file: $follow_up_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+        exit 2
+    fi
+    # shellcheck source=scripts/follow-up-env.sh
+    if ! . "$follow_up_helper"; then
+        echo "onepipeline: the follow-up drafting helper at $follow_up_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+        exit 2
+    fi
+    export_follow_up_drafts onepipeline || exit "$?"
 fi
 
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.

@@ -240,7 +240,8 @@ STATED_IN = {"add": "node", "retry": "node", "requeue": "amend"}
 #: settles `done (no-changes)` without a worker, so no judge ever reads its task. The
 #: engine refuses the field beside a `persona`, which is why an absent persona is not
 #: the test — a node stating neither is refused by the engine for want of a persona,
-#: and a node stating this one is the ordinary way a manager records a follow-up.
+#: and a node stating this one is a journal bookmark: a node on the run's own record that
+#: nobody works. A follow-up is not recorded this way; `just follow-up` drafts one.
 NO_DISPATCH = "expects_no_diff"
 
 #: The exit status `scripts/channel-reply.sh` reads as a refusal. It is 1 rather than 2
@@ -597,8 +598,9 @@ def _dispatching(stated: Mapping[str, object]) -> dict[str, object] | None:
 
     A node declaring :data:`NO_DISPATCH` settles without a worker, so its task is prose
     no judge reads and there is nothing here to hold it to — and reading it anyway
-    refused the ordinary way a manager records a follow-up mid-run, `{"task":
-    "Report.", "expects_no_diff": true}`, for carrying no acceptance criteria. A step of
+    refused a journal bookmark a manager adds mid-run, `{"task": "Report.",
+    "expects_no_diff": true}`, for carrying no acceptance criteria. (A follow-up itself
+    is drafted with `just follow-up`, not added as a node.) A step of
     a lifecycle node may declare the same thing of itself, so the steps are pruned
     rather than the node: the steps beside it still dispatch and are still read.
     """

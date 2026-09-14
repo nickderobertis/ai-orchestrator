@@ -46,6 +46,7 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple, cast
 
+import follow_up_variables
 import plan_root_variable
 import pytest
 from waits import timeout as e2e_timeout
@@ -93,6 +94,13 @@ WRAPPER_SCRIPTS = (
     # environment below rather than discovered, which keeps that resolution — and the
     # project the launch writes — inside this throwaway checkout.
     "plan-root-env.sh",
+    # Every launch also exports the follow-up drafting seam: the `drafts` source's root,
+    # stated in the environment below for the reason the plan-authoring root is, and the
+    # drafting command this helper refuses a launch without. `just follow-up` goes through
+    # the third, which establishes that seam and runs the command as the manager.
+    "follow-up-env.sh",
+    "follow-up-draft.sh",
+    "follow-up.sh",
     # And the operational appendix every dispatched task must carry, which `just plan`
     # hands its planner as text rather than as a path into a checkout that planner cannot
     # see. It reads `config/dispatch-appendix.md`, which `_checkout` copies beside it.
@@ -675,6 +683,16 @@ def _run(
     plans = checkout / ".plans"
     plans.mkdir(exist_ok=True)
     environment[plan_root_variable.name()] = str(plans)
+    # The follow-up drafts root every launch exports, stated for the same reason: an
+    # unstated one resolves to the real `.follow-ups` of the tree this suite runs in. The
+    # plugin and the command are the helper's to export and are cleared, so an enclosing
+    # launch's values are not what these rows measure.
+    root, plugin, command = follow_up_variables.all_names()
+    follow_ups = checkout / ".follow-ups"
+    follow_ups.mkdir(exist_ok=True)
+    environment[root] = str(follow_ups)
+    environment.pop(plugin, None)
+    environment.pop(command, None)
     environment.pop("ONEPIPELINE_RUNS_DIR", None)
     # This suite is itself run from inside a dispatch, whose real status directory and
     # history store would otherwise reach the recipe under test. Each journey states

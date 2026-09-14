@@ -222,6 +222,19 @@ amend it unilaterally, named two options for its owner, and then stopped for thr
 lost about fifteen minutes of correct work and settled reporting `ahead of main: 0
 commit(s)`.
 
+**Draft a follow-up that can wait; never draft one that cannot.** Work you notice that
+is outside your subtask — a bug beside the code you touched, a missing test or script, a
+stale document, an improvement to this harness or to the context agents are given — is a
+follow-up, and doing it is not yours. Record each one the moment you notice it by piping
+its body into `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"`, whose `--help` names the flags and the four
+headings that body carries; the command stamps where it came from. Do not collect them into
+a list at the end of your last message instead, because nothing reads that list. A draft is
+unverified — a follow-up agent checks every one after the run — and it is not your
+completion report, which still says what you did. Drafting is only for what can wait:
+anything blocking, whether a decision fork, a constraint you cannot meet, or something your
+manager should act on now, goes over `$ORCHESTRATOR_ASK_MANAGER` immediately, as the
+paragraph above says, and is never drafted in its place.
+
 **A GitHub rate-limit refusal that `gh api rate_limit` disagrees with is the secondary
 limiter.** The primary limit is the one that endpoint reports and the one a wait answers.
 The secondary limiter is reported by nothing, polled by nothing, and not waited out by

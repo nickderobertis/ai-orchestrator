@@ -72,6 +72,8 @@ from test_dispatch_appendix import (
     CONCURRENT_RUNS_ALLOWED,
     DEFINITION,
     DOWNSTREAM,
+    DRAFT_COMMAND,
+    DRAFTING_RULE,
     EXCLUDES_ONLY_ITSELF,
     FIXED_PORT_REASON,
     GATE_FUNCTION,
@@ -317,6 +319,30 @@ def test_a_dispatched_worker_is_told_to_run_only_the_checks_that_exercise_its_ch
         assert any(marker in sentence.lower() for marker in DOWNSTREAM), (
             f"a dispatched worker is handed {mention.group(0)!r} in a sentence that does "
             f"not say it runs downstream on the merge path ({sentence!r})"
+        )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_told_to_draft_what_can_wait_and_ask_about_what_cannot(
+    dispatched_notes: str,
+) -> None:
+    """The drafting rule arrives whole, beside the channel route, in the prompt a worker reads.
+
+    What the model then drafts, or asks, is the paid model's to decide and is exactly what
+    the stand-in replaces, so it is not driven here. What is driven is everything short of
+    that: that the rule a worker is held to reached it through the builder, `onepipeline`
+    and `oneagentgraph` intact, and — in `tests/ask_seam/test_follow_up_drafts_launch_e2e.py`
+    — that the command it names works from inside a real dispatch.
+    """
+    paragraphs = [block for block in dispatched_notes.split("\n\n") if DRAFT_COMMAND.search(block)]
+    assert len(paragraphs) == 1, (
+        f"a dispatched worker was handed {len(paragraphs)} paragraphs naming the drafting "
+        "command, where the appendix states the rule once"
+    )
+    delivered = " ".join(paragraphs[0].split())
+    for what, stated_by in DRAFTING_RULE:
+        assert stated_by.search(delivered), (
+            f"the drafting rule a dispatched worker was handed no longer {what}:\n{delivered}"
         )
 
 

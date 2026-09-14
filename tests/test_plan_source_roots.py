@@ -22,7 +22,7 @@ import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import plan_copy, plan_review
+from orchestrator import follow_up_drafts, plan_copy, plan_review
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -230,3 +230,32 @@ def test_the_board_copy_plan_defaults_to_is_the_one_this_repository_plans_agains
         f"be reviewed there and `just copy-plan`'s whole reason for existing — that a "
         f"record can only be written where the plan is drafted — no longer holds"
     )
+
+
+def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:
+    """`drafts` holds unverified follow-ups as local Markdown, under an ignored root of its own.
+
+    Local, because a draft is unverified and a board is where verified tickets go. Kept out
+    of `default_sources`, because a draft is not a plan: every read that names no source is
+    a plan listing, and a run's drafts would otherwise appear in each of them. Its root's
+    distinctness from every other source is the shared-root check above; that nothing under
+    it is ever committed is asked of git itself.
+    """
+    configured = read_plan_sources(_configuration())
+    assert follow_up_drafts.SOURCE in configured, (
+        f"onetaskgraph.yaml configures no {follow_up_drafts.SOURCE!r} source, which is where "
+        "orchestrator/follow_up_drafts.py stores every draft"
+    )
+    drafts = configured[follow_up_drafts.SOURCE]
+    assert (drafts.plugin, drafts.root) == (WRITABLE_PLUGIN, ".follow-ups"), (
+        f"the drafts source is {drafts.plugin!r} rooted at {drafts.root!r}"
+    )
+    assert follow_up_drafts.SOURCE not in read_default_sources(_configuration()), (
+        "the drafts source is among default_sources, so every plan listing shows drafts"
+    )
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--no-index", ".follow-ups/tasks/run/drafts/x.md"],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    assert ignored.returncode == 0, "a draft under .follow-ups/ is not gitignored"

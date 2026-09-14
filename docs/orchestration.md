@@ -1737,9 +1737,39 @@ stopped. `just status` is the surface-reporting view and keeps both, in that ord
 is stuck stays visible without the run reading as live supervision.
 
 Every proposal includes `surface.blocking`: `true` means the worker is awaiting the
-decision, while `false` is an informational follow-up that does not stop the graph
-frontier. Everything the monitor and the pacemaker raise is non-blocking by
-construction: an observation is not a question the graph should stop for.
+decision, while `false` is informational and does not stop the graph frontier. Either
+way a proposal is for a decision the planner must see **during** the run. Everything the
+monitor and the pacemaker raise is non-blocking by construction: an observation is not a
+question the graph should stop for.
+
+### Follow-ups are drafted, not surfaced
+
+A follow-up — work some party noticed outside its own scope that can wait to be verified
+after the run — does not travel over the channel at all. It is **drafted**: written as an
+unverified local Markdown task into the `drafts` plan source (`onetaskgraph.yaml`, root
+`.follow-ups/` in the launching checkout, gitignored and outside `default_sources`), in a
+project of its own per run — `projects/<run-id>.md`, with each draft under
+`tasks/<run-id>/drafts/`. Drafts live there rather than in a dispatch's worktree so they
+survive the worktree being reaped, and they are read by a follow-up agent after the graph
+completes; nothing reads them during the run.
+
+Every launch exports the seam through `scripts/follow-up-env.sh`: the source's absolute
+root and its plugin at the plan store's environment layer, and
+`$ORCHESTRATOR_FOLLOW_UP_DRAFT`, the one command every party drafts with. A worker drafts
+as itself; the monitor drafts `--as monitor --member monitor`; the pacemaker drafts
+`--as pacemaker --member check-in` and reports in each update how many drafts the run's
+project holds; a manager drafts with `just follow-up <run-id>`. The party supplies only a
+title, the repository, the paths and a body carrying four headings; the command stamps the
+rest — the run, the dispatch's scratch, session, working directory, branch and head, the
+node resolved from the run's dispatch registry by process ancestry, and the command that
+reads the turns the draft came from. `orchestrator/follow_up_drafts.py` is the one source
+of that record, and `"$ORCHESTRATOR_FOLLOW_UP_DRAFT" --help` states it in full.
+
+Drafting is only for what can wait. Anything blocking — a decision fork, a constraint
+that cannot be met, a finding the planner should act on now — still goes over the channel
+immediately: a worker's blocking question to its manager, the monitor's
+`finding`, the pacemaker's update, a planner's exceptions. A draft never stands in for any
+of them.
 `monitor` renders `ACK REQUIRED` while any blocking surface, including closeout,
 awaits a reply.
 

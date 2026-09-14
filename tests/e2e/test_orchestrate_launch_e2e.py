@@ -3459,8 +3459,22 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
             f"cannot be read from the dispatch it was written for:\n{launch.stdout}"
         )
         for config in dispatched:
-            assert f"max_turns: {budget}" in config.read_text(encoding="utf-8"), (
+            effective = config.read_text(encoding="utf-8")
+            assert f"max_turns: {budget}" in effective, (
                 f"{config} did not receive the node's turn budget of {budget}"
+            )
+            # The same file is where the retired `assessment` is proven gone from a real
+            # dispatch: it asked every worker's judge to summarise follow-ups into a report
+            # no view opened, and a base or persona declaring it again reaches the judge
+            # only through this merged config.
+            asked = [
+                line
+                for line in effective.splitlines()
+                if line.startswith("assessment:") and line.split(":", 1)[1].strip() != "null"
+            ]
+            assert not asked, (
+                f"{config} asks the dispatch's judge for an assessment again ({asked}); "
+                "follow-ups are drafted with $ORCHESTRATOR_FOLLOW_UP_DRAFT instead"
             )
     finally:
         _just("stop", "turn-budget-e2e", environment=environment, seconds=60)

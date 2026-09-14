@@ -8,6 +8,10 @@ sources:
     plugin: local-md
     config:
       root: .plans
+  drafts:
+    plugin: local-md
+    config:
+      root: .follow-ups
   test-fixtures:
     plugin: local-md
     config:
