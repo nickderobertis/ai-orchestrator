@@ -18,6 +18,10 @@ Everything is real — the recipe, the wrapper, `onevcs`, git, and a throwaway o
 What makes it safe is isolation rather than substitution: `ONEVCS_HOME` points at a
 scratch registry and the repository is a throwaway checkout of a throwaway bare origin,
 so nothing this host has registered is read.
+
+`--repo` is held the same way here, against the verb's own scoped report and its own
+refusal; the argv the recipe hands the verb is `tests/e2e/test_delegated_recipes_e2e.py`'s
+table, with the published CLI doubled.
 """
 
 from __future__ import annotations
@@ -230,3 +234,115 @@ def test_recoverable_passes_the_machine_readable_report_through_untouched(
         ["onevcs", "recover"],
         ["onevcs", "publish-branch"],
     ], f"the published argv is not what the rewrite is anchored on:\n{rows}"
+
+
+#: A preserved branch on a second registered identity, which a listing scoped to the
+#: first must leave out — the observable difference `--repo` makes.
+OTHER_IDENTITY_BRANCH = "claude/other-identity-work"
+
+
+def _register_other_identity(root: Path, environment: dict[str, str]) -> None:
+    """Register a second identity, holding one complete preserved branch, beside the first."""
+    root.mkdir()
+    seed = root / "seed"
+    _git("init", "-q", "-b", BASE, str(seed), cwd=root)
+    (seed / "README.md").write_text("other seed\n", encoding="utf-8")
+    _git("add", "-A", cwd=seed)
+    _git("commit", "-q", "-m", "init", cwd=seed)
+    origin = root / "origin.git"
+    _git("clone", "-q", "--bare", str(seed), str(origin), cwd=root)
+    # Named apart from the first checkout, because registration aliases a checkout by
+    # its directory name and a second `checkout` would take the first one's alias.
+    checkout = root / "other-checkout"
+    _git("clone", "-q", str(origin), str(checkout), cwd=root)
+    _git("checkout", "-q", "-b", OTHER_IDENTITY_BRANCH, cwd=checkout)
+    (checkout / "other.txt").write_text("other work\n", encoding="utf-8")
+    _git("add", "-A", cwd=checkout)
+    _git("commit", "-q", "-m", "feat: other work", cwd=checkout)
+    _git("checkout", "-q", BASE, cwd=checkout)
+    registered = _run("just", "register-repo", str(checkout), environment=environment)
+    assert registered.returncode == 0, registered.stderr + registered.stdout
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Placement, as the reason below says.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] As the reason below says.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These journeys and the
+# three above them share one module, which already drives
+# `just recoverable` against a real scratch registry in the tier the module runs in; each
+# costs what those do — a throwaway origin, one or two registrations, a few `onevcs`
+# reads, about a second apiece. Giving the module a project of its own would move all
+# five, and that is a change to this workspace's Nx project graph rather than to
+# the recipe these journeys hold.
+def test_recoverable_scoped_by_repo_lists_that_identity_in_its_drafting_form(
+    tmp_path: Path,
+) -> None:
+    """`--repo` scopes the listing from outside the checkout, and it is still re-rendered.
+
+    Run from this repository, which the scratch registry does not hold, so the unscoped
+    listing answers for every identity and names the second one's branch. Given `--repo`,
+    the recipe's output must be the verb's own scoped report with only its resume commands
+    rewritten: a wrapper that dropped the flag would list both identities, and one that
+    skipped the rewrite for a flagged invocation, as it does for `--json`, would offer the
+    pasteable raw line again.
+    """
+    registry = _registry(tmp_path)
+    _register_other_identity(tmp_path / "other", registry.environment)
+    scope = ("--repo", str(registry.checkout))
+
+    unscoped = _run("just", "recoverable", environment=registry.environment)
+    published = _run("uv", "run", "onevcs", "recoverable", *scope, environment=registry.environment)
+    listed = _run("just", "recoverable", *scope, environment=registry.environment)
+
+    assert unscoped.returncode == 0, unscoped.stderr + unscoped.stdout
+    assert OTHER_IDENTITY_BRANCH in unscoped.stdout, (
+        f"the unscoped listing does not name the second identity's branch:\n{unscoped.stdout}"
+    )
+    assert published.returncode == 0, published.stderr + published.stdout
+    assert listed.returncode == 0, listed.stderr + listed.stdout
+    assert OTHER_IDENTITY_BRANCH not in listed.stdout, (
+        f"`--repo` did not scope the recipe's listing to one identity:\n{listed.stdout}"
+    )
+    expected = published.stdout
+    for published_verb, recipe in REWRITES.items():
+        expected = expected.replace(f"Resume: {published_verb} ", f"Resume: {recipe} ")
+    assert listed.stdout == expected, (
+        "the scoped listing is not the verb's own report with its resume commands rewritten:\n"
+        f"{listed.stdout}\n--- expected ---\n{expected}"
+    )
+    assert _resume_lines(listed.stdout) == [
+        f"Resume: just publish-branch {COMPLETE_BRANCH} --repo {registry.checkout}",
+        f"Resume: just repo-recover {INCOMPLETE_BRANCH} --repo {registry.checkout}",
+    ], f"the scoped listing does not offer the recipes that draft a body:\n{listed.stdout}"
+
+
+def test_recoverable_scoped_to_an_unregistered_repo_fails_with_the_verbs_refusal(
+    tmp_path: Path,
+) -> None:
+    """A `--repo` the verb refuses fails the recipe, with the verb's own status and reason.
+
+    The rewrite is a pipe, so a wrapper that lost `pipefail` would exit with the filter's
+    status — zero — and an operator scoping to a mistyped checkout would read an empty
+    listing as nothing to recover.
+    """
+    registry = _registry(tmp_path)
+    scope = ("--repo", str(tmp_path / "not-registered"))
+
+    published = _run("uv", "run", "onevcs", "recoverable", *scope, environment=registry.environment)
+    listed = _run("just", "recoverable", *scope, environment=registry.environment)
+
+    assert published.returncode != 0, (
+        f"the verb accepted an unregistered `--repo`, so there is no refusal to carry:\n"
+        f"{published.stdout}"
+    )
+    assert listed.returncode == published.returncode, (
+        f"the recipe did not fail with the verb's status:\n{listed.stdout}{listed.stderr}"
+    )
+    assert published.stderr.strip() in listed.stderr, (
+        f"the verb's reason for refusing did not reach the operator:\n{listed.stderr}"
+    )
+    assert _resume_lines(listed.stdout) == [], listed.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[shell_test_tiers_stay_split]

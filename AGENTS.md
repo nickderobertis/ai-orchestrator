@@ -75,7 +75,8 @@ base without its merge path ruling on it, the failure this routing exists to pre
 the table is in [the lifecycle
 doc](docs/repo-lifecycle.md#which-verb-lands-which-branch-state). Three verbs answer
 the questions those raise. `just recoverable` names which verb a branch needs, with
-each resume command in its `just` form; run inside a registered checkout it answers for
+each resume command in its `just` form. `--repo <checkout>` scopes it to that one
+identity from any directory; without it, run inside a registered checkout it answers for
 that identity **alone** and elsewhere for every identity, so read its first line for
 the scope before reading a short result as nothing to recover. It omits a branch that
 already landed — unconditionally for a `local-direct` identity, and for a remote one

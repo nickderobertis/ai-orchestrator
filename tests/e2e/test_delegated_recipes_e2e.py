@@ -511,6 +511,13 @@ DELEGATIONS = (
         "uv run onevcs recover claude/work --repo /checkout --body-file /tmp/body.md",
     ),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
+    # Scoped to one identity from wherever it runs. The wrapper reads its arguments only
+    # for `--json`, so `--repo` has to arrive at the verb whole, beside its value.
+    Delegation(
+        "recoverable",
+        ("--repo", "/checkout"),
+        "uv run onevcs recoverable --repo /checkout",
+    ),
     # The two reads that close the gap the landing verbs left. `status` is the only
     # way to ask what became of a piece of work — a run's own row dates its answer to
     # the settlement — and `import` is the only way to make work a landing verb cannot
