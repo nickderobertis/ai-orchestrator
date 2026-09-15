@@ -121,7 +121,7 @@ quota that role loses once everything ahead of it is exhausted. Log in to all si
 
 | Identity | Command |
 | --- | --- |
-| `claude-code:primary` | `claude` (the default `$HOME/.claude` config directory) |
+| `claude-code:primary` | once, in the canonical checkout: `CLAUDE_CONFIG_DIR="$HOME/.claude" claude`, then `/login` if it is not logged in — it shares the default `claude` login's credentials ([why once](#how-the-primary-identity-authenticates)) |
 | `claude-code:alternate` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt" claude`, then `/login` |
 | `claude-code:alternate2` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude`, then `/login` |
 | `claude-code:primary-backup` | `CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude`, then `/login` |
@@ -182,10 +182,107 @@ ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR=/home/<user>/.claude
 ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR=/home/<user>/.claude-primary
 ```
 
+### How the primary identity authenticates
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] claude-code's on-disk layout has no source to derive from; step 8's probe, named below, is its check. -->
+With nothing exported and no identities file, `claude-code:primary` runs with
+`CLAUDE_CONFIG_DIR=$HOME/.claude`, which is where the default `claude` login keeps its
+credentials. So the primary identity **authenticates on the default login's
+`$HOME/.claude/.credentials.json`**: it is the same account, and a token refresh by
+either one is read by the other. Its **trust and onboarding state is its own**.
+claude-code with `CLAUDE_CONFIG_DIR` set keeps that state in `$HOME/.claude/.claude.json`,
+separate from the default login's `$HOME/.claude.json`. A directory an interactive
+`claude` trusts is therefore not trusted for a dispatch, and the reverse.
+
+Confirm it on a host with step 8's per-identity probe,
+`scripts/oneharness-agent.sh run --harness claude-code:primary`. It names one candidate,
+so a fall-through cannot answer for another account. An operator runs it: the pre-push
+hook's `just smoke`, spent when a push touches the harness routing files, runs one turn
+on the chain's first candidate that runs and never pins `claude-code:primary`, so it
+does not confirm this. A turn that ran authenticated
+reports `"ran": "claude-code:primary"` with an empty `fell_through`. That probe is also
+what shows either path above has moved: the turn then stops running authenticated as
+the primary.
+
+That statement rests on one such turn, traced with `strace -f` on claude-code 2.1.272.
+It ran on `claude-code:primary` with no fall-through and billed tokens. It opened
+`$HOME/.claude/.credentials.json` only for reading. claude-code wrote its state through
+`$HOME/.claude/.claude.json`, and no process of the turn opened `$HOME/.claude.json`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+#### Its `.claude.json` has to exist before the first dispatch
+
+The trust pass marks a `.claude.json` that exists, and returns without writing when the
+file is absent (`mark_claude_config_trust` in `scripts/claude-workspace-trust.sh`). That
+covers session setup, the `post-checkout` hook and every dispatch's own mark.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Observed claude-code start-up behaviour with no source or login-free gate; the commands below hold whether or not it changes. -->
+claude-code does create that file itself on a non-interactive run, but it creates the
+file in the same start in which it decides trust. A probe with an empty config
+directory showed this. claude-code created `.claude.json`, reported the checkout
+untrusted, named that new file, and ignored the checkout's `permissions.allow`. The
+session's own SessionStart pass marked the file only afterwards, too late for the session
+it ran in.
+
+That probe held no credentials, so it shows only what happens before authentication. No
+run with credentials and no `.claude.json` was made, because staging one would mean
+copying a live login's credentials. Nothing, then, shows that a first dispatch under
+such a directory is pretrusted. **Pretrusting it requires the file to exist first.** One
+interactive `claude` in that directory creates the file before the trust pass reads it,
+and that is right whichever way an authenticated first run behaves.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+#### The commands
+
+**An existing host that exports nothing.** Log in the primary-backup, create the
+primary's `.claude.json` with one interactive run, then run [step 5](#5-the-trust-marking-pass-order-matters)'s pass:
+
+```sh
+cd ~/projects/ai-orchestrator
+CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude   # /login, then exit
+CLAUDE_CONFIG_DIR="$HOME/.claude" claude                  # accept the trust dialog, then exit
+just session-setup
+```
+
+**The WSL host whose `~/.claude` is the primary-backup login.** A `~/.claude` logged in
+by a plain `claude` holds credentials, but its state lives in `~/.claude.json`. That is
+the case above, so the same one-time run applies to it. In order:
+
+1. Write the identities file. The unquoted heredoc writes the two lines above with
+   `$HOME` expanded, and the helper names the file's location:
+
+   ```sh
+   cd ~/projects/ai-orchestrator
+   file=$(bash -c 'source scripts/claude-alt-config-dir.sh; claude_identities_file_path')
+   mkdir -p "$(dirname "$file")"
+   cat > "$file" <<EOF
+   ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR=$HOME/.claude
+   ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR=$HOME/.claude-primary
+   EOF
+   ```
+
+2. Log in the Primary account in its own directory:
+
+   ```sh
+   CLAUDE_CONFIG_DIR="$HOME/.claude-primary" claude   # /login, then exit
+   ```
+
+3. Create `~/.claude`'s `.claude.json` with one interactive run in the canonical checkout:
+
+   ```sh
+   CLAUDE_CONFIG_DIR="$HOME/.claude" claude           # accept the trust dialog, then exit
+   ```
+
+4. Run step 5's pass: `just session-setup`.
+5. Run [step 5's verify loop](#5-the-trust-marking-pass-order-matters). All four lines
+   print `true`, and the files it reads are `$HOME/.claude-primary/.claude.json` for the
+   primary and `$HOME/.claude/.claude.json` for the primary-backup.
+
 ## 5. The trust-marking pass (order matters)
 
 `scripts/session-setup.sh` marks every dispatch identity's `.claude.json` — but only a
-config file **that already exists**, and it is the login in step 4 that creates it.
+config file **that already exists**, and it is step 4 that creates it: each login, and
+for the primary its one-time interactive run.
 So the session doing the authenticating is always too early, and one explicit pass
 afterwards is required:
 
@@ -450,7 +547,8 @@ just gate
 - [ ] `git`, `just`, `uv`, `jq`, `gh`, `node`/`npm` on `PATH`
 - [ ] `gh auth login`; global git `user.name` and `user.email`
 - [ ] canonical checkout **and** isolated safety clone; `just bootstrap` in the canonical one
-- [ ] all six harness identities logged in
+- [ ] all six harness identities logged in, and the primary's `.claude.json` created by
+      its one-time interactive run
 - [ ] one `just session-setup` **after** the Claude logins; all four
       `hasTrustDialogAccepted` values `true`
 - [ ] allowlister installed and its codex hook wired
