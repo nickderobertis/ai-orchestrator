@@ -1,8 +1,8 @@
 """The one list of structural rules a node is held to, whichever tier asks.
 
 A node is checked before launch by `just check-plan` and again whenever a reply envelope
-results in it — an `add`, a `retry`'s replacement, a `requeue` with its overrides folded
-in. The two tiers once applied different lists: the live-edit check held task prose to
+states it — an `add`, or a `retry`'s replacement. The two tiers once applied different
+lists: the live-edit check held task prose to
 the criteria bar and asked no structural question at all, so a `requeue` amending
 `adoption: fast` onto a node publishing `local-direct` behind a releasing dependency was
 accepted there and failed an hour of work at its last step, on a refusal
@@ -12,7 +12,7 @@ So the rules that read a node's **fields** — where it publishes, what it waits
 adopts — are listed here once, and every tier reads this list rather than naming the
 guards itself: :func:`orchestrator.criteria_guard.check_plan` and
 :func:`orchestrator.plan_check.refusals` at the plan tier, and
-:func:`orchestrator.live_edit_check.structural_refusal` at the live one. A rule added to
+:func:`orchestrator.envelope_review.structural_refusal` at the live one. A rule added to
 either guard reaches both tiers with nothing to follow, and a guard added here reaches
 both too; `tests/test_structural_guard.py` fails when a module shaped like a guard is
 read by one tier and not this list.

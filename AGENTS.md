@@ -631,7 +631,8 @@ quality come first; saving time or tokens never relaxes their bar.
 human-action attestation, and the watch. The planner owns decomposition, contracts,
 persona choice, and task authoring. The engine owns scheduling, ledger writes,
 integration of finished work, and publication closeout. The monitor owns noticing — and
-applying a fix inside the allowlist its edit author is bounded to; a finding it or the
+applying a fix inside the allowlist its edit author is bounded to — `retry`, `requeue`,
+`cancel`, `finding` and `add`, as `config/onemessagebus.yaml` grants them; a finding it or the
 pacemaker calls a rule violation names the file and line the rule comes from, and its
 own supervisor sends an observation back until it is one. None of these roles authors
 target-project content.
@@ -748,34 +749,45 @@ was.
 
 ### Answering on the channel
 
+- **The channel is `onemessagebus` over `config/onemessagebus.yaml`**, the one place
+  this host's messaging policy lives: change the policy there, never in a wrapper.
+  `just channel-reply`, the ask `ORCHESTRATOR_ASK_MANAGER` names and the observer's
+  judge side are that bus's verbs, so the rules below are the bus's.
 - **Read the queue before replying**, and confirm the `pending` surface is the one
-  being answered: a reply binds to whatever is pending at that instant, by the halves
-  it carries — a verdict answers the pending surface, a commands-only envelope leaves
-  it standing. A blocking surface is handed out first and reading past it leaves it
-  pending; a verdict for a question not yet handed out is refused, because it would
-  reach nobody.
+  being answered: a reply binds by correlation, never by arrival. A question carries
+  the correlation the bus stamped on it, and `just channel-reply
+  <run-id> --correlation <c>` answers that ask, while a reply naming none binds to the
+  one pending ask and is refused naming them when none or several are. A correlation
+  nothing pending holds — unknown, or already answered — is refused naming it, with
+  nothing appended. A commands-only envelope answers nothing and leaves the ask
+  pending. A blocking surface is handed out first, and reading past it leaves it
+  pending.
 - **`abandoned` marks a blocking surface nobody is waiting on *now***, never that the
   asker has gone — its next session takes its surfaces back — so read one as a finding
   to look at rather than a question to answer.
-- **`delivered` is a transport receipt**, not a reader able to use the ruling. A
-  dispatched agent's blocking question acts only on a boolean `completion` echoing the
-  correlation token its question minted and discards anything else silently — so echo
-  the token. Nothing else is refused, because a monitor score is the same bytes on the
-  queue as a token-less answer.
+- **The verb's one line is a transport receipt** — `{answered, correlation, sent}`
+  from `reply`, `{queue, position, id}` from `send` — not a reader acting on the ruling
+  or the reconciler applying an edit, which the run records as `edit-committed` or
+  `edit-rejected`. The asker's answer is the reply echoing its correlation and nothing else:
+  a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
+  your prose.
 - **Task prose in an envelope is criteria, and is held to the criteria bar before any
-  of it is sent** — an `amend`, and the whole task an `add`, `retry` or `requeue`
-  states, read as the effective task the engine would compose; a refusal refuses the
-  whole envelope, and the escape it names is a `note`'s `text`, which touches no
-  criterion and is never read (a note's `criterion` is). A novel whole task also spends
-  one judged turn under the reviewer `just review-plan` uses, because nothing holds a
-  pass for it; a correction to a node a review already cleared is deterministic only,
-  because a model call there would make every mid-run correction wait and give you a
-  reason to route around the guard. A turn that answers nothing is refused as `could
-  not be judged` and re-sent unchanged once the harness answers, never corrected. Only
-  a pass is recorded, under the run root and keyed on the text and both tiers' bars, so
-  moving either bar invalidates every record made under the one before it. A reply
-  accepted while nothing is driving the run is **queued**, not applied, until `just
-  orchestrate --adopt <run-id>` attaches the driver that drains it.
+  of it is sent** — the one validator `config/onemessagebus.yaml` declares on a reply
+  carrying commands reads an `amend`, and the whole task an `add`, `retry` or `requeue`
+  states, as the envelope states it and reads no run state, so a `requeue` folding bad
+  fields onto a parked node is the engine's and the merge path's to refuse. The bus
+  judges the whole offer before appending any of it, so a refusal refuses the whole
+  envelope, and the escape it names is a `note`'s `text`, which touches no criterion
+  and is never read (a note's `criterion` is). A novel whole task also spends one judged
+  turn under the reviewer `just review-plan` uses, because nothing holds a pass for it;
+  a correction to a node a review already cleared is deterministic only, because a
+  model call there would make every mid-run correction wait and give you a reason to
+  route around the guard. A turn that answers nothing is unjudged — `could not be
+  judged`, never sent — and re-sent unchanged once the harness answers, never
+  corrected. Only a pass is cached, by the bus, keyed on the envelope's bytes and the
+  bar's fingerprint, so moving either tier of the bar invalidates every recorded pass.
+  A reply accepted while nothing is driving the run is **queued**, not applied, until
+  `just orchestrate --adopt <run-id>` attaches the driver that drains it.
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** A note is journalled against the node; a raw interrupt reaches the worker's
   turn alone and leaves the run unable to explain why a worker changed direction. Ask
@@ -871,7 +883,7 @@ decision:
 - **Monitor side** — `oneharness.orchestrator.toml`: both codex identities first, so
   this long-lived process does not queue ahead of the workers, and the one side with no
   per-turn deadline (`timeout = 0`), because it watches for the life of the run. Its
-  judge side is the live manager over `scripts/channel-serve.py`.
+  judge side is the live manager, over `onemessagebus serve --codec onejudge`.
 - **Pacemaker side** — `oneharness.check-in.toml`: the monitor's routing verbatim with a
   finite deadline, a separate file for that one reason — an unbounded deadline reaching
   a scheduled member leaves a wedged turn alive forever, silently. Re-merging the two
@@ -989,11 +1001,12 @@ every launch is refused without it save the bounded planning exemption above.
 
 ### What every launch exports
 
-Every launch exports `ORCHESTRATOR_ASK_MANAGER` (`scripts/ask-manager.sh`), the one
-supported way a dispatched agent asks its manager a blocking question, with the run id
-it asks on, because a question asked any other way can take the channel's own timeout
-for an answer: `onepipeline channel serve` answers an elapsed wait itself, at exit 0.
-The same verbs load this checkout's credentials from the gitignored
+Every launch hands the engine `--bus-config config/onemessagebus.yaml` and exports
+`ORCHESTRATOR_ASK_MANAGER`, with the run id it asks on: `scripts/ask-manager.sh`, a shim
+turning a question into one `onemessagebus ask` on that run's channel under this host's
+reply window, and the one supported way a dispatched agent asks its manager a blocking
+question. Its output is the bus's one-line answer, `reply` alone at exit 0, so an
+elapsed wait reads as `timeout` and never as a ruling. The same verbs load this checkout's credentials from the gitignored
 root `.env` through `scripts/credentials-env.sh`, never overriding a name the
 environment already defines; so do the board recipes — `just plans`, `just check-plan`,
 `just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names
@@ -1017,7 +1030,8 @@ prefer different identities, and a `journal:` line as the one that makes the res
 unprovable. Two readings are this host's own (`scripts/supervision-readings.py`): free
 space on every filesystem a run writes to, above the `providers:` cut so a watch still
 sees it — read it, and leave acting on a filling disk to whoever owns what is filling
-it — and every live `onepipeline channel serve`, because a passing journey of this
+it — and every live `onemessagebus ask` and `onemessagebus serve`, bound to its run by
+the channel its `--transport-dir` names, because a passing journey of this
 repository's own suite stands up a real rendezvous, and answering that one by hand
 puts a manager's verdict into a test. A run's journal holds a dispatch's own evidence —
 every tool call and its output — beside the run and outliving the worktree, and `just

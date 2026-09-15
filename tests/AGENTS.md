@@ -29,12 +29,14 @@ Conventions for this repository's tests.
   exclusive `<root>/.venv` lock for as long as a writer holds it, so
   `SHARED_TOOLCHAIN_GROUP` in `tests/e2e/nx_workspace.py` keeps that lock's writers and
   readers on one xdist worker — one name, because `--dist loadgroup` co-locates only
-  tests sharing a name, and nothing holds two Nx targets apart. An unlocked
-  read-modify-write on `runs/<run-id>/channel/queue.json` can destroy a worker's
-  blocking question. Read the queue before re-diagnosing the group. A waiter here looks
-  at that file read-only through `planner_channel.queue_may_hand_something_out` and
-  reads through `channel-next` only once it holds something, because the verb rewrites
-  the file even when it hands nothing out.
+  tests sharing a name, and nothing holds two Nx targets apart. A run's channel is a
+  directory of `onemessagebus` queues the bus owns, so read it through the bus —
+  `onemessagebus status --transport-dir runs/<run-id>/channel` — before re-diagnosing
+  the group, never by opening its files: a question waiting or pending there is a
+  waiter nobody answered, and nothing there is a lock. A waiter here looks through
+  `planner_channel.queue_may_hand_something_out`, which asks `status` and claims
+  nothing, and reads through `channel-next` only once it holds something, because that
+  verb claims what it hands out.
 - **A shared stand-in is reached through `project_fixtures.helper`, never through a test
   module's own `__file__`**: a paid provider's stand-in that does not exist is not a
   stand-in — the journey spends real turns while passing.

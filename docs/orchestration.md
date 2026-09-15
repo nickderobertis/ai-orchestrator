@@ -530,7 +530,7 @@ profile](#read-profiles), the [`awaiting-planner`](#when-an-attach-returns) stat
 `onepipeline next`, `onepipeline reply` — the reader they name is the manager, and
 every "planner" below is to be read that way. The dispatched planner reaches that
 channel from the other end, as [an agent with a
-question](#a-dispatched-agent-asks-its-manager): a surface *on* it rather than a
+question](#asking-the-manager): a surface *on* it rather than a
 seat at it.
 
 ## The plan schema
@@ -722,13 +722,12 @@ Two things about them are worth knowing before reading a surprising run:
   override. `onepipeline` appends that override after the launch's `--node-set`
   values, so the plan is authoritative. Nodes with no dispatch (human and
   `expects_no_diff` nodes) name no persona and still settle normally.
-- The monitor's judge side **is** the planner channel. Every monitor turn ends at a
-  supervisor boundary that `onepipeline channel serve` raises as a non-blocking
-  surface and blocks on, so a planner answering it with `just channel-reply` is not
-  only editing the graph — their `message` becomes the monitor's next instruction.
-  It is reached through `scripts/channel-serve.py`, because the two halves agree on
-  the response object and disagree on the request; see [Serving the channel as the
-  monitor's judge side](#serving-the-channel-as-the-monitors-judge-side).
+- The monitor's judge side **is** the planner channel: `onemessagebus serve surfaces
+  --codec onejudge` over `config/onemessagebus.yaml`, which reads onejudge's frames
+  itself. A turn raises nothing, a lost turn and the end-of-run completion bar each
+  raise a non-blocking surface of their own, and a monitor reports through the
+  `finding` op; see [Serving the channel as the monitor's judge
+  side](#serving-the-channel-as-the-monitors-judge-side).
 
 ### The monitor is a paced foreground conversation
 
@@ -759,11 +758,10 @@ contract (its `docs/contract.md`, under `version: 9`), proven in that repository
 than here: a `trigger`, the run's `stop` or the member's own `cancel`, and a **note**
 offered to the member — the turn opens and the note is delivered into it — so a
 manager's `note` to the monitor is never held for five minutes. And the judge side is
-unchanged: `scripts/channel-serve.py` answers every
+unchanged: the bus's onejudge codec answers every
 supervisor frame at once, because the hold is the graph's and a judge that slept would
-only stack a second wait on the first; what its turn-taken acknowledgement now says is
-that the next turn opens after the hold and reads the stream from the cursor
-`personas/orchestrator.yaml` keeps, rather than "keep reading now".
+only stack a second wait on the first; the next turn opens after the hold and reads the
+stream from the cursor `personas/orchestrator.yaml` keeps.
 
 **Why the monitor is paced, in the operator's own numbers.** Measured over
 2026-09-05..2026-09-11, the monitor's conversation was 58% of this host's Codex tokens:
@@ -928,7 +926,7 @@ clock through `oneagentgraph reset-timer RUN check-in` — and `finding` is some
 a watcher saw and decided the planner should know, raised deliberately rather than
 as the side effect of a turn having happened. That is the CLI's own restriction and
 not the queue's: `kind` on a queued surface is a free-form string, which is how
-`scripts/channel-serve.py` raises `monitor-failed` and `monitor-completion`, and how
+the bus's onejudge codec raises `monitor-failed` and `monitor-completion`, and how
 the engine raises `monitor-edit` and `edit-rejected`.
 
 The planner reads it with `just channel-next RUN`, which hands out each queued
@@ -943,7 +941,7 @@ default is `planner`. Settled workers may also surface while the run continues. 
 worker's `surface` is advice only: it is raised and never replied to, and only the
 planner and the monitor can issue edits. A worker that needs an answer before it can
 continue does not raise one — it blocks on the channel instead, as [an agent with a
-question](#a-dispatched-agent-asks-its-manager). The planner replies with one of
+question](#asking-the-manager). The planner replies with one of
 these legacy verdict shapes:
 
 ```json
@@ -1007,164 +1005,80 @@ messages: channel state is durable under `runs/<run-id>/channel/` as `queue.json
 ### Serving the channel as the monitor's judge side
 
 The monitor is a two-sided onejudge member, and its judge side is the live planner
-rather than a simulated user. That is what makes a reply *supervision*: the
-planner's `message` is handed back to the monitor as its next instruction.
+rather than a simulated user. That is what makes a reply *supervision*: the planner's
+ruling reaches the monitor in its own conversation rather than only as graph edits.
 
-The wiring goes through `scripts/channel-serve.py`, and the reason is one
-mismatch. The **response** shapes nearly agree — `onepipeline channel serve`
-answers a ruling with exactly the `{completion, message, reason}` object onejudge's
-`supervisor` op expects, and the filter passes it through byte for byte. A wait nobody
-filled is the one exception: the adopted 0.32.0 answers it with the wait itself,
-`{"answer":"timeout","correlation":…}`, carrying no `completion`, and the filter turns
-that into a non-completion saying no planner answered, so the member lives. The
-**request** shapes do not agree:
+That side is `onemessagebus serve surfaces --codec onejudge` over
+`config/onemessagebus.yaml`, as `graphs/dag-scope.yaml` names it. The **onejudge codec**
+reads the frames onejudge writes to a judge command and answers each with the response
+object onejudge reads, so nothing stands between the two halves any more. Its rules are
+the bus's, in onemessagebus's `codecs.md`; what this host configures is the
+`codecs.onejudge` block — the queue it raises on, the variables its asker and session
+bound are read from, and the [reply window](#asking-the-manager).
 
-| | Shape |
+The channel directory is the run's own, and the judge command composes it from
+`ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
+of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
+onepipeline 0.32.0 in the judge command's own environment on a real launch, and re-taken
+on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`. Where a frame's task
+opens by naming the run, the codec reads the run from there.
+
+| Frame | What the codec does |
 | --- | --- |
-| onejudge 0.12.0 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
-| `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
+| `supervisor`, the turn produced any assistant content | the monitor took its turn: nothing is raised, and the member is answered with a non-completion telling it that a report reaches the planner as a `finding` |
+| `supervisor`, no assistant content, or a machine transcript that **proves** the turn was lost | one bounded, non-blocking `monitor-failed` surface naming the cause and the harness identity, and the member ends |
+| `judge` | the completion bar is raised as a non-blocking `monitor-completion` question and the ruling is relayed as the score — see [below](#the-completion-bar-is-scored-by-the-planner-too) |
+| `assess`, a numeric `judge`, `respond`, `user` | refused by name |
 
-Naming `onepipeline channel serve` directly as the member's `judge.command` is
-therefore refused on the first turn — `the observer emitted a bad frame: unknown
-field 'op'` — and onejudge kills the member with `provider produced no output`,
-leaving the run driven but unwatched. The filter recovers the two values a surface
-needs, both out of the frame itself:
+A lost turn is proven only by what its transcript ends in — an `error` frame, or a
+`turn/completed` whose `status` is `failed` — and its identity is read against
+`ORCHESTRATOR_CODEX_ALT_HOME`, because this host's two codex identities hold separate
+quotas and the identity is the actionable half. A transcript nothing can be proven
+inside is content like any other: the member took its turn, and the run keeps it where
+`just monitor <run> --filter monitor` reads it.
 
-- **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
-  environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.32.0 in the judge command's own environment on a real
-  launch, and re-taken on every gate run by
-  `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
-  validates instead, because that is a contract rather than a per-release export;
-- **whether the monitor took its turn at all**, from the last thing it said. What it
-  said is not read beyond that, because prose raises no surface — see [A monitor
-  reports through the `finding` op](#a-monitor-reports-through-the-finding-op) below.
-  The one thing still read out of that message is a turn the monitor did *not* take.
-
-A turn the agent side lost does not always arrive empty: the harness writes its own
-machine transcript into that message instead — measured off this host's
-`runs/rc-fixes-brief` channel, fifteen JSON-RPC frames and 21,531 characters, most of
-it the prompt echoed back, ending in a `method: error` frame and a `turn/completed`
-whose `status` is `failed`. Twenty of them queued unread on one run. That is the same
-provider defect as an empty turn wearing content, and reading it as content would let
-a monitor whose agent side is failing look healthy for the rest of the run. So the
-filter recognises a lost turn and raises it as a named failure, under its own kind:
-
-| | |
-| --- | --- |
-| kind | `monitor-failed` |
-| message | ``monitor turn failed: usageLimitExceeded on codex. It said nothing, so there is nothing to answer; its 21531-character transcript is not repeated here. Read it with `just monitor rc-fixes-brief --filter monitor`.`` |
-
-The identity is the actionable half — this host's two codex identities hold separate
-quotas — and it is read out of the transcript's own opening frame, compared against
-`ORCHESTRATOR_CODEX_ALT_HOME`. A transcript that names no harness says so rather than
-guessing at one. Only a turn the filter can *prove* was lost is named as a failure: a
-terminal turn status of `failed`, or an error frame. That vocabulary is deliberately
-never widened, because widening it is how the next harness's fourth shape outruns the
-classifier and a planner is sent to the wrong quota.
-
-**A transcript no failure can be proven inside raises nothing**, and it used to raise a
-bounded `monitor-transcript` line of its own. That kind is gone with the prose path it
-was compensating for. It existed because prose was republished verbatim: measured on
-2026-08-24, 26 oversized surfaces on this host, every one `status: completed` with
-`error: null`, so nothing was provable about any of them and all 26 were raised as the
-monitor's own words — 176.1 MB of protocol carrying zero model-authored characters, a
-3.6 GB journal holding one 699 MB event line, and a read-only `just runs` that needed
-5.7 GB of RSS. With nothing republished there is nothing to bound: an unprovable
-transcript is content the member produced, so the member is answered and lives, no
-surface is queued, and the run keeps the turn where `just monitor <run> --filter
-monitor` reads it. That date stamps this host's own accumulated journals rather than any
-release, and `tests/e2e/test_monitor_quiet_turn_e2e.py` drives what an unprovable
-transcript gets now.
-
-`tests/e2e/test_lost_turn_wire_contract_e2e.py` drives the surviving surface onto a real
-published channel with the real `codex` transcript behind it, and reads it back out of
-`runs/<run-id>/channel/queue.json` where a manager reads one.
-
-It raises the surface **non-blocking**. A blocking one would hold the run at
+Every surface the codec raises is **non-blocking**. A blocking one would hold the run at
 `awaiting-planner` on every monitor turn — ending the attached launch's
-settle-and-return contract, and stopping the frontier to ask about watching rather
-than about work. A planner who never answers simply leaves the monitor waiting,
-which costs the run nothing.
+settle-and-return contract, and stopping the frontier to ask about watching rather than
+about work. A planner who never answers costs the run nothing.
 
-The filter never answers on the planner's behalf. A frame it cannot serve, and a
-refusal from the channel itself, both exit non-zero with the reason on stderr
-rather than printing a `{"completion": ...}` onejudge would act on — a fabricated
-verdict there would continue or settle a run nobody ruled on.
-`tests/e2e/test_orchestrate_launch_e2e.py` drives the whole round trip on a real
-launch, and each refusal through the real script.
+**A live edit never reaches the monitor.** A reply is routed by the halves it carries: a
+commands-only envelope reaches the `commands` queue alone and leaves the monitor's
+pending surface standing, and one carrying a verdict and edits reaches both. Should a
+regressed transport deliver one to the codec anyway, it is recognised, the member is
+answered with a non-completion naming the edits, and nothing is re-applied — the edit
+reached the engine when it was sent, and sending it again would apply it twice.
+
+`tests/e2e/test_monitor_quiet_turn_e2e.py`, `tests/e2e/test_lost_turn_wire_contract_e2e.py`
+and `tests/e2e/test_monitor_survives_the_channel_e2e.py` are this seam's journeys on a
+real run's channel. Why each rule is what it is was measured on the filter the codec
+replaced, and is kept under [What the retired channel scripts
+measured](#what-the-retired-channel-scripts-measured).
 
 #### A monitor reports through the `finding` op
 
 A monitor has exactly one way to tell the planner something, and it is the `finding` op
 in an `onepipeline reply` envelope. The prose a turn ends in raises **no** planner
-surface, whatever it says.
-
-That is a deletion rather than a filter, and the measurement behind it is one run's own
-queue. While prose was raised automatically, a monitor with a finding to file had three
-moves and none of them was clean: the prose alone, which loses the operation's node
-attribution and its structured kind; the operation *and* prose, which is two surfaces
-for one finding; or the operation and a quiet-turn sentinel, which is one surface and a
-false statement its own judge then scores against a bar about surfacing everything
-observed. It chose the middle every time. Of `root-causes-94-plan`'s 54 surfaces, 19 are
-findings and 8 are `monitor` prose, and all 8 duplicate the finding immediately before
-them, raised three to thirty-five seconds later, six byte-identical and two
-restatements — 30% of the monitor-authored surfaces carrying nothing the operator had
-not been handed seconds earlier, against a
-[`personas/orchestrator.yaml`](../personas/orchestrator.yaml) that promises a finding
-arrives once. The one line a planner may never filter is the unread-surface count that
-[`AGENTS.md`](../AGENTS.md) owns the rule about, and it is worth nothing when part of
-that count is a repeat — a blocking surface produces no other signal until it is read,
-so every duplicate degrades the one indicator that discipline exists to protect.
-
-Suppressing prose that merely *resembles* a recent finding was the obvious alternative
-and the same measurement rules it out: two of those eight were restatements at very low
-token overlap, so content matching catches at most six of eight while risking the
-suppression of a genuine follow-up. Removing the path removes the choice instead.
-
-**What a turn's content is still read for is liveness, and nothing else.** A monitor
-that found nothing and a monitor that said nothing are two different turns, and the
-filter used to have one answer for both — which cost this host its whole supervisory
-tier for hours at a time. A frame carrying no assistant content was refused as a
-protocol failure, `oneagentgraph` recorded `member-died
-{"rule":"provider-failure","cause":"protocol"}`, and the run carried on reporting
-`ACTIVE` with nothing watching it. Observed on `spanish-language-tutor-upgrade`, which
-lost its observer five minutes in and ran roughly two hours that way while every other
-indicator stayed green.
-
-| The turn's last message | What happens |
-| --- | --- |
-| any assistant content at all | no surface is raised and nothing is queued; onejudge is answered `{"completion": false}` with a message telling the monitor its report goes as a `finding`, so the member lives and keeps watching |
-| a machine transcript a failure can be *proven* inside | the one surface left on this path: a bounded `monitor-failed` line, per the section above — this is the filter reporting on the member, not the monitor reporting on the run |
-| no assistant content at all | refused: an empty turn is a real provider defect and is what a lost turn looks like from here |
-
-There is deliberately no fixed string anywhere on this path and nothing to compare a
-message against. A sentinel is a vocabulary, a vocabulary can be got wrong, and the
-monitor was being scored on getting it wrong.
+surface, whatever it says, and there is deliberately no fixed quiet-turn string for a
+monitor to get wrong: a sentinel is a vocabulary, and a vocabulary can be got wrong.
 
 **What covers a monitor that observes something and does not file it** is its
-supervisor, not this filter: prose is the safety net no longer, so the monitor's own
-`user.persona` requires such a turn be sent back until the finding is on the channel.
-The cost is stated plainly because it is real — a monitor that notices something, writes
-it as prose, and is not sent back has reported it to nobody.
+supervisor: prose is the safety net no longer, so the monitor's own `user.persona`
+requires such a turn be sent back until the finding is on the channel. The cost is stated
+plainly because it is real — a monitor that notices something, writes it as prose, and is
+not sent back has reported it to nobody.
 
 **The periodic `check-in` member is untouched by all of this.** It is a single-sided
-`kind: oneharness` member with no judge side at all, so it never reaches
-`scripts/channel-serve.py`: it raises its own surface with `onepipeline surface --kind
-check-in` and its report reaches the queue under its own kind and source.
-`tests/e2e/test_monitor_quiet_turn_e2e.py` proves that on a real launch rather than
-asserting it, by reading the pacemaker's surface off the queue in the same run whose
-monitor prose raises none.
+`kind: oneharness` member with no judge side at all: it raises its own surface with
+`onepipeline surface --kind check-in`, and its report reaches the queue under its own
+kind and source. `tests/e2e/test_monitor_quiet_turn_e2e.py` reads the pacemaker's
+surface off the queue in the same run whose monitor prose raises none.
 
 Structured output would be the heavier way to draw the same line, and one constraint
 rules it out: oneharness validates a structured answer against the complete response, so
 `stream = true` and `schema_file` cannot both hold, and turning streaming off for the
 run's long-lived watcher would trade away the per-turn visibility a manager supervises
 with.
-
-`tests/e2e/test_monitor_quiet_turn_e2e.py` drives each of those answers through the real
-filter onto a real published channel, and reads what was and was not queued out of
-`runs/<run-id>/channel/queue.json`.
 
 #### The completion bar is scored by the planner too
 
@@ -1184,94 +1098,37 @@ always carries a bar it is always asked to score, whether or not its judge side 
 model. Editing the bar out of `config/onejudge.base.yaml` is not the answer either:
 that one is the shared dispatch bar for every worker on this host.
 
-So the filter serves that op the same way it serves `supervisor`, and for the same
-reason — **the planner is this member's judge side, so the planner scores the
-criterion**. It raises the criterion as its own non-blocking surface, under kind
-`monitor-completion`, and relays the ruling that comes back: `completion` becomes the
-boolean score and the prose beside it becomes the rationale. Nothing is invented. The
-surface says in as many words that the run is not blocked on it, because it arrives
-once, at the end, and a manager meeting it for the first time must not read it as a
-run held up on them. A planner who never answers costs nothing: `channel serve` answers
-the elapsed wait with the wait itself, carrying no `completion`, and the filter turns it
-into a non-completion that reads through as `unsatisfied` — the conservative direction,
-and only for the run nobody answered rather than permanently.
+So the codec serves that op for the same reason it serves `supervisor` — **the planner
+is this member's judge side, so the planner scores the criterion**. It raises the
+criterion as its own non-blocking question, under kind `monitor-completion`, and relays
+the ruling that comes back: `completion` becomes the boolean score and the ruling's
+`reason` becomes the score's. Nothing is invented. The surface arrives once, at the end,
+and a manager meeting it for the first time must not read it as a run held up on them. A
+planner who never answers costs nothing: a wait that elapses, or a question abandoned
+before anyone ruled, is scored `unsatisfied` — the conservative direction — and never a
+fabricated pass.
 
 This is a **workaround for an upstream gap**, and it is written down as one so it can
 be retired rather than maintained: a member whose judge side is not a harness still
 gets a scored bar it cannot answer, and neither `done_when: null` nor
-`done_when_replaces_base` can remove it. `tests/test_observer_judge_ops.py` holds the
-filter to going on serving the op, and
+`done_when_replaces_base` can remove it.
 `tests/e2e/test_monitor_survives_the_channel_e2e.py` asserts on a real launch that the
 member still carries a bar at all — so the day a release lets one decline it, that
 check fails and the score path can go.
 
-`assess`, the op a top-level `assessment` produces, is still refused by name, as is a
-`judge` asking for a score on a scale: a planner rules with a boolean, and a boolean is
-not a number. Neither can arrive from this repository's graphs, because
+`assess`, the op a top-level `assessment` produces, is refused by name, as is a `judge`
+asking for a score on a scale: a planner rules with a boolean, and a boolean is not a
+number. Neither can arrive from this repository's graphs, because
 `tests/test_observer_judge_ops.py` forbids any channel-served persona from declaring
 the keys that would ask them.
 
-#### An answer addressed to the engine, not to this reader
+### Asking the manager
 
-There is one answer the filter recognises and does **not** refuse, and it is the
-second way a monitor dies. The channel is a durable queue with two readers — the
-monitor's judge side, which wants a supervisor ruling, and the engine's reconciler,
-which wants graph edits — and through onepipeline 0.8.x it arbitrated between them by
-arrival order. So a manager's [live edit](#live-graph-edits) —
-`{"version":1,"commands":[…]}` with no boolean `completion` — reached the monitor's
-judge side whenever it got there first. Forty of this host's recorded dag-scope runs
-died there, refused as `is not a supervisor ruling` and killed. The timing was the
-worst part: it fired precisely while a manager was supervising, because the manager's
-own correction was what killed the watcher.
-
-**The adopted release fixed that at its source, and the filter stayed.** A reply is
-now routed by the halves it carries: `Channel::answer_if_verdict` puts a commands-only
-envelope on the command path alone and leaves the pending surface — and any reader
-waiting there — untouched, `Channel::claim_reply` hands the verdict reader one ruling
-per claim and passes over such an envelope an older build already queued, and an
-envelope carrying both goes to both paths. So a manager issuing a live edit mid-turn
-no longer reaches the monitor at all. What the filter below keeps is the answer for a
-release that regresses, driven directly at both boundaries rather than through the
-channel, because this failure announces itself nowhere else.
-
-The filter discriminates on the verdict. An envelope carrying a boolean `completion`
-is a ruling and is relayed exactly as before, however many edits ride with it. An
-envelope carrying `commands` and no `completion` is not this reader's, and is
-**recognised, named back to the monitor in a non-completion ruling, and otherwise left
-alone** — so the member takes another turn instead of dying. A non-completion is not a
-verdict on the planner's behalf: it settles nothing, completes nothing, and rules on
-no work, and all it says is that this surface has not been answered yet, which is what
-happened. Any prose the planner sent beside their edits is carried through to the
-monitor, since this reader is the last thing holding it.
-
-**Left alone, and not handed back.** The obvious repair — re-send the envelope with
-`onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
-measured rather than argued. `onepipeline reply` applies an envelope's commands
-*itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.32.0 answers
-`{"reply":0,"state":"applied","commands":"applied"}` and records
-`edit-committed` there and then. The edit has therefore already reached the engine by
-the time it arrives at this reader, which has nothing left to route — and re-sending
-it applies it a **second** time. The same measurement, re-submitted, comes back
-`add: node 'added-by-the-edit' already exists`; an op with no such guard (`retry`,
-`cancel`, `requeue`) would simply be applied twice.
-
-That premise is the load-bearing one: if `reply` ever stopped applying commands
-itself, ignoring one here would lose it. So it is gated rather than remembered —
-`tests/e2e/test_monitor_survives_the_channel_e2e.py` sends a real commands-only
-envelope on a real run's channel, asserts the verb answered it the way this paragraph
-quotes, asserts it reached the graph, and asserts the member lived through it. This is a local mirror in any case: the durable fix is upstream, a
-reply routed by its intended reader rather than claimed by arrival, and the filter
-holds the same line independently of whatever release is installed.
-
-### A dispatched agent asks its manager
-
-The same `channel serve` verb is the other end of the channel: how a worker that
-has reached a decision fork stops and asks rather than guessing. **Every launch this
-repository makes** exports the path of `scripts/ask-manager.sh` into the launch
-environment as `ORCHESTRATOR_ASK_MANAGER`, and that wrapper is the one supported way
-to ask. It takes the question as an argument, as `--file <path>`, or on stdin,
-blocks, and prints the manager's answer on stdout.
+A worker that has reached a decision fork stops and asks rather than guessing. **Every
+launch this repository makes** exports the path of `scripts/ask-manager.sh` into the
+launch environment as `ORCHESTRATOR_ASK_MANAGER`, and that command is the one supported
+way to ask. *When* a fork is worth blocking on is the dispatched role's judgment rather
+than this page's; both are in [`personas/planner.yaml`](../personas/planner.yaml).
 
 `scripts/ask-manager-env.sh` is the one source of that path and of the refusal when
 it is not runnable, and `scripts/onepipeline.sh` takes it for `start` and `adopt` —
@@ -1283,228 +1140,250 @@ dispatch of an orchestrated run had ever been given it: a worker read its person
 instruction to run that command, found the empty string, and had nothing to fall
 back on and nothing to report it to. The persona's own fallback is for a dispatch
 some *other* launch made, which is why it is stated there rather than here.
-*When* a fork is worth blocking on is the dispatched role's judgment rather than
-this page's; both are in [`personas/planner.yaml`](../personas/planner.yaml).
 
-The frame it writes is the shape the table above gives `channel serve`: kind
-`planner-question`, and **`"blocking": true`**, which is what holds the run at
-`awaiting-planner` until an answer arrives. It is one compact line, because a
-pretty-printed frame is refused as a parse error at line 1 column 1, a message
-naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
-ask on, and an unset one is refused rather than guessed at. What sets it depends on
-the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.32.0**, composed where the
-dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
-That names the release in force rather than the one it arrived in —
-`executor::dispatch_env` has composed the pair since
+**The command is a shim, and the bus does the asking.** It takes the question as one
+argument, as `--file <path>`, or on stdin — the three forms every dispatched task spells
+out — and turns each into one `exec onemessagebus ask surfaces --blocking` over
+`config/onemessagebus.yaml` and the run's channel directory,
+`${ONEPIPELINE_RUNS_DIR:-runs}/<run-id>/channel` against the directory it is run in,
+with the question as a `planner-question` frame on stdin, `ONEPIPELINE_CHANNEL_ASKER` as
+its `--asker` where one is set, `ORCHESTRATOR_ASK_MANAGER_NODE` as its `--about`, and
+the reply window as its `--timeout`. It refuses before asking only what no frame could
+carry — an empty question, text that is not UTF-8, a run id that is unset or is not one
+word — and adds nothing after: the bus's answer and exit status are the shim's own.
+`tests/e2e/test_ask_manager_shim_e2e.py` drives that translation.
+
+Everything after the question is on the queue is the bus's (onemessagebus's `ask.md`).
+The bus prints `correlation: <c>` on stderr as soon as the question is queued, and one
+answer on stdout:
+
+| Answer | Exit | When |
+| --- | --- | --- |
+| `{"answer":"reply","correlation":…,"reply":…}` | 0 | a reply echoing the question's correlation |
+| `{"answer":"timeout","correlation":…}` | 1 | the window elapsed with no reply; the question stands |
+| `{"answer":"abandoned","correlation":…}` | 1 | no reply, and nobody is attending the question |
+| `{"answer":"refused","reason":…}` | 1 | the bus refused the question, or the reply bound to it |
+
+Only `reply` carries a `reply` member, so an elapsed wait can never be read as the
+manager's ruling. The correlation is stamped on the question by the bus and a reply
+binds by it, so a wait never consumes another question's answer, and there is nothing
+for a manager to echo and nothing for the asker to re-ask. A later listener naming the
+same asker takes back a question an earlier one left abandoned.
+
+The manager answers it as an ordinary blocking surface: `just channel-next RUN` hands it
+over, and `just channel-reply RUN --correlation <c>` answers it — or `just channel-reply
+RUN` alone while it is the one pending ask. See [A planner writes a reply
+once](#a-planner-writes-a-reply-once).
+
+`ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
+guessed at. What sets it depends on the launch, measured per shape by
+`tests/ask_seam/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
+as of onepipeline 0.32.0**, composed where the dispatch is made, so all three `just
+orchestrate` shapes reach a worker that can ask. That names the release in force rather
+than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
-release number, because this page is held to naming the adopted one alone.
-Below *that* release only the **attached** shape did, and by accident of process rather
-than by design — an attached driver starts its observer graph in its own process, and
-the export leaked from there into every dispatch it made afterwards, which is why a
-launch passing `--dag-graph off` carried nothing even attached. Every `just plan`
-dispatch carries the id on either side of that bump, because that recipe exports it
-itself; that is sound only because it refuses a name whose run root is already taken
-— `onepipeline` mints `<name>-2` when one exists, so without that refusal the
-exported id could name a live run belonging to somebody else's workstream. What a
-`just orchestrate` dispatch is given is not derived here from the plan's `name`,
-which would be restating how a run id is minted; the journey reads it back and
-checks it names the one run that launch created. An observer member carries the
-run's id too, so finding the variable says which run a process is *under* and never
-that it is a dispatch.
+release number, because this page is held to naming the adopted one alone. Below *that*
+release only the **attached** shape did, and by accident of process rather than by
+design — an attached driver starts its observer graph in its own process, and the export
+leaked from there into every dispatch it made afterwards, which is why a launch passing
+`--dag-graph off` carried nothing even attached. Every `just plan` dispatch carries the
+id on either side of that bump, because that recipe exports it itself; that is sound
+only because it refuses a name whose run root is already taken — `onepipeline` mints
+`<name>-2` when one exists, so without that refusal the exported id could name a live
+run belonging to somebody else's workstream. What a `just orchestrate` dispatch is given
+is not derived here from the plan's `name`, which would be restating how a run id is
+minted; the journey reads it back and checks it names the one run that launch created.
+An observer member carries the run's id too, so finding the variable says which run a
+process is *under* and never that it is a dispatch.
 
-**Naming the run is half of reaching it; the other half is knowing where that run's
-records are.** `onepipeline` finds a run under `ONEPIPELINE_RUNS_DIR`, and under a
-*relative* `runs` when nothing names one — and a lifecycle dispatch works in a session
-worktree, which has no `runs` directory and is not the checkout the launch ran from. So
-an ask made from one was refused `no such run '<run>' under runs`, with the question
-never reaching the channel and no surface raised: silent from the manager's side, and a
-worker told to ask left guessing after all. The wrapper now resolves that directory
-before it serves, and states it to `channel serve` as an environment value rather than
-by changing directory — which is what keeps a `--file` path and a piped question the
-*caller's*, relative to wherever the agent ran the wrapper.
+**The reply window is fifty minutes — 3000 seconds — and that value is a measurement.**
+`ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it for one ask, and
+`reply_window_seconds` in `config/onemessagebus.yaml` is the same decision for the
+questions the monitor's codec asks, which `tests/test_onemessagebus_config.py` holds to
+the shim's default. The engine's own rendezvous waited about thirty seconds when nothing
+set a window — 29.8 seconds measured — which is a supervisor's cadence and not a
+manager's, and the codec's default with no configuration is the same 30 seconds. A
+question worth blocking on is worth waiting past the next time somebody looks at their
+terminal: fifty minutes is long enough that a manager who stepped away still answers,
+and short enough that a wedged question is not immortal. The window used to be set
+through `ONEPIPELINE_REPLY_TIMEOUT_SECONDS`, which governed the engine's wait exactly —
+measured 5 seconds as 5.03, and 12 as 11.89 — and appeared in no `--help` output, found
+in the pinned binary instead; it is now the bus's `--timeout` and a configuration key,
+stated where it is set, so a caller that forgets to export something can no longer
+return a manager's window to a supervisor's.
 
-Two rungs, each corroborated against `launch.json`, the file `onepipeline` discovers a
-run by. First the question the CLI is about to ask: is this run under the directory it
-would look in? Yes leaves the environment untouched, which is the branch every ask from
-the checkout root takes. No passes that directory over — the run id identifies the work
-and a runs root is only how to find it — for `ONEPIPELINE_NODE_SCRATCH_DIR`, the one
-thing a dispatch carries that names its own run's directory, walked up to the ancestor
-named for this run that holds a launch record. **The checkout the wrapper itself lives
-in is deliberately not a rung**: it is usually also where the launch ran, but nothing
-ties the two, and asking confidently on the wrong store is worse than being refused.
-Where neither rung answers, nothing is exported and the ask stays where it was, for
-`serve` to refuse naming what it looked under. That the engine keeps a dispatch's
-scratch under its run's own directory is `onepipeline`'s to change, so
-`tests/ask_seam/test_launch_ask_seam_e2e.py` measures it against a real dispatch of
-every launch shape rather than restating it.
-`ORCHESTRATOR_ASK_MANAGER_NODE`
-optionally attaches the surface to a node, and a node the run does not have is a
-fatal refusal rather than a retry.
+### What the retired channel scripts measured
 
-The manager answers it as an ordinary blocking surface — `just channel-next RUN`
-hands it over, `just channel-reply RUN` answers — with one requirement the surface
-states in its own text: **the reply's `message` must repeat the correlation token
-verbatim.** A reply here is [claimed by whichever reader reaches it
-next](#a-planner-writes-a-reply-once), so a ruling that does not echo the token is
-somebody else's answer arriving at this call, and a listener re-arms rather than
-handing it over.
+This host once reconciled the planner channel by hand, in four pieces that are deleted:
+`channel-serve.py`, the observer's judge-side filter between onejudge's supervisor frame
+and `onepipeline channel serve`; `ask-manager.sh` as a full wrapper, with
+`ask-manager-contract.sh`, the rule it shared with the reply recipe; `channel-reply.sh`,
+the recipe's reply guard; and `live_edit_check.py`, the envelope's criteria check. Every
+rule below was an incident first, and each is now the installed `onemessagebus`
+release's to keep, in the document that states it: onemessagebus's `codecs.md` for the
+filter, `ask.md` for the wrapper, its contract and the reply guard, `validators.md`
+for the envelope check, and `queues.md` for the queue race. **This section is
+history**: nothing in it describes the tree as it stands, and a release number in it is
+the one pinned when the measurement was taken.
 
-**What it does about that depends on the token the stray ruling carries**, and the
-difference is worth knowing because one of the two puts a second question in front of
-you. A ruling echoing *another* ask's token is an answer that outlived the asker it was
-meant for; this question's own blocking surface was never touched and is still the one
-thing to answer, so the wrapper re-arms behind a **non-blocking** note that says so and
-asks to be left alone — you answer the question, and the re-armed listener receives it.
-A ruling echoing **no** token is this question's own surface answered without the echo:
-that surface is spent, and a run with nothing blocking pending refuses every further
-reply (`run '<id>' has settled, so nothing will ever read a reply to it`), so the
-question is put back as a blocking surface or nobody could answer at all.
+#### The observer filter, `channel-serve.py`
 
-The split exists because a duplicate blocking question is self-perpetuating. On run
-`issue-28` a re-ask queued one, the manager answered both copies, only one listener was
-left to claim an answer, and the orphaned one was then drawn — milliseconds after
-asking — by the next question put to that channel, which doubled in turn.
+- **It existed because the two halves agreed on the response and not on the request.**
+  The engine's `channel serve` answered a ruling with exactly the `{completion, message,
+  reason}` object onejudge's `supervisor` op expects, but onejudge wrote `{"op":
+  "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages":
+  [...], "session"}` to a judge command, and `channel serve` read `{"kind", "message",
+  "blocking"?, "node"?}`. Naming `channel serve` directly as the member's
+  `judge.command` was refused on the first turn — `the observer emitted a bad frame:
+  unknown field 'op'` — and onejudge killed the member with `provider produced no
+  output`, leaving the run driven but unwatched. The filter recovered the run id from
+  the composed task's opening line, and turned the engine's answer to an elapsed wait,
+  `{"answer":"timeout","correlation":…}`, into a non-completion so the member lived.
+- **Raising prose duplicated findings.** While prose was raised automatically, a monitor
+  with a finding to file had three moves and none was clean: the prose alone, losing the
+  operation's node attribution; the operation and prose, two surfaces for one finding; or
+  the operation and a quiet-turn sentinel, one surface and a false statement its judge
+  scored against a bar about surfacing everything observed. It chose the middle every
+  time. Of `root-causes-94-plan`'s 54 surfaces, 19 were findings and 8 `monitor` prose,
+  and all 8 duplicated the finding immediately before them, raised three to thirty-five
+  seconds later, six byte-identical and two restatements — 30% of the monitor-authored
+  surfaces, degrading the unread-surface line a planner may never filter. Suppressing
+  prose that merely resembled a recent finding would have caught at most six of the
+  eight, because the two restatements shared very little wording, so the path was removed
+  instead.
+- **A monitor that found nothing was not a monitor that failed.** A frame carrying no
+  assistant content was refused as a protocol failure, `oneagentgraph` recorded
+  `member-died {"rule":"provider-failure","cause":"protocol"}`, and the run carried on
+  reporting `ACTIVE` with nothing watching it: `spanish-language-tutor-upgrade` lost its
+  observer five minutes in and ran roughly two hours that way.
+- **A lost turn did not always arrive empty.** The harness wrote its own transcript into
+  the last message instead — measured off this host's `runs/rc-fixes-brief` channel,
+  fifteen JSON-RPC frames and 21,531 characters, most of it the prompt echoed back,
+  ending in a `method: error` frame and a `turn/completed` whose `status` was `failed`;
+  twenty of them queued unread on one run. So the filter raised a proven loss as
+  ``monitor turn failed: usageLimitExceeded on codex. It said nothing, so there is
+  nothing to answer; its 21531-character transcript is not repeated here.``, and its
+  proof vocabulary was deliberately never widened, because widening it is how the next
+  harness's shape outruns the classifier and a planner is sent to the wrong quota.
+- **Republished transcripts flooded the host.** Measured on 2026-08-24, 26 oversized
+  surfaces on this host, every one `status: completed` with `error: null`, were raised as
+  the monitor's own words: 176.1 MB of protocol carrying zero model-authored characters, a
+  3.6 GB journal holding one 699 MB event line, and a read-only `just runs` that needed
+  5.7 GB of RSS. A bounded `monitor-transcript` kind existed for that and went with the
+  prose path.
+  <!-- dated-claim: incident what this host's own accumulated journals held on one day, kept as the reason a lost turn's transcript is never repeated in a surface rather than as a claim about any release -->
+- **The scoring op killed every watched run's monitor at its end.** `judge` was refused
+  — `got 'judge'`, `provider-failure`/`protocol` — though onejudge always asks it of a
+  member carrying a `done_when`, so the monitor died at the end of every run it watched.
+  It was then served as the planner's score, and the filter wrote the ruling's prose as
+  `rationale` where onejudge reads a score's justification from `reason`, so every score
+  it relayed arrived unexplained; the codec writes `reason`.
+- **A manager's live edit killed the watcher it was supervising.** Through the engine's
+  0.8.x releases a reply went to whichever reader arrived first, so a live edit —
+  `{"version":1,"commands":[…]}` with no boolean `completion` — reached the monitor's
+  judge side whenever it got there first. Forty of this host's recorded dag-scope runs
+  died there, refused as `is not a supervisor ruling`, precisely while a manager was
+  supervising. The engine then routed a reply by its halves (`Channel::answer_if_verdict`,
+  `Channel::claim_reply`), and the filter kept recognising such an envelope and answering
+  the member with a non-completion naming the edits, never re-sending it: the engine's
+  `reply` applied an envelope's commands itself before queuing it — replying `{"op":"add",
+  …}` to a real run answered `{"reply":0,"state":"applied","commands":"applied"}` and
+  recorded `edit-committed` there and then, and the same envelope re-submitted came back
+  `add: node 'added-by-the-edit' already exists`, while an op with no such guard (`retry`,
+  `cancel`, `requeue`) would simply have applied twice.
 
-**A re-arm is a new listener, and the question only survives one because the ask has a
-name.** `onepipeline channel serve` is a listener an asker rents rather than the asker
-itself, so a succession of them over one still-pending question is what waiting here
-looks like. A session that ends leaves what it raised marked as owed to nobody, and the
-engine gives that back only to a later session carrying the **same asker** —
-`ONEPIPELINE_CHANNEL_ASKER`, an opaque word compared for equality and nothing else,
-which the engine composes for every dispatch it makes as that dispatch's own scratch
-path. A session naming none adopts nothing and nothing adopts what it raised, so before
-the wrapper named one, each re-arm withdrew the question: the queue held it in neither
-slot, a manager's verdict naming it was refused for naming a question the run had not
-handed out, and the ask blocked for its whole reply window and was killed with nothing
-on either pipe. Nothing raised a surface, because a question that never arrives looks
-exactly like an agent that never had one.
+#### The ask wrapper, `ask-manager.sh`, and its shared contract, `ask-manager-contract.sh`
 
-So `scripts/ask-manager.sh` **inherits a dispatch's asker untouched and names itself
-when nothing gave it one**, from the same token it minted for that question — already
-this invocation's alone and constant across its re-arms, which is what an asker has to
-be. Inheriting rather than minting over is the engine's own model and not a detail: the
-asker is the *dispatch*, so a question an earlier ask of that dispatch left outstanding
-is still owed and is taken back. A blank inherited value is read as none given, because
-`serve` refuses one — a name every session matches would take over questions belonging
-to askers it has never heard of — and that refusal would reach a caller as a channel
-that would not accept its question.
+- **The frame had to be one compact line.** A pretty-printed frame was refused as `EOF
+  while parsing an object at line 1 column 1`, a message naming the symptom and not the
+  cause.
+- **The server answered its own timeout with a plausible ruling.** Through engine
+  release 0.31.0, `channel serve` printed `{"completion":false,"message":"no planner reply
+  within the timeout; continue",…}` at exit 0 when its window elapsed, which a caller
+  checking only the exit status acted on as the manager's answer; the release after it
+  printed the wait itself, and the wrapper refused that line as a timeout with nothing on
+  stdout.
+- **A reply was claimed by whichever reader arrived next.** Measured on a live run under
+  the engine's 0.8.x releases, a re-ask returned
+  `{"version":1,"author":"monitor","commands":[{"op":"context",...}]}` — a live graph edit
+  addressed to the engine. Read against the engine's source at tag v0.11.0, `Reply`
+  carried no surface id and `claim_reply` handed the oldest unclaimed reply to whoever
+  polled next, while `serve` had no listen-only mode, so every frame it accepted queued
+  another surface. So the wrapper minted a correlation token per question, acted only on a
+  JSON object carrying a boolean `completion` whose `message` echoed that token, and
+  discarded everything else; the contract file was the one statement of that rule, the
+  token's prefix and the reference grammar, sourced by the wrapper and the reply recipe
+  alike, because a reply the recipe waved through and the wrapper then discarded would be
+  reported `delivered` and read by nobody. The bus's correlation is the upstream change
+  that note asked for: stamped on the question, bound by the reply, and never consumed by
+  a wait it does not match.
+- **Re-arm, not re-ask.** A drawn ruling echoing another ask's token left this question
+  pending, so the wrapper re-armed a listener behind a non-blocking note; one echoing no
+  token had spent this question's own surface, and a run with nothing blocking pending
+  refused every further reply (`run '<id>' has settled, so nothing will ever read a reply
+  to it`), so the question went back as a blocking surface. The split was forced by a
+  self-sustaining duplicate: on run `issue-28` a re-ask queued a second blocking copy, the
+  manager answered both, and the orphaned answer was drawn — milliseconds after asking —
+  by the next question put to that channel, which doubled in turn.
+- **A listener is rented, the asker is not.** A session naming no
+  `ONEPIPELINE_CHANNEL_ASKER` adopted nothing, so each re-arm withdrew the question: the
+  queue held it in neither slot, a verdict naming it was refused, and the ask blocked for
+  its whole window and was killed with nothing on either pipe. So the wrapper inherited a
+  dispatch's asker untouched and named itself from its own token when nothing had.
+- **A lifecycle dispatch could not find its run.** Its working directory is a session
+  worktree with no `runs` directory, so an ask was refused `no such run '<run>' under
+  runs` with no surface raised. The wrapper resolved the runs root in two rungs, each
+  corroborated against the run's `launch.json` — the directory the engine would look in,
+  then `ONEPIPELINE_NODE_SCRATCH_DIR` walked up to the run's own directory — and never its
+  own checkout, because asking confidently on the wrong store is worse than being refused.
 
-**An envelope that question cannot use is refused where you send it.** The wrapper acts
-only on a JSON object carrying a boolean `completion` and discards everything else with
-nothing on the channel to say so: three replies omitting it were each reported
-`delivered`, each read by nobody, and the planner that asked stayed blocked for about
-thirty-five minutes, re-asking twice. So `just channel-reply` reads the pending surface
-first — `scripts/channel-reply.sh`, judging by the same rule the wrapper applies, out of
-the one file both source — and refuses such an envelope, naming the field that is
-missing or of the wrong type and leaving the question pending for your next try. It is
-narrow deliberately: it fires only while a **blocking** surface carrying that wrapper's
-token is pending, and never on an envelope carrying `commands`, which is a live edit the
-engine routes to the command path and which you must still be able to send while a
-question waits.
+#### The reply guard, `channel-reply.sh`
 
-**The wrapper is mitigating this, not fixing it, and the fix is onepipeline's.** Two
-things in that crate produce the duplication between them, and both are stated here
-against the source at tag **v0.11.0** — the release
-[`config/onepipeline.version`](../config/onepipeline.version) adopts and therefore the
-one a dispatch runs. Line numbers are that tag's, which is immutable; the function
-names are what to search by if a later release moves them.
+- **A reply the asker could not use was reported `delivered`.** Three replies omitting
+  `completion` were each reported delivered and each read by nobody, and the planner that
+  asked stayed blocked for about thirty-five minutes, re-asking twice. So the recipe read
+  `queue.json` before sending and refused an envelope the wrapper would discard, naming
+  the missing field — only while a blocking surface carrying the wrapper's token was
+  pending, and never for an envelope carrying commands.
+- **A verdict for a question nobody had handed out reached nobody.** The recipe refused a
+  ruling echoing the token of a blocking question still waiting to be read, keyed on the
+  envelope's own bytes rather than on queue state, because a monitor's score is the same
+  bytes on the queue as a token-less answer. It also merged which halves the envelope
+  carried, and each note's `reached` read back off the journal, into the engine's receipt.
+  A reply bound by the bus's correlation reaches its question whether or not it was
+  handed out first, and one naming a correlation nothing pending holds is refused.
 
-*A reply is bound to the next reader, never to the surface it answers.*
-`wait_for_reply` (`src/driver.rs:1918`) hands back whatever `ChannelState::claim_reply`
-(`src/channel.rs:594`) gives it, and that is a cursor over `replies.jsonl` —
-`self.replies().into_iter().find(|queued| queued.id >= claimed_through && …)` — so the
-oldest unclaimed reply goes to whoever polls next regardless of which question it
-answers. Nothing could correlate the two even in principle: `Reply`
-(`src/channel.rs:173`) carries a version, an author, `completion`, `message`, `reason`
-and `commands` — and no surface id. `ChannelState::answer` (`src/channel.rs:532`)
-records none against the reply it queues either, clearing `pending` wholesale at
-`:534`. That absence is the whole reason a correlation token had to be invented in a
-shell wrapper. **The upstream change
-is to carry the answered surface's id on `Reply` and `QueuedReply` and to have
-`claim_reply` pass over a reply whose id is not the caller's own pending surface** —
-which also retires the token, since a reply that cannot reach the wrong reader needs no
-echo to be recognized. That id has to be an optional, defaulted field: `Reply` is
-`#[serde(deny_unknown_fields)]` at `src/channel.rs:172`, so a reply written by anything
-older carries none and must still be claimable, and a reply carrying none must still
-serialize without it.
+#### The envelope check, `live_edit_check.py`
 
-*A listener cannot wait without asking again.* `serve` (`src/driver.rs:1814`) loops over
-its stdin frames at `:1819` and calls `channel.push(Surface { … })` at `:1850` for every
-frame it accepts, and `ChannelState::push` (`src/channel.rs:482`) appends
-unconditionally at `:491`. The single exception is the pacemaker's, `retain`ing away a
-superseded `source::CHECK_IN` at `:486`-`:490` — a proposal frame, which is what an ask
-is, has no such path. So there is no listen-only mode: waiting again necessarily
-queues another surface. **The upstream change is a frame that waits on the reply queue
-without pushing one** — the `ObserverFrame` at `src/driver.rs:1898` is where it would
-be declared, and `serve`'s body is where the `push` would become conditional on it.
-
-*What the mitigation does and does not prevent.* It prevents the observed defect: a
-stray ruling no longer puts a second **blocking** question in front of the manager, so
-the self-sustaining loop above is broken and one ask is one question to answer. It does
-not prevent a second **surface** — the re-arm is still a `push`, of a non-blocking note,
-because of the paragraph above — and it does not prevent a reply from reaching the wrong
-reader in the first place, which is what the token detects rather than avoids.
-
-Nothing else is handed back to the asking agent either: a reply that is not a
-ruling — a ruling carries a boolean `completion`, and a live graph edit routed here
-does not — and `channel serve`'s own answer at exit 0 to a wait that elapsed are both
-refused, with the reason on stderr and nothing on stdout. On the adopted 0.32.0 that
-answer is the wait itself, `{"answer":"timeout","correlation":…}`, which carries no
-`completion` and is refused as a timeout rather than as not a ruling. The window that
-timeout measures is the wrapper's own, fifty minutes rather than `serve`'s ~30
-seconds, and `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it.
-
-`scripts/ask-manager.sh` states each of those checks against what measured it, and
-`tests/ask_seam/test_ask_manager_e2e.py` drives every one against a real run's channel.
+- The recipe piped the staged envelope into it, and it answered by exit status — `0`
+  send, `1` refuse, `3` a judged turn that answered nothing, `4` a structural refusal. It
+  composed the **whole effective task** the engine would compose from the run's own
+  record — an `amend` onto the node's current task, a `requeue`'s overrides onto the
+  parked node — and kept a register of passes under the run root, keyed on the text and
+  both tiers' bars. Its structural tier was added after a `requeue` amending `adoption:
+  fast` onto a node publishing `local-direct` behind a releasing dependency was accepted
+  and then failed an hour of work at its last step. Its successor is the bus's command
+  validator, which reads no run state, because the bus caches a pass on the envelope's
+  bytes and a verdict folded over the run would make that cache unsound — so that
+  refusal is now the engine's and the merge path's.
 
 #### A question that was raised and then dropped
 
-One more defect of that crate reaches this seam, and it is the one a hang of
-`tests/ask_seam/` is read for. `runs/<run-id>/channel/queue.json` is read-modify-written
-by every read of the channel — `onepipeline next`, which `just channel-next` calls — and
-by the process that writes a surface into it, with nothing serialising the pair. A read
-that lands over a worker's concurrent write rewrites the queue from the state the reader
-loaded, which never held the surface, so the worker's blocking question is gone from the
-queue while everything else records that it was asked. The asking wrapper then waits its
-whole reply window for a question nothing will ever hand out, and from outside that reads
-exactly like a worker still waiting for an answer.
-
-**Its signature is three records under one run disagreeing**, and the queue is the one to
-open first: `surfaces.jsonl` holds the surface, the run's journal recorded it queued, and
-`queue.json` reads `next_id: 0` — last written by a process that never saw it. That pair,
-a journal entry for the surface beside a queue that has never numbered one, is this
-defect and nothing else; a queue that holds the surface is a question still waiting for
-its answer, which is the ordinary case and the one `just channel-next` resolves.
-
-**What makes it fire is not established, and inconclusive is the recorded answer.** It
-reproduces under a single serial pytest process, so it needs no second one; it has not
-been reproduced with this checkout's `.venv` lock provably free, so lock contention is
-not excluded either. Neither cross-target concurrency nor contention is therefore the
-cause on the evidence, and nothing here should be read as naming one. The race is the
-engine's: the repair is to serialise the queue's read-modify-write in that crate, and
-this repository cannot make it short of doubling the verb its journeys exist to prove.
-
-**What this repository's own suite can do is stop being the reader in the window, and
-it does.** The managers its journeys play — `_waited_for_question` in
-`tests/ask_seam/test_ask_manager_e2e.py`, and `answer_each` and `answer_persistently`
-in `tests/e2e/planner_channel.py` — used to poll an empty channel through the verb from
-the moment the asking wrapper was spawned, and every one of those reads was a rewrite of
-`queue.json` from a state that held no surface: measured, `onepipeline next` over an
-empty queue hands nothing out and still leaves the file under a new inode and a new
-stamp. Two consecutive publication gates here each lost a different one of those
-journeys' questions to it. So each of those loops now **looks** before it reads —
-`queue_may_hand_something_out` reads the file read-only until it holds something waiting
-or pending — and only then hands out through `channel-next`, which keeps the suite's
-own write out of the window the worker's push lands in. That is not doubling the verb:
-the verb is still the only thing that hands a surface out, and a manager who reads
-`just channel-next` when the views say something is unread is doing the same thing.
-What it does not close is a push landing while a *second* surface is already queued,
-since the reader then has something to read; that residue, and the manager's own reads,
-are the engine's repair to take.
-`test_a_waiting_manager_leaves_an_empty_queue_unwritten_until_a_question_is_there` holds
-both halves: a wait with nothing queued moves neither the queue's inode nor its stamp,
-and the same waiter then hands a real question out through the verb.
+- **The queue was a document every reader rewrote.** `runs/<run-id>/channel/queue.json`
+  was read-modify-written by every read of the channel — `onepipeline next`, which `just
+  channel-next` calls — and by the process writing a surface into it, with nothing
+  serialising the pair, so a read landing over a worker's write rewrote the queue from a
+  state that never held the question. The asker then waited its whole window for a
+  question nothing would hand out. Its signature was three records disagreeing:
+  `surfaces.jsonl` held the surface, the journal recorded it queued, and `queue.json` read
+  `next_id: 0`. What made it fire was never established: it reproduced under a single
+  serial pytest process, and contention for this checkout's `.venv` lock was not
+  excluded. This suite's played managers stopped being the reader in that window by
+  looking at the file read-only before reading through the verb — measured, `onepipeline
+  next` over an empty queue rewrote the file under a new inode — after two consecutive
+  publication gates each lost a question to it. The bus keeps the log as the record and
+  the document as a sealed projection of it, so a lost write costs the next reader a fold
+  and never a record (onemessagebus's `queues.md`, "The projection").
 
 ### Read profiles
 
@@ -1530,33 +1409,39 @@ none.
 
 ### A planner writes a reply once
 
-**Acceptance means delivery for a reply, exactly as it does for an edit.** A reply
-`channel-reply` accepts is appended to `runs/<run-id>/channel/replies.jsonl` and
-claimed from there by whichever reader reaches it next, under the queue lock, so
-one reply reaches exactly one reader and no reader can lose it. Nothing has to be
-listening at the moment the planner writes, and there is no boundary at which the
-listener changes: the reconciler runs for as long as the run does.
+**Acceptance means delivery for a reply, exactly as it does for an edit.** `just
+channel-reply` is one `onemessagebus` verb over `config/onemessagebus.yaml` and the
+run's own channel directory, and choosing the verb is all it adds. An envelope carrying
+a verdict, or sent with `--correlation`, is `onemessagebus reply surfaces`. An envelope
+carrying commands and no verdict, sent with no `--correlation`, is `onemessagebus send
+replies`, because `reply` refuses such an envelope whenever no question is pending —
+most of a run — and a live edit binds to no question anyway. Either way the layout
+appends it durably — a verdict to `replies`, bound to the ask it answers, and commands
+to `commands`, which the reconciler drains — so nothing has to be listening at the
+moment the planner writes, and there is no boundary at which the listener changes: the
+reconciler runs for as long as the run does.
 
-The command reports what happened, on stdout:
+**A verdict binds by correlation, never by arrival** (onemessagebus's `ask.md`).
+`--correlation <c>` names the ask it answers; with none, the verdict binds to the one
+pending ask, and is refused naming how many are pending when that is none or several. A
+correlation nothing pending holds — unknown, or already answered — is refused naming
+it, with nothing appended. So a reply cannot reach a reader that did not ask for it,
+and a question that has not yet been handed out is still answerable by its correlation.
+
+The command reports what happened, on stdout, as the bus's one line — from `reply`, and
+from `send` for a commands-only envelope:
 
 ```json
-{"reply": 3, "state": "applied", "commands": "applied"}
+{"answered": 3, "correlation": "c-…", "sent": […]}
+{"queue": "commands", "position": 7, "id": 7}
 ```
 
-`applied` means the reconciler answered the envelope before the command exited.
-The reply survives whether or not it did — it is durable the moment it is
-accepted — so a state that is not `applied` is not an instruction to resend.
-Beside `reply` and `state`, whose spellings and meanings are unchanged, the adopted
-release carries **one key per carried half** — `commands` here, and a `verdict` where
-the envelope ruled. A key's *absence* says that half was never carried, which is a
-different statement from a half that was carried and did nothing.
-
-**What that state is not is a receipt that anybody could act on the reply.** It is a
-transport receipt: the engine took the envelope and queued it for whoever is waiting,
-and whether that reader can *use* it is a different question the engine does not ask.
-The one reader that provably cannot is [a dispatched agent's
-wrapper](#a-dispatched-agent-asks-its-manager), which is why `just channel-reply`
-refuses that one case before the engine ever sees it.
+`answered` is the question answered and `sent` every record appended; a commands-only
+envelope sent with `--correlation` goes to `reply` and answers nothing — `answered` is
+`null` — leaving the ask pending. **Either line is a transport receipt, not a receipt
+that anybody acted on the reply**:
+whether the reconciler applied an edit is the run's record to say, as an
+`edit-committed` or `edit-rejected` event.
 
 Replies used to depend on a live rendezvous, so `channel-reply` failed with
 `channel rendezvous timed out` whenever nothing held the endpoint open — which was
@@ -2041,58 +1926,56 @@ delta's compiled mutations or none of them, and reconstructs the graph from what
 was actually submitted rather than inferring it. Channel frames are locked,
 acknowledged JSON lines and are not limited to a FIFO's atomic-write size.
 
-**Every edit is applied or rejected, and `channel-reply` reports which.** It
-validates each edit against the graph projected from `events.jsonl` — through the
-reconciler's own validator, so the answer is the one the reconciler would give —
-and exits non-zero with the reason when it cannot be applied, before anything is
-queued or sent. There is no round for an edit to be inside of: the desired graph is
-what an edit changes, and it outlives any one dispatch. That is why an `add` is
-still accepted against a run whose driver has exited, while a *verdict* to a
-settled run is refused — nothing will read the verdict, but the graph is still
-there to be edited and an adopted driver will act on it.
+**Every edit is applied or rejected, and the run records which.** There is no round
+for an edit to be inside of: the desired graph is what an edit changes, and it outlives
+any one dispatch. That is why an `add` is still accepted against a run whose driver has
+exited, while a *verdict* to a settled run is refused — nothing will read the verdict,
+but the graph is still there to be edited and an adopted driver will act on it.
 
-Accepted edits are appended to the durable channel queue and drained from there by
-the reconciler, which answers each claimed command; `channel-reply` waits for that
-verdict before it exits:
+`just channel-reply` appends accepted edits to the channel's durable `commands` queue —
+through `onemessagebus send replies` when the envelope carries commands alone and names
+no `--correlation`, through `onemessagebus reply surfaces` otherwise, as [A planner
+writes a reply once](#a-planner-writes-a-reply-once) says — and the reconciler drains
+them from there, validating each against the graph projected from `events.jsonl` and
+answering each claimed command. The verb does not wait for that answer; its exits are
+the bus's (onemessagebus's `cli.md`):
 
 | Exit | Meaning | stdout |
 | --- | --- | --- |
-| 0 | every edit in the envelope was applied by the reconciler | `{"reply":N,"state":"applied","commands":"applied"}` |
-| 1 | the edits were accepted and durable but not reconciled in time; they remain queued — check `just monitor` rather than resubmitting | the reply's state |
-| 2 | the reply was malformed, or an edit was refused at submission, or the reconciler rejected it | the reason, on stderr |
+| 0 | the envelope was appended; the reconciler applies or rejects its edits from the queue | `{"queue":…,"position":…,"id":…}` from `send`, `{"answered":…,"correlation":…,"sent":[…]}` from `reply` |
+| 1 | the bus said no, with nothing appended: the validator refused or could not judge the envelope, or — through `reply` — its correlation binds no pending ask | the reason, on stderr |
+| 2 | the envelope was not a JSON object, its correlation was malformed, or the invocation was a usage error | the reason, on stderr |
 
-Before any of that, an envelope stating task prose — an `amend`, the whole task an
-`add`, a `retry` or a `requeue` states, or the `criterion` a `note` may carry — is held
-to the bar a plan's task is held to, over the **whole effective task** the op results in
-as the engine composes it: `orchestrator/criteria_guard.py`'s matchers over every
-resulting task, then one judged turn of the `just review-plan` reviewer over a **novel
-whole task** — an added node, a retry's replacement, a requeued node's amended task —
-spent once per resulting task and recorded under the run's own root so the same text
-never spends a second. A correction — a bare `amend`, a note's `criterion` — is matched
-and never judged; a note's `text` is never read at all. The record is keyed on which
-tiers the text was asked as well as on the text, so a bare `amend`'s free pass over the
-task it composed onto never stands in for the judged turn an `add` or a `retry` stating
-that same text owes. A refusal by either tier exits 2
-with the findings on stderr and sends nothing; a judged turn that answered nothing exits
-2 too, saying `could not be judged` and asking for the same envelope again rather than a
-correction. AGENTS.md, under "Answering on the channel", is the contract for what each
-carrier is asked, how the effective task is composed, and why a node nothing dispatches
-from is read by neither tier.
+Before anything is appended, an envelope carrying commands is held by the one validator
+`config/onemessagebus.yaml` declares on `replies` — `scripts/envelope-review.sh`, which
+runs `orchestrator/envelope_review.py` — to the bar a plan's task is held to: an
+`amend`, the whole task an `add`, a `retry` or a `requeue` states, and the `criterion` a
+`note` may carry. The envelope is judged **as it states itself** and no run state is
+read, because the bus caches a pass on the envelope's bytes and a verdict that also
+depended on the run's journal would make that cache unsound.
+`orchestrator/criteria_guard.py`'s matchers read every stated task, then one judged turn
+of the `just review-plan` reviewer reads a **novel whole task** — an added node, a
+retry's replacement, a requeued node's amended task. A correction — a bare `amend`, a
+note's `criterion` — is matched and never judged; a note's `text` is never read at all.
+The bus judges the whole offer before appending any of it, so a refusal by either tier
+sends nothing and its findings are the reason on stderr; a judged turn that answered
+nothing is **unjudged**, saying `could not be judged`, and is never sent — send the same
+envelope again once the harness answers rather than correcting it. Only a pass is
+cached, by the bus, under `.cache/envelope-passes` keyed on the envelope's bytes and on
+what `--bar-fingerprint` prints, so moving either tier of the bar invalidates every
+recorded pass (onemessagebus's `validators.md`).
 
-Ahead of both, every node an envelope results in — what an `add` states, and what a
-`retry` or `requeue` returns with its overrides folded in — is held to the structural
-rules `just check-plan` applies to a plan's nodes (`orchestrator/structural_guard.py`
-lists them once for both tiers), over the graph the whole envelope leaves. A node either
-tier's rules refuse — a `requeue` amending `adoption: fast` onto a node publishing
-`local-direct` behind a releasing dependency is the case that motivated it — exits 2 with
-that rule's own message and sends nothing.
+Ahead of both, every node an envelope states — what an `add` states, and a `retry`'s
+replacement — is held to the structural rules `just check-plan` applies to a plan's
+nodes (`orchestrator/structural_guard.py` lists them once for both tiers), over the
+graph the envelope's own nodes form, and a node they refuse is refused with that rule's
+own message. A `requeue` folding fields onto a parked node's own `repo` and `deps` is
+not in that envelope, so it is the engine's and the merge path's to refuse.
 
-An edit that passes submission can still lose a race to the frontier it was
-validated against — the log a submitter reads lags the live frontier — and that
-case is a synchronous rejection to the caller that issued it, not a proposal to
-be noticed later. Every rejection is also surfaced as a `reconciler: rejected ...`
-proposal and recorded as an `edit-rejected` event carrying the command and the
-reason. No accepted command is silently dropped.
+An edit that reaches the queue can still lose a race to the live frontier. Every
+rejection is surfaced as a `reconciler: rejected ...` proposal and recorded as an
+`edit-rejected` event carrying the command and the reason. No accepted command is
+silently dropped.
 
 Both edits that change only *eligibility* — `attest` and `reparent` — wake the
 scheduler on the same reconciler pass. `blocked` and `skipped` are derived
@@ -2790,7 +2673,7 @@ checkout than the driver it was supervising. Strict replay stays strict in the
 other direction — a line it cannot read might have been an authoritative graph
 mutation — but a *collision*, two records sharing a number with both present and in
 order, loses nothing and is read through. That last part is not cosmetic:
-`channel-reply` validates every live edit against this reader, so treating a
+the reconciler validates every live edit against this reader, so treating a
 collision as fatal ends a healthy run's supervisability, which is what it did.
 
 ### A run outlives the turn that launched it
@@ -3067,16 +2950,17 @@ run:
   [Adopting a run whose driver died](#adopting-a-run-whose-driver-died).
 * **Every live rendezvous**, on `just host`: one line per process holding a question
   open for a reply, naming the run the question is bound to and the dispatch it sits
-  under. A blocking surface produces no other signal until somebody reads it, so a live
-  `onepipeline channel serve` with nothing pending on the queue reads as a question
-  stuck below the queue — a stall a manager is supposed to break — when it is as likely
-  to be a passing journey of this repository's own suite, which stands up a real
-  rendezvous on a fixture run whose id expires by itself. Answering that one by hand
-  puts a manager's verdict into a test. A rendezvous bound to a run this runs root does
-  not hold is reported as exactly that rather than left out, because it is the one a
-  manager most needs to see. One rendezvous is one line: `uv run onepipeline channel
-  serve RUN` puts those argv words on the launcher as well as on the engine it execs
-  into, and counting processes would report one open question as several.
+  under. A rendezvous is a live `onemessagebus ask` or `onemessagebus serve`, bound to
+  its run by the channel its `--transport-dir` names — argv rather than the
+  environment, because argv is what told the bus which channel to hold open. A blocking
+  surface produces no other signal until somebody reads it, so a live one with nothing
+  pending on the queue reads as a question stuck below the queue — a stall a manager is
+  supposed to break — when it is as likely to be a passing journey of this repository's
+  own suite, which stands up a real rendezvous on a fixture run whose id expires by
+  itself. Answering that one by hand puts a manager's verdict into a test. A rendezvous
+  whose argv names no run's channel is reported as unattributable, and one bound to a
+  run this runs root does not hold as exactly that, rather than either being left out,
+  because it is the one a manager most needs to see.
 
 Both additions are written beside what the published verb printed rather than into it:
 every line the engine gave is written back in order, for the reason
@@ -3471,8 +3355,9 @@ way to learn which of the two things happened. Five words the run records —
 — plus one more a caller reads back from the verb rather than from the run: the reply
 was accepted durably without the reconciler having answered within the reply timeout.
 That is still queued rather than a refusal, and **never** an instruction to send the
-note again. `just channel-reply` merges the recorded word into its own answer as
-`reached`, per note it sent.
+note again. `just channel-reply` answers the bus's receipt alone, so the recorded word
+is read off the run: the `reached` of the note's operation in its `edit-committed`
+event, which `just monitor` renders.
 
 The first four are the note reaching the running dispatch's conversation and `carried`
 is the note reaching no turn of it; under the default those two are the only ways one
@@ -3529,6 +3414,11 @@ pins, and each recipe named above is a thin wrapper over one of their verbs.
   (surfaces, replies, live edits and their authorship, attestation), the read-time
   filter profiles, the read-only views, and the driver `just orchestrate`
   launches.
+- **`onemessagebus`** — the channel's transport and the verbs this host speaks it
+  through: `ask` (the shim `ORCHESTRATOR_ASK_MANAGER` names), `reply` and `send` (`just
+  channel-reply`), `serve --codec onejudge` (the observer's judge side) and `status`,
+  with the validator, its pass cache and the codec's constants configured once in
+  `config/onemessagebus.yaml`.
 - **`oneagentgraph`** — one dispatched agent turn and the graph of members a run
   drives, its history records, and its scratch.
 - **`onevcs`** — repository identity, the rules that resolve a policy from it,

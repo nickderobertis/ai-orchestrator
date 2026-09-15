@@ -1,10 +1,11 @@
-"""A turn the real producer really lost, and the protocol schema it publishes.
+"""A turn the real producer really lost, recorded the way a monitor loses one.
 
-`scripts/channel-serve.py` reads a harness's own machine transcript to name a monitor
-turn its agent side lost. Two things reconcile that reading against reality — the drift
-gate in `tests/test_lost_turn_wire_contract.py` and the journey in
-`tests/e2e/test_lost_turn_wire_contract_e2e.py` — and both need the same lost turn, so
-producing one lives here rather than in either.
+The monitor's judge side — `onemessagebus serve --codec onejudge`, as `graphs/dag-scope.yaml`
+declares it — reads a harness's own machine transcript to tell a turn its agent side lost
+from one that said something. The bus proves that reading against a transcript its own suite
+recorded; `tests/e2e/test_lost_turn_wire_contract_e2e.py` proves the producer this host
+installs still writes a shape the judge side it spawns reads the same way, and producing that
+turn lives here.
 
 Nothing about the producer is stood in for. A real `oneharness` runs the real `codex`
 binary through `codex app-server` — the path a dispatch takes, selected by `--control`,
@@ -14,9 +15,8 @@ A refused turn is the same terminal shape as the quota refusal that cost this ho
 monitor for a day, and it is the half a check can produce on demand: offline, in under a
 second, with no paid account and no credential of this host's in reach.
 
-The filter bounds a transcript whether or not a failure can be proven inside it, so the
-other shape lives here too — `without_the_frames_that_prove_the_loss`, which is that same
-real transcript cut back to the frames that prove nothing, which is what all 26 of this
+The other shape lives here too — `without_the_frames_that_prove_the_loss`, which is that
+same real transcript cut back to the frames that prove nothing, which is what all 26 of this
 host's oversized surfaces were.
 
 The same arrangement answers a second question about that path, which is why the model
@@ -38,11 +38,12 @@ import os
 import shutil
 import subprocess
 import threading
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict
 
-#: The one producer whose transcript reaches that filter, as `oneharness list` ids it.
+#: The one producer whose transcript reaches the monitor's judge side, as `oneharness list` ids it.
 PRODUCER = "codex"
 
 #: The field a lost turn's error records its classification in — the half of the named
@@ -111,8 +112,8 @@ def _serve_refusals(models: list[str | None] | None) -> str:
     A daemon thread serves it, so nothing needs cleanup. A closed port, which this used,
     no longer loses a turn: codex reads a refused connection as the network being down
     and reconnects past both `_max_retries` keys until `capture`'s `--timeout` expires,
-    reporting a deadline instead. A status is also the truer shape, since the refusal
-    `scripts/channel-serve.py` names arrives as one rather than as a closed socket, and
+    reporting a deadline instead. A status is also the truer shape, since the refusal a
+    lost monitor turn is named by arrives as one rather than as a closed socket, and
     codex classifies it at once.
     """
 
@@ -327,41 +328,79 @@ def without_the_frames_that_prove_the_loss(transcript: str) -> str:
     return "\n".join(kept)
 
 
-def _proves_the_loss(frame: dict[str, Any]) -> bool:
-    """Whether this one frame is a frame `scripts/channel-serve.py` reads as proof.
+class Proof(StrEnum):
+    """The two ways a lost turn's transcript proves the loss, named so a journey can keep one."""
 
-    The filter's own two shapes, matched the way the filter matches them, and stated
-    here as the producer emits them rather than imported from it: a turn whose terminal
-    status is `failed`, and an error notification.
-    `tests/test_lost_turn_wire_contract.py` is what holds both to the producer, so this
-    restatement drifting is a failure there rather than a green here.
+    ERROR_NOTIFICATION = "error-notification"
+    FAILED_TURN = "failed-turn"
+
+
+# `Any` because a frame is the producer's own JSON-RPC message, parsed unvalidated: the
+# shape is codex's, and the match below reads only the members it names.
+def _proof(frame: dict[str, Any]) -> Proof | None:
+    """Which proof of a lost turn this one frame is, if it is one.
+
+    The two shapes onemessagebus's `docs/codecs.md` names as proof, as the producer emits
+    them: an error notification, and a turn whose terminal status is `failed`. Stated here
+    rather than imported, since the codec is another repository's; a restatement that
+    drifted would leave a proof in a cut transcript, which the journey reading it fails on
+    as a raised surface rather than passing.
     """
     match frame:
-        case {"method": "error"} | {"params": {"turn": {"status": "failed"}}}:
-            return True
+        case {"method": "error"}:
+            return Proof.ERROR_NOTIFICATION
+        case {"params": {"turn": {"status": "failed"}}}:
+            return Proof.FAILED_TURN
         case _:
-            return False
+            return None
 
 
-def protocol_schema(codex_bin: str, home: Path, out: Path) -> dict[str, Any]:
-    """What the producer says it emits: its own generated app-server protocol schema.
+def _proves_the_loss(frame: dict[str, Any]) -> bool:
+    """Whether this one frame is one that proves the turn was lost."""
+    return _proof(frame) is not None
 
-    Generated by the installed producer rather than checked in, which is the point — a
-    checked-in copy would be one more restatement to drift.
+
+def keeping_only_the_proof(transcript: str, proof: Proof) -> str:
+    """The same real transcript with every frame that proves the loss another way removed.
+
+    A real lost turn records both proofs, so one capture cannot show that either alone is
+    read as a loss; cutting the other one out of the producer's own bytes can. Refuses a
+    transcript that did not record both, because then the cut would prove nothing about
+    the proof it claims to keep.
     """
-    generated = subprocess.run(
-        [codex_bin, "app-server", "generate-json-schema", "--out", str(out)],
-        env=_environment(home),
-        text=True,
-        capture_output=True,
-        timeout=GUARD_SECONDS,
-        check=False,
+    kept: list[str] = []
+    recorded: set[Proof] = set()
+    for line in transcript.splitlines():
+        if not line.strip():
+            continue
+        found = _proof(json.loads(line))
+        if found is not None:
+            recorded.add(found)
+        if found is None or found == proof:
+            kept.append(line)
+    assert recorded == set(Proof), (
+        f"the real lost turn recorded {sorted(recorded) or 'no'} proof(s), not both"
     )
-    assert generated.returncode == 0, generated.stderr
-    definitions: dict[str, Any] = {}
-    for bundle in sorted(out.glob("*.schemas.json")):
-        definitions.update(json.loads(bundle.read_text(encoding="utf-8"))["definitions"])
-    return definitions
+    return "\n".join(kept)
+
+
+# `Any` because each frame is the producer's own JSON-RPC message, parsed unvalidated; the
+# one member read here is type-checked where it is read.
+def codex_home_named_by(frames: tuple[dict[str, Any], ...]) -> str:
+    """The codex home the producer's own initialize response says this turn ran under.
+
+    Which of this host's codex identities a lost turn is named as is decided by comparing
+    this with `ORCHESTRATOR_CODEX_ALT_HOME`, so a journey about that naming reads the home
+    out of the transcript rather than out of the capture's arguments.
+    """
+    homes = {
+        result["codexHome"]
+        for frame in frames
+        if isinstance(result := frame.get("result"), dict)
+        if isinstance(result.get("codexHome"), str)
+    }
+    assert len(homes) == 1, f"the transcript names {sorted(homes) or 'no'} codex home(s)"
+    return homes.pop()
 
 
 def classification_recorded_by(frames: tuple[dict[str, Any], ...]) -> set[str]:

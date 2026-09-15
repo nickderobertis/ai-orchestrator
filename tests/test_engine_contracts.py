@@ -1958,45 +1958,89 @@ def test_the_readings_measure_the_worktree_root_onevcs_cuts_under() -> None:
         )
 
 
-def test_the_readings_watch_for_the_rendezvous_verb_the_engine_publishes() -> None:
-    """The words that make a process a rendezvous are the CLI's own, operand included.
+def test_the_readings_watch_for_the_rendezvous_the_installed_bus_publishes() -> None:
+    """The words that make a process a rendezvous are the bus command line's own.
 
     Read from the installed binary rather than from the crate, because what a live
-    process carries on its argv is what that binary accepts. Both halves matter: the
-    two words are what the reading matches, and the single positional operand after
-    them is what it takes to be the run — a verb that grew a second operand, or moved
-    the run behind a flag, would have every rendezvous reported against the wrong run
-    or against none.
+    process carries on its argv is what that binary accepts. Each name matters: the
+    program and its two verbs are what the reading matches, and the flag is where it
+    reads the channel — and so the run — from. A bus that renamed a verb would leave
+    every rendezvous of that shape unreported; one that renamed the flag, or stopped
+    taking one directory with it, would report every one as unattributable, which is the
+    sentence reserved for a process whose command line names no run.
     """
-    words = _constant(SUPERVISION_READINGS, "SERVE_WORDS")
-    assert isinstance(words, tuple), (
-        f"{SUPERVISION_READINGS.name}'s SERVE_WORDS is no longer a tuple of argv words"
+    bus = _constant(SUPERVISION_READINGS, "BUS")
+    verbs = _constant(SUPERVISION_READINGS, "RENDEZVOUS_VERBS")
+    flag = _constant(SUPERVISION_READINGS, "TRANSPORT_DIR_FLAG")
+    assert isinstance(bus, str) and isinstance(flag, str) and isinstance(verbs, tuple), (
+        f"{SUPERVISION_READINGS.name}'s BUS, RENDEZVOUS_VERBS and TRANSPORT_DIR_FLAG are no "
+        "longer a program name, a tuple of verbs and a flag"
     )
-    surface = surface_of("onepipeline")
-    assert words in surface.paths, (
-        f"the installed onepipeline publishes no {' '.join(words)!r} verb, so "
-        f"{SUPERVISION_READINGS.name} matches a command nothing runs and every "
-        "rendezvous goes unreported"
+    binary = REPO_ROOT / ".venv" / "bin" / bus
+    assert binary.is_file(), (
+        f"no {bus} is installed at {binary}, so {SUPERVISION_READINGS.name} watches for a "
+        "program this host does not run; run 'just bootstrap'"
     )
-    binary = REPO_ROOT / ".venv" / "bin" / "onepipeline"
-    reported = subprocess.run(
-        [str(binary), *words, "--help"], capture_output=True, text=True, check=False
+    version = subprocess.run(
+        [str(binary), "--version"], capture_output=True, text=True, check=False
     )
-    assert reported.returncode == 0, (
-        f"`onepipeline {' '.join(words)} --help` exited {reported.returncode}: "
-        f"{reported.stderr.strip()}"
+    assert version.returncode == 0 and version.stdout.split()[:1] == [bus], (
+        f"the installed bus names itself {version.stdout.strip()!r} rather than {bus!r}, so "
+        f"{SUPERVISION_READINGS.name} matches a program name nothing carries"
     )
-    usage = next((line for line in reported.stdout.splitlines() if line.startswith("Usage:")), None)
-    assert usage is not None, (
-        f"the installed onepipeline no longer states a usage line for "
-        f"{' '.join(words)!r}, so this gate cannot read what operands it takes"
+    surface = surface_of(bus)
+    for verb in verbs:
+        assert (verb,) in surface.paths, (
+            f"the installed {bus} publishes no {verb!r} verb, so "
+            f"{SUPERVISION_READINGS.name} matches a command nothing runs"
+        )
+        reported = subprocess.run(
+            [str(binary), verb, "--help"], capture_output=True, text=True, check=False
+        )
+        assert re.search(OPTION_WITH_A_VALUE.format(flag=re.escape(flag)), reported.stdout), (
+            f"`{bus} {verb}` no longer takes one value with {flag!r}, so "
+            f"{SUPERVISION_READINGS.name} reads every live {verb} as naming no channel:\n"
+            f"{reported.stdout}"
+        )
+
+
+#: How clap's help states an option taking one value: `      --transport-dir <DIR>  …`.
+OPTION_WITH_A_VALUE = r"(?m)^\s+{flag} <[A-Z_]+>\s"
+
+#: This host's own two rendezvous: the ask shim a dispatched agent asks through, and the
+#: observer graph whose monitor's judge side is a bus `serve`. The reading binds either to
+#: its run only if each names the run's channel the way the engine keeps it.
+RENDEZVOUS_PRODUCERS = (
+    REPO_ROOT / "scripts" / "ask-manager.sh",
+    REPO_ROOT / "graphs" / "dag-scope.yaml",
+)
+
+
+def test_the_readings_bind_a_rendezvous_by_the_channel_directory_the_engine_keeps() -> None:
+    """A run's channel is the directory the engine keeps it in, and this host names it so.
+
+    The reading takes a rendezvous's run to be the directory holding the channel it names,
+    so the channel directory's name is the engine's to decide — `RunPaths::channel_dir` —
+    and both of this host's producers have to compose it under the flag the reading reads.
+    A renamed directory would report every live rendezvous as unattributable; a producer
+    that named its channel some other way would leave its own rendezvous unattributed.
+    """
+    declared = _joined_under_a_run_root("channel_dir")
+    kept = _constant(SUPERVISION_READINGS, "CHANNEL_DIRECTORY")
+    assert kept == declared, (
+        f"{SUPERVISION_READINGS.name} reads a run's channel as {kept!r} while onepipeline "
+        f"{ONEPIPELINE.ref}'s `RunPaths::channel_dir` joins {declared!r}, so every live "
+        "rendezvous reads as naming no run"
     )
-    operands = usage.split(maxsplit=1)[1].split()[1 + len(words) :]
-    assert operands == ["<RUN>"], (
-        f"`onepipeline {' '.join(words)}` now takes {operands} rather than one run "
-        f"operand, so {SUPERVISION_READINGS.name}'s first-non-flag-word reading of a "
-        "live rendezvous's argv names the wrong thing"
-    )
+    flag = _constant(SUPERVISION_READINGS, "TRANSPORT_DIR_FLAG")
+    assert isinstance(flag, str) and isinstance(kept, str)
+    composed = re.compile(rf'{re.escape(flag)}\s+"[^"\n]*/{re.escape(kept)}"')
+    for producer in RENDEZVOUS_PRODUCERS:
+        assert composed.search(producer.read_text("utf-8")) is not None, (
+            f"{producer.relative_to(REPO_ROOT)} no longer names its channel as "
+            f'`{flag} "…/{kept}"`, so {SUPERVISION_READINGS.name} cannot bind the '
+            "rendezvous it starts to its run"
+        )
 
 
 def test_the_readings_cut_the_status_view_where_the_engine_opens_its_health_report() -> None:
@@ -2470,172 +2514,49 @@ AMENDED = re.compile(
     re.DOTALL,
 )
 
-#: The engine's `NodeRequeued` fold: the existing node's record with `parked` removed
-#: and every override written over its own field, top-level key by key.
-NODE_REQUEUED_FOLD = re.compile(
-    r"Operation::NodeRequeued \{ node, amend \} => \{.*?"
-    r'object\.remove\("parked"\);\s*'
-    r"for \(key, value\) in amend\.iter\(\)\.flatten\(\) \{\s*"
-    r"object\.insert\(key\.clone\(\), value\.clone\(\)\);",
-    re.DOTALL,
-)
-
-
-#: The engine's `Operation` enum: serialized by `kind` in kebab case, with each variant's
-#: fields declared as struct fields. The first captures the serde attribute the wire
-#: spelling comes from; the second captures one variant with its fields, doc comments
-#: and attributes included, so a field a variant gained or lost is read from the
-#: declaration rather than assumed.
-OPERATION_TAGGING = re.compile(
-    r'#\[serde\(tag = "kind", rename_all = "kebab-case"\)\]\s*pub enum Operation \{'
-)
+#: A `Command` variant with its fields, doc comments and attributes included, so a field a
+#: variant gained or lost is read from the declaration rather than assumed.
 OPERATION_VARIANT = re.compile(r"\n    (?P<name>[A-Z]\w*) \{(?P<body>.*?)\n    \},", re.DOTALL)
-VARIANT_FIELD = re.compile(r"^\s{8}(?:pub )?(?P<field>[a-z_]\w*): ", re.MULTILINE)
 #: A top-level struct's fields, at the indentation a struct body declares them.
 STRUCT_FIELD = re.compile(r"^\s{4}pub (?P<field>[a-z_]\w*): ", re.MULTILINE)
-
-
-def _kebab(variant: str) -> str:
-    """A Rust variant name as serde's `kebab-case` spells it on the wire."""
-    return re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower()
-
-
-#: The checkpoint's shape, at the four declarations the reply reads it through: the
-#: checkpoint carrying `coverage` and `state`, the coverage's `bytes`, the projected
-#: state's `graph`, and the graph as written with its `nodes`.
-CHECKPOINT_SHAPE = (
-    (
-        "checkpoint.rs",
-        re.compile(r"struct Checkpoint \{.*?coverage: Coverage,.*?state: RunState,", re.DOTALL),
-    ),
-    ("checkpoint.rs", re.compile(r"struct Coverage \{.*?bytes: u64,", re.DOTALL)),
-    ("projection.rs", re.compile(r"pub struct RunState \{.*?pub graph: Graph,", re.DOTALL)),
-    (
-        "graph.rs",
-        re.compile(r"struct AsWritten \{\s*concurrency: u32,\s*nodes: Vec<Node>,", re.DOTALL),
-    ),
-)
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
 # this into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
 # above states: its subject is the adopted engine's own source, outside this workspace.
-def test_the_run_state_a_live_edit_composes_onto_is_read_as_the_engine_writes_it() -> None:
-    """The reply folds a run's nodes from the engine's own records, so the record shapes it
-    reads — the checkpoint's paths to its nodes and its coverage, and the operations of an
-    `edit-committed` record with their fields — are held to the engine's declarations at
-    the pinned release. A drifted shape here would not fail: the reader falls back to the
-    launch plan and every amendment would compose onto text no dispatch reads.
+def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares() -> None:
+    """`orchestrator/envelope_review.py` reads a node an `add` or a `retry` states only when
+    every field it carries is one the engine's `Node` accepts, renders the node's amendment
+    from the field the engine renders one from, and passes over a node declaring that it
+    dispatches nobody by the field the engine settles that on. Each is a restatement of
+    `Node` at the pinned release: a field the engine gained would have the preflight pass
+    over a node the engine commits, and a renamed amendment or no-dispatch field would have
+    it judge text no dispatch reads, or refuse a bookmark nobody works.
     """
-    from orchestrator import live_edit_check
+    from orchestrator import envelope_review
 
-    for source, declaration in CHECKPOINT_SHAPE:
-        assert declaration.search(_source(ONEPIPELINE, source)) is not None, (
-            f"onepipeline {ONEPIPELINE.ref} no longer declares in {source} the shape "
-            f"`orchestrator.live_edit_check` reads the checkpoint through ({declaration.pattern!r})"
-        )
-    assert live_edit_check.CHECKPOINT_NODES == ("state", "graph", "nodes")
-    assert live_edit_check.CHECKPOINT_COVERAGE == ("coverage", "bytes")
-
-    edits_rs = _source(ONEPIPELINE, "edits.rs")
-    tagged = OPERATION_TAGGING.search(edits_rs)
-    assert tagged is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer serializes `Operation` by `kind` in kebab "
-        "case, so every kind `orchestrator.live_edit_check.FOLDED` names is spelled wrong"
-    )
-    declared = {
-        _kebab(variant["name"]): set(VARIANT_FIELD.findall(variant["body"]))
-        for variant in OPERATION_VARIANT.finditer(edits_rs[tagged.end() :].split("\n}\n", 1)[0])
-    }
-    for kind, fields in live_edit_check.FOLDED.items():
-        assert kind in declared, (
-            f"orchestrator/live_edit_check.py folds {kind!r}, which onepipeline "
-            f"{ONEPIPELINE.ref} does not declare among {sorted(declared)}"
-        )
-        assert set(fields) <= declared[kind], (
-            f"orchestrator/live_edit_check.py reads {kind!r} for {fields}, while onepipeline "
-            f"{ONEPIPELINE.ref} declares it with {sorted(declared[kind])}"
-        )
     node_struct = _source(ONEPIPELINE, "plan.rs").split("pub struct Node {", 1)[1]
     node_fields = set(STRUCT_FIELD.findall(node_struct.split("\n}\n", 1)[0]))
-    assert node_fields == live_edit_check.NODE_FIELDS, (
+    assert node_fields == envelope_review.NODE_FIELDS, (
         f"onepipeline {ONEPIPELINE.ref}'s Node fields changed, so the live structural "
         f"preflight's command validation drifted: engine={sorted(node_fields)}, "
-        f"check={sorted(live_edit_check.NODE_FIELDS)}"
+        f"check={sorted(envelope_review.NODE_FIELDS)}"
     )
-    assert live_edit_check.AMENDMENT in node_fields, (
-        f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field a live edit's "
-        f"amendment is read from; it declares {sorted(node_fields)}"
-    )
-
-
-#: Where the engine's projection folds a committed command's operations from: the arm
-#: over the journal kinds it folds, and the payload key it reads the operations at.
-COMMITTED_FOLD = re.compile(
-    r"Some\((?P<kinds>(?:journal::PipelineKind::\w+\s*\|?\s*)+)\) => \{\s*"
-    r"let operations = payload\s*\.get\(\"(?P<key>[a-z_]+)\"\)",
-    re.DOTALL,
-)
-
-#: `RunPaths`'s public accessor for each of the run's own records that
-#: `orchestrator/live_edit_check.py` reads under a run root, beside the constant that
-#: restates its name. The checkpoint is the third file it reads and is not here: that
-#: accessor is crate-private, and `CHECKPOINT_DECLARATION` is what reads it.
-LIVE_EDIT_RUN_FILES = (("plan", "LAUNCH_PLAN"), ("journal", "JOURNAL"))
-
-
-def test_the_records_a_live_edit_folds_a_run_from_are_the_ones_the_engine_writes() -> None:
-    """The reply reads three files under the run root and folds one journal envelope, and
-    every name involved is the engine's: the file each `RunPaths` accessor joins, the
-    `kind` words of the journal records whose operations the engine's own projection
-    folds, and the payload key it folds them from. None of those drifting would fail —
-    a renamed file, kind or key leaves the reader folding from nothing and composing
-    every amendment onto text no dispatch reads — so each is held to its declaration.
-    """
-    from orchestrator import live_edit_check
-
-    for accessor, constant in LIVE_EDIT_RUN_FILES:
-        assert getattr(live_edit_check, constant) == _joined_under_a_run_root(accessor), (
-            f"orchestrator/live_edit_check.py's `{constant}` is not the file onepipeline "
-            f"{ONEPIPELINE.ref}'s `RunPaths::{accessor}` joins onto a run's directory"
+    for name in ("AMENDMENT", "NO_DISPATCH"):
+        assert getattr(envelope_review, name) in node_fields, (
+            f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field "
+            f"`orchestrator.envelope_review.{name}` names; it declares {sorted(node_fields)}"
         )
-    checkpoint = CHECKPOINT_DECLARATION.search(_source(ONEPIPELINE, "ledger.rs"))
-    assert checkpoint is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer declares a fold checkpoint on `RunPaths` "
-        "where this gate reads it; re-read `ledger.rs`"
-    )
-    assert checkpoint.group(1) == live_edit_check.CHECKPOINT, (
-        f"orchestrator/live_edit_check.py reads the checkpoint as {live_edit_check.CHECKPOINT!r}, "
-        f"while onepipeline {ONEPIPELINE.ref} writes {checkpoint.group(1)!r}"
-    )
-
-    words = dict(re.findall(r'Self::(\w+) => "([a-z][a-z-]*)",', _source(ONEPIPELINE, "event.rs")))
-    folded = COMMITTED_FOLD.search(_source(ONEPIPELINE, "projection.rs"))
-    assert folded is not None, (
-        f"onepipeline {ONEPIPELINE.ref}'s projection no longer folds a committed command's "
-        "operations off the payload where this gate reads it; re-read `projection.rs`"
-    )
-    variants = re.findall(r"journal::PipelineKind::(\w+)", folded.group("kinds"))
-    assert set(live_edit_check.COMMITTED_KINDS) == {words[variant] for variant in variants}, (
-        f"orchestrator/live_edit_check.py folds {live_edit_check.COMMITTED_KINDS}, while "
-        f"onepipeline {ONEPIPELINE.ref}'s projection folds operations off {variants}"
-    )
-    assert folded.group("key") == live_edit_check.OPERATIONS, (
-        f"orchestrator/live_edit_check.py reads a committed command's operations at "
-        f"{live_edit_check.OPERATIONS!r}, while onepipeline {ONEPIPELINE.ref}'s projection "
-        f"folds them from {folded.group('key')!r}"
-    )
 
 
-def test_the_effective_task_a_live_edit_is_keyed_on_is_composed_as_the_engine_composes_it() -> None:
-    """A live edit's review is keyed on the task the dispatch will read, so how the engine
-    renders an amendment into a task is restated in `orchestrator/live_edit_check.py`,
-    and this holds the restatement to the engine's source at the pinned release: the
-    three strings, the placement rule, and the requeue fold the effective node comes from.
-    A release that moved any of them would leave every live-edit key a key over text no
-    dispatch reads, silently — which is the one thing a key must not be.
+def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
+    """A node an envelope states is judged on the task its dispatch will read, so how the
+    engine renders an amendment into a task is restated in `orchestrator/envelope_review.py`,
+    and this holds the restatement to the engine's source at the pinned release: the three
+    strings and the placement rule. A release that moved either would have every stated
+    node judged on text no dispatch reads, silently.
     """
-    from orchestrator import live_edit_check
+    from orchestrator import envelope_review
 
     plan_rs = _source(ONEPIPELINE, "plan.rs")
     for name, declaration in AMENDMENT_CONSTANTS.items():
@@ -2644,26 +2565,21 @@ def test_the_effective_task_a_live_edit_is_keyed_on_is_composed_as_the_engine_co
             f"onepipeline {ONEPIPELINE.ref} no longer declares {name} in plan.rs where this "
             "gate reads it; re-read how it renders an amendment and correct the restatement"
         )
-        assert getattr(live_edit_check, name) == declared.group(1), (
-            f"orchestrator/live_edit_check.py restates {name} as "
-            f"{getattr(live_edit_check, name)!r} while onepipeline {ONEPIPELINE.ref} "
+        assert getattr(envelope_review, name) == declared.group(1), (
+            f"orchestrator/envelope_review.py restates {name} as "
+            f"{getattr(envelope_review, name)!r} while onepipeline {ONEPIPELINE.ref} "
             f"declares {declared.group(1)!r}"
         )
     assert AMENDED.search(plan_rs) is not None, (
         f"onepipeline {ONEPIPELINE.ref}'s `amended` no longer places the block the way "
-        "`orchestrator.live_edit_check.amended` restates; re-read it and correct the "
+        "`orchestrator.envelope_review.amended` restates; re-read it and correct the "
         "restatement"
-    )
-    assert NODE_REQUEUED_FOLD.search(_source(ONEPIPELINE, "edits.rs")) is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer folds a requeue as `parked` removed and "
-        "every override written over its field; re-read `NodeRequeued` and correct "
-        "`orchestrator.live_edit_check._requeued`"
     )
 
 
 #: Which `add` and `retry` the engine refuses for their target, and how it moves a node's
 #: `deps` and `consumes` under the three edits that move edges — each at the declaration
-#: in `src/edits.rs` that `orchestrator.live_edit_check.resulting_graph` restates.
+#: in `src/edits.rs` that `orchestrator.envelope_review.stated_graph` restates.
 EDGE_FOLDS = {
     "an add of an id the graph already holds is refused": re.compile(
         r"fn compile_add\(graph: &mut Graph, node: &Node\) -> Result<Vec<Operation>> \{\s*"
@@ -2733,7 +2649,7 @@ def test_the_graph_a_live_edit_is_checked_over_is_folded_as_the_engine_folds_it(
 ) -> None:
     """The structural rules a reply's resulting nodes are held to read `deps` and
     `consumes`, so how a `retry`, a `drop` and a `reparent` move them is restated in
-    `orchestrator/live_edit_check.py` and held here to the engine's source at the pinned
+    `orchestrator/envelope_review.py` and held here to the engine's source at the pinned
     release. A release that moved one would have the check ask the rules about a graph the
     engine never commits — accepting a reply that lands a refusable node, or refusing one
     that does not.
@@ -2741,7 +2657,7 @@ def test_the_graph_a_live_edit_is_checked_over_is_folded_as_the_engine_folds_it(
     assert EDGE_FOLDS[fold].search(_source(ONEPIPELINE, "edits.rs")) is not None, (
         f"onepipeline {ONEPIPELINE.ref}'s `edits.rs` no longer declares that {fold}; re-read "
         "`compile_add`, `compile_retry`, `compile_drop` and `apply`, and correct "
-        "`orchestrator.live_edit_check.resulting_graph`"
+        "`orchestrator.envelope_review.stated_graph`"
     )
 
 
@@ -2760,7 +2676,7 @@ def _command_fields() -> dict[str, dict[str, str]]:
     tagged = COMMAND_TAGGING.search(channel_rs)
     assert tagged is not None, (
         f"onepipeline {ONEPIPELINE.ref} no longer serializes `Command` by `op` in lower "
-        "case with unknown fields refused, so every op `orchestrator.live_edit_check` "
+        "case with unknown fields refused, so every op `orchestrator.envelope_review` "
         "names and every field it reads for one is unreconciled"
     )
     body = channel_rs[tagged.end() :].split("\n}\n", 1)[0]
@@ -2774,7 +2690,7 @@ def _command_fields() -> dict[str, dict[str, str]]:
 
 def test_the_ops_a_live_edit_reads_task_prose_from_are_the_commands_the_engine_declares() -> None:
     """Which ops carry a node mapping, in which field, and which carry a text or a
-    criterion, is restated in `orchestrator/live_edit_check.py` as data, and the
+    criterion, is restated in `orchestrator/envelope_review.py` as data, and the
     live-edit table in `docs/orchestration.md` is held to that restatement elsewhere. This
     holds it to the declaration both derive from: the engine's own `Command` enum at the
     pinned release. An op that stopped carrying its node, or moved it to another field,
@@ -2782,30 +2698,30 @@ def test_the_ops_a_live_edit_reads_task_prose_from_are_the_commands_the_engine_d
     the engine no longer speaks — and task prose reaching a dispatch through the field
     nothing reads.
     """
-    from orchestrator import live_edit_check
+    from orchestrator import envelope_review
 
     declared = _command_fields()
-    assert set(live_edit_check.WHOLE_TASK_OPS) == set(live_edit_check.STATED_IN)
-    for op, field in live_edit_check.STATED_IN.items():
+    assert set(envelope_review.WHOLE_TASK_OPS) == set(envelope_review.STATED_IN)
+    for op, field in envelope_review.STATED_IN.items():
         assert op in declared, (
-            f"orchestrator/live_edit_check.py reads a whole task off {op!r}, which onepipeline "
+            f"orchestrator/envelope_review.py reads a whole task off {op!r}, which onepipeline "
             f"{ONEPIPELINE.ref} does not declare among {sorted(declared)}"
         )
         assert field in declared[op], (
-            f"orchestrator/live_edit_check.py reads {op!r}'s task from {field!r}, while "
+            f"orchestrator/envelope_review.py reads {op!r}'s task from {field!r}, while "
             f"onepipeline {ONEPIPELINE.ref} declares it with {sorted(declared[op])}"
         )
     # `add` and `retry` state a full `Node`; `requeue` states partial overrides of one,
-    # which is the map the module folds over the parked node.
+    # which the module reads as the overrides they are.
     assert declared["add"]["node"] == declared["retry"]["node"] == "Node", declared
     assert declared["requeue"]["amend"].startswith("Option<Map<"), declared["requeue"]
     # An amendment is the `text` of `amend`, a note's criteria half is its `criterion`,
     # and both name their node by `id` — the three fields the module matches on.
-    assert "text" in declared[live_edit_check.AMEND_OP], declared[live_edit_check.AMEND_OP]
-    assert {"id", "criterion"} <= set(declared[live_edit_check.NOTE_OP]), declared[
-        live_edit_check.NOTE_OP
+    assert "text" in declared[envelope_review.AMEND_OP], declared[envelope_review.AMEND_OP]
+    assert {"id", "criterion"} <= set(declared[envelope_review.NOTE_OP]), declared[
+        envelope_review.NOTE_OP
     ]
-    assert all("id" in declared[op] for op in ("retry", "requeue", live_edit_check.AMEND_OP)), (
+    assert all("id" in declared[op] for op in ("retry", "requeue", envelope_review.AMEND_OP)), (
         declared
     )
 

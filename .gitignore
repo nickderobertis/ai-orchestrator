@@ -51,6 +51,10 @@ dist/
 !/scratch/issue-24-followups.md
 /runs/
 
+# The planner channel's envelope pass cache (config/onemessagebus.yaml): the bus's own
+# record of envelopes the criteria bar passed, keyed on the bar, and never content.
+/.cache/envelope-passes/
+
 # Screenshot galleries (`just dag-ui-screens`). One directory per invocation, so two
 # concurrent runs never write into each other's; they are evidence to look at, not
 # repository content, and nothing here is ever compared against a checked-in image.

@@ -1074,7 +1074,7 @@ def test_a_named_bundle_directory_that_holds_none_names_the_variable(tmp_path: P
 # dry run reads what the recipe would run without starting a server, and the loop reads
 # whether either script restates the address. Reading the source is the only thing that can
 # see either, which is why `tests/test_watch_surface_drift.py` and
-# `tests/test_lost_turn_wire_contract.py` read theirs. The journeys either side of this one
+# `tests/test_engine_contracts.py` read theirs. The journeys either side of this one
 # start both servers for real and drive them over HTTP.
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
     """`just dag-ui` finds `just telemetry-server` only while they agree on it."""

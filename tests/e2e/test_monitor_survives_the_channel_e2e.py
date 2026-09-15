@@ -1,40 +1,38 @@
-"""The run's monitor lives through everything the planner channel hands it.
+"""The run's monitor lives through everything the planner channel hands it, and is scored by it.
 
-`graphs/dag-scope.yaml`'s monitor is the thing that notices a run going wrong, and it
-had two ways of dying on its own judge side — both of which leave the run reporting
-`ACTIVE` with nobody watching, because nothing announces the loss:
+`graphs/dag-scope.yaml`'s monitor is the thing that notices a run going wrong, and its judge
+side is the planner channel: `onemessagebus serve surfaces --codec onejudge` over this host's
+`config/onemessagebus.yaml`. It had two ways of dying on that side — both of which leave the
+run reporting `ACTIVE` with nobody watching, because nothing announces the loss:
 
-1. **A question the channel cannot answer.** `scripts/channel-serve.py` serves the
-   `supervisor` op alone. onejudge asks its judge side other ops at the end of a
-   conversation — `assess` for an `assessment`, `judge` for each `evals` criterion
-   *and* for `user.done_when` — and each is refused by name, after which
-   `oneagentgraph` kills the member with `provider-failure`/`protocol`. Which keys
-   produce which op is a declaration, and `tests/test_observer_judge_ops.py` holds it.
-   What a declaration cannot say is whether the merged configuration a **launch**
-   composes still carries one, or whether the member actually lives to the end.
-2. **An answer addressed to somebody else.** The channel is a durable queue with two
-   readers, and through onepipeline 0.8.x it arbitrated between them by arrival order —
-   so a manager's live graph edit, `commands` and no `completion`, reached the monitor's
-   judge side whenever it got there first. Forty of this host's recorded dag-scope runs
-   died on it, at the worst possible timing: it fired precisely while a manager was
-   supervising, because the manager's own correction was what killed the watcher.
+1. **A question the channel cannot answer.** onejudge asks its judge side other ops at the
+   end of a conversation — `assess` for an `assessment`, `judge` for each `evals` criterion
+   *and* for `user.done_when` — and the codec serves only a boolean `judge`, refusing the
+   rest by name, after which `oneagentgraph` kills the member. Which keys produce which op
+   is a declaration, and `tests/test_planner_channel_personas.py` holds it. What a
+   declaration cannot say is whether the merged configuration a **launch** composes still
+   carries one, or whether the member actually lives to the end.
+2. **An answer addressed to somebody else.** Through onepipeline 0.8.x a reply went to
+   whichever reader of the channel arrived first, so a manager's live graph edit reached the
+   monitor's judge side whenever it got there first. Forty of this host's recorded dag-scope
+   runs died on it, at the worst possible timing: it fired precisely while a manager was
+   supervising, because the manager's own correction was what killed the watcher. `just
+   channel-reply` now sends a commands-only envelope to the engine's command path, and the
+   bus routes a reply by the halves it carries.
 
-   **The adopted release routes a reply by the halves it carries**, so that envelope
-   never reaches this reader at all. That is what the second half of this journey now
-   measures: a manager who answers a real run with nothing but live edits for the whole
-   life of that run, and a judge side that is handed none of them. The filter's own
-   recognition of one is kept — it is what stands between a run and that death if a
-   release regresses — and is driven directly, against a stand-in channel made to hand
-   one back, at both of the boundaries a member has.
+So this launches one real run and plays a manager who answers **only** with live edits, which
+is the reproduction rather than a stand-in for it: the real recipe, the real engine, the real
+graph, the real judge side, and the real channel. Nothing is substituted but the paid model,
+at the `oneharness` seam every other journey here substitutes it at. The run is then driven to
+settlement and the whole of it is judged at once — the effective config the member was
+launched with, what the monitor was and was not handed, the edits the engine got, and the
+graph's own record of how each member ended.
 
-So this launches one real run and plays a manager who answers **only** with live
-edits, which is the reproduction rather than a stand-in for it: the real recipe, the
-real engine, the real graph, the real filter, and the real channel. Nothing is
-substituted but the paid model, at the `oneharness` seam every other journey here
-substitutes it at. The run is then driven to settlement and the whole of it is judged
-at once — the effective config the member was launched with, what the judge side was
-and was not handed, the edits the engine got, and the graph's own record of how each
-member ended.
+And the bar the member cannot decline is served rather than survived: a second launch lets
+the monitor's conversation end, and a manager scores it through `just channel-reply
+--correlation`, the way one answers any question on this channel. The score the member is
+settled with is read back off the graph's own record, so what is proven is that the ruling
+the manager typed is the one onejudge recorded.
 """
 
 # The finding these answer is about which Nx project owns this file, so it is the file
@@ -50,6 +48,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,26 +56,28 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV, RecordedTurn
+from planner_channel import reply as channel_reply
 from project_fixtures import project_from_plan
+from shared_dispatch_bar import shared_completion_bar
 
 # The launch environment has one source and it is the module that owns the launch
 # journeys. Copying its twenty lines here is how a journey comes to run against a
 # seam the rest of the suite has moved off — the fake provider, the guarded PATH, the
 # alternate-identity indirections — so it is imported rather than restated.
 from test_orchestrate_launch_e2e import (
+    CONVERSATION_ENDS_AT_ITS_CAP,
     DAG_SCOPE_STREAM,
     MONITOR_MEMBER,
     PACEMAKER_INTERVAL_SECONDS,
+    SURFACE_KIND_OF_A_COMPLETION_SCORE,
     _environment,
-    _frame_of_a_lost_turn,
     _just,
+    _queue_state,
 )
+from waits import deadline, until
 from waits import timeout as e2e_timeout
-from waits import until
 
 from orchestrator.root import REPO_ROOT
-
-pytestmark = pytest.mark.xdist_group("monitor-survives-the-channel")
 
 #: The run this journey launches, and the one node it holds open. The node is held so
 #: the run stays alive long enough for the monitor to take several turns and for a
@@ -104,11 +105,10 @@ MONITOR_HOLD_SECONDS = 1
 
 #: What has to have happened before this journey stops editing, and why these two.
 #:
-#: **One mis-routed envelope is all it takes.** The failure guarded here kills the
-#: member the first time its judge side is handed a manager's reply, and the filter
-#: names that envelope in the prompt it answers with. So the question is never how many
-#: draws make a sound sample — it is whether there were draws at all: an edit sent while
-#: the monitor's judge side is a live reader at the queue. An edit sent to a monitor
+#: **One mis-routed envelope is all it takes.** The failure guarded here reaches the
+#: monitor the first time its conversation is handed a manager's edit. So the question is
+#: never how many draws make a sound sample — it is whether there were draws at all: an
+#: edit sent while the monitor is a live member taking turns. An edit sent to a monitor
 #: that had already stopped taking turns is not a draw, and monitor turns taken while
 #: nothing was being sent are not draws either, which is why neither half stands alone.
 #:
@@ -116,20 +116,13 @@ MONITOR_HOLD_SECONDS = 1
 #: minute of continuous editing against a demonstrably live watcher — two orders of
 #: margin over the one mis-route it takes. Both are counts of **work done** rather than
 #: of elapsed time, deliberately: a loaded host reaches them later rather than reaching
-#: them with less of the claim tested, which is the property the fixed window this
-#: journey moved away from did not have.
+#: them with less of the claim tested.
 EDITS_TO_FALSIFY = 40
 MONITOR_TURNS_ALONGSIDE = 20
 
-#: How the filter opens the ruling it gives a monitor whose surface was answered with a
-#: live edit. Read out of `scripts/channel-serve.py` rather than quoted, because this is
-#: the one string that says the filter recognised the envelope instead of dying on it,
-#: and a second copy of it here would keep passing after the first was reworded away.
-FILTER = REPO_ROOT / "scripts" / "channel-serve.py"
-ROUTED_RULING = "live graph edit addressed to the"
-#: What the published `channel serve` writes when its reply window elapses, as measured
-#: on onepipeline 0.32.0 against a real run: the wait itself, carrying no ruling field.
-TIMED_OUT = '{"answer":"timeout","correlation":"c-87b5815a4e6f0fb0fc9d6eb323f482cf"}'
+#: How every node this manager adds is named. Distinctive, because an edit that reached
+#: the monitor's conversation carries it into the prompt the monitor is given next.
+EDITED_NODE = "noted-by-the-manager-"
 
 #: What the member's own effective onejudge config may not carry, against the written
 #: value that says it is not carried. `oneagentgraph` composes it from
@@ -144,7 +137,7 @@ TIMED_OUT = '{"answer":"timeout","correlation":"c-87b5815a4e6f0fb0fc9d6eb323f482
 #: half cannot start refusing what the other half asks for.
 DECLINED = {"assessment": ("null",), "evals": ("[]",)}
 
-#: And the one it always carries however it is declared, which is why the filter serves
+#: And the one it always carries however it is declared, which is why the codec serves
 #: the op that scores it. Asserted PRESENT deliberately; see the test below.
 UNDECLINABLE = "done_when:"
 
@@ -152,33 +145,11 @@ UNDECLINABLE = "done_when:"
 #: named by this journey so it reads this run's graph and never a concurrent dispatch's.
 GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
 
-#: The env var naming the run to a scoring frame, which carries no task to read one
-#: out of. Stated by the cases below rather than inherited: this suite runs from inside
-#: a dispatch that carries its own, and which run a frame belongs to is under test.
-RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
-
-#: The seam that lets a case stand a chosen channel behind the real filter. The published
-#: `channel serve` cannot be made to time out or to hand back a live edit on demand, and
-#: those are the two degradations the score path has to survive.
-ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
-
-#: The scoring frame onejudge writes once a conversation ends, measured on onejudge 0.12.0
-#: with a `kind: command` judge that logged every op it was asked. No `task`, no `session`
-#: — which is why the run is read from the environment. That release also writes an
-#: optional `evidence` beside these, which the filter does not read and this frame
-#: leaves out, since a producer may omit it too.
-SCORING_FRAME = {
-    "op": "judge",
-    "kind": "boolean",
-    "criterion": "every acceptance criterion stated in the task is met",
-    "messages": [{"role": "assistant", "content": "I watched the run."}],
-}
-
-
 #: The graph event that says a member did not survive, and the label naming which one.
 #: Read from the graph's own record because the rendered event line does not carry the
 #: member, and which member died is the whole question here.
 MEMBER_DIED = "member-died"
+MEMBER_SETTLED = "member-settled"
 MEMBER_LABEL = "member"
 
 #: The one death a settled run's teardown can record, and how it is told apart from a
@@ -186,9 +157,9 @@ MEMBER_LABEL = "member"
 #: observer graph's `signals/stop`; `oneagentgraph` reads that file as a cancellation
 #: request, and a member it reaches **inside** a turn rather than in its hold between
 #: turns is recorded `member-died` with this cause. Under this journey's one-second
-#: hold a turn is in flight at that moment often enough to fail a healthy run, on the
-#: old pins and the new alike. Both deaths guarded here are provider or protocol
-#: failures before settlement, and neither carries this cause.
+#: hold a turn is in flight at that moment often enough to fail a healthy run. Both
+#: deaths guarded here are provider or protocol failures before settlement, and neither
+#: carries this cause.
 TEARDOWN_CAUSE = "cancelled"
 STOP_SIGNAL = "signals/stop"
 
@@ -206,7 +177,7 @@ class ReplyAnswer(NamedTuple):
 
     #: The verb's exit status; non-zero is a refusal, which this manager ignores.
     returncode: int
-    #: Its stdout verbatim, which is the JSON both documents quote when it is zero.
+    #: Its stdout verbatim, which is the bus's one-line answer when it is zero.
     stdout: str
 
 
@@ -217,11 +188,10 @@ class Watched(NamedTuple):
     monitor_config: Path
     #: Every prompt the monitor's agent side was given, oldest first.
     monitor_prompts: list[str]
-    #: Whether a live edit reached the filter, which is what makes the rest meaningful.
-    filter_answered_a_live_edit: bool
-    #: What `just channel-reply` answered each edit with, oldest first. The premise the
-    #: filter's inaction rests on is that the reply verb applies an envelope's commands
-    #: itself, and this is that verb's own answer saying so.
+    #: Whether a manager's edit reached the monitor's conversation, which is what makes
+    #: the rest meaningful.
+    an_edit_reached_the_monitor: bool
+    #: What `just channel-reply` answered each edit with, oldest first.
     reply_answers: list[ReplyAnswer]
     #: `just monitor --filter monitor` over the settled run.
     stream: str
@@ -294,9 +264,9 @@ class SustainedEditing:
         )
 
 
-def _routed_ruling_reached(prompt_log: Path) -> bool:
-    """Whether the monitor has been given the filter's ruling for a live edit yet."""
-    return any(ROUTED_RULING in prompt for prompt in _monitor_prompts(prompt_log))
+def _edit_reached_the_monitor(prompt_log: Path) -> bool:
+    """Whether any prompt the monitor was given carries one of the manager's edits."""
+    return any(EDITED_NODE in prompt for prompt in _monitor_prompts(prompt_log))
 
 
 def _supervision_state(
@@ -309,8 +279,8 @@ def _supervision_state(
 
     Every party of the round trip, because which one stopped is the whole diagnosis and
     from a bare timeout none of them is visible: the launch that should have ended, the
-    member that should have been given the ruling, and the manager that should have been
-    sending the edits that produce one.
+    member that should have kept taking turns, and the manager that should have been
+    sending the edits.
     """
     ended = launch.poll()
     prompts = _monitor_prompts(prompt_log)
@@ -319,9 +289,8 @@ def _supervision_state(
     covered = "" if editing is None else f"; {editing.so_far()}"
     return (
         f"the launch is {'still running' if ended is None else f'over, exit {ended}'}; "
-        f"the `{MONITOR_MEMBER}` member has been given {len(prompts)} prompt(s), none "
-        f"carrying {ROUTED_RULING!r}; the manager sent {len(answers)} live edit(s) and "
-        f"the last {last}{covered}"
+        f"the `{MONITOR_MEMBER}` member has been given {len(prompts)} prompt(s); the "
+        f"manager sent {len(answers)} live edit(s) and the last {last}{covered}"
     )
 
 
@@ -350,12 +319,9 @@ def _monitor_prompts(prompt_log: Path) -> list[str]:
     """
     if not prompt_log.exists():
         return []
-    # The member's NEXT PROMPT is the only place surviving an answer is observable. An
-    # operator view reports that a member is alive, which a member killed one turn later
-    # also is, and reports nothing about what it was given — so an event label would pass
-    # for the death this asserts against. The prompt cannot: the filter's ruling is in it
-    # only if the filter recognised the envelope, answered onejudge with something it
-    # could act on, and the member then took another turn.
+    # The member's NEXT PROMPT is the only place what it was handed is observable. An
+    # operator view reports that a member is alive, and reports nothing about what it was
+    # given — so an event label would pass for a monitor that was handed a manager's edit.
     # llmlint: ignore[tests_mirror_real_usage] No operator view carries a turn's prompt.
     recorded = [
         record
@@ -372,11 +338,10 @@ def _monitor_prompts(prompt_log: Path) -> list[str]:
 def _live_edit(sequence: int) -> str:
     """One reply envelope that is a graph edit and nothing else.
 
-    Commands and no `completion`, which is what makes it the reconciler's rather than
-    the monitor's judge side's — and what the filter has to recognise. `add` of a node
-    that settles without a dispatch, so each one is genuinely applied and genuinely
-    observable, and unique per send because the same id twice is refused the second
-    time.
+    Commands and no `completion`, which is what makes it the engine's command path's
+    rather than any question's. `add` of a node that settles without a dispatch, so each
+    one is genuinely applied and genuinely observable, and unique per send because the
+    same id twice is refused the second time.
     """
     return json.dumps(
         {
@@ -386,7 +351,7 @@ def _live_edit(sequence: int) -> str:
                 {
                     "op": "add",
                     "node": {
-                        "id": f"noted-by-the-manager-{sequence}",
+                        "id": f"{EDITED_NODE}{sequence}",
                         "task": "Report.",
                         "expects_no_diff": True,
                     },
@@ -401,9 +366,9 @@ class EditingManager:
 
     Deliberately not `tests/e2e/planner_channel.py`'s manager, which answers questions:
     the failure under test is what happens when a manager *corrects the graph* instead
-    of answering, so this one never sends a `completion` at all. Refusals are ignored
-    on purpose — between two readers of one queue there are moments with no reader, and
-    a send nobody is waiting for is refused rather than being a failing manager.
+    of answering, so this one never sends a `completion` at all. Refusals are ignored on
+    purpose, so a transient refusal is read as a send that was not a draw rather than as
+    a failing manager.
     """
 
     def __init__(self, environment: dict[str, str]) -> None:
@@ -414,11 +379,9 @@ class EditingManager:
         self._thread = threading.Thread(target=self._edit, daemon=True)
         self._thread.start()
 
-    #: How long to leave between edits. Nothing at all while this raced a reader that
-    #: no longer takes these envelopes means editing flat out for the whole run: one
-    #: send added one node, and a three-minute run took over thirteen hundred of them
-    #: before it settled. A monitor's turn lasts seconds, so this is still an edit
-    #: inside every window there is to arrive in.
+    #: How long to leave between edits. A monitor's turn lasts seconds, so this is still
+    #: an edit inside every window there is to arrive in, without adding thousands of
+    #: nodes to a three-minute run.
     INTERVAL_SECONDS = 0.5
 
     def _edit(self) -> None:
@@ -454,7 +417,7 @@ def _graph_events(scratch: Path) -> list[dict[str, Any]]:
     """The dag-scope graph's own record of this run, which names the member per event.
 
     The `Any` values are carried for the reason the field above states: the envelope is
-    `oneagentgraph`'s own and only two of its keys are read here.
+    `oneagentgraph`'s own and only a few of its keys are read here.
 
     `just monitor` renders these too, but its line carries the event and not the member
     it happened to, and which member died is exactly the question. The graph writes
@@ -463,9 +426,8 @@ def _graph_events(scratch: Path) -> list[dict[str, Any]]:
     """
     events = []
     for log in sorted(scratch.glob("dag-scope-*/events.jsonl")):
-        # `oneagentgraph` owns this schema; only `kind` and `labels.member` are read.
-        # The `cast` is that ownership at the type level: `json.loads` answers `Any`, and
-        # validating a schema this journey does not own would be a copy of it.
+        # `oneagentgraph` owns this schema; only `kind`, `labels.member` and the payload
+        # of the events asserted on are read. The `cast` is that ownership at the type level.
         # llmlint: ignore[tests_mirror_real_usage] The rendered line omits the member.
         events.extend(
             cast(dict[str, Any], json.loads(line))
@@ -518,6 +480,30 @@ def _settlement_teardown(event: dict[str, Any], watched: Watched) -> bool:
     return settled <= stop <= datetime.fromisoformat(str(event.get("ts")))
 
 
+def _held_plan(tmp_path: Path, run: str, goal: str) -> str:
+    """A one-node project whose node is a dispatched worker the stand-in holds open."""
+    plan = tmp_path / f"{run}.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": run,
+                "goal": {"text": goal},
+                "tasks": [
+                    {
+                        "id": HELD_NODE,
+                        "persona": "engineer",
+                        "task": "## What\nReport.\n\n## Why\nBecause.\n\n"
+                        "## Acceptance criteria\n- Reported.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return project_from_plan(plan)
+
+
 @pytest.fixture(scope="module")
 def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Watched]:
     """Launch one run, supervise it with edits alone, and settle it.
@@ -538,25 +524,7 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
     environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
     scratch = tmp_path / "graph-state"
     environment[GRAPH_STATE_ENV] = str(scratch)
-    plan = tmp_path / "watched.plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "name": RUN,
-                "goal": {"text": "prove the monitor survives its own judge side"},
-                "tasks": [
-                    {
-                        "id": HELD_NODE,
-                        "persona": "engineer",
-                        "task": "## What\nReport.\n\n## Why\nBecause.\n\n"
-                        "## Acceptance criteria\n- Reported.",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    project = _held_plan(tmp_path, RUN, "prove the monitor survives its own judge side")
 
     # Streamed to a file rather than a pipe nobody drains: an attached launch prints the
     # whole merged event stream, and a full pipe buffer stops the driver mid-run — which
@@ -567,7 +535,7 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             [
                 "just",
                 "orchestrate",
-                project_from_plan(plan),
+                project,
                 "--heartbeat-interval",
                 str(PACEMAKER_INTERVAL_SECONDS),
                 "--set",
@@ -579,6 +547,19 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             stdout=streaming,
             stderr=subprocess.STDOUT,
         )
+        # Not one edit before the launch has made its run root. A send names the run by its
+        # id alone, and `just channel-reply` makes that run's channel directory when it does
+        # not exist yet — so an edit that beat the launch would leave a directory the engine
+        # then mints a different run id beside, and every read of this run below would read
+        # a run that was never launched.
+        run_root = Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN
+        until(
+            "the launch to write its run's own launch record",
+            lambda: (run_root / "launch.json").is_file() or launch.poll() is not None,
+            seconds=SUPERVISED_SECONDS,
+            state=lambda: printed.read_text("utf-8"),
+        )
+        assert (run_root / "launch.json").is_file(), printed.read_text("utf-8")
         manager = EditingManager(environment)
         editing = SustainedEditing(manager, prompt_log)
         try:
@@ -591,13 +572,13 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
                 "the monitor to keep taking turns through sustained live editing",
                 lambda: (
                     editing.observe()
-                    or _routed_ruling_reached(prompt_log)
+                    or _edit_reached_the_monitor(prompt_log)
                     or launch.poll() is not None
                 ),
                 seconds=SUPERVISED_SECONDS,
                 state=lambda: _supervision_state(launch, prompt_log, manager, editing),
             )
-            reached = _routed_ruling_reached(prompt_log)
+            reached = _edit_reached_the_monitor(prompt_log)
             # Stopping is what lets the graph complete: nothing else here ever stops
             # adding nodes to it, and the settlement the last case asserts survival to
             # does not exist until this happens.
@@ -613,7 +594,7 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             yield Watched(
                 monitor_config=composed[0] if composed else scratch / "no-effective-config",
                 monitor_prompts=_monitor_prompts(prompt_log),
-                filter_answered_a_live_edit=reached,
+                an_edit_reached_the_monitor=reached,
                 reply_answers=manager.answers,
                 stream=_just(
                     "monitor", RUN, "--filter", "monitor", environment=environment, seconds=60
@@ -629,16 +610,17 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             _just("stop", RUN, environment=environment, seconds=60)
 
 
+@pytest.mark.xdist_group("monitor-survives-the-channel")
 def test_the_merged_config_a_launch_hands_the_monitor_declines_what_it_can(
     watched: Watched,
 ) -> None:
     """The effective onejudge config asks for no assessment and no evals.
 
-    `tests/test_observer_judge_ops.py` holds the two files this is merged from; neither
-    of them is the answer, because inheritance is the whole hazard — the base declares an
-    `assessment` for the dispatched workers it is shared with, and a persona that says
-    nothing about it inherits it. `oneagentgraph` writes the merged result into the
-    member's own scratch, and that file is the only place the answer exists.
+    `tests/test_planner_channel_personas.py` holds the two files this is merged from;
+    neither of them is the answer, because inheritance is the whole hazard — the base
+    declares an `assessment` for the dispatched workers it is shared with, and a persona
+    that says nothing about it inherits it. `oneagentgraph` writes the merged result into
+    the member's own scratch, and that file is the only place the answer exists.
     """
     assert watched.monitor_config.is_file(), (
         f"no effective config was written for the `{MONITOR_MEMBER}` member, so what it "
@@ -647,8 +629,7 @@ def test_the_merged_config_a_launch_hands_the_monitor_declines_what_it_can(
     # The merged base ⊕ persona result exists in exactly one place and no operator view
     # reports it: `status`, `results`, and `transcript` all carry what a member did, not
     # what it was configured with, and the two source files each state only half of the
-    # answer. `test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for` reads
-    # the same file for the same reason.
+    # answer.
     # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
     effective = watched.monitor_config.read_text("utf-8")
     for question, unset in DECLINED.items():
@@ -661,27 +642,27 @@ def test_the_merged_config_a_launch_hands_the_monitor_declines_what_it_can(
         assert not asked, (
             f"the launch handed the `{MONITOR_MEMBER}` member a `{question}` to "
             f"answer ({asked}), and its judge side is the planner channel. onejudge asks "
-            f"that question once the conversation ends and the member dies on the "
-            f"refusal:\n{effective}"
+            f"that question once the conversation ends, the codec refuses it, and the "
+            f"member dies on the refusal:\n{effective}"
         )
 
 
+@pytest.mark.xdist_group("monitor-survives-the-channel")
 def test_the_bar_the_member_cannot_decline_is_still_there_to_be_served(
     watched: Watched,
 ) -> None:
-    """The upstream gap this whole score path works around is still open, measurably.
+    """The upstream gap the score path works around is still open, measurably.
 
     Asserting a `done_when` is PRESENT reads backwards until you have tried to remove
     one. `oneagentgraph` merges a persona's `user.done_when` as a second bar alongside
     the base's rather than over it, so a null adds nothing; and
     `user.done_when_replaces_base` is refused outright with nothing to replace it with.
     A `kind: onejudge` member therefore always carries a bar onejudge always asks its
-    judge side to score, whether or not that judge side is a model — and the filter
-    serving that op is a workaround for exactly that, not a feature.
+    judge side to score, whether or not that judge side is a model — and the codec
+    serving that op, which the journey below drives, is a workaround for exactly that.
 
     So this is the gate on the gap. The day a release lets a member decline the bar, this
-    fails, and whoever reads it can retire the score path instead of maintaining a
-    workaround for something that stopped being broken.
+    fails, and whoever reads it can stop relying on the score path.
     """
     # Same file and same reason as above, and here it is the subject rather than a
     # convenience: the claim is about what `oneagentgraph` composed, which is observable
@@ -692,41 +673,34 @@ def test_the_bar_the_member_cannot_decline_is_still_there_to_be_served(
     assert carried, (
         f"the `{MONITOR_MEMBER}` member was launched with no `{UNDECLINABLE.rstrip(':')}` at "
         "all, which the adopted oneagentgraph refuses to compose. If a release now allows "
-        "it, the completion-score path in scripts/channel-serve.py exists to work around a "
-        f"gap that has closed and can go:\n{effective}"
+        "it, the completion score the codec puts to the planner exists to work around a "
+        f"gap that has closed:\n{effective}"
     )
 
 
-def test_no_manager_live_edit_is_handed_to_the_monitors_judge_side(
-    watched: Watched,
-) -> None:
-    """The failure this journey was written for is fixed at its source, and measured.
+@pytest.mark.xdist_group("monitor-survives-the-channel")
+def test_no_manager_live_edit_is_handed_to_the_monitor(watched: Watched) -> None:
+    """The failure this journey was written for does not reach the member, and it is measured.
 
-    The manager playing this run sends nothing but graph edits, for the whole life of
-    the run — every one of them a reply that, under onepipeline 0.8.x, this reader
-    would have claimed whenever it got to the queue first, and died on. The adopted
-    release routes a reply by the halves it carries: a commands-only envelope belongs
-    to the command path, and the verdict queue this reader claims from does not hold
-    it.
+    The manager playing this run sends nothing but graph edits, for the whole life of the
+    run — every one of them a reply that, under onepipeline 0.8.x, the monitor's judge
+    side would have claimed whenever it got to the queue first, and died on. Now a
+    commands-only envelope goes to the engine's command path, and the monitor's judge side
+    asks no question at a turn boundary for one to be mistaken for an answer.
 
-    So the assertion is that the monitor was handed **none** of them, and it is only
-    worth anything beside the two below it: that the edits really were sent and really
-    did reach the graph. Without those this would pass for a manager that sent nothing.
+    So the assertion is that no prompt the monitor was given carries an edit, and it is
+    only worth anything beside the two below it: that the edits really were sent and
+    really did reach the graph. Without those this would pass for a manager that sent
+    nothing.
     """
-    assert ROUTED_RULING in FILTER.read_text("utf-8"), (
-        f"{FILTER.name} no longer opens that ruling with {ROUTED_RULING!r}, so this journey "
-        "is matching a string nothing produces; read the constant out of it again"
-    )
     assert watched.reply_answers, (
         "this manager sent no live edit at all, so nothing here says anything about how "
         "one is routed"
     )
-    answered = [prompt for prompt in watched.monitor_prompts if ROUTED_RULING in prompt]
-    assert not watched.filter_answered_a_live_edit and not answered, (
-        "a live edit was handed to the monitor's judge side, which the adopted release "
-        "routes away from it. Either the routing regressed — in which case the filter "
-        "below is the only thing keeping this member alive and every document describing "
-        f"that routing is now wrong — or this run reached it another way:\n{answered}"
+    handed = [prompt for prompt in watched.monitor_prompts if EDITED_NODE in prompt]
+    assert not watched.an_edit_reached_the_monitor and not handed, (
+        "a manager's live edit reached the monitor's own conversation, which the command "
+        f"path is meant to keep it out of:\n{handed}"
     )
     assert len(watched.monitor_prompts) > 1, (
         "the monitor took one turn or none, so this run never watched anything and the "
@@ -734,59 +708,51 @@ def test_no_manager_live_edit_is_handed_to_the_monitors_judge_side(
     )
 
 
+@pytest.mark.xdist_group("monitor-survives-the-channel")
 def test_the_manager_live_edit_still_reached_the_engine(watched: Watched) -> None:
     """The edit is accounted for rather than dropped, and by the engine rather than here.
 
-    This is the premise the filter's own inaction rests on, so it is measured rather
-    than assumed: `onepipeline reply` applies an envelope's commands *itself*, before
-    the envelope is queued for any reader, so an edit that then arrives at the monitor's
-    judge side has already landed and there is nothing left there to route. If a release
-    ever stopped doing that, ignoring one would start losing it — and this is the check
-    that would fail rather than a paragraph that would quietly go stale.
+    An edit routed away from the monitor is only safe if it arrives where it was routed:
+    the engine's command path applies it. If the routing ever sent edits nowhere, keeping
+    them away from the monitor would start losing them — and this is the check that would
+    fail rather than a paragraph that would quietly go stale.
     """
     assert "edit-committed" in watched.stream, (
-        "the manager's live edits never reached the graph, so either the reply verb "
-        "stopped applying an envelope's commands or nothing was ever sent:\n"
-        f"{watched.stream}"
+        "the manager's live edits never reached the graph, so either the command path "
+        f"stopped applying an envelope's commands or nothing was ever sent:\n{watched.stream}"
     )
 
 
-def test_the_reply_verb_says_itself_that_it_applied_the_edit(watched: Watched) -> None:
-    """And it says so in its own answer, which is the literal both documents quote.
+@pytest.mark.xdist_group("monitor-survives-the-channel")
+def test_the_reply_verb_says_itself_that_it_sent_the_edit_to_the_command_path(
+    watched: Watched,
+) -> None:
+    """And `just channel-reply` says where the edit went, in the bus's own answer.
 
-    `scripts/channel-serve.py` and `docs/orchestration.md` each date this measurement to
-    a release and quote what the verb answered — `{"reply":0,"state":"applied"}` — because
-    it is the whole reason ignoring a claimed edit here is safe rather than lossy. The
-    event above proves the edit landed; this proves the verb reported landing it, which
-    is the half a reader checks the quoted literal against. Both move in the same change
-    as the dated literal, so a release that reworded the answer re-dates the paragraphs
-    rather than leaving them quoting a shape nothing emits.
-
-    Only that at least one send was answered this way, deliberately: this manager races
-    the engine's own reader for the queue, so a send nobody was waiting for is refused
-    rather than being a failing manager, exactly as `EditingManager` says. The `state` is
-    pinned and the `reply` count is only required to be a number, because the count is how
-    many surfaces that send also answered — a property of what happened to be pending, not
-    of the release — while `applied` is the claim the paragraphs rest on.
+    A commands-only envelope is `onemessagebus send replies`, which the planner-channel
+    layout routes to the engine's `commands` queue and answers with one `{queue, position,
+    id}` line. The event above proves the edit landed; this proves the recipe routed it
+    there rather than to the queue a question is answered on, which is the half a reader
+    checks the recipe against. Every accepted send is held to it.
     """
-    applied = [
+    accepted = [
         json.loads(answered.stdout)
         for answered in watched.reply_answers
         if answered.returncode == 0 and answered.stdout.strip().startswith("{")
     ]
 
-    assert any(answer.get("state") == "applied" for answer in applied), (
-        "no live edit was answered `state: applied` by the reply verb, so the premise "
-        "the filter's own inaction rests on no longer holds; re-measure the answer and "
-        "re-date every document quoting it, in this change. What it answered instead:\n"
-        f"{watched.reply_answers}"
+    assert accepted, f"no live edit was accepted at all:\n{watched.reply_answers}"
+    assert all(answer.get("queue") == "commands" for answer in accepted), (
+        "a live edit was sent somewhere other than the engine's command path, where "
+        f"nothing applies it:\n{accepted}"
     )
-    assert all(isinstance(answer.get("reply"), int) for answer in applied), (
-        "an answer no longer carries the `reply` count both documents quote beside the "
-        f"state:\n{watched.reply_answers}"
-    )
+    assert all(
+        isinstance(answer.get("position"), int) and isinstance(answer.get("id"), int)
+        for answer in accepted
+    ), f"an answer no longer says where on that queue the edit was appended:\n{accepted}"
 
 
+@pytest.mark.xdist_group("monitor-survives-the-channel")
 def test_the_monitor_lives_to_the_graphs_settlement(watched: Watched) -> None:
     """The member is still there when the graph ends, which is the whole point of it.
 
@@ -803,9 +769,7 @@ def test_the_monitor_lives_to_the_graphs_settlement(watched: Watched) -> None:
     )
     # Every death counts but the settled run's own teardown (`_settlement_teardown`): a
     # stop the driver wrote after the last node settled that reached the member inside a
-    # turn. That one is the settlement this case asserts survival to, not a loss before
-    # it — and without this, the race between that stop and a one-second hold failed
-    # healthy runs on the old pins and the new alike.
+    # turn. That one is the settlement this case asserts survival to, not a loss before it.
     died = [
         event
         for event in watched.graph_events
@@ -824,357 +788,126 @@ def test_the_monitor_lives_to_the_graphs_settlement(watched: Watched) -> None:
     )
 
 
-def _channel_answering(tmp_path: Path, answer: str) -> Path:
-    """A stand-in `channel serve` that keeps the surface it was handed, and answers.
+#: The run whose monitor a manager scores, and the ruling they score it with. The reason
+#: is distinctive, because a score arriving with it is the manager's and no default's; and
+#: the value is `true`, because a wait nobody answers is scored `false`, so only `true`
+#: tells a relayed ruling from a question that went unanswered.
+SCORED_RUN = "monitor-scored-by-the-planner"
+PLANNER_RULED = "the planner read the watch and ruled it met the bar"
 
-    Only the channel, and only for the cases whose subject is an answer the published
-    one cannot be made to give on demand — a reply window that ran out, and a live edit
-    claimed at this boundary. The filter, its argv, the frame on its stdin, and the
-    response onejudge reads back are all real.
-    """
-    channel = tmp_path / "stand-in-channel"
-    captured = tmp_path / "surface.json"
-    # llmlint: ignore-block[e2e_not_mocked,tests_mirror_real_usage] The published channel
-    # cannot make these answers on demand: `channel serve` takes no reply-window flag, so
-    # its elapsed wait is the engine's own to time.
-    channel.write_text(f"#!/usr/bin/env bash\ncat > {captured}\ncat <<'JSON'\n{answer}\nJSON\n")
-    # llmlint: ignore-end[e2e_not_mocked,tests_mirror_real_usage]
-    channel.chmod(0o755)
-    return channel
+#: How long the manager below waits for the monitor's conversation to end and ask.
+SCORE_ASKED_SECONDS = 180
 
 
-def _scored(
-    tmp_path: Path,
-    oneharness_bin: str,
-    answer: str,
-    *,
-    frame: dict[str, object] | None = None,
-    run: str | None = RUN,
-) -> subprocess.CompletedProcess[str]:
-    """Put one scoring frame to the real filter, against a channel answering `answer`.
-
-    `run` is what the environment names, and `None` is a launch that named nothing —
-    which is a state to drive rather than one to assume away, since this suite runs from
-    inside a dispatch that carries a run id of its own.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    environment.pop(RUN_ID_ENV, None)
-    if run is not None:
-        environment[RUN_ID_ENV] = run
-    # llmlint: ignore-block[e2e_not_mocked,tests_mirror_real_usage] The published channel
-    # cannot make these answers on demand: `channel serve` takes no reply-window flag, so
-    # its elapsed wait is the engine's own to time.
-    environment[ONEPIPELINE_BIN] = str(_channel_answering(tmp_path, answer))
-    # llmlint: ignore-end[e2e_not_mocked,tests_mirror_real_usage]
-    return subprocess.run(
-        [str(REPO_ROOT / "scripts" / "channel-serve.py")],
-        cwd=REPO_ROOT,
-        env=environment,
-        input=json.dumps(frame if frame is not None else SCORING_FRAME),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
+def _completion_question(environment: dict[str, str]) -> dict[str, object] | None:
+    """The completion score the monitor's judge side is asking for, if it is asking yet."""
+    asked = [
+        record
+        for record in _queue_state(environment, SCORED_RUN, "surfaces")["waiting"]
+        if record.get("kind") == SURFACE_KIND_OF_A_COMPLETION_SCORE
+    ]
+    return asked[0] if asked else None
 
 
-def test_the_planner_scores_the_completion_bar_they_are_the_judge_side_for(
+@pytest.mark.xdist_group("monitor-scored-by-the-planner")
+def test_the_planner_scores_the_completion_bar_through_the_reply_recipe(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """The `judge` op is put to the planner and their ruling comes back as the score.
+    """The `judge` op is put to the manager, and their ruling is the score onejudge records.
 
-    A `kind: onejudge` member always carries a `done_when` — `oneagentgraph` refuses a
-    persona that replaces the base's bar with nothing — and onejudge always asks its
+    A `kind: onejudge` member always carries a `done_when`, and onejudge always asks its
     judge side to score it once the conversation ends. There is no configuration escape,
     so this op has to be *served*, and the only answer that is not an invention is the
-    planner's: they are this member's judge side, and they rule with a `completion`
-    boolean that relays onto a boolean score exactly.
+    manager's: they are this member's judge side. So a real launch lets the monitor's
+    conversation end at its turn cap, and a manager answers the question the judge side
+    raised with `just channel-reply --correlation`, the way any question on this channel
+    is answered.
 
-    The surface it raises is checked as well as the score it returns, because a surface
-    that read like a blocking question would move the stall this whole change is about
-    from the observer onto the run.
+    What is held is the whole round trip the wiring owns: the question reaches this run's
+    own channel non-blocking and quoting the bar, the recipe binds the ruling to it, and
+    the member is settled with exactly the value and reason the manager typed — read off
+    the graph's own `member-settled` record rather than off anything the recipe said.
     """
-    ruled = _scored(
-        tmp_path,
-        oneharness_bin,
-        '{"completion": true, "reason": "the watch was continuous"}',
-    )
-
-    assert ruled.returncode == 0, ruled.stderr
-    scored = json.loads(ruled.stdout)
-    assert scored == {"value": True, "rationale": "the watch was continuous"}, scored
-    raised = json.loads((tmp_path / "surface.json").read_text("utf-8"))
-    assert raised["blocking"] is False, (
-        f"the completion score was raised as a BLOCKING surface, which parks the run at "
-        f"`awaiting-planner` until somebody answers it: {raised}"
-    )
-    assert SCORING_FRAME["criterion"] in raised["message"], raised["message"]
-    assert "NOT BLOCKED" in raised["message"], (
-        "the surface does not say that nothing is waiting on it, so a manager meeting it "
-        f"for the first time reads it as a run held up on them: {raised['message']}"
-    )
-
-
-def test_a_completion_bar_nobody_answers_scores_false_rather_than_killing_the_member(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """The degradation is conservative and silent, which is what makes it safe to ship.
-
-    A planner who never answers is the ordinary case, not the exception — the surface is
-    non-blocking and the run settles without it. `channel serve` answers an elapsed wait
-    with the wait itself rather than a ruling — `{"answer":"timeout","correlation":…}`,
-    measured on onepipeline 0.32.0 — and the filter reads that as `unsatisfied`: no
-    invention, no fabricated success, and above all no exit status, because an exit here
-    is the death this whole journey exists to prevent.
-    """
-    timed_out = _scored(tmp_path, oneharness_bin, TIMED_OUT)
-
-    assert timed_out.returncode == 0, timed_out.stderr
-    scored = json.loads(timed_out.stdout)
-    assert scored["value"] is False, timed_out.stdout
-    assert "no planner answered" in scored["rationale"], timed_out.stdout
-
-
-def test_a_turn_nobody_answers_is_a_non_completion_rather_than_killing_the_member(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """The `supervisor` op meets the same elapsed wait, and the member lives through it.
-
-    A turn the agent side lost raises a non-blocking surface nobody is obliged to read, so
-    its wait elapsing is ordinary too. What comes back is a non-completion saying nobody
-    answered, which settles nothing — and never the wait's own line, which carries no
-    `completion` and would have been refused as not a ruling, killing the monitor.
-    """
-    lost = _supervised(tmp_path, oneharness_bin, TIMED_OUT)
-
-    assert lost.returncode == 0, lost.stderr
-    ruled = json.loads(lost.stdout)
-    assert ruled["completion"] is False, lost.stdout
-    assert "no planner answered" in ruled["message"], lost.stdout
-
-
-def test_a_live_edit_claimed_at_the_score_boundary_does_not_end_the_member_either(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """The other reader's envelope arrives at this op too, and is survived here as well.
-
-    The queue does not know which op this filter is serving when it hands over a reply,
-    so a manager's live edit reaches the score boundary exactly as it reaches a turn
-    boundary. It is recognised in one place for both, which is the point of serving them
-    through one round trip.
-    """
-    edited = _scored(
-        tmp_path,
-        oneharness_bin,
-        '{"version":2,"commands":[{"op":"note","id":"held","addressee":"worker",'
-        '"text":"the fixture moved"}]}',
-    )
-
-    assert edited.returncode == 0, edited.stderr
-    assert json.loads(edited.stdout)["value"] is False, edited.stdout
-
-
-def test_a_score_the_planner_cannot_rule_on_is_still_refused(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A numeric criterion has no planner answer, so it is named rather than invented.
-
-    A planner rules with a boolean and nothing else, so a criterion asking for a score on
-    a scale would have to be made up here. It can only come from `evals`, which
-    `tests/test_observer_judge_ops.py` forbids any channel-served persona from carrying —
-    so this is the boundary holding rather than a branch anybody takes.
-    """
-    refused = _scored(
-        tmp_path,
-        oneharness_bin,
-        '{"completion": true, "reason": "sure"}',
-        frame={**SCORING_FRAME, "kind": "numeric", "criterion": "how readable the watch was"},
-    )
-
-    assert refused.returncode != 0, refused.stdout
-    assert "scores a `boolean` criterion" in refused.stderr, refused.stderr
-    assert "value" not in refused.stdout, refused.stdout
-
-
-def test_a_score_that_names_no_run_is_reported_rather_than_guessed_at(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """The scoring frame's only source for the run is the environment, so a gap is named.
-
-    Every other op is held to the composed task, which this filter already validates. A
-    scoring frame carries no task at all, so `ONEPIPELINE_RUN_ID` is the whole of what
-    it has — and a release that stopped exporting it would leave this reader with no
-    channel to serve and no way to say so unless it checks. Reported rather than
-    answered around: a score printed here without a planner behind it is the invention
-    this file exists not to make.
-    """
-    unnamed = _scored(tmp_path, oneharness_bin, '{"completion": true, "reason": "sure"}', run=None)
-
-    assert unnamed.returncode != 0, unnamed.stdout
-    assert f"{RUN_ID_ENV} names no run" in unnamed.stderr, unnamed.stderr
-    assert "value" not in unnamed.stdout, unnamed.stdout
-
-
-@pytest.mark.parametrize(
-    ("case", "run"),
-    [
-        ("a run argv would read as a flag", "--all"),
-        ("a run that reaches outside the runs directory", "../../etc/passwd"),
-    ],
-)
-def test_a_score_naming_a_run_the_environment_cannot_spend_is_refused(
-    tmp_path: Path, oneharness_bin: str, case: str, run: str
-) -> None:
-    """The environment is a source like any other, so what it names is checked like one.
-
-    Every other op reads its run out of a composed task, and that source is already held
-    to this grammar. A scoring frame's source is `ONEPIPELINE_RUN_ID` instead — exported
-    by whatever launched the member — and the value is spent the same two ways, as an
-    argv word to `onepipeline channel serve` and as a `runs/<run-id>/` path. Trusting it
-    because it arrived through the environment is how a filter that refuses a hostile
-    task hands the same string to a subprocess one op over.
-    """
-    refused = _scored(tmp_path, oneharness_bin, '{"completion": true, "reason": "sure"}', run=run)
-
-    assert refused.returncode != 0, f"{case} was scored anyway: {refused.stdout}"
-    assert "will not pass to" in refused.stderr, f"{case}: {refused.stderr}"
-    assert RUN_ID_ENV in refused.stderr, (
-        f"{case} was refused without naming the environment variable an operator has to "
-        f"fix, which is the only place this run came from: {refused.stderr}"
-    )
-    assert "value" not in refused.stdout, f"{case}: {refused.stdout}"
-
-
-@pytest.mark.parametrize(
-    ("case", "criterion"),
-    [("a criterion that is missing", None), ("a criterion that is blank", "   ")],
-)
-def test_a_score_with_no_criterion_to_rule_on_is_reported_rather_than_guessed_at(
-    tmp_path: Path, oneharness_bin: str, case: str, criterion: str | None
-) -> None:
-    """There is nothing to put to the planner, so nothing is put to them.
-
-    A surface asking a manager to rule on an empty bar is worse than no surface: they
-    cannot answer it, and answering it wrongly is what decides the member's reported
-    completion. Both shapes are read defensively at the one place the criterion is used,
-    because this is onejudge's wire format and not this repository's.
-    """
-    frame = dict(SCORING_FRAME)
-    if criterion is None:
-        del frame["criterion"]
-    else:
-        frame["criterion"] = criterion
-
-    refused = _scored(
-        tmp_path, oneharness_bin, '{"completion": true, "reason": "sure"}', frame=frame
-    )
-
-    assert refused.returncode != 0, f"{case} was scored anyway: {refused.stdout}"
-    assert "scores a `boolean` criterion" in refused.stderr, f"{case}: {refused.stderr}"
-    assert "value" not in refused.stdout, f"{case}: {refused.stdout}"
-
-
-def _supervised(
-    tmp_path: Path, oneharness_bin: str, answer: str
-) -> subprocess.CompletedProcess[str]:
-    """Put one supervisor frame to the real filter, against a channel answering `answer`.
-
-    The turn boundary rather than the score boundary, because what a claimed reply is
-    turned into is decided there and only *reported* here — and every branch below is
-    about an answer the published channel cannot be made to give on demand.
-
-    The frame ends in a turn the agent side lost rather than in prose, because prose
-    raises no surface: the filter answers it itself and never opens the channel, so
-    there would be no claimed reply to turn into anything.
-    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
     environment = _environment(tmp_path, oneharness_bin)
-    # llmlint: ignore[e2e_not_mocked] The published channel cannot make these answers.
-    environment[ONEPIPELINE_BIN] = str(_channel_answering(tmp_path, answer))
-    return subprocess.run(
-        [str(REPO_ROOT / "scripts" / "channel-serve.py")],
-        cwd=REPO_ROOT,
-        env=environment,
-        input=_frame_of_a_lost_turn(),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
+    environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
+    scratch = tmp_path / "graph-state"
+    environment[GRAPH_STATE_ENV] = str(scratch)
+    project = _held_plan(tmp_path, SCORED_RUN, "prove the planner scores the monitor")
 
+    with (tmp_path / "launch.log").open("w", encoding="utf-8") as streaming:
+        launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+            [
+                "just",
+                "orchestrate",
+                project,
+                *CONVERSATION_ENDS_AT_ITS_CAP,
+                "--success-hook=",
+                "--failure-hook=",
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdout=streaming,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        limit = deadline(SCORE_ASKED_SECONDS)
+        question = _completion_question(environment)
+        while question is None:
+            if launch.poll() is not None or time.monotonic() >= limit:
+                pytest.fail(
+                    "the monitor's judge side never asked this run's channel for a completion "
+                    f"score:\n{(tmp_path / 'launch.log').read_text('utf-8')}"
+                )
+            time.sleep(0.2)
+            question = _completion_question(environment)
 
-def test_a_reply_carrying_both_a_verdict_and_edits_is_still_relayed_as_a_ruling(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """The discriminator is the verdict, not the presence of commands.
+        assert question.get("blocking") is False, (
+            f"the completion score was raised as a BLOCKING question, which holds a manager "
+            f"on the watch rather than on the work: {question}"
+        )
+        assert " ".join(shared_completion_bar().split()) in " ".join(
+            str(question.get("message")).split()
+        ), f"the question does not quote the bar it asks the manager to score: {question}"
+        correlation = str(question.get("correlation"))
 
-    This is the other side of the recognition, and getting it wrong is a worse bug than
-    the one it guards: a manager who rules AND corrects in one envelope has answered the
-    monitor, and swallowing that into a non-completion would silently discard a planner
-    verdict — the run would go on being watched by a member nobody could ever finish.
-    onejudge acts on `completion` and on nothing else, so an envelope carrying one is a
-    ruling however many edits ride with it.
-    """
-    both = _supervised(
-        tmp_path,
-        oneharness_bin,
-        '{"version":2,"completion":true,"reason":"the watch is finished",'
-        '"commands":[{"op":"note","id":"held","addressee":"worker","text":"n"}]}',
-    )
+        sent = channel_reply(
+            SCORED_RUN,
+            environment,
+            json.dumps({"version": 3, "completion": True, "reason": PLANNER_RULED}),
+            correlation,
+        )
+        assert sent.returncode == 0, sent.stderr + sent.stdout
+        answered = json.loads(sent.stdout)
+        assert answered["correlation"] == correlation and answered["answered"], answered
 
-    assert both.returncode == 0, both.stderr
-    relayed = json.loads(both.stdout)
-    assert relayed["completion"] is True, relayed
-    assert relayed["reason"] == "the watch is finished", relayed
+        def scored() -> list[dict[str, Any]]:
+            # `Any` because each verdict is the engine's own settlement record, read off the
+            # graph's event log unvalidated; the journey asserts the members it is about.
+            return [
+                verdict["verdict"]
+                for event in _graph_events(scratch)
+                if event.get("kind") == MEMBER_SETTLED
+                and event.get("labels", {}).get(MEMBER_LABEL) == MONITOR_MEMBER
+                for verdict in event.get("payload", {}).get("verdict", [])
+            ]
 
-
-def test_a_claimed_edit_is_named_back_to_the_monitor_with_whatever_the_planner_said(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """What the monitor is told is the whole of what this reader does with an edit.
-
-    So it is asserted rather than assumed. Three things have to survive into that one
-    sentence: which edits arrived and what each one targets, so a manager reading the
-    monitor's next turn can recognise their own correction; a command the envelope
-    shaped badly, named as unnamed rather than as `None`; and any prose the planner sent
-    beside their edits, since this reader is the last thing holding it — dropping it
-    would lose a manager's words with no trace that there were any.
-    """
-    claimed = _supervised(
-        tmp_path,
-        oneharness_bin,
-        '{"version":2,"commands":[{"op":"note","id":"held","addressee":"worker","text":"n"},'
-        '{"op":"cancel","id":"stale"},{"text":"no op at all"}],'
-        '"message":"stop working on the stale node"}',
-    )
-
-    assert claimed.returncode == 0, claimed.stderr
-    told = json.loads(claimed.stdout)
-    assert told["completion"] is False, told
-    assert "note held" in told["message"], told["message"]
-    assert "cancel stale" in told["message"], told["message"]
-    assert "an unnamed edit" in told["message"], told["message"]
-    assert "stop working on the stale node" in told["message"], told["message"]
-
-
-def test_a_score_the_planner_gave_no_reason_for_still_says_who_decided_it(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A bare boolean in a transcript says which way it went and nothing about who ruled.
-
-    `rationale` is optional to onejudge and sent anyway, because the interesting half of
-    this score is that a person decided it rather than a model. A planner is entitled to
-    rule with neither `reason` nor `message` — `scripts/planner-verdict.sh` renders an
-    approve with no message at all — so the fallback is a real path, not a defensive one.
-    """
-    bare = _scored(tmp_path, oneharness_bin, '{"completion": true}')
-
-    assert bare.returncode == 0, bare.stderr
-    scored = json.loads(bare.stdout)
-    assert scored["value"] is True, scored
-    assert scored["rationale"].strip(), (
-        f"the score carries no rationale at all, so its transcript says nothing about who "
-        f"decided it: {scored}"
-    )
+        until(
+            "the monitor to be settled with the score its judge side relayed",
+            lambda: bool(scored()),
+            seconds=120,
+            state=lambda: f"the graph recorded no settled monitor yet: {_graph_events(scratch)}",
+        )
+        assert scored()[0] == {"value": True, "reason": PLANNER_RULED}, (
+            "the monitor was settled with a score other than the ruling the manager sent, so "
+            f"the question and the reply did not meet on one channel: {scored()}"
+        )
+    finally:
+        launch.kill()
+        launch.wait(timeout=e2e_timeout(60))
+        _just("stop", SCORED_RUN, environment=environment, seconds=60)
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

@@ -24,9 +24,8 @@ import re
 import shutil
 import signal
 import subprocess
-import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
@@ -36,21 +35,20 @@ import pytest
 from fake_backend import (
     AGENT_DELAY_ENV,
     JUDGE_CONFIG_NAME,
-    OBSERVER_ANSWER_ENV,
-    OBSERVER_MEMBER_ENV,
     PROMPT_LOG_ENV,
     RUN_TASK,
 )
 from harness_indirections import established_indirections, harness_routing
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
-from planner_channel import RUNS_OWN_PROJECTION_COMPLAINT
+from planner_channel import BUS_CONFIG, RUNS_OWN_PROJECTION_COMPLAINT
 from project_fixtures import project_from_plan, read_project_plan
 from published_surface import surface_of
 from shared_dispatch_bar import (
     shared_agent_preamble,
     shared_completion_bar,
 )
+from test_observer_judge_ops import judge_argv
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -144,9 +142,9 @@ MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 #: The pacemaker member, whose turn reports and never edits.
 PACEMAKER_MEMBER = "check-in"
 
-#: The probe that stands exactly where `scripts/channel-serve.py` stands — as an
-#: observer member's `judge.command` — and writes out the environment it was started
-#: with, so the export below is measured rather than asserted from prose.
+#: The probe that stands exactly where the bus's onejudge codec stands — as an observer
+#: member's `judge.command` — and writes out the environment it was started with, so the
+#: export below is measured rather than asserted from prose.
 OBSERVER_PROBE = Path(__file__).resolve().parent / "observer_environment.py"
 
 #: The variable `onepipeline` names an observer member's run with, taken from the
@@ -177,11 +175,6 @@ FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
 #: The monitor's role, as `personas/orchestrator.yaml` states it. The composed task says
 #: only what the run is, so this is the only thing that says what the member is for.
 WATCH_ROLE = "Actively monitor one executing tracked graph"
-
-#: The surface kind `scripts/channel-serve.py` raises a monitor's supervisor boundary
-#: under. `channel serve` takes a free-form kind here, unlike `onepipeline surface
-#: --kind`, so the surface says what it is rather than borrowing the pacemaker's word.
-SURFACE_KIND_OF_A_MONITOR = "monitor"
 
 #: The read the monitor's persona tells it to make: the `monitor` profile, which carries
 #: each dispatched worker's turns as well as the pipeline's own node events. The whole
@@ -769,11 +762,11 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         )
 
     # The composed task is the OPENING instruction of the conversation, so it is the
-    # first watching turn that carries it — and it is where `scripts/channel-serve.py`
+    # first watching turn that carries it — and it is where the bus's onejudge codec
     # reads the run out of. Every turn after one is given whatever its judge side
-    # answered the turn before with: the planner's own words where a surface was raised
-    # and answered, and this repository's own ruling where the turn raised none. That is
-    # onejudge's design rather than a prompt that lost its run.
+    # answered the turn before with, which for a taken turn is the codec's own
+    # acknowledgement rather than the task again. That is onejudge's design rather than a
+    # prompt that lost its run.
     named = RUN_TASK.search(watching[0]["prompt"])
     assert named is not None, f"the opening watching turn named no run:\n{watching[0]['prompt']}"
     assert named.group(1) == SHIPPED_RUN
@@ -1479,12 +1472,12 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
     assert "--filter" in both.stderr and "--all" in both.stderr, both.stderr
 
 
-#: Every op the monitor may issue, and what an already-settled graph answers each with.
-#: The refusal is the graph's, not an authority verdict, which is the distinction under
-#: test: these three are refused for what the node is, and the five below for who asked.
-#: `add` and `finding` are the two of the five allowed ops that still apply to a settled
-#: graph, so each is exercised on a run of its own rather than against this settled one.
-MONITOR_OPS_ON_A_SETTLED_GRAPH = (
+#: Every op the monitor may issue, and what a graph holding an already-settled node answers
+#: each with. The refusal is the graph's, not an authority verdict, which is the distinction
+#: under test: these three are refused for what the node is, and the five below for who
+#: asked. `add` and `finding` are the two of the five allowed ops that still apply to a
+#: settled node, so each is exercised on a run of its own below.
+MONITOR_OPS_ON_A_SETTLED_NODE = (
     RefusedOnTheGraph({"op": "cancel", "id": "research"}, "not pending or running"),
     RefusedOnTheGraph(
         {
@@ -1530,18 +1523,18 @@ def _monitor_reply(launched: Launched, envelope: ReplyEnvelope) -> subprocess.Co
 
 @pytest.mark.xdist_group("orchestrate-launch")
 @pytest.mark.parametrize("command", OPS_THE_MONITOR_MAY_NOT_ISSUE, ids=lambda row: str(row["op"]))
-def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
+def test_an_op_outside_the_monitor_allowlist_is_refused_by_its_author_grants(
     launched: Launched, command: EditCommand
 ) -> None:
-    """`personas/orchestrator.yaml` states the allowlist; the engine is what enforces it.
+    """`personas/orchestrator.yaml` states the allowlist; the channel is what enforces it.
 
     A persona is a prompt, so a bound stated only there is a bound a model may cross.
     These five are the ones whose crossing costs the planner a decision it never made —
     removing work, rewiring dependencies, attesting a human action nobody took,
     declaring the run finished, and binding what a node's judge decides against — so
-    what is held here is that the published engine refuses them for *who asked*, ahead
-    of any question about the graph's state. Sent through the real recipe, against the
-    run this journey already launched.
+    what is held here is that the monitor's grants in `config/onemessagebus.yaml` refuse
+    them for *who asked*, before anything is appended and ahead of any question about the
+    graph's state. Sent through the real recipe, against the run this journey launched.
     """
     refused = _monitor_reply(launched, {"version": 2, "author": "monitor", "commands": [command]})
 
@@ -1553,37 +1546,236 @@ def test_an_op_outside_the_monitor_allowlist_is_refused_by_the_engine(
     assert "Surface it to the planner" in reported, reported
 
 
-@pytest.mark.xdist_group("orchestrate-launch")
+class Receipt(TypedDict):
+    """What `just channel-reply` answers a commands-only envelope with: where it was sent.
+
+    The bus's own `send` answer, which is why it names a queue: the layout routes an
+    envelope carrying commands and no verdict to the engine's `commands` queue.
+    """
+
+    queue: str
+    position: int
+    id: int
+
+
+class CommandResult(TypedDict, total=False):
+    """One command of an envelope, as the engine settled it."""
+
+    index: int
+    op: str
+    outcome: str
+    reason: str
+
+
+class CommandOutcome(TypedDict, total=False):
+    """The engine's record of one sent envelope, on the channel's `command-outcomes` queue.
+
+    `id` is the id the envelope was sent under, which is what correlates a receipt with
+    its outcome; `reason` is present on a refusal alone.
+    """
+
+    id: Required[int]
+    applied: Required[bool]
+    reason: str
+    results: list[CommandResult]
+
+
+class QueueState(TypedDict):
+    """`onemessagebus status <queue>`, narrowed to what these journeys read."""
+
+    queue: str
+    records: int
+    waiting: list[dict[str, object]]
+
+
+def _queue_state(environment: dict[str, str], run: str, queue: str) -> QueueState:
+    """One queue of a run's channel, read through the bus rather than the file behind it.
+
+    `status` claims nothing, so reading it changes nothing a manager would later read. A
+    channel the run has not made yet holds nothing, which is an ordinary early state.
+    """
+    channel = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "channel"
+    if not channel.is_dir():
+        return {"queue": queue, "records": 0, "waiting": []}
+    read = subprocess.run(
+        [
+            "onemessagebus",
+            "status",
+            queue,
+            "--config",
+            str(BUS_CONFIG),
+            "--transport-dir",
+            str(channel),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert read.returncode == 0, f"`onemessagebus status {queue}` over {channel}:\n{read.stderr}"
+    # The bus owns this schema; `QueueState` states the three fields read here.
+    return cast(list[QueueState], json.loads(read.stdout))[0]
+
+
+def _reply(
+    environment: dict[str, str], run: str, envelope: ReplyEnvelope
+) -> subprocess.CompletedProcess[str]:
+    """Send one envelope on a run's channel, through the recipe an author really uses."""
+    return subprocess.run(
+        ["just", "channel-reply", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+def _sent(environment: dict[str, str], run: str, envelope: ReplyEnvelope) -> Receipt:
+    """Send one commands-only envelope and hand back the receipt the recipe answered."""
+    sent = _reply(environment, run, envelope)
+    assert sent.returncode == 0, sent.stderr + sent.stdout
+    # The bus's one-line answer, stated by `Receipt`.
+    receipt = cast(Receipt, json.loads(sent.stdout))
+    assert receipt["queue"] == "commands", (
+        f"a commands-only envelope was not routed to the engine's command path: {receipt}"
+    )
+    return receipt
+
+
+def _outcome(environment: dict[str, str], run: str, receipt: Receipt) -> CommandOutcome:
+    """Wait for the engine to settle one sent envelope, and hand back what it decided.
+
+    Correlated by the id the envelope was sent under rather than by position or by text,
+    so a journey reading two outcomes cannot read one twice.
+    """
+    limit = deadline(120)
+    while True:
+        waiting = _queue_state(environment, run, "command-outcomes")["waiting"]
+        settled = [outcome for outcome in waiting if outcome.get("id") == receipt["id"]]
+        if settled:
+            # The engine's own record, narrowed by `CommandOutcome`.
+            return cast(CommandOutcome, settled[0])
+        if time.monotonic() >= limit:
+            pytest.fail(f"the engine never settled envelope {receipt} on run {run}: {waiting}")
+        time.sleep(0.2)
+
+
+#: How long each of the runs below holds its dispatched worker open. These runs exist to
+#: have a driver reading their channel, and a run that settles has none: an envelope sent
+#: to it is appended and never read. Long enough to outlast every send of its journey.
+DRIVEN_HELD_SECONDS = 180
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Each run this makes is
+# one attached launch shared by a module-scoped fixture: a driver reading the run's channel
+# is the one thing a live edit, a finding or a blocking surface needs in order to be applied
+# rather than only appended, so there is no cheaper run that answers those journeys. It sits
+# in `tests/e2e` for the reason this file's other blocks state: re-homing that tree into an
+# Nx project of its own is enforcement configuration this change may not move to pass.
+def _driven(
+    tmp_path: Path, oneharness_bin: str, run: RunId, tasks: list[PlanNode]
+) -> Iterator[LiveRun]:
+    """A run with a driver reading its channel, and no observer graph raising surfaces.
+
+    `--dag-graph off` because every journey using this reads the planner's queue, and a
+    monitor's own conversation raises a completion question onto it once it ends.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    environment = _environment(tmp_path, oneharness_bin)
+    environment[AGENT_DELAY_ENV] = str(DRIVEN_HELD_SECONDS)
+    plan = tmp_path / f"{run}.plan.json"
+    driven: CandidatePlan = {"schema_version": 2, "name": run, "tasks": tasks}
+    plan.write_text(json.dumps(driven), encoding="utf-8")
+    # Streamed to a file rather than a pipe nobody drains, which would stop the driver.
+    with (tmp_path / "launch.log").open("w", encoding="utf-8") as streaming:
+        launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--dag-graph",
+                "off",
+                "--success-hook=",
+                "--failure-hook=",
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdout=streaming,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        _dispatched(LiveRun(environment, run, launch))
+        yield LiveRun(environment, run, launch)
+    finally:
+        launch.kill()
+        launch.wait(timeout=e2e_timeout(60))
+        _just("stop", run, environment=environment, seconds=60)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+@pytest.fixture(scope="module")
+def graph_with_a_settled_node(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[LiveRun]:
+    """A driven run whose `research` node settled at once, beside a worker still running."""
+    yield from _driven(
+        tmp_path_factory.mktemp("settled-node"),
+        oneharness_bin,
+        RunId("monitor-ops-e2e"),
+        [{"id": "research", "task": "Report.", "expects_no_diff": True}, _node(id="held")],
+    )
+
+
+@pytest.mark.xdist_group("monitor-ops")
 @pytest.mark.parametrize(
-    "refused_on_the_graph", MONITOR_OPS_ON_A_SETTLED_GRAPH, ids=lambda row: str(row.command["op"])
+    "refused_on_the_graph", MONITOR_OPS_ON_A_SETTLED_NODE, ids=lambda row: str(row.command["op"])
 )
 def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_author(
-    launched: Launched, refused_on_the_graph: RefusedOnTheGraph
+    graph_with_a_settled_node: LiveRun, refused_on_the_graph: RefusedOnTheGraph
 ) -> None:
     """The allowed ops reach the graph, and are answered by what the graph is.
 
     The other half of the allowlist, and the half a refusal-only test would leave
-    unproven: an in-allowlist op must not be refused for *who asked*. This run has
-    settled, so each of these three is refused for what the node now is — and the
-    refusal wording is the distinction, because an authority refusal and a state
-    refusal read alike to a monitor that only checks the exit status. `add` and
-    `finding` are exercised separately below, since they are the two that still apply.
+    unproven: an in-allowlist op must not be refused for *who asked*. Each of these three
+    names a node that has already settled, so each is refused for what the node now is —
+    and the refusal wording is the distinction, because an authority refusal and a state
+    refusal read alike to a monitor that only checks the exit status. Sent to a run whose
+    driver is reading its channel, and read back off the engine's own outcome for that
+    envelope, since the send itself only says where the envelope went.
     """
-    refused = _monitor_reply(
-        launched,
+    live = graph_with_a_settled_node
+    receipt = _sent(
+        live.environment,
+        live.run,
         {"version": 2, "author": "monitor", "commands": [refused_on_the_graph.command]},
     )
 
-    assert refused.returncode != 0, refused.stdout
-    reported = refused.stderr + refused.stdout
+    outcome = _outcome(live.environment, live.run, receipt)
+    assert outcome["applied"] is False, outcome
+    reported = outcome.get("reason", "")
     assert "is not an op the monitor may issue" not in reported, (
-        f"an in-allowlist op was refused for who asked rather than for the graph:\n{reported}"
+        f"an in-allowlist op was refused for who asked rather than for the graph:\n{outcome}"
     )
-    assert refused_on_the_graph.refusal in reported, reported
+    assert refused_on_the_graph.refusal in reported, outcome
+
+
+@pytest.fixture
+def monitor_edit_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """A driven run of its own, because the edit below mutates the graph it is sent to."""
+    yield from _driven(tmp_path, oneharness_bin, RunId("monitor-edit-e2e"), [_node(id="only")])
 
 
 def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
-    tmp_path: Path, oneharness_bin: str
+    monitor_edit_run: LiveRun,
 ) -> None:
     """An in-allowlist edit lands on the graph, carrying the author that makes it visible.
 
@@ -1591,92 +1783,61 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
     and the reason `"author":"monitor"` is required rather than decorative: the engine
     records the author on the committed edit and queues a non-blocking planner surface
     naming it, so a fix the monitor applied is reported as the monitor's without the
-    monitor also having to report it. A run of its own, because this one mutates the
-    graph it is sent to.
+    monitor also having to report it.
     """
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
-    environment = _environment(tmp_path, oneharness_bin)
-    plan = tmp_path / "monitor-edit.plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "name": "monitor-edit-e2e",
-                "tasks": [_node(id="only")],
-            }
-        ),
-        encoding="utf-8",
-    )
-    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
-    try:
-        assert launch.returncode == 0, launch.stdout + launch.stderr
-        applied = subprocess.run(
-            ["just", "channel-reply", "monitor-edit-e2e"],
-            cwd=REPO_ROOT,
-            env=environment,
-            input=json.dumps(
+    live = monitor_edit_run
+    receipt = _sent(
+        live.environment,
+        live.run,
+        {
+            "version": 2,
+            "author": "monitor",
+            "commands": [
                 {
-                    "version": 2,
-                    "author": "monitor",
-                    "commands": [
-                        {
-                            "op": "add",
-                            "node": {
-                                "id": "monitor-added",
-                                "task": "Report.",
-                                "expects_no_diff": True,
-                            },
-                        }
-                    ],
+                    "op": "add",
+                    "node": {"id": "monitor-added", "task": "Report.", "expects_no_diff": True},
                 }
-            ),
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(60),
-            check=False,
-        )
-        assert applied.returncode == 0, applied.stderr + applied.stdout
+            ],
+        },
+    )
+    outcome = _outcome(live.environment, live.run, receipt)
+    assert outcome["applied"] is True, outcome
 
-        # The attribution is only worth what a planner can read, so it is read back the
-        # way a planner reads one: from the run's own stream, through the recipe.
-        stream = _just("monitor", "monitor-edit-e2e", "--all", environment=environment, seconds=60)
-        assert stream.returncode == 0, stream.stderr
-        assert "edit-committed" in stream.stdout, stream.stdout
-        assert "monitor-edit" in stream.stdout, (
-            "the engine queued no planner surface naming the monitor's edit, so a fix "
-            f"the monitor applied is invisible to the planner:\n{stream.stdout}"
-        )
+    # The attribution is only worth what a planner can read, so it is read back the way a
+    # planner reads one: from the run's own stream, through the recipe.
+    stream = _just("monitor", live.run, "--all", environment=live.environment, seconds=60)
+    assert stream.returncode == 0, stream.stderr
+    assert "edit-committed" in stream.stdout, stream.stdout
+    assert "monitor-edit" in stream.stdout, (
+        "the engine queued no planner surface naming the monitor's edit, so a fix "
+        f"the monitor applied is invisible to the planner:\n{stream.stdout}"
+    )
 
-        # And consumed the way a planner consumes one. `just channel-next` hands out
-        # each queued surface once, with the events its profile admits, so this is also
-        # where the recipe's `planner` default is held live: consuming a surface mutates
-        # the queue, so it is done on this journey's own run rather than the shared one.
-        #
-        # Drained rather than read once, because this run's monitor is raising its own
-        # supervisor surfaces alongside the engine's attribution and the order of the
-        # two is not this journey's claim.
-        seen: list[str] = []
-        sources: set[str] = set()
-        for _ in range(MOST_SURFACES_A_SETTLED_RUN_QUEUES):
-            read = _just("channel-next", "monitor-edit-e2e", environment=environment, seconds=60)
-            assert read.returncode == 0, read.stderr
-            handed = cast(SurfaceRead, json.loads(read.stdout))
-            sources |= {event["source"] for event in handed["events"]}
-            if handed["surface"] is None:
-                break
-            seen.append(handed["surface"]["kind"])
-            if handed["surface"]["kind"] == "monitor-edit":
-                break
-        assert "monitor-edit" in seen, (
-            f"no surface naming the monitor's edit was handed out; got {seen}"
-        )
-        assert sources and sources == {"pipeline"}, (
-            "`just channel-next` no longer reads through the planner profile; it "
-            f"carried events from {sorted(sources)}"
-        )
-    finally:
-        _just("stop", "monitor-edit-e2e", environment=environment, seconds=60)
+    # And consumed the way a planner consumes one. `just channel-next` hands out each
+    # queued surface once, with the events its profile admits, so this is also where the
+    # recipe's `planner` default is held live: consuming a surface mutates the queue, so
+    # it is done on this journey's own run rather than a shared one.
+    seen: list[str] = []
+    sources: set[str] = set()
+    for _ in range(MOST_SURFACES_A_SETTLED_RUN_QUEUES):
+        read = _just("channel-next", live.run, environment=live.environment, seconds=60)
+        assert read.returncode == 0, read.stderr
+        # `cast` rather than a validating read: `onepipeline next` owns this shape, and
+        # `SurfaceRead` states the part this journey consumes.
+        handed = cast(SurfaceRead, json.loads(read.stdout))
+        sources |= {event["source"] for event in handed["events"]}
+        if handed["surface"] is None:
+            break
+        seen.append(handed["surface"]["kind"])
+        if handed["surface"]["kind"] == "monitor-edit":
+            break
+    assert "monitor-edit" in seen, (
+        f"no surface naming the monitor's edit was handed out; got {seen}"
+    )
+    assert sources and sources == {"pipeline"}, (
+        "`just channel-next` no longer reads through the planner profile; it "
+        f"carried events from {sorted(sources)}"
+    )
 
 
 class RefusedFinding(NamedTuple):
@@ -1686,7 +1847,7 @@ class RefusedFinding(NamedTuple):
     monitor sent, and what the engine told it — and because a finding is refused for
     what it *carries* rather than for who asked or what the graph is, which is what
     separates these from `OPS_THE_MONITOR_MAY_NOT_ISSUE` and
-    `MONITOR_OPS_ON_A_SETTLED_GRAPH`.
+    `MONITOR_OPS_ON_A_SETTLED_NODE`.
     """
 
     command: EditCommand
@@ -1707,23 +1868,7 @@ FINDING_REFUSALS = (
 )
 
 
-def _reply(
-    environment: dict, run: str, envelope: ReplyEnvelope
-) -> subprocess.CompletedProcess[str]:
-    """Send one envelope on a run's channel, through the recipe an author really uses."""
-    return subprocess.run(
-        ["just", "channel-reply", run],
-        cwd=REPO_ROOT,
-        env=environment,
-        input=json.dumps(envelope),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-
-def _read_one(environment: dict, run: str) -> Surface | None:
+def _read_one(environment: dict[str, str], run: str) -> Surface | None:
     """The next surface the run hands out, read the way a planner reads one.
 
     `channel-next` is the only consumer, so this is what a manager working a queue down
@@ -1735,7 +1880,7 @@ def _read_one(environment: dict, run: str) -> Surface | None:
     return cast(SurfaceRead, json.loads(read.stdout))["surface"]
 
 
-def _drain(environment: dict, run: str) -> Iterator[Surface]:
+def _drain(environment: dict[str, str], run: str) -> Iterator[Surface]:
     """Each surface in turn, so a caller can read the run's state between two reads."""
     for _ in range(MOST_SURFACES_A_SETTLED_RUN_QUEUES):
         handed = _read_one(environment, run)
@@ -1748,7 +1893,7 @@ def _drain(environment: dict, run: str) -> Iterator[Surface]:
 AWAITING_A_DECISION = "waiting for planner decision"
 
 
-def _awaiting_a_decision(environment: dict, run: str) -> list[str]:
+def _awaiting_a_decision(environment: dict[str, str], run: str) -> list[str]:
     """The lines `just status` renders for surfaces it has handed out and is holding.
 
     A pending blocking surface's one planner-facing signal: `waiting for planner
@@ -1760,8 +1905,14 @@ def _awaiting_a_decision(environment: dict, run: str) -> list[str]:
     return [line.strip() for line in shown.stdout.splitlines() if AWAITING_A_DECISION in line]
 
 
+@pytest.fixture
+def monitor_finding_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """A driven run of its own, since draining a queue consumes it."""
+    yield from _driven(tmp_path, oneharness_bin, RunId("monitor-finding-e2e"), [_node(id="only")])
+
+
 def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
-    tmp_path: Path, oneharness_bin: str
+    monitor_finding_run: LiveRun,
 ) -> None:
     """The structured way a monitor reports, and the two properties that distinguish it.
 
@@ -1773,368 +1924,145 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     surface would double every observation in the one line a planner may not filter.
     Both are read through the planner's own views — the surfaces off `channel-next`,
     the graph off `results` — because those are where a monitor's report is either
-    visible or not. A run of its own, since draining a queue consumes it.
+    visible or not.
     """
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
-    run = "monitor-finding-e2e"
-    environment = _environment(tmp_path, oneharness_bin)
-    plan = tmp_path / "monitor-finding.plan.json"
-    plan.write_text(
-        json.dumps({"schema_version": 2, "name": run, "tasks": [_node(id="only")]}),
-        encoding="utf-8",
+    environment, run = monitor_finding_run.environment, monitor_finding_run.run
+
+    for refused_finding in FINDING_REFUSALS:
+        receipt = _sent(
+            environment,
+            run,
+            {"version": 2, "author": "monitor", "commands": [refused_finding.command]},
+        )
+        outcome = _outcome(environment, run, receipt)
+        assert outcome["applied"] is False, outcome
+        reported = outcome.get("reason", "")
+        assert "is not an op the monitor may issue" not in reported, (
+            f"a `finding` was refused for who asked rather than for what it carried:\n{outcome}"
+        )
+        assert refused_finding.refusal in reported, outcome
+
+    said = "issue: the finding op reached the engine"
+    receipt = _sent(
+        environment,
+        run,
+        {
+            "version": 2,
+            "author": "monitor",
+            "commands": [{"op": "finding", "message": said, "id": "only"}],
+        },
     )
-    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
-    try:
-        assert launch.returncode == 0, launch.stdout + launch.stderr
+    assert _outcome(environment, run, receipt)["applied"] is True
 
-        for refused_finding in FINDING_REFUSALS:
-            refused = _reply(
-                environment,
-                run,
-                {"version": 2, "author": "monitor", "commands": [refused_finding.command]},
-            )
-            assert refused.returncode != 0, refused.stdout
-            reported = refused.stderr + refused.stdout
-            assert "is not an op the monitor may issue" not in reported, (
-                f"a `finding` was refused for who asked rather than for what it "
-                f"carried:\n{reported}"
-            )
-            assert refused_finding.refusal in reported, reported
+    handed = list(_drain(environment, run))
+    raised = [surface for surface in handed if surface["message"] == said]
+    assert len(raised) == 1, (
+        f"the `finding` op did not reach the planner as exactly one surface: {handed}"
+    )
+    assert raised[0]["kind"] == "finding", raised[0]
+    assert raised[0]["source"] == "monitor", raised[0]
+    assert raised[0]["workstream"] == "only", (
+        f"a finding naming a node is no longer filed against that workstream: {raised[0]}"
+    )
+    assert raised[0]["blocking"] is False, (
+        f"a finding is an observation, and must not stop the frontier: {raised[0]}"
+    )
 
-        said = "issue: the finding op reached the engine"
-        applied = _reply(
+    # The half a one-surface assertion would miss. `monitor-edit` is what every other
+    # in-allowlist op queues, so its absence from the whole drained queue is the claim:
+    # the persona tells the model a finding arrives once, and this is what makes that
+    # true.
+    assert "monitor-edit" not in [surface["kind"] for surface in handed], (
+        f"the engine raised a `monitor-edit` surface beside the finding, so every "
+        f"observation now costs the planner two surfaces: {handed}"
+    )
+
+    # And that the report changed nothing it was reporting on. `results` is the
+    # planner's per-node view, so a graph that gained a node shows up here.
+    outcomes = _just("results", run, environment=environment, seconds=60)
+    assert outcomes.returncode == 0, outcomes.stderr
+    # Node rows only: `results` also renders the run-end hook that fired beneath them,
+    # which is one row about the run and its output rather than a node.
+    named = [
+        row.group(1) for line in outcomes.stdout.splitlines()[1:] if (row := NODE_ROW.match(line))
+    ]
+    assert named == ["only"], (
+        f"the `finding` op changed the graph, which is what makes it safe to reach "
+        f"for on any observation:\n{outcomes.stdout}"
+    )
+
+
+@pytest.fixture
+def blocking_first_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """A driven run of its own, since reading past a question consumes the queue."""
+    yield from _driven(tmp_path, oneharness_bin, RunId("blocking-first-e2e"), [_node(id="only")])
+
+
+def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pending(
+    blocking_first_run: LiveRun,
+) -> None:
+    """A worker's question can no longer sit behind a pile of observations.
+
+    Both halves of the ordering `AGENTS.md` tells a manager to rely on. This run queues
+    two non-blocking findings and then one blocking finding *last*: the first read must
+    hand out the blocking one anyway. And once it is handed out, reading the non-blocking
+    surfaces behind it must leave it awaiting a decision — only a verdict answers it —
+    because a manager draining a queue must not consume the question by accident. Read
+    through `just status`, which is where a manager sees an outstanding question, rather
+    than through the file behind it. Each finding is read only once the engine has
+    settled it, so the order the queue holds is the order they were sent in.
+    """
+    environment, run = blocking_first_run.environment, blocking_first_run.run
+
+    def _raise(message: str, *, blocking: bool) -> None:
+        receipt = _sent(
             environment,
             run,
             {
                 "version": 2,
                 "author": "monitor",
-                "commands": [{"op": "finding", "message": said, "id": "only"}],
+                "commands": [{"op": "finding", "message": message, "blocking": blocking}],
             },
         )
-        assert applied.returncode == 0, applied.stderr + applied.stdout
+        assert _outcome(environment, run, receipt)["applied"] is True
 
-        handed = list(_drain(environment, run))
-        raised = [surface for surface in handed if surface["message"] == said]
-        assert len(raised) == 1, (
-            f"the `finding` op did not reach the planner as exactly one surface: {handed}"
-        )
-        assert raised[0]["kind"] == "finding", raised[0]
-        assert raised[0]["source"] == "monitor", raised[0]
-        assert raised[0]["workstream"] == "only", (
-            f"a finding naming a node is no longer filed against that workstream: {raised[0]}"
-        )
-        assert raised[0]["blocking"] is False, (
-            f"a finding is an observation, and must not stop the frontier: {raised[0]}"
-        )
+    _raise("observation queued first", blocking=False)
+    _raise("observation queued second", blocking=False)
+    asked = "question queued last, and read first"
+    _raise(asked, blocking=True)
 
-        # The half a one-surface assertion would miss. `monitor-edit` is what every
-        # other in-allowlist op queues, so its absence from the whole drained queue is
-        # the claim: the persona tells the model a finding arrives once, and this is
-        # what makes that true.
-        assert "monitor-edit" not in [surface["kind"] for surface in handed], (
-            f"the engine raised a `monitor-edit` surface beside the finding, so every "
-            f"observation now costs the planner two surfaces: {handed}"
-        )
-
-        # And that the report changed nothing it was reporting on. `results` is the
-        # planner's per-node view, so a graph that gained a node shows up here.
-        outcomes = _just("results", run, environment=environment, seconds=60)
-        assert outcomes.returncode == 0, outcomes.stderr
-        # Node rows only: `results` also renders the run-end hook that fired beneath them,
-        # which is one row about the run and its output rather than a node.
-        named = [
-            row.group(1)
-            for line in outcomes.stdout.splitlines()[1:]
-            if (row := NODE_ROW.match(line))
-        ]
-        assert named == ["only"], (
-            f"the `finding` op changed the graph, which is what makes it safe to reach "
-            f"for on any observation:\n{outcomes.stdout}"
-        )
-    finally:
-        _just("stop", run, environment=environment, seconds=60)
-
-
-def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pending(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A worker's question can no longer sit behind a pile of observations.
-
-    Both halves of the ordering `AGENTS.md` tells a manager to rely on. Every surface
-    the monitor and the pacemaker raise is non-blocking by construction, so this run
-    queues those and then one blocking finding *last*: the first read must hand out the
-    blocking one anyway. And once it is handed out, reading the non-blocking surfaces
-    behind it must leave it awaiting a decision — only a verdict answers it — because a
-    manager draining a queue must not consume the question by accident. Read through
-    `just status`, which is where a manager sees an outstanding question, rather than
-    through the file behind it.
-    """
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
-    run = "blocking-first-e2e"
-    environment = _environment(tmp_path, oneharness_bin)
-    plan = tmp_path / "blocking-first.plan.json"
-    plan.write_text(
-        json.dumps({"schema_version": 2, "name": run, "tasks": [_node(id="only")]}),
-        encoding="utf-8",
-    )
-    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
-    try:
-        assert launch.returncode == 0, launch.stdout + launch.stderr
-
-        def _raise(message: str, *, blocking: bool) -> None:
-            sent = _reply(
-                environment,
-                run,
-                {
-                    "version": 2,
-                    "author": "monitor",
-                    "commands": [{"op": "finding", "message": message, "blocking": blocking}],
-                },
-            )
-            assert sent.returncode == 0, sent.stderr + sent.stdout
-
-        _raise("observation queued first", blocking=False)
-        _raise("observation queued second", blocking=False)
-        asked = "question queued last, and read first"
-        _raise(asked, blocking=True)
-
-        first = _read_one(environment, run)
-        assert first is not None, "the run handed out no surface at all"
-        assert first["message"] == asked, (
-            f"`channel-next` handed out a non-blocking surface while a blocking one was "
-            f"queued behind two of them, so a worker's question can be buried again: "
-            f"{first}"
-        )
-
-        read_past = 0
-        for surface in _drain(environment, run):
-            read_past += 1
-            assert _awaiting_a_decision(environment, run) == [
-                f"{AWAITING_A_DECISION}: finding — {asked}"
-            ], (
-                f"reading the non-blocking surface {surface['message']!r} cleared the "
-                f"question the run is holding, so a manager draining the queue consumed "
-                f"it"
-            )
-        assert read_past >= 2, (
-            f"only {read_past} surface(s) were left to read past the question, so this "
-            "run cannot show that reading past one leaves it standing"
-        )
-    finally:
-        _just("stop", run, environment=environment, seconds=60)
-
-
-#: The judge side `graphs/dag-scope.yaml` gives the monitor: the filter that makes the
-#: planner channel serviceable as a onejudge command provider.
-CHANNEL_SERVE = REPO_ROOT / "scripts" / "channel-serve.py"
-
-#: The supervisor frame onejudge writes to a judge-side command provider's stdin, as
-#: recorded off a real `oneagentgraph run` whose judge side was a frame-dumping
-#: command. `onepipeline channel serve` reads `{kind, message, blocking?, node?}` and
-#: refuses an unknown field, so this shape is exactly what the filter exists to
-#: translate — and the fixture below is the real thing rather than a paraphrase.
-# A typed model here would be a second copy of an external wire format whose one model
-# is `SupervisorFrame` in `scripts/channel-serve.py`, and the filter — not this fixture
-# — is what that model exists to type; a copy could drift from the recorded frame the
-# journey feeds it and still typecheck.
-# llmlint: ignore[modern_domain_modeling] `scripts/channel-serve.py` owns this model.
-SUPERVISOR_FRAME: dict[str, object] = {
-    "op": "supervisor",
-    "task": "onepipeline run `serve-e2e`.\n\nGoal: prove the channel is the judge side",
-    "persona": "Act as the live planner reviewing the run's monitor.",
-    "done_when": "the run has settled",
-    "worktree": str(REPO_ROOT),
-    "history_name": "dag-scope-1-monitor-skill",
-    "messages": [
-        {"role": "user", "content": "onepipeline run `serve-e2e`."},
-        {"role": "assistant", "content": "node api has drifted from its acceptance criteria"},
-    ],
-    "session": "dag-scope-1-monitor-user",
-}
-
-
-def _serve(frame: str, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Drive the real filter at the interface `oneagentgraph` spawns it through."""
-    return subprocess.run(
-        [str(CHANNEL_SERVE)],
-        cwd=REPO_ROOT,
-        env=environment,
-        input=frame,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
+    first = _read_one(environment, run)
+    assert first is not None, "the run handed out no surface at all"
+    assert first["message"] == asked, (
+        f"`channel-next` handed out a non-blocking surface while a blocking one was "
+        f"queued behind two of them, so a worker's question can be buried again: {first}"
     )
 
-
-class Supervised(NamedTuple):
-    """One launch whose monitor is actually being supervised, and its evidence.
-
-    The supervision is the fixture's whole job: a monitor whose judge side is the
-    planner takes one turn and then waits, so a run nobody answers stops producing
-    the very turns these journeys read. Answering it is also what a planner does.
-    """
-
-    #: What every later recipe has to be given to see the same run.
-    environment: dict[str, str]
-    #: Every effective prompt the run's turns were given, as the fake backend saw them.
-    prompt_log: Path
-    #: The instruction the supervising planner keeps sending, asserted verbatim below.
-    steer: str
-
-
-#: The run id `onepipeline` mints from the supervised plan's `name`.
-SUPERVISED_RUN = "planner-supervises-monitor"
-
-#: What the planner tells the monitor. Distinctive prose, because one journey asserts
-#: this exact text becomes the monitor's next instruction.
-PLANNER_STEER = "keep watching the gate and report what it is blocking"
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This fixture and the
-# launch it spends both pre-date this change, which only paces that launch's monitor
-# small; which Nx project owns the `tests/e2e` tree it sits in is a property of the tree
-# rather than of anything here — `AGENTS.md` records the tier split as a deliberate
-# decision, and re-homing the launch journeys into a new project is enforcement
-# configuration this change may not move in order to pass.
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same site, same
-# reason.
-# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
-# a pytest journey over the real recipe, not a shell test suite.
-@pytest.fixture(scope="module")
-def planner_supervised(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[Supervised]:
-    """Launch a run and supervise its monitor for as long as the journeys need it.
-
-    A plan holding one **held worker**, so the run stays unsettled while the monitor
-    works. A human gate does not: it leaves the graph nothing to dispatch, so the run
-    settles onto the attestation at once, and from onepipeline 0.17.3 a reply to a
-    settled run is refused — *"nothing will ever read a reply to it"* — which silences
-    the very conversation this journey reads. A background answerer plays the planner:
-    it reads each surface with the real `just channel-next` and answers it with the
-    real `just channel-reply`, which is what keeps the conversation — and therefore
-    the observer graph, and therefore its scheduled pacemaker — alive.
-
-    Its monitor is scripted to the turn that still raises a surface, because there has to
-    be one for a planner to answer: see `_monitor_scripted_to_raise_a_surface`.
-    """
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
-    tmp_path = tmp_path_factory.mktemp("planner-supervises-monitor")
-    environment = _environment(tmp_path, oneharness_bin)
-    environment[AGENT_DELAY_ENV] = str(SUPERVISED_HELD_SECONDS)
-    _monitor_scripted_to_raise_a_surface(environment)
-    prompt_log = tmp_path / "prompts.jsonl"
-    environment[PROMPT_LOG_ENV] = str(prompt_log)
-    plan = tmp_path / "serve.plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "goal": {"text": "prove the channel is the monitor's judge side"},
-                "name": SUPERVISED_RUN,
-                "tasks": [_node(id="held")],
-            }
-        ),
-        encoding="utf-8",
+    read_past = 0
+    for surface in _drain(environment, run):
+        if RUNS_OWN_PROJECTION_COMPLAINT.search(surface["message"]):
+            continue
+        read_past += 1
+        assert _awaiting_a_decision(environment, run) == [
+            f"{AWAITING_A_DECISION}: finding — {asked}"
+        ], (
+            f"reading the non-blocking surface {surface['message']!r} cleared the question "
+            f"the run is holding, so a manager draining the queue consumed it"
+        )
+    assert read_past >= 2, (
+        f"only {read_past} surface(s) were left to read past the question, so this run "
+        "cannot show that reading past one leaves it standing"
     )
-
-    launched = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        [
-            "just",
-            "orchestrate",
-            project_from_plan(plan),
-            "--heartbeat-interval",
-            str(PACEMAKER_INTERVAL_SECONDS),
-            "--set",
-            f"members.{MONITOR_MEMBER}.schedule.every={SUPERVISED_MONITOR_HOLD_SECONDS}",
-        ],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    supervising = threading.Event()
-
-    def supervise() -> None:
-        while not supervising.is_set():
-            read = _just("channel-next", SUPERVISED_RUN, environment=environment, seconds=60)
-            if read.returncode != 0 or not read.stdout.strip():
-                time.sleep(0.1)
-                continue
-            handed = cast(SurfaceRead, json.loads(read.stdout))
-            if handed["surface"] is None:
-                time.sleep(0.1)
-                continue
-            subprocess.run(
-                ["just", "channel-reply", SUPERVISED_RUN],
-                cwd=REPO_ROOT,
-                env=environment,
-                input=json.dumps(
-                    {
-                        "completion": False,
-                        "message": PLANNER_STEER,
-                        "reason": "the run is not finished",
-                    }
-                ),
-                text=True,
-                capture_output=True,
-                timeout=e2e_timeout(60),
-                check=False,
-            )
-
-    planner = threading.Thread(target=supervise, daemon=True)
-    planner.start()
-    try:
-        yield Supervised(environment, prompt_log, PLANNER_STEER)
-    finally:
-        supervising.set()
-        planner.join(timeout=e2e_timeout(60))
-        launched.kill()
-        launched.wait(timeout=e2e_timeout(60))
-        _just("stop", SUPERVISED_RUN, environment=environment, seconds=60)
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-# llmlint: ignore-end[shell_test_tiers_stay_split]
-
-
-def _turns_so_far(prompt_log: Path) -> list[PromptRecord]:
-    """Every turn recorded up to now, on a run that is still going.
-
-    Tolerates the log not existing yet, which is the ordinary state for the first
-    fraction of a second of a live launch and not a failure to report.
-    """
-    return _recorded_turns(prompt_log) if prompt_log.exists() else []
 
 
 def _monitor_agent_turns(prompt_log: Path) -> list[PromptRecord]:
     """Every turn the monitor's AGENT side was given, newest last."""
     return [
         turn
-        for turn in _turns_so_far(prompt_log)
-        if "/members/monitor/" in (turn["config"] or "")
+        for turn in _recorded_turns(prompt_log)
+        if f"/members/{MONITOR_MEMBER}/" in (turn["config"] or "")
         and Path(turn["config"] or "").name != JUDGE_CONFIG_NAME
     ]
-
-
-def _monitor_turns(prompt_log: Path) -> list[str]:
-    """Every prompt the monitor's AGENT side was given, newest last."""
-    return [turn["prompt"] for turn in _monitor_agent_turns(prompt_log)]
-
-
-def _await(found: Callable[[], bool], seconds: float, failure: Callable[[], str]) -> None:
-    """Wait for a live run to show something, or fail saying what it showed instead."""
-    limit = deadline(seconds)
-    while not found():
-        if time.monotonic() >= limit:
-            pytest.fail(failure())
-        time.sleep(0.1)
 
 
 #: What `personas/orchestrator.yaml` demands before a finding may be called a rule
@@ -2147,9 +2075,9 @@ GROUNDING_DEMANDED = "Quote the file and the line it"
 GROUNDING_FALLBACK = "observation"
 
 
-@pytest.mark.xdist_group("planner-supervises-monitor")
+@pytest.mark.xdist_group("orchestrate-launch")
 def test_the_monitor_is_told_to_ground_a_violation_before_it_alleges_one(
-    planner_supervised: Supervised,
+    launched: Launched,
 ) -> None:
     """The grounding rule reaches a real monitor turn, not just the persona file.
 
@@ -2163,57 +2091,146 @@ def test_the_monitor_is_told_to_ground_a_violation_before_it_alleges_one(
     names the persona, but naming is not delivery: it travels the base config,
     `oneagentgraph`, and `oneharness` to reach a turn as that turn's system prompt, and
     none of them reports what it passed on. This reads the system prompt the monitor
-    was given on a supervised launch.
+    was given on the launched run.
 
     `tests/test_observer_grounding.py` holds the sides that state the rule and the
     section that explains it. This holds the one thing that file cannot: that a
     watching member is actually given it.
     """
-
-    def told() -> list[str]:
-        return [turn["system"] for turn in _monitor_agent_turns(planner_supervised.prompt_log)]
-
-    _await(
-        lambda: any(
-            GROUNDING_DEMANDED in system and GROUNDING_FALLBACK in system for system in told()
-        ),
-        seconds=90,
-        failure=lambda: (
-            "the monitor was never told to ground a rule violation in a quoted file and "
-            "line, so a rule it inferred reaches the planner as a breach; its turns were "
-            f"given:\n{told()}"
-        ),
+    # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the system prompt.
+    told = [turn["system"] for turn in _monitor_agent_turns(launched.prompt_log)]
+    assert told, "the monitor took no agent-side turn in this run, so nothing here is proven"
+    assert any(GROUNDING_DEMANDED in system and GROUNDING_FALLBACK in system for system in told), (
+        "the monitor was never told to ground a rule violation in a quoted file and line, "
+        f"so a rule it inferred reaches the planner as a breach; its turns were given:\n{told}"
     )
 
 
-@pytest.mark.xdist_group("planner-supervises-monitor")
-def test_a_planner_reply_reaches_the_monitor_in_its_own_conversation(
-    planner_supervised: Supervised,
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
+    launched: Launched,
 ) -> None:
-    """The planner channel is the monitor's judge side, so a reply steers its next turn.
+    """`just orchestrate` passes `--bus-config config/onemessagebus.yaml`, and the engine kept it.
 
-    This is the whole point of wiring `onepipeline channel serve` behind that member:
-    a planner who answers a monitor surface is not only editing the graph, they are
-    answering the monitor, and what they say has to become the monitor's next
-    instruction. Nothing short of a real launch shows it — the reply travels onejudge's
-    supervisor boundary, out through `scripts/channel-serve.py` to the channel, back
-    through it, and into the next turn's prompt — so this reads the prompt the monitor
-    was actually given, from a run being supervised through the real recipes.
+    Every channel verb of the run — the reply validator, the monitor's grants, the codec's
+    reply window — is the configuration the engine was handed, so a launch that stopped
+    naming this file would run a planner channel with the layout's defaults: no envelope
+    review, a monitor granted every op, a thirty-second window on a question a manager
+    answers in minutes. Nothing about the run would fail.
 
-    Pointed at `graphs/dag-scope.yaml` itself. Wire that member's judge back to a
-    simulated-user harness and this fails at the surface that never arrives.
+    So this reads the run's own launch record, where the engine records the configuration
+    it parsed, rather than the command line, and holds each value that is this host's
+    decision to the line of `config/onemessagebus.yaml` that states it.
+    `tests/e2e/test_delegated_recipes_e2e.py` holds the rendering.
     """
-    _await(
-        lambda: any(
-            planner_supervised.steer in prompt
-            for prompt in _monitor_turns(planner_supervised.prompt_log)
-        ),
-        seconds=90,
-        failure=lambda: (
-            "the planner's reply never reached the monitor's conversation; its turns "
-            f"were given:\n{_monitor_turns(planner_supervised.prompt_log)}"
-        ),
+    launch_record = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "launch.json"
+    # llmlint: ignore[tests_mirror_real_usage] No view renders the bus configuration the
+    # engine parsed, and the argv says only what the recipe asked for; the run's launch
+    # record is the one place the engine's own reading is kept.
+    recorded = json.loads(launch_record.read_text(encoding="utf-8"))
+    bus = recorded.get("bus_config")
+    assert isinstance(bus, dict), (
+        f"the launch recorded no bus configuration, so the engine ran this run's channel on "
+        f"the layout's defaults: {sorted(recorded)}"
     )
+    stated = BUS_CONFIG.read_text(encoding="utf-8")
+
+    def declared(pattern: str) -> str:
+        found = re.search(pattern, stated, re.MULTILINE)
+        assert found is not None, f"{BUS_CONFIG.name} states nothing matching {pattern!r}"
+        return found.group(1)
+
+    assert bus.get("profile") == declared(r"^profile: (\S+)$"), bus
+    codec = bus["codecs"]["onejudge"]
+    assert codec["reply_window_seconds"] == int(declared(r"^    reply_window_seconds: (\d+)$")), (
+        f"the launch recorded a reply window other than this checkout's: {codec}"
+    )
+    assert codec["queue"] == declared(r"^    queue: (\S+)$"), codec
+    granted = declared(r"^  monitor: \{capabilities: \[([^\]]*)\]\}$")
+    grants = [op.strip() for op in granted.split(",")]
+    assert bus["authors"]["monitor"]["capabilities"] == grants, (
+        f"the launch recorded monitor grants other than this checkout's {grants}: {bus['authors']}"
+    )
+    validators = [validator["command"] for validator in bus["validators"]]
+    command = [word.strip() for word in declared(r"^    command: \[([^\]]*)\]$").split(",")]
+    assert validators == [command], (
+        f"the launch recorded envelope validators other than this checkout's {command}: "
+        f"{bus['validators']}"
+    )
+
+
+#: The member of `graphs/dag-scope.yaml` whose judge side is the planner channel, and
+#: the argv it is spawned with — read out of the graph rather than restated, so a journey
+#: driving it goes on driving what a launch spawns after the graph moves.
+def _judge_command() -> list[str]:
+    return judge_argv(DAG_SCOPE_GRAPH, MONITOR_MEMBER)
+
+
+#: The supervisor frame onejudge writes to a judge-side command's stdin, as recorded off
+#: a real `oneagentgraph run` whose judge side was a frame-dumping command, with the run
+#: and the monitor's closing message filled in. Its shape is onejudge's protocol v6, which
+#: the bus registers as `agent.onejudge-frame.supervisor@6`;
+#: `tests/e2e/test_monitor_quiet_turn_e2e.py` checks this frame against that schema, so
+#: the fixture cannot drift from what the codec reads.
+def _supervisor_frame(run: str, said: str | None) -> str:
+    """One supervisor frame naming `run`, ending in what the monitor said or in nothing.
+
+    `None` is the case rather than an absence to tolerate: a conversation the monitor has
+    not spoken in is what a turn its agent side lost can leave behind.
+    """
+    spoken = [] if said is None else [{"role": "assistant", "content": said}]
+    return json.dumps(
+        {
+            "op": "supervisor",
+            "task": f"onepipeline run `{run}`.\n\nGoal: prove the channel is the judge side",
+            "persona": "Act as the live planner reviewing the run's monitor.",
+            "done_when": "the run has settled",
+            "worktree": str(REPO_ROOT),
+            "history_name": "dag-scope-1-monitor-skill",
+            "messages": [{"role": "user", "content": f"onepipeline run `{run}`."}, *spoken],
+            "session": "dag-scope-1-monitor-user",
+        }
+    )
+
+
+def _judge_side(
+    frame: str, environment: dict[str, str], run: str, *, seconds: float = 60
+) -> subprocess.CompletedProcess[str]:
+    """Put one frame to the monitor's judge side, spawned exactly as the graph declares it.
+
+    From the repository root, which is where a launch spawns it, with the run named by the
+    variable the engine exports to an observer member.
+    """
+    spawned = dict(environment)
+    spawned[RUN_ID_ENV] = run
+    return subprocess.run(  # noqa: S603 - the graph's own judge command
+        _judge_command(),
+        cwd=REPO_ROOT,
+        env=spawned,
+        input=frame,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(seconds),
+        check=False,
+    )
+
+
+#: What makes a launched run settle at once with nothing watching it: a node that settles
+#: without a dispatch, and no observer graph, no run-end hooks. The run directory that
+#: leaves is the engine's own, which is what the judge-side journeys drive against.
+SETTLES_UNWATCHED = ("--dag-graph", "off", "--success-hook=", "--failure-hook=")
+
+
+def _settling_project(tmp_path: Path, run: str) -> str:
+    """A one-node project whose run settles on its own, for a real run root to exist."""
+    plan = tmp_path / f"{run}.plan.json"
+    settling: CandidatePlan = {
+        "schema_version": 2,
+        "name": run,
+        "tasks": [{"id": "settled", "task": "Report.", "expects_no_diff": True}],
+    }
+    plan.write_text(json.dumps(settling), encoding="utf-8")
+    return project_from_plan(plan)
 
 
 def _dag_scope_document() -> tuple[int, str]:
@@ -2343,8 +2360,8 @@ def observed_launch(
 
     An observer graph is attached by path and nothing else about it is this
     repository's to choose, so the graph here is `graphs/dag-scope.yaml`'s monitor
-    member with one substitution: the probe takes `scripts/channel-serve.py`'s place
-    as `judge.command`. Everything the environment could come from is left real — the
+    member with one substitution: the probe takes the bus codec's place as
+    `judge.command`. Everything the environment could come from is left real — the
     `just` recipe, `onepipeline`'s driver, and the `oneagentgraph` run it starts the
     observer with.
 
@@ -2516,13 +2533,15 @@ def test_a_launch_names_its_run_to_the_graph_watching_it(
     otherwise leave every one of those paragraphs reading true.
 
     A failure here is a re-measurement, not a repair. If the variable is gone or
-    renamed, `graphs/dag-scope.yaml`, `docs/orchestration.md`, `AGENTS.md`, and
-    `scripts/channel-serve.py` each say what was measured and against which release,
-    and all of them move in the same change as this one.
+    renamed, `graphs/dag-scope.yaml`, `docs/orchestration.md`, and `AGENTS.md` each say
+    what was measured and against which release, and all of them move in the same
+    change as this one.
 
-    Nothing reads the variable: `scripts/channel-serve.py` and the `check-in`
-    pacemaker take their run from the composed task, which is this graph's own
-    contract. The export is documented, so it is measured.
+    It is also what the monitor's judge side runs on: `graphs/dag-scope.yaml` composes
+    the channel directory `onemessagebus serve` is spawned over from this variable, and
+    the codec reads a scoring frame's run from it, since that frame carries no task. The
+    `check-in` pacemaker takes its run from the composed task instead, which is this
+    graph's own contract.
     """
     environment = observed_launch.environment
     assert environment.get(RUN_ID_ENV) == OBSERVED_RUN, (
@@ -2769,669 +2788,6 @@ def test_the_paid_provider_guard_answers_an_abbreviated_version_probe(binary: st
     )
 
 
-def test_the_channel_filter_refuses_input_the_planner_channel_would_not_answer(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """Malformed input is refused by name, never answered on the planner's behalf.
-
-    The filter sits between a model's conversation and a live planner, so the one
-    thing it must never do is invent a verdict when it cannot reach one. Each case
-    below is driven through the real script at the interface `oneagentgraph` spawns
-    it through, and each must fail with a diagnostic rather than print a supervisor
-    response: onejudge reads this stdout as the planner's answer, so a fabricated
-    `{"completion": ...}` here would settle or continue a run nobody ruled on.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-
-    refusals = {
-        "nothing on stdin at all": ("", "no supervisor frame on stdin"),
-        "not JSON at all": ("this is not a frame", "not JSON"),
-        "not an object": ("[1, 2]", "must be a JSON object"),
-        # The two ops the filter serves are `supervisor` and `judge`; an `assess` — the
-        # op a top-level `assessment` produces — is refused by name, and
-        # `tests/test_observer_judge_ops.py` is what keeps any channel-served persona
-        # from declaring the key that would ask it.
-        "an assess call rather than one of the two served ops": (
-            json.dumps({**SUPERVISOR_FRAME, "op": "assess"}),
-            "reach the planner channel, got 'assess'",
-        ),
-        "a task that names no run": (
-            json.dumps({**SUPERVISOR_FRAME, "task": "no run named here"}),
-            "does not name its run",
-        ),
-        # The run id is read out of somebody else's prose and then spent as an argv word
-        # and a `runs/<run-id>/` directory, so a task naming something those two uses do
-        # not survive is refused here rather than handed to a subprocess to interpret.
-        "a task naming a run argv would read as a flag": (
-            json.dumps({**SUPERVISOR_FRAME, "task": "onepipeline run `--all`."}),
-            "will not pass to",
-        ),
-        "a task naming a run that reaches outside the runs directory": (
-            json.dumps({**SUPERVISOR_FRAME, "task": "onepipeline run `../../etc/passwd`."}),
-            "will not pass to",
-        ),
-        "a frame carrying no conversation": (
-            json.dumps({**SUPERVISOR_FRAME, "messages": "node api has drifted"}),
-            "carries no `messages` conversation",
-        ),
-        "a conversation the monitor has not spoken in": (
-            json.dumps({**SUPERVISOR_FRAME, "messages": [{"role": "user", "content": "hi"}]}),
-            "said nothing",
-        ),
-    }
-    for case, (frame, expected) in refusals.items():
-        refused = _serve(frame, environment)
-
-        assert refused.returncode != 0, f"{case} was accepted: {refused.stdout}"
-        assert expected in refused.stderr, f"{case}: {refused.stderr}"
-        assert "completion" not in refused.stdout, (
-            f"{case} produced a supervisor verdict onejudge would act on: {refused.stdout}"
-        )
-
-
-#: The seam `scripts/channel-serve.py` resolves its `onepipeline` through, so a journey
-#: can drive what happens when that binary cannot run or answers nothing.
-ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
-
-
-def test_the_channel_filter_reports_a_channel_it_cannot_run(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A toolchain that cannot answer the planner is reported, not answered around.
-
-    The filter resolves the pinned `onepipeline` rather than looking one up, so the
-    failure a broken checkout produces is a spawn failure — and the monitor's whole
-    conversation depends on it. Held here because the alternative to reporting it is
-    the one thing this filter must never do: rule on the run itself.
-
-    Every unusable override is reported the same way, including the ones that never
-    reach a spawn at all: the value is the graph's environment rather than this
-    filter's, so an empty or unencodable one has to be named as the cause here instead
-    of surfacing as a traceback from the subprocess boundary.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-
-    for case, override in (
-        ("a path where nothing is installed", str(tmp_path / "no-such-onepipeline")),
-        ("a file that is not executable", str(_unrunnable(tmp_path))),
-        ("an override set to nothing at all", ""),
-    ):
-        environment[ONEPIPELINE_BIN] = override
-
-        refused = _serve(json.dumps(SUPERVISOR_FRAME), environment)
-
-        assert refused.returncode != 0, f"{case} was run: {refused.stdout}"
-        assert "could not run" in refused.stderr, f"{case}: {refused.stderr}"
-        assert "just bootstrap" in refused.stderr, f"{case}: {refused.stderr}"
-        assert "Traceback" not in refused.stderr, f"{case}: {refused.stderr}"
-        assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
-
-
-def _unrunnable(tmp_path: Path) -> Path:
-    """A real `onepipeline`-shaped file that the filter still cannot run."""
-    present = tmp_path / "onepipeline-without-the-bit"
-    present.write_text("#!/usr/bin/env bash\necho '{\"completion\": true}'\n", encoding="utf-8")
-    present.chmod(0o644)
-    return present
-
-
-def test_the_channel_filter_refuses_an_answer_it_cannot_recognise(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """Whatever the channel says is checked to be a ruling before onejudge acts on it.
-
-    onejudge reads this stdout as the planner's verdict, so relaying an unchecked
-    response would let a changed release — or an empty one — settle or continue a run
-    nobody ruled on. The ruling's `completion` and the prose onejudge hands back to the
-    monitor are both checked, and every shape is driven against the real script through
-    a stand-in channel, which is the only way to produce an answer the published one
-    never gives.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    channel = tmp_path / "stand-in-channel"
-    answers = tmp_path / "answer.txt"
-    # The subject of this journey is what the filter does with an answer the published
-    # `channel serve` never gives, so the published one cannot produce the input under
-    # test; every other boundary here is real. The stand-in reads the surface and
-    # replies with whatever the case put in the file, so the answer travels as bytes
-    # rather than through a shell quoting it.
-    # llmlint: ignore[e2e_not_mocked] The published channel cannot make this input.
-    channel.write_text(
-        f"#!/usr/bin/env bash\ncat > /dev/null\ncat {answers}\n",
-        encoding="utf-8",
-    )
-    channel.chmod(0o755)
-    environment[ONEPIPELINE_BIN] = str(channel)
-
-    for case, answer, expected in (
-        ("an empty answer", "", "closed without answering"),
-        ("an answer that is not JSON", "ok\n", "is not JSON"),
-        ("an answer that is not a ruling", '{"message": "sure"}\n', "not a supervisor ruling"),
-        (
-            "a ruling whose message is not prose",
-            '{"completion": true, "message": 3}\n',
-            "`message` for run",
-        ),
-        (
-            "a ruling whose reason is not prose",
-            '{"completion": false, "reason": ["drift"]}\n',
-            "`reason` for run",
-        ),
-    ):
-        answers.write_text(answer, encoding="utf-8")
-
-        refused = _serve(_frame_of_a_lost_turn(), environment)
-
-        assert refused.returncode != 0, f"{case} was relayed: {refused.stdout}"
-        assert expected in refused.stderr, f"{case}: {refused.stderr}"
-        assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
-
-
-def test_the_channel_filter_relays_a_ruling_whole_including_fields_it_does_not_know(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """An additive field in the planner's ruling reaches onejudge rather than dying here.
-
-    The complement of the refusals above, and the reason the relay is deliberate:
-    onejudge — not this filter — decides what a ruling may carry, so a onepipeline
-    release that adds a field to its answer must not kill the monitor on its first turn,
-    and must not have that field quietly withheld from the onejudge that would act on
-    it. Both halves are asserted: the additive field arrives, and the three fields this
-    filter does check arrive unaltered beside it.
-
-    The request translation is held here too, because the same run proves it: what the
-    stand-in receives on stdin is the observer frame `channel serve` reads, bounded and
-    non-blocking so a watcher's report never stops the frontier. The frame ends in a
-    turn the agent side lost rather than in prose, because prose raises no surface at
-    all — the filter answers it without ever opening the channel — so a lost turn is the
-    only supervisor-op path whose round trip there is to hold.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    channel = tmp_path / "stand-in-channel"
-    captured = tmp_path / "surface.json"
-    # The input under test is an answer carrying a field no published `onepipeline`
-    # release emits yet, so the published `channel serve` cannot produce it; the
-    # filter, its argv, the frame, and the pipes are all real.
-    # llmlint: ignore[e2e_not_mocked] No published onepipeline emits the field tested.
-    channel.write_text(
-        f"#!/usr/bin/env bash\ncat > {captured}\n"
-        'echo \'{"completion": false, "message": "keep watching", "reason": "mid-run",'
-        ' "surface_id": 7, "planner": {"session": "planner-1"}}\'\n',
-        encoding="utf-8",
-    )
-    channel.chmod(0o755)
-    environment[ONEPIPELINE_BIN] = str(channel)
-
-    relayed = _serve(_frame_of_a_lost_turn(), environment)
-
-    assert relayed.returncode == 0, relayed.stderr
-    ruling = json.loads(relayed.stdout)
-    assert ruling["surface_id"] == 7, f"an additive field was dropped: {ruling}"
-    assert ruling["planner"] == {"session": "planner-1"}, f"an additive field was dropped: {ruling}"
-    assert ruling["completion"] is False, ruling
-    assert ruling["message"] == "keep watching", ruling
-    assert ruling["reason"] == "mid-run", ruling
-
-    surface = json.loads(captured.read_text(encoding="utf-8"))
-    assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, surface
-    assert surface["blocking"] is False, surface
-    assert surface["message"].startswith(f"monitor turn failed: {LOST_TURN_CAUSE} on codex."), (
-        surface
-    )
-
-
-#: The kind `scripts/channel-serve.py` raises a turn its agent side lost under.
-SURFACE_KIND_OF_A_LOST_TURN = "monitor-failed"
-
-#: The ceiling the surface's composition may not exceed, for any transcript, identity,
-#: and run id these journeys drive through it. The raw transcript it replaces was 21,531
-#: characters.
-NAMED_FAILURE_LIMIT = 400
-
-#: How the recorded transcript's harness classified the refusal it ended on.
-LOST_TURN_CAUSE = "usageLimitExceeded"
-
-#: Text that occurs only inside the transcript, asserted absent from the surface: a
-#: frame name, a key, and the URL out of the refusal's own prose.
-ONLY_IN_THE_TRANSCRIPT = ("turn/completed", "codexErrorInfo", "chatgpt.com")
-
-#: The prompt the harness echoes back at itself, which is most of a lost turn's weight.
-ECHOED_PROMPT = (
-    "Actively monitor one executing tracked graph and report what drifts from it.\n" * 100
-)
-
-
-def _lost_turn_transcript(codex_home: str) -> str:
-    """What a monitor turn its agent side lost leaves as the last thing it "said".
-
-    The shape measured off this host's own `runs/rc-fixes-brief` channel queue: the
-    harness's own JSON-RPC stream, one frame per line, opening with the home the
-    identity it ran as is credentialed from, echoing the whole prompt back, and ending
-    in an error frame and a `turn/completed` whose status is `failed`. Twenty of these
-    queued unread on one run, each one 21,531 characters that had to be opened to find
-    out it said nothing.
-
-    Thread and session identifiers are this fixture's own and the echoed prompt is the
-    monitor's role rather than the recorded run's; the frames, their order, and the two
-    that carry the refusal are as recorded.
-    """
-    refusal = (
-        "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
-        "to purchase more credits or try again at Aug 20th, 2026 3:30 AM."
-    )
-    thread = "01a01a5d-8df8-77b0-aace-730d932eefe4"
-    turn = "01a01a5d-8f08-7642-947f-d6103de39e42"
-    echoed = {
-        "type": "userMessage",
-        "id": "01a01a5d-9351-77a1-b947-d7aa89759a9c",
-        "content": [{"type": "text", "text": ECHOED_PROMPT}],
-    }
-    error = {"message": refusal, "codexErrorInfo": LOST_TURN_CAUSE, "additionalDetails": None}
-    frames: list[dict[str, object]] = [
-        {
-            "id": 1,
-            "result": {
-                "userAgent": "oneharness/0.145.0 (Ubuntu 24.4.0; x86_64)",
-                "codexHome": codex_home,
-                "platformFamily": "unix",
-                "platformOs": "linux",
-            },
-        },
-        {"method": "thread/started", "params": {"thread": {"id": thread}}},
-        {
-            "method": "turn/started",
-            "params": {"threadId": thread, "turn": {"id": turn, "status": "inProgress"}},
-        },
-        {"method": "item/started", "params": {"item": echoed}},
-        {"method": "item/completed", "params": {"item": echoed}},
-        {
-            "method": "account/rateLimits/updated",
-            "params": {"rateLimits": {"credits": {"hasCredits": False, "balance": "0"}}},
-        },
-        {
-            "method": "thread/status/changed",
-            "params": {"threadId": thread, "status": {"type": "systemError"}},
-        },
-        {"method": "error", "params": {"error": error, "willRetry": False, "threadId": thread}},
-        {
-            "method": "turn/completed",
-            "params": {
-                "threadId": thread,
-                "turn": {"id": turn, "items": [], "status": "failed", "error": error},
-            },
-        },
-    ]
-    return _transcript(*frames)
-
-
-def _transcript(*frames: dict[str, object]) -> str:
-    """One machine transcript, in the form a harness streams it: a JSON object per line."""
-    return "\n".join(json.dumps(frame) for frame in frames)
-
-
-def _capturing_channel(tmp_path: Path, environment: dict[str, str]) -> Path:
-    """A stand-in `channel serve` that keeps the surface it was handed, and answers.
-
-    What these journeys are about is the surface the filter *sends*, and the published
-    `channel serve` neither hands one back nor answers one without a live run whose
-    planner is reading it. Everything else is real: the filter, its argv, the frame on
-    its stdin, and the response it validates off this stdout.
-    """
-    channel = tmp_path / "stand-in-channel"
-    captured = tmp_path / "surface.json"
-    # llmlint: ignore[e2e_not_mocked] A reader is what makes the sent surface readable.
-    channel.write_text(
-        f'#!/usr/bin/env bash\ncat > {captured}\necho \'{{"completion": false, '
-        '"message": "keep watching", "reason": "mid-run"}\'\n',
-        encoding="utf-8",
-    )
-    channel.chmod(0o755)
-    # llmlint: ignore[e2e_not_mocked] A reader is what makes the sent surface readable.
-    environment[ONEPIPELINE_BIN] = str(channel)
-    return captured
-
-
-def _frame_ending_in(said: str) -> str:
-    """The recorded supervisor frame, with the monitor's conversation ending in `said`."""
-    messages = [*cast(list[dict[str, str]], SUPERVISOR_FRAME["messages"])[:-1]]
-    return json.dumps(
-        {**SUPERVISOR_FRAME, "messages": [*messages, {"role": "assistant", "content": said}]}
-    )
-
-
-def _frame_of_a_lost_turn() -> str:
-    """The recorded supervisor frame, ending in the one message that reaches the channel.
-
-    `SUPERVISOR_FRAME` ends in prose, and prose raises no surface: the filter answers it
-    itself and never spawns `channel serve`. So every journey below whose subject is the
-    round trip — what the channel is handed, what its answer is turned into, what a
-    channel that cannot be reached is reported as — has to end its frame in a turn the
-    agent side lost, which is the only supervisor-op path left that raises one.
-    """
-    return _frame_ending_in(_lost_turn_transcript("/home/nick/.codex"))
-
-
-def test_the_channel_filter_names_a_lost_monitor_turn_instead_of_transcribing_it(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A turn the agent side lost reaches the planner as a named failure, not a dump.
-
-    The planner may not filter the unread-surface line, because a blocking surface
-    produces no other signal until it is read. So a monitor turn that failed rather than
-    spoke used to arrive as twenty-one thousand characters of the harness's own JSON-RPC
-    stream — unreadable and undroppable at once, and each one had to be opened to find
-    out it said nothing. What has to arrive instead is the two things a planner acts on:
-    what the failure was, and which identity's quota it happened on.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    captured = _capturing_channel(tmp_path, environment)
-    transcript = _lost_turn_transcript("/home/nick/.codex")
-
-    relayed = _serve(_frame_ending_in(transcript), environment)
-
-    assert relayed.returncode == 0, relayed.stderr
-    surface = json.loads(captured.read_text(encoding="utf-8"))
-    assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, surface
-    assert surface["blocking"] is False, surface
-    named = surface["message"]
-    assert f"monitor turn failed: {LOST_TURN_CAUSE} on codex." in named, named
-    assert len(named) <= NAMED_FAILURE_LIMIT, f"{len(named)} characters is not a line: {named}"
-    for buried in ONLY_IN_THE_TRANSCRIPT:
-        assert buried not in named, f"the raw transcript reached the surface message: {named}"
-    assert ECHOED_PROMPT.splitlines()[0] not in named, named
-
-
-def test_the_channel_filter_names_which_codex_identity_lost_the_turn(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """The identity is read out of the transcript, so the alternate is named as itself.
-
-    The actionable half of the line is which quota to go and look at, and this host's
-    two codex identities have separate ones. The transcript names the home it was
-    credentialed from; `ORCHESTRATOR_CODEX_ALT_HOME` is what says which identity that
-    is, and this journey establishes it exactly as a launch does. Reporting `codex` for
-    a turn the alternate lost would send a planner to a quota that is fine.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    captured = _capturing_channel(tmp_path, environment)
-    alternate = environment["ORCHESTRATOR_CODEX_ALT_HOME"]
-
-    relayed = _serve(_frame_ending_in(_lost_turn_transcript(alternate)), environment)
-
-    assert relayed.returncode == 0, relayed.stderr
-    named = json.loads(captured.read_text(encoding="utf-8"))["message"]
-    assert f"monitor turn failed: {LOST_TURN_CAUSE} on codex:alternate." in named, named
-    assert len(named) <= NAMED_FAILURE_LIMIT, f"{len(named)} characters is not a line: {named}"
-
-
-def test_the_channel_filter_names_a_lost_turn_however_its_harness_recorded_it(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """Every shape a lost turn is recorded in still reaches the planner as one line.
-
-    The recorded transcript is one harness classifying one refusal, and the branches
-    around it are what the next one will land on: an error frame with no terminal turn
-    after it, a turn that failed recording nothing, an unclassified error whose only
-    account of itself is prose, and a stream that never says which harness ran it. Each
-    still has to name what it can and stay a line — including the two that would not on
-    their own, a cause longer than the whole surface and a cause carrying newlines,
-    which is text the harness controls and this filter renders.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    captured = _capturing_channel(tmp_path, environment)
-    opening = {"result": {"codexHome": "/home/nick/.codex"}}
-    recorded = {
-        "an error frame with no terminal turn behind it": (
-            _transcript(opening, {"method": "error", "params": {"error": {"code": "quotaLost"}}}),
-            "monitor turn failed: quotaLost on codex.",
-        ),
-        "a turn that failed recording nothing about why": (
-            _transcript(
-                opening,
-                {"method": "turn/completed", "params": {"turn": {"status": "failed"}}},
-            ),
-            "monitor turn failed: no cause recorded on codex.",
-        ),
-        "an error whose only account of itself is prose": (
-            _transcript(
-                opening,
-                {"method": "error", "params": {"error": {"message": "the provider hung up"}}},
-            ),
-            "monitor turn failed: the provider hung up on codex.",
-        ),
-        "a stream that never says which harness ran it": (
-            _transcript({"method": "error", "params": {"error": {"code": "quotaLost"}}}),
-            "monitor turn failed: quotaLost on an unidentified harness.",
-        ),
-        "a cause carrying the newlines that would make the line two": (
-            _transcript(
-                opening,
-                {"method": "error", "params": {"error": {"message": "hung up.\n\nRetry at 3AM."}}},
-            ),
-            "monitor turn failed: hung up. Retry at 3AM. on codex.",
-        ),
-    }
-    for case, (said, expected) in recorded.items():
-        relayed = _serve(_frame_ending_in(said), environment)
-
-        assert relayed.returncode == 0, f"{case}: {relayed.stderr}"
-        surface = json.loads(captured.read_text(encoding="utf-8"))
-        assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, f"{case}: {surface}"
-        assert expected in surface["message"], f"{case}: {surface['message']}"
-        assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, f"{case}: {surface['message']}"
-
-
-def test_the_channel_filter_bounds_a_cause_its_harness_did_not_bound(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A refusal that is a paragraph still lands as a line a planner reads where it is.
-
-    The cause is the one part of the line copied out of somebody else's transcript, and
-    nothing on the far side of that boundary keeps it short: the recorded refusal is
-    already two sentences and a URL. So the bound is asserted against a cause far longer
-    than the whole surface may be, and the identity and the remedy — the two halves a
-    reader acts on — have to survive it.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    captured = _capturing_channel(tmp_path, environment)
-    unbounded = "the provider refused this turn and explained itself at length. " * 20
-    said = _transcript(
-        {"result": {"codexHome": "/home/nick/.codex"}},
-        {"method": "error", "params": {"error": {"message": unbounded}}},
-    )
-
-    relayed = _serve(_frame_ending_in(said), environment)
-
-    assert relayed.returncode == 0, relayed.stderr
-    named = json.loads(captured.read_text(encoding="utf-8"))["message"]
-    assert len(named) <= NAMED_FAILURE_LIMIT, f"{len(named)} characters is not a line: {named}"
-    assert named.startswith("monitor turn failed: the provider refused this turn"), named
-    assert "on codex." in named, named
-    assert "`just monitor serve-e2e --filter monitor`" in named, named
-
-
-def test_the_channel_filter_raises_nothing_for_an_observation_written_as_prose(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """Prose raises no surface, whatever it says, and the member is answered and lives.
-
-    This is the deletion that makes the `finding` op the only route: while prose was
-    raised automatically, one run's monitor answered nineteen findings with eight prose
-    surfaces restating them seconds later — 30% of everything it said to its operator
-    being a duplicate of what they had just been handed. So a monitor now reports by
-    sending, and its reply text reaches nobody.
-
-    Both cases here are prose by the only test that draws the line without guessing at a
-    harness vocabulary — a prose line does not parse as a JSON object — and each is one a
-    careless classifier would swallow: an observation that quotes the very frame the
-    classifier keys on, and one whose closing line is a JSON value that is not an object.
-    Neither may raise anything, and neither may be answered with a verdict onejudge would
-    act on to settle a watch nobody ruled on.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    # A stand-in `channel serve` that would capture anything raised, so "no surface" is
-    # read off a channel that demonstrably records one — `_frame_of_a_lost_turn` above
-    # drives this same stand-in and the file it writes is asserted there.
-    # llmlint: ignore[e2e_not_mocked] The published channel is doubled at its own boundary.
-    captured = _capturing_channel(tmp_path, environment)
-    said_in_prose = {
-        "an observation": "issue: node api has drifted from its acceptance criteria",
-        "an observation that quotes a failed turn": (
-            "node api's dispatch died to its provider. Its last frame was "
-            '{"method": "turn/completed", "params": {"turn": {"status": "failed"}}} — retry it?'
-        ),
-        "a transcript one of whose lines is not an object": (
-            _transcript({"method": "error", "params": {"error": {"code": "quotaLost"}}})
-            + '\n"node api has drifted"'
-        ),
-    }
-    for case, said in said_in_prose.items():
-        answered = _serve(_frame_ending_in(said), environment)
-
-        assert answered.returncode == 0, f"{case}: {answered.stderr}"
-        assert not captured.exists(), (
-            f"{case} raised a planner surface: {captured.read_text(encoding='utf-8')}"
-        )
-        ruling = json.loads(answered.stdout)
-        assert ruling["completion"] is False, (
-            f"{case} answered onejudge with a completion, which settles a watch nobody "
-            f"ruled on: {ruling}"
-        )
-        assert said not in ruling["message"], f"{case}: the prose came back as its own ruling"
-        assert ruling["reason"].strip(), (
-            f"{case} answered with a bare non-completion, which reads in a transcript "
-            f"like a planner who refused the watch: {ruling}"
-        )
-
-
-def test_the_channel_filter_raises_nothing_for_a_transcript_it_cannot_prove_was_lost(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """An unprovable machine transcript is content like any other, and raises nothing.
-
-    It used to get a bounded `monitor-transcript` surface of its own, and that kind is
-    gone with the path it was compensating for. It existed because prose was republished
-    verbatim: all 26 oversized surfaces measured on this host were `status: completed`
-    with `error: null`, so nothing was provable about any of them and every one went out
-    as the monitor's own words — 176.1 MB of protocol carrying zero model-authored
-    characters. With nothing republished there is nothing to bound.
-
-    The three branches below are the ones a real transcript lands on: a turn that
-    finished, a stream with no terminal frame at all, and one whose failure-shaped frame
-    carries a status the filter does not read as lost. None may raise a surface, and none
-    may put the transcript back in front of anybody — including back at the monitor
-    inside its own ruling.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    # llmlint: ignore[e2e_not_mocked] The published channel is doubled at its own boundary.
-    captured = _capturing_channel(tmp_path, environment)
-    opening = {"result": {"codexHome": "/home/nick/.codex"}}
-    unproven = {
-        "a transcript of a turn that finished": _transcript(
-            opening,
-            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
-        ),
-        "a stream that stops before any terminal frame": _transcript(
-            opening,
-            {"method": "thread/started", "params": {"thread": {"id": "01a01a5d"}}},
-        ),
-        "a turn whose status is not one the filter reads as lost": _transcript(
-            opening,
-            {"method": "turn/completed", "params": {"turn": {"status": "cancelled"}}},
-        ),
-    }
-    for case, said in unproven.items():
-        answered = _serve(_frame_ending_in(said), environment)
-
-        assert answered.returncode == 0, f"{case}: {answered.stderr}"
-        assert not captured.exists(), (
-            f"{case} raised a planner surface: {captured.read_text(encoding='utf-8')}"
-        )
-        ruling = json.loads(answered.stdout)
-        assert ruling["completion"] is False, f"{case}: {ruling}"
-        assert said not in ruling["message"], f"{case}: the transcript came back in the ruling"
-        for buried in ("turn/completed", "codexHome"):
-            assert buried not in ruling["message"], f"{case}: the transcript leaked into {ruling}"
-
-
-def test_a_named_failure_still_never_answers_for_the_planner(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """Naming the failure changes nothing about who rules on the run.
-
-    The filter now composes a message of its own, which is exactly the point at which
-    answering the planner's question for them would become easy — and onejudge reads
-    this stdout as the planner's ruling, so a fabricated `{"completion": ...}` would
-    continue or settle a run nobody ruled on. A lost turn whose channel cannot be
-    reached at all still exits non-zero with the cause and the remedy.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    frame = _frame_ending_in(_lost_turn_transcript("/home/nick/.codex"))
-
-    for case, override in (
-        ("a channel that is not installed", str(tmp_path / "no-such-onepipeline")),
-        ("a channel that cannot be executed", str(_unrunnable(tmp_path))),
-    ):
-        environment[ONEPIPELINE_BIN] = override
-
-        refused = _serve(frame, environment)
-
-        assert refused.returncode != 0, f"{case} was answered: {refused.stdout}"
-        assert "could not run" in refused.stderr, f"{case}: {refused.stderr}"
-        assert "just bootstrap" in refused.stderr, f"{case}: {refused.stderr}"
-        assert "Traceback" not in refused.stderr, f"{case}: {refused.stderr}"
-        assert "completion" not in refused.stdout, f"{case}: {refused.stdout}"
-
-
-def test_the_channel_filter_reports_a_channel_that_cannot_be_executed(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A channel that passes for runnable and then fails to exec is still a diagnostic.
-
-    The check that resolves `ONEPIPELINE_BIN` to an executable cannot answer whether the
-    kernel will accept it, so this is the failure that survives it: a file with the bit
-    set whose interpreter is not there. `subprocess.run` raises at the spawn itself, and
-    the whole point of catching it is that the monitor's judge side reports a cause and a
-    remedy — a traceback on this path would reach onejudge as a provider that produced no
-    output, and say nothing about a broken checkout.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-    channel = tmp_path / "channel-with-no-interpreter"
-    channel.write_text("#!/nonexistent/interpreter\necho unreachable\n", encoding="utf-8")
-    channel.chmod(0o755)
-    environment[ONEPIPELINE_BIN] = str(channel)
-
-    refused = _serve(_frame_of_a_lost_turn(), environment)
-
-    assert refused.returncode != 0, refused.stdout
-    assert "could not run" in refused.stderr, refused.stderr
-    assert "channel serve serve-e2e" in refused.stderr, refused.stderr
-    assert "just bootstrap" in refused.stderr, refused.stderr
-    assert "Traceback" not in refused.stderr, refused.stderr
-    assert "completion" not in refused.stdout, refused.stdout
-
-
-def test_the_channel_filter_reports_a_refusal_from_the_channel_itself(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A well-formed frame the *channel* rejects is reported, not smoothed over.
-
-    The complement of the case above: here the filter's own validation passes and
-    `onepipeline channel serve` is the one that refuses — an unknown run. The filter
-    has a real answer to relay and none arrives, so it must say which end refused and
-    exit non-zero rather than answer for the planner. Driven against a runs directory
-    that genuinely holds no such run, so the refusal is the published one.
-    """
-    environment = _environment(tmp_path, oneharness_bin)
-
-    refused = _serve(_frame_of_a_lost_turn(), environment)
-
-    assert refused.returncode != 0, refused.stdout
-    assert "the planner channel refused the surface" in refused.stderr, refused.stderr
-    assert "no such run" in refused.stderr, refused.stderr
-    assert "completion" not in refused.stdout, refused.stdout
-
-
 def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
@@ -3563,19 +2919,10 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
 WORKER_HELD_SECONDS = 20
 
 #: The longer hold the channel journeys need: three parametrizations share one run, each
-#: waits for its own surface and sends its own verdict, and a reply arriving after the
+#: waits for its own question and sends its own verdict, and a reply arriving after the
 #: hold expires is refused for the right reason — the run settled — and so would fail
 #: those journeys for a reason they are not about.
 SUPERVISED_HELD_SECONDS = 120
-
-#: How long the supervised launch tells the graph to hold the monitor between turns.
-#: The shipped `graphs/dag-scope.yaml` paces that conversation one turn per 300 seconds,
-#: counted from the planner's reply, and the journey reading the reply back out of the
-#: monitor's *next* turn waits 90 seconds for it — so under the shipped period the
-#: instruction the planner sent would never be observed. `--set
-#: members.monitor.schedule.every` is the published override for a journey that needs
-#: turns closer together than the shipped period; the shipped value stays what it is.
-SUPERVISED_MONITOR_HOLD_SECONDS = 2
 
 #: The verb the engine used to be advanced by. It is gone, and its absence is half of
 #: what "settles on its own" means: the other half is a run that settled anyway.
@@ -3786,22 +3133,22 @@ VERDICT_RECIPES = (
 )
 
 
-def _monitor_scripted_to_raise_a_surface(environment: dict[str, str]) -> None:
-    """Script this run's monitor to the one turn that still puts a surface on the queue.
+#: The two settings that make a monitor's conversation end, and so ask its judge side for
+#: a score, inside a journey: a turn cap of two, and the graph's smallest hold between
+#: turns. The conversation ending at its cap is one of the two ways it ends on a real
+#: run — onejudge scores the completion bar whether the supervisor ruled complete or the
+#: cap ran out — and `--set` is the published override, so the shipped graph stays as it
+#: is. Each conversation that settles ends its observer graph, and the driver starts
+#: another, which asks again two turns later.
+CONVERSATION_ENDS_AT_ITS_CAP = (
+    "--set",
+    f"members.{MONITOR_MEMBER}.max_turns=2",
+    "--set",
+    f"members.{MONITOR_MEMBER}.schedule.every=1",
+)
 
-    A monitor's prose raises none — its report reaches the planner as a `finding` op it
-    issues itself — so a journey whose subject is the *reply* path needs a turn that
-    opens a rendezvous, and a turn its agent side lost is the one supervisor-op path
-    that does: `scripts/channel-serve.py` raises it as a bounded `monitor-failed` line
-    and then blocks on the channel exactly as it always did. Nothing else about that
-    round trip differs, which is why it stands in for the prose that used to open it.
-
-    The monitor's words are the paid model's, and the paid model is the only thing
-    doubled here; every other turn of the run stays what it was.
-    """
-    # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
-    environment[OBSERVER_ANSWER_ENV] = _lost_turn_transcript("/home/nick/.codex")
-    environment[OBSERVER_MEMBER_ENV] = MONITOR_MEMBER
+#: The kind the bus's onejudge codec puts a completion score to the planner under.
+SURFACE_KIND_OF_A_COMPLETION_SCORE = "monitor-completion"
 
 
 class SupervisedChannel(NamedTuple):
@@ -3823,15 +3170,15 @@ def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[Supervis
     `"state":"delivered"` and nothing read it, so this journey was asserting a false
     receipt; holding the worker open is what gives the verdict a live reader to reach.
 
-    Its monitor is scripted to the turn that still raises a surface, because a verdict
-    binds to a pending one: see `_monitor_scripted_to_raise_a_surface`.
+    Its monitor's conversation ends at a turn cap of two, because a verdict binds to a
+    pending question and the one a monitor's judge side asks is the completion score it
+    is owed once its conversation ends: see `CONVERSATION_ENDS_AT_ITS_CAP`.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     run = RunId("verdict-recipes-e2e")
     environment = _environment(tmp_path, oneharness_bin)
     environment[AGENT_DELAY_ENV] = str(SUPERVISED_HELD_SECONDS)
-    _monitor_scripted_to_raise_a_surface(environment)
     plan = tmp_path / "verdict.plan.json"
     supervised: CandidatePlan = {
         "schema_version": 2,
@@ -3845,14 +3192,15 @@ def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[Supervis
             "just",
             "orchestrate",
             project_from_plan(plan),
-            "--heartbeat-interval",
-            str(PACEMAKER_INTERVAL_SECONDS),
+            *CONVERSATION_ENDS_AT_ITS_CAP,
+            "--success-hook=",
+            "--failure-hook=",
         ],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
         yield SupervisedChannel(environment, run)
@@ -3876,12 +3224,13 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
     `tests/e2e/test_delegated_recipes_e2e.py` proves what these three write, against a
     traced `uv`; it cannot prove that `onepipeline reply` accepts it, and an envelope
     the CLI refuses would pass there and fail an operator. So each one is sent here to
-    a real run whose channel has a reader waiting, through the recipe as typed.
+    a real run whose channel holds a question, through the recipe as typed.
 
-    Retried against successive surfaces rather than sent once. A verdict is refused
-    outright when nothing is waiting to read it — the engine says so by name — so the
-    thing under test is only observable while a rendezvous is open, and which surface
-    that is, is not this journey's claim.
+    The question is the completion score the monitor's judge side asks once its
+    conversation ends, found by reading the channel through the bus. It is sent against
+    successive questions rather than once, because a verdict is refused outright when
+    nothing is waiting to read it — the engine says so by name — and which question
+    is open when a recipe is typed is not this journey's claim.
     """
     environment, run = supervised_channel
     limit = deadline(180)
@@ -3889,18 +3238,19 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
     while delivered is None:
         if time.monotonic() >= limit:
             pytest.fail(f"`just {recipe}` was never accepted by the channel of run {run}")
-        handed = _just("channel-next", run, environment=environment, seconds=60)
-        if handed.returncode != 0 or not handed.stdout.strip():
-            time.sleep(0.1)
-            continue
-        # `cast` for the same reason as above: the published verb owns this schema,
-        # and `SurfaceRead` states only the part this suite reads back from it.
-        if cast(SurfaceRead, json.loads(handed.stdout))["surface"] is None:
-            time.sleep(0.1)
+        asked = [
+            record
+            for record in _queue_state(environment, run, "surfaces")["waiting"]
+            if record.get("kind") == SURFACE_KIND_OF_A_COMPLETION_SCORE
+        ]
+        if not asked:
+            time.sleep(0.2)
             continue
         answered = _just(recipe, run, *arguments, environment=environment, seconds=60)
         if answered.returncode == 0:
             delivered = answered.stdout
+        else:
+            time.sleep(0.2)
     assert '"state":"delivered"' in "".join(delivered.split()), delivered
 
 
@@ -4058,12 +3408,20 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
     to name what is being waited for rather than only saying no.
     """
     _dispatched(cancellable_run)
-    cancelled = _replied(cancellable_run, {"op": "cancel", "id": "held"})
-    assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
+    environment, run = cancellable_run.environment, cancellable_run.run
+    cancelled = _sent(
+        environment, run, {"version": 2, "commands": [{"op": "cancel", "id": "held"}]}
+    )
+    assert _outcome(environment, run, cancelled)["applied"] is True
 
-    refused = _replied(cancellable_run, {"op": "requeue", "id": "held"})
-    reported = refused.stderr + refused.stdout
-    assert refused.returncode != 0, reported
+    # The send only says where the requeue went; whether the engine took it is the
+    # outcome it records against that envelope.
+    requeued = _sent(
+        environment, run, {"version": 2, "commands": [{"op": "requeue", "id": "held"}]}
+    )
+    refused = _outcome(environment, run, requeued)
+    reported = refused.get("reason", "")
+    assert refused["applied"] is False, refused
     assert "still has a dispatch in flight" in reported, reported
     # Named, not merely refused: a supervisor told only "it is still running" has
     # nothing to look at while it waits.

@@ -345,3 +345,49 @@ def test_each_planning_launch_records_the_session_that_made_it(
         f"run {launched} records session {session!r} where the flow ran as "
         f"{LAUNCHING_SESSION!r}, so nothing this session asks about would ever reach it"
     )
+
+
+#: What makes a recorded bus configuration this checkout's: the layout, this host's
+#: envelope validator, and its measured reply window, each held to the file itself by
+#: `tests/test_onemessagebus_config.py`.
+BUS_PROFILE = "planner-channel"
+BUS_VALIDATOR_COMMAND = ["scripts/envelope-review.sh"]
+BUS_REPLY_WINDOW_SECONDS = 3000
+
+
+@pytest.mark.parametrize("launched", [RUN, DESIGN_RUN], ids=["planner", "design-document"])
+def test_each_planning_launch_records_this_checkouts_bus_configuration(
+    launched: str, observed: Observed
+) -> None:
+    """Both of the flow's launches keep their channel under this host's bus configuration.
+
+    `scripts/onepipeline.sh` adds `--bus-config config/onemessagebus.yaml` to every
+    `onepipeline start`, and the engine records what it parsed in the run's launch record
+    as `bus_config`. The design-document run is launched by the flow's tail and by no
+    other journey's launch, so this is where that shape's record is read; an engine given
+    no configuration records none, and one given another file records other values.
+    """
+    record = observed.runs / launched / "launch.json"
+    assert record.is_file(), (
+        f"the flow left no launch record at {record}. It reported:\n{observed.reported}"
+    )
+    bus = json.loads(record.read_text(encoding="utf-8")).get("bus_config")
+    assert isinstance(bus, dict), (
+        f"run {launched} recorded no bus configuration, so its channel runs under the bus's "
+        f"defaults rather than this host's. The flow reported:\n{observed.reported}"
+    )
+    assert bus.get("profile") == BUS_PROFILE, bus
+    validators = bus.get("validators")
+    assert isinstance(validators, list) and [
+        validator.get("command") for validator in validators if isinstance(validator, dict)
+    ] == [BUS_VALIDATOR_COMMAND], (
+        f"run {launched}'s channel does not judge replies by this host's envelope validator: "
+        f"{validators}"
+    )
+    codecs = bus.get("codecs")
+    onejudge = codecs.get("onejudge") if isinstance(codecs, dict) else None
+    assert isinstance(onejudge, dict), f"run {launched} recorded no onejudge codec: {bus}"
+    assert onejudge.get("reply_window_seconds") == BUS_REPLY_WINDOW_SECONDS, (
+        f"run {launched} serves under a reply window of "
+        f"{onejudge.get('reply_window_seconds')!r}, not this host's {BUS_REPLY_WINDOW_SECONDS}"
+    )

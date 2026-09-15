@@ -16,31 +16,22 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # Two links, each spelled once in its text and once in its URL: the command protocol a
     # stand-in speaks, and the judge-list shape a graph member's `judge:` may take.
     Path("docs/onejudge-integration.md"): 4,
-    # The dag-scope graph names the release whose onejudge cannot serve the
-    # planner channel as a command provider. Dating that observation is what makes
-    # it honest, and it is exactly the literal an upgrade has to re-measure.
-    Path("graphs/dag-scope.yaml"): 1,
-    # The filter standing between onejudge's supervisor frame and the planner channel
-    # parses that frame's exact shape, and serves the two ops that release asks a judge
-    # side. Both are per-release measurements — which shape a release writes, and which
-    # ops it asks and when — so a bump has to re-measure the parser and the op set rather
-    # than discover either in a dead monitor.
-    Path("scripts/channel-serve.py"): 2,
-    # The same two measurements, said to an operator and to the model that lives under
-    # them. The prose half is what a reader acts on and the persona half is what the
+    # Which ops a release asks a monitor's judge side, and when — the measurement the
+    # completion bar's scoring rests on — said to an operator and to the model that lives
+    # under it. The prose half is what a reader acts on and the persona half is what the
     # member is configured by, so a bump that moved either would leave both wrong.
-    # The third names the release whose own source documents `user.settle_on_noop` — the
-    # field a monitor settled on its quiet turns would opt out through — and a citation
-    # to a file at a version is only worth reading while the version is the one in
-    # force, so it joins this gate rather than aging quietly beside the two above.
-    Path("docs/orchestration.md"): 3,
+    # The second in the prose names the release whose own source documents
+    # `user.settle_on_noop` — the field a monitor settled on its quiet turns would opt out
+    # through — and a citation to a file at a version is only worth reading while the
+    # version is the one in force, so it joins this gate rather than aging quietly beside
+    # the first. The frame shape the retired filter parsed is history there, written with
+    # no literal, because a measurement of a deleted file is not re-taken on a bump.
+    Path("docs/orchestration.md"): 2,
     Path("personas/orchestrator.yaml"): 1,
-    # And the gates that state which onejudge release each op measurement was taken
+    # And the gate that states which onejudge release its op measurement was taken
     # against. A test asserting a per-release behaviour under a release that has moved
     # is the worst kind of green, so its claim is dated here like every other.
-    Path("tests/test_observer_judge_ops.py"): 1,
     Path("tests/test_planner_channel_personas.py"): 1,
-    Path("tests/e2e/test_monitor_survives_the_channel_e2e.py"): 1,
     # The base config's `user.done_when` is the whole review bar for every dispatch,
     # and it is written to be resolved by the judge against the task. That only works
     # because onejudge hands the criterion over verbatim beside a transcript opening
@@ -93,28 +84,23 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # schema versions the build reads, and from which one `{task}` stops being
     # literal — so each carries a literal this gate holds to the pin.
     "oneagentgraph": {Path("graphs/dag-scope.yaml"): 1, Path("graphs/pr-author.yaml"): 1},
-    # Four in the filter: the frame shape it parses, the run-id export it deliberately
-    # does not read at a supervisor boundary, the same export as the ONLY source it has
-    # at a scoring one, and that `reply` applies an envelope's commands itself — which is
-    # the premise the filter's own inaction on a claimed live edit rests on, so a release
-    # that moved it would have this reader start losing manager edits.
-    # Eight in the operating manual: which plan schema versions the reconciler reads, what
+    # Seven in the operating manual: which plan schema versions the reconciler reads, what
     # a monitor member's environment carries, what a judge command's does, which
     # dispatches are handed the run they may ask their manager on, where a `context` note
-    # is delivered, that same `reply` measurement said to an operator, and the two halves
+    # is delivered, and the two halves
     # of the write-back's own account — the release below which it deleted the project
     # description an operator authored, and the release its refuse-rather-than-default
     # read was measured against. Those last two are the reason a count is declared here
     # rather than derived: they are literals in prose about a *behaviour* that moved, so
-    # a bump has to re-open them exactly as it re-opens the six before them. The ninth is
+    # a bump has to re-open them exactly as it re-opens the five before them. The eighth is
     # the release whose write-back stopped renaming a destination project and dropping its
     # labels, which is what returned this repository's plans to the board — a third
     # behavioural literal, re-opened by a bump for the same reason as the two above. The
-    # tenth is the release whose write-back stopped retrying a refused projection four
+    # ninth is the release whose write-back stopped retrying a refused projection four
     # times a second and started backing it off, which is a fourth behavioural literal and
     # is re-opened by a bump for the same reason: the retry rate an operator is told about
     # is the release's, and a stale number describes an outage nobody would recognise.
-    "onepipeline": {Path("scripts/channel-serve.py"): 4, Path("docs/orchestration.md"): 10},
+    "onepipeline": {Path("docs/orchestration.md"): 9},
 }
 
 
@@ -269,11 +255,10 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         "at onepipeline v{version}. Read that from what the release",
     ),
     # What a run names to the agent graph watching it — `ONEPIPELINE_RUN_ID`, set to
-    # the run id — restated in five places because the claim is load-bearing in five
+    # the run id — restated in three places because the claim is load-bearing in three
     # different arguments: why the pacemaker interpolates `{task}`, why the observer
-    # graph is written the way it is, why the planner channel's filter parses a run id
-    # out of prose, what an operator should write a member against, and what that
-    # filter's own header promises.
+    # graph's judge command can compose the run's channel directory, and what an operator
+    # should write a member against.
     # `tests/e2e/test_orchestrate_launch_e2e.py` re-takes that measurement on a real
     # launch, and this gate holds each restatement to the release it was taken
     # against, so a bump fails at both halves at once.
@@ -289,9 +274,10 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
         # The agent-graphs section, on why a member interpolates `{task}`.
         "measured against onepipeline {version} by dumping both sides of a monitor "
         "member's whole environment",
-        # The channel-serve section, on what its filter reads and what it leaves.
+        # The judge-side section, on the variables its command composes the run's channel
+        # directory from.
         "measured against onepipeline {version} in the judge command's own environment",
-        # The ask-manager section, on which launch shapes reach a worker that can ask.
+        # The asking section, on which launch shapes reach a worker that can ask.
         "every node dispatch of a run carries it as of onepipeline {version}",
     ),
     # The drafting endings, which did not exist below this release: the paragraph
@@ -325,14 +311,6 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
     # run-scope telemetry view was re-measured. Both are per-release readings of the
     # crate rather than of anything this repository writes.
     "docs/telemetry.md": ("re-measured against `onepipeline` v{version} on this host's own",),
-    # Two independent per-release claims share this file. Its header states the
-    # request shape each side of the channel writes, so a bump that moved either side
-    # would leave it reconciling a frame nobody sends; the second is the run-id export
-    # above, which it names and declines to read.
-    "scripts/channel-serve.py": (
-        "`onepipeline` {version} reads it",
-        "measured against onepipeline {version} by dumping this command's whole environment",
-    ),
 }
 
 

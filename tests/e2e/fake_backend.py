@@ -628,9 +628,9 @@ def main(argv: list[str]) -> int:
         )
     # Before the single-sided branch below, and that ordering is the whole of what makes
     # this seam reach the member it names. `graphs/dag-scope.yaml`'s monitor is two-party
-    # but its JUDGE side is a `command` — `scripts/channel-serve.py` — so `oneagentgraph`
-    # writes no judge harness config beside its agent one, and the "no judge sibling"
-    # test below reads that member as single-sided. Answered there, every scripted
+    # but its JUDGE side is a `command` — `onemessagebus serve --codec onejudge` — so
+    # `oneagentgraph` writes no judge harness config beside its agent one, and the "no judge
+    # sibling" test below reads that member as single-sided. Answered there, every scripted
     # monitor answer was replaced by the pacemaker's report while the prompt log went on
     # recording the script, so a journey asserting on the log passed while the model said
     # something else entirely.

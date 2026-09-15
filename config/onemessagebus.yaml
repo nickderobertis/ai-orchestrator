@@ -1,0 +1,52 @@
+# This host's messaging policy for the planner channel: the one place it lives.
+#
+# Read by every verb that touches a run's channel — `just channel-reply`, the ask shim
+# `ORCHESTRATOR_ASK_MANAGER` names, the observer's judge side in graphs/dag-scope.yaml —
+# and by the engine itself, which every launch hands it with `--bus-config`, so the
+# validators and codec constants below are the same ones whichever of them is speaking.
+# The keys are the installed `onemessagebus` release's schema (config/onemessagebus.version;
+# its docs/queues.md, docs/validators.md and docs/codecs.md); the values are this host's.
+# tests/test_onemessagebus_config.py loads the file through the release and holds each
+# value below to the statement it comes from.
+version: 1
+# The run's channel directory is supplied per invocation with `--transport-dir`, never
+# here: the engine refuses a `transport.dir` in a launch's bus configuration, because the
+# transport is the run root's own.
+transport: {kind: local}
+# The engine's channel layout, as `onemessagebus-agent` declares it.
+profile: planner-channel
+authors:
+  # The monitor's allowlist as AGENTS.md states it. A configuration may only narrow an
+  # author's grants, so this is the ceiling the layout grants the monitor, written down.
+  monitor: {capabilities: [retry, requeue, cancel, finding, add]}
+validators:
+  # Task prose in an envelope is criteria. Every reply carrying commands is held to the
+  # criteria bar — the deterministic tier, then the judged one — before anything is
+  # appended; `orchestrator/envelope_review.py` is that bar's one entry point, reached
+  # through `scripts/envelope-review.sh` for the identity environment its judged turn
+  # needs. Only a pass is cached, keyed on the envelope's bytes and the bar's
+  # fingerprint, so moving either tier of the bar invalidates every recorded pass. Both
+  # paths are relative to the working directory, which is the repository root for a
+  # recipe and for the launch a run's own replies are validated under.
+  - on: replies
+    when: {carries: commands}
+    kind: command
+    command: [scripts/envelope-review.sh]
+    cache:
+      dir: .cache/envelope-passes
+      bar_fingerprint: [uv, run, python, -m, orchestrator.envelope_review, --bar-fingerprint]
+codecs:
+  # No `run_env`: the engine refuses one in a launch's bus configuration, because its own
+  # `channel serve` takes the run from its argument, and the codec already reads the run
+  # from `ONEPIPELINE_RUN_ID` when the key is absent — the variable the engine exports to
+  # both sides of an observer member.
+  onejudge:
+    queue: surfaces
+    asker_env: ONEPIPELINE_CHANNEL_ASKER
+    # The engine's name for a per-turn session's bound, held to the installed engine's
+    # binary and to the codec's own reading of it by tests/test_onemessagebus_config.py.
+    session_env: ONEPIPELINE_SERVE_SESSION_SECONDS
+    # Fifty minutes, the window this host measured a manager needs: long enough that a
+    # manager who stepped away still answers, short enough that a wedged question is not
+    # immortal. docs/orchestration.md keeps the measurement.
+    reply_window_seconds: 3000

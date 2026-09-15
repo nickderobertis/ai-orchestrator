@@ -58,7 +58,7 @@ goal and every node whole, and records the pass on the **project** record under 
 three properties hold for it exactly as for a task's record, and `just check-plan` and
 `just copy-plan` both refuse a plan whose project carries none. **A mid-run live edit is
 held to the per-task tiers only.** An `add`, a `retry` or a `requeue` with an amended
-task reaches :mod:`orchestrator.live_edit_check`, which spends the per-task turn and
+task reaches :mod:`orchestrator.envelope_review`, which spends the per-task turn and
 never this one, because a model call over the whole plan there would stall every
 mid-run correction; the manager's own review is what covers adoption on a mid-run add,
 and the plan-level record says nothing about an edit it never saw.
@@ -666,69 +666,21 @@ def content_key(authored: Mapping[str, object], bar: BarFingerprint) -> ReviewKe
 
     The one place a review key is composed, so every carrier of reviewable content is
     keyed the same way: :func:`review_key` hands it a plan task's authored fields, and
-    :func:`edit_key` hands it the text a live edit states. Each value goes through
-    :func:`meaning_bearing` first, which is what keeps a re-indented block from costing
-    a second review of a demand nobody moved.
+    :func:`plan_key` a whole plan's. Each value goes through :func:`meaning_bearing`
+    first, which is what keeps a re-indented block from costing a second review of a
+    demand nobody moved. A live edit is keyed by no function here: the bus's own pass
+    cache keys it on the envelope's bytes and :func:`edit_bar_fingerprint`.
     """
     read = {field: meaning_bearing(value) for field, value in {**authored, "bar": bar}.items()}
     rendered = json.dumps(read, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return ReviewKey(hashlib.sha256(rendered.encode("utf-8")).hexdigest())
 
 
-def edit_key(
-    text: str,
-    persona: object,
-    bar: BarFingerprint,
-    *,
-    whole_task: bool = True,
-    judged: bool = True,
-) -> ReviewKey:
-    """The digest one live edit's resulting task, reviewed under ``bar``, hashes to.
-
-    A live edit states a task on the channel rather than in the plan store, so it carries
-    none of the fields beside a plan task's prose — no title, no dependencies, no `kind`.
-    What it does carry is the persona whose bar that text will be judged under, and that
-    is in the key because it decides the answer: the same prose under a role forbidden to
-    change the tree is a different review from the same prose under `engineer`. So is
-    **what the text is** — a whole task or an amendment — because the two are asked
-    different questions under different frames, and a pass granted to a correction says
-    nothing about the same words stated as a task.
-
-    **And so is which tiers the text was asked**, which is a third shape rather than a
-    flag on the second. A whole task reaches this key by two routes that are not asked
-    the same questions: a novel one — an added node, a retry's replacement, a requeued
-    node's amended task — clears the deterministic bar and then a judged turn, while an
-    amendment composed onto its node's own task is a whole task that clears the
-    deterministic bar alone, because a correction owes no judged turn. A key that told
-    those two apart by nothing would let a bare amendment's free pass stand in for the
-    judged turn a later `add` or `retry` stating that same effective text owes — the one
-    way this register could hand a novel whole task to a dispatch with the judged
-    tier's questions unasked. So a whole task judged under both tiers hashes as a
-    ``task``, one cleared under the deterministic tier alone as a ``composed`` task, and
-    a correction read alone as an ``amendment``; a text cleared under the stronger bar
-    is asked the free tier again when it later arrives as the weaker shape, which costs
-    no provider turn.
-
-    The two keys are deliberately **not** interchangeable, and the field names are what
-    keeps them apart: a digest over a plan task's twelve authored fields can never equal
-    one over these three, so a record made about a live edit can never be read as
-    clearing a plan task or the other way round. Neither reads the other's store either —
-    see :mod:`orchestrator.live_edit_check` for where a live edit's own record is kept.
-    """
-    if not whole_task:
-        shape = "amendment"
-    elif judged:
-        shape = "task"
-    else:
-        shape = "composed"
-    return content_key({"edit": text, "persona": persona, "shape": shape}, bar)
-
-
 #: What the reviewer is told about a whole task a **live edit** states, between the
 #: question above and the bar. A plan task reaches the reviewer through `just
 #: review-plan` with its title and dependencies beside it; an `add`, a `retry`'s
 #: replacement node and a `requeue`'s amended task reach it through
-#: :mod:`orchestrator.live_edit_check` with neither, written by a manager in the minute
+#: :mod:`orchestrator.envelope_review` with neither, written by a manager in the minute
 #: after reading a failure. The bar is the same one, because the judge it reaches is.
 LIVE_EDIT_FRAME = """\
 This task was not read out of a plan. It was stated by a live edit on a running run's
@@ -889,7 +841,7 @@ def verdict(prompt: str) -> Verdict:
     has to stand in for, and the schema is enforced by oneharness rather than here.
 
     Public because it is the one judged turn this repository spends on task prose, and
-    :mod:`orchestrator.live_edit_check` spends it on a live edit's resulting task under
+    :mod:`orchestrator.envelope_review` spends it on a live edit's resulting task under
     :func:`edit_prompt`; a second spawn there would be a second seam to stand in for.
     Raises :class:`OSError` when no verdict came back, naming why and the repair, so a
     caller never records a pass from a turn that answered nothing.
@@ -1160,7 +1112,7 @@ def plan_key(plan: object, bar: BarFingerprint) -> ReviewKey:
 
     Over the plan in the engine's loaded shape, so the store path and the check path
     compute one key. The `shape` field keeps it from ever equalling a task's key or a
-    live edit's, the way :func:`edit_key`'s does.
+    live edit's.
     """
     return content_key({"goal": plan_goal(plan), "nodes": plan_nodes(plan), "shape": "plan"}, bar)
 

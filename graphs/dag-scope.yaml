@@ -48,26 +48,30 @@ members:
     # The planner channel IS this member's judge side, so the planner's replies
     # reach the monitor in its own conversation rather than only as graph edits.
     #
-    # `onepipeline channel serve RUN` is that server side, and it is reached through
-    # a filter rather than named directly. The two halves already agree on the
-    # response — `serve` answers with exactly the `{completion, message, reason}`
-    # object onejudge's `supervisor` op expects, and the filter passes it through
-    # untouched. They disagree on the request: onejudge 0.12.0 writes
-    # `{"op":"supervisor", …}` while `serve` reads `{kind, message, blocking?,
-    # node?}`, so naming `serve` directly here is refused with `the observer emitted
-    # a bad frame: unknown field 'op'` and the member dies on its first turn.
-    # `scripts/channel-serve.py` is that one reconciliation, measured from both ends
-    # on a real launch.
+    # `onemessagebus serve surfaces --codec onejudge` is that side, over this host's
+    # config/onemessagebus.yaml. What the codec answers each frame is the bus's to say,
+    # in onemessagebus's docs/codecs.md; what is this host's is the configuration it
+    # reads and the run's channel it serves.
     #
-    # That path is the one ref in this file NOT resolved against this file's
-    # directory: `command` is an argv, spawned with the directory the run was
-    # launched from as its working directory — measured by dumping a judge
-    # command's own `PWD` on a real launch. So it is written launch-relative, which
-    # is why `just orchestrate` is run from the repository root, exactly as
-    # `--dag-graph graphs/dag-scope.yaml` already is. A `../`-prefixed path here
-    # spawns nothing and kills the member with `could not run provider`.
+    # The channel directory is the run's own, and an argv cannot name a run it is not
+    # told: the engine exports `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID` to both
+    # sides of an observer member (tests/e2e/test_orchestrate_launch_e2e.py measures
+    # it), so the command composes the directory from those and nothing else.
+    #
+    # This is the one ref in this file NOT resolved against this file's directory:
+    # `command` is an argv, spawned with the directory the run was launched from as
+    # its working directory — measured by dumping a judge command's own `PWD` on a
+    # real launch. So the configuration is named launch-relative, which is why `just
+    # orchestrate` is run from the repository root, exactly as `--dag-graph
+    # graphs/dag-scope.yaml` already is.
     judge:
-      command: ["scripts/channel-serve.py"]
+      command:
+        - bash
+        - -c
+        - >-
+          exec onemessagebus serve surfaces --codec onejudge
+          --config config/onemessagebus.yaml
+          --transport-dir "${ONEPIPELINE_RUNS_DIR:-runs}/$ONEPIPELINE_RUN_ID/channel"
     mode: bypass
     # One turn every five minutes, paced by the graph rather than by the model: `every`
     # is the hold between the judge's answer and the next agent turn, and a `schedule`

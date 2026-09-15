@@ -2,9 +2,11 @@
 
 Both engine views report exhaustively on what is *running* and not at all on what it is
 running *in*, and two supervision failures came out of that gap — a driver that died of a
-full disk and reported only a dead driver, and a live `onepipeline channel serve`
-belonging to a passing test that no manager-facing view could tell from one belonging to
-the run being supervised. `AGENTS.md` and `docs/orchestration.md` carry what each cost.
+full disk and reported only a dead driver, and a live rendezvous belonging to a passing
+test that no manager-facing view could tell from one belonging to the run being
+supervised. That rendezvous was an `onepipeline channel serve` then; on this host it is
+now an `onemessagebus ask` or `onemessagebus serve` holding a run's channel open.
+`AGENTS.md` and `docs/orchestration.md` carry what each cost.
 `scripts/supervision-readings.py` is the reading; these journeys hold the two recipes to
 giving it, to giving it where a supervisor can see it, and to still giving everything the
 engine gave before it.
@@ -17,14 +19,15 @@ llmlint: ignore-file[tool_output_is_signal] the rendered view is these viewing
 commands' whole product, so the assertions are on what they printed.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Each journey is behind
-the edge that covers what it reads, and there are three. Eighteen carry `reads_recipes`
-and are charged to `orchestrator:test-recipes`, keyed on the justfile, `scripts/**` and
-the modules that collect them — exactly what they drive. One spends a real `just
-orchestrate`, whose verdict depends on `graphs/`, `personas/`, `config/` and the Markdown
-records under `examples/`, none of which that key covers, so it carries `reads_docs` and
-is charged to the whole-workspace tier; putting it in the narrow one would replay a green
-for a tree whose launch had changed. The twentieth drives the filter alone with a mode
-word it does not know, reads nothing outside the code-keyed tier, and carries no marker.
+the edge that covers what it reads, and there are three. Those that drive a view carry
+`reads_recipes` and are charged to `orchestrator:test-recipes`, keyed on the justfile,
+`scripts/**` and the modules that collect them — exactly what they drive. The one that
+spends a real `just orchestrate`, whose verdict depends on `graphs/`, `personas/`,
+`config/` and the Markdown records under `examples/`, none of which that key covers,
+carries `reads_docs` and is charged to the whole-workspace tier; putting it in the narrow
+one would replay a green for a tree whose launch had changed. The one that drives the
+filter alone with a mode word it does not know reads nothing outside the code-keyed tier,
+and carries no marker.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] These are pytest journeys rather than a
 shell test suite, and the split they are held to is the one above: each is charged to the
@@ -51,18 +54,20 @@ recipe, the wrapper scripts, the engine, the plan store, the run root it writes.
 that reached a paid model would cost a quota per run of the suite and prove nothing
 further about a view that reads a directory.
 
-llmlint: ignore-file[tests_mirror_real_usage] Seventeen journeys read a run root this
+llmlint: ignore-file[tests_mirror_real_usage] Twenty journeys read a run root this
 module builds, and one — `test_the_readings_answer_over_a_run_root_a_real_launch_wrote` —
 renders both views over one `just orchestrate` wrote, which is the control that makes the
-other seventeen statements about a shape the engine really produces. The built roots are
+other twenty statements about a shape the engine really produces. The built roots are
 not a saving: three of them need conditions no real launch can be asked for, listed in
 `tests/e2e/probe_run_root.py`. Everything from the recipe down is real in every one of
-them, the rendezvous included.
+them, the rendezvous included: a real `onemessagebus ask` or `serve`, except where a
+journey needs an argv no real bus process can carry, and there the stand-in says so.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -75,6 +80,7 @@ from pathlib import Path
 import pytest
 from probe_run_root import Probe, record_dispatch, run_name, run_root
 from waits import timeout as e2e_timeout
+from waits import until
 
 #: This checkout, resolved from this file rather than imported: every journey but one
 #: below is in the recipe-scoped tier, whose key is the justfile and `scripts/**`, and
@@ -98,6 +104,17 @@ RENDEZVOUS = "  rendezvous"
 #: separately, and the journey below asserts the two-line answer only after proving the
 #: one-line answer it is contrasted with.
 SECOND_FILESYSTEM = "/dev/shm"
+
+#: The installed bus every real rendezvous here is, and the configuration this host starts
+#: each one with: `scripts/ask-manager.sh` execs `ask` and `graphs/dag-scope.yaml` execs
+#: `serve`, both over `config/onemessagebus.yaml`, both naming the run's channel with
+#: `--transport-dir <runs root>/<run>/channel`.
+BUS = REPO_ROOT / ".venv" / "bin" / "onemessagebus"
+BUS_CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
+QUEUE = "surfaces"
+
+#: One blocking question, as the ask shim encodes it — the whole of `ask`'s stdin.
+QUESTION = '{"kind":"planner-question","message":"probe","source":"proposal"}\n'
 
 #: Durations move between two invocations seconds apart, and the comparison journeys
 #: below run each view twice — once through the engine and once through the recipe —
@@ -161,52 +178,143 @@ def _above_providers(rendered: str) -> list[str]:
     return lines
 
 
+def _bus_processes(session: int, verb: str) -> list[int]:
+    """Every live bus process running `verb` inside the process session `session`.
+
+    Scoped to the session this journey started, so what it counts is its own rendezvous
+    and never the bus processes other journeys on this shared host leave running.
+    """
+    found: list[int] = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            if os.getsid(int(name)) != session:
+                continue
+            argv = Path(f"/proc/{name}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if (
+            len(argv) > 1
+            and Path(os.fsdecode(argv[0])).name == BUS.name
+            and os.fsdecode(argv[1]) == verb
+        ):
+            found.append(int(name))
+    return found
+
+
+def _question_waiting(channel: Path) -> bool:
+    """Whether the channel's queue holds the question, read through the bus's own `status`."""
+    looked = subprocess.run(
+        [str(BUS), "status", QUEUE, "--transport-dir", str(channel), "--format", "json"],
+        capture_output=True,
+        text=True,
+        timeout=e2e_timeout(30),
+        check=False,
+    )
+    return looked.returncode == 0 and any(
+        queue.get("waiting") or queue.get("pending") is not None
+        for queue in json.loads(looked.stdout or "[]")
+    )
+
+
 @contextlib.contextmanager
 def _serving(
-    run: str, runs_root: Path, *, through_launcher: bool = False
+    run: str,
+    runs_root: Path,
+    *,
+    verb: str = "ask",
+    through_launcher: bool = False,
+    relative: bool = False,
+    in_environment: bool = False,
 ) -> Iterator[subprocess.Popen[str]]:
-    """A real rendezvous: one blocking question queued, and nobody answering it.
+    """A real rendezvous: a bus process holding one run's channel open for a reply.
 
-    `onepipeline channel serve` is the published server side — it reads one frame,
-    queues it as a planner surface, and blocks until somebody replies — so this is the
-    process a dispatched agent's blocking question leaves on the host, produced the way
-    it is really produced rather than imitated.
+    `ask` is what a dispatched agent's blocking question is on this host — one question
+    queued and nobody answering it — and `serve` is what an observer member's judge side
+    is, reading frames for as long as its member runs. Both are started the way this host
+    starts them, rather than imitated. `relative` names the channel relative to the
+    process's working directory, which is how the judge side names it
+    (`${ONEPIPELINE_RUNS_DIR:-runs}/<run>/channel` from the checkout); `in_environment`
+    names it in `ONEMESSAGEBUS_TRANSPORT_DIR` instead of on the command line, which the
+    bus accepts and which leaves argv naming no run at all.
     """
+    bound = int(e2e_timeout(120))
+    channel = runs_root / run / "channel"
     environment = dict(os.environ)
-    environment["ONEPIPELINE_RUNS_DIR"] = str(runs_root)
-    # Long enough that no journey here races it, and finite so a failure leaves nothing
-    # of this test alive on a shared host.
-    environment["ONEPIPELINE_REPLY_TIMEOUT_SECONDS"] = str(int(e2e_timeout(120)))
+    environment["ONEPIPELINE_RUN_ID"] = run
+    cwd = runs_root.parent if relative else REPO_ROOT
+    transport = str(Path(runs_root.name) / run / "channel") if relative else str(channel)
+    named = ["--config", str(BUS_CONFIG)]
+    if in_environment:
+        environment["ONEMESSAGEBUS_TRANSPORT_DIR"] = transport
+    else:
+        named += ["--transport-dir", transport]
+    if verb == "ask":
+        command = [str(BUS), "ask", QUEUE, "--blocking", *named, "--timeout", str(bound)]
+    else:
+        command = [str(BUS), "serve", QUEUE, "--codec", "onejudge", *named]
+        command += ["--session-seconds", str(bound)]
     # A `timeout` in front is what somebody bounding a wait by hand types, and unlike
     # `uv run` — which execs, measured — it stays as a process of its own carrying the
-    # same argv words as the engine below it. The pinned binary reached directly is the
-    # one process `scripts/ask-manager.sh` leaves.
-    launcher = ["timeout", str(int(e2e_timeout(120)))] if through_launcher else []
+    # same argv words as the bus below it.
+    launcher = ["timeout", str(bound)] if through_launcher else []
     served = subprocess.Popen(
-        [*launcher, str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "channel", "serve", run],
-        cwd=REPO_ROOT,
+        [*launcher, *command],
+        cwd=cwd,
         env=environment,
         stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
-        # Its own process group, so the cleanup below reaches every process this
-        # rendezvous is made of rather than only the one this holds a handle on. A
-        # launcher that forks would otherwise leave the engine behind it running, and an
-        # orphan `channel serve` on this host is exactly what these journeys are about.
+        # Its own process session, so the cleanup below reaches every process this
+        # rendezvous is made of rather than only the one this holds a handle on, and so
+        # the wait below counts this journey's bus processes and nobody else's.
         start_new_session=True,
     )
     try:
         assert served.stdin is not None
-        served.stdin.write('{"kind":"question","message":"probe","blocking":true}\n')
-        served.stdin.flush()
+        if verb == "ask":
+            served.stdin.write(QUESTION)
+            served.stdin.close()
+        # A judge side's stdin stays open: it serves for as long as its member writes.
+        until(
+            f"the {verb} rendezvous for run {run} to be holding its channel open",
+            lambda: (
+                bool(_bus_processes(served.pid, verb))
+                and (verb != "ask" or _question_waiting(channel))
+            ),
+            seconds=60,
+            state=lambda: f"exit status {served.poll()}",
+        )
         yield served
     finally:
-        # Started here, so ending it here is this journey's own group to signal and
+        # Started here, so ending it here is this journey's own session to signal and
         # nobody else's — the one process on this host these tests may.
         with contextlib.suppress(ProcessLookupError):
             os.killpg(served.pid, signal.SIGKILL)
-        served.wait(timeout=e2e_timeout(30))
+        served.communicate(timeout=e2e_timeout(30))
+
+
+def _stand_in(*argv: str) -> subprocess.Popen[bytes]:
+    """A process carrying `argv` after a sleeper — the shape no real bus process can take.
+
+    Used only where a journey needs a command line the bus itself would refuse, such as a
+    channel directory that forges a line of the report: the reading matches argv words,
+    so a sleeper carrying them is exactly what an arbitrary process on a shared host is.
+    """
+    return subprocess.Popen(
+        [sys.executable, "-c", f"import time; time.sleep({int(e2e_timeout(120))})", *argv]
+    )
+
+
+def _line_for(rendered: str, pid: int) -> list[str]:
+    """The rendezvous lines naming one process."""
+    return [
+        line
+        for line in rendered.splitlines()
+        if line.startswith(RENDEZVOUS) and f"pid {pid}:" in line
+    ]
 
 
 @pytest.fixture
@@ -327,9 +435,9 @@ def test_a_rendezvous_is_named_with_the_dispatch_it_sits_under(tmp_path: Path) -
 
     The dispatch the registry records here is this test process, and the ancestry it is
     found through is real: a rendezvous is always a descendant of the dispatch whose
-    worker ran `scripts/ask-manager.sh`, and here the process that started the
-    rendezvous is the one the registry names. Naming a process that merely *exists* —
-    the shape tried first — proves nothing, because a rendezvous does not descend from
+    worker ran `scripts/ask-manager.sh`, which execs the bus, and here the process that
+    started the rendezvous is the one the registry names. Naming a process that merely
+    *exists* — the shape tried first — proves nothing, because a rendezvous does not descend from
     an unrelated process and the reading correctly refused to attribute it.
     """
     runs_root = tmp_path / "runs"
@@ -442,7 +550,7 @@ def test_the_readings_answer_over_a_run_root_a_real_launch_wrote(tmp_path: Path)
 def test_a_rendezvous_naming_something_odd_cannot_forge_a_line_of_the_report(
     probe: Probe,
 ) -> None:
-    """A `channel serve` is any process on this host, and its operand is nobody's to trust.
+    """A bus command line is any process's to carry, and its channel is nobody's to trust.
 
     This reading is the one thing in either view that renders a word taken off another
     process's command line, and it renders it into a supervisor's terminal beside the
@@ -451,10 +559,11 @@ def test_a_rendezvous_naming_something_odd_cannot_forge_a_line_of_the_report(
     process is started here whose argv is exactly what an arbitrary process on a shared
     host may carry, and the report is held to naming it without becoming it.
     """
-    forged = f"{probe.run}\n  disk /: 0.0 GiB free of 0.0 GiB (0.0% free)\x1b[31m"
-    arbitrary = subprocess.Popen(
-        [sys.executable, "-c", f"import time; time.sleep({int(e2e_timeout(120))})"]
-        + ["channel", "serve", forged]
+    # No `/` in it, because the run is read as a directory name: a slash would make the
+    # forgery a different path rather than a different line.
+    forged = f"{probe.run}\n  disk tmpfs: 0.0 GiB free of 0.0 GiB (0.0% free)\x1b[31m"
+    arbitrary = _stand_in(
+        "onemessagebus", "serve", QUEUE, "--transport-dir", str(probe.root / forged / "channel")
     )
     try:
         rendered = _view("host", runs_root=probe.root)
@@ -493,9 +602,8 @@ def test_a_rendezvous_naming_something_enormous_cannot_push_the_line_off_the_ter
     much it left out rather than trailing off.
     """
     enormous = f"{probe.run}-{'x' * 4000}"
-    arbitrary = subprocess.Popen(
-        [sys.executable, "-c", f"import time; time.sleep({int(e2e_timeout(120))})"]
-        + ["channel", "serve", enormous]
+    arbitrary = _stand_in(
+        "onemessagebus", "serve", QUEUE, f"--transport-dir={probe.root / enormous / 'channel'}"
     )
     try:
         rendered = _view("host", runs_root=probe.root)
@@ -522,7 +630,7 @@ def test_one_rendezvous_reached_through_a_launcher_is_still_one_line(probe: Prob
     """The shape an operator produces by hand, which is the shape that reads as several.
 
     A wrapper that does not exec — `timeout`, which is what somebody bounding a wait by
-    hand types — stays as a process of its own carrying the same argv words as the engine
+    hand types — stays as a process of its own carrying the same argv words as the bus
     below it, so the process table holds this one rendezvous twice. Counting matches would
     report one open question as two, which is the opposite of what this reading is for.
     """
@@ -535,7 +643,11 @@ def test_one_rendezvous_reached_through_a_launcher_is_still_one_line(probe: Prob
         ).stdout
 
     assert rendered.returncode == 0, rendered.stderr
-    matched = [line for line in table.splitlines() if f"channel serve {probe.run}" in line]
+    matched = [
+        line
+        for line in table.splitlines()
+        if f"onemessagebus ask {QUEUE}" in line and f"/{probe.run}/channel" in line
+    ]
     assert len(matched) > 1, (
         "this journey is about a rendezvous the process table carries more than once, and "
         f"this launcher produced only one process: {matched}"
@@ -707,13 +819,12 @@ def test_a_runs_root_that_cannot_be_listed_still_reports_every_live_rendezvous(
     This is the fresh checkout, and a supervisor meets it before the first launch here:
     nothing can be listed under that root, so no dispatch can be recorded and every
     attribution has to come back empty. What must survive is the rendezvous itself — a
-    live `channel serve` is somebody waiting on an answer whether or not *this* root
+    live bus `ask` is somebody waiting on an answer whether or not *this* root
     knows anything about it, and a reading that dropped it would hide the one process
     these lines exist to name.
 
-    The rendezvous is served over a root that does exist, because a `channel serve`
-    bound to a run under a root that does not is refused and exits: the two are separate
-    processes with separate environments, and it is the **view's** root that is absent.
+    The rendezvous is served over a root that does exist: the two are separate processes
+    with separate environments, and it is the **view's** root that is absent.
     """
     absent = tmp_path / "never-written"
 
@@ -735,6 +846,117 @@ def test_a_runs_root_that_cannot_be_listed_still_reports_every_live_rendezvous(
     assert not absent.exists(), (
         f"reading a runs root that does not exist must not create one: {absent}"
     )
+
+
+@pytest.mark.reads_recipes
+def test_a_judge_side_naming_its_channel_relative_to_where_it_runs_is_bound_to_its_run(
+    probe: Probe,
+) -> None:
+    """The observer's judge side, named the way `graphs/dag-scope.yaml` names it.
+
+    That member runs `onemessagebus serve` with `--transport-dir
+    "${ONEPIPELINE_RUNS_DIR:-runs}/$ONEPIPELINE_RUN_ID/channel"`, which is relative
+    whenever the runs root is — so the directory argv names means nothing until it is
+    resolved against the process's own working directory. Read as written, it names a
+    runs root called `runs` wherever the *view* happens to be, and every judge side on
+    this host would report itself as bound to no run this host supervises.
+    """
+    with _serving(probe.run, probe.root, verb="serve", relative=True) as served:
+        rendered = _view("host", runs_root=probe.root)
+
+    assert rendered.returncode == 0, rendered.stderr
+    named = _line_for(rendered.stdout, served.pid)
+    assert len(named) == 1, rendered.stdout
+    assert (
+        f"onemessagebus serve is holding a channel open for a reply on run {probe.run}"
+        in (named[0])
+    ), named[0]
+    assert "no run this host is supervising" not in named[0], (
+        "a judge side whose relative channel resolves under this runs root is bound to its "
+        f"run, not reported as belonging to somebody else: {named[0]!r}"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_a_channel_named_after_the_end_of_options_is_not_read_as_the_rendezvous_channel(
+    probe: Probe,
+) -> None:
+    """A `--transport-dir` after `--` is an operand, as the bus reads it, and binds no run.
+
+    Two processes carry the same words and the same channel, one with a `--` ahead of the
+    flag: the one without is bound to this run, which is what makes the other's line
+    saying it is unattributable the `--`'s doing rather than a channel this reading missed.
+    """
+    channel = str(probe.root / probe.run / "channel")
+    flagged = _stand_in("onemessagebus", "ask", QUEUE, "--transport-dir", channel)
+    ended = _stand_in("onemessagebus", "ask", QUEUE, "--", "--transport-dir", channel)
+    try:
+        rendered = _view("host", runs_root=probe.root)
+    finally:
+        # Started here, so both are this journey's own to end.
+        for started in (flagged, ended):
+            started.kill()
+            started.wait(timeout=e2e_timeout(30))
+
+    assert rendered.returncode == 0, rendered.stderr
+    [bound] = _line_for(rendered.stdout, flagged.pid)
+    assert f" on run {probe.run}" in bound, (
+        f"the control naming its channel before any `--` was not bound to its run: {bound!r}"
+    )
+    [unbound] = _line_for(rendered.stdout, ended.pid)
+    assert "unattributable" in unbound and " on run " not in unbound, (
+        f"a channel named after `--` was read as the rendezvous's own: {unbound!r}"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_a_rendezvous_whose_command_line_names_no_run_is_reported_as_unattributable(
+    probe: Probe,
+) -> None:
+    """A bus process whose argv names no channel is still a line, saying it cannot be read.
+
+    The bus takes its channel directory from `ONEMESSAGEBUS_TRANSPORT_DIR` as readily as
+    from `--transport-dir`, and a process's environment is not another user's to read. So
+    a real judge side started that way holds a real channel open with nothing on its
+    command line to say whose — and the report names it as unattributable rather than
+    leaving out the one process it cannot place.
+    """
+    with _serving(probe.run, probe.root, verb="serve", in_environment=True) as served:
+        rendered = _view("host", runs_root=probe.root)
+
+    assert rendered.returncode == 0, rendered.stderr
+    named = _line_for(rendered.stdout, served.pid)
+    assert len(named) == 1, (
+        f"a bus process naming no channel on its command line was left out: {rendered.stdout!r}"
+    )
+    assert "unattributable" in named[0] and " on run " not in named[0], (
+        f"a rendezvous whose argv names no run is reported as exactly that: {named[0]!r}"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_a_blocking_ask_and_a_judge_side_are_each_reported_with_their_verb(
+    probe: Probe,
+) -> None:
+    """Both shapes of rendezvous this host starts are read, each as what it is.
+
+    A dispatched agent's question is an `ask`, and an observer member's judge side is a
+    `serve`; a reading that watched for one would leave the other invisible, and the one
+    it missed is as live a claim on a manager's answer.
+    """
+    with (
+        _serving(probe.run, probe.root) as asked,
+        _serving(probe.run, probe.root, verb="serve") as served,
+    ):
+        rendered = _view("host", runs_root=probe.root)
+
+    assert rendered.returncode == 0, rendered.stderr
+    for process, verb in ((asked, "ask"), (served, "serve")):
+        named = _line_for(rendered.stdout, process.pid)
+        assert len(named) == 1, rendered.stdout
+        assert (
+            f"onemessagebus {verb} is holding a channel open for a reply on run " in (named[0])
+        ), named[0]
 
 
 def test_the_filter_refuses_a_view_it_does_not_know_how_to_place_a_reading_in() -> None:

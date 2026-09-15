@@ -44,7 +44,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import NamedTuple
 
 import follow_up_variables
 import plan_root_variable
@@ -112,11 +112,6 @@ WRAPPER_SCRIPTS = (
     # hands its planner as text rather than as a path into a checkout that planner cannot
     # see. It reads `config/dispatch-appendix.md`, which `_checkout` copies beside it.
     "dispatch-appendix-env.sh",
-    # `just channel-reply` goes through this one, which forwards the caller's own
-    # arguments and refuses only an envelope the run's pending blocking question
-    # cannot use; the rule it judges by is the wrapper's own, in the helper beside it.
-    "channel-reply.sh",
-    "ask-manager-contract.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
     # `just repos` goes through this one, which absorbs the flag spelling.
@@ -189,7 +184,7 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
         f"uv run orchestrator-review-plan {project}",
         f"uv run orchestrator-check-plan {project}",
         f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
-        f"uv run onepipeline start {DESIGN_PROJECT} --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} {DESIGN_PROJECT} --dag-graph off",
         f"uv run orchestrator-copy-plan {project} --to {destination}",
         f"uv run orchestrator-plan-locations {project} --in {destination}",
     )
@@ -230,6 +225,9 @@ CHECKOUT = "@CHECKOUT@"
 RUN_ENDED = f"{CHECKOUT}/scripts/run-ended.sh"
 #: Both hooks as a launch the caller named neither of carries them, in the order added.
 HOOKS = f"--success-hook {RUN_ENDED} --failure-hook {RUN_ENDED}"
+#: The bus configuration `scripts/onepipeline.sh` hands every launch that names none,
+#: immediately after `start`, as the copied checkout's own absolute path.
+BUS_CONFIG = f"--bus-config {CHECKOUT}/config/onemessagebus.yaml"
 
 
 #: The whole delegation table, as `just` invocation → the command lines it must
@@ -247,13 +245,14 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe",),
-        "uv run onepipeline start authoring:probe --dag-graph graphs/dag-scope.yaml"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe --dag-graph graphs/dag-scope.yaml"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--detach"),
-        "uv run onepipeline start authoring:probe --detach --dag-graph graphs/dag-scope.yaml"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe --detach"
+        " --dag-graph graphs/dag-scope.yaml"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     # A caller who names one keeps it: the flags refuse to be given twice, so adding
@@ -262,25 +261,25 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph", "off"),
-        "uv run onepipeline start authoring:probe --dag-graph off"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe --dag-graph off"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph=graphs/other.yaml"),
-        "uv run onepipeline start authoring:probe --dag-graph=graphs/other.yaml"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe --dag-graph=graphs/other.yaml"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph", "graphs/other.yaml"),
-        "uv run onepipeline start authoring:probe --pr-author-graph graphs/other.yaml"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe --pr-author-graph graphs/other.yaml"
         f" --dag-graph graphs/dag-scope.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
-        "uv run onepipeline start authoring:probe"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe"
         f" --pr-author-graph=graphs/other.yaml --dag-graph=off {HOOKS}",
     ),
     # Each hook is kept per flag too, in either spelling and including a blank value,
@@ -288,14 +287,15 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--success-hook", "/elsewhere/on-success"),
-        "uv run onepipeline start authoring:probe --success-hook /elsewhere/on-success"
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe"
+        " --success-hook /elsewhere/on-success"
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
         f" --failure-hook {RUN_ENDED}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--failure-hook=", "--success-hook="),
-        "uv run onepipeline start authoring:probe --failure-hook= --success-hook="
+        f"uv run onepipeline start {BUS_CONFIG} authoring:probe --failure-hook= --success-hook="
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml",
     ),
     # Adoption attaches a fresh driver to an intact ledger, which already records the
@@ -318,7 +318,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF,),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:cursor-shape --dag-graph off",
         then=_tail(),
     ),
     # `--detach` hands back before the planner has written anything, so there is no plan
@@ -327,7 +327,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        "uv run onepipeline start authoring:listing-api --detach --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:listing-api --detach --dag-graph off",
     ),
     # The joined spelling of both, which is a separate parsing path: `--name=` decides
     # the plan path this line names, and `--max-turns=` is absorbed rather than
@@ -335,7 +335,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        "uv run onepipeline start authoring:listing-api --detach --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:listing-api --detach --dag-graph off",
     ),
     # `--no-design-doc` stops the flow after the planner, so the tail is absent here for
     # a different reason than it is absent above: there is nothing to write a document
@@ -343,7 +343,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--no-design-doc"),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:cursor-shape --dag-graph off",
     ),
     # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
     # destination decides nothing about the planner, and everything about where the plan
@@ -351,7 +351,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--to", "elsewhere"),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:cursor-shape --dag-graph off",
         then=_tail(destination="elsewhere"),
     ),
     # A caller who names an observer keeps it, in either spelling and including their
@@ -361,13 +361,15 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph graphs/dag-scope.yaml",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:cursor-shape"
+        " --dag-graph graphs/dag-scope.yaml",
         then=_tail(),
     ),
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        "uv run onepipeline start authoring:cursor-shape --dag-graph=graphs/other.yaml --detach",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:cursor-shape"
+        " --dag-graph=graphs/other.yaml --detach",
     ),
     # The tail on its own, which is how a plan edited after it was authored is finished:
     # the same six verbs in the same order, reached without a planner being launched at
@@ -380,7 +382,7 @@ DELEGATIONS = (
         then=(
             "uv run orchestrator-check-plan authoring:listing-cursor",
             "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
-            "uv run onepipeline start authoring:cursor-shape-design --dag-graph off",
+            f"uv run onepipeline start {BUS_CONFIG} authoring:cursor-shape-design --dag-graph off",
             "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
             "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
         ),
@@ -400,8 +402,15 @@ DELEGATIONS = (
         "uv run onepipeline monitor run-1 --filter monitor",
     ),
     Delegation("monitor", ("run-1", "--all"), "uv run onepipeline monitor run-1 --all"),
+    # A verdict named as a file is `onemessagebus reply`, which binds it to the pending
+    # question; the table's runner writes the envelope a row names. A commands-only envelope
+    # is `onemessagebus send replies` instead, and an envelope file that cannot be read is
+    # refused before the bus; the `test_the_reply_recipe_*` journeys below state both.
     Delegation(
-        "channel-reply", ("run-1", "reply.json"), "uv run onepipeline reply run-1 reply.json"
+        "channel-reply",
+        ("run-1", "reply.json"),
+        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
+        "--transport-dir runs/run-1/channel --file reply.json",
     ),
     # The text is handed over on the verb's stdin rather than as `--message`, so no
     # prose this recipe was given is ever a command-line word — the hazard the two
@@ -693,6 +702,7 @@ def _run(
     stdin: str | None = None,
     status_dir: Path | None = None,
     env: dict[str, str] | None = None,
+    stdin_fd: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["PATH"] = f"{checkout / 'bin'}{os.pathsep}{environment['PATH']}"
@@ -747,7 +757,13 @@ def _run(
         text=True,
         capture_output=True,
         input=stdin,
-        stdin=None if stdin is not None else subprocess.DEVNULL,
+        # A descriptor a journey opened stands for a stdin the recipe reads from; otherwise
+        # piped text, or nothing at all.
+        stdin=stdin_fd
+        if stdin_fd is not None
+        else None
+        if stdin is not None
+        else subprocess.DEVNULL,
     )
 
 
@@ -764,7 +780,12 @@ def _gated(published: str) -> tuple[str, ...]:
     """The gate line a launch owes, and nothing for a command line that launches nothing."""
     if not published.startswith(STARTS):
         return ()
-    return (f"{LAUNCH_GATE} {published.removeprefix(STARTS)}",)
+    return (f"{LAUNCH_GATE} {published.removeprefix(STARTS).removeprefix(f'{BUS_CONFIG} ')}",)
+
+
+#: The envelope a row naming a reply file hands the recipe: a verdict, so it is
+#: `onemessagebus reply` it reaches.
+REPLY_ENVELOPE = '{"version":3,"completion":true,"message":"main"}'
 
 
 @pytest.mark.reads_recipes
@@ -773,6 +794,11 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     tmp_path: Path, delegation: Delegation
 ) -> None:
     checkout, trace = _checkout(tmp_path)
+    # A row naming an envelope file names one a manager wrote: `channel-reply` reads it to
+    # choose its verb, and refuses a file it cannot read before reaching the bus.
+    for argument in delegation.arguments:
+        if argument.endswith(".json"):
+            (checkout / argument).write_text(REPLY_ENVELOPE, encoding="utf-8")
 
     result = _run(checkout, trace, *delegation.invocation)
 
@@ -1005,7 +1031,11 @@ def test_the_plan_recipe_launches_a_brief_named_after_its_plan_under_another_nam
     result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--name", run, "--detach")
 
     assert result.returncode == 0, result.stderr
-    published = f"uv run onepipeline start authoring:{run} --detach --dag-graph off"
+    published = (
+        f"uv run onepipeline start {BUS_CONFIG} authoring:{run} --detach --dag-graph off".replace(
+            CHECKOUT, str(checkout.resolve())
+        )
+    )
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{run}.md").is_file(), result.stderr
     native = COLLIDING_PROJECT.split(":", 1)[1]
@@ -1038,7 +1068,9 @@ def test_the_plan_recipe_launches_a_run_named_as_a_plan_in_another_source(
 
     assert result.returncode == 0, result.stderr
     assert "the native id of the brief's plan project" not in result.stderr, result.stderr
-    published = f"uv run onepipeline start authoring:{native} --detach --dag-graph off"
+    published = (
+        f"uv run onepipeline start {BUS_CONFIG} authoring:{native} --detach --dag-graph off"
+    ).replace(CHECKOUT, str(checkout.resolve()))
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{native}.md").is_file(), result.stderr
 
@@ -1079,256 +1111,112 @@ def test_the_plan_recipe_opt_out_still_refuses_a_plan_project_it_cannot_compare(
     assert written == [], f"a refused launch wrote plan records: {written}"
 
 
-class ReplyShape(NamedTuple):
-    """One way of reaching `just channel-reply`, and what the recipe owes that shape."""
-
-    what: str
-    #: A wrapper script to remove from the checkout before running, or `None`.
-    without: str | None
-    #: What the caller types after the recipe name.
-    arguments: tuple[str, ...]
-    #: A fragment the refusal must carry, or `None` when the shape is forwarded.
-    refuses: str | None
-
-
-#: The shapes that are not a guarded reply, each of which has to end somewhere better
-#: than a shell error. Two are checkouts missing a piece — a guard that judged with no
-#: rule would pass every envelope, and a delegate that is not there cannot send one — and
-#: three are inputs this recipe deliberately declines to judge, because `onepipeline
-#: reply` owns its own surface and reports a usage error better than a guess here would.
-REPLY_SHAPES = (
-    ReplyShape(
-        "a checkout with no contract helper",
-        "ask-manager-contract.sh",
-        ("run-1",),
-        "ask-manager-contract.sh",
-    ),
-    ReplyShape(
-        "a checkout with no onepipeline wrapper",
-        "onepipeline.sh",
-        ("run-1",),
-        "not executable",
-    ),
-    ReplyShape("no run at all", None, (), None),
-    ReplyShape("more arguments than the verb takes", None, ("run-1", "a.json", "b.json"), None),
-    ReplyShape("an envelope file that is not there", None, ("run-1", "absent.json"), None),
+#: A commands-only envelope, the shape a manager sends all run long: no verdict to bind.
+LIVE_EDIT = (
+    '{"version":2,"author":"planner","commands":[{"op":"cancel","id":"api","reason":"park"}]}'
 )
 
 
 @pytest.mark.reads_recipes
-@pytest.mark.parametrize("shape", REPLY_SHAPES, ids=lambda row: row.what)
-def test_the_reply_recipe_ends_every_shape_that_is_not_a_guarded_reply(
-    tmp_path: Path, shape: ReplyShape
-) -> None:
-    """A reply the guard cannot judge reaches the verb, and a broken checkout says so.
+def test_the_reply_recipe_sends_a_live_edit_rather_than_binding_it(tmp_path: Path) -> None:
+    """Commands with no verdict and no correlation are `onemessagebus send replies`.
 
-    Both halves matter for the same reason: this recipe stands between a manager and the
-    only channel they have. A missing piece has to be named — a guard with no rule would
-    wave every envelope through, which is worse than no guard, and a delegate that is not
-    there sends nothing — while an input the guard has no business judging has to go on
-    to the verb that does, whose refusal names the argument it could not take.
+    `onemessagebus reply` binds a reply to a pending question and refuses one with nothing
+    to bind to, which is most of a run for a live edit; `send replies` is routed to the
+    run's `commands` queue by the layout and judged by the same validators. The envelope
+    reaches the bus byte for byte on stdin, piped or named as a file.
     """
     checkout, trace = _checkout(tmp_path)
-    if shape.without is not None:
-        (checkout / "scripts" / shape.without).unlink()
 
-    result = _run(checkout, trace, "channel-reply", *shape.arguments, stdin='{"completion":true}')
+    piped = _run(checkout, trace, "channel-reply", "run-1", stdin=f"{LIVE_EDIT}\n")
 
-    if shape.refuses is not None:
-        assert result.returncode != 0, f"{shape.what} was not refused:\n{result.stdout}"
-        assert shape.refuses in result.stderr, result.stderr
-        assert not trace.exists(), f"{shape.what} reached the published verb:\n{trace.read_text()}"
-    else:
-        assert result.returncode == 0, result.stderr
-        reached = trace.read_text().splitlines()
-        assert reached and reached[0].startswith("uv run onepipeline reply"), (
-            f"{shape.what} was not passed on to the verb that owns it: {reached}"
-        )
-
-
-#: Every amendment the criteria bar refuses, and the fragment its refusal quotes. One
-#: per question that bar asks of an amendment, because an amendment is criteria and the
-#: only place it can be held to that bar is here — it reaches a node over the channel
-#: rather than through the plan store, so `just check-plan` never sees one.
-REFUSED_AMENDMENTS = (
-    (
-        "state that arrives after the dispatch",
-        "The finished branch merges cleanly into its base and its change request's "
-        "required checks pass.",
-        "required checks pass",
-    ),
-    (
-        "a mechanism where a property belongs",
-        "Do not re-research it: run `just gate` and stop there.",
-        "names a `just` invocation",
-    ),
-    (
-        "a backtick run that never closes",
-        "Keep the `--json form, and just report what it says.",
-        "backtick run unclosed",
-    ),
-)
-
-
-@pytest.mark.reads_recipes
-@pytest.mark.parametrize("what,text,quoted", REFUSED_AMENDMENTS, ids=lambda row: row)
-def test_the_reply_recipe_refuses_an_amendment_before_it_reaches_the_verb(
-    tmp_path: Path, what: str, text: str, quoted: str
-) -> None:
-    """Each question the bar asks of an amendment, driven where a manager meets it.
-
-    An `amend` replaces the binding text that becomes part of a node's effective task,
-    so it is criteria — and criteria written in the minute after a manager reads a
-    failure. What has to hold for every one of them is that the refusal happens **before
-    the verb**: nothing is sent, so no other command in the envelope is applied either,
-    and the trace the delegate would leave is not there.
-    """
-    checkout, trace = _checkout(tmp_path)
-    envelope = json.dumps({"version": 2, "commands": [{"op": "amend", "id": "work", "text": text}]})
-
-    result = _run(checkout, trace, "channel-reply", "run-1", stdin=envelope)
-
-    assert result.returncode != 0, f"{what} was sent anyway:\n{result.stdout}"
-    assert quoted in result.stderr, result.stderr
-    assert "nothing was sent" in result.stderr, result.stderr
-    assert not trace.exists(), f"{what} reached the published verb:\n{trace.read_text()}"
-
-
-@pytest.mark.reads_recipes
-def test_the_reply_recipe_sends_an_amendment_the_bar_takes(tmp_path: Path) -> None:
-    """The half that makes those refusals worth having, and the way this guard goes wrong.
-
-    A narrow guard widens quietly: an amendment stating what the finished tree must carry
-    is the ordinary case a manager sends all run long, and it has to reach the verb byte
-    for byte with nothing this recipe added to it — and with no judged turn spent, because
-    a bare amendment is a correction to a task a review already cleared.
-    """
-    checkout, trace = _checkout(tmp_path)
-    envelope = json.dumps(
-        {
-            "version": 2,
-            "commands": [
-                {
-                    "op": "amend",
-                    "id": "work",
-                    "text": "The finished tree carries an assertion whose subject is the "
-                    "behaviour this change adds.",
-                }
-            ],
-        }
-    )
-
-    result = _run(checkout, trace, "channel-reply", "run-1", stdin=envelope)
-
-    assert result.returncode == 0, result.stderr
-    reached = trace.read_text().splitlines()
-    assert reached and reached[0].startswith("uv run onepipeline reply"), reached
-
-
-#: A `python3` that refuses the amendment check with a diagnostic of its own on stdout
-#: and a status no refusal uses. The recipe tells a verdict from a broken helper by what
-#: was *said* rather than by which status came back — an interpreter dying with a status
-#: of its own can collide with a refusal's — so this is the shape that reaches the branch
-#: neither of those two rules covers.
-LOUD_BROKEN_INTERPRETER = """#!/usr/bin/env bash
-echo "python3: something this recipe must not read as a verdict"
-exit 4
-"""
-
-
-@pytest.mark.reads_recipes
-def test_an_amendment_check_that_fails_loudly_is_named_rather_than_read_as_a_verdict(
-    tmp_path: Path,
-) -> None:
-    """A helper that could not run must never be reported as the envelope's refusal.
-
-    The recipe reads a non-zero status with an empty stdout as a broken helper, so this
-    drives the other side of that: a helper that failed *and* said something. Reported as
-    the check having failed to run, with the toolchain repair named — and, either way,
-    the envelope does not go on unjudged.
-    """
-    checkout, trace = _checkout(tmp_path)
-    # llmlint: ignore[e2e_not_mocked] The recipe is real; a broken interpreter is the input.
-    broken = checkout / "bin" / "python3"
-    broken.write_text(LOUD_BROKEN_INTERPRETER)
-    broken.chmod(0o755)
-
-    result = _run(checkout, trace, "channel-reply", "run-1", stdin='{"completion":true}')
-
-    assert result.returncode != 0, f"an unjudged reply was sent anyway:\n{result.stdout}"
-    assert "could not be judged against the criteria bar" in result.stderr, result.stderr
-    assert "exited 4" in result.stderr, result.stderr
-    assert "something this recipe must not read as a verdict" in result.stderr, (
-        f"the interpreter's own account of what failed was dropped, so the manager holds "
-        f"a refusal with no cause in it:\n{result.stderr}"
-    )
-    assert "just bootstrap" in result.stderr, result.stderr
-    assert not trace.exists(), f"the reply reached the verb unjudged:\n{trace.read_text()}"
-
-
-#: A `python3` that refuses every call, for the one failure the guard cannot recover
-#: from. It stands on PATH in a checkout with no pinned interpreter beside it, which is
-#: what a half-restored checkout is.
-BROKEN_INTERPRETER = """#!/usr/bin/env bash
-exit 3
-"""
-
-
-@pytest.mark.reads_recipes
-def test_a_reply_that_cannot_be_judged_is_named_rather_than_sent_unjudged(
-    tmp_path: Path,
-) -> None:
-    """A guard that could not run says so, and the envelope does not go on regardless.
-
-    The alternative is the failure this whole recipe exists to prevent, one layer up: an
-    envelope reaching the channel with nothing having judged it, and a manager told it
-    was delivered. Driven by putting a `python3` on PATH that refuses, in a checkout with
-    no pinned interpreter beside the wrapper — which is what a half-restored checkout is.
-    """
-    checkout, trace = _checkout(tmp_path)
-    # llmlint: ignore[e2e_not_mocked] The recipe is real; a broken interpreter is the input.
-    broken = checkout / "bin" / "python3"
-    broken.write_text(BROKEN_INTERPRETER)
-    broken.chmod(0o755)
-
-    result = _run(checkout, trace, "channel-reply", "run-1", stdin='{"completion":true}')
-
-    assert result.returncode != 0, f"an unjudged reply was sent anyway:\n{result.stdout}"
-    assert "could not be judged" in result.stderr, result.stderr
-    # An interpreter that dies with a status of its own can collide with a refusal's, and
-    # every refusal names itself on stdout while a dead one names nothing — which is what
-    # the recipe reads to tell them apart. This interpreter exits with exactly such a
-    # status, so a recipe that stopped checking would refuse an unjudged reply in its own
-    # voice with an empty reason where the explanation belongs.
-    assert "with nothing to say for it" in result.stderr, (
-        f"the recipe read a dead interpreter's exit status as one of its own refusals, "
-        f"so a reply nothing judged was refused as though it had been:\n{result.stderr}"
-    )
-    assert "just bootstrap" in result.stderr, result.stderr
-    assert not trace.exists(), f"the reply reached the verb unjudged:\n{trace.read_text()}"
-
-
-@pytest.mark.reads_recipes
-def test_the_reply_recipe_forwards_a_piped_envelope_untouched(tmp_path: Path) -> None:
-    """A reply the recipe does not refuse reaches the verb byte for byte, on its stdin.
-
-    The refusal this recipe adds is narrow, and the way a narrow guard goes wrong is by
-    quietly widening: an envelope carrying `commands` and no `completion` is a live
-    graph edit a manager sends all run long, and it has to arrive as it was written.
-    Here there is no run and so nothing pending, which is the other half — a guard that
-    could not read a queue must forward rather than refuse, or a manager loses the
-    channel whenever the ledger is somewhere it cannot see.
-    """
-    checkout, trace = _checkout(tmp_path)
-    envelope = '{"version":2,"author":"planner","commands":[{"op":"cancel","id":"api"}]}'
-
-    result = _run(checkout, trace, "channel-reply", "run-1", stdin=f"{envelope}\n")
-
-    assert result.returncode == 0, result.stderr
+    assert piped.returncode == 0, piped.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onepipeline reply run-1",
-        f"stdin {envelope}",
+        "uv run onemessagebus send replies --config config/onemessagebus.yaml "
+        "--transport-dir runs/run-1/channel",
+        f"stdin {LIVE_EDIT}",
     ]
+
+    trace.unlink()
+    (checkout / "edit.json").write_text(LIVE_EDIT, encoding="utf-8")
+    named = _run(checkout, trace, "channel-reply", "run-1", "edit.json")
+
+    assert named.returncode == 0, named.stderr
+    assert trace.read_text().splitlines() == [
+        "uv run onemessagebus send replies --config config/onemessagebus.yaml "
+        "--transport-dir runs/run-1/channel --file edit.json",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_the_reply_recipe_binds_a_verdict_and_a_named_correlation(tmp_path: Path) -> None:
+    """A verdict, or a caller naming the question, is `onemessagebus reply surfaces`.
+
+    The correlation is forwarded as the caller typed it, so the bus binds the reply to that
+    question and no other; an envelope carrying commands beside it goes the same way,
+    because `--correlation` is a statement about which question it answers.
+    """
+    checkout, trace = _checkout(tmp_path)
+    verdict = '{"version":3,"completion":true,"message":"main"}'
+
+    bound = _run(
+        checkout, trace, "channel-reply", "run-1", "--correlation", "c-1", stdin=f"{verdict}\n"
+    )
+
+    assert bound.returncode == 0, bound.stderr
+    assert trace.read_text().splitlines() == [
+        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
+        "--transport-dir runs/run-1/channel --correlation c-1",
+        f"stdin {verdict}",
+    ]
+
+    trace.unlink()
+    steered = _run(
+        checkout, trace, "channel-reply", "run-1", "--correlation", "c-1", stdin=f"{LIVE_EDIT}\n"
+    )
+
+    assert steered.returncode == 0, steered.stderr
+    assert trace.read_text().splitlines()[0].startswith("uv run onemessagebus reply surfaces")
+
+
+@pytest.mark.reads_recipes
+def test_the_reply_recipe_names_an_envelope_file_it_cannot_read(tmp_path: Path) -> None:
+    """An envelope file that cannot be read is refused by name, and the bus is not reached.
+
+    Which verb an envelope needs is read off its content, so a file that cannot be opened
+    has no content to read. Sending it anyway would leave the bus to report something else
+    as the fault; the recipe names the file and stops instead.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    unreadable = _run(checkout, trace, "channel-reply", "run-1", "absent.json")
+
+    assert unreadable.returncode == 2, f"{unreadable.stdout}{unreadable.stderr}"
+    assert "the envelope file 'absent.json' could not be read" in unreadable.stderr, (
+        unreadable.stderr
+    )
+    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
+    assert "onemessagebus" not in traced, f"an unreadable envelope reached the bus:\n{traced}"
+
+
+@pytest.mark.reads_recipes
+def test_the_reply_recipe_names_an_envelope_it_cannot_read_from_stdin(tmp_path: Path) -> None:
+    """A stdin that cannot be read is refused by name, and the bus is not reached.
+
+    A directory handed over as stdin opens and then fails every read. That is a read that
+    failed rather than an empty envelope, so the recipe says so instead of sending nothing.
+    """
+    checkout, trace = _checkout(tmp_path)
+    unreadable = os.open(checkout, os.O_RDONLY)
+    try:
+        refused = _run(checkout, trace, "channel-reply", "run-1", stdin_fd=unreadable)
+    finally:
+        os.close(unreadable)
+
+    assert refused.returncode == 2, f"{refused.stdout}{refused.stderr}"
+    assert "the envelope could not be read from stdin" in refused.stderr, refused.stderr
+    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
+    assert "onemessagebus" not in traced, f"an unreadable envelope reached the bus:\n{traced}"
 
 
 #: Records argv one word per line rather than as one joined string. The shared trace
@@ -1921,524 +1809,6 @@ def test_the_channel_surface_recipe_refuses_an_invocation_it_cannot_act_on(
     assert not trace.exists()
 
 
-#: A `uv` that accepts the reply and appends whatever the journey told it to. It stands
-#: where the published verb stands, which is the only place a journey can present a
-#: second `reached` word: the engine writes `worker` or `supervisor` only by reaching a
-#: live two-party conversation, and this suite's stand-in provider runs none.
-JOURNALLING_UV = """#!/usr/bin/env bash
-set -euo pipefail
-printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
-if [ ! -t 0 ]; then cat >/dev/null; fi
-if [ -n "${JOURNAL_APPEND:-}" ]; then cat -- "$JOURNAL_APPEND" >>"$JOURNAL_FILE"; fi
-printf '%s\\n' '{"reply":0,"state":"applied"}'
-"""
-
-#: A `uv` whose reply is **accepted and still queued**, at whichever exit status the
-#: journey names. Both halves are the point. The engine's word for that state has always
-#: been the receipt's `state`, and the status beside it has been spelled two ways: `1`
-#: while a queued envelope shared its status with nothing else, and `0` since the engine
-#: ruled that a non-zero status from this verb is a rejection to correct. So the recipe's
-#: advice cannot be keyed on the status, and this double is what says it is not.
-QUEUEING_UV = """#!/usr/bin/env bash
-set -euo pipefail
-printf 'uv %s\n' "$*" >>"$TRACE_FILE"
-if [ ! -t 0 ]; then cat >/dev/null; fi
-printf '%s\n' '{"reply":'"${FAKE_REPLY_STATUS:-0}"',"state":"queued","commands":"queued"}'
-exit "${FAKE_REPLY_STATUS:-0}"
-"""
-
-
-class QueuedStatus(NamedTuple):
-    """One status a queued receipt has arrived at, and what that status was."""
-
-    status: int
-    #: For the failure message, so a reader knows which release's spelling failed.
-    what: str
-
-
-#: Both spellings, driven as rows rather than as one number so neither is what this
-#: journey is about.
-QUEUED_STATUSES = (
-    QueuedStatus(0, "the status the engine gives an accepted envelope it has not reconciled"),
-    QueuedStatus(1, "the status it gave that envelope before a non-zero one meant a rejection"),
-)
-
-
-@pytest.mark.reads_recipes
-@pytest.mark.parametrize("arrival", QUEUED_STATUSES, ids=lambda row: str(row.status))
-def test_a_queued_reply_is_told_what_it_waits_for_whatever_status_it_arrives_at(
-    tmp_path: Path, arrival: QueuedStatus
-) -> None:
-    """The one sentence that tells `queued` from `applied`, read off the word not the number.
-
-    `queued` and `applied` differ by one word in the receipt, and the difference is the
-    whole state: a live run passes through the first in a second, and a run whose driver
-    has died stays in it forever. This recipe's job is to say which of those a manager is
-    looking at and what to do about it, and it used to decide that from the exit status —
-    which the engine has since changed under it, on the ground that a non-zero status from
-    this verb is a rejection to correct.
-
-    A branch still keyed on the number would simply stop firing: the advice would vanish
-    on the release that made it most worth printing, and silently, because a queued reply
-    at exit 0 reads exactly like an applied one. So both statuses are driven against the
-    same receipt, and the sentence is owed under each.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(QUEUEING_UV)
-
-    result = _run(
-        checkout,
-        trace,
-        "channel-reply",
-        "run-1",
-        stdin='{"completion":true,"reason":"read"}',
-        env={"FAKE_REPLY_STATUS": str(arrival.status)},
-    )
-
-    assert result.returncode == arrival.status, f"{result.stdout}{result.stderr}"
-    assert "they stay queued until something is driving that run" in result.stderr, (
-        f"a reply the engine reported {arrival.what} said nothing about what it is "
-        f"waiting for, so a manager cannot tell it from an applied one:\n{result.stderr}"
-    )
-    assert "just orchestrate --adopt run-1" in result.stderr, (
-        f"the sentence reports a state without the action that answers it:\n{result.stderr}"
-    )
-    assert _verb_answer(result)["state"] == "queued", (
-        f"the verb's own answer is no longer the whole of this recipe's stdout:\n{result.stdout}"
-    )
-
-
-@pytest.mark.reads_recipes
-def test_an_applied_reply_is_not_told_it_is_waiting_for_anything(tmp_path: Path) -> None:
-    """The other side, so the sentence above is about `queued` rather than about replying.
-
-    An advice line printed on every acceptance is one a manager stops reading, and it
-    would be worse than none: the state it is about is the one they have to act on.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(JOURNALLING_UV)
-
-    result = _run(checkout, trace, "channel-reply", "run-1", stdin='{"completion":true}')
-
-    assert result.returncode == 0, f"{result.stdout}{result.stderr}"
-    assert _verb_answer(result)["state"] == "applied"
-    assert "they stay queued" not in result.stderr, result.stderr
-
-
-#: The run every row below replies to, and where its journal lives under the checkout.
-JOURNALLED_RUN = "run-1"
-
-#: The node the notes are addressed to, and the two notes themselves. The earlier one is
-#: what a recipe reading the journal by recency would answer with.
-NOTED_NODE = "api"
-EARLIER_NOTE = {
-    "op": "note",
-    "id": NOTED_NODE,
-    "addressee": "worker",
-    "text": "the note sent before this one",
-}
-THIS_NOTE = {
-    "op": "note",
-    "id": NOTED_NODE,
-    "addressee": "worker",
-    "text": "the note this reply carries",
-}
-
-#: What the earlier note's outcome is recorded as, so a row whose own outcome differs
-#: fails loudly if the wrong one is read.
-EARLIER_REACHED = "carried"
-
-
-def _committed_record(command: dict[str, object], reached: str | None) -> str:
-    """One `edit-committed` line, in the shape a real run's journal is read to carry.
-
-    Not a second source for that shape: the ask-seam journey named above drives the same
-    reader over a journal the real engine wrote, so a wire change fails there while this
-    stays self-consistent. What this file adds is the cases that engine cannot be made to
-    produce — a second disposition word, and a journal missing this note's outcome while
-    carrying an earlier one's.
-
-    `reached` of `None` is the edit committed with no `note-delivered` operation at all,
-    which is the other way a correlated read comes up empty, and it must read as "not
-    recorded" rather than fall through to somebody else's outcome.
-    """
-    operations = (
-        []
-        if reached is None
-        else [
-            {
-                "kind": "note-delivered",
-                "node": command["id"],
-                "addressee": command["addressee"],
-                "text": command["text"],
-                "reached": reached,
-            }
-        ]
-    )
-    return json.dumps(
-        {
-            "v": 1,
-            "ts": "2026-09-04T12:00:00.000Z",
-            "stream": "U-TEST-1",
-            "seq": 0,
-            "source": "pipeline",
-            "kind": "edit-committed",
-            "labels": {"run_id": JOURNALLED_RUN},
-            "payload": {"author": "planner", "command": command, "operations": operations},
-        }
-    )
-
-
-#: The field the verb's answer carries the note outcomes in, and what an unreadable
-#: journal is said in instead. `notes_unread` is its own field because nobody having
-#: looked and nothing having been decided are opposite states.
-NOTES_FIELD = "notes"
-NOTES_UNREAD_FIELD = "notes_unread"
-
-
-def _verb_answer(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
-    """The one line a successful reply prints, which is the verb's answer and nothing else."""
-    printed = result.stdout.strip().splitlines()
-    assert len(printed) == 1, (
-        f"a successful reply printed {len(printed)} line(s) where the verb's own answer "
-        f"is the whole of the success output:\n{result.stdout}"
-    )
-    # `cast` rather than a validating read: each journey asserts the shape it is about.
-    return cast(dict[str, object], json.loads(printed[0]))
-
-
-#: What the recipe is driven over, and the property it is driven for: it reports the word
-#: it finds rather than a word it knows. So the rows are deliberately not this engine's
-#: `Reached` vocabulary — restating an enum a doubled journal cannot reconcile would be a
-#: second source for it — but a pair that differ, plus one no release has ever written.
-#: Passing that third row is what says a value added upstream reaches the manager instead
-#: of being dropped for not being on a list. The last row is the note whose outcome is not
-#: journalled when the recipe looks, which reads back as `None` rather than as an earlier
-#: note's word.
-#: `tests/ask_seam/test_channel_reply_e2e.py` is where the shape itself is reconciled: it
-#: drives the same reader over an `edit-committed` the real engine wrote on a real run, so
-#: a wire change fails there rather than passing here.
-NOTE_DISPOSITIONS = ("worker", "carried", "sideways", None)
-
-
-@pytest.mark.reads_recipes
-@pytest.mark.parametrize("reached", NOTE_DISPOSITIONS, ids=lambda row: str(row))
-def test_the_reply_recipe_reports_this_notes_own_disposition_and_never_an_earlier_ones(
-    tmp_path: Path, reached: str | None
-) -> None:
-    """The correlation, driven against a journal that already carries an earlier outcome.
-
-    `onepipeline reply` answers `delivered` whatever the envelope carried, and what became
-    of the note is written only to the run's journal — so the recipe reads it back. What
-    it must never do is read it by recency: the journal here already holds an earlier
-    note's outcome, and answering with that would tell a manager their note reached a
-    dispatch when nothing had yet decided that it did.
-
-    Every row sends the same envelope through the real recipe against the same journal,
-    and only what is journalled for *this* note differs. The last row journals nothing for
-    it, which is the case a recipe reading the newest outcome, the last, or the only one
-    gets wrong.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(JOURNALLING_UV)
-    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
-    journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
-    appended = tmp_path / "appended.jsonl"
-    appended.write_text(
-        "" if reached is None else _committed_record(THIS_NOTE, reached) + "\n",
-        encoding="utf-8",
-    )
-
-    result = _run(
-        checkout,
-        trace,
-        "channel-reply",
-        JOURNALLED_RUN,
-        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
-        env={
-            "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
-            "JOURNAL_APPEND": str(appended),
-            "JOURNAL_FILE": str(journal),
-        },
-    )
-
-    assert result.returncode == 0, f"{result.stdout}{result.stderr}"
-    answer = _verb_answer(result)
-    assert answer["state"] == "applied", (
-        f"the verb's own answer did not survive the merge:\n{result.stdout}"
-    )
-    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "reached": reached}], (
-        f"a note the engine journalled as {reached!r} was not answered that way against "
-        f"its own node. A `reached` where this row journalled none is the EARLIER note's, "
-        f"which is what reading this journal by recency, by its last entry, or by its only "
-        f"entry does — and what a manager would then act on:\n{result.stdout}"
-    )
-    assert "channel-reply:" not in result.stderr, (
-        f"the recipe printed a status line of its own beside the verb's answer:\n{result.stderr}"
-    )
-
-
-#: The second note an envelope carries, addressed to a node of its own so the two lines
-#: the report joins are told apart by what they name rather than by their order.
-OTHER_NODE = "worker"
-OTHER_NOTE = {
-    "op": "note",
-    "id": OTHER_NODE,
-    "addressee": "supervisor",
-    "text": "the second note this reply carries",
-}
-
-
-@pytest.mark.reads_recipes
-def test_the_reply_recipe_reports_every_note_one_envelope_carried(tmp_path: Path) -> None:
-    """Two notes in one envelope read back as two, correlated one for one.
-
-    A manager sends several notes in one reply, and each has its own fate: the engine
-    commits them separately and journals an outcome per note. So the report has to carry
-    both, matched to the note each belongs to rather than to the order they were
-    journalled in — here the second note's outcome is written first, and the earlier
-    reply's outcome sits above them both.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(JOURNALLING_UV)
-    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
-    journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
-    appended = tmp_path / "appended.jsonl"
-    # The second note's outcome first, so a reader that paired them by position would
-    # report each under the other's node.
-    appended.write_text(
-        _committed_record(OTHER_NOTE, "supervisor")
-        + "\n"
-        + _committed_record(THIS_NOTE, "carried")
-        + "\n",
-        encoding="utf-8",
-    )
-
-    result = _run(
-        checkout,
-        trace,
-        "channel-reply",
-        JOURNALLED_RUN,
-        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE, OTHER_NOTE]}),
-        env={
-            "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
-            "JOURNAL_APPEND": str(appended),
-            "JOURNAL_FILE": str(journal),
-        },
-    )
-
-    assert result.returncode == 0, f"{result.stdout}{result.stderr}"
-    assert _verb_answer(result)[NOTES_FIELD] == [
-        {"node": NOTED_NODE, "reached": "carried"},
-        {"node": OTHER_NODE, "reached": "supervisor"},
-    ], (
-        f"a two-note reply did not answer each note its own outcome against its own node, "
-        f"in the order the envelope sent them. Pairing them by the order they were "
-        f"journalled would report each under the other's node, and the earlier reply's "
-        f"{EARLIER_REACHED!r} appearing at all is that outcome claimed by one of "
-        f"them:\n{result.stdout}"
-    )
-
-
-#: A `uv` that accepts the reply and answers something that is not a JSON object, which
-#: is the one shape the note outcomes cannot be merged into.
-UNPARSEABLE_RECEIPT_UV = """#!/usr/bin/env bash
-set -euo pipefail
-printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
-if [ ! -t 0 ]; then cat >/dev/null; fi
-printf '%s\\n' 'accepted'
-"""
-
-
-@pytest.mark.reads_recipes
-def test_a_receipt_with_nowhere_to_carry_the_outcome_is_handed_back_alone(
-    tmp_path: Path,
-) -> None:
-    """Success is one line or none, including where there is nothing to merge into.
-
-    The outcomes ride inside the verb's own answer, so an answer that is not a JSON object
-    has nowhere to carry them. What must not happen is the recipe making up the difference
-    with a second line of its own: the verb keeps its answer whole, the recipe adds
-    nothing, and the reply still succeeds.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(UNPARSEABLE_RECEIPT_UV)
-    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
-    journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
-
-    result = _run(
-        checkout,
-        trace,
-        "channel-reply",
-        JOURNALLED_RUN,
-        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
-        env={"ONEPIPELINE_RUNS_DIR": str(checkout / "runs")},
-    )
-
-    assert result.returncode == 0, (
-        f"an answer this could not merge into failed the reply, which was already sent:"
-        f"\n{result.stdout}{result.stderr}"
-    )
-    assert result.stdout.splitlines() == ["accepted"], (
-        f"the verb's own answer did not reach the caller whole:\n{result.stdout}"
-    )
-    assert "channel-reply:" not in result.stderr, (
-        f"the recipe added a line of its own beside an answer it could not merge into, so "
-        f"success is two lines where it is one or none:\n{result.stderr}"
-    )
-
-
-#: A `uv` that accepts the reply and then takes the journal away, which is the one thing
-#: that can happen between the offset being taken and the outcome being read.
-UNREADABLE_JOURNAL_UV = """#!/usr/bin/env bash
-set -euo pipefail
-printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
-if [ ! -t 0 ]; then cat >/dev/null; fi
-chmod 000 -- "$JOURNAL_FILE"
-printf '%s\\n' '{"reply":0,"state":"applied"}'
-"""
-
-
-@pytest.mark.reads_recipes
-def test_a_journal_the_recipe_cannot_read_is_said_rather_than_read_as_no_outcome(
-    tmp_path: Path,
-) -> None:
-    """A broken read and an undecided note are opposite states, and must not share a word.
-
-    The reply is accepted and the journal is then unreadable, so the recipe has nothing
-    to correlate against. Reporting that as "no outcome recorded yet" would tell a manager
-    the engine had not decided the note's fate when the truth is that nobody looked — the
-    same silence this whole report exists to end, one layer further in.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(UNREADABLE_JOURNAL_UV)
-    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
-    journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
-
-    try:
-        result = _run(
-            checkout,
-            trace,
-            "channel-reply",
-            JOURNALLED_RUN,
-            stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
-            env={
-                "ONEPIPELINE_RUNS_DIR": str(checkout / "runs"),
-                "JOURNAL_FILE": str(journal),
-            },
-        )
-    finally:
-        # Restored so the temporary tree can be cleaned up by whoever owns it.
-        journal.chmod(0o644)
-
-    assert result.returncode == 0, (
-        f"an unreadable journal failed the reply itself, which was already sent:"
-        f"\n{result.stdout}{result.stderr}"
-    )
-    answer = _verb_answer(result)
-    assert "could not be read" in str(answer.get(NOTES_UNREAD_FIELD)), (
-        f"the answer does not say the journal was unreadable, so a note nobody could look "
-        f"up is indistinguishable from one whose fate nothing had decided — which are "
-        f"opposite states:\n{result.stdout}"
-    )
-    assert answer[NOTES_FIELD] == [{"node": NOTED_NODE, "reached": None}], (
-        f"the note this reply sent was not answered, or was answered with the earlier "
-        f"reply's {EARLIER_REACHED!r}:\n{result.stdout}"
-    )
-
-
-#: A `python3` that refuses the outcome read and answers every other call, so the
-#: envelope is judged and sent exactly as it would be and only the read back fails. It
-#: stands on PATH in a checkout with no pinned interpreter beside it, which is what a
-#: half-restored checkout is.
-#:
-#: Keyed on the invocation that fails rather than on the ones that must not, because the
-#: recipe runs a helper per question it asks of an envelope and the set of them grows: it
-#: judges the amendments, judges the rendezvous, and only then reads each note's fate
-#: back. A stand-in that named the passing shapes would start refusing a new one the day
-#: a question was added, and this journey would fail about that instead of about its own
-#: subject. The outcome read is the one taking the journal, the offset and the verb's own
-#: answer beside the program — four arguments after `-c`, where no other call here has
-#: more than two.
-HALF_BROKEN_INTERPRETER = """#!/usr/bin/env bash
-if [ "$#" -eq 5 ]; then exit 4; fi
-exit 0
-"""
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This suite predates
-# this change and is already behind a narrow edge — `recipeWorkspace`, which names the
-# recipes and scripts these journeys drive and nothing else of this repository — so an
-# unrelated orchestrator change does not pay for it. Moving the whole file into an Nx
-# project of its own is a workspace-graph change with its own key, its own conftest
-# routing and its own reason to exist; this change edits one stand-in constant inside it
-# and is not where that belongs.
-
-
-@pytest.mark.reads_recipes
-def test_an_outcome_read_that_could_not_run_is_named_rather_than_passed_off_as_none(
-    tmp_path: Path,
-) -> None:
-    """A read that never happened must not look like a note with nothing to report.
-
-    The reply is sent and accepted, and the helper that reads each note's fate back then
-    cannot run at all. Swallowing that hands the manager the bare transport receipt —
-    which is byte for byte what a reply carrying no note at all answers with — so the one
-    thing they would conclude is that there was no outcome to report. That is this
-    recipe's own defect worn one layer in, and the whole reason it reads the journal.
-
-    So it is named, with where the outcome can still be read. Not refused: the envelope
-    is already on the channel, so the verb's own answer and exit status stay the
-    caller's, and stdout carries that answer and nothing else.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(JOURNALLING_UV)
-    # llmlint: ignore[e2e_not_mocked] The recipe is real; a half-broken interpreter is the input.
-    broken = checkout / "bin" / "python3"
-    broken.write_text(HALF_BROKEN_INTERPRETER)
-    broken.chmod(0o755)
-    journal = checkout / "runs" / JOURNALLED_RUN / "events.jsonl"
-    journal.parent.mkdir(parents=True)
-    journal.write_text(_committed_record(EARLIER_NOTE, EARLIER_REACHED) + "\n", encoding="utf-8")
-
-    result = _run(
-        checkout,
-        trace,
-        "channel-reply",
-        JOURNALLED_RUN,
-        stdin=json.dumps({"version": 2, "commands": [THIS_NOTE]}),
-        env={"ONEPIPELINE_RUNS_DIR": str(checkout / "runs")},
-    )
-
-    assert result.returncode == 0, (
-        f"a failed outcome read failed the reply itself, which was already sent:"
-        f"\n{result.stdout}{result.stderr}"
-    )
-    assert result.stdout.strip().splitlines() == ['{"reply":0,"state":"applied"}'], (
-        f"the verb's own answer did not reach the caller whole and alone:\n{result.stdout}"
-    )
-    assert "could not be read back" in result.stderr, (
-        f"the recipe swallowed a failed outcome read, so the manager holds a receipt with "
-        f"no note outcome in it and nothing saying why — which is what a reply carrying no "
-        f"note at all answers with:\n{result.stderr}"
-    )
-    assert "the reply itself was sent" in result.stderr, (
-        f"the diagnostic does not say the envelope reached the channel, so a manager "
-        f"reading it cannot tell whether to send it again:\n{result.stderr}"
-    )
-    assert f"just monitor {JOURNALLED_RUN}" in result.stderr, (
-        f"the diagnostic names no way to read the outcome that was recorded anyway, so "
-        f"the manager is told their read failed and nothing else:\n{result.stderr}"
-    )
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-
-
 #: The credential this checkout supplies from its own gitignored `.env`, and what stands
 #: in for it below. Not a real token, and never asserted as one — what is asserted is
 #: that the name arrived at the command the recipe delegates to.
@@ -2868,7 +2238,9 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
     launched = (
         "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
-        "uv run onepipeline start authoring:run-1-follow-ups --dag-graph off",
+        f"uv run onepipeline start {BUS_CONFIG} authoring:run-1-follow-ups --dag-graph off".replace(
+            CHECKOUT, str(checkout.resolve())
+        ),
     )
 
     first = _run(checkout, trace, "follow-ups", "run-1")

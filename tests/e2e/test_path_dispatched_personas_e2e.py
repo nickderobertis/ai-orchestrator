@@ -234,8 +234,9 @@ def test_the_monitors_persona_loads_and_reaches_the_turn(
     running under instructions nobody wrote.
 
     The judge side is an `oneharness_config` here where the shipped document names
-    `scripts/channel-serve.py`. That command is the **live manager** on a run's own
-    channel, which no journey can stand in for; every other party — the real
+    `onemessagebus serve --codec onejudge`. That command answers over a run's own channel
+    and puts the monitor's completion bar to the **live manager**, and this probe has no
+    run for it to serve; every other party — the real
     `oneagentgraph`, the real base config, the real persona, the real onejudge
     conversation between the two sides — is the shipped one.
     """

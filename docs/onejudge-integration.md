@@ -156,13 +156,17 @@ This repository uses three onejudge provider arrangements:
   for the paid harness boundary.
 - The monitor is a two-sided onejudge member whose judge side is the **live
   planner**: its agent side runs under `oneharness.orchestrator.toml`, and its
-  judge side is a command provider reaching `onepipeline channel serve` through
-  `scripts/channel-serve.py`. That filter exists because the two halves agree on
-  the response object and not on the request.
-  <!-- llmlint: ignore[no_redundant_instruction_pointers] The two stdin shapes are one contract with one source, and `contracts_have_one_source_or_a_drift_gate` is why they are not restated here; this names where that source is rather than re-advertising the document. -->
+  judge side is a command provider running `onemessagebus serve surfaces --codec
+  onejudge` over `config/onemessagebus.yaml` (`graphs/dag-scope.yaml` names it). The
+  **onejudge codec** reads onejudge's judge-side frames itself (onemessagebus's
+  `codecs.md`): a `supervisor` turn with content is answered with a non-completion
+  and raises nothing, a lost turn raises one bounded `monitor-failed` surface and ends
+  the member, and a `judge` frame raises the completion bar as a non-blocking
+  `monitor-completion` question whose ruling is relayed as the score.
+  <!-- llmlint: ignore[no_redundant_instruction_pointers] The codec's behaviour has one source, onemessagebus's `codecs.md`, and `contracts_have_one_source_or_a_drift_gate` is why it is not restated further here; this names where this host's account of it lives rather than re-advertising the document. -->
   [Serving the channel as the monitor's judge
-  side](orchestration.md#serving-the-channel-as-the-monitors-judge-side) holds both
-  shapes and the refusal a direct wiring gets.
+  side](orchestration.md#serving-the-channel-as-the-monitors-judge-side) holds what
+  each frame gets, and what the filter it replaced measured.
 
 `onepipeline start --dag-graph` launches that graph beside the run it is driving.
 The wiring is specific to the observer graph; worker dispatch retains its ordinary

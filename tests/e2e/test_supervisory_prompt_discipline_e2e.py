@@ -17,9 +17,9 @@ different mechanisms, and an editor who knows only one of them changes nothing:
 
 Each is therefore read at the seam its own shape reaches a provider through, and only
 the paid model is substituted. The pacemaker gets its own launch rather than riding the
-first one for a reason the design makes unavoidable: its schedule is resettable, so a
-monitor — which raises a planner surface on every turn — restarts its clock before it
-can ever come due, and a journey that waited for it on a supervised run would wait
+first one for a reason the design makes unavoidable: its schedule is resettable, so every
+planner-visible surface on the run restarts its clock before it can come due, and a
+journey that waited for it on a run whose other members raise surfaces could wait
 forever. So its member is launched on its own, taken verbatim out of the shipped graph
 rather than retyped, which is the only way its own turn is observable at all.
 """
@@ -442,9 +442,9 @@ def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
             f"{DAG_SCOPE_GRAPH}: {watching[0].config}"
         )
         # The merged config, which is where this launch's own copy of the reviewing bar
-        # is: the monitor's judge side is `scripts/channel-serve.py`, so no turn of the
-        # run carries that prose and the two files it is merged from each hold half of
-        # it.
+        # is: the monitor's judge side is the bus's onejudge codec rather than a model, so
+        # no turn of the run carries that prose and the two files it is merged from each
+        # hold half of it.
         # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
         composed = sorted(
             Path(environment[GRAPH_STATE_ENV]).glob(
@@ -694,10 +694,11 @@ def test_the_monitor_is_told_which_run_it_observes(monitored: Monitored) -> None
 def test_the_monitors_reviewing_side_holds_it_to_that_same_run(monitored: Monitored) -> None:
     """The bar the planner rules against is bound to the same run, and read from a launch.
 
-    This half reaches no model at all: the monitor's judge side is
-    `scripts/channel-serve.py`, which raises `user.persona` to the live manager as its
-    own surface. So it is what a *person* is asked to rule on, and a bar that still said
-    `<run-id>` would ask them to accept an edit aimed anywhere.
+    This half reaches no model at all: the monitor's judge side is `onemessagebus serve
+    --codec onejudge`, which rules on a turn itself and puts only the completion bar to the
+    live manager. So it is the statement of what a *person* holds the monitor to, read in
+    the persona it was merged from, and a bar that still said `<run-id>` would describe an
+    edit aimed anywhere.
     """
     _assert_bound_to_the_run_it_observes("review", monitored.review_bar)
 

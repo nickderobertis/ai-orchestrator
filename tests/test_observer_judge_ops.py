@@ -1,78 +1,261 @@
-"""The bar no persona can decline is one the planner channel still serves.
+"""The planner channel an observer member is judged over is the bus codec, on the run's channel.
 
-onejudge asks a judge side three things, and only one of them is a supervisor ruling.
-Two — `evals` and `assessment` — a persona can decline, and
+onejudge asks a judge side three things, and only one of them is a supervisor ruling. Two
+— `evals` and `assessment` — a persona can decline, and
 `tests/test_planner_channel_personas.py` is where every channel-served member is held to
-declining them. The third cannot be declined at all, which is why it is closed the other
-way round and gated here.
+declining them. The third, `user.done_when`, cannot be declined: `oneagentgraph` merges a
+persona's bar as a second one beside the base's, so a `kind: onejudge` member always
+carries one and onejudge always asks its judge side to score it once the conversation
+ends. So that bar is closed by being **served**, and what serves it is
+`onemessagebus serve surfaces --codec onejudge`: the codec puts the criterion to the
+planner as a `monitor-completion` question and relays their ruling as the score
+(onemessagebus's `docs/codecs.md`).
 
-`oneagentgraph` merges a persona's `user.done_when` as a *second* bar alongside the
-base's rather than over it, so a null one adds nothing, and `user.done_when_replaces_base`
-is refused outright with nothing to replace it with. A `kind: onejudge` member therefore
-always carries a bar it is always asked to score, once the conversation ends, whether the
-supervisor ruled complete or the turn cap ran out — measured against onejudge 0.12.0 with
-a `kind: command` judge that logged every op it was asked, and independently of the two
-keys a persona can decline. So `done_when` is closed by being
-**served**: `scripts/channel-serve.py` raises the criterion to the planner and relays the
-`completion` they rule with as the score, which is the only answer that is not an
-invention, since the planner is that member's judge side.
+That behaviour is the bus's, proven in its own suite. What is this repository's is the
+wiring, and the wiring has three seams each of which fails silently:
 
-That asymmetry is why `assessment: null` alone was not the fix. It removed `assess` and
-left the monitor dying at the very end of every run on `got 'judge'`. Each half alone
-leaves the member dying, so they are gated apart: declining what can be declined is a
-property of the personas, and going on serving what cannot is a property of the filter.
-A change that narrowed the filter back to `supervisor` alone would reintroduce a death
-nothing else here would catch — the member would start, watch the whole run, and die at
-settlement.
+- **The command is the codec, and nothing stands between it and onejudge.** The graph
+  names an argv, and a wrapper that swallowed the codec's exit status would keep a
+  monitor whose agent side lost its turn reading as alive — exit 1 is how the codec ends
+  that member.
+- **It serves the queue this host's configuration declares its codec on.** `serve`
+  refuses a queue other than `codecs.onejudge.queue`, so a graph naming another one
+  would kill the member on its first frame.
+- **It asks where the manager answers.** The monitor's question is answered with `just
+  channel-reply --correlation`, so the configuration file and the channel directory the
+  codec is spawned with have to be the ones that recipe replies over — otherwise a
+  ruling reaches a queue nobody is asking on, and every score degrades to `false`.
+
+The launched journeys prove the three reach a real run
+(`tests/e2e/test_monitor_survives_the_channel_e2e.py` for the score); this is the cheap
+gate that says which file to fix.
 """
 
 from __future__ import annotations
 
 import re
+import shlex
+from typing import NamedTuple
 
 from orchestrator.root import REPO_ROOT
 
-#: The bar that cannot be declined, and the op onejudge asks its judge side to score it
-#: with. Written as a path because it is nested, which is the only reason the reader
-#: below walks one rather than reading a column-0 key.
-UNDECLINABLE = "user.done_when"
-SCORED_AS = "judge"
+#: The directory holding this repository's agent-graph documents.
+GRAPHS = REPO_ROOT / "graphs"
 
-#: The filter that has to go on serving that op, how it declares which ops it serves,
-#: and how it binds a name in that declaration to the op it stands for. Read out of the
-#: script rather than restated: this gate's whole job is that the two agree, and the
-#: script is the one that has to be right.
-CHANNEL_FILTER_SCRIPT = REPO_ROOT / "scripts" / "channel-serve.py"
-SERVED_OPS = re.compile(r"SERVED_OPS = \((?P<ops>[^)]*)\)")
-OP_CONSTANT = re.compile(r'^(?P<name>[A-Z_]+) = "(?P<op>[a-z-]+)"$', re.MULTILINE)
+#: This host's bus configuration, and the justfile whose `channel-reply` answers over it.
+BUS_CONFIG = "config/onemessagebus.yaml"
+JUSTFILE = REPO_ROOT / "justfile"
+
+#: The codec the monitor's judge side serves onejudge's frames with.
+CODEC = "onejudge"
+
+#: The variable the engine names an observer member's run with. The reply recipe names
+#: the same run as its first argument.
+RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
+
+#: How a graph document names a member, and how deep the fields this reads are nested.
+MEMBERS_KEY = "members:"
+MEMBER_INDENT = 2
+FIELD_INDENT = 4
 
 
-def test_the_bar_no_persona_can_decline_is_one_the_filter_still_serves() -> None:
-    """The other half, and the one a persona cannot close for itself.
+class JudgeCommand(NamedTuple):
+    """One member's `judge.command`, as the graph document spells it."""
 
-    Every channel-served member carries a `user.done_when` whether or not it asks for
-    one — a persona's is merged as a second bar rather than over the base's, and
-    `done_when_replaces_base` is refused with nothing to replace it with — and onejudge
-    asks its judge side to score that bar once the conversation ends. So the member's
-    survival rests on the filter going on serving that op, and a change that narrowed it
-    back to `supervisor` alone would reintroduce a death nothing else here would catch:
-    the member would start, watch the whole run, and die at settlement.
+    #: Where it is declared, for a failure that names the file to fix.
+    graph: str
+    #: The member's name in that document.
+    member: str
+    #: The argv, one element per list item, with folded scalars joined as YAML folds them.
+    argv: list[str]
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _argv(body: list[str]) -> list[str] | None:
+    """The `judge.command` list under one member's lines, or `None` when it has none.
+
+    Read with an indentation walk rather than a YAML library, as every other reader of
+    these documents here does: the workspace installs none, and `oneagentgraph validate`
+    — which `just check` runs over `graphs/` — is what holds them well-formed. A folded
+    `>-` item is joined the way YAML folds it, one space per line break.
     """
-    script = CHANNEL_FILTER_SCRIPT.read_text(encoding="utf-8")
-    served = SERVED_OPS.search(script)
-    assert served is not None, (
-        f"{CHANNEL_FILTER_SCRIPT.name} no longer declares SERVED_OPS, so which ops it "
-        "answers cannot be read; update this gate together with that declaration"
-    )
-    # The declaration names constants, so each is resolved to the op it stands for. A
-    # name that binds to nothing is left as itself, which fails below by name rather
-    # than being silently read as some other op.
-    bound = {found.group("name"): found.group("op") for found in OP_CONSTANT.finditer(script)}
-    answers = {bound.get(name.strip(), name.strip()) for name in served.group("ops").split(",")}
+    lines = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
+    try:
+        judge = next(
+            index
+            for index, line in enumerate(lines)
+            if _indent(line) == FIELD_INDENT and line.strip() == "judge:"
+        )
+    except StopIteration:
+        return None
+    block = []
+    for line in lines[judge + 1 :]:
+        if _indent(line) <= FIELD_INDENT:
+            break
+        block.append(line)
+    opened = next((i for i, line in enumerate(block) if line.strip() == "command:"), None)
+    if opened is None:
+        return None
+    items: list[str] = []
+    item_indent: int | None = None
+    folding = False
+    for line in block[opened + 1 :]:
+        if _indent(line) <= _indent(block[opened]):
+            break
+        stripped = line.strip()
+        if stripped.startswith("- ") and (item_indent is None or _indent(line) == item_indent):
+            item_indent = _indent(line)
+            value = stripped[2:]
+            folding = value == ">-"
+            items.append("" if folding else value)
+        elif folding and item_indent is not None and _indent(line) > item_indent:
+            items[-1] = f"{items[-1]} {stripped}".strip()
+        else:
+            raise AssertionError(f"unrecognised `judge.command` line: {line!r}")
+    return items
 
-    assert SCORED_AS in answers, (
-        f"{CHANNEL_FILTER_SCRIPT.name} serves {sorted(answers)}, which does not include the "
-        f"`{SCORED_AS}` op. Every channel-served member carries a `{UNDECLINABLE}` it cannot "
-        "decline, onejudge asks that op to score it once the conversation ends, and a "
-        "refusal there kills the member at the end of every run it watches"
+
+def _judge_commands() -> list[JudgeCommand]:
+    """Every member of every shipped graph whose judge side is a command, discovered."""
+    found: list[JudgeCommand] = []
+    for document in sorted(GRAPHS.glob("*.yaml")):
+        lines = document.read_text(encoding="utf-8").splitlines()
+        if MEMBERS_KEY not in lines:
+            continue
+        name: str | None = None
+        blocks: dict[str, list[str]] = {}
+        for line in lines[lines.index(MEMBERS_KEY) + 1 :]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if _indent(line) == 0:
+                break
+            if _indent(line) == MEMBER_INDENT and line.rstrip().endswith(":"):
+                name = line.strip().rstrip(":")
+                blocks[name] = []
+            elif name is not None:
+                blocks[name].append(line)
+        for member, body in blocks.items():
+            argv = _argv(body)
+            if argv is not None:
+                found.append(JudgeCommand(str(document.relative_to(REPO_ROOT)), member, argv))
+    return found
+
+
+def judge_argv(graph: str, member: str) -> list[str]:
+    """The `judge.command` argv one shipped graph declares for one member, as written.
+
+    Public because the launched journeys spawn exactly this argv against a real run root:
+    a journey that restated it would go on passing after the graph moved off it.
+    """
+    declared = [
+        command.argv
+        for command in _judge_commands()
+        if command.graph == graph and command.member == member
+    ]
+    assert len(declared) == 1, f"{graph} declares {len(declared)} `judge.command` for `{member}`"
+    return declared[0]
+
+
+def _served(command: JudgeCommand) -> list[str]:
+    """The words the member's `bash -c` script runs, with the shell's own quoting removed."""
+    assert command.argv[:2] == ["bash", "-c"] and len(command.argv) == 3, (
+        f"{command.graph}'s `{command.member}` judge command is {command.argv}, not one "
+        "`bash -c` script; the run's channel directory is composed from the environment "
+        "the engine exports, which only a shell can expand"
     )
+    return shlex.split(command.argv[2])
+
+
+def _flag(words: list[str], name: str) -> str:
+    assert words.count(name) == 1, f"`{name}` is not named exactly once in {words}"
+    return words[words.index(name) + 1]
+
+
+def test_a_shipped_graph_serves_a_member_over_the_planner_channel() -> None:
+    """Every assertion below is a loop over what this finds, so it has to find one."""
+    served = [command for command in _judge_commands() if "onemessagebus serve" in command.argv[-1]]
+    assert served, (
+        f"no member of any document in {GRAPHS.relative_to(REPO_ROOT)} runs its judge side "
+        "through `onemessagebus serve`, so every assertion in this file is vacuous; check this "
+        "reader against those documents"
+    )
+
+
+def test_every_command_judge_side_is_the_bus_codec_execed_in_the_members_place() -> None:
+    """The codec's exit status is the member's own, so a lost turn really ends the member."""
+    for command in _judge_commands():
+        words = _served(command)
+        assert words[:3] == ["exec", "onemessagebus", "serve"], (
+            f"{command.graph}'s `{command.member}` judge side runs {words[:3]}, not `exec "
+            "onemessagebus serve`. Anything else either is not the planner channel's codec "
+            "or stands between the codec and onejudge, where exit 1 — the codec reporting "
+            "a turn the agent side lost — would stop ending the member"
+        )
+        assert _flag(words, "--codec") == CODEC, (
+            f"{command.graph}'s `{command.member}` is served by codec "
+            f"{_flag(words, '--codec')!r}; only `{CODEC}` reads onejudge's frames and "
+            "serves the `judge` op every two-party member is asked"
+        )
+
+
+def test_the_codec_serves_the_queue_this_configuration_declares_for_it() -> None:
+    """`serve` refuses a queue other than the codec block's, on the member's first frame."""
+    config = (REPO_ROOT / BUS_CONFIG).read_text(encoding="utf-8")
+    declared = re.search(
+        r"^codecs:\n(?:\s*#.*\n)*  onejudge:\n(?:    .*\n)*?    queue: (\S+)$", config, re.MULTILINE
+    )
+    assert declared is not None, f"{BUS_CONFIG} declares no `codecs.onejudge.queue`"
+    for command in _judge_commands():
+        words = _served(command)
+        queue = words[3]
+        assert queue == declared.group(1), (
+            f"{command.graph}'s `{command.member}` serves queue {queue!r} while {BUS_CONFIG} "
+            f"declares the onejudge codec on {declared.group(1)!r}"
+        )
+        assert _flag(words, "--config") == BUS_CONFIG, (
+            f"{command.graph}'s `{command.member}` reads {_flag(words, '--config')!r}, not "
+            f"{BUS_CONFIG}, which every launch hands the engine and `just channel-reply` "
+            "replies over"
+        )
+
+
+def test_the_codec_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
+    """The monitor's question and the manager's ruling meet in one directory, over one file.
+
+    Held against the `channel-reply` recipe's own line rather than a restated path: the
+    two are one decision made twice, and a run whose codec asked somewhere else would read
+    every manager's score as a wait that elapsed.
+    """
+    body = re.search(
+        r"^channel-reply run \*args:\n((?:    .*\n|\n)*?)(?=^\S)",
+        JUSTFILE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert body is not None, "the justfile no longer declares `channel-reply run *args`"
+    verb = re.search(r"onemessagebus reply (\w+)", body.group(1))
+    channel = re.search(r"--config (\S+) --transport-dir (\S+)", body.group(1))
+    assert verb is not None and channel is not None, (
+        "the justfile's `channel-reply` no longer answers with `onemessagebus reply <queue>` "
+        f"over a named `--config` and `--transport-dir`:\n{body.group(1)}"
+    )
+    replied_queue = verb.group(1)
+    replied_config = channel.group(1)
+    # The recipe names its run `$run`; the codec names the same run by the variable the
+    # engine exports to an observer member. `shlex` removes the quoting and a closing
+    # array parenthesis the recipe's shell line carries.
+    replied_dir = shlex.split(channel.group(2).rstrip(")"))[0].replace("$run", f"${RUN_ID_ENV}")
+    for command in _judge_commands():
+        words = _served(command)
+        assert (words[3], _flag(words, "--config"), _flag(words, "--transport-dir")) == (
+            replied_queue,
+            replied_config,
+            replied_dir,
+        ), (
+            f"{command.graph}'s `{command.member}` asks on queue {words[3]!r} over "
+            f"{_flag(words, '--config')!r} in {_flag(words, '--transport-dir')!r}, while "
+            f"`just channel-reply` answers on {replied_queue!r} over {replied_config!r} in "
+            f"{replied_dir!r}"
+        )

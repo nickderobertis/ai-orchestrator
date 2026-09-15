@@ -394,8 +394,9 @@ user:
     it is — that decision was the planner's to make and escalating it was the
     available action. Reject any target-project content this agent authored
     itself.
-  # Scored by the PLANNER over the channel, not by a model — `scripts/channel-serve.py`
-  # raises this text as its own surface and relays the ruling. So the prose below is read
+  # Scored by the PLANNER over the channel, not by a model — the bus's onejudge codec
+  # (`onemessagebus serve --codec onejudge`, graphs/dag-scope.yaml) raises this text as
+  # its own surface and relays the ruling. So the prose below is read
   # by a person, and is written to be ruled on.
   #
   # Do not try to declare it unset; both spellings have been tried and refused. A

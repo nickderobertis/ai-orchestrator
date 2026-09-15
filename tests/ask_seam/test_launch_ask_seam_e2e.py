@@ -151,33 +151,35 @@ ASK_WRAPPER = Input(
 )
 RUN_ID = Input(
     "ONEPIPELINE_RUN_ID",
-    "the run whose channel the question goes to; the wrapper refuses rather than "
-    "guessing at one, so an unset one is a question that is never asked",
+    "the run whose channel the question goes to; the shim refuses rather than guessing "
+    "at one, so an unset one is a question that is never asked",
 )
 REQUIRED_INPUTS = (ASK_WRAPPER, RUN_ID)
 
-#: Deliberately not one of those. An ask made from the checkout the launch ran from
-#: needs none of it, so the wrapper's header calls it optional and this file measures it
-#: anyway — the gate above is one-directional for exactly this case. What it buys is the
-#: half of the seam a *lifecycle* dispatch depends on: that dispatch's working directory
-#: is a session worktree, `onepipeline` looks for a run under a relative `runs` when
-#: nothing names one, and this variable is the only thing in the environment that says
-#: where the run's records actually are.
-NODE_SCRATCH = Input(
-    "ONEPIPELINE_NODE_SCRATCH_DIR",
-    "the one thing a dispatch carries that names its own run's directory, which "
-    "`scripts/ask-manager.sh` walks up to find the runs root from a worktree",
+#: Deliberately not one of those. An ask made from the checkout the launch ran from needs
+#: none of it, so the shim's header calls it optional and falls back to the relative `runs`
+#: the engine itself reads — and this file measures it anyway, because that fallback is
+#: exactly what a *lifecycle* dispatch cannot use: its working directory is a session
+#: worktree holding no `runs`, and this variable is the only thing in its environment that
+#: says where the run's channel actually is. onepipeline 0.32.0's contract composes it,
+#: absolute, into every dispatch of every node (its `docs/contract-divergences.md`, "The
+#: dispatch environment").
+RUNS_ROOT = Input(
+    "ONEPIPELINE_RUNS_DIR",
+    "the runs root `scripts/ask-manager.sh` composes the run's channel directory under, "
+    "so a relative or absent one from a worktree names a channel nobody launched",
 )
 
-#: Not required either, and for a sharper reason than the one above: the wrapper names
-#: itself when nothing gives it one, so drift here degrades rather than breaks. What it
-#: costs is the difference between an asker that is the *dispatch* and one that is a
-#: single invocation of the wrapper — so a question an earlier ask of a dispatch left
-#: outstanding stops being taken back over, silently, with every ask still working.
+#: Not required either, and for a sharper reason than the one above: the shim asks with
+#: no `--asker` when nothing gives it one, so drift here degrades rather than breaks. What
+#: it costs is the bus taking a question back: a question an ask left abandoned — its
+#: listener killed by a tool deadline, say — is re-armed only by a later listener naming
+#: the *same* asker, so a dispatch given none has its earlier questions stranded, silently,
+#: with every fresh ask still working.
 CHANNEL_ASKER = Input(
     "ONEPIPELINE_CHANNEL_ASKER",
-    "who a dispatch's `channel serve` sessions listen on behalf of, which is what lets "
-    "one still-pending question outlive the listener that raised it",
+    "who a dispatch asks as on the bus, which is what lets a later ask of the same "
+    "dispatch take back a question an earlier one left abandoned",
 )
 
 #: Not required of every launch either — only of a *planning* one, which is the launch
@@ -270,12 +272,23 @@ def repository_credentials_file() -> Iterator[None]:
             credentials.write_bytes(original)
 
 
-#: The question a dispatched agent puts, and the answer its manager gives. Compared
-#: whole, because what the wrapper owes a caller is the manager's message and nothing
-#: else — a wrapper that handed back the wire object would leave every agent parsing
-#: JSON out of what was supposed to be an answer.
+#: The question a dispatched agent puts, and the answer its manager gives. The answer is
+#: compared whole against the envelope the dispatch's ask handed back, because what the
+#: shim owes a caller is the bus's reply line carrying the manager's envelope and nothing
+#: else.
 ASK_QUESTION = "Should the cursor be an opaque token or a node id?"
 ANSWER = "An opaque token; the node id would leak the ordering."
+
+#: What every launch's recorded bus configuration must say, read as the values that make
+#: it *this checkout's* `config/onemessagebus.yaml` rather than any configuration at all —
+#: the layout, the envelope validator this host adds, and the reply window this host
+#: measured. `tests/test_onemessagebus_config.py` holds each to the file and to the release
+#: that loads it; these are restated rather than parsed because nothing in this suite's
+#: environment reads YAML, and the three together are what a launch that dropped
+#: `--bus-config` or pointed it elsewhere would lose.
+BUS_PROFILE = "planner-channel"
+BUS_VALIDATOR_COMMAND = ["scripts/envelope-review.sh"]
+BUS_REPLY_WINDOW_SECONDS = 3000
 
 #: How long a journey waits for a launch to reach a dispatched turn. Load-scaled like
 #: every other hang guard here, and the largest of them because reaching a turn is the
@@ -466,8 +479,8 @@ def _reading_the_plan_store(destination: Path) -> list[str]:
 #: that recipe launches on `--dag-graph off`, because a planning run's output is the very
 #: plan a monitor would be comparing it against. So every ask measured here is asked on an
 #: unwatched run — which is the shape a planner is actually launched in, and is a claim
-#: about the channel in its own right: a blocking question is served by `onepipeline`
-#: itself, and an answer never had to get past an observer to reach the asker.
+#: about the channel in its own right: a blocking question waits on the bus alone, and an
+#: answer never had to get past an observer to reach the asker.
 #:
 #: Dropping it used to change the environment as well — below onepipeline 0.8.1 the run
 #: id reached a dispatch only by leaking out of an *attached* driver's own process after
@@ -565,7 +578,7 @@ def _environment(
     environment[ENVIRONMENT_KEYS_ENV] = ",".join(
         [
             *(required.name for required in REQUIRED_INPUTS),
-            NODE_SCRATCH.name,
+            RUNS_ROOT.name,
             CHANNEL_ASKER.name,
             SESSION.name,
             PLAN_ROOT.name,
@@ -731,17 +744,17 @@ def _answering(run: RunId, environment: dict[str, str]) -> PersistentManager:
     the whole window went on reaching the turn, and the manager gave up at the moment the
     question they were waiting for was finally being asked.
 
-    They keep answering until this journey says the asker has it, and that is measured
-    rather than belt-and-braces: on a watched run the monitor reads the same channel and
-    claimed the answer, and a wrapper that receives nothing asks again for nothing —
-    it re-asks only on a ruling it can see is somebody else's. One answer, sent once, is
-    therefore one throw of a race.
+    They keep reading until this journey says the asker has it, rather than stopping at
+    the first answer, because which surface is the dispatch's question is known only once
+    it is handed out: a manager who stopped after one read could spend it on a surface the
+    run raised about itself. Every answer is bound to the question it was read off, by the
+    correlation `just channel-reply --correlation` sends.
     """
     _await_run(run, environment)
     return PersistentManager(
         run,
         environment,
-        lambda token: ruling(f"{ANSWER} {token}"),
+        lambda _surface: ruling(ANSWER),
         seconds=MANAGER_SECONDS,
     )
 
@@ -907,7 +920,7 @@ def orchestrate_detached(tmp_path_factory: pytest.TempPathFactory, oneharness_bi
 def orchestrate_lifecycle(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
 ) -> Dispatch:
-    """Launch `just orchestrate --detach` on a lifecycle node, and read what its session gave it.
+    """Launch `just orchestrate --detach` on a lifecycle node, and have it ask from its worktree.
 
     The one launch here whose dispatch runs in a session worktree: the node names a
     seeded scratch identity's publication checkout and execution alias, so the engine
@@ -915,6 +928,11 @@ def orchestrate_lifecycle(
     worktree the worker starts in. Detached, for the reason the detached shape above is
     measured at all — what the dispatch is given is composed where the dispatch is made,
     and an attached launcher could add nothing to it afterwards.
+
+    Its dispatch asks, because a worktree is the one place the shim's channel directory
+    can go wrong: it holds no `runs` of its own, so a question reaches this run's channel
+    only through what the dispatch was given. A manager answers over the run's own
+    channel, and the ask's record says whether the answer came back.
 
     It used to be the `just plan` launches that were read for this, while the planner
     was a lifecycle node; `scripts/plan.sh` moved it back onto the direct shape, so a
@@ -925,8 +943,8 @@ def orchestrate_lifecycle(
     _requires_just()
     tmp_path = tmp_path_factory.mktemp("orchestrate-lifecycle")
     run = RunId("launch-seam-orchestrate-lifecycle")
-    turns = tmp_path / "turns.jsonl"
-    environment = _environment(tmp_path, oneharness_bin, turns)
+    turns, record = tmp_path / "turns.jsonl", tmp_path / "asked.json"
+    environment = _environment(tmp_path, oneharness_bin, turns, record=record)
     identity = seeded(tmp_path)
     environment["ONEVCS_HOME"] = str(identity.home)
     environment.update(identity.environment)
@@ -942,7 +960,11 @@ def orchestrate_lifecycle(
     )
     try:
         assert launched.returncode == 0, f"the launch failed:\n{launched.stdout}{launched.stderr}"
-        return Dispatch(run=run, worker=_await_dispatch(turns), asked=None, environment=environment)
+        dispatched = _await_dispatch(turns)
+        manager = _answering(run, environment)
+        answered = _await_answer(record, manager)
+        _reaped(manager, answered)
+        return Dispatch(run=run, worker=dispatched, asked=answered, environment=environment)
     finally:
         just("stop", run, environment=environment, seconds=60)
 
@@ -1333,47 +1355,42 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
         "orchestrate_attached",
         "orchestrate_detached",
         "orchestrate_adopted",
+        "orchestrate_lifecycle",
         "plan_attached",
         "plan_detached",
     ],
 )
-def test_every_launch_gives_its_dispatch_a_scratch_directory_under_its_own_run(
+def test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under(
     shape: str, request: pytest.FixtureRequest
 ) -> None:
-    """The drift gate over the layout the wrapper resolves a runs root from.
+    """The drift gate over the one input a worktree's ask cannot do without.
 
-    `scripts/ask-manager.sh` walks up from this variable looking for the directory named
-    for its run that holds a `launch.json`, and takes that directory's parent as the runs
-    root. The walk is written not to assume a depth, but it does depend on the engine
-    putting a dispatch's scratch somewhere under the run's own directory — which is
-    `onepipeline`'s to change and nothing here owns.
+    `scripts/ask-manager.sh` names the bus's transport directory as
+    `${ONEPIPELINE_RUNS_DIR:-runs}/<run>/channel` and resolves nothing else, so a dispatch
+    whose runs root is relative or absent asks under whatever `runs` its working directory
+    holds — none, in a session worktree — and its question reaches no manager. onepipeline
+    0.32.0 composes it for every dispatch; that is the producer's to change, so it is held
+    here against a real dispatch of every launch shape rather than restated.
 
-    Measured against a real dispatch of every launch shape rather than restated, because
-    the failure mode of drift is silent in exactly the direction that matters: the walk
-    would find nothing, the ask would fall back to the relative `runs` it used to use,
-    and a lifecycle worker would go back to being refused with no surface raised. Its
-    own journeys stand up a scratch directory of this shape by hand — these runs reach
-    no dispatch of their own — so this is where that shape is held to the producer.
+    Read off the dispatch's own turn: absolute, and naming the root this launch really
+    wrote its run's channel under, so the directory the shim composes is one the manager's
+    `just channel-next` reads.
     """
     # `getfixturevalue` answers `Any` because the fixture is chosen by name at run time;
     # every name this case is parametrized over is a `Dispatch` fixture declared above.
     dispatch = cast(Dispatch, request.getfixturevalue(shape))
-    scratch = Path(_given(dispatch, NODE_SCRATCH))
-    assert scratch.is_absolute(), (
-        f"a dispatch of run {dispatch.run} was given a relative {NODE_SCRATCH.name} "
-        f"({scratch}); it is {NODE_SCRATCH.why}, and a relative one names a different "
-        "directory for every caller"
+    root = Path(_given(dispatch, RUNS_ROOT))
+    assert root.is_absolute(), (
+        f"a dispatch of run {dispatch.run} was given a relative {RUNS_ROOT.name} ({root}); "
+        f"it is {RUNS_ROOT.why}"
     )
-
-    own = Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"]) / dispatch.run
-    assert scratch.is_relative_to(own), (
-        f"a dispatch of run {dispatch.run} was given {scratch}, which is not under that "
-        f"run's own directory {own}; the wrapper finds the runs root by walking up from "
-        "it, so an ask from a worktree has nothing left to resolve"
+    assert root == Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"]), (
+        f"a dispatch of run {dispatch.run} was given {root} as its runs root, where its "
+        f"launch wrote the run under {dispatch.environment['ONEPIPELINE_RUNS_DIR']}"
     )
-    assert (own / "launch.json").is_file(), (
-        f"run {dispatch.run} has no launch record at {own / 'launch.json'}; that file is "
-        "what the walk stops at, so a run without one cannot be found from a worktree"
+    assert (root / dispatch.run / "channel").is_dir(), (
+        f"run {dispatch.run} has no channel directory under {root}, so the directory the "
+        "shim composes from what this dispatch was given is not where the run's questions go"
     )
 
 
@@ -1390,27 +1407,26 @@ def test_every_launch_gives_its_dispatch_a_scratch_directory_under_its_own_run(
 def test_every_launch_gives_its_dispatch_an_asker_to_ask_as(
     shape: str, request: pytest.FixtureRequest
 ) -> None:
-    """The drift gate over the name that keeps one question alive across a re-arm.
+    """The drift gate over the name that lets a dispatch take its own question back.
 
-    `onepipeline channel serve` is a listener an asker rents rather than the asker
-    itself, so `scripts/ask-manager.sh` waits through a succession of them over one
-    still-pending question. A session that ends leaves what it raised owed to nobody,
-    and only a later session of the **same** asker takes it back — so a dispatch that
-    was given none has an ask whose asker is one invocation of the wrapper rather than
-    the dispatch, and a question an earlier ask left outstanding is quietly stranded.
+    `scripts/ask-manager.sh` passes this to `onemessagebus ask --asker`. An ask that ends
+    without its answer — a tool deadline killing it, say — leaves its question abandoned
+    on the queue, and the bus re-arms an abandoned question only for a later listener
+    naming the **same** asker. So a dispatch given none asks as nobody, and a question an
+    earlier ask of that dispatch left behind is one no later ask of it can take back.
 
-    Measured against a real dispatch of every launch shape because that degrade is
-    silent in both directions: the wrapper mints its own when nothing gives it one, so
-    every ask still returns an answer and nothing anywhere reports the narrowing. What
-    the engine composes it *as* is deliberately not asserted — it is opaque and compared
-    for equality — only that a dispatch is given one that names somebody.
+    Measured against a real dispatch of every launch shape because that degrade is silent:
+    the shim asks without an asker when nothing gives it one, so every fresh ask still
+    returns an answer and nothing anywhere reports the narrowing. What the engine composes
+    it *as* is deliberately not asserted — it is opaque and compared for equality — only
+    that a dispatch is given one that names somebody.
     """
     dispatch = cast(Dispatch, request.getfixturevalue(shape))
     given = _given(dispatch, CHANNEL_ASKER)
     assert given.strip(), (
         f"a dispatch of run {dispatch.run} was given a blank {CHANNEL_ASKER.name}, which "
-        f"is not an identity: `channel serve` refuses one, because a name every session "
-        f"matches would take over questions belonging to askers it has never heard of"
+        f"is not an identity: the shim reads a blank one as none given, so the dispatch "
+        f"asks as nobody and cannot take back a question it left abandoned"
     )
     # The dispatch's own, never whatever the launcher happened to be running under. This
     # is what makes `INHERITED_ENVIRONMENT` dropping the name load-bearing rather than
@@ -1751,39 +1767,128 @@ def test_a_plan_launch_tells_its_dispatch_the_run_it_actually_created(
 
     A question is only answerable on the right channel, and the id is where that goes
     wrong silently: a wrapper handed somebody else's run does not fail, it queues a
-    blocking surface on a channel that run's own manager is not watching, and then reads
-    back whatever the timeout synthesizes.
+    blocking surface on a channel that run's own manager is not watching, and waits out
+    its whole reply window for an answer nobody there will send.
     """
     assert _given(plan_detached, RUN_ID) == plan_detached.run
 
 
-@pytest.mark.parametrize("shape", ["orchestrate_attached", "plan_attached", "plan_detached"])
+@pytest.mark.parametrize(
+    "shape", ["orchestrate_attached", "orchestrate_lifecycle", "plan_attached", "plan_detached"]
+)
 def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand(
     shape: str, request: pytest.FixtureRequest
 ) -> None:
-    """The whole round trip, from inside a dispatch: a defect journey for two, a guard for one.
+    """The whole round trip, from inside a dispatch, for every shape that asks.
 
     A runnable path in the environment is not the claim that matters; getting an answer
     back is. So the process serving the dispatch runs the command that variable names,
-    with nothing but what its own turn inherited, and a manager answers it over the real
-    `just channel-next` and `just channel-reply`. What comes back has to be the manager's
-    message and nothing else — the wrapper's whole contract with a caller.
+    with nothing but what its own turn inherited and from wherever the engine placed it,
+    and a manager answers over the real `just channel-next` and `just channel-reply
+    --correlation`. What comes back has to be exactly one line — the bus's `reply` answer,
+    carrying the envelope the manager sent — at exit 0.
 
-    Attached `just orchestrate` and detached `just plan` are defect journeys: before the
-    fix the first found no wrapper and the second refused with `ONEPIPELINE_RUN_ID is not
-    set`. Attached `just plan` is the regression guard, and passes on both sides of it.
+    Attached `just orchestrate` and detached `just plan` were defect journeys when first
+    written: the first found no wrapper and the second refused with `ONEPIPELINE_RUN_ID is
+    not set`. The lifecycle shape is the ask from a session worktree, which holds no `runs`
+    of its own, so it reaches this run's channel only through the runs root its dispatch
+    was given. Attached `just plan` is the regression guard on the one shape that always
+    worked.
     """
     dispatch = cast(Dispatch, request.getfixturevalue(shape))
     asked = dispatch.asked
     assert asked is not None, f"the {shape} journey did not ask, so there is no answer to read"
     assert asked["status"] == 0, (
-        f"a dispatch of run {dispatch.run} could not reach its manager:\n{asked['err']}"
+        f"a dispatch of run {dispatch.run} could not reach its manager:\n{asked['out']}"
+        f"{asked['err']}"
     )
-    assert ANSWER in asked["out"], (
-        f"the manager's answer is not what reached the dispatch of run {dispatch.run}:\n"
+    lines = asked["out"].splitlines()
+    assert len(lines) == 1, (
+        f"the ask from a dispatch of run {dispatch.run} printed {len(lines)} lines where the "
+        f"bus answers with one:\n{asked['out']}"
+    )
+    # `cast` rather than a validating read: `onemessagebus` owns this line's shape, and the
+    # two fields a caller relies on are asserted below.
+    answer = cast(dict[str, object], json.loads(lines[0]))
+    assert answer.get("answer") == "reply", (
+        f"the dispatch of run {dispatch.run} was answered with something other than a "
+        f"reply:\n{asked['out']}"
+    )
+    record = answer.get("reply")
+    assert isinstance(record, dict) and record.get("reply") == json.loads(ruling(ANSWER)), (
+        f"the manager's envelope is not what reached the dispatch of run {dispatch.run}:\n"
         f"{asked['out']}"
     )
-    assert asked["err"] == "", f"a successful ask reported something on stderr:\n{asked['err']}"
+    assert asked["err"].splitlines() == [f"correlation: {answer.get('correlation')}"], (
+        f"a successful ask reported something beyond its correlation on stderr:\n{asked['err']}"
+    )
+
+
+#: The shapes of launch this module makes, each read for the bus configuration its run
+#: recorded. The design-document launch is not among them: `_planned` launches `just plan`
+#: with `--no-design-doc`, so the flow's second launch is made only by the plan-flow
+#: journeys under `tests/plan_tooling/`.
+LAUNCH_SHAPES = (
+    "orchestrate_attached",
+    "orchestrate_detached",
+    "orchestrate_adopted",
+    "orchestrate_lifecycle",
+    "plan_attached",
+    "plan_detached",
+    "plan_over_a_chosen_root",
+)
+
+
+@pytest.mark.parametrize("shape", LAUNCH_SHAPES)
+def test_every_launch_records_this_checkouts_bus_configuration_for_its_run(
+    shape: str, request: pytest.FixtureRequest
+) -> None:
+    """The engine a launch starts applies this host's messaging policy to the run's channel.
+
+    `scripts/onepipeline.sh` adds `--bus-config config/onemessagebus.yaml` to every
+    `onepipeline start`, which is the verb every launch shape reaches, and the engine
+    records the configuration it parsed in the run's `launch.json` under `bus_config`. So
+    the record is read rather than the argv: it says what the engine actually took, which
+    is what decides the validators its replies are judged by and the reply window its
+    observer's judge side is served under.
+
+    Asserted as the values that make it this checkout's configuration — the layout, this
+    host's envelope validator, and its measured reply window — because an engine given no
+    configuration records none, and one given another file records other values. The
+    adopted shape is read after its adoption, which passes no `--bus-config` of its own, so
+    it is also the run keeping the configuration its launch retained.
+    """
+    # `cast` because `getfixturevalue` answers `Any` for a fixture named at run time, and
+    # every name in `LAUNCH_SHAPES` is a fixture of this module that yields a `Dispatch`.
+    dispatch = cast(Dispatch, request.getfixturevalue(shape))
+    launch = Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"]) / dispatch.run / "launch.json"
+    assert launch.is_file(), f"run {dispatch.run} left no launch record at {launch}"
+    # `cast` rather than a validating read: the engine owns this record, and every field
+    # read off it below is asserted where it is read.
+    # llmlint: ignore[tests_mirror_real_usage] No view renders the bus configuration the
+    # engine parsed, and the argv says only what the launch asked for; the run's launch
+    # record is the one place the engine's own reading is kept.
+    recorded = cast(dict[str, object], json.loads(launch.read_text(encoding="utf-8")))
+    bus = recorded.get("bus_config")
+    assert isinstance(bus, dict), (
+        f"run {dispatch.run} recorded no bus configuration, so its channel runs under the "
+        f"bus's defaults rather than this host's: {sorted(recorded)}"
+    )
+    assert bus.get("profile") == BUS_PROFILE, bus
+    validators = bus.get("validators")
+    assert isinstance(validators, list) and [
+        validator.get("command") for validator in validators if isinstance(validator, dict)
+    ] == [BUS_VALIDATOR_COMMAND], (
+        f"run {dispatch.run}'s channel does not judge replies by this host's envelope "
+        f"validator: {validators}"
+    )
+    codecs = bus.get("codecs")
+    onejudge = codecs.get("onejudge") if isinstance(codecs, dict) else None
+    assert isinstance(onejudge, dict), f"run {dispatch.run} recorded no onejudge codec: {bus}"
+    assert onejudge.get("reply_window_seconds") == BUS_REPLY_WINDOW_SECONDS, (
+        f"run {dispatch.run} serves its observer's judge side under a reply window of "
+        f"{onejudge.get('reply_window_seconds')!r}, not this host's {BUS_REPLY_WINDOW_SECONDS}"
+    )
 
 
 def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_another_run(

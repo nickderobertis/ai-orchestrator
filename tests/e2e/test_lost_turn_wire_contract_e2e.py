@@ -1,32 +1,29 @@
-"""A monitor turn's machine transcript, raised to a real planner channel as one line.
+"""A turn the real producer really lost, put to the monitor's real judge side on a real run.
 
-`scripts/channel-serve.py` is the judge side of `graphs/dag-scope.yaml`'s monitor: it
-takes onejudge's supervisor frame on stdin and raises what the monitor said as a surface
-through `onepipeline channel serve`. When what the monitor "said" is the harness's own
-JSON-RPC transcript rather than prose, raising it verbatim is what cost this host its
-supervisory layer for a day — twenty-one thousand characters a planner could neither read
-nor drop, twelve hundred of them discarded as noise — and then cost it a second day at a
-different scale: 176.1 MB across 26 surfaces, a 3.6 GB journal, and a read-only `just
-runs` that needed 5.7 GB of RSS on a shared box.
+The monitor's judge side is `onemessagebus serve surfaces --codec onejudge`, as
+`graphs/dag-scope.yaml` declares it, and the codec reads a harness's own machine transcript
+to tell a turn its agent side lost from a turn that said something. Raising that transcript
+verbatim is what cost this host its supervisory layer for a day — twenty-one thousand
+characters a planner could neither read nor drop — and then a second day at a different
+scale: 176.1 MB across 26 surfaces, a 3.6 GB journal, and a read-only `just runs` that needed
+5.7 GB of RSS on a shared box.
 
-Both journeys here are that path driven with nothing standing in: the real `codex`
-really loses a turn, the real filter reads the transcript it left, and the real published
-`channel serve` queues what the filter raised. The surface is then read where a manager
-reads one — out of `runs/<run-id>/channel/queue.json`. All this journey provides is an
-empty directory named after a run; the published verb creates the channel inside it.
+The codec's reading of that shape is the bus's to prove, against a recorded fixture its own
+suite keeps. What is this host's is that the producer it installs still writes a shape the
+judge side it spawns reads the same way — so every journey here is that path with nothing
+standing in: the real `codex` really loses a turn through a real `oneharness`
+(`tests/lost_turn_producer.py`), and the argv read out of the graph is spawned against a run
+directory the real engine made, whose channel is then read through `onemessagebus status`.
 
-They differ in the one thing the filter branches on. The first transcript records the
-refusal that ended the turn, so the failure is *provable* and the surface names its cause
-and identity. The second is the same real transcript with those frames removed — the
-shape all 26 of this host's oversized surfaces had, `status: completed` and `error: null`
-— where nothing is provable, and what has to arrive is **nothing at all**: the monitor's
-prose raises no surface now, so an unprovable transcript is content like any other, the
-member is answered and lives, and the channel is never opened.
-
-Whether the *shape* the filter reads is still the shape the producer writes is a
-different question, asked of a declaration rather than of a journey, and
-`tests/test_lost_turn_wire_contract.py` is where it is asked. This is the half that says
-the parts still add up to the line a planner acts on.
+They differ in the one thing the codec branches on. Where the transcript records the
+refusal that ended the turn, the loss is *provable*: one bounded surface names the cause
+this turn's own frames recorded, and the member fails — whichever of the recorded proofs the
+transcript keeps, and under this host's alternate Codex home as under the primary one, which
+the surface then names. The last journey is the same real transcript with those frames
+removed — the shape all 26 of this host's oversized surfaces had, `status: completed` and
+`error: null` — where nothing is provable, and what has to arrive is **nothing at all**: an
+unprovable transcript is content like any other, the member is answered with a
+non-completion, and the channel is left as it was.
 
 It reads the producer this host has installed, which lives outside the workspace and so
 outside every `nx.json` key, so it runs in the uncached tier.
@@ -40,42 +37,43 @@ outside every `nx.json` key, so it runs in the uncached tier.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import time
+import shutil
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, TypedDict, cast
 
 import lost_turn_producer
 import pytest
-from lost_turn_producer import PRODUCER, LostTurn
-from test_orchestrate_launch_e2e import SURFACE_KIND_OF_A_LOST_TURN
-from waits import deadline
-from waits import timeout as e2e_timeout
+from lost_turn_producer import (
+    PRODUCER,
+    LostTurn,
+    Proof,
+    codex_home_named_by,
+    keeping_only_the_proof,
+)
+from test_monitor_quiet_turn_e2e import (
+    MEMBER_FAILED,
+    NAMED_FAILURE_LIMIT,
+    SURFACE_KIND_OF_A_LOST_TURN,
+    _raised_since,
+    _records,
+)
+from test_orchestrate_launch_e2e import (
+    SETTLES_UNWATCHED,
+    _environment,
+    _judge_side,
+    _just,
+    _settling_project,
+    _supervisor_frame,
+)
 
-from orchestrator.root import REPO_ROOT
+pytestmark = [pytest.mark.reads_checkouts, pytest.mark.xdist_group("lost-turn-wire-contract")]
 
-pytestmark = pytest.mark.reads_checkouts
-
-#: The filter this journey drives, at the interface `oneagentgraph` spawns it through.
-CHANNEL_SERVE = REPO_ROOT / "scripts" / "channel-serve.py"
-
-#: The seam that would let something other than the pinned `onepipeline` answer the
-#: planner. Cleared rather than set: the published channel is the point of the journey.
-ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
-
-#: The run each journey works against, which the filter reads out of the composed task
-#: and renders back into the command it points a planner at. One per journey, because the
-#: published verb creates a durable channel under the run and two journeys queueing into
-#: one would each read the other's surface.
+#: The run whose directory every journey here puts a frame to.
 RUN = "wire-contract-e2e"
-RUN_OF_AN_UNPROVEN_TRANSCRIPT = "wire-contract-unproven-e2e"
 
-#: How long the filter may take to answer an unprovable transcript on its own. It opens
-#: no channel at all for one, so what this really bounds is the regression: a filter that
-#: raised a surface instead would sit inside `channel serve` waiting out its whole reply
-#: window, and that wait is what the failure would look like.
-UNRAISED_SECONDS = 30
+#: The variable the judge side reads this host's alternate codex home from, which
+#: `scripts/codex-alt-home.sh` exports.
+CODEX_ALT_HOME = "ORCHESTRATOR_CODEX_ALT_HOME"
 
 
 @pytest.fixture(scope="session")
@@ -105,190 +103,137 @@ def lost_turn(
     )
 
 
-class QueuedSurface(TypedDict):
-    """One planner surface as the run's own channel queue holds it.
-
-    The three fields `scripts/channel-serve.py` composes and a manager reads, named
-    rather than left as a bare mapping: what a queued surface *is* is the contract these
-    journeys are about. `channel serve` adds bookkeeping of its own — an id, a source —
-    which is the published verb's to declare and no part of what is asserted here.
-    """
-
-    kind: str
-    message: str
-    blocking: bool
-
-
-def _queued(queue: Path, serving: subprocess.Popen[str]) -> list[dict[str, Any]]:
-    """The surfaces the run's own channel is holding, once the filter has raised one.
-
-    Polled rather than waited on, because `channel serve` queues the surface and then
-    keeps running to wait for a planner. A half-written queue is read as no queue: the
-    published verb is writing this file, so a partial read is a race and not an answer.
-    """
-    limit = deadline(60)
-    while True:
-        assert serving.poll() is None, (
-            f"the filter exited before raising a surface: {serving.communicate()}"
-        )
-        assert time.monotonic() < limit, f"no surface reached {queue} within the wait"
-        try:
-            waiting = json.loads(queue.read_text(encoding="utf-8"))["waiting"]
-        except (OSError, json.JSONDecodeError, KeyError):
-            waiting = []
-        if waiting:
-            return list(waiting)
-        time.sleep(0.05)
-
-
-def _raised_to_a_real_channel(tmp_path: Path, run: str, said: str) -> QueuedSurface:
-    """The one surface the real filter queued on run `run`'s own real channel.
-
-    The whole round trip, shared by both journeys because the only thing that differs
-    between them is what the monitor's last message is: the real filter runs at the
-    interface `oneagentgraph` spawns it through, the pinned `onepipeline` serves the
-    channel, and the surface is read back out of `queue.json` where a manager reads one.
-    """
-    runs = tmp_path / "runs"
-    (runs / run).mkdir(parents=True)
-    # The launch record is the one thing `channel serve` reads before it will serve a
-    # run at all: onepipeline 0.32.0 refuses a run directory without one, so it carries
-    # the one field that verb requires and nothing the journey is not about.
-    # llmlint: ignore[tests_mirror_real_usage] A launch dispatches a run; serve reads only this.
-    (runs / run / "launch.json").write_text(json.dumps({"run_id": run}), encoding="utf-8")
-    environment = dict(os.environ)
-    environment["ONEPIPELINE_RUNS_DIR"] = str(runs)
-    environment.pop(ONEPIPELINE_BIN, None)
-    frame = {
-        "op": "supervisor",
-        "task": f"onepipeline run `{run}`.\n\nGoal: prove the transcript surface",
-        "messages": [{"role": "assistant", "content": said}],
-    }
-
-    serving = subprocess.Popen(
-        [str(CHANNEL_SERVE)],
-        cwd=REPO_ROOT,
-        env=environment,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+@pytest.fixture(scope="module")
+def run_environment(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[dict[str, str]]:
+    """The environment of a run root the real engine made, launched and settled unwatched."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp_path = tmp_path_factory.mktemp("wire-contract-run")
+    environment = _environment(tmp_path, oneharness_bin)
+    launch = _just(
+        "orchestrate", _settling_project(tmp_path, RUN), *SETTLES_UNWATCHED, environment=environment
     )
     try:
-        assert serving.stdin is not None
-        serving.stdin.write(json.dumps(frame))
-        serving.stdin.close()
-        queued = _queued(runs / run / "channel" / "queue.json", serving)
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+        assert (Path(environment["ONEPIPELINE_RUNS_DIR"]) / RUN / "launch.json").is_file()
+        yield environment
     finally:
-        # The surface is raised non-blocking and nobody here is the planner, so `channel
-        # serve` is now waiting out its own reply window. What it does at the end of one
-        # is another journey's subject; these have what they came to read.
-        serving.terminate()
-        serving.wait(timeout=e2e_timeout(30))
-
-    assert len(queued) == 1, queued
-    # The queue is JSON off disk, so the three fields are checked by the assertions each
-    # journey makes rather than by the decoder; the cast names what the published verb
-    # queued so the journeys read it as a surface instead of as a mapping.
-    return cast(QueuedSurface, queued[0])
+        _just("stop", RUN, environment=environment, seconds=60)
 
 
-def _answered_without_the_channel(
-    runs: Path, run: str, said: str
-) -> subprocess.CompletedProcess[str]:
-    """Put one frame to the real filter and wait for it to answer without a channel.
-
-    For the case that raises nothing: the filter is expected to decide and exit without
-    ever opening `channel serve`. A `TimeoutExpired` here is therefore a finding rather
-    than a flake — it says the filter went to the channel and is waiting out a reply
-    window nobody will answer — so it is re-raised as that.
-    """
-    environment = dict(os.environ)
-    environment["ONEPIPELINE_RUNS_DIR"] = str(runs)
-    environment.pop(ONEPIPELINE_BIN, None)
-    frame = {
-        "op": "supervisor",
-        "task": f"onepipeline run `{run}`.\n\nGoal: prove an unprovable transcript raises none",
-        "messages": [{"role": "assistant", "content": said}],
-    }
-    try:
-        return subprocess.run(
-            [str(CHANNEL_SERVE)],
-            cwd=REPO_ROOT,
-            env=environment,
-            input=json.dumps(frame),
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(UNRAISED_SECONDS),
-            check=False,
-        )
-    except subprocess.TimeoutExpired as waited:
-        raise AssertionError(
-            f"the filter did not answer run {run} on its own within the wait, which is "
-            "what raising a surface looks like from here: `channel serve` queues it and "
-            "then blocks for a planner who is not coming"
-        ) from waited
-
-
-def test_the_channel_filter_raises_a_real_lost_turn_to_a_real_planner_channel(
-    tmp_path: Path, lost_turn: LostTurn
+def test_the_judge_side_raises_a_real_lost_turn_to_a_real_planner_channel(
+    run_environment: dict[str, str], lost_turn: LostTurn
 ) -> None:
     """One lost turn reaches the planner as a line, under its own kind, non-blocking.
 
     The transcript stays out of the message, which is the whole fix: a planner may not
     filter the unread-surface line, so a surface that cannot be read and cannot be
-    dropped is the worst of both. What must arrive instead is the two things a planner
-    acts on — what the failure was, and which identity's quota it happened on — and both
-    are asserted against what this turn's own frames recorded rather than against
-    anything the filter says about itself.
+    dropped is the worst of both. What must arrive instead is what the failure was and
+    which harness it happened on, and the cause is asserted against what this turn's own
+    frames recorded rather than against anything the judge side says about itself.
     """
-    raised = _raised_to_a_real_channel(tmp_path, RUN, lost_turn.transcript)
+    before = _records(run_environment, RUN)
 
-    assert raised["kind"] == SURFACE_KIND_OF_A_LOST_TURN, raised
-    assert raised["blocking"] is False, raised
+    failed = _judge_side(_supervisor_frame(RUN, lost_turn.transcript), run_environment, RUN)
+
+    assert failed.returncode == MEMBER_FAILED, failed.stdout + failed.stderr
+    assert "completion" not in failed.stdout, failed.stdout
+    raised = _raised_since(run_environment, RUN, before)
+    assert len(raised) == 1, f"one lost turn raised {len(raised)} surface(s): {raised}"
+    surface = raised[0]
+    assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, surface
+    assert surface["blocking"] is False, surface
     recorded = lost_turn_producer.classification_recorded_by(lost_turn.frames)
     assert len(recorded) == 1, f"this turn recorded {recorded or 'no'} classification(s)"
+    assert surface["message"].startswith(f"monitor turn failed: {recorded.pop()} on {PRODUCER}."), (
+        surface["message"]
+    )
+    assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, surface["message"]
+    assert lost_turn.transcript not in surface["message"], surface["message"]
 
-    assert raised["message"] == (
-        f"monitor turn failed: {recorded.pop()} on {PRODUCER}. It said nothing, so there "
-        f"is nothing to answer; its {len(lost_turn.transcript)}-character transcript is "
-        f"not repeated here. Read it with `just monitor {RUN} --filter monitor`."
-    ), raised["message"]
+
+@pytest.mark.parametrize("proof", list(Proof), ids=str)
+def test_either_proof_a_real_lost_turn_records_is_enough_for_the_judge_side(
+    run_environment: dict[str, str], lost_turn: LostTurn, proof: Proof
+) -> None:
+    """Each of the two frames that prove a loss is read as one on its own.
+
+    A real lost turn records both an error notification and a failed turn, so the journey
+    above cannot tell whether the judge side still reads each. Another release of the
+    producer may send only one, and a judge side that had stopped reading it would take a
+    lost turn for content — a failing monitor that looks healthy. So the producer's own
+    transcript is cut down to one proof at a time and put to the graph's judge command.
+    """
+    transcript = keeping_only_the_proof(lost_turn.transcript, proof)
+    before = _records(run_environment, RUN)
+
+    failed = _judge_side(_supervisor_frame(RUN, transcript), run_environment, RUN)
+
+    assert failed.returncode == MEMBER_FAILED, failed.stdout + failed.stderr
+    raised = _raised_since(run_environment, RUN, before)
+    assert len(raised) == 1, f"a lost turn proven by {proof} raised {len(raised)}: {raised}"
+    surface = raised[0]
+    assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, surface
+    assert surface["blocking"] is False, surface
+    assert surface["message"].startswith("monitor turn failed: "), surface["message"]
+    assert f" on {PRODUCER}." in surface["message"], surface["message"]
+    assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, surface["message"]
+    assert transcript not in surface["message"], surface["message"]
 
 
-def test_the_channel_filter_raises_nothing_for_a_real_transcript_that_proves_no_failure(
-    tmp_path: Path, lost_turn: LostTurn
+def test_a_lost_turn_under_this_hosts_alternate_codex_home_names_that_identity(
+    run_environment: dict[str, str], lost_turn: LostTurn
+) -> None:
+    """The surface says which of this host's two codex identities lost the turn.
+
+    `scripts/codex-alt-home.sh` exports `ORCHESTRATOR_CODEX_ALT_HOME` to every side, and
+    the judge side compares it with the home the producer's own initialize response names.
+    The journey above runs under a home that is not the alternate and is named `codex`;
+    here the same real transcript is served with the alternate set to that very home, and
+    the quota a planner is sent to look at has to be the alternate's.
+    """
+    environment = {**run_environment, CODEX_ALT_HOME: codex_home_named_by(lost_turn.frames)}
+    recorded = lost_turn_producer.classification_recorded_by(lost_turn.frames)
+    assert len(recorded) == 1, f"this turn recorded {recorded or 'no'} classification(s)"
+    before = _records(environment, RUN)
+
+    failed = _judge_side(_supervisor_frame(RUN, lost_turn.transcript), environment, RUN)
+
+    assert failed.returncode == MEMBER_FAILED, failed.stdout + failed.stderr
+    raised = _raised_since(environment, RUN, before)
+    assert len(raised) == 1, f"one lost turn raised {len(raised)} surface(s): {raised}"
+    assert raised[0]["message"].startswith(
+        f"monitor turn failed: {recorded.pop()} on {PRODUCER}:alternate."
+    ), raised[0]["message"]
+
+
+def test_the_judge_side_raises_nothing_for_a_real_transcript_that_proves_no_failure(
+    run_environment: dict[str, str], lost_turn: LostTurn
 ) -> None:
     """A real transcript nothing can be proven inside raises no surface at all.
 
     This is the shape that actually filled this channel: all 26 of the oversized surfaces
-    measured on this host were `status: completed` with `error: null`, so `lost_turn_error`
-    proved nothing about any of them and every one was republished as the monitor's own
-    words — 176.1 MB of protocol carrying zero model-authored characters. The bounded
-    `monitor-transcript` line that used to stand in its place existed only to keep that
-    republication readable, and it went with the republication: prose raises no surface,
-    so an unprovable transcript is content the member produced. What must happen is that
-    the channel is never opened, the member is answered with a ruling onejudge can act
-    on, and nothing at all is queued for a planner to read.
+    measured on this host were `status: completed` with `error: null`, so nothing proved a
+    failure about any of them and every one was republished as the monitor's own words —
+    176.1 MB of protocol carrying zero model-authored characters. What must happen now is
+    that the member is answered with a ruling onejudge can act on, and nothing at all is
+    queued for a planner to read.
 
     The transcript is the real producer's own bytes with the two frames that record the
     refusal removed, which is the whole of the difference between the two shapes — a turn
-    that completes needs a reachable provider, which this cannot have offline. So the
-    journey above and this one differ in exactly what the filter branches on.
+    that completes needs a reachable provider, which this cannot have offline.
     """
     unproven = lost_turn_producer.without_the_frames_that_prove_the_loss(lost_turn.transcript)
     assert unproven != lost_turn.transcript, "the real transcript proved no failure to remove"
-    runs = tmp_path / "runs"
-    queue = runs / RUN_OF_AN_UNPROVEN_TRANSCRIPT / "channel" / "queue.json"
-    (runs / RUN_OF_AN_UNPROVEN_TRANSCRIPT).mkdir(parents=True)
+    before = _records(run_environment, RUN)
 
-    answered = _answered_without_the_channel(runs, RUN_OF_AN_UNPROVEN_TRANSCRIPT, unproven)
+    answered = _judge_side(_supervisor_frame(RUN, unproven), run_environment, RUN)
 
     assert answered.returncode == 0, answered.stderr
-    assert not queue.exists(), (
-        "an unprovable machine transcript still reached the planner's queue: "
-        f"{queue.read_text(encoding='utf-8')}"
-    )
+    raised = _raised_since(run_environment, RUN, before)
+    assert raised == [], f"an unprovable machine transcript reached the planner's queue: {raised}"
     ruling = json.loads(answered.stdout)
     assert ruling["completion"] is False, (
         f"an unprovable transcript answered onejudge with a completion, which settles a "

@@ -16,7 +16,7 @@ import ast
 
 import pytest
 
-from orchestrator import criteria_guard, live_edit_check, plan_check, structural_guard, task_body
+from orchestrator import criteria_guard, envelope_review, plan_check, structural_guard, task_body
 from orchestrator.plan_store import NodeId
 from orchestrator.publication_guard import Refusal
 from orchestrator.root import REPO_ROOT
@@ -51,7 +51,7 @@ class Invented:
 
 
 def test_a_rule_put_on_the_list_is_applied_by_every_tier(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The plan tier's two paths and the live-edit check all refuse with the new rule.
+    """The plan tier's two paths and the envelope validator all refuse with the new rule.
 
     A tier that named its guards itself rather than reading the list would pass this plan
     and this envelope, because neither real guard has anything to say about a human node
@@ -68,8 +68,8 @@ def test_a_rule_put_on_the_list_is_applied_by_every_tier(monkeypatch: pytest.Mon
         criteria_guard.check_plan(document)
 
     envelope = {"version": 2, "commands": [{"op": "add", "node": {**gate, "id": "added"}}]}
-    refused = live_edit_check.structural_refusal(envelope)
-    assert refused == f"node 'added', as this reply leaves it: adoption: {INVENTED_REASON}"
+    refused = envelope_review.structural_refusal(envelope)
+    assert refused == f"node 'added', as this reply states it: adoption: {INVENTED_REASON}"
 
 
 def test_the_list_is_exactly_the_guard_shaped_modules_the_plan_tier_does_not_keep_to_itself() -> (

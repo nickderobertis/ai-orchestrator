@@ -13,23 +13,29 @@ and never a thing this acts on — clearing space belongs to whoever owns what i
 it.
 
 **A live rendezvous is bound to its run by argv rather than by the environment**, though
-both carry it. `onepipeline channel serve RUN` takes the run as an operand, so argv *is*
-the binding, where `ONEPIPELINE_RUN_ID` is a variable that merely accompanied it — a
-rendezvous served for one run out of a dispatch of another would be described wrongly by
-the second and rightly by the first. `/proc/<pid>/environ` is readable only by the
-process's own user besides, so on a shared host it would answer for some rendezvous and
-stay silent about the rest. Silence is the one answer this must not give: an
-unattributable rendezvous is reported as unattributable, never omitted.
+both carry it. `onemessagebus ask` and `onemessagebus serve` are told which channel to
+hold open with `--transport-dir <runs root>/<run>/channel`, so argv *is* the binding,
+where `ONEPIPELINE_RUN_ID` is a variable that merely accompanied it — a rendezvous served
+for one run out of a dispatch of another would be described wrongly by the second and
+rightly by the first. `/proc/<pid>/environ` is readable only by the process's own user
+besides, so on a shared host it would answer for some rendezvous and stay silent about the
+rest. A relative directory is resolved against the process's own working directory, which
+is how the observer's judge side names it. Silence is the one answer this must not give:
+a rendezvous whose argv names no run — no `--transport-dir`, or one that is not a run's
+channel — is reported as unattributable, and one bound to a run this host does not
+supervise is reported as that, never omitted.
 
-**Every engine-owned name below is reconciled rather than remembered.** Answering either
-question means reading the engine's own store — the runs root, the marker that makes a
-directory a run, the dispatch registry under it, the start token each entry carries, and
-the verb whose live processes are the rendezvous. Each drifts in the direction that reads
+**Every engine- and bus-owned name below is reconciled rather than remembered.**
+Answering either question means reading the engine's own store — the runs root, the
+marker that makes a directory a run, the channel directory under it, the dispatch
+registry beside that, and the start token each entry carries — and the bus's own command
+line: its name, the verbs whose live processes are the rendezvous, and the flag that
+names their channel. Each drifts in the direction that reads
 as an answer: a renamed marker makes every run root look like a directory that is not a
 run, so every rendezvous reports itself as bound to no run this host supervises, which is
 the sentence reserved for somebody else's test. Nothing fails, the view renders, and each
 line says the opposite of the truth. So each is a named constant here, and
-`tests/test_engine_contracts.py` holds it against the release this host installed.
+`tests/test_engine_contracts.py` holds it against the releases this host installed.
 
 **Nothing the engine printed is reformatted.** Every line arriving on stdin is written
 back out in order and these readings are added beside them — the rule
@@ -45,7 +51,7 @@ llmlint: ignore-file[tool_output_is_signal] The rendered view is these viewing c
 whole product — the engine's report and the readings beside it — and this filter is what
 writes it, so a quiet success would be a supervisor's view with nothing in it.
 
-llmlint: ignore-file[modern_domain_modeling] `Filesystem`, `Dispatch` and `ServeMatch`
+llmlint: ignore-file[modern_domain_modeling] `Filesystem`, `Dispatch` and `BusMatch`
 model what is structured here. What is left is the run identifier, and a `NewType` for it
 would be verified by nobody: this repository's type checker reads `orchestrator/` alone,
 and a module whose name carries a hyphen cannot be imported, so the journeys that drive
@@ -81,8 +87,9 @@ INDENT = "  "
 PROVIDERS = re.compile(r"^\s*providers:")
 
 #: How `onepipeline` is told to look somewhere other than that default, and what it
-#: looks under when nothing does — the same pair `scripts/ask-manager.sh` resolves, so a
-#: rendezvous and the view that reports it are talking about one store rather than two.
+#: looks under when nothing does — the same pair `scripts/ask-manager.sh` composes the
+#: channel directory from, so a rendezvous and the view that reports it are talking about
+#: one store rather than two.
 RUNS_ROOT_ENV = "ONEPIPELINE_RUNS_DIR"
 DEFAULT_RUNS_ROOT = "runs"
 
@@ -120,11 +127,23 @@ DISPATCH_NODE = "node"
 DISPATCH_PID = "pid"
 DISPATCH_STARTED = "started"
 
-#: The verb whose live processes are the rendezvous. Matched as two consecutive argv
-#: words followed by an operand, never as a substring of a whole command line: the
+#: The bus command line whose live processes are the rendezvous, and the two verbs of it
+#: that hold a run's channel open for a reply: `ask`, which is what a dispatched agent's
+#: blocking question is on this host (`scripts/ask-manager.sh` execs it), and `serve`,
+#: which is what an observer member's judge side is (`graphs/dag-scope.yaml` runs it).
+#: Matched as two consecutive argv words, the first by its last path component so a bus
+#: reached by path matches too — never as a substring of a whole command line: the
 #: substring form is what makes `pgrep -f` match the shell that is asking, and this
 #: reading runs from inside the very views a supervisor uses to look for it.
-SERVE_WORDS = ("channel", "serve")
+BUS = "onemessagebus"
+RENDEZVOUS_VERBS = ("ask", "serve")
+
+#: The flag both verbs name the channel's directory with, and the directory a run keeps
+#: its channel in, directly under its own run root. Together they are the binding: a
+#: `--transport-dir <runs root>/<run>/channel` names the run as the directory holding
+#: that channel, and nothing else on the command line names a run at all.
+TRANSPORT_DIR_FLAG = "--transport-dir"
+CHANNEL_DIRECTORY = "channel"
 
 GIB = 1024**3
 
@@ -133,8 +152,8 @@ GIB = 1024**3
 #: name out of a JSON record, a path out of the environment — and a supervisor reads
 #: these lines in a terminal beside the engine's own. So each is bounded and stripped of
 #: the control characters that would let it forge a line of the report or move the
-#: cursor: a `channel serve` is any process on this host, and nothing validated the
-#: operand it was started with before this read it.
+#: cursor: an `onemessagebus serve` is any process on this host, and nothing validated
+#: the directory it was started with before this read it.
 RENDERED_LIMIT = 120
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
@@ -344,38 +363,51 @@ def _parent(pid: int) -> int | None:
     return None  # pragma: no cover - every /proc/<pid>/status carries PPid
 
 
-def _serve_operand(argv: list[str]) -> str | None:
-    """The operand following the serve verb's words in one argv, if it carries them.
+def _rendezvous_words(argv: list[str]) -> tuple[str, str | None] | None:
+    """The bus verb one argv carries, and the channel directory it names — if it carries one.
 
     Named for what it reads rather than for the run it is nearly always the run of, on
-    `ServeMatch`'s reasoning below: these are the words a rendezvous carries, and any
-    other process on this host that happens to carry them is indistinguishable here.
+    `BusMatch`'s reasoning below: these are the words a rendezvous carries, and any other
+    process on this host that happens to carry them is indistinguishable here. The flag
+    is read in both of the spellings the bus accepts, `--transport-dir DIR` and
+    `--transport-dir=DIR`, and only after the verb, because that is where it belongs to
+    the verb; a `--` ends the options, as it does for the bus.
     """
-    for index in range(len(argv) - 2):
-        if tuple(argv[index : index + 2]) != SERVE_WORDS:
+    for index in range(len(argv) - 1):
+        if Path(argv[index]).name != BUS or argv[index + 1] not in RENDEZVOUS_VERBS:
             continue
-        for operand in argv[index + 2 :]:
-            if not operand.startswith("-"):
-                return operand
-        return None
+        verb = argv[index + 1]
+        after = argv[index + 2 :]
+        for at, word in enumerate(after):
+            if word == "--":
+                break
+            if word == TRANSPORT_DIR_FLAG:
+                return verb, after[at + 1] if at + 1 < len(after) else None
+            if word.startswith(f"{TRANSPORT_DIR_FLAG}="):
+                return verb, word.removeprefix(f"{TRANSPORT_DIR_FLAG}=")
+        return verb, None
     return None
 
 
-class ServeMatch(NamedTuple):
-    """One live process carrying the serve verb's words, and the run its operand names.
+class BusMatch(NamedTuple):
+    """One live process carrying a rendezvous verb's words, and the channel it names.
 
     Named for what the evidence establishes rather than for what it is nearly always
     evidence *of*. A process holding an open question carries exactly this, and so does
-    any other process on this host that happens to carry the same words — the sleeper
-    `tests/e2e/test_supervision_readings_e2e.py` starts to prove an operand cannot forge
-    a line of the report is one. Nothing here can close that gap: a rendezvous is a
-    socket the engine holds rather than a state the kernel publishes, and
+    any other process on this host that happens to carry the same words — the sleepers
+    `tests/e2e/test_supervision_readings_e2e.py` starts to prove a directory cannot forge
+    a line of the report are such. Nothing here can close that gap: a rendezvous is a
+    queue the bus keeps in files rather than a state the kernel publishes, and
     `/proc/<pid>/environ` is readable only by the process's own user, so on a host
     several managers share it would answer for some and stay silent about the rest.
     """
 
     pid: int
-    run: str
+    verb: str
+    #: The `--transport-dir` value exactly as argv carries it, or `None` when argv names
+    #: none — which leaves the bus reading its directory from the environment or a
+    #: configuration file, and leaves this reading unable to say which run it serves.
+    transport: str | None
 
 
 class Dispatch(NamedTuple):
@@ -466,46 +498,70 @@ def _under_dispatch(pid: int, by_process: dict[int, Dispatch]) -> str | None:
     return None
 
 
-def _bound_by_argv(processes: list[int]) -> list[ServeMatch]:
-    """One entry per rendezvous, as far as argv can say — and the run each one binds.
+def _bound_by_argv(processes: list[int]) -> list[BusMatch]:
+    """One entry per rendezvous, as far as argv can say — and the channel each one names.
 
     Named for its evidence rather than for its subject, because the two are not the
     same claim and only the narrower one is true: this reads argv, so what it finds is
-    every process *carrying* the verb's words and its operand, which is what a process
-    serving a rendezvous carries and is not proof that one is. Nothing on this host can
-    give that proof — a rendezvous is a socket the engine holds, not a state the kernel
+    every process *carrying* a rendezvous verb's words, which is what a process holding
+    a channel open carries and is not proof that one is. Nothing on this host can give
+    that proof — a rendezvous is a queue the bus keeps in files, not a state the kernel
     publishes — so the reading says what it saw and the line it renders says the same.
 
-    One rendezvous can be several processes. Anything in front of the engine that does
-    not exec — a `timeout` bounding a wait by hand, a shell that runs the line — keeps a
-    process of its own carrying those same argv words, so counting matches would report
-    one open question as two or three. (`uv run` is not one of them: measured on this
-    host, it execs.) The innermost is the one holding the rendezvous, so a match whose
-    own descendant matches on the same run is a wrapper and is dropped. Ancestry rather
-    than parentage, because a shell between the two matches nothing and would otherwise
-    leave both.
+    One rendezvous can be several processes. Anything in front of the bus that does not
+    exec — a `timeout` bounding a wait by hand — keeps a process of its own carrying
+    those same argv words, so counting matches would report one open question as two.
+    (`uv run` is not one of them, and neither is the `bash -c 'exec …'` the observer's
+    judge side is started through: both exec.) The innermost is the one holding the
+    channel, so a match whose own descendant carries the same verb and directory is a
+    wrapper and is dropped. Ancestry rather than parentage, because a shell between the
+    two matches nothing and would otherwise leave both.
     """
-    bound = {pid: run for pid in processes if (run := _serve_operand(_argv(str(pid)))) is not None}
+    bound = {
+        pid: words for pid in processes if (words := _rendezvous_words(_argv(str(pid)))) is not None
+    }
 
     wrappers = {
         ancestor
-        for pid, run in bound.items()
+        for pid, words in bound.items()
         for ancestor in _ancestors(pid)
-        if bound.get(ancestor) == run
+        if bound.get(ancestor) == words
     }
-    return [ServeMatch(pid=pid, run=run) for pid, run in bound.items() if pid not in wrappers]
+    return [
+        BusMatch(pid=pid, verb=verb, transport=transport)
+        for pid, (verb, transport) in bound.items()
+        if pid not in wrappers
+    ]
+
+
+def _channel(match: BusMatch) -> Path | None:
+    """The channel directory one match names, resolved as the process itself resolves it.
+
+    A relative directory is relative to the process's working directory — the observer's
+    judge side names `runs/<run>/channel` exactly so — so it is joined onto
+    `/proc/<pid>/cwd` and the whole resolved. Where that link is not this process's to
+    read, it stays unresolved in the path, which then names no runs root this host
+    supervises and is reported as exactly that rather than guessed at.
+    """
+    if match.transport is None:
+        return None
+    named = Path(match.transport)
+    if not named.is_absolute():
+        named = Path(f"/proc/{match.pid}/cwd") / named
+    return Path(os.path.realpath(named))
 
 
 def _rendezvous_lines() -> list[str]:
-    """The report's rendezvous section: one line per process the serve verb's words match.
+    """The report's rendezvous section: one line per process a rendezvous verb's words match.
 
     Named for the section it writes rather than for a property of what it found, because
     those are two different claims and only the first is this function's to make — what
-    each line is evidence of is `ServeMatch`'s docstring, and a match that is somebody
+    each line is evidence of is `BusMatch`'s docstring, and a match that is somebody
     else's sleeper is reported in the same words as one that is a real open question. A
     supervisor reading either still has to look, which is what these lines are for.
     """
     runs_root = _runs_root()
+    supervised = Path(os.path.realpath(runs_root))
     by_process, runs = _dispatches(runs_root)
     lines: list[str] = []
     try:
@@ -520,23 +576,40 @@ def _rendezvous_lines() -> list[str]:
     for rendezvous in _bound_by_argv(processes):
         under = _under_dispatch(rendezvous.pid, by_process)
         where = under if under is not None else "no dispatch this runs root records"
-        named = _readable(rendezvous.run)
-        if rendezvous.run in runs:
+        opened = (
+            f"{INDENT}rendezvous pid {rendezvous.pid}: {BUS} {rendezvous.verb}"
+            " is holding a channel open for a reply"
+        )
+        channel = _channel(rendezvous)
+        if channel is None or channel.name != CHANNEL_DIRECTORY:
+            named = "none" if rendezvous.transport is None else _readable(rendezvous.transport)
             lines.append(
-                f"{INDENT}rendezvous pid {rendezvous.pid}: a question is open for a reply"
-                f" on run {named}, under {where}"
+                f"{opened}, under {where} — its command line names no {TRANSPORT_DIR_FLAG}"
+                f" ending in a run's '{CHANNEL_DIRECTORY}' directory (it names {named}),"
+                " so the run it is bound to cannot be read and this rendezvous is"
+                " unattributable"
             )
             continue
+        named = _readable(channel.parent.name)
+        on = f"{opened} on run {named}, under {where}"
+        if channel.parent.parent != supervised:
+            lines.append(
+                f"{on} — its channel is under {_readable(channel.parent.parent)}, not the"
+                f" runs root {_readable(runs_root)}, so this rendezvous is bound to no run"
+                " this host is supervising"
+            )
+            continue
+        if channel.parent.name in runs:
+            lines.append(on)
+            continue
         lines.append(
-            f"{INDENT}rendezvous pid {rendezvous.pid}: a question is open for a reply on"
-            f" run {named}, under {where} — no run root '{named}' under"
-            f" {_readable(runs_root)}, so this rendezvous is bound to no run this host"
-            " is supervising"
+            f"{on} — no run root '{named}' under {_readable(runs_root)}, so this"
+            " rendezvous is bound to no run this host is supervising"
         )
     if not lines:
         lines.append(
-            f"{INDENT}rendezvous: none — no process on this host is holding a question"
-            " open for a reply"
+            f"{INDENT}rendezvous: none — no {BUS} {' or '.join(RENDEZVOUS_VERBS)} on this"
+            " host is holding a channel open for a reply"
         )
     return lines
 

@@ -19,7 +19,8 @@
 #     under those configs.
 #
 # A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
-# `scripts/ask-manager.sh`. It is established here for the same reason the two above
+# `scripts/ask-manager.sh`, the shim a dispatched agent asks through `onemessagebus ask`
+# with. It is established here for the same reason the two above
 # are: it reaches a dispatch only by inheritance, so the launching process is the
 # last place that can put it there, and `start` and `adopt` are every shape of launch
 # this repository has. `scripts/ask-manager-env.sh` owns the path and the refusal.
@@ -144,6 +145,24 @@ if [ "$launching" = true ]; then
         exit 2
     fi
     export_follow_up_drafts onepipeline || exit "$?"
+fi
+
+# Every launch keeps its channel under this host's bus configuration, so the engine applies
+# the same validators, author grants and codec constants that `just channel-reply`, the ask
+# shim and the observer's judge side read. Named here because `start` is the one verb every
+# launch shape reaches — `just orchestrate`, `just plan` and the design-document launch —
+# and `adopt` takes none because an adopted run keeps the configuration its launch record
+# retained. A caller who names one keeps theirs.
+if [ "${1:-}" = start ]; then
+    named_bus_config=false
+    for argument in "${@:2}"; do
+        case "$argument" in
+            --bus-config | --bus-config=*) named_bus_config=true ;;
+        esac
+    done
+    if [ "$named_bus_config" = false ]; then
+        set -- start --bus-config "${script_dir%/scripts}/config/onemessagebus.yaml" "${@:2}"
+    fi
 fi
 
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.

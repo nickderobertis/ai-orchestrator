@@ -113,8 +113,8 @@ RECIPE_SCOPED = "test-recipes"
 #: The uncached tier that reconciles this repository's configuration against what
 #: lives outside the workspace: the registered checkouts of the repositories it routes
 #: — a rule's gate and a repo-specific persona's review bar are both held to the
-#: recipes those repositories define — and the installed producer whose wire format
-#: `scripts/channel-serve.py` reads.
+#: recipes those repositories define — and the adopted releases' own source, which the
+#: names this repository restates from the engines and the bus are held to.
 #: Deliberately unmemoized: no `nx.json` key could cover either, so any memo would be a
 #: verdict on whatever they looked like when it was recorded.
 CHECKOUT_SCOPED = "test-checkouts"
@@ -144,7 +144,7 @@ PLAN_TOOLING_DOCS_SCOPED = "test-docs"
 PLAN_TOOLING_ROOT = "tests/plan_tooling"
 
 #: The project whose test target owns the host-tool journeys over the ask seam — the
-#: real `scripts/ask-manager.sh`, the real `onepipeline channel serve` it asks through,
+#: real `scripts/ask-manager.sh`, the real `onemessagebus ask` it hands the question to,
 #: and the real launches that decide what a dispatch is given to ask with. A project of
 #: its own for the reason `plan-tooling` is one: every journey here spends a real launch,
 #: which is a cost `nx affected` can only keep off an unrelated edit where it is a
