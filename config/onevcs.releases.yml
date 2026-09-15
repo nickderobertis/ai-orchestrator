@@ -53,3 +53,6 @@ repositories:
   - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
     declaration: merge
     default_target: pypi-cli
+  - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
+    declaration: merge
+    default_target: pypi

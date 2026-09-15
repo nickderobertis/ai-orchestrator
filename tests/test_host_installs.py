@@ -35,7 +35,7 @@ from orchestrator.root import REPO_ROOT
 
 #: The rows this table is fixed to, stated here in full rather than derived from the
 #: module: a test that read them out of the code under test would hold the module to
-#: itself. Seven producers, the override's order, and the engine wheel alone marked as
+#: itself. Eight producers, the override's order, and the engine wheel alone marked as
 #: what a dispatch runs.
 EXPECTED_ROWS = (
     Installed(
@@ -71,6 +71,13 @@ EXPECTED_ROWS = (
         "onepipeline-ui",
         False,
     ),
+    Installed(
+        "github.com/nickderobertis/onemessagebus",
+        "pypi",
+        "pypi:onemessagebus-cli",
+        "onemessagebus",
+        False,
+    ),
 )
 
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -104,7 +111,7 @@ INSTALLED_OUTSIDE_PYPROJECT = frozenset({"onetaskgraph-cli"})
 SDK_CARRYING_A_ROWS_WHEEL = {"onejudge": "onejudge-cli"}
 
 
-def test_the_table_holds_exactly_the_seven_rows_in_the_overrides_order() -> None:
+def test_the_table_holds_exactly_the_expected_rows_in_the_overrides_order() -> None:
     assert INSTALLED == EXPECTED_ROWS
     assert [row.producer for row in INSTALLED if row.governs_dispatch] == [
         "github.com/nickderobertis/onepipeline"

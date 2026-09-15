@@ -5,8 +5,9 @@ fork instead of guessing, so what it may never do is hand back something that is
 the manager's answer. The channel gives it three ways to do exactly that, and all
 three are real rather than hypothetical:
 
-* it **answers its own timeouts**, at exit 0, with a ruling that reads like a
-  decision (`no planner reply within the timeout; continue`);
+* it **answers its own timeouts**, at exit 0 — through onepipeline 0.31.0 with a ruling
+  that read like a decision (`no planner reply within the timeout; continue`), and on the
+  adopted 0.32.0 with the wait itself (`{"answer":"timeout",…}`);
 * a reply is **claimed by whichever reader reaches it next**, so a live graph edit
   the manager addressed to the engine arrives at the asking call instead;
 * and a frame it will never accept — a `node` the run does not have — is refused in
@@ -705,19 +706,20 @@ def test_the_round_trip_survives_a_differently_pinned_tool_at_the_once_shared_pa
     assert TOKEN.sub("", out).strip() == ANSWER, out
 
 
-def test_the_channels_own_timeout_ruling_is_refused_rather_than_returned(asked: Asked) -> None:
-    """A synthesized verdict is worse than no verdict, because it is actionable.
+def test_the_channels_own_elapsed_wait_is_refused_rather_than_returned(asked: Asked) -> None:
+    """An elapsed wait is refused as a timeout, never returned as a decision.
 
-    Nobody answers here, so `channel serve` answers itself: exit 0, valid JSON, and
-    `{"completion": false, "message": "no planner reply within the timeout; continue"}`
-    — a ruling an agent would act on. It happened on this plan's own dispatch. So the
-    wrapper must exit non-zero, name the timeout as the cause, and put nothing on
-    stdout for a caller to mistake for a decision.
+    Nobody answers here, so `channel serve` answers itself at exit 0. Through onepipeline
+    0.31.0 that was `{"completion": false, "message": "no planner reply within the
+    timeout; continue"}` — a ruling an agent would act on, and it happened on this plan's
+    own dispatch. The adopted 0.32.0 answers `{"answer":"timeout","correlation":…}`
+    instead, carrying no ruling field. Either way the wrapper must exit non-zero, name the
+    timeout as the cause, and put nothing on stdout for a caller to mistake for a
+    decision.
 
-    This is also the drift gate on the `reason` string the refusal keys off: were a
-    future `onepipeline` to reword it, the synthesized ruling would stop matching, be
-    re-asked as somebody else's answer, and fail with the *other* message — so this
-    assertion is what says which of the two happened.
+    This is also the drift gate on the `answer` word the refusal keys off: were a future
+    `onepipeline` to rename it, the line would stop matching and be refused as *not a
+    ruling* instead — so this assertion is what says which of the two happened.
     """
     asking = _ask(asked, "Nobody is watching this run.", window=SHORT_WINDOW_SECONDS)
 
@@ -725,7 +727,7 @@ def test_the_channels_own_timeout_ruling_is_refused_rather_than_returned(asked: 
 
     assert status != 0, f"the wrapper accepted the channel's own timeout as an answer:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"
-    assert "synthesized its own ruling" in err and "no manager answered" in err, err
+    assert "answered its own timeout" in err and "no manager answered" in err, err
 
 
 def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
@@ -805,7 +807,7 @@ def test_a_manager_live_edit_is_not_handed_to_the_asking_call_as_its_answer(
 
     assert status != 0, f"the wrapper returned a live graph edit as an answer:\n{out}"
     assert out == "", f"a refused question still printed a ruling:\n{out}"
-    assert "synthesized its own ruling" in err and "no manager answered" in err, (
+    assert "answered its own timeout" in err and "no manager answered" in err, (
         f"the question was answered by something, though the only reply sent was a "
         f"graph edit the verb says answered no surface:\n{err}"
     )
@@ -1451,17 +1453,22 @@ def _stranded_answer(asked: Asked, question: str) -> str:
 def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arms(
     asked: Asked,
 ) -> None:
-    """A foreign-token ruling re-arms a listener, so one ask blocks a manager once.
+    """A stale answer left on the channel costs the next ask nothing, so one ask blocks once.
 
     The seed is ordinary and is what run `issue-28` did: an ask outlives its agent's tool
     deadline and is killed while waiting, so its manager's answer — echoing that ask's
-    token — is left with no reader. The next ask draws it milliseconds after asking.
+    token — is left with no reader. Through onepipeline 0.31.0 the next ask drew it
+    milliseconds after asking, and re-armed a listener behind a non-blocking note.
 
     A wrapper that answered that by asking again queued a second *blocking* question, and
     that duplicate is what made the defect self-sustaining: the manager answers both
     copies, one listener is left to claim an answer, and the orphan poisons the ask after
-    it. Asserted here is that the ask still returns the manager's answer, that it really
-    did re-arm rather than skipping this path, and that exactly one surface blocks.
+    it. **The adopted onepipeline 0.32.0 binds a ruling to the question it answers**, by
+    the correlation the bus gives that question, so the stale answer stays with the
+    killed seed and the next ask never draws it: it raises its one question and is handed
+    the manager's answer to it. Asserted here is that the ask still returns that answer,
+    that it raised exactly one surface — a second would be a re-arm, which now means a
+    stale ruling reached a reader it was not bound to — and that the one surface blocks.
 
     The manager answers persistently because the re-arm window has no reader in it, and
     the seed's own completion has already settled the run — so a reply sent there is
@@ -1499,9 +1506,10 @@ def test_one_ask_puts_one_blocking_question_to_a_manager_however_often_it_re_arm
         for surface in [*manager.surfaces, *_drained(asked)]
         if (found := TOKEN.search(surface["message"])) is not None and found.group(0) != seeded
     ]
-    assert len(raised) > 1, (
-        f"the ask drew the stale ruling and never re-armed, so it never reached the path "
-        f"this journey is about and its single surface proves nothing about it: {raised}"
+    assert len(raised) == 1, (
+        f"one ask raised more than one surface, so a stale ruling reached a reader it was "
+        f"not bound to and the ask re-armed — the release no longer binds a ruling to its "
+        f"question, and the wrapper's re-arm is load-bearing again: {raised}"
     )
     assert len({token for token, _ in raised}) == 1, (
         f"these surfaces did not all come from one ask, so counting them says nothing "
@@ -2505,7 +2513,7 @@ SILENT_CHANNEL = "#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n"
 BROKEN_JUDGE = """#!/usr/bin/env bash
 for argument in "$@"; do
   case "$argument" in
-    *timeout_reason*) exit 3 ;;
+    *timeout_answer*) exit 3 ;;
   esac
 done
 exec {python} "$@"
@@ -2602,12 +2610,12 @@ def test_a_toolchain_that_cannot_judge_the_answer_says_so_rather_than_falling_th
 
 
 #: A `python3` that refuses to encode the question as a channel frame. Told apart from
-#: the classifier by the program that mentions the timeout reason, which only the
+#: the classifier by the program that mentions the timeout answer, which only the
 #: classifier is given — so this one fails first and nothing is ever asked.
 BROKEN_ENCODER = """#!/usr/bin/env bash
 for argument in "$@"; do
   case "$argument" in
-    *timeout_reason*) exec {python} "$@" ;;
+    *timeout_answer*) exec {python} "$@" ;;
   esac
 done
 exit 4

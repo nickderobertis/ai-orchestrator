@@ -54,6 +54,7 @@ PUBLISHED_TOOLS = (
     PublishedTool(
         "onepipeline-ui.version", "onepipeline-api-cli", "onepipeline-api", "onepipeline-ui"
     ),
+    PublishedTool("onemessagebus.version", "onemessagebus-cli", "onemessagebus"),
 )
 #: onejudge and oneharness are pinned here too, but each is read and verified by its
 #: own named function — onejudge's check also proves the `onejudge_sdk` import — so

@@ -7,11 +7,13 @@ blocks until the planner answers, and writes that answer to stdout. onejudge's
 judge-side command provider is the other end of the same conversation: it writes
 one supervisor frame to a command's stdin and reads one response object back.
 
-The two halves already agree on the **response**. `channel serve` answers with
-exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
-onejudge's `supervisor` op expects. What they do not agree on is the **request**,
-and this filter is that one reconciliation, as onejudge 0.12.0 writes it and
-`onepipeline` 0.31.0 reads it:
+The two halves nearly agree on the **response**. `channel serve` answers a ruling
+with exactly `{"completion": ..., "message": ..., "reason": ...}`, which is the object
+onejudge's `supervisor` op expects — and answers a wait nobody filled with the wait
+itself, `{"answer": "timeout", "correlation": ...}`, carrying none of those fields,
+which this filter turns into a non-completion (see `ruling_for_an_elapsed_wait`). What
+they do not agree on is the **request**, and this filter is that reconciliation, as
+onejudge 0.12.0 writes it and `onepipeline` 0.32.0 reads it:
 
     onejudge  ->  {"op": "supervisor", "task", "persona", "done_when",
                    "worktree", "history_name", "messages": [...], "session"}
@@ -28,7 +30,7 @@ out of what the frame itself carries:
 * **The run id.** The task `onepipeline` composes for the graph opens by naming
   the run, so the id is read from there. The environment names it too —
   `ONEPIPELINE_RUN_ID` is set to the run id on both sides of an observer member,
-  measured against onepipeline 0.31.0 by dumping this command's whole environment on
+  measured against onepipeline 0.32.0 by dumping this command's whole environment on
   a real launch — but that is a per-release export while the composed task is the
   contract this filter already validates, so the task stays the source. The export
   is gated by `tests/e2e/test_orchestrate_launch_e2e.py`, which stands a probe where
@@ -140,8 +142,9 @@ this member's judge side, so the planner scores the criterion. The criterion is 
 as its own non-blocking surface and the ruling that comes back is the score —
 `completion` becomes the boolean, and the prose beside it becomes the rationale.
 Nothing is invented, and a planner who never answers costs nothing: `channel serve`
-times out with its own non-completion, which is the conservative reading (`unsatisfied`)
-rather than a fabricated success. The one thing this op cannot take from the frame is
+answers the elapsed wait with the wait itself, and this filter reads that as a
+non-completion, which is the conservative reading (`unsatisfied`) rather than a
+fabricated success. The one thing this op cannot take from the frame is
 the run, because onejudge writes no `task` into it; it is read from `ONEPIPELINE_RUN_ID`
 instead, which `onepipeline` exports to both sides of an observer member and which
 `tests/e2e/test_orchestrate_launch_e2e.py` re-measures on a real launch every gate run.
@@ -173,7 +176,7 @@ driven directly rather than through the channel for exactly that reason.
 Such an answer is **recognised, reported to the monitor, and not acted on**, and the
 member survives it. Not acted on is the measured half. `onepipeline reply` applies an
 envelope's commands *itself*, before the envelope is queued for any reader: measured
-against onepipeline 0.31.0 by replying `{"op":"add", …}` to a real run, which answers
+against onepipeline 0.32.0 by replying `{"op":"add", …}` to a real run, which answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records `edit-committed` there
 and then. So the
 edit has already reached the engine by the time it arrives here, and this reader has
@@ -293,7 +296,7 @@ ONEPIPELINE_BIN = "ONEPIPELINE_BIN"
 
 #: How `onepipeline` names the run to both sides of an observer member. The scoring op
 #: is the one frame that carries no `task`, so this is its only source; measured against
-#: onepipeline 0.31.0 and re-measured on a real launch by
+#: onepipeline 0.32.0 and re-measured on a real launch by
 #: `tests/e2e/test_orchestrate_launch_e2e.py` every gate run.
 RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 
@@ -307,6 +310,21 @@ SCORE_CRITERION = "criterion"
 #: prose rides beside it, and an answer with it is one however many edits do.
 LIVE_EDIT_COMMANDS = "commands"
 RULING_VERDICT = "completion"
+
+#: How `channel serve` names a reply window that elapsed with nobody answering: the
+#: field and the word, in a line carrying no `completion` — the measured shape this
+#: file's header quotes, `{"answer":"timeout","correlation":"c-…"}`.
+WAIT_ANSWER = "answer"
+WAIT_ELAPSED = "timeout"
+WAIT_CORRELATION = "correlation"
+
+#: What the monitor is told when that happens, and why it is a non-completion. The
+#: reason is what a score's rationale carries, so it says who did not decide.
+NOBODY_ANSWERED = (
+    "no planner answered this surface within the channel's reply window; nothing was "
+    "ruled on your watch — keep watching the detailed stream and raise what you find"
+)
+NOBODY_ANSWERED_REASON = "no planner answered within the planner channel's reply window"
 
 #: How one live-edit command names what it does and what it does it to, for the line a
 #: planner reads when the engine would not take it. Neither is required of a command by
@@ -889,6 +907,37 @@ def ruling_for_a_live_edit(edit: LiveEdit) -> SupervisorResponse:
     return SupervisorResponse(completion=False, message=message, reason=NOT_A_RULING)
 
 
+def elapsed_wait(answer: str) -> bool:
+    """Whether `channel serve` answered with its own elapsed wait rather than a ruling.
+
+    The wait's line names itself in `answer` beside the string `correlation` of the
+    question it elapsed on, and carries no `completion`; a line that carries one is a
+    ruling however it is worded, and is left to `ruling_from`.
+    """
+    try:
+        parsed = json.loads(answer)
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(parsed, dict)
+        and parsed.get(WAIT_ANSWER) == WAIT_ELAPSED
+        and isinstance(parsed.get(WAIT_CORRELATION), str)
+        and RULING_VERDICT not in parsed
+    )
+
+
+def ruling_for_an_elapsed_wait() -> SupervisorResponse:
+    """Tell the monitor nobody answered, as a non-completion and never an exit status.
+
+    Not an answer on the planner's behalf: a non-completion settles nothing and rules on
+    no work, and it says exactly what happened. `scored` reads it as `unsatisfied`, the
+    conservative reading of a completion bar nobody ruled on.
+    """
+    return SupervisorResponse(
+        completion=False, message=NOBODY_ANSWERED, reason=NOBODY_ANSWERED_REASON
+    )
+
+
 def served_by_the_planner(
     surface: ObserverFrame, run: RunId, binary: str
 ) -> SupervisorResponse | int:
@@ -932,6 +981,10 @@ def served_by_the_planner(
             "was waiting, which leaves nothing to answer it",
         )
     answer = served.stdout.strip()
+    # A wait nobody filled is answered with the wait, not a ruling, and is survived: a
+    # non-blocking surface nobody read is the ordinary case, not a protocol failure.
+    if elapsed_wait(answer):
+        return ruling_for_an_elapsed_wait()
     # An answer addressed to the engine's reconciler rather than to this reader is
     # recognised and survived, not refused: exiting here is what killed the monitor of
     # every run whose manager corrected it. See this file's header.

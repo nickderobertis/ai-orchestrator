@@ -1,6 +1,6 @@
 """What this host installs from each producer it depends on, and the pin each wheel governs.
 
-Seven repositories publish the tools this harness configures, and each publishes
+Eight repositories publish the tools this harness configures, and each publishes
 several artifacts — a crate, a wheel, an npm launcher, an SDK — of which this host
 installs exactly one: the wheel `pyproject.toml` pins. A node waiting on a release
 has to say *which* artifact it waits for, because "the crate is out" and "the wheel is
@@ -110,6 +110,13 @@ INSTALLED: tuple[Installed, ...] = (
         target="pypi-cli",
         artifact="pypi:onepipeline-api-cli",
         pin="onepipeline-ui",
+        governs_dispatch=False,
+    ),
+    Installed(
+        producer="github.com/nickderobertis/onemessagebus",
+        target="pypi",
+        artifact="pypi:onemessagebus-cli",
+        pin="onemessagebus",
         governs_dispatch=False,
     ),
 )

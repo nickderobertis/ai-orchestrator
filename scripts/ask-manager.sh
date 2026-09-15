@@ -20,13 +20,13 @@
 # parsing an object at line 1 column 1` — a parse error that names the symptom and
 # not the cause. Removing that trap is one reason this wrapper exists.
 #
-# **`serve` answers its own timeouts, at exit 0, with a plausible ruling.** Measured:
-# after the window elapses it prints
-# `{"completion":false,"message":"no planner reply within the timeout; continue",
-# "reason":"the channel timed out waiting for a verdict"}`. A caller that checked only
-# the exit status would act on that as the manager's answer, and a fabricated verdict
-# is worse than no verdict because it is actionable. So a reply whose `reason` is
-# exactly that string is refused here, loudly, with nothing on stdout.
+# **`serve` answers its own timeouts, at exit 0.** Through onepipeline 0.31.0 it printed
+# a plausible ruling, `{"completion":false,"message":"no planner reply within the
+# timeout; continue",…}`, which a caller checking only the exit status would act on as
+# the manager's answer. The adopted 0.32.0 prints the wait itself instead —
+# `{"answer":"timeout","correlation":"c-…"}`, carrying no `completion` — and that line is
+# refused here as a timeout, loudly, with nothing on stdout, before it could be reported
+# as merely not a ruling.
 #
 # **A reply is claimed by whichever reader arrives next, not by the call that asked.**
 # That was measured on a live run under onepipeline 0.8.x: a re-ask returned
@@ -49,10 +49,9 @@
 #      — up to `MAX_ATTEMPTS`.
 #
 # The token is the general remedy and needs no engine change: a reply routed to the
-# wrong reader cannot echo a token it never saw. It also bounds the blast radius of
-# the timeout check drifting — if a future release rewords that `reason`, the
-# synthesized ruling stops matching the token and is re-asked and then refused,
-# instead of being returned as an answer.
+# wrong reader cannot echo a token it never saw. The timeout check drifting is bounded
+# too — if a future release renamed that `answer` word, the line would carry no
+# `completion` and be refused as not a ruling, instead of being returned as an answer.
 #
 # **Whether the question goes back depends on which token the stray ruling echoes.** A
 # ruling echoing a *foreign* token is another ask's answer outliving its asker, so this
@@ -145,9 +144,12 @@ DEFAULT_TIMEOUT_SECONDS=3000
 #: its first occurrence.
 MAX_ATTEMPTS=4
 
-#: The `reason` `onepipeline channel serve` synthesizes for its own timeout. Matched
-#: exactly, because a substring would also swallow a manager who wrote about a timeout.
-TIMEOUT_REASON="the channel timed out waiting for a verdict"
+#: What `onepipeline channel serve` answers in its `answer` field when its wait elapsed,
+#: in a line carrying no `completion` — measured on onepipeline 0.32.0 as
+#: `{"answer":"timeout","correlation":"c-…"}`. Matched exactly, only beside a string
+#: `correlation` and only on a line with no `completion`, so a manager's ruling that
+#: merely mentions a timeout is still a ruling.
+TIMEOUT_ANSWER="timeout"
 
 #: What a correlation token looks like on the wire. The prefix is
 #: `scripts/ask-manager-contract.sh`'s, sourced above, because `just channel-reply` now
@@ -229,15 +231,24 @@ for message, blocking in ((sys.stdin.read(), True), (sys.argv[1], False)):
 CLASSIFY_PROGRAM="$ASK_MANAGER_RULING_SOURCE$ASK_MANAGER_TOKEN_SOURCE"'
 import json, re, sys
 
-timeout_reason, token, foreign = sys.argv[1], sys.argv[2], sys.argv[3]
+timeout_answer, token, foreign = sys.argv[1], sys.argv[2], sys.argv[3]
 raw = sys.stdin.read()
 excerpt = " ".join(raw.split())[:200]
+try:
+    said = json.loads(raw)
+except json.JSONDecodeError:
+    said = None
+if (
+    isinstance(said, dict)
+    and said.get("answer") == timeout_answer
+    and isinstance(said.get("correlation"), str)
+    and "completion" not in said
+):
+    sys.exit(10)
 if ruling_refusal(raw) is not None:
     sys.stdout.write(excerpt)
     sys.exit(11)
 answer = json.loads(raw)
-if answer.get("reason") == timeout_reason:
-    sys.exit(10)
 if not answer_echoes(raw, token):
     sys.stdout.write(excerpt)
     message = answer.get("message")
@@ -480,7 +491,7 @@ while true; do
         "check with 'just status $run' whether the run settled while this was waiting, which leaves nobody to answer"
 
     classify_status=0
-    classified=$("$python" -c "$CLASSIFY_PROGRAM" "$TIMEOUT_REASON" "$token" "$TOKEN_PATTERN" <"$served_out") || classify_status=$?
+    classified=$("$python" -c "$CLASSIFY_PROGRAM" "$TIMEOUT_ANSWER" "$token" "$TOKEN_PATTERN" <"$served_out") || classify_status=$?
     case "$classify_status" in
         0)
             # llmlint: ignore[tool_output_is_signal] The manager's answer IS this wrapper's output, and a decision at a fork is prose that arrives as many lines. Abridging it here would hand a dispatched agent a truncated ruling to act on, which is the one failure this whole wrapper exists to prevent; test_the_wrapper_answers_with_the_managers_message_and_nothing_else pins the message whole and nothing else on stdout.
@@ -488,7 +499,7 @@ while true; do
             exit 0
             ;;
         10)
-            fail "no manager answered within ${window}s, and the channel synthesized its own ruling to say so" \
+            fail "no manager answered within ${window}s, and the channel answered its own timeout to say so" \
                 "ask the manager to watch this run with 'just channel-next $run' before asking again, or raise ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"
             ;;
         11)

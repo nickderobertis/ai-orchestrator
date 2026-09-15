@@ -1,0 +1,43 @@
+# A stand-in for the release-targets.toml github.com/nickderobertis/onemessagebus declares at its
+# base, carrying its target ids and names and nothing a probe would run: what a scratch
+# producer identity in a journey of scripts/apply-repo-registry.sh declares. Its target
+# ids and names are held whole to the producer's own declaration, in
+# tests/test_host_installs.py's reads_checkouts tier.
+schema_version = 1
+probe = "scripts/release-probe.sh"
+
+[[target]]
+id = "crate:onemessagebus"
+name = "crate"
+what = "The crate target of onemessagebus, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "crate:onemessagebus-agent"
+name = "agent-crate"
+what = "The agent-crate target of onemessagebus, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "pypi:onemessagebus-cli"
+name = "pypi"
+what = "The pypi target of onemessagebus, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "npm:onemessagebus-cli"
+name = "npm"
+what = "The npm target of onemessagebus, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "pypi:onemessagebus"
+name = "sdk"
+what = "The sdk target of onemessagebus, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."
+
+[[target]]
+id = "npm:@onemessagebus/sdk"
+name = "node-sdk"
+what = "The node-sdk target of onemessagebus, as this host's scratch declaration states it."
+published_by = "Nothing: this is a journey's stand-in for the producer's declaration."

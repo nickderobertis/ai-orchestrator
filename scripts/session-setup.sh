@@ -10,8 +10,8 @@
 #   2. The exact `oneharness` version adopted in `config/oneharness.version` is
 #      installed into this worktree's project venv by the same `uv sync` and
 #      verified as both a distribution and CLI.
-#   3. The four published tools this repository is a configuration layer over —
-#      oneagentgraph, onevcs, onepipeline, and onepipeline-ui — arrive from PyPI
+#   3. The published tools this repository is a configuration layer over —
+#      oneagentgraph, onevcs, onepipeline, onepipeline-ui, and onemessagebus — arrive from PyPI
 #      through that same `uv sync` at the versions adopted in `config/`, and are
 #      verified as both a distribution and a CLI (see PUBLISHED_TOOL_SPECS below).
 #   4. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
@@ -47,7 +47,7 @@ readonly ONETASKGRAPH_VERSION_FILE="$REPO_ROOT/config/onetaskgraph.version"
 # The published tools this repository is a configuration layer over, as
 # `<CLI binary>|<PyPI distribution>|<config version file>`. Each publishes a
 # binary wheel whose console script reports `<binary> <version>`, so one table
-# drives reading, validating, and verifying all four. `onepipeline-ui` is the
+# drives reading, validating, and verifying every one. `onepipeline-ui` is the
 # tool's name and `onepipeline-api-cli` the distribution PyPI carries it under;
 # its npm counterpart is out of scope here because this repo provisions its
 # Python-side tooling from PyPI.
@@ -56,6 +56,7 @@ readonly PUBLISHED_TOOL_SPECS=(
   "onevcs|onevcs-cli|onevcs.version"
   "onepipeline|onepipeline-cli|onepipeline.version"
   "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
+  "onemessagebus|onemessagebus-cli|onemessagebus.version"
 )
 declare -A PUBLISHED_TOOL_VERSIONS=()
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"

@@ -127,6 +127,9 @@ MONITOR_TURNS_ALONGSIDE = 20
 #: and a second copy of it here would keep passing after the first was reworded away.
 FILTER = REPO_ROOT / "scripts" / "channel-serve.py"
 ROUTED_RULING = "live graph edit addressed to the"
+#: What the published `channel serve` writes when its reply window elapses, as measured
+#: on onepipeline 0.32.0 against a real run: the wait itself, carrying no ruling field.
+TIMED_OUT = '{"answer":"timeout","correlation":"c-87b5815a4e6f0fb0fc9d6eb323f482cf"}'
 
 #: What the member's own effective onejudge config may not carry, against the written
 #: value that says it is not carried. `oneagentgraph` composes it from
@@ -831,8 +834,11 @@ def _channel_answering(tmp_path: Path, answer: str) -> Path:
     """
     channel = tmp_path / "stand-in-channel"
     captured = tmp_path / "surface.json"
-    # llmlint: ignore[e2e_not_mocked] The published channel cannot make these answers.
+    # llmlint: ignore-block[e2e_not_mocked,tests_mirror_real_usage] The published channel
+    # cannot make these answers on demand: `channel serve` takes no reply-window flag, so
+    # its elapsed wait is the engine's own to time.
     channel.write_text(f"#!/usr/bin/env bash\ncat > {captured}\ncat <<'JSON'\n{answer}\nJSON\n")
+    # llmlint: ignore-end[e2e_not_mocked,tests_mirror_real_usage]
     channel.chmod(0o755)
     return channel
 
@@ -855,8 +861,11 @@ def _scored(
     environment.pop(RUN_ID_ENV, None)
     if run is not None:
         environment[RUN_ID_ENV] = run
-    # llmlint: ignore[e2e_not_mocked] The published channel cannot make these answers.
+    # llmlint: ignore-block[e2e_not_mocked,tests_mirror_real_usage] The published channel
+    # cannot make these answers on demand: `channel serve` takes no reply-window flag, so
+    # its elapsed wait is the engine's own to time.
     environment[ONEPIPELINE_BIN] = str(_channel_answering(tmp_path, answer))
+    # llmlint: ignore-end[e2e_not_mocked,tests_mirror_real_usage]
     return subprocess.run(
         [str(REPO_ROOT / "scripts" / "channel-serve.py")],
         cwd=REPO_ROOT,
@@ -912,20 +921,36 @@ def test_a_completion_bar_nobody_answers_scores_false_rather_than_killing_the_me
     """The degradation is conservative and silent, which is what makes it safe to ship.
 
     A planner who never answers is the ordinary case, not the exception — the surface is
-    non-blocking and the run settles without it. `channel serve` times out with its own
-    non-completion, and that reads straight through as `unsatisfied`: no invention, no
-    fabricated success, and above all no exit status, because an exit here is the death
-    this whole journey exists to prevent.
+    non-blocking and the run settles without it. `channel serve` answers an elapsed wait
+    with the wait itself rather than a ruling — `{"answer":"timeout","correlation":…}`,
+    measured on onepipeline 0.32.0 — and the filter reads that as `unsatisfied`: no
+    invention, no fabricated success, and above all no exit status, because an exit here
+    is the death this whole journey exists to prevent.
     """
-    timed_out = _scored(
-        tmp_path,
-        oneharness_bin,
-        '{"completion": false, "message": "no planner reply within the timeout; continue",'
-        ' "reason": "the channel timed out waiting for a verdict"}',
-    )
+    timed_out = _scored(tmp_path, oneharness_bin, TIMED_OUT)
 
     assert timed_out.returncode == 0, timed_out.stderr
-    assert json.loads(timed_out.stdout)["value"] is False, timed_out.stdout
+    scored = json.loads(timed_out.stdout)
+    assert scored["value"] is False, timed_out.stdout
+    assert "no planner answered" in scored["rationale"], timed_out.stdout
+
+
+def test_a_turn_nobody_answers_is_a_non_completion_rather_than_killing_the_member(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The `supervisor` op meets the same elapsed wait, and the member lives through it.
+
+    A turn the agent side lost raises a non-blocking surface nobody is obliged to read, so
+    its wait elapsing is ordinary too. What comes back is a non-completion saying nobody
+    answered, which settles nothing — and never the wait's own line, which carries no
+    `completion` and would have been refused as not a ruling, killing the monitor.
+    """
+    lost = _supervised(tmp_path, oneharness_bin, TIMED_OUT)
+
+    assert lost.returncode == 0, lost.stderr
+    ruled = json.loads(lost.stdout)
+    assert ruled["completion"] is False, lost.stdout
+    assert "no planner answered" in ruled["message"], lost.stdout
 
 
 def test_a_live_edit_claimed_at_the_score_boundary_does_not_end_the_member_either(

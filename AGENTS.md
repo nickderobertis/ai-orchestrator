@@ -212,6 +212,11 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   governing no dispatch. Governed by `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
   https://github.com/nickderobertis/onepipeline-ui and [`docs/dag-ui.md`](docs/dag-ui.md).
+- **`onemessagebus`** — the typed message bus the stack's channel, events and notes run
+  on, and the `serve --codec onejudge` the observer's judge side will run. Governed by
+  `config/onemessagebus.version`, which governs the CLI the host runs; a dispatch reaches
+  the bus through the crates the engine links. `onemessagebus --help`;
+  https://github.com/nickderobertis/onemessagebus.
 - **`llmlint`** — the judged lint tier (`llmlint.yml`; `just lint-llm`, `just
   lint-llm-diff`), the blocking pre-push check beside the deterministic `just check`.
   No `config/` pin: `scripts/setup-llmlint.sh` installs it. `llmlint --help`;
@@ -222,8 +227,11 @@ What each tool is *for here*. How to use it is the tool's own to say — in
 Every `config/*.version` names one adopted release, and they do not all answer the same
 question. **`config/onepipeline.version` decides what a dispatched node runs**, through
 the crates that release linked — the `onevcs` it publishes through, the `oneagentgraph`
-that reads its persona, the `onejudge` it settles on. Every other pin governs the
-host's own commands (see [the roster](#the-tools-this-harness-configures)). So when a
+that reads its persona, the `onejudge` it settles on, the `onemessagebus` its channel,
+events and notes run on. Every other pin governs the host's own commands (see [the
+roster](#the-tools-this-harness-configures)) — `config/onemessagebus.version` among them,
+naming the bus's CLI the host runs, while a dispatch reaches the bus only through the
+engine's pin. So when a
 fix lives in a linked library, the pin to move is `config/onepipeline.version`, and
 moving any other one moves nothing a dispatch does — reading the wrong pin has produced
 a wrong diagnosis here twice, both times with every pin looking current while a real
@@ -955,9 +963,9 @@ every launch is refused without it save the bounded planning exemption above.
 
 Every launch exports `ORCHESTRATOR_ASK_MANAGER` (`scripts/ask-manager.sh`), the one
 supported way a dispatched agent asks its manager a blocking question, with the run id
-it asks on, because a question asked any other way can be answered by a fabricated
-verdict: `onepipeline channel serve` answers its own timeouts with a ruling that reads
-like a decision. The same verbs load this checkout's credentials from the gitignored
+it asks on, because a question asked any other way can take the channel's own timeout
+for an answer: `onepipeline channel serve` answers an elapsed wait itself, at exit 0.
+The same verbs load this checkout's credentials from the gitignored
 root `.env` through `scripts/credentials-env.sh`, never overriding a name the
 environment already defines; so do the board recipes — `just plans`, `just check-plan`,
 `just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names

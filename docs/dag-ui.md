@@ -67,10 +67,10 @@ separately, and the reader links whatever its release was built against. So the
 two are expected to differ; what the field is for is being able to say which
 reader is answering rather than assuming it.
 
-**Today the two differ by two minor releases, and the reading to carry is still that
+**Today the two differ by three minor releases, and the reading to carry is still that
 neither number constrains the other**: the adopted `onepipeline-ui` 0.7.3 statically
 links onepipeline 0.29.0 and onejudge 0.10.0, while `config/onepipeline.version` reads
-0.31.0, whose engine writes a run's reports through onejudge 0.12.0. The reader was last
+0.32.0, whose engine writes a run's reports through onejudge 0.12.0. The reader was last
 moved with the engine because a reader linking an older onejudge than the one writing a
 run's reports refuses a newer report schema and renders no transcript; onejudge 0.12.0
 writes the same report schema, 12, as 0.10.0, so that reason does not apply to this gap.

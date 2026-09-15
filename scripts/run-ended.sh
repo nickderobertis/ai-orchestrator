@@ -51,8 +51,10 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook 
 checkout=$(dirname -- "$script_dir")
 
 helper="$script_dir/plan-brief.sh"
-[ -f "$helper" ] && [ -r "$helper" ] || fail "required helper is not a readable regular file: $helper" \
-    "restore it from the repository, then let the run's owner verify its drafts with 'just follow-ups <run-id>'"
+if [ ! -f "$helper" ] || [ ! -r "$helper" ]; then
+    fail "required helper is not a readable regular file: $helper" \
+        "restore it from the repository, then let the run's owner verify its drafts with 'just follow-ups <run-id>'"
+fi
 # shellcheck source=scripts/plan-brief.sh
 . "$helper"
 

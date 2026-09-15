@@ -151,6 +151,11 @@ def _raised_to_a_real_channel(tmp_path: Path, run: str, said: str) -> QueuedSurf
     """
     runs = tmp_path / "runs"
     (runs / run).mkdir(parents=True)
+    # The launch record is the one thing `channel serve` reads before it will serve a
+    # run at all: onepipeline 0.32.0 refuses a run directory without one, so it carries
+    # the one field that verb requires and nothing the journey is not about.
+    # llmlint: ignore[tests_mirror_real_usage] A launch dispatches a run; serve reads only this.
+    (runs / run / "launch.json").write_text(json.dumps({"run_id": run}), encoding="utf-8")
     environment = dict(os.environ)
     environment["ONEPIPELINE_RUNS_DIR"] = str(runs)
     environment.pop(ONEPIPELINE_BIN, None)

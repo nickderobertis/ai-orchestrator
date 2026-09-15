@@ -148,13 +148,21 @@ class GraphEvent(TypedDict, total=False):
 
 
 def _create_empty_run(tmp_path: Path, run: str) -> Path:
-    """Create an empty runs root holding one empty run directory; return its queue path.
+    """Create a runs root holding one run and its launch record; return its queue path.
 
-    Creating and nothing more, which is the whole point: the channel inside it is the
-    published verb's to make, so a queue that exists afterwards was written by
-    `onepipeline channel serve` having really been asked to raise something.
+    The launch record and nothing more, which is the whole point: the channel inside it
+    is the published verb's to make, so a queue that exists afterwards was written by
+    `onepipeline channel serve` having really been asked to raise something. The record
+    is the one thing that verb reads before it will serve a run at all — onepipeline
+    0.32.0 refuses a run directory without one (`launch.json: No such file or
+    directory`), and one missing `run_id` (`missing field `run_id``) — so it carries
+    that field alone.
     """
     (tmp_path / "runs" / run).mkdir(parents=True)
+    # llmlint: ignore[tests_mirror_real_usage] A launch dispatches a run; serve reads only this.
+    (tmp_path / "runs" / run / "launch.json").write_text(
+        json.dumps({"run_id": run}), encoding="utf-8"
+    )
     return tmp_path / "runs" / run / "channel" / "queue.json"
 
 

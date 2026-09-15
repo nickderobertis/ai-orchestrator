@@ -7,8 +7,9 @@ dependencies = [
     "oneagentgraph-cli==0.4.2",
     "oneharness-cli==0.12.1",
     "onejudge==0.12.0",
+    "onemessagebus-cli==0.4.0",
     "onepipeline-api-cli==0.7.3",
-    "onepipeline-cli==0.31.0",
+    "onepipeline-cli==0.32.0",
     "onevcs-cli==0.24.0",
 ]
 

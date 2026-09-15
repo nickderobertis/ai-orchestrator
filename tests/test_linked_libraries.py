@@ -493,6 +493,9 @@ RECONCILED_PINS = {
     "oneagentgraph": "oneagentgraph.version",
     "onevcs": "onevcs.version",
     "onejudge": "onejudge.version",
+    # The `onemessagebus-cli` wheel and the `onemessagebus` crate share one workspace
+    # version, so the engine's SBOM names the release of the bus CLI the host installs.
+    "onemessagebus": "onemessagebus.version",
 }
 
 

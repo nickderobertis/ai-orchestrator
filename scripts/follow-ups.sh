@@ -158,7 +158,9 @@ board=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --feedback | --to)
-            [ $# -ge 2 ] && [ -n "$2" ] || fail "$1 was given no value" "usage: $usage"
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                fail "$1 was given no value" "usage: $usage"
+            fi
             if [ "$1" = --feedback ]; then feedback=$2; else board=$2; fi
             shift 2
             ;;

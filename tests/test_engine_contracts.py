@@ -521,11 +521,14 @@ CONSTANTS = (
     # number in prose: the engine bumped it to 2 when it removed `context` and left one
     # manager-note op, and a document still telling a manager to send version 1 is
     # describing the envelope before that break. Held against the crate constant so the
-    # next bump comes due here rather than after somebody sends the old shape.
+    # next bump comes due here rather than after somebody sends the old shape. Since
+    # onepipeline 0.32.0 the channel runs on `onemessagebus-agent`, whose `channel.rs`
+    # declares the number and whose re-export in onepipeline's own `channel.rs` names no
+    # literal, so it is read where it is declared.
     Constant(
         "reply envelope version",
-        ONEPIPELINE,
-        "channel.rs",
+        ONEMESSAGEBUS,
+        "onemessagebus-agent/src/channel.rs",
         re.compile(r"pub const REPLY_ENVELOPE_VERSION: u32 = (\d+);"),
         ORCHESTRATION,
         '"version":{value}',

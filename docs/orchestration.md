@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.31.0. The whole of that reasoning —
+onepipeline 0.32.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.31.0. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.32.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,7 +323,7 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.31.0; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.32.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
@@ -333,7 +333,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.31.0, that schedule answers only the failures a retry can change. A projection the store
+0.32.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -539,7 +539,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.31.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.32.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -667,7 +667,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.31.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.32.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -1011,10 +1011,13 @@ rather than a simulated user. That is what makes a reply *supervision*: the
 planner's `message` is handed back to the monitor as its next instruction.
 
 The wiring goes through `scripts/channel-serve.py`, and the reason is one
-mismatch. The **response** shapes already agree — `onepipeline channel serve`
-answers with exactly the `{completion, message, reason}` object onejudge's
-`supervisor` op expects, and the filter passes it through byte for byte. The
-**request** shapes do not:
+mismatch. The **response** shapes nearly agree — `onepipeline channel serve`
+answers a ruling with exactly the `{completion, message, reason}` object onejudge's
+`supervisor` op expects, and the filter passes it through byte for byte. A wait nobody
+filled is the one exception: the adopted 0.32.0 answers it with the wait itself,
+`{"answer":"timeout","correlation":…}`, carrying no `completion`, and the filter turns
+that into a non-completion saying no planner answered, so the member lives. The
+**request** shapes do not agree:
 
 | | Shape |
 | --- | --- |
@@ -1029,7 +1032,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.31.0 in the judge command's own environment on a real
+  measured against onepipeline 0.32.0 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -1188,9 +1191,10 @@ criterion**. It raises the criterion as its own non-blocking surface, under kind
 boolean score and the prose beside it becomes the rationale. Nothing is invented. The
 surface says in as many words that the run is not blocked on it, because it arrives
 once, at the end, and a manager meeting it for the first time must not read it as a
-run held up on them. A planner who never answers costs nothing: `channel serve` times
-out with its own non-completion, which reads through as `unsatisfied` — the
-conservative direction, and only for the run nobody answered rather than permanently.
+run held up on them. A planner who never answers costs nothing: `channel serve` answers
+the elapsed wait with the wait itself, carrying no `completion`, and the filter turns it
+into a non-completion that reads through as `unsatisfied` — the conservative direction,
+and only for the run nobody answered rather than permanently.
 
 This is a **workaround for an upstream gap**, and it is written down as one so it can
 be retired rather than maintained: a member whose judge side is not a harness still
@@ -1244,7 +1248,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.31.0 answers
+a real run on onepipeline 0.32.0 answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
@@ -1289,7 +1293,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.31.0**, composed where the
+node dispatch of a run carries it as of onepipeline 0.32.0**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -1444,8 +1448,10 @@ reader in the first place, which is what the token detects rather than avoids.
 
 Nothing else is handed back to the asking agent either: a reply that is not a
 ruling — a ruling carries a boolean `completion`, and a live graph edit routed here
-does not — and the ruling `channel serve` synthesizes at exit 0 for its own timeout
-are both refused, with the reason on stderr and nothing on stdout. The window that
+does not — and `channel serve`'s own answer at exit 0 to a wait that elapsed are both
+refused, with the reason on stderr and nothing on stdout. On the adopted 0.32.0 that
+answer is the wait itself, `{"answer":"timeout","correlation":…}`, which carries no
+`completion` and is refused as a timeout rather than as not a ruling. The window that
 timeout measures is the wrapper's own, fifty minutes rather than `serve`'s ~30
 seconds, and `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it.
 
@@ -3388,7 +3394,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.31.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.32.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`
