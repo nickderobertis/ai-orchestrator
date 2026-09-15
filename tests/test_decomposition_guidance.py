@@ -84,7 +84,7 @@ OWNED_STATEMENTS = (
     # The manager's judgment: what to dispatch, what to brief, what to decide, what
     # to escalate — and the two rules a top-level session breaks most expensively.
     Owned(MANAGER.document, "Decide whether to dispatch a planner at all"),
-    Owned(MANAGER.document, "the complete gate can prove it"),
+    Owned(MANAGER.document, "no direct large operations"),
     Owned(MANAGER.document, "their approval of it is what gates dispatch"),
     Owned(MANAGER.document, "high-value to put in front of the user"),
     Owned(MANAGER.document, "A watch is armed before you turn to anything else"),

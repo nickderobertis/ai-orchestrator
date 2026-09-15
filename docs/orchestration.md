@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.29.4. The whole of that reasoning —
+onepipeline 0.31.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.29.4. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.31.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,7 +323,7 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.29.4; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.31.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
@@ -333,7 +333,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.29.4, that schedule answers only the failures a retry can change. A projection the store
+0.31.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -539,7 +539,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.29.4 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.31.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -667,7 +667,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.29.4 by dumping both sides of a monitor member's whole
+  against onepipeline 0.31.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -837,7 +837,7 @@ changes, and both are in force on this host:
   survived; the `paced-conversations` release (0.3.19) let a `kind: onejudge` member
   carry a `schedule` that paces one conversation rather than starting a second, with a
   hold that keeps the heartbeat and the activity clock alive and ends early on a note.
-  The `onepipeline` this host adopts links a release carrying both — 0.4.1 at this
+  The `onepipeline` this host adopts links a release carrying both — 0.4.2 at this
   adoption — which `tests/test_linked_libraries.py` reads off the installed wheel's SBOM.
 - **`onepipeline`** — the observer relaunch, which 0.21.1 already carried
   (https://github.com/nickderobertis/onepipeline/pull/197): a driver keeps an observer
@@ -866,7 +866,7 @@ planner's queue was also what ended its watch — and why there is no sentinel a
 `personas/orchestrator.yaml` asks a quiet turn for words about what it read rather than
 for a formula, so a healthy watch no longer walks into that signature on purpose.
 onejudge declares a field for the contract that remains — `user.settle_on_noop`,
-documented in `onejudge` 0.11.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out
+documented in `onejudge` 0.12.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out
 for "an observer instructed to answer with one fixed short sentence while it finds
 nothing", with `max_turns` left as the bound. Nothing here sets it today; that is a
 change to `personas/orchestrator.yaml` and a decision for a manager, not something this
@@ -953,7 +953,12 @@ these legacy verdict shapes:
 
 `completion: false` requires both `message` and `reason`; `completion: true`
 requires `reason`. Completion is reserved for a verified `closeout` after the
-whole graph is published and follow-ups are triaged. See [Live graph
+whole graph is published and follow-ups are triaged. **Follow-ups are triaged** means,
+for a run that ended with every node done, that the follow-up run its success hook
+launched has settled and the planner has relayed the links to every issue it created
+or updated; for a run that ended any other way, that the planner has decided with the
+user whether to verify its drafts by hand with `just follow-ups <run-id>`. See
+[the run-end hooks](#follow-ups-are-drafted-not-surfaced) for both. See [Live graph
 edits](#live-graph-edits) to change the graph, which never waits for anything: the
 reconciler applies an accepted edit on its next pass.
 
@@ -966,7 +971,16 @@ just channel-reply RUN reply.json
 just channel-approve RUN
 just channel-reject RUN "verification failed"
 just channel-continue RUN "apply the edit and continue"
+just follow-ups RUN --detach
+just follow-ups RUN --feedback feedback.md
 ```
+
+`just follow-ups` verifies a finished run's drafted follow-ups in a run of its own; a
+run `just orchestrate` launched whose every node ended `done` has it launched for it by
+the success hook, and a manager types it for a run that ended any other way or to
+re-dispatch with feedback. [Follow-ups are drafted, not
+surfaced](#follow-ups-are-drafted-not-surfaced) says what it does and how the hooks
+reach it.
 
 The ledger lives under `runs/` in the working directory; `ONEPIPELINE_RUNS_DIR`
 moves it, and every one of these verbs reads the same variable.
@@ -1004,7 +1018,7 @@ answers with exactly the `{completion, message, reason}` object onejudge's
 
 | | Shape |
 | --- | --- |
-| onejudge 0.11.0 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
+| onejudge 0.12.0 writes to a judge command | `{"op": "supervisor", "task", "persona", "done_when", "worktree", "history_name", "messages": [...], "session"}` |
 | `onepipeline channel serve` reads | `{"kind", "message", "blocking"?, "node"?}` |
 
 Naming `onepipeline channel serve` directly as the member's `judge.command` is
@@ -1015,7 +1029,7 @@ needs, both out of the frame itself:
 
 - **the run id**, from the composed task's opening ``onepipeline run `<id>```. The
   environment carries it too — `ONEPIPELINE_RUN_ID` is set to the run id there,
-  measured against onepipeline 0.29.4 in the judge command's own environment on a real
+  measured against onepipeline 0.31.0 in the judge command's own environment on a real
   launch, and re-taken on every gate run by
   `tests/e2e/test_orchestrate_launch_e2e.py`. The filter reads the frame it already
   validates instead, because that is a contract rather than a per-release export;
@@ -1154,7 +1168,7 @@ filter onto a real published channel, and reads what was and was not queued out 
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
 boundary; `judge` comes once the conversation ends, to score `user.done_when` —
 always, whether the supervisor ruled complete or the turn cap ran out, and
-independently of `evals` and `assessment`. Measured on onejudge 0.11.0 with a
+independently of `evals` and `assessment`. Measured on onejudge 0.12.0 with a
 `kind: command` judge that logged every op it was asked.
 
 That second one has **no configuration escape**, and the attempts are worth knowing
@@ -1230,7 +1244,7 @@ monitor, since this reader is the last thing holding it.
 `onepipeline reply` so the reconciler gets it — is wrong here, and the reason is
 measured rather than argued. `onepipeline reply` applies an envelope's commands
 *itself*, before the envelope is queued for any reader: replying `{"op":"add", …}` to
-a real run on onepipeline 0.29.4 answers
+a real run on onepipeline 0.31.0 answers
 `{"reply":0,"state":"applied","commands":"applied"}` and records
 `edit-committed` there and then. The edit has therefore already reached the engine by
 the time it arrives at this reader, which has nothing left to route — and re-sending
@@ -1275,7 +1289,7 @@ pretty-printed frame is refused as a parse error at line 1 column 1, a message
 naming the symptom and not the cause. `ONEPIPELINE_RUN_ID` names the run to
 ask on, and an unset one is refused rather than guessed at. What sets it depends on
 the launch, measured per shape by `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every
-node dispatch of a run carries it as of onepipeline 0.29.4**, composed where the
+node dispatch of a run carries it as of onepipeline 0.31.0**, composed where the
 dispatch is made, so all three `just orchestrate` shapes reach a worker that can ask.
 That names the release in force rather than the one it arrived in —
 `executor::dispatch_env` has composed the pair since
@@ -1785,6 +1799,42 @@ launches nothing for a run holding no drafts or tickets, and checks every ticket
 attached run settles. `--feedback FILE` re-dispatches over the same run with the manager's
 words in the task, `--detach` returns at the launch record printing the follow-up run and
 its watch command, and `--to SOURCE` copies onto another configured source.
+
+**The run-end hooks are what launch it.** `just orchestrate` names
+`scripts/run-ended.sh`, by its absolute path in the launching checkout, as both the
+engine's `--success-hook` and its `--failure-hook`, unless the caller named that flag;
+`just orchestrate --adopt` names neither, because the engine replays both from the
+launch record. The engine runs at most one of them, once, when the run **ends** —
+after the driver has let go of the run, in the launch directory, awaited under
+`--hook-timeout` — keeps its output in `runs/<run-id>/hooks/<hook>.log`, relays it to
+an attached launch's stderr, and renders it in `just results <run-id>`. A hook never
+changes how the run settled. onepipeline's own `docs/contract.md` (**Run-end hooks**)
+is the contract; this host does two things with it:
+
+- **success** (every node `done`) runs `just follow-ups <run-id> --detach` and prints
+  `main work of run <run-id> is complete; follow-ups are being verified in run
+  <follow-up-run-id>; watch it with: just watch <follow-up-run-id>`. A run that drafted
+  nothing prints the recipe's own line and that no follow-up run was launched. It exits
+  with the recipe's status. The follow-up run is detached because the hook is awaited
+  and the run outlives that deadline, and it belongs to the main run's owner: the
+  engine exports that owner's launcher identity to the hook, and
+  `scripts/onepipeline.sh` keeps an exported identity.
+- **failure** (a failed or skipped node, an unfinished graph with nothing left to
+  decide, or a clean `stop`) launches nothing, prints one line naming the run and the
+  reason the engine gave, says that no follow-up run was launched and that `just
+  follow-ups <run-id>` verifies its drafts by hand, and exits 0.
+
+A run paused on a decision (`awaiting-planner`) has not ended and fires neither; the
+driver that later reaches its ending fires the one it reaches, and a run that has fired
+one never fires again, so a failed run requeued to completion gets no follow-up run on
+its own. A driver that dies fires nothing. `just plan`, `just finish-plan` and `just
+follow-ups` name no hook, so a planning run and a follow-up run never launch a
+follow-up run, and nothing else in this repository runs `just follow-ups` — the
+success hook and a manager typing it are the only two ways. **Hooks arrive with an
+engine adopted between runs**: a launch record written before `config/onepipeline.version`
+named a release carrying them names no hook, and that run fires none, whichever engine
+later adopts it. `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives both hooks through a
+real launch.
 `monitor` renders `ACK REQUIRED` while any blocking surface, including closeout,
 awaits a reply.
 
@@ -3313,7 +3363,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.29.4 rather than restating it independently.
+declaration as it stands in onepipeline 0.31.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

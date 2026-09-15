@@ -76,6 +76,17 @@ MERGE_POLICY_WORKSPACE = "mergePolicyWorkspace"
 #: the graphs and harness configs the engine reads at launch, the plan-store stand-in the
 #: engine spawns, and the modules the test imports.
 WRITEBACK_BUDGET_WORKSPACE = "writebackBudgetWorkspace"
+#: The key the `run-end-hooks` project's one tier is memoized on. Files rather than trees,
+#: for the reason `unwatchedWorkspace` names, and measured the same way: the tier traced
+#: under `strace -f -e trace=openat,execve`, each opened path normalized, a relative one
+#: resolved against the checkout and a bytecode file mapped to its source, then intersected
+#: with what git tracks. So the key is the launch machinery `just orchestrate` reaches, the
+#: hook and the `just follow-ups` chain it runs, every pin in `config/`, the graphs, harness
+#: configs, persona and task template the two launches open, the six package modules they
+#: import, and the modules the test imports. Two entries the trace cannot show stay:
+#: `scripts/ask-manager.sh`, which a launch only tests with `-x` and refuses without, and
+#: the test modules and `tests/conftest.py`, which pytest opens as rewritten bytecode.
+RUN_END_HOOKS_WORKSPACE = "runEndHooksWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
 #: `just telemetry-server` drive and read — those two recipes and the scripts they
 #: reach, the address both resolve each other through, the pins that decide which
@@ -218,6 +229,17 @@ WRITEBACK_BUDGET_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 WRITEBACK_BUDGET_ROOT = "tests/writeback_budget"
+
+#: The project whose test target owns the journey that fires this host's run-end hooks
+#: through `just orchestrate` on the installed engine: a completed run launching its
+#: follow-up run, a failed one launching nothing, and each beside a hookless twin. A project
+#: of its own for the reason `unwatched` is: several real launches and a follow-up run
+#: waited out are a cost `nx affected` can only keep off an unrelated edit here.
+RUN_END_HOOKS_PROJECT = "run-end-hooks"
+#: That project's one test target: nothing here reads this repository's prose.
+RUN_END_HOOKS_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+RUN_END_HOOKS_ROOT = "tests/run_end_hooks"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

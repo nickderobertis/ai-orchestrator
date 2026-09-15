@@ -63,6 +63,8 @@ from nx_inputs import (
     PLAN_TOOLING_SCOPED,
     RECIPE_SCOPED,
     RECIPE_WORKSPACE,
+    RUN_END_HOOKS_ROOT,
+    RUN_END_HOOKS_SCOPED,
     SELECTED_TARGETS,
     UNCONDITIONAL_TARGETS,
     UNWATCHED_ROOT,
@@ -846,7 +848,8 @@ def _collected(selection: list[str]) -> set[str]:
 #: and the hook itself in one, the `merge-policy` project owns the journeys that hold
 #: the restated `merge_policy` vocabulary to the launcher in one, the `writeback-budget`
 #: project owns the journey that holds the adopted engine to the copy deadline its items
-#: earn in one, and the orchestrator project owns the rest in four.
+#: earn in one, the `run-end-hooks` project owns the journey that fires the run-end hooks
+#: through a real launch in one, and the orchestrator project owns the rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
@@ -856,6 +859,7 @@ SUITE_TIERS = (
     (f"{UNWATCHED_ROOT}/project.json", UNWATCHED_SCOPED),
     (f"{MERGE_POLICY_ROOT}/project.json", MERGE_POLICY_SCOPED),
     (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
+    (f"{RUN_END_HOOKS_ROOT}/project.json", RUN_END_HOOKS_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),

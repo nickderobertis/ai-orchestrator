@@ -4,7 +4,7 @@
 `supervisor` at each turn boundary, and `judge` scoring the `user.done_when`. Everything
 else onejudge can ask a judge side is refused by name — after which `oneagentgraph`
 classifies the member `provider-failure`/`protocol` and kills it, and the run carries on
-reporting `ACTIVE` with nobody watching it. Measured against onejudge 0.11.0 with a
+reporting `ACTIVE` with nobody watching it. Measured against onejudge 0.12.0 with a
 `kind: command` judge that logged every op it was asked:
 
 - `assessment` is asked as `assess`, once the conversation ends.

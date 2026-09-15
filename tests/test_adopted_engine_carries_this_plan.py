@@ -225,6 +225,20 @@ WRITEBACK_QUOTA_LANDINGS = (
     ),
 )
 
+#: The engine half of the follow-ups lifecycle plan: a launch names a success hook and a
+#: failure hook, and the driver runs the one the run's ending reaches, once. `settle-hooks`'s
+#: work was delivered by its retry, `settle-hooks-2`, and is recorded under the node id for
+#: the reason `Landing.node` gives. `tests/run_end_hooks/test_run_end_hooks_e2e.py` observes the
+#: installed engine firing both through `just orchestrate`.
+FOLLOW_UPS_LIFECYCLE_LANDINGS = (
+    Landing(
+        node="settle-hooks",
+        change_request=290,
+        commit="1818aec75b87d2b0ce9d25f223004de5071705bc",
+        did="run a success hook or a failure hook once when a run ends",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -232,6 +246,7 @@ LANDINGS = (
     *NOTE_PROVENANCE_LANDINGS,
     *WRITEBACK_BUDGET_LANDINGS,
     *WRITEBACK_QUOTA_LANDINGS,
+    *FOLLOW_UPS_LIFECYCLE_LANDINGS,
 )
 
 

@@ -66,6 +66,10 @@ WRAPPER_SCRIPTS = (
     # Every `onepipeline` recipe goes through this one, which is where the planner's
     # identity and a launch's harness environment are established.
     "onepipeline.sh",
+    # `just orchestrate` adds this host's defaults through the first, and names the second
+    # as both run-end hooks, refusing a checkout where it could not run.
+    "orchestrate.sh",
+    "run-ended.sh",
     # `just plan` writes its one-node plan through this one, and refuses to launch at
     # all unless the wrapper the seam names is there for the planner to ask questions
     # with. Every launch takes that seam, `onepipeline.sh` included, so the helper that
@@ -219,6 +223,15 @@ class Delegation(NamedTuple):
         return (self.recipe, *self.arguments)
 
 
+#: Where a row's command line names the checkout the recipe ran in. Each journey runs in a
+#: throwaway checkout of its own, so the rows spell it as this and the comparison fills it.
+CHECKOUT = "@CHECKOUT@"
+#: The run-end hook `just orchestrate` names, as the absolute path it renders.
+RUN_ENDED = f"{CHECKOUT}/scripts/run-ended.sh"
+#: Both hooks as a launch the caller named neither of carries them, in the order added.
+HOOKS = f"--success-hook {RUN_ENDED} --failure-hook {RUN_ENDED}"
+
+
 #: The whole delegation table, as `just` invocation → the command lines it must
 #: produce, in order: one for nearly every recipe, and the sequence a recipe that
 #: composes several verbs owes. This is the mapping this repository promises, in one
@@ -226,50 +239,67 @@ class Delegation(NamedTuple):
 #: way, or reaching only the first of the verbs it composes, fails here rather than in
 #: an operator's terminal.
 DELEGATIONS = (
-    # The two graph flags are the recipe's own addition, and the reason it exists:
-    # both ship defaulted to nothing, so a bare launch runs with no agent watching it
-    # and opens its change requests with no drafted body.
+    # The two graph flags and the two hooks are the recipe's own addition, and the reason
+    # it exists: all four ship defaulted to nothing, so a bare launch runs with no agent
+    # watching it, opens its change requests with no drafted body, and ends with nothing
+    # verifying what it drafted. The hooks name the run-ended script by its absolute path
+    # in the checkout the recipe ran in.
     Delegation(
         "orchestrate",
         ("authoring:probe",),
         "uv run onepipeline start authoring:probe --dag-graph graphs/dag-scope.yaml"
-        " --pr-author-graph graphs/pr-author.yaml",
+        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--detach"),
         "uv run onepipeline start authoring:probe --detach --dag-graph graphs/dag-scope.yaml"
-        " --pr-author-graph graphs/pr-author.yaml",
+        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     # A caller who names one keeps it: the flags refuse to be given twice, so adding
     # a default over an explicit one would break the launch outright. Per flag, so
-    # naming one leaves the other's default in place.
+    # naming one leaves the others' defaults in place.
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph", "off"),
         "uv run onepipeline start authoring:probe --dag-graph off"
-        " --pr-author-graph graphs/pr-author.yaml",
+        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph=graphs/other.yaml"),
         "uv run onepipeline start authoring:probe --dag-graph=graphs/other.yaml"
-        " --pr-author-graph graphs/pr-author.yaml",
+        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph", "graphs/other.yaml"),
         "uv run onepipeline start authoring:probe --pr-author-graph graphs/other.yaml"
-        " --dag-graph graphs/dag-scope.yaml",
+        f" --dag-graph graphs/dag-scope.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
         "uv run onepipeline start authoring:probe"
-        " --pr-author-graph=graphs/other.yaml --dag-graph=off",
+        f" --pr-author-graph=graphs/other.yaml --dag-graph=off {HOOKS}",
+    ),
+    # Each hook is kept per flag too, in either spelling and including a blank value,
+    # which is how a caller says this launch has none.
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--success-hook", "/elsewhere/on-success"),
+        "uv run onepipeline start authoring:probe --success-hook /elsewhere/on-success"
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f" --failure-hook {RUN_ENDED}",
+    ),
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--failure-hook=", "--success-hook="),
+        "uv run onepipeline start authoring:probe --failure-hook= --success-hook="
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml",
     ),
     # Adoption attaches a fresh driver to an intact ledger, which already records the
-    # graphs its launch chose, so neither default is added to it.
+    # graphs and hooks its launch chose, so no default is added to it.
     Delegation("orchestrate", ("--adopt", "run-1"), "uv run onepipeline adopt run-1"),
     # `just plan` writes the plan it launches, so the argument its published line
     # carries is a path this recipe generated rather than one the caller typed. Both
@@ -747,12 +777,34 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     result = _run(checkout, trace, *delegation.invocation)
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
+    expected = [
         *delegation.before,
         *_gated(delegation.published),
         delegation.published,
         *delegation.then,
     ]
+    assert trace.read_text().splitlines() == [
+        line.replace(CHECKOUT, str(checkout.resolve())) for line in expected
+    ]
+
+
+def test_the_orchestrate_recipe_refuses_a_checkout_whose_run_end_hook_cannot_run(
+    tmp_path: Path,
+) -> None:
+    """A launch whose hook could not start when the run ends is refused before it starts.
+
+    The engine spawns the hook only once the run has ended, and a hook that cannot start
+    is recorded as `could-not-start` in a log nobody is reading for it — the run's
+    follow-ups would go unverified with nothing said at launch.
+    """
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "scripts" / "run-ended.sh").chmod(0o644)
+
+    result = _run(checkout, trace, "orchestrate", "authoring:probe")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "the run-end hook is not an executable file at" in result.stderr, result.stderr
+    assert not trace.exists() or trace.read_text() == "", trace.read_text()
 
 
 #: The two task records a whole `just plan` writes under the local authoring source, one

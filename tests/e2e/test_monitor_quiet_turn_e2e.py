@@ -636,6 +636,12 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
                 str(PACEMAKER_INTERVAL_SECONDS),
                 "--set",
                 f"members.{MONITOR_MEMBER}.schedule.every={MONITOR_HOLD_SECONDS}",
+                # No run-end hooks: they are not this journey's subject, and an attached
+                # launch awaits the one the run fires, which outlasts the monitor's
+                # conversation and queues its completion surface beside the update this
+                # journey holds to be alone. A blank value is the recipe's spelling of none.
+                "--success-hook=",
+                "--failure-hook=",
             ],
             cwd=REPO_ROOT,
             env=environment,

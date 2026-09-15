@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.29.4 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.31.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,15 +143,15 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.12.1/0.11.0 upgrade (`config/oneharness.version` and
+after the 0.12.1/0.12.0 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
-this paragraph whenever either pin moves. That re-check has now been made five times
+this paragraph whenever either pin moves. That re-check has now been made six times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
-could classify. For two of the four since, it was re-taken by spending a real
+could classify. For two of the five since, it was re-taken by spending a real
 `oneagentgraph smoke` turn on the adopted pair, through this repository's own agent
 wrapper and with `ONEHARNESS_HISTORY_DIR` pointed at a throwaway store, and reading the
 record it wrote: at history
@@ -187,7 +187,13 @@ none, so `judge` still counts one simulated user. It has since moved to 0.11.0 o
 same terms: `onejudge-cli` 0.11.0 is compiled against `oneharness-core` 0.13.0 and the
 engine wheel still links 0.13.1, read off each wheel's own SBOM, and the report onejudge
 writes stays at schema 12 on both tags; what 0.11.0 adds is `user.artifacts`, which names
-files in a judge's prompt and writes nothing into a record's `usage`. `dispatches`,
+files in a judge's prompt and writes nothing into a record's `usage`. It has since moved
+to 0.12.0 on the same terms: `onejudge-cli` 0.12.0 is still compiled against
+`oneharness-core` 0.13.0 and the engine wheel still links 0.13.1, read off each wheel's
+own SBOM, and neither `crates/onejudge/src/report.rs` (schema 12) nor
+`crates/onejudge/src/usage.rs` changes between the two tags; what 0.12.0 changes is where
+its note contract and frame protocol come from — `onemessagebus` 0.4.0 — which writes
+nothing into a record's `usage`. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 

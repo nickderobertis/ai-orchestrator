@@ -158,16 +158,22 @@ upgrade:
 #     change requests with the body its plan states, or with none, which is how
 #     every pull request this harness opened came to carry `Published by onevcs.`
 #     as its Why.
+#   * `--success-hook` and `--failure-hook`, both naming `scripts/run-ended.sh` by
+#     an absolute path in this checkout — a launch naming none fires nothing when it
+#     ends. A run whose every node ended `done` launches its follow-up run detached
+#     through `just follow-ups`, and prints that run and its watch command; a run that
+#     ended any other way launches nothing and says how to verify its drafts by hand.
 #
-# An operator who names either one themselves keeps it, per flag and including
-# `--dag-graph off`: the flags refuse to be given twice, and the caller's intent is
-# the specific one.
+# An operator who names any of them themselves keeps it, per flag and including
+# `--dag-graph off` or a blank hook: the flags refuse to be given twice, and the
+# caller's intent is the specific one.
 #
 # `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
 # splits adoption into its own verb, and this recipe keeps the one spelling the
 # planner doctrine names. `--adopt` has to lead, because everything after it is the
-# adopt verb's own. It takes neither graph flag — adoption attaches a fresh driver
-# to an intact ledger, which already records the graphs its launch chose.
+# adopt verb's own. It takes none of the four flags — adoption attaches a fresh driver
+# to an intact ledger, which already records the graphs and hooks its launch chose.
+# `scripts/orchestrate.sh` is the mechanism.
 #
 # Per-side routing is a property of the launched graphs. `onepipeline start`
 # forwards `--set` to the dag graph and `--node-set` to every dispatched node
@@ -178,8 +184,7 @@ upgrade:
 # `adopt` alike, and refuses a launch whose wrapper it cannot run.
 [doc('Launch a qualified onetaskgraph project on the monitor and drafting graphs; `--detach` returns at its launch record and `--adopt <run-id>` resumes it.')]
 orchestrate *args:
-    # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
-    @if [[ "${1:-}" == "--adopt" ]]; then ./scripts/onepipeline.sh adopt "${@:2}"; else defaults=(); for pair in "--dag-graph graphs/dag-scope.yaml" "--pr-author-graph graphs/pr-author.yaml"; do read -r flag ref <<<"$pair"; named=; for argument in "$@"; do if [[ "$argument" == "$flag" || "$argument" == "$flag"=* ]]; then named=1; break; fi; done; [[ -n "$named" ]] || defaults+=("$flag" "$ref"); done; ./scripts/onepipeline.sh start "$@" ${defaults[@]+"${defaults[@]}"}; fi
+    @./scripts/orchestrate.sh "$@"
 
 # Launch a planner on a manager-written brief: `just plan <BRIEF.md> [--name NAME]
 # [--max-turns N] [--to SOURCE] [--no-design-doc] [<onepipeline start flags>]`. Those

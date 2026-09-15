@@ -365,7 +365,9 @@ there instead. Read one with `just plans project show plans:<project>` and launc
 with `just orchestrate plans:<project>`. Five values on that source — plugin, owner,
 project number, repository, credential variable — are never repointed, because a live
 run's settlements are projected back to the project it was launched from
-(`tests/test_plan_source_roots.py` holds them).
+(`tests/test_plan_source_roots.py` holds them). The same five on the `followups`
+source, the board every session's verified follow-up tickets accumulate on, are never
+repointed either, because a later run comments on an earlier run's issue there.
 
 **It is not authored there.** A plan is drafted in the `authoring` source — the
 gitignored `.plans/` root every planner is briefed to write into — reviewed there,
@@ -432,14 +434,16 @@ them reach you; `manager` names the session role and is never a command.
    plan project, and is run by passing its qualified `source:project` id to `just
    orchestrate`.
 
-   One direct-tweak exception: **the complete gate can prove it**. Apply a change
-   yourself only when you already hold the context, the change is already determined,
-   and a check in the target repository's complete gate exercises the changed artifact
-   and demonstrates the fix; report that gate result. A mechanically checked rename
-   can qualify. Commit-message payloads, PR titles and bodies, changelog and
-   release-note prose never do, because no gate check proves them; line count,
-   urgency, "the diff is empty", and "it's faster than dispatching" are not
-   exceptions.
+   <!-- llmlint: ignore-block[changed_behavior_has_e2e] This paragraph is judgment a manager session reads, not code any process executes, so there is no journey to drive: what a test can hold is that the rule is stated once and in the manager's own document, which `tests/test_decomposition_guidance.py` anchors on "no direct large operations". -->
+   One direct-tweak rule: **no direct large operations**. Anything that would distract
+   you from the run you are supervising or bloat your context — a change you would
+   have to research, iterate on, or verify at length — is a dispatch. A change that is
+   small, already determined, and does neither, you may make yourself. Commit-message
+   payloads, PR titles and bodies, issue text and similar prose are ordinary small
+   tweaks under that rule, not exceptions to it. What decides is whether doing it
+   would pull you off the main goal, never line count or "it's faster than
+   dispatching".
+   <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 2. **Write the planner's brief.** It is the whole input to a context that has never
    seen this work, so be detailed about the **goals**, the **constraints**, and a
    suggested high-level implementation marked as a suggestion, and give the user's
@@ -506,8 +510,8 @@ them reach you; `manager` names the session role and is never a command.
    key shape, an on-disk or wire layout, the ownership line between two modules — and
    you approve the seam rather than the list: one waved through as "not really a
    contract" is one every downstream node restates its own way. Each is then fixed
-   for the run, and a worker's proposed departure is yours to amend by live edit or
-   defer as a follow-up.
+   for the run, and a worker's proposed departure is yours to amend by live edit or,
+   where it can wait, draft as a follow-up with `just follow-up <run-id>`.
 
    Send a plan back to its planner when the repair is decomposition; fixing it in
    place is the same over-reach as planning it yourself and lands work no plan-quality
@@ -582,7 +586,8 @@ it.
 
 Keep the user informed at each milestone and never let thirty minutes pass between
 updates; a completion report for a node that published includes the change request's
-link. Require verified publication closeout before issuing `complete`, which is a
+link. Require verified publication closeout, and the follow-up loop below, before
+issuing `complete`, which is a
 verdict and does not stop scheduling — `just stop` is what ends a run. A run the views
 report `PARKED` is alive and not working: treat it as stopped and intervene, which is
 unrelated to a node you parked with `cancel`. A run whose driver is dead over an intact
@@ -622,6 +627,32 @@ applying a fix inside the allowlist its edit author is bounded to; a finding it 
 pacemaker calls a rule violation names the file and line the rule comes from, and its
 own supervisor sends an observation back until it is one. None of these roles authors
 target-project content.
+
+### Follow-ups: drafted while a run works, verified once it ends
+
+**What can wait is drafted; what blocks is surfaced now.** Draft a follow-up with `just
+follow-up <run-id>` only when nobody needs it during the run; a decision, an unmet
+constraint, or a finding a node must act on goes over the channel at once, as below. A
+draft never stands in for a surface or for a question the user needed answered.
+
+**When a run you launched ends with every node done**, its success hook launches the
+follow-up run and names it. Tell the user the main work is complete and only follow-ups
+are being verified; that run is yours and owed a watch like any other. When it settles,
+give the user the link to every follow-up issue it created or updated, the drafts it
+dropped with why, and anything it found that should have been surfaced during the run.
+
+**When a run ends any other way**, the failure hook launches nothing. Decide with the user
+whether to verify its drafts by hand with `just follow-ups <run-id>`. A pause on a
+decision is not an ending, and a run fires at most one hook.
+
+**Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
+comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
+--feedback FILE`. On the `followups` board a run owns only the issues it created and the
+comments its marker names (`orchestrator/follow_up_tickets.py`).
+
+**`complete` waits for the follow-up run's settlement and the links you relayed**, or for
+that decision with the user. Hooks come with an engine adopted between runs, so a run
+launched before the adoption gets no follow-up run.
 
 ### Never let dispatched work run unwatched
 
@@ -1126,4 +1157,4 @@ Act on two standing goals beyond the ask: (1) engineer the context for next time
 real e2e for any journey a bug slipped through, a script for a step you did by hand, a
 terse note here for what the code doesn't show); (2) keep the codebase and environment
 clean and reproducible. Fold either in when it's the lowest-error path to the ask;
-otherwise propose it as a follow-up. Skip busywork.
+otherwise draft it with `just follow-up <run-id>` against the run it came out of. Skip busywork.

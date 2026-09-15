@@ -30,6 +30,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
+import follow_up_variables
+import plan_root_variable
 import pytest
 from fake_backend import (
     AGENT_DELAY_ENV,
@@ -52,6 +54,7 @@ from shared_dispatch_bar import (
 from waits import deadline
 from waits import timeout as e2e_timeout
 
+from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, named to `oneagentgraph` as its harness.
@@ -78,6 +81,10 @@ SHIPPED_RUN = "scheduler-research"
 
 #: The plan schema written in the shipped example projects' onepipeline metadata.
 PLAN_SCHEMA_VERSION = 3
+
+#: One node's row in `just results`: the node id two spaces in, then a column gap. The
+#: run-end hook that fired renders beneath the node rows as prose, which this does not match.
+NODE_ROW = re.compile(r"^  (\S+)\s{2,}\S")
 
 #: A Conventional Commit subject: `type(optional scope)optional !: summary`.
 CONVENTIONAL_COMMIT_SUBJECT = re.compile(r"^[a-z]+(\([^()]+\))?!?: \S.*$")
@@ -349,6 +356,15 @@ def _environment(
     environment = dict(os.environ)
     for name in LAUNCHER_ENVIRONMENT:
         environment.pop(name, None)
+    # Every launch through the recipe names the run-end hooks, and the success hook reads
+    # the run's drafts and writes a follow-up project when it finds some. So the drafts
+    # root and the authoring root are this journey's own, never the real stores of the
+    # tree the suite runs in.
+    root_name, plugin_name, command_name = follow_up_variables.all_names()
+    environment.pop(command_name, None)
+    environment[root_name] = str(tmp_path / "follow-ups")
+    environment[plugin_name] = WRITABLE_PLUGIN
+    environment[plan_root_variable.name()] = str(tmp_path / "plans")
     # The identity `scripts/onepipeline.sh` derives, stated as the ambient harness
     # variable a real planner session would carry rather than as the derived value:
     # the derivation is what this journey holds.
@@ -1825,7 +1841,13 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
         # planner's per-node view, so a graph that gained a node shows up here.
         outcomes = _just("results", run, environment=environment, seconds=60)
         assert outcomes.returncode == 0, outcomes.stderr
-        named = [line.split()[0] for line in outcomes.stdout.splitlines()[1:] if line.strip()]
+        # Node rows only: `results` also renders the run-end hook that fired beneath them,
+        # which is one row about the run and its output rather than a node.
+        named = [
+            row.group(1)
+            for line in outcomes.stdout.splitlines()[1:]
+            if (row := NODE_ROW.match(line))
+        ]
         assert named == ["only"], (
             f"the `finding` op changed the graph, which is what makes it safe to reach "
             f"for on any observation:\n{outcomes.stdout}"

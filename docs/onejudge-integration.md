@@ -91,7 +91,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.29.4,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.31.0,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -138,11 +138,11 @@ members:
 **This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
 `oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
 side, and every dispatch keeps its single simulated user; stacking one is a change to a
-graph and a manager's decision. The shape is stated in [onejudge v0.11.0's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.11.0/docs/judges.md)
+graph and a manager's decision. The shape is stated in [onejudge v0.12.0's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.12.0/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
-graph member, in [oneagentgraph v0.4.1's
-`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.1/docs/contract.md).
+graph member, in [oneagentgraph v0.4.2's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.2/docs/contract.md).
 `tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
@@ -1114,8 +1114,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.29.4,
-> `oneagentgraph` 0.4.1, nor `onevcs` 0.23.0. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.31.0,
+> `oneagentgraph` 0.4.2, nor `onevcs` 0.24.0. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1400,7 +1400,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.11.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.11.0/docs/protocol.md)),
+([onejudge v0.12.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.12.0/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

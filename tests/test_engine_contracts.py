@@ -261,6 +261,9 @@ def _pinned_tag(tool: str) -> str:
 
 #: The engine a dispatch's *pipeline* is, at the release this host runs.
 ONEPIPELINE = Engine("onepipeline", _pinned_tag("onepipeline"), "src")
+#: The same release's published contract document, where the declarations a caller of the
+#: engine — rather than a reader of its source — is held to are stated.
+ONEPIPELINE_DOCS = Engine("onepipeline", _pinned_tag("onepipeline"), "docs")
 #: The engine a dispatch *publishes through*, at the version onepipeline links —
 #: deliberately not `config/onevcs.version`, which is the CLI the manager verbs run.
 ONEVCS = Engine("onevcs", f"v{_linked_version('onevcs')}", "crates/onevcs/src")
@@ -275,6 +278,14 @@ ONEAGENTGRAPH = Engine("oneagentgraph", f"v{_linked_version('oneagentgraph')}", 
 #: not make the pin the core's version — `tests/test_linked_libraries.py` gates that
 #: distinction.
 ONEHARNESS = Engine("oneharness", _pinned_tag("oneharness"), "crates/oneharness-core/src")
+#: The message bus a journal envelope is, at the `onemessagebus-agent` onepipeline links.
+#: Since onepipeline 0.31.0 the envelope, its `Source`, and the envelope versions a
+#: build reads are that crate's — over the `onemessagebus` core, released from the same
+#: repository at the same commit — and `src/event.rs` re-exports them. Read at the agent
+#: crate's own tag, with the source root at `crates/` so both crates are reachable.
+ONEMESSAGEBUS = Engine(
+    "onemessagebus", f"onemessagebus-agent-v{_linked_version('onemessagebus-agent')}", "crates"
+)
 
 
 class Vocabulary(NamedTuple):
@@ -1666,6 +1677,8 @@ ONEVCS_WORKSPACES_DIR = re.compile(
 #: omits it. Both are what part a field this repository must write from one it may.
 SERDE_FIELD = re.compile(r"((?:[ \t]*#\[[^\]]*\]\n)*)[ \t]*pub (\w+):")
 SERDE_RENAME = re.compile(r'rename\s*=\s*"([^"]+)"')
+#: The struct a field's type names, by the last segment of its path (`V::Dimensions`).
+SERDE_FIELD_TYPE = re.compile(r"\s*(?:\w+::)*(\w+)")
 
 #: The wire word for each of this crate's own event kinds, which is the closed
 #: vocabulary a built journal's `kind` has to be drawn from.
@@ -1674,6 +1687,11 @@ PIPELINE_KIND_WORD = re.compile(r'Self::\w+ => "([a-z][a-z-]*)",')
 #: How `Source` — which library produced an envelope — is spelled on the wire.
 SOURCE_RENAME = re.compile(r'#\[serde\(rename_all = "([a-z-]+)"\)\]\s*pub enum Source')
 SOURCE_VARIANT = re.compile(r"^\s{4}([A-Z][A-Za-z]*),", re.MULTILINE)
+#: onepipeline's re-export of the bus's envelope types, which is what makes the bus the
+#: place a journal envelope is declared.
+BUS_REEXPORT = re.compile(r"pub use onemessagebus_agent::event::\{([^}]*)\};")
+#: How onepipeline takes the version it stamps: the newest its bus profile reads.
+ENVELOPE_VERSION_FROM_THE_BUS = "pub const ENVELOPE_VERSION: u32 = EVENT_ENVELOPE_READS[0];"
 
 #: `/proc/<pid>/stat` split at the last `)`, as the two Python copies added with these
 #: readings spell it. The existing shell and journey copies spell the same split with
@@ -1710,6 +1728,9 @@ class Record(NamedTuple):
     #: Where in a built run root that record's JSON objects are. Every one found is
     #: checked, so a journal's second event is as reconciled as its first.
     found: Callable[[Path], list[dict[str, object]]]
+    #: Where a `#[serde(flatten)]` field's struct is declared, when the record carries
+    #: one: its fields travel as the record's own on the wire, so they are read there.
+    flattened_from: str | None = None
 
 
 def _module_source(path: Path) -> ast.Module:
@@ -1769,32 +1790,52 @@ def _joined_under_a_run_root(accessor: str) -> str:
     return joined.group(1)
 
 
-def _declared_fields(engine: Engine, source: str, struct: str) -> tuple[Field, ...]:
-    """Every field one engine record declares, in declaration order."""
+def _declared_fields(
+    engine: Engine, source: str, struct: str, flattened_from: str | None = None
+) -> tuple[Field, ...]:
+    """Every field one engine record declares on the wire, in declaration order.
+
+    A generic record (`Envelope<V: Vocabulary>`) is read like any other, and a
+    `#[serde(flatten)]` field is replaced by the fields of the struct it names, read
+    out of `flattened_from` — refused when the record names none, because dropping
+    the field would reconcile the record against fewer keys than it carries.
+    """
     body = re.search(
-        rf"pub struct {re.escape(struct)} \{{(.*?)\n\}}", _source(engine, source), re.DOTALL
+        rf"pub struct {re.escape(struct)}(?:<[^>{{]*>)? \{{(.*?)\n\}}",
+        _source(engine, source),
+        re.DOTALL,
     )
     assert body is not None, (
         f"{engine.crate} {engine.ref} no longer declares `{struct}` in {source}, so the "
         "record this repository writes cannot be reconciled against it; re-read that "
         "file and correct the builder"
     )
-    fields = tuple(
-        Field(
-            name=(
-                rename.group(1)
-                if (rename := SERDE_RENAME.search(found.group(1)))
-                else found.group(2)
-            ),
-            optional="default" in found.group(1),
+    fields: list[Field] = []
+    for found in SERDE_FIELD.finditer(body.group(1)):
+        if "flatten" in found.group(1):
+            flattened = SERDE_FIELD_TYPE.match(body.group(1), found.end())
+            assert flattened is not None and flattened_from is not None, (
+                f"{engine.crate} {engine.ref}'s `{struct}` flattens `{found.group(2)}` into "
+                "its wire record, and nothing names where that struct is declared, so its "
+                "keys cannot be reconciled; name the source it is read from"
+            )
+            fields.extend(_declared_fields(engine, flattened_from, flattened.group(1)))
+            continue
+        fields.append(
+            Field(
+                name=(
+                    rename.group(1)
+                    if (rename := SERDE_RENAME.search(found.group(1)))
+                    else found.group(2)
+                ),
+                optional="default" in found.group(1),
+            )
         )
-        for found in SERDE_FIELD.finditer(body.group(1))
-    )
     assert fields, (
         f"{engine.crate} {engine.ref}'s `{struct}` declares no public fields where this "
         "gate reads them, so it would reconcile every record against an empty set"
     )
-    return fields
+    return tuple(fields)
 
 
 def test_the_readings_look_under_the_runs_root_the_engine_writes() -> None:
@@ -2021,14 +2062,15 @@ BUILT_RECORDS = (
     ),
     Record(
         "each journal envelope",
-        ONEPIPELINE,
-        "event.rs",
+        ONEMESSAGEBUS,
+        "onemessagebus/src/envelope.rs",
         "Envelope",
         lambda root: [
             json.loads(line)
             for line in (root / "events.jsonl").read_text("utf-8").splitlines()
             if line
         ],
+        flattened_from="onemessagebus-agent/src/event.rs",
     ),
     Record(
         "each dispatch registry entry",
@@ -2067,7 +2109,7 @@ def test_the_built_run_root_writes_the_records_the_engine_declares(
     record the engine cannot read at all — loud where it is read, and gated here so a
     builder that dropped one cannot pass by nothing having read that record.
     """
-    declared = _declared_fields(record.engine, record.source, record.struct)
+    declared = _declared_fields(record.engine, record.source, record.struct, record.flattened_from)
     names = {field.name for field in declared}
     required = {field.name for field in declared if not field.optional}
     written = record.found(built_run_root)
@@ -2091,6 +2133,20 @@ def test_the_built_run_root_writes_the_records_the_engine_declares(
         )
 
 
+def test_onepipeline_stamps_the_newest_envelope_version_its_bus_reads() -> None:
+    """The version a built journal is held to is the one onepipeline writes.
+
+    Read off the bus's registry since the envelope moved there, which is right only
+    while onepipeline still takes its own stamp from that read set rather than
+    declaring a number of its own again.
+    """
+    assert ENVELOPE_VERSION_FROM_THE_BUS in _source(ONEPIPELINE, "event.rs"), (
+        f"onepipeline {ONEPIPELINE.ref} no longer takes `ENVELOPE_VERSION` from "
+        f"{ONEMESSAGEBUS.crate}'s `EVENT_ENVELOPE_READS[0]`, so the version a built "
+        "journal is reconciled against may not be the one the engine writes"
+    )
+
+
 def test_the_built_journal_names_events_the_engine_produces(built_run_root: Path) -> None:
     """A built journal's kinds and producer are drawn from the engine's own vocabularies.
 
@@ -2105,14 +2161,24 @@ def test_the_built_journal_names_events_the_engine_produces(built_run_root: Path
         f"onepipeline {ONEPIPELINE.ref} no longer spells its own event kinds where this "
         "gate reads them, so a built journal cannot be reconciled against them"
     )
-    rename = SOURCE_RENAME.search(event)
-    assert rename is not None and rename.group(1) == "lowercase", (
-        f"onepipeline {ONEPIPELINE.ref} no longer writes `Source` in lowercase, so how "
-        f"{PROBE_RUN_ROOT.name} spells the producer of a built envelope has moved"
+    reexport = BUS_REEXPORT.search(event)
+    assert reexport is not None and {"Envelope", "Source"} <= set(
+        re.findall(r"\w+", reexport.group(1))
+    ), (
+        f"onepipeline {ONEPIPELINE.ref} no longer re-exports `Envelope` and `Source` from "
+        f"`onemessagebus_agent::event`, so {ONEMESSAGEBUS.crate} {ONEMESSAGEBUS.ref} is no "
+        "longer where a journal envelope is declared; re-read `event.rs`"
     )
-    declaration = re.search(r"pub enum Source \{.*?\n\}", event, re.DOTALL)
+    bus_event = _source(ONEMESSAGEBUS, "onemessagebus-agent/src/event.rs")
+    rename = SOURCE_RENAME.search(bus_event)
+    assert rename is not None and rename.group(1) == "lowercase", (
+        f"{ONEMESSAGEBUS.crate} {ONEMESSAGEBUS.ref} no longer writes `Source` in lowercase, "
+        f"so how {PROBE_RUN_ROOT.name} spells the producer of a built envelope has moved"
+    )
+    declaration = re.search(r"pub enum Source \{.*?\n\}", bus_event, re.DOTALL)
     assert declaration is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer declares `Source` where this gate reads it"
+        f"{ONEMESSAGEBUS.crate} {ONEMESSAGEBUS.ref} no longer declares `Source` where this "
+        "gate reads it"
     )
     sources = {variant.lower() for variant in SOURCE_VARIANT.findall(declaration.group(0))}
     for envelope in (
@@ -2236,11 +2302,13 @@ BUILT_VALUES = (
         re.compile(r"pub const PLAN_SCHEMA_VERSION: u32 = (\d+);"),
         lambda root: [str(json.loads((root / "plan.json").read_text("utf-8"))["schema_version"])],
     ),
+    # The newest version the bus profile reads, which onepipeline stamps as its own —
+    # `test_onepipeline_stamps_the_newest_envelope_version_its_bus_reads` holds that.
     Value(
         "each journal envelope's version",
-        ONEPIPELINE,
-        "event.rs",
-        re.compile(r"pub const ENVELOPE_VERSION: u32 = (\d+);"),
+        ONEMESSAGEBUS,
+        "onemessagebus-agent/src/registry.rs",
+        re.compile(r"pub const EVENT_ENVELOPE_READS: &\[u32\] = &\[(\d+)"),
         lambda root: [str(envelope["v"]) for envelope in _built_envelopes(root)],
     ),
     Value(
@@ -2740,3 +2808,73 @@ def test_the_ops_a_live_edit_reads_task_prose_from_are_the_commands_the_engine_d
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The run-end hook this host wires, which restates the engine's failure document.
+RUN_ENDED = REPO_ROOT / "scripts" / "run-ended.sh"
+#: The fenced block of `docs/contract.md` that states the run-end hooks.
+RUN_END_HOOKS_BLOCK = re.compile(r"```json\n(\{\s*\"run_end_hooks\".*?)\n```", re.DOTALL)
+#: The reason kinds the hook's own reader accepts.
+HOOK_REASON_KINDS = re.compile(r"^KINDS = \(([^)]*)\)$", re.MULTILINE)
+#: The engine variables the hook reads.
+HOOK_READS = ("ONEPIPELINE_HOOK", "ONEPIPELINE_RUN_ID", "ONEPIPELINE_RUN_ROOT")
+
+
+def _run_end_hooks_contract() -> dict[str, object]:
+    block = RUN_END_HOOKS_BLOCK.search(_source(ONEPIPELINE_DOCS, "contract.md"))
+    assert block is not None, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref} no longer states its run-end hooks in a JSON block "
+        "of docs/contract.md, so scripts/run-ended.sh's reading of the hook document cannot be "
+        "reconciled; re-read the contract and correct both"
+    )
+    contract: object = json.loads(block.group(1))["run_end_hooks"]
+    assert isinstance(contract, dict), contract
+    return contract
+
+
+def test_the_run_end_hook_reads_the_failure_document_the_engine_declares() -> None:
+    """`scripts/run-ended.sh` restates the engine's failure document, so it is held to it.
+
+    Three halves: the reason kinds it accepts are the ones the engine names, the variables
+    it reads are ones the engine exports to a hook, and the contract's own failure example,
+    handed to the real script, comes back as the line naming its nodes rather than as a
+    document the script could not read.
+    """
+    contract = _run_end_hooks_contract()
+    declared = HOOK_REASON_KINDS.search(RUN_ENDED.read_text(encoding="utf-8"))
+    assert declared is not None, "scripts/run-ended.sh no longer declares the reason kinds it reads"
+    assert re.findall(r'"([a-z-]+)"', declared.group(1)) == contract["reason_kinds"], (
+        f"scripts/run-ended.sh accepts {declared.group(1)} while onepipeline "
+        f"{ONEPIPELINE_DOCS.ref} declares {contract['reason_kinds']}"
+    )
+    exported = contract["environment"]
+    assert isinstance(exported, list) and set(HOOK_READS) <= set(exported), (
+        f"scripts/run-ended.sh reads {HOOK_READS}, and onepipeline {ONEPIPELINE_DOCS.ref} "
+        f"exports {exported} to a hook"
+    )
+
+    stdin = contract["stdin"]
+    assert isinstance(stdin, dict), stdin
+    example = stdin["failure"]
+    assert isinstance(example, dict), example
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("ONEPIPELINE_")
+    }
+    ran = subprocess.run(  # noqa: S603 - this repository's own hook, spawned as the engine spawns it
+        [str(RUN_ENDED)],
+        cwd=REPO_ROOT,
+        env=environment | {"ONEPIPELINE_HOOK": "failure", "ONEPIPELINE_RUN_ID": example["run_id"]},
+        input=json.dumps(example),
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    reason = example["reason"]
+    assert isinstance(reason, dict), reason
+    listed = ", ".join(f"{node['id']} {node['status']}" for node in reason["nodes"])
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert f"(reason {reason['kind']}: {listed})" in ran.stdout, (
+        f"scripts/run-ended.sh could not read onepipeline {ONEPIPELINE_DOCS.ref}'s own failure "
+        f"example:\n{ran.stdout}{ran.stderr}"
+    )
