@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NewType, TypedDict
 
+import follow_up_variables
 import jsonschema
 import plan_root_variable
 import pytest
@@ -40,7 +41,7 @@ from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_store
+from orchestrator import follow_up_tickets, plan_store
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -295,6 +296,12 @@ STATUS_OPTIONS: tuple[_StatusOption, ...] = (
     _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
     NEEDS_ATTENTION,
 )
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live `followups`
+# board's own option, which `onetaskgraph.yaml` sends a new ticket's `backlog` to. The
+# stand-in answers it so the journey can assert that name reaches the wire; reconciling it
+# against that board would take the board credential no test may use.
+PROPOSAL = _StatusOption(id=_FieldOptionId("OPT_proposal"), name="Proposal")
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 #: The node id the fixture answers each repository it knows with, one per `owner/name`.
 #: The journeys assert which of these reaches `createIssue`, which is the whole of what
 #: naming a repository buys — on the source, whose configured one is the fallback a
@@ -361,7 +368,7 @@ class _Issue:
                     "field": {
                         "id": STATUS_FIELD_ID,
                         "name": "Status",
-                        "options": [option.rendered() for option in STATUS_OPTIONS],
+                        "options": [option.rendered() for option in BOARD.options],
                     },
                 }
             ],
@@ -460,6 +467,8 @@ class _Board:
         )
         self.issues: list[_Issue] = [parent, child]
         self.created: list[_Issue] = []
+        #: The Status options this board carries, which one journey narrows.
+        self.options: tuple[_StatusOption, ...] = STATUS_OPTIONS
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -477,7 +486,7 @@ class _Board:
                                     "__typename": "ProjectV2SingleSelectField",
                                     "id": STATUS_FIELD_ID,
                                     "name": "Status",
-                                    "options": [option.rendered() for option in STATUS_OPTIONS],
+                                    "options": [option.rendered() for option in self.options],
                                 },
                                 {
                                     "__typename": "ProjectV2Field",
@@ -881,7 +890,9 @@ class _GitHubFixture(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _serving_board(refusal: _Refusal | None = None) -> Iterator[dict[str, str]]:
+def _serving_board(
+    refusal: _Refusal | None = None, options: tuple[_StatusOption, ...] = STATUS_OPTIONS
+) -> Iterator[dict[str, str]]:
     """Serve the board fixture, yielding the environment that points `plans` at it.
 
     The board is reset per journey rather than shared: it is mutated by the writes a
@@ -891,8 +902,10 @@ def _serving_board(refusal: _Refusal | None = None) -> Iterator[dict[str, str]]:
     ``refusal`` makes every request come back as one GitHub refusal instead. It is a
     property of the server rather than of a call because what a caller sees is the
     diagnostic the source composes, and the source retries before it composes one.
+    ``options`` are the Status options the board carries.
     """
     BOARD.reset()
+    BOARD.options = options
     _GitHubFixture.requests = []
     _GitHubFixture.refusal = refusal
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GitHubFixture)
@@ -902,6 +915,9 @@ def _serving_board(refusal: _Refusal | None = None) -> Iterator[dict[str, str]]:
         yield {
             "GH_PROJECTS_TOKEN": "fixture-token",
             "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": (
+                f"http://127.0.0.1:{server.server_port}/graphql"
+            ),
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": (
                 f"http://127.0.0.1:{server.server_port}/graphql"
             ),
         }
@@ -2001,6 +2017,141 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
     assert shared.keys() == {NEEDS_ATTENTION.name}, (
         f"only `unknown`'s words may share an option, and the copy wrote {written}"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The spelling an ambient override of the `followups` source's mapping would take, removed
+#: from the journeys' environment so the committed file is the mapping applied.
+FOLLOWUPS_STATUS_MAPPING_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__STATUS_MAPPING"
+#: The run and root cause of the one ticket the journeys below copy.
+PROPOSED_RUN = "proposal-run"
+PROPOSED_CAUSE = "ticket-lands-as-a-proposal"
+
+
+def _proposed_ticket(root: Path) -> follow_up_tickets.Ticket:
+    """Write one new ticket, `backlog`, under a drafts root at ``root``, as the agent does."""
+    host = follow_up_tickets.Host("verifier.example")
+    ticket = follow_up_tickets.Ticket(
+        title="ai-orchestrator: a ticket lands as a proposal",
+        status=follow_up_tickets.Status.PROPOSED,
+        root_cause=follow_up_tickets.RootCause(PROPOSED_CAUSE),
+        repository=follow_up_tickets.Origin("github.com/nickderobertis/ai-orchestrator"),
+        created_by_run=follow_up_tickets.RunId(PROPOSED_RUN),
+        owning_runs=(follow_up_tickets.RunId(PROPOSED_RUN),),
+        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{PROPOSED_RUN}/drafts/noticed"),),
+        basis=(
+            follow_up_tickets.Basis(
+                follow_up_tickets.Origin("github.com/nickderobertis/ai-orchestrator"),
+                follow_up_tickets.Commit("0" * 40),
+            ),
+        ),
+        verified_at=follow_up_tickets.Timestamp("2026-01-01T00:00:00Z"),
+        host=host,
+        body="\n\n".join(
+            f"## {heading}\n\nVerified on `{host}` ({heading})."
+            for heading in follow_up_tickets.HEADINGS
+        ),
+    )
+    path = follow_up_tickets.ticket_path(root, PROPOSED_RUN, PROPOSED_CAUSE)
+    path.parent.mkdir(parents=True)
+    path.write_text(follow_up_tickets.render(ticket), encoding="utf-8")
+    return ticket
+
+
+def _copy_proposed_ticket(
+    tmp_path: Path, options: tuple[_StatusOption, ...]
+) -> tuple[subprocess.CompletedProcess[str], follow_up_tickets.Ticket]:
+    """Copy a new ticket onto `followups`, served by a board carrying ``options``.
+
+    The copy runs from this checkout, so the committed `onetaskgraph.yaml` decides where
+    `backlog` goes; only the endpoint, the credential and the drafts root are pointed
+    elsewhere, and any ambient override of the `followups` mapping is removed.
+    """
+    drafts_root = tmp_path / "follow-ups"
+    ticket = _proposed_ticket(drafts_root)
+    environment = _plan_environment(tmp_path)
+    for name in [
+        name for name in environment if name.startswith(FOLLOWUPS_STATUS_MAPPING_ENV_PREFIX)
+    ]:
+        del environment[name]
+    environment[follow_up_variables.root_name()] = str(drafts_root)
+    environment[follow_up_variables.plugin_name()] = plan_store.WRITABLE_PLUGIN
+    # llmlint: ignore[e2e_not_mocked] The live `followups` board is the one boundary this
+    # journey must not reach: every session's verified tickets accumulate there, and a write
+    # needs a credential no test may use. What is doubled stops at the wire — the installed
+    # CLI and the committed configuration are real.
+    with _serving_board(options=options) as remote:
+        environment.update(remote)
+        environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = (
+            "0"
+        )
+        copied = subprocess.run(  # noqa: S603 - the installed plan-store CLI
+            [
+                str(ONETASKGRAPH_BIN),
+                "task",
+                "copy",
+                follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE),
+                "--to",
+                follow_up_tickets.BOARD,
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(120),
+            check=False,
+        )
+    return copied, ticket
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
+# inputs as every journey beside it — the installed plan-store CLI driven against the
+# loopback board — so `nx affected` already selects this module together, and a project of
+# one function would buy no selection. It runs in `orchestrator:test`, keyed `codeWorkspace`.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
+# the edge it pays is the one every other CLI-spawning journey in this file already pays.
+def test_a_new_follow_up_ticket_is_written_to_the_followups_boards_proposal_option(
+    tmp_path: Path,
+) -> None:
+    """A `backlog` ticket copied onto `followups` sets its board row's Status to `Proposal`.
+
+    That option is what tells the user the ticket awaits their decision, so the write read
+    here is the one GitHub would record: the Status field update for the created row.
+    """
+    copied, ticket = _copy_proposed_ticket(tmp_path, (*STATUS_OPTIONS, PROPOSAL))
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    (created,) = [issue for issue in BOARD.created if issue.title == ticket.title]
+    status_writes = [
+        request.input_value("value")
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.UPDATE_FIELD
+        and request.input_value("fieldId") == STATUS_FIELD_ID
+        and request.input_value("itemId") == created.item_id
+    ]
+    assert status_writes == [{"singleSelectOptionId": PROPOSAL.id}], (
+        f"a new ticket has to be written to the {PROPOSAL.name!r} option; the copy wrote "
+        f"{status_writes}"
+    )
+
+
+def test_a_followups_board_without_a_proposal_option_refuses_the_copy_by_name(
+    tmp_path: Path,
+) -> None:
+    """The mapping overrides the shipped `Backlog` default, so no other option stands in."""
+    copied, _ = _copy_proposed_ticket(tmp_path, STATUS_OPTIONS)
+
+    assert copied.returncode != 0, copied.stdout + copied.stderr
+    assert PROPOSAL.name in copied.stderr, copied.stderr
+    assert not [
+        request
+        for request in _GitHubFixture.requests
+        if request.operation is _Operation.UPDATE_FIELD
+        and request.input_value("fieldId") == STATUS_FIELD_ID
+    ], "a board without the option had some other Status option written instead"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

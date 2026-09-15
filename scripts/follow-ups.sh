@@ -264,7 +264,8 @@ trap 'rm -f "$scratch" || echo "follow-ups: the scratch file $scratch could not 
 checkout=$(CDPATH='' cd -- "$script_dir/.." && pwd) || fail "this recipe's checkout could not be resolved" \
     "run it from a readable checkout, then retry"
 compose=(compose --template "$checkout/$TEMPLATE" --root "$drafts_root" --run "$run" --board "$board"
-    --validate "\"$python\" -m orchestrator.follow_up_tickets validate" --checkout "$checkout")
+    --validate "\"$python\" -m orchestrator.follow_up_tickets validate"
+    --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status" --checkout "$checkout")
 [ -z "$feedback" ] || compose+=(--feedback "$feedback")
 "$python" -m orchestrator.follow_up_tickets "${compose[@]}" >"$scratch" ||
     fail "the follow-up agent's task could not be composed from $TEMPLATE" \

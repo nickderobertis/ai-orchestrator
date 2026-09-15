@@ -1805,6 +1805,22 @@ attached run settles. `--feedback FILE` re-dispatches over the same run with the
 words in the task, `--detach` returns at the launch record printing the follow-up run and
 its watch command, and `--to SOURCE` copies onto another configured source.
 
+**A ticket names its host and reaches the board as a proposal.** Evidence is a claim about
+trees read on one machine — its registered checkouts, its installed tools, its run
+journals — so a ticket's record's `host` names the machine its verification ran on, read
+from `hostname` rather than typed, and its `## Evidence` section states that host where a
+reader of the issue sees it. A new ticket lands on the board in `Proposal`, and the user
+moving it to `Todo` is what accepts it, so a later agent sent to work on accepted
+follow-ups selects them by the board's status alone. The board is therefore the record of
+that decision and no copy undoes it: before every copy the follow-up agent runs the
+module's `board-status` command, and a ticket the board already holds is copied carrying
+the status the board holds it at. Withdrawing a ticket closes a proposal as not planned,
+and a run never withdraws a ticket the board shows as accepted: it copies nothing, leaves
+its own ticket as it is, and reports what it would have withdrawn and why. The statuses,
+the record's keys and the board's options are stated in `orchestrator/follow_up_tickets.py`
+and `onetaskgraph.yaml` alone, and `tests/test_follow_up_ticket_docs.py` holds this
+paragraph to them.
+
 **The run-end hooks are what launch it.** `just orchestrate` names
 `scripts/run-ended.sh`, by its absolute path in the launching checkout, as both the
 engine's `--success-hook` and its `--failure-hook`, unless the caller named that flag;

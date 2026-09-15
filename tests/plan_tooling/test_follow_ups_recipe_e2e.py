@@ -40,6 +40,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -55,7 +56,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator.plan_store import WRITABLE_PLUGIN
-from orchestrator.project_store import write_plan_project
+from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: A real launch holds this checkout's toolchain for as long as it runs, so it is scheduled
@@ -109,10 +110,21 @@ REPOSITORY = "github.com/nickderobertis/some-service"
 COMMIT = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 VERIFIED_AT = "2026-01-01T00:00:00Z"
 
+#: The machine this journey runs on, which is what `hostname` prints for the agent's turn,
+#: and what a ticket the agent stages says in its place until that turn reads `hostname`.
+HOST = socket.gethostname()
+READ_FROM_HOSTNAME = "host-read-from-hostname"
+
 #: The two root causes the main run's drafts carry: one no board item names yet, and one an
 #: earlier run already filed an open issue for.
 NEW_CAUSE = "listing-cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
+
+#: The two schema-1 tickets a run filed before tickets named their host: the one a feedback
+#: re-dispatch brings to the current shape, and the one it leaves as it was.
+REWRITTEN_CAUSE = "export-drops-a-column"
+LEFT_CAUSE = "retry-loop-never-backs-off"
+LEGACY_FEEDBACK = "Bring the export ticket to the current shape.\n"
 
 #: The manager's feedback, carrying what a naive splice would corrupt: a placeholder the
 #: template fills, a replacement backreference, and a `&`.
@@ -238,10 +250,18 @@ def _draft_id(run: str, draft: Path) -> str:
     return f"drafts:{run}/drafts/{draft.stem}"
 
 
-def _ticket(run: str, cause: str, drafts: tuple[str, ...], title: str, body: str) -> tickets.Ticket:
+def _ticket(
+    run: str,
+    cause: str,
+    drafts: tuple[str, ...],
+    title: str,
+    body: str,
+    host: str = READ_FROM_HOSTNAME,
+) -> tickets.Ticket:
+    """A `backlog` ticket, naming ``host`` in its record and in its `## Evidence` section."""
     return tickets.Ticket(
         title=title,
-        status=tickets.Status.OPEN,
+        status=tickets.Status.PROPOSED,
         root_cause=tickets.RootCause(cause),
         repository=tickets.Origin(REPOSITORY),
         created_by_run=tickets.RunId(run),
@@ -249,7 +269,72 @@ def _ticket(run: str, cause: str, drafts: tuple[str, ...], title: str, body: str
         drafts=tuple(tickets.QualifiedDraftId(draft) for draft in drafts),
         basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
         verified_at=tickets.Timestamp(VERIFIED_AT),
-        body="\n\n".join(f"## {heading}\n\n{body} ({heading})." for heading in tickets.HEADINGS),
+        host=tickets.Host(host),
+        body="\n\n".join(
+            f"## {heading}\n\n{body} ({heading})."
+            + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
+            for heading in tickets.HEADINGS
+        ),
+    )
+
+
+def _schema_1(ticket: tickets.Ticket) -> str:
+    """``ticket`` as schema 1 stored it: no `host` in its record, and none in its evidence."""
+    held = {key: value for key, value in tickets.record(ticket).items() if key != "host"}
+    return frontmatter(
+        {
+            "title": ticket.title,
+            "status": ticket.status.written,
+            "metadata": {tickets.KEY: held | {"schema": 1}},
+        },
+        ticket.body.replace(f" Verified on `{ticket.host}`.", ""),
+    )
+
+
+def _placed(staged: Path, ticket: Path) -> list[str]:
+    """The agent's command putting a staged ticket in place, its host read from `hostname`."""
+    return [
+        "sh",
+        "-c",
+        f'sed "s/{READ_FROM_HOSTNAME}/$(hostname)/g" {shlex.quote(str(staged))} '
+        f"> {shlex.quote(str(ticket))}",
+    ]
+
+
+def _decided_and_copied(python: str, store: str, ticket: Path, qualified: str) -> list[str]:
+    """The agent's step before copying: ask the board the status, write it, validate, copy."""
+    return [
+        "bash",
+        "-c",
+        "set -euo pipefail\n"
+        f"cd {shlex.quote(str(REPO_ROOT))}\n"
+        f"word=$({python} -m orchestrator.follow_up_tickets board-status --board {BOARD} "
+        f"{shlex.quote(str(ticket))})\n"
+        f'sed -i "s/^status: .*/status: \\"$word\\"/" {shlex.quote(str(ticket))}\n'
+        f"{python} -m orchestrator.follow_up_tickets validate {shlex.quote(str(ticket))}\n"
+        f"{store} task copy {qualified} --to {BOARD}\n",
+    ]
+
+
+def _category(item: dict[str, object]) -> object:
+    status = item["status"]
+    assert isinstance(status, dict), status
+    return status["category"]
+
+
+# llmlint: ignore[tests_mirror_real_usage] The board here is a `local-md` store, whose items are
+# files, and onetaskgraph 0.2.31 has no verb that changes an item's status (`task` lists, shows,
+# walks, copies and comments), so editing the item's file is how a person moves it; the store
+# reads the edit back through `task show` below, and the live board is off limits to a test.
+def _moved(bench: Bench, qualified: str, word: str) -> None:
+    """Move a board item to ``word``, the way a person edits its status on the board."""
+    location = _item(bench, qualified)["location"]
+    assert isinstance(location, dict), location
+    path = Path(str(location["path"]))
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        re.sub(r"^status: .*$", f"status: {json.dumps(word)}", text, count=1, flags=re.MULTILINE),
+        encoding="utf-8",
     )
 
 
@@ -329,8 +414,10 @@ class Followed(NamedTuple):
     other_after_first: dict[str, object]
     comments_after_first: list[dict[str, object]]
     board_after_first: list[str]
+    new_after_move: dict[str, object]
     second: Pass
     new_after_second: dict[str, object]
+    local_after_second: dict[str, object]
     other_after_second: dict[str, object]
     comments_after_second: list[dict[str, object]]
     board_after_second: list[str]
@@ -338,6 +425,13 @@ class Followed(NamedTuple):
     edited_comment: str
     unsound: subprocess.CompletedProcess[str]
     unsound_ticket: Path
+    legacy: Pass
+    legacy_before: dict[str, object]
+    legacy_local: dict[str, object]
+    legacy_after: dict[str, object]
+    legacy_body: str
+    rewritten_ticket: Path
+    left_ticket: Path
     detached: subprocess.CompletedProcess[str]
     detached_seconds: float
     detached_run: str
@@ -403,7 +497,7 @@ def _pass(bench: Bench, name: str, main: str, *extra: str) -> Pass:
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `tests/plan_tooling` is
 # already the Nx project edge this repository keeps for journeys that launch the installed
 # engine, keyed on `planToolingWorkspace`, which covers every file these launches read. The
-# fixture is module-scoped and spends five launches whose turns are the provider's stand-in.
+# fixture is module-scoped and spends six launches whose turns are the provider's stand-in.
 @pytest.fixture(scope="module")
 def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR0915 - one journey
     if shutil.which("just") is None:
@@ -425,6 +519,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             (f"drafts:{other}/drafts/an-earlier-draft",),
             "some-service: the sweep trailer omits a family it never examined",
             "Filed by the earlier run",
+            HOST,
         )
         earlier_path = tickets.ticket_path(bench.drafts_root, other, SHARED_CAUSE)
         earlier_path.parent.mkdir(parents=True)
@@ -463,20 +558,12 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             main,
             [
                 ["mkdir", "-p", str(new_ticket.parent)],
-                [
-                    "cp",
-                    str(_staged(bench, "new.md", tickets.render(first_ticket))),
-                    str(new_ticket),
-                ],
-                [
-                    "cp",
-                    str(_staged(bench, "shared.md", tickets.render(shared))),
-                    str(shared_ticket),
-                ],
+                _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
+                _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
                 [*validate, str(new_ticket), str(shared_ticket)],
                 ["rm", str(new_draft), str(shared_draft)],
-                _from_checkout(
-                    store, "task", "copy", tickets.qualified_id(main, NEW_CAUSE), "--to", BOARD
+                _decided_and_copied(
+                    python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
                 ),
                 _from_checkout(
                     store,
@@ -514,6 +601,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         comments_after_first = _comments(bench, other_issue)
         board_after_first = _board_ids(bench)
 
+        # The user accepts the new ticket: its board item is moved to `todo` by hand.
+        _moved(bench, new_issue, tickets.Status.ACCEPTED.written)
+        new_after_move = _item(bench, new_issue)
+
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
         # by copying its ticket again, and its comment on the earlier run's issue is edited.
         edited = _ticket(
@@ -543,14 +634,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             bench,
             main,
             [
-                [
-                    "cp",
-                    str(_staged(bench, "new-edited.md", tickets.render(edited))),
-                    str(new_ticket),
-                ],
-                [*validate, str(new_ticket)],
-                _from_checkout(
-                    store, "task", "copy", tickets.qualified_id(main, NEW_CAUSE), "--to", BOARD
+                # Staged as the proposal it was first written as; the board decides.
+                _placed(_staged(bench, "new-edited.md", tickets.render(edited)), new_ticket),
+                _decided_and_copied(
+                    python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
                 ),
                 ["bash", "-c", edit],
             ],
@@ -559,6 +646,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         started.append(second.run)
         assert second.result.returncode == OK, second.result.stdout + second.result.stderr
         new_after_second = _item(bench, new_issue)
+        local_after_second = _item(bench, tickets.qualified_id(main, NEW_CAUSE))
         other_after_second = _item(bench, other_issue)
         comments_after_second = _comments(bench, other_issue)
         board_after_second = _board_ids(bench)
@@ -575,7 +663,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             "Unsound",
         )
         rendered = tickets.render(broken).replace(
-            'status: "todo"', 'status: "todo"\nproject: "a-project"'
+            'status: "backlog"', 'status: "backlog"\nproject: "a-project"'
         )
         _script(
             bench,
@@ -587,6 +675,59 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         )
         unsound = _run(["just", "follow-ups", unsound_run, "--to", BOARD], bench)
         started.append(f"{unsound_run}{SUFFIX}")
+
+        # A run whose tickets were filed at schema 1, before a ticket named its host — the
+        # shape of the tickets already on the live board — one of them accepted there by a
+        # person. The manager's feedback re-dispatch rewrites that one and leaves the other.
+        legacy_run = f"fu-legacy-{pid}"
+        legacy_drafts = (f"drafts:{legacy_run}/drafts/a-consumed-draft",)
+        rewritten_ticket = tickets.ticket_path(bench.drafts_root, legacy_run, REWRITTEN_CAUSE)
+        left_ticket = tickets.ticket_path(bench.drafts_root, legacy_run, LEFT_CAUSE)
+        for cause, path in ((REWRITTEN_CAUSE, rewritten_ticket), (LEFT_CAUSE, left_ticket)):
+            filed = _ticket(
+                legacy_run,
+                cause,
+                legacy_drafts,
+                f"some-service: {cause.replace('-', ' ')}",
+                "Filed before hosts",
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_schema_1(filed), encoding="utf-8")
+            copied = _run(
+                [store, "task", "copy", tickets.qualified_id(legacy_run, cause), "--to", BOARD],
+                bench,
+            )
+            assert copied.returncode == 0, copied.stdout + copied.stderr
+        legacy_issue = f"{BOARD}:{legacy_run}/tickets/{REWRITTEN_CAUSE}"
+        _moved(bench, legacy_issue, tickets.Status.ACCEPTED.written)
+        legacy_before = _item(bench, legacy_issue)
+        rewritten = _ticket(
+            legacy_run,
+            REWRITTEN_CAUSE,
+            legacy_drafts,
+            f"some-service: {REWRITTEN_CAUSE.replace('-', ' ')}",
+            "Brought to the current shape",
+        )
+        _script(
+            bench,
+            legacy_run,
+            [
+                # Rewritten as a new proposal would be, its host read from `hostname`; the
+                # board decides the status it is copied with.
+                _placed(_staged(bench, "legacy.md", tickets.render(rewritten)), rewritten_ticket),
+                _decided_and_copied(
+                    python,
+                    store,
+                    rewritten_ticket,
+                    tickets.qualified_id(legacy_run, REWRITTEN_CAUSE),
+                ),
+            ],
+        )
+        legacy_feedback = _staged(bench, "legacy-feedback.md", LEGACY_FEEDBACK)
+        legacy = _pass(bench, "legacy", legacy_run, "--feedback", str(legacy_feedback))
+        started.append(legacy.run)
+        legacy_local = _item(bench, tickets.qualified_id(legacy_run, REWRITTEN_CAUSE))
+        legacy_after = _item(bench, legacy_issue)
 
         # A detached launch whose one turn is held, so its run is still being driven.
         detach_run = f"fu-detach-{pid}"
@@ -655,8 +796,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             other_after_first=other_after_first,
             comments_after_first=comments_after_first,
             board_after_first=board_after_first,
+            new_after_move=new_after_move,
             second=second,
             new_after_second=new_after_second,
+            local_after_second=local_after_second,
             other_after_second=other_after_second,
             comments_after_second=comments_after_second,
             board_after_second=board_after_second,
@@ -664,6 +807,13 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             edited_comment=edited_comment,
             unsound=unsound,
             unsound_ticket=unsound_ticket,
+            legacy=legacy,
+            legacy_before=legacy_before,
+            legacy_local=legacy_local,
+            legacy_after=legacy_after,
+            legacy_body=rewritten.body.replace(READ_FROM_HOSTNAME, HOST),
+            rewritten_ticket=rewritten_ticket,
+            left_ticket=left_ticket,
             detached=detached,
             detached_seconds=detached_seconds,
             detached_run=detached_run,
@@ -793,9 +943,21 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
         "every issue you created or updated with its URL",
         "every dropped draft with its reason",
         "every finding that should have been surfaced live",
+        "**Decide each ticket's status from the board, before every copy.**",
+        f"-m orchestrator.follow_up_tickets board-status --board {BOARD} <path of the ticket>`",
+        "Run `hostname` on the machine you run on and write exactly what it prints, both as "
+        "`host` and in the `## Evidence` section, never a value you type or recall",
     ):
         assert instruction in flat, instruction
-    contract = tickets.ticket_contract(main, BOARD).replace("@DRAFTS_ROOT@", str(root))
+    steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
+    decided = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets board-status) --board", steps)
+    assert decided is not None, steps
+    assert decided.start() < steps.index("**Put each ticket on the board.**"), steps
+    contract = (
+        tickets.ticket_contract(main, BOARD)
+        .replace("@DRAFTS_ROOT@", str(root))
+        .replace("@BOARD_STATUS@", decided[1])
+    )
     assert contract in task, "the ticket shape is not the one the module renders"
     assert tickets.comment_contract(main, BOARD) in task, "board ownership is not the module's"
     assert "## This is a re-dispatch" not in task
@@ -808,6 +970,9 @@ def test_a_verified_ticket_lands_on_the_board_with_its_shape_and_no_project_or_r
     landed = followed.new_after_first
 
     ticket = tickets.from_store_item(landed)
+    assert _category(landed) == tickets.Status.PROPOSED, "a new ticket did not land as a proposal"
+    assert ticket.host == HOST, "the ticket's host is not what `hostname` printed"
+    assert f"`{HOST}`" in ticket.body.split(f"## {tickets.EVIDENCE}", 1)[1]
     assert ticket.created_by_run == followed.main
     assert ticket.root_cause == NEW_CAUSE
     assert ticket.basis == (tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),)
@@ -849,10 +1014,34 @@ def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_add
     assert FEEDBACK.rstrip() in task.split(heading, 1)[1], "the feedback was not spliced verbatim"
     assert "## This is a re-dispatch" in task
     assert f"an issue run `{followed.main}` created is **edited**" in task
+    flat = " ".join(task.split())
+    assert (
+        f"an existing ticket of run `{followed.main}` is copied again carrying the board's" in flat
+    )
+    assert "a ticket of an older schema is brought to the current shape" in flat
 
     assert followed.board_after_second == followed.board_after_first, "a re-dispatch added an item"
-    assert followed.new_after_second["content"] == followed.edited_body
+    assert followed.new_after_second["content"] == followed.edited_body.replace(
+        READ_FROM_HOSTNAME, HOST
+    )
     assert followed.new_after_second["content"] != followed.new_after_first["content"]
+
+
+def test_a_re_copy_keeps_the_status_a_person_moved_the_board_item_to(
+    followed: Followed,
+) -> None:
+    """The user accepted the ticket between the passes, and the re-dispatch left it accepted.
+
+    The re-dispatch's agent staged its edited ticket as the proposal it was first written as
+    and asked `board-status` before copying, so what it copied carried the board's status.
+    """
+    accepted = tickets.Status.ACCEPTED
+
+    assert _category(followed.new_after_first) == tickets.Status.PROPOSED
+    assert _category(followed.new_after_move) == accepted, "the board item was not moved"
+    assert _category(followed.new_after_second) == accepted, "a re-copy undid the acceptance"
+    assert _category(followed.local_after_second) == accepted
+    assert followed.new_after_second["content"] != followed.new_after_move["content"]
     (comment,) = followed.comments_after_second
     assert comment["id"] == followed.comments_after_first[0]["id"]
     assert str(comment["body"]).strip() == followed.edited_comment.strip()
@@ -866,6 +1055,48 @@ def test_an_attached_run_names_every_ticket_that_fails_the_shape(followed: Follo
     assert unsound.returncode == UNSOUND, unsound.stdout + unsound.stderr
     assert f"{followed.unsound_ticket} is not a sound ticket" in unsound.stderr
     assert "carries a `project`" in unsound.stderr
+
+
+def test_a_feedback_re_dispatch_brings_a_schema_1_ticket_to_the_current_shape_and_keeps_its_status(
+    followed: Followed,
+) -> None:
+    """The back-fill of tickets filed before hosts: rewritten with this machine's, left accepted.
+
+    Both tickets were schema 1 and on the board, and a person had accepted one. The re-dispatch
+    rewrote that one and asked `board-status` before copying it; the other it never touched, and
+    the attached closeout names it rather than passing it.
+    """
+    legacy, before, local, after = (
+        followed.legacy,
+        followed.legacy_before,
+        followed.legacy_local,
+        followed.legacy_after,
+    )
+    accepted = tickets.Status.ACCEPTED
+
+    held_before = before["metadata"]
+    assert isinstance(held_before, dict)
+    assert held_before[tickets.KEY]["schema"] == 1
+    assert "host" not in held_before[tickets.KEY]
+    assert _category(before) == accepted, "the schema-1 board item was not moved"
+
+    (task,) = legacy.prompts
+    assert "a ticket of an older schema is brought to the current shape" in " ".join(task.split())
+    for shown in (local, after):
+        ticket = tickets.from_store_item(shown)
+        assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
+        assert f"`{HOST}`" in ticket.body.split(f"## {tickets.EVIDENCE}", 1)[1]
+        metadata = shown["metadata"]
+        assert isinstance(metadata, dict)
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
+        assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
+    assert after["content"] == followed.legacy_body
+    assert after["content"] != before["content"]
+
+    assert legacy.result.returncode == UNSOUND, legacy.result.stdout + legacy.result.stderr
+    assert f"{followed.left_ticket} is not a sound ticket" in legacy.result.stderr
+    assert "the record is schema 1, and this reads schema 2" in legacy.result.stderr
+    assert f"{followed.rewritten_ticket} is not a sound ticket" not in legacy.result.stderr
 
 
 def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_owns(

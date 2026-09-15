@@ -650,6 +650,13 @@ comment is a direct tweak; anything more goes back with `just follow-ups <run-id
 --feedback FILE`. On the `followups` board a run owns only the issues it created and the
 comments its marker names (`orchestrator/follow_up_tickets.py`).
 
+**The `followups` board is the user's decision.** A ticket's record's `host` names the
+machine its verification ran on, and its evidence states the same host. A new ticket
+reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
+later copy keeps whatever status the board holds, so a re-dispatch never moves an item
+back. Withdrawal closes a proposal as not planned, and a run never withdraws a ticket the
+board shows as accepted — only a person moves an accepted item.
+
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
 that decision with the user. Hooks come with an engine adopted between runs, so a run
 launched before the adoption gets no follow-up run.

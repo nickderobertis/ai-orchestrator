@@ -4,15 +4,18 @@
 through the real store and a real launch. What is proven here is what that journey reaches
 only one shape at a time: every way a store item can fail the ticket shape, the ownership
 predicates in both directions, and the single-pass fill that brings the manager's feedback
-into the task verbatim. The `validate` and `check-run` commands are driven against the
-installed `onetaskgraph`, over a drafts root this test names through the helper that
-composes that name.
+into the task verbatim. The `validate`, `check-run` and `board-status` commands are driven
+against the installed `onetaskgraph`, over a drafts root this test names through the helper
+that composes that name, and — for `board-status` — a second local store standing in for the
+board, whose item is moved the way a person moves it.
 """
 
 from __future__ import annotations
 
 import copy
 import dataclasses
+import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +23,7 @@ import follow_up_variables
 import pytest
 
 from orchestrator import follow_up_tickets as tickets
+from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -28,16 +32,26 @@ OTHER_RUN = "earlier-run"
 CAUSE = "cursor-skips-last-page"
 REPOSITORY = "github.com/nickderobertis/some-service"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+#: A well-formed hostname that is not this machine's: the validator checks the shape alone.
+HOST = "verifier-01.build.example"
 
-BODY = "\n\n".join(
-    f"## {heading}\n\nWhat this ticket says under {heading}." for heading in tickets.HEADINGS
-)
+
+def _body(host: str = HOST) -> str:
+    return "\n\n".join(
+        f"## {heading}\n\nWhat this ticket says under {heading}."
+        + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
+        for heading in tickets.HEADINGS
+    )
+
+
+BODY = _body()
+EVIDENCE_TEXT = f"What this ticket says under {tickets.EVIDENCE}. Verified on `{HOST}`."
 
 
 #: A sound ticket, which each test below states only its departures from.
 SOUND_TICKET = tickets.Ticket(
     title="some-service: the listing cursor skips the last page",
-    status=tickets.Status.OPEN,
+    status=tickets.Status.PROPOSED,
     root_cause=tickets.RootCause(CAUSE),
     repository=tickets.Origin(REPOSITORY),
     created_by_run=tickets.RunId(RUN),
@@ -45,6 +59,7 @@ SOUND_TICKET = tickets.Ticket(
     drafts=(tickets.QualifiedDraftId(f"drafts:{RUN}/drafts/20260101T000000Z-cursor"),),
     basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
     verified_at=tickets.Timestamp("2026-01-01T00:00:00Z"),
+    host=tickets.Host(HOST),
     body=BODY,
 )
 
@@ -60,7 +75,7 @@ def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
         "id": f"{RUN}/tickets/{held.root_cause}",
         "title": held.title,
         "content": held.body,
-        "status": {"category": held.status, "name": held.status},
+        "status": {"category": held.status.value, "name": held.status.written},
         "labels": [],
         "project": None,
         "repositories": [],
@@ -81,9 +96,19 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
     assert tickets.from_store_item(_item(), run=RUN, root_cause=CAUSE) == _ticket()
 
 
-def test_a_withdrawn_ticket_is_still_a_ticket() -> None:
-    withdrawn = _ticket(status=tickets.Status.WITHDRAWN)
-    assert tickets.from_store_item(_item(withdrawn)).status == tickets.Status.WITHDRAWN
+def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
+    held = tickets.record(_ticket())
+
+    assert held["schema"] == tickets.SCHEMA == 2
+    keys = list(held)
+    assert keys == list(tickets.RECORD_KEYS)
+    assert keys.index("host") == keys.index("verified_at") + 1
+    assert held["host"] == HOST
+
+
+@pytest.mark.parametrize("status", list(tickets.Status))
+def test_each_ticket_status_is_admitted(status: tickets.Status) -> None:
+    assert tickets.from_store_item(_item(_ticket(status=status))).status is status
 
 
 def _set(key: str, value: object) -> Callable[[dict[str, object]], None]:
@@ -111,16 +136,23 @@ def _no_record(item: dict[str, object]) -> None:
     item["metadata"] = {}
 
 
+def _status(word: str) -> Callable[[dict[str, object]], None]:
+    return _set("status", {"category": word, "name": word})
+
+
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
         (_set("project", "listing-run"), "carries a `project`"),
         (_set("repositories", [REPOSITORY]), "carries `repositories`"),
-        (_set("status", {"category": "done", "name": "done"}), "the status is 'done'"),
+        (_status("unknown"), "the status is 'unknown'"),
+        (_status("draft"), "the status is 'draft'"),
+        (_set("status", "open"), "the status is 'open'"),
         (_no_record, "carries no `orchestrator.follow-up` metadata record"),
         (_drop_record("basis"), "record is missing basis"),
+        (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 2), "is schema 2"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 2"),
         (_set_record("schema", True), "is schema True"),
         (_set_record("root_cause", "Not A Slug"), "is not a kebab-case slug"),
         (_set_record("root_cause", "another-cause"), "is not the file's root cause"),
@@ -146,8 +178,12 @@ def _no_record(item: dict[str, object]) -> None:
         (_set("content", None), "the ticket has no body"),
         (_set("content", BODY.replace("## Examples", "## Samples")), "no `## Examples` heading"),
         (
-            _set("content", BODY.replace("What this ticket says under Evidence.", "")),
+            _set("content", BODY.replace(EVIDENCE_TEXT, "")),
             "the body's `## Evidence` section is empty",
+        ),
+        (
+            _set("content", _body("another-host")),
+            f"`## Evidence` section does not name the host '{HOST}'",
         ),
     ],
 )
@@ -163,6 +199,75 @@ def test_each_way_an_item_is_not_a_ticket_is_named(
     with pytest.raises(tickets.Refused) as refused:
         tickets.from_store_item(item, run=RUN, root_cause=CAUSE)
     assert reason in str(refused.value)
+
+
+def test_a_status_outside_the_vocabulary_is_told_what_each_status_means() -> None:
+    (problem,) = tickets.problems(copy.deepcopy(_item()) | {"status": "unknown"})
+
+    for status in tickets.Status:
+        assert f"`{status}`, {status.meaning}" in problem, problem
+
+
+def test_a_missing_host_is_named_in_the_one_line_naming_every_missing_key() -> None:
+    item = _item()
+    del _record(item)["basis"]
+    del _record(item)["host"]
+
+    found = tickets.problems(item, run=RUN, root_cause=CAUSE)
+
+    missing = [problem for problem in found if "is missing" in problem]
+    assert missing == ["the `orchestrator.follow-up` record is missing basis, host"], found
+
+
+def test_a_schema_1_ticket_is_refused_naming_its_schema() -> None:
+    """The shape a ticket was written in before `host`: schema 1, and no `host` key."""
+    item = _item()
+    _record(item)["schema"] = 1
+    del _record(item)["host"]
+
+    found = tickets.problems(item, run=RUN, root_cause=CAUSE)
+
+    assert found[0].startswith("the record is schema 1, and this reads schema 2"), found
+    assert "the `orchestrator.follow-up` record is missing host" in found
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        "-leading",
+        "trailing-",
+        "under_score",
+        "two..dots",
+        "trailing.",
+        ".leading",
+        "hôte",
+        "has space",
+        "line\nbreak",
+        "a" * 64,
+        ".".join(["a" * 63] * 4),
+        7,
+        None,
+    ],
+)
+def test_a_host_that_is_not_a_hostname_is_refused(host: object) -> None:
+    item = copy.deepcopy(_item())
+    _record(item)["host"] = host
+
+    found = tickets.problems(item, run=RUN, root_cause=CAUSE)
+
+    assert any(problem.startswith(f"`host` {host!r} is not a hostname") for problem in found), found
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["lima-hp", "a", "A-1.b2.example", "a" * 63, ".".join(["a" * 63] * 3 + ["a" * 61])],
+)
+def test_any_well_formed_hostname_is_accepted_whatever_machine_it_names(host: str) -> None:
+    ticket = _ticket(host=tickets.Host(host), body=_body(host))
+
+    assert tickets.problems(_item(ticket), run=RUN, root_cause=CAUSE) == []
+    assert tickets.from_store_item(_item(ticket)).host == host
 
 
 def test_every_problem_is_named_at_once_rather_than_the_first() -> None:
@@ -230,8 +335,19 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_comments_only_on_oth
 
 TEMPLATE = (
     "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
+    "Decide each status with @BOARD_STATUS@.\n"
     "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
+BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
+
+
+def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-root") -> str:
+    """The ticket contract as a composed task carries it, its values filled."""
+    return (
+        tickets.ticket_contract(run, board)
+        .replace("@DRAFTS_ROOT@", root)
+        .replace("@BOARD_STATUS@", BOARD_STATUS)
+    )
 
 
 def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
@@ -241,6 +357,7 @@ def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
         board="followups",
         drafts_root=Path("/drafts-root"),
         validate="python -m orchestrator.follow_up_tickets validate",
+        board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
         feedback=feedback,
         redispatch=redispatch,
@@ -255,9 +372,7 @@ def test_the_composed_task_fills_every_placeholder_and_renders_both_contracts() 
         "Run listing-run onto followups under /drafts-root, validating with python -m "
     )
     assert task.rstrip().endswith("Again, listing-run.")
-    assert (
-        tickets.ticket_contract(RUN, "followups").replace("@DRAFTS_ROOT@", "/drafts-root") in task
-    )
+    assert _contract() in task
     assert tickets.comment_contract(RUN, "followups") in task
     assert f"onetaskgraph task copy drafts:{RUN}/tickets/<root-cause> --to followups" in task
     assert tickets.comment_marker(RUN, "<root-cause>") in task
@@ -272,6 +387,7 @@ def test_a_value_the_template_names_more_than_once_is_filled_everywhere() -> Non
         board="followups",
         drafts_root=Path("/drafts-root"),
         validate="v",
+        board_status="s",
         checkout=Path("/checkout"),
         feedback=None,
         redispatch=False,
@@ -281,8 +397,11 @@ def test_a_value_the_template_names_more_than_once_is_filled_everywhere() -> Non
 
 
 @pytest.mark.reads_docs
-def test_the_tracked_template_composes_into_a_task_with_nothing_left_unfilled() -> None:
-    """The template the recipe composes from is one this module accepts, whole."""
+def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contract() -> None:
+    """The template the recipe composes from carries the module's contract whole.
+
+    And it names the status decision as a step of its own, before the step that copies.
+    """
     template = (REPO_ROOT / "config" / "follow-up-task.md").read_text(encoding="utf-8")
 
     task = tickets.compose(
@@ -291,18 +410,23 @@ def test_the_tracked_template_composes_into_a_task_with_nothing_left_unfilled() 
         board="followups",
         drafts_root=Path("/drafts-root"),
         validate="python -m orchestrator.follow_up_tickets validate",
+        board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
         feedback="Merge the two cursor tickets.\n",
         redispatch=True,
     )
 
     assert tickets.PLACEHOLDER.search(task) is None
+    assert _contract() in task
     assert tickets.comment_contract(RUN, "followups") in task
     assert "## This is a re-dispatch" in task
     assert "Merge the two cursor tickets." in task
+    steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
+    decided = steps.index(f"`{BOARD_STATUS} --board followups <path of the ticket>`")
+    assert decided < steps.index("**Put each ticket on the board.**"), steps
 
 
-def test_the_contract_renders_the_ticket_with_every_key_and_heading() -> None:
+def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule() -> None:
     contract = tickets.ticket_contract(RUN, "followups")
 
     for key in tickets.RECORD_KEYS:
@@ -310,6 +434,13 @@ def test_the_contract_renders_the_ticket_with_every_key_and_heading() -> None:
     for heading in tickets.HEADINGS:
         assert f"## {heading}" in contract, heading
     assert "no `project`" in contract and "no `repositories`" in contract
+    assert f"A new ticket is `{tickets.Status.PROPOSED}`" in contract
+    assert "A ticket the board already holds carries the status the board holds it at" in contract
+    assert f"withdraws is `{tickets.Status.WITHDRAWN}`" in contract
+    assert "unless the board shows it as accepted: then copy nothing, leave the local" in contract
+    assert "report that you would have withdrawn it and why" in contract
+    assert "Run `hostname` on the machine you run on and write exactly what it prints" in contract
+    assert "@BOARD_STATUS@ --board followups <path of the ticket>" in contract
 
 
 def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
@@ -322,6 +453,15 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     assert feedback.rstrip() in task.split(heading, 1)[1]
     assert "## This is a re-dispatch" in task
     assert "an issue run `listing-run` created is **edited**" in task
+    flat = " ".join(task.split())
+    assert (
+        f"an existing ticket of run `listing-run` is copied again carrying the board's status, "
+        f"which `{BOARD_STATUS} --board followups <path of the ticket>` prints"
+    ) in flat
+    assert (
+        "a ticket of an older schema is brought to the current shape before it is copied, "
+        "its `host` read from this machine with `hostname`"
+    ) in flat
 
 
 @pytest.mark.parametrize(
@@ -329,6 +469,7 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     [
         (TEMPLATE + "@UNKNOWN@", "placeholders nothing fills: UNKNOWN"),
         (TEMPLATE.replace("@FEEDBACK@", ""), "missing placeholders: FEEDBACK"),
+        (TEMPLATE.replace("@BOARD_STATUS@", ""), "missing placeholders: BOARD_STATUS"),
         (TEMPLATE + "@COMMENT_CONTRACT@", "more than once: COMMENT_CONTRACT"),
     ],
 )
@@ -342,6 +483,7 @@ def test_a_template_that_does_not_name_each_placeholder_once_is_refused(
             board="followups",
             drafts_root=Path("/r"),
             validate="v",
+            board_status="s",
             checkout=Path("/checkout"),
             feedback=None,
             redispatch=False,
@@ -375,10 +517,27 @@ def test_validate_reads_a_rendered_ticket_through_the_store_as_sound(
     assert "is a sound ticket" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("status", list(tickets.Status))
+def test_the_store_reads_each_status_a_ticket_is_written_with_as_that_status(
+    drafts_root: Path, status: tickets.Status
+) -> None:
+    """A status is the store's category, written in whichever word the store reads as it."""
+    path = _write(drafts_root, _ticket(status=status))
+    run, cause = tickets.located_path(path)
+    item = plan_store.one_item(
+        plan_store.store_json(["task", "show", tickets.qualified_id(run, cause)]), "task"
+    )
+
+    assert item["status"] == {"category": status.value, "name": status.written}
+    assert tickets.read_ticket(path).status is status
+
+
 def test_validate_names_each_problem_of_a_ticket_the_store_reads(
     drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rendered = tickets.render(_ticket()).replace('status: "todo"', 'status: "todo"\nproject: "p"')
+    rendered = tickets.render(_ticket()).replace(
+        'status: "backlog"', 'status: "backlog"\nproject: "p"'
+    )
     path = _write(drafts_root, _ticket(), rendered)
 
     assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
@@ -414,6 +573,166 @@ def test_check_run_validates_every_ticket_a_run_holds(
     assert "second-cause.md is not a sound ticket" in captured.err
 
 
+#: The local store standing in for the board `board-status` asks, spelled lowercase because
+#: it is spelled into the store's environment layer as well as onto `--board`.
+BOARD = "ticketboard"
+#: A status a person could type onto a board item that the store's vocabulary cannot place.
+UNPLACEABLE = "waiting-on-vendor"
+
+
+@pytest.fixture
+def board(drafts_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A second local store standing in for the board, beside the drafts root."""
+    root = tmp_path / "board"
+    root.mkdir()
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN", WRITABLE_PLUGIN)
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT", str(root))
+    return root
+
+
+def _on_board(ticket: Path) -> str:
+    """Copy ``ticket`` onto the board through the store, as the agent does; its item's id."""
+    run, cause = tickets.located_path(ticket)
+    copied = plan_store.store_json(
+        ["task", "copy", tickets.qualified_id(run, cause), "--to", BOARD]
+    )
+    destination = copied["items"][0]["destination"]
+    assert isinstance(destination, str), copied
+    return destination
+
+
+def _board_item(destination: str) -> dict[str, object]:
+    return dict(plan_store.one_item(plan_store.store_json(["task", "show", destination]), "task"))
+
+
+def _moved(destination: str, word: str) -> None:
+    """Move the board item to ``word``, the way a person edits the item's status.
+
+    A `local-md` item is a file, and the installed store has no verb that changes a status,
+    so a person moves one by editing it; the store reads the edit back through `task show`.
+    """
+    location = _board_item(destination)["location"]
+    assert isinstance(location, dict)
+    path = Path(str(location["path"]))
+    text = path.read_text(encoding="utf-8")
+    moved = re.sub(r"^status: .*$", f"status: {json.dumps(word)}", text, count=1, flags=re.M)
+    assert moved != text or f"status: {json.dumps(word)}" in text, text
+    path.write_text(moved, encoding="utf-8")
+
+
+def _board_category(destination: str) -> object:
+    status = _board_item(destination)["status"]
+    assert isinstance(status, dict)
+    return status["category"]
+
+
+def _decided(ticket: Path, capsys: pytest.CaptureFixture[str], *extra: str) -> tuple[int, str, str]:
+    status = tickets.main(["board-status", "--board", BOARD, *extra, str(ticket)])
+    captured = capsys.readouterr()
+    return status, captured.out, captured.err
+
+
+def test_board_status_answers_backlog_for_a_ticket_the_board_holds_no_item_for(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ticket = _write(drafts_root, _ticket(status=tickets.Status.ACCEPTED))
+
+    assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
+    assert not any(board.rglob("*.md")), "deciding a status wrote to the board"
+
+
+@pytest.mark.parametrize("held", list(tickets.Status))
+def test_board_status_answers_the_status_the_board_holds_the_item_at(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], held: tickets.Status
+) -> None:
+    ticket = _write(drafts_root, _ticket())
+    destination = _on_board(ticket)
+    _moved(destination, held.written)
+    assert _board_category(destination) == held.value
+
+    status, printed, _ = _decided(ticket, capsys)
+
+    assert (status, printed) == (tickets.SOUND, f"{held.written}\n")
+    written = _write(drafts_root, _ticket(status=tickets.Status(held)))
+    assert tickets.read_ticket(written).status is held, "the printed word is not that status"
+
+
+def test_board_status_refuses_an_item_the_store_cannot_place_with_a_status_of_its_own(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ticket = _write(drafts_root, _ticket())
+    destination = _on_board(ticket)
+    _moved(destination, UNPLACEABLE)
+    assert _board_category(destination) == "unknown"
+
+    for extra in ((), ("--withdraw",)):
+        status, printed, reported = _decided(ticket, capsys, *extra)
+
+        assert status == tickets.UNPLACED, extra
+        assert tickets.UNPLACED not in (tickets.SOUND, tickets.UNRUNNABLE, tickets.ACCEPTED)
+        assert printed == ""
+        assert "at category 'unknown', which no ticket carries" in reported
+
+
+@pytest.mark.parametrize("held", [None, tickets.Status.PROPOSED, tickets.Status.WITHDRAWN])
+def test_a_withdrawal_closes_a_ticket_nobody_accepted(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    held: tickets.Status | None,
+) -> None:
+    ticket = _write(drafts_root, _ticket())
+    if held is not None:
+        _moved(_on_board(ticket), held.written)
+
+    assert _decided(ticket, capsys, "--withdraw") == (tickets.SOUND, "cancelled\n", "")
+
+
+@pytest.mark.parametrize("held", [status for status in tickets.Status if status.accepted])
+def test_a_withdrawal_of_a_ticket_the_board_shows_as_accepted_is_refused_and_moves_nothing(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], held: tickets.Status
+) -> None:
+    ticket = _write(drafts_root, _ticket())
+    before = ticket.read_text(encoding="utf-8")
+    destination = _on_board(ticket)
+    _moved(destination, held.written)
+
+    status, printed, reported = _decided(ticket, capsys, "--withdraw")
+
+    assert status == tickets.ACCEPTED
+    assert tickets.ACCEPTED not in (tickets.SOUND, tickets.UNRUNNABLE, tickets.UNPLACED)
+    assert printed == ""
+    assert f"holds this ticket's item at `{held}`" in reported
+    assert "this run never withdraws it" in reported
+    assert _board_category(destination) == held.value
+    assert ticket.read_text(encoding="utf-8") == before
+
+
+def test_board_status_that_cannot_ask_the_board_is_unrunnable(
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket = _write(drafts_root, _ticket())
+
+    assert tickets.main(["board-status", "--board", "no-such-board", str(ticket)]) == (
+        tickets.UNRUNNABLE
+    )
+    assert 'no source named "no-such-board"' in capsys.readouterr().err
+
+    stray = tmp_path / "not-a-ticket.md"
+    assert tickets.main(["board-status", "--board", BOARD, str(stray)]) == tickets.UNRUNNABLE
+    assert "is not where a ticket is stored" in capsys.readouterr().err
+
+    # A dry-run answer naming neither a new item nor an existing one, which the installed
+    # store does not give: the one answer here that stands in for the store.
+    monkeypatch.setattr(plan_store, "store_json", lambda _arguments: {"items": []})
+    assert tickets.main(["board-status", "--board", BOARD, str(ticket)]) == tickets.UNRUNNABLE
+    assert "naming neither a new item nor an existing one" in capsys.readouterr().err
+
+
 def test_inventory_counts_a_runs_drafts_and_tickets(
     drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -445,6 +764,8 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         "followups",
         "--validate",
         "v",
+        "--board-status",
+        "s",
         "--checkout",
         "/checkout",
     ]
@@ -462,7 +783,7 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         (["inventory", "--root", "/r", "../escape"], "is not a run id"),
         (
             ["compose", "--template", "/no/such/template", "--root", "/r", "--run", RUN]
-            + ["--board", "b", "--validate", "v", "--checkout", "/c"],
+            + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"],
             "No such file",
         ),
     ],
@@ -491,7 +812,7 @@ def test_a_template_the_compose_command_refuses_is_unrunnable(
 
     status = tickets.main(
         ["compose", "--template", str(template), "--root", str(tmp_path), "--run", RUN]
-        + ["--board", "b", "--validate", "v", "--checkout", "/c"]
+        + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"]
     )
 
     assert status == tickets.UNRUNNABLE

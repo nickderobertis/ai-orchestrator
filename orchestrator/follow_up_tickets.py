@@ -17,8 +17,15 @@ seam and both outlive the agent that wrote them, so both are decided here and no
 composes the agent's task — rendering both contracts into it from :func:`ticket_contract`
 and :func:`comment_contract` rather than restating them — and names every ticket that fails
 the shape once an attached run settles. The agent validates each ticket it writes through
-this module's `validate` command before copying it. And the journeys read the board back
-through :func:`from_store_item` and :func:`comment_owner`.
+this module's `validate` command, and decides the status it carries through its
+`board-status` command, before copying it. And the journeys read the board back through
+:func:`from_store_item` and :func:`comment_owner`.
+
+**The board is the record of the user's decision, and a ticket names its machine.** A ticket
+reaches the board as a proposal and a person accepts it there, so the status a copy writes
+is read off the board item first (:func:`status_before_copy`) rather than carried over from
+the ticket. Evidence is a claim about trees read on one machine, so the record's `host` and
+its `## Evidence` section both name the host the verification ran on.
 
 **A ticket is read through the store, never parsed here.** An agent writes the front matter
 in whatever YAML style it likes, and what reaches the board is what the installed
@@ -54,22 +61,58 @@ TICKETS = drafts.TICKETS
 BOARD = "followups"
 
 #: The version of the record below. A reader refuses any other: a ticket is a stored shape
-#: that outlives the agent that wrote it.
-SCHEMA = 1
+#: that outlives the agent that wrote it. Schema 2 added `host` and the proposal statuses.
+SCHEMA = 2
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
 
 
 class Status(StrEnum):
-    """A ticket's status: standing, or withdrawn by its run.
+    """A ticket's status, as the plan store's category of its board item.
 
-    The board holds a withdrawn ticket's issue as closed as not planned; no issue is ever
-    deleted.
+    **The board is the record of the user's decision.** A ticket reaches it as a proposal,
+    and a person moving the item to `todo` is what accepts it, so a later agent selects
+    accepted tickets by this category alone. The `followups` source maps `backlog` to the
+    board's `Proposal` option (`onetaskgraph.yaml`); a withdrawn ticket's issue is closed as
+    not planned, and no issue is ever deleted.
     """
 
-    OPEN = "todo"
+    PROPOSED = "backlog"
+    ACCEPTED = "todo"
+    UNDER_WAY = "in-progress"
+    FINISHED = "done"
     WITHDRAWN = "cancelled"
+
+    @property
+    def meaning(self) -> str:
+        """What this status says about a ticket."""
+        return _MEANINGS[self]
+
+    @property
+    def accepted(self) -> bool:
+        """Whether a person accepted the ticket, which only a person undoes."""
+        return self in (Status.ACCEPTED, Status.UNDER_WAY, Status.FINISHED)
+
+    @property
+    def written(self) -> str:
+        """The word a ticket's `status` is written as, which the store reads as this category.
+
+        The category's own spelling for every status but one: onetaskgraph 0.2.31's
+        `local-md` source reads `in-progress` as `unknown` and `in progress` as
+        `in-progress`. `tests/test_follow_up_tickets.py` reads every word back through the
+        installed store.
+        """
+        return "in progress" if self is Status.UNDER_WAY else self.value
+
+
+_MEANINGS = {
+    Status.PROPOSED: "a proposal awaiting the user's decision",
+    Status.ACCEPTED: "accepted",
+    Status.UNDER_WAY: "accepted and under way",
+    Status.FINISHED: "accepted and finished",
+    Status.WITHDRAWN: "withdrawn",
+}
 
 
 #: The identities a ticket names, each a type of its own so that one cannot be passed where
@@ -82,6 +125,7 @@ Origin = NewType("Origin", str)
 Commit = NewType("Commit", str)
 QualifiedDraftId = NewType("QualifiedDraftId", str)
 Timestamp = NewType("Timestamp", str)
+Host = NewType("Host", str)
 
 
 class Basis(NamedTuple):
@@ -104,6 +148,7 @@ RECORD_KEYS = (
     "drafts",
     "basis",
     "verified_at",
+    "host",
 )
 
 #: The level-2 headings a ticket's body carries, in this order, each with content.
@@ -116,11 +161,20 @@ HEADINGS = (
     "Owning runs",
 )
 
+#: The heading whose section names the host the verification ran on.
+EVIDENCE = "Evidence"
+
 #: A root cause's slug, which names the ticket's file.
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 #: A commit a claim was verified at.
 COMMIT = re.compile(r"[0-9a-f]{40}")
+
+#: The host a ticket's verification ran on, as `hostname` prints it: at most this many
+#: characters, of dot-separated labels, each 1–63 ASCII letters, digits and `-`, neither
+#: starting nor ending with `-`. Its shape is checked, never its value.
+HOST_LIMIT = 253
+HOST_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 
 #: A qualified draft id a ticket consumed.
 DRAFT_ID = re.compile(rf"{re.escape(SOURCE)}:(?P<run>[^/\s]+)/{re.escape(drafts.DRAFTS)}/[^/\s]+")
@@ -140,7 +194,7 @@ TICKET_SUFFIX = ".md"
 #: prose needs them, and sections it names exactly once, since a section rendered twice is
 #: two copies of a contract in one task.
 PLACEHOLDER = re.compile(r"@([A-Z][A-Z_]*)@")
-VALUES = ("RUN", "BOARD", "DRAFTS_ROOT", "VALIDATE", "CHECKOUT")
+VALUES = ("RUN", "BOARD", "DRAFTS_ROOT", "VALIDATE", "BOARD_STATUS", "CHECKOUT")
 SECTIONS = ("TICKET_CONTRACT", "COMMENT_CONTRACT", "REDISPATCH", "FEEDBACK")
 PLACEHOLDERS = (*VALUES, *SECTIONS)
 
@@ -148,9 +202,18 @@ PLACEHOLDERS = (*VALUES, *SECTIONS)
 PROG = "follow-up-tickets"
 
 #: Exit statuses: every ticket is sound; a ticket failed the shape; the command could not run.
+#: And two of `board-status`'s own, each a ticket not to copy: the board holds its item at a
+#: category no ticket carries; and a withdrawal the board's acceptance of the item refuses.
 SOUND = 0
 UNSOUND = 1
 UNRUNNABLE = 2
+UNPLACED = 3
+ACCEPTED = 4
+
+#: What a dry-run `onetaskgraph task copy` reports for a ticket the board holds no item for,
+#: and each action it reports for one whose item the board already holds.
+CREATED = "created"
+EXISTING = ("updated", "unchanged")
 
 
 class Refused(ValueError):
@@ -174,6 +237,7 @@ class Ticket:
     drafts: tuple[QualifiedDraftId, ...]
     basis: tuple[Basis, ...]
     verified_at: Timestamp
+    host: Host
     body: str
 
 
@@ -205,13 +269,18 @@ def record(ticket: Ticket) -> dict[str, object]:
         "drafts": list(ticket.drafts),
         "basis": {entry.origin: entry.commit for entry in ticket.basis},
         "verified_at": ticket.verified_at,
+        "host": ticket.host,
     }
 
 
 def render(ticket: Ticket) -> str:
     """One ticket as the `local-md` record it is stored as: no `project`, no `repositories`."""
     return frontmatter(
-        {"title": ticket.title, "status": ticket.status, "metadata": {KEY: record(ticket)}},
+        {
+            "title": ticket.title,
+            "status": ticket.status.written,
+            "metadata": {KEY: record(ticket)},
+        },
         ticket.body,
     )
 
@@ -304,19 +373,33 @@ def _real_time(value: object) -> bool:
     return True
 
 
+def is_host(value: object) -> bool:
+    """Whether ``value`` has a hostname's shape; which host it names is never checked."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= HOST_LIMIT
+        and all(HOST_LABEL.fullmatch(label) for label in value.split("."))
+    )
+
+
 def _record_problems(
     held: Mapping[str, object], *, run: str | None, root_cause: str | None
 ) -> list[str]:
+    found = []
+    # Named before the missing keys, because a ticket of an older schema lacks the keys its
+    # successor added, and the schema is what says why.
+    if "schema" in held and (type(held["schema"]) is not int or held["schema"] != SCHEMA):
+        found.append(
+            f"the record is schema {held['schema']!r}, and this reads schema {SCHEMA}; bring "
+            "the ticket to the current shape"
+        )
     missing = [key for key in RECORD_KEYS if key not in held]
     if missing:
-        return [f"the `{KEY}` record is missing {', '.join(missing)}"]
-    found = []
+        return [*found, f"the `{KEY}` record is missing {', '.join(missing)}"]
     if unexpected := sorted(key for key in held if key not in RECORD_KEYS):
         found.append(
             f"the `{KEY}` record carries keys this does not write: {', '.join(unexpected)}"
         )
-    if type(held["schema"]) is not int or held["schema"] != SCHEMA:
-        found.append(f"the record is schema {held['schema']!r}, and this reads schema {SCHEMA}")
     stated = held["root_cause"]
     if not isinstance(stated, str) or not SLUG.fullmatch(stated):
         found.append(f"`root_cause` {stated!r} is not a kebab-case slug")
@@ -342,10 +425,16 @@ def _record_problems(
             f"`verified_at` {held['verified_at']!r} is not an RFC 3339 UTC time like "
             "YYYY-MM-DDTHH:MM:SSZ"
         )
+    if not is_host(held["host"]):
+        found.append(
+            f"`host` {held['host']!r} is not a hostname: at most {HOST_LIMIT} characters of "
+            "dot-separated labels, each 1–63 ASCII letters, digits and `-`, neither starting "
+            "nor ending with `-`; write what `hostname` prints"
+        )
     return found
 
 
-def _body_problems(body: object) -> list[str]:
+def _body_problems(body: object, host: object) -> list[str]:
     if not isinstance(body, str):
         return ["the ticket has no body"]
     found = drafts.sections(body)
@@ -363,6 +452,11 @@ def _body_problems(body: object) -> list[str]:
             ]
         if not found[at][1].strip():
             return [f"the body's `## {required}` section is empty"]
+        if required == EVIDENCE and is_host(host) and str(host) not in found[at][1]:
+            return [
+                f"the body's `## {EVIDENCE}` section does not name the host {host!r} the "
+                "record's `host` states; state there the host the verification ran on"
+            ]
         after = at + 1
     return []
 
@@ -385,24 +479,29 @@ def problems(
             "the ticket carries `repositories`; a ticket carries none, so its issue is "
             "filed in the board's own repository whatever repository the root cause lives in"
         )
-    status = item.get("status")
-    name = status.get("name") if isinstance(status, Mapping) else status
-    if name not in tuple(Status):
+    category = _category(item.get("status"))
+    if category not in tuple(Status):
         found.append(
-            f"the status is {name!r}, where a ticket is `{Status.OPEN}` while it stands and "
-            f"`{Status.WITHDRAWN}` once withdrawn"
+            f"the status is {category!r}, where a ticket's status is "
+            + "; ".join(f"`{status}`, {status.meaning}" for status in Status)
+            + " — write the one `board-status` prints"
         )
     metadata = item.get("metadata")
     held = metadata.get(KEY) if isinstance(metadata, Mapping) else None
     if isinstance(held, Mapping):
         found.extend(_record_problems(held, run=run, root_cause=root_cause))
-        repository = held.get("repository")
+        repository, host = held.get("repository"), held.get("host")
     else:
         found.append(f"the ticket carries no `{KEY}` metadata record")
-        repository = None
+        repository = host = None
     found.extend(_title_problems(item.get("title"), repository))
-    found.extend(_body_problems(item.get("content")))
+    found.extend(_body_problems(item.get("content"), host))
     return found
+
+
+def _category(status: object) -> object:
+    """The category a store item's status reports, which is what a ticket's status is."""
+    return status.get("category") if isinstance(status, Mapping) else status
 
 
 def from_store_item(
@@ -413,7 +512,6 @@ def from_store_item(
     if found:
         raise Refused(found)
     metadata = item["metadata"]
-    status = item["status"]
     # `problems` has just proven every shape narrowed here, and says so if it has not.
     assert isinstance(metadata, Mapping)  # noqa: S101
     held = metadata[KEY]
@@ -422,7 +520,7 @@ def from_store_item(
     assert isinstance(basis, Mapping)  # noqa: S101
     return Ticket(
         title=str(item["title"]),
-        status=Status(str(status.get("name") if isinstance(status, Mapping) else status)),
+        status=Status(str(_category(item["status"]))),
         root_cause=RootCause(str(held["root_cause"])),
         repository=Origin(str(held["repository"])),
         created_by_run=RunId(str(held["created_by_run"])),
@@ -434,6 +532,7 @@ def from_store_item(
             )
         ),
         verified_at=Timestamp(str(held["verified_at"])),
+        host=Host(str(held["host"])),
         body=str(item["content"]).strip(),
     )
 
@@ -482,6 +581,68 @@ def read_ticket(path: Path) -> Ticket:
             ]
         )
     return from_store_item(item, run=run, root_cause=root_cause)
+
+
+class Unplaced(ValueError):
+    """The board holds a ticket's item at a category no ticket carries, so it is not copied."""
+
+    def __init__(self, category: str) -> None:
+        super().__init__(
+            f"the board holds this ticket's item at category {category!r}, which no ticket "
+            "carries; copy nothing and report it"
+        )
+
+
+class AcceptedOnBoard(ValueError):
+    """A withdrawal of a ticket the board shows as accepted, which only a person undoes."""
+
+    def __init__(self, status: Status) -> None:
+        super().__init__(
+            f"the board holds this ticket's item at `{status}` ({status.meaning}), so this "
+            "run never withdraws it: copy nothing, leave the local ticket as it is, and "
+            "report that you would have withdrawn it and why"
+        )
+        self.status = status
+
+
+def board_category(ticket: str, board: str) -> str | None:
+    """The category ``board`` holds ``ticket``'s item at, or `None` when it holds no item.
+
+    Asked of the store's own copy, dry-run, because the origin a copy records is the only
+    correspondence between a ticket and its item: the dry-run reports whether the copy would
+    create an item or reach an existing one, and names that one.
+    """
+    planned = plan_store.store_json(["task", "copy", ticket, "--to", board, "--dry-run"])
+    entries = planned.get("items")
+    entry = entries[0] if isinstance(entries, list) and len(entries) == 1 else None
+    action = entry.get("action") if isinstance(entry, Mapping) else None
+    destination = entry.get("destination") if isinstance(entry, Mapping) else None
+    if action == CREATED:
+        return None
+    if action not in EXISTING or not isinstance(destination, str):
+        raise OSError(
+            f"the dry-run copy of {ticket} onto {board} answered {entries!r}, naming neither "
+            "a new item nor an existing one"
+        )
+    item = plan_store.one_item(plan_store.store_json(["task", "show", destination]), "task")
+    return str(_category(item.get("status")))
+
+
+def status_before_copy(held: str | None, *, withdraw: bool) -> Status:
+    """The status a ticket is copied with, given the category the board holds its item at.
+
+    A ticket the board holds no item for is a proposal; one it holds carries the board's
+    status, so a copy never undoes a person's decision; and a withdrawal closes an item only
+    while nobody has accepted it. :class:`Unplaced` or :class:`AcceptedOnBoard` otherwise.
+    """
+    if held is None:
+        return Status.WITHDRAWN if withdraw else Status.PROPOSED
+    if held not in tuple(Status):
+        raise Unplaced(held)
+    status = Status(held)
+    if withdraw and status.accepted:
+        raise AcceptedOnBoard(status)
+    return Status.WITHDRAWN if withdraw else status
 
 
 def comment_marker(run: str, root_cause: str) -> str:
@@ -547,8 +708,9 @@ _HEADING_GUIDANCE = (
     "<a simple explanation of the root cause>",
     "<the normalized origin, and the paths inside it>",
     "<one or more examples of it>",
-    "<per draft: the qualified draft id, its run and node, the verified claim with "
-    "`path:line` at the basis commit, and the transcript command from the draft>",
+    "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
+    "the qualified draft id, its run and node, the verified claim with `path:line` at the "
+    "basis commit, and the transcript command from the draft>",
     "<the suggested fixes>",
     "<every run whose evidence this ticket carries>",
 )
@@ -558,7 +720,7 @@ def ticket_contract(run: str, board: str) -> str:
     """C5, as the follow-up agent is told it: the shape of the ticket it writes."""
     example = Ticket(
         title="<repository name>: <the root cause in one line>",
-        status=Status.OPEN,
+        status=Status.PROPOSED,
         root_cause=RootCause("<root-cause>"),
         repository=Origin(
             "<normalized origin the root cause lives in, like github.com/owner/name>"
@@ -576,6 +738,7 @@ def ticket_contract(run: str, board: str) -> str:
             ),
         ),
         verified_at=Timestamp("<now, in RFC 3339 UTC: YYYY-MM-DDTHH:MM:SSZ>"),
+        host=Host("<exactly what `hostname` prints on the machine you run on>"),
         body="\n\n".join(
             f"## {heading}\n\n{guidance}"
             for heading, guidance in zip(HEADINGS, _HEADING_GUIDANCE, strict=True)
@@ -593,13 +756,26 @@ def ticket_contract(run: str, board: str) -> str:
         "- Its title is `<repository name>: <the root cause in one line>`, at most "
         f"{TITLE_LIMIT} characters, where the repository name is the last segment of "
         "`repository`.\n"
-        f"- Its status is `{Status.OPEN}` while it stands. A ticket this run withdraws is "
-        f"copied again with status `{Status.WITHDRAWN}`, which the board holds as closed as not "
-        "planned. "
-        "No issue is ever deleted.\n"
+        "- **Its status is the board's to decide.** A new ticket is "
+        f"`{Status.PROPOSED.written}`, {Status.PROPOSED.meaning}, which the board shows as "
+        "`Proposal`; a person moving it to `Todo` is what accepts it. A ticket the board "
+        "already holds carries the status the board holds it at, so a copy never undoes that "
+        f"decision. A ticket this run withdraws is `{Status.WITHDRAWN.written}`, which the "
+        "board holds as closed as not planned, unless the board shows it as accepted: then "
+        "copy nothing, leave the local ticket as it is, and report that you would have "
+        "withdrawn it and why. No issue is ever deleted.\n"
+        f"- **Before every copy, run `@BOARD_STATUS@ --board {board} <path of the ticket>`** "
+        "(adding `--withdraw` for a ticket this run withdraws, before you change that ticket), "
+        "write the word it prints as the ticket's `status`, and validate the ticket again. It "
+        f"exits {SOUND} with that word; {UNPLACED} when the board holds the item at a status "
+        f"no ticket carries; and {ACCEPTED} for a withdrawal of an item the board shows as "
+        "accepted. On either refusal, copy nothing and report what it printed.\n"
         f"- Its front matter carries the `{KEY}` record with every key present, and its body "
         f"the headings {headings}, in that order, each with content. `created_by_run` is "
         "this run, and `owning_runs` includes it.\n"
+        "- **`host` is read, never typed.** Run `hostname` on the machine you run on and "
+        f"write exactly what it prints, both as `host` and in the `## {EVIDENCE}` section, "
+        "never a value you type or recall.\n"
         f"- It reaches the board only as `onetaskgraph task copy {ticket} --to {board}`. The "
         "origin that copy records makes a later copy of the same ticket update that same "
         "issue, and that is the only way an issue is edited.\n\n"
@@ -641,7 +817,12 @@ comments of this run may already exist. The ownership rules above bind every cha
 - an issue run `@RUN@` created is **edited** — change its ticket and copy the ticket again —
   and never commented on;
 - a comment run `@RUN@` already left on another run's issue is **edited** in place, never
-  joined by a second.
+  joined by a second;
+- an existing ticket of run `@RUN@` is copied again carrying the board's status, which
+  `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` prints, never the status the ticket
+  held before — the board may have been moved since the last copy;
+- a ticket of an older schema is brought to the current shape before it is copied, its
+  `host` read from this machine with `hostname`, and validated again.
 """
 
 #: The heading the manager's feedback goes under, above the feedback itself.
@@ -666,6 +847,7 @@ def compose(
     board: str,
     drafts_root: Path,
     validate: str,
+    board_status: str,
     checkout: Path,
     feedback: str | None,
     redispatch: bool,
@@ -692,6 +874,7 @@ def compose(
         "BOARD": board,
         "DRAFTS_ROOT": str(drafts_root),
         "VALIDATE": validate,
+        "BOARD_STATUS": board_status,
         "CHECKOUT": str(checkout),
     }
     values = {
@@ -734,6 +917,15 @@ def _parser() -> _Parser:
     check = commands.add_parser("check-run", help="validate every ticket a run holds")
     check.add_argument("--root", type=Path, required=True, help=root_help)
     check.add_argument("run", metavar="RUN-ID")
+    placed = commands.add_parser(
+        "board-status",
+        help="print the status a ticket is copied with, decided from the board's item",
+    )
+    placed.add_argument("--board", required=True, metavar="SOURCE")
+    placed.add_argument(
+        "--withdraw", action="store_true", help="decide for a ticket this run withdraws"
+    )
+    placed.add_argument("path", type=Path, metavar="PATH")
     count = commands.add_parser("inventory", help="print how many drafts and tickets a run holds")
     count.add_argument("--root", type=Path, required=True, help=root_help)
     count.add_argument("run", metavar="RUN-ID")
@@ -743,6 +935,7 @@ def _parser() -> _Parser:
     task.add_argument("--run", required=True, metavar="RUN-ID")
     task.add_argument("--board", required=True, metavar="SOURCE")
     task.add_argument("--validate", required=True, metavar="COMMAND")
+    task.add_argument("--board-status", required=True, metavar="COMMAND")
     task.add_argument("--checkout", type=Path, required=True, help="the launching checkout")
     task.add_argument("--feedback", type=Path, metavar="FILE")
     return parser
@@ -775,6 +968,7 @@ def _composed(arguments: argparse.Namespace) -> int:
             board=arguments.board,
             drafts_root=root,
             validate=arguments.validate,
+            board_status=arguments.board_status,
             checkout=arguments.checkout,
             feedback=feedback,
             redispatch=feedback is not None or inventory(root, arguments.run)[1] > 0,
@@ -786,12 +980,33 @@ def _composed(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
+def _placed(arguments: argparse.Namespace) -> int:
+    """Print the status a ticket is copied with, for the `board-status` command."""
+    try:
+        run, root_cause = located_path(arguments.path.absolute())
+        held = board_category(qualified_id(run, root_cause), arguments.board)
+        status = status_before_copy(held, withdraw=arguments.withdraw)
+    except Unplaced as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return UNPLACED
+    except AcceptedOnBoard as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return ACCEPTED
+    except (OSError, Refused) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    print(status.written)
+    return SOUND
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate, count or compose, for `scripts/follow-ups.sh` and the follow-up agent."""
+    """Validate, decide a status, count or compose, for the recipe and the follow-up agent."""
     arguments = _parser().parse_args(argv)
     match arguments.command:
         case "validate":
             return _validated(arguments.paths)
+        case "board-status":
+            return _placed(arguments)
         case _ if not RECORD_COMPONENT.fullmatch(arguments.run):
             print(f"{PROG}: refused: {arguments.run!r} is not a run id", file=sys.stderr)
             return UNRUNNABLE
