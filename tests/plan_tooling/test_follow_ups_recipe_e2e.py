@@ -14,6 +14,13 @@ ticket it wrote into place, validate it, delete the drafts it consumed, copy it 
 board, comment on another run's issue — through the real programs. Every record this module
 asserts on is one those programs left.
 
+It is reached through `tests/e2e/fake_codex_untrusted_directory.py`, which refuses a turn the
+way codex does when the directory it runs in is inside no repository and its argv carries
+neither codex's bypass argument nor its repository-check skip. The member's working directory
+is its agent graph's scratch directory, which is exactly that case, so a follow-up turn that
+stopped running in `bypass` falls through as `untrusted-directory` here as it did on the
+first real dispatch, and every phase below fails with it.
+
 **The board is a second local store and never the live `followups` board.** It is added
 through the store's own `ONETASKGRAPH_SOURCES__` environment layer and named to the recipe
 with `--to`, the way `tests/plan_tooling/test_copy_plan_recipe_e2e.py` stands a local store
@@ -56,10 +63,16 @@ from orchestrator.root import REPO_ROOT
 #: worker.
 pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 
-#: The provider's stand-in, and the guard covering the identities `ONEHARNESS_BIN_*` cannot
-#: reach, so a routing mistake refuses a turn rather than spending one.
-FAKE_CODEX = helper("fake_codex.py")
+#: The provider's stand-in, refusing an untrusted directory the way codex does, and the guard
+#: covering the identities `ONEHARNESS_BIN_*` cannot reach, so a routing mistake refuses a
+#: turn rather than spending one.
+FAKE_CODEX = helper("fake_codex_untrusted_directory.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
+
+#: Files the first pass's turn has real programs write into the directory it runs commands
+#: from: `pwd`'s answer to where that is, and git's answer to whether a repository holds it.
+TURN_DIRECTORY_WITNESS = "turn-directory.witness"
+GIT_WITNESS = "git-toplevel.witness"
 
 #: The launching session this journey states, and everything an enclosing dispatch would
 #: otherwise decide for these launches.
@@ -311,6 +324,7 @@ class Followed(NamedTuple):
     empty: subprocess.CompletedProcess[str]
     empty_run: str
     first: Pass
+    first_turn: Turn
     new_after_first: dict[str, object]
     other_after_first: dict[str, object]
     comments_after_first: list[dict[str, object]]
@@ -331,6 +345,49 @@ class Followed(NamedTuple):
     driving: subprocess.CompletedProcess[str]
     exempt_gate: subprocess.CompletedProcess[str]
     tampered_gate: subprocess.CompletedProcess[str]
+
+
+class Turn(NamedTuple):
+    """The follow-up member's one turn, as `oneharness` reported it.
+
+    `directory` is where that report was written, which is the member's scratch directory;
+    `ran` is the identity that took the turn (empty when none did), `fell_through` each
+    identity passed over with its reason, and `command` and `status` are the ones the running
+    identity was given and ended with.
+    """
+
+    directory: Path
+    ran: str
+    fell_through: tuple[tuple[str, str], ...]
+    command: tuple[str, ...]
+    status: str
+
+
+def _turn(bench: Bench, follow_up_run: str) -> Turn | None:
+    """The member's turn, found through `just transcript` — where an operator reads it.
+
+    The transcript names the member's turn report, and that report is `oneharness`'s own account
+    of which identity ran and why the ones before it did not.
+    """
+    transcript = _run(["just", "transcript", follow_up_run], bench)
+    named = re.findall(r"^\s+report worker (\S+/report\.json)$", transcript.stdout, re.MULTILINE)
+    if len(named) != 1:
+        return None
+    path = Path(named[0])
+    # llmlint: ignore[boundary_inputs_validated] `oneharness`'s own turn report, at the path the
+    # transcript names; every field read here is narrowed into `Turn` and asserted on there.
+    report = json.loads(path.read_text(encoding="utf-8"))
+    fallback = report["fallback"]
+    ran = next((one for one in report["results"] if one["harness_id"] == fallback["ran"]), None)
+    return Turn(
+        directory=path.parent,
+        ran=str(fallback["ran"] or ""),
+        fell_through=tuple(
+            (str(one["harness"]), str(one["reason"])) for one in fallback["fell_through"]
+        ),
+        command=tuple(str(word) for word in ran["command"]) if ran else (),
+        status=str(ran["status"]) if ran else "",
+    )
 
 
 def _pass(bench: Bench, name: str, main: str, *extra: str) -> Pass:
@@ -430,11 +487,26 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--body-file",
                     str(_staged(bench, "comment.md", comment)),
                 ),
+                # Where the turn runs its commands, written down there by the programs
+                # themselves: `pwd` says which directory, git whether a repository holds it.
+                ["sh", "-c", f"pwd -P > {TURN_DIRECTORY_WITNESS}"],
+                [
+                    "sh",
+                    "-c",
+                    f"git rev-parse --show-toplevel > {GIT_WITNESS} 2>&1; "
+                    f'echo "exit $?" >> {GIT_WITNESS}',
+                ],
             ],
         )
         first = _pass(bench, "first", main)
         started.append(first.run)
-        assert first.result.returncode == OK, first.result.stdout + first.result.stderr
+        first_turn = _turn(bench, first.run)
+        # The turn rides on the failure, because a turn that fell through says why in its report
+        # and nowhere this recipe prints.
+        assert first.result.returncode == OK, (
+            f"{first.result.stdout}{first.result.stderr}{first_turn}"
+        )
+        assert first_turn is not None, "the transcript names no turn report for the member"
         new_issue = f"{BOARD}:{main}/tickets/{NEW_CAUSE}"
         assert new_issue in _board_ids(bench), _ran(bench)
         new_after_first = _item(bench, new_issue)
@@ -578,6 +650,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             empty=empty,
             empty_run=empty_run,
             first=first,
+            first_turn=first_turn,
             new_after_first=new_after_first,
             other_after_first=other_after_first,
             comments_after_first=comments_after_first,
@@ -645,6 +718,36 @@ def test_the_recipe_launches_one_direct_node_under_the_graph_that_settles_on_the
         f"launch-gate: authoring:{followed.main}{SUFFIX} is the project a follow-ups launch writes"
         in first.result.stderr
     ), first.result.stderr
+
+
+def test_the_members_turn_runs_on_codex_and_runs_commands_from_a_directory_no_repository_holds(
+    followed: Followed,
+) -> None:
+    """The turn a `default`-mode member lost on its first real dispatch, taken here.
+
+    The stand-in refuses a codex turn run outside every repository unless its argv carries
+    codex's bypass argument, so a codex identity running at all is the config's `bypass`
+    reaching the turn the engine really dispatched. What the turn did from its directory is
+    read back from the programs that did it.
+    """
+    turn = followed.first_turn
+
+    assert turn.ran.startswith("codex:"), turn
+    assert all(reason != "untrusted-directory" for _, reason in turn.fell_through), (
+        f"a codex identity fell through as an untrusted directory: {turn}"
+    )
+    assert turn.status == "ok", turn
+    assert "--dangerously-bypass-approvals-and-sandbox" in turn.command, turn.command
+
+    directory = turn.directory.resolve()
+    witness = directory / TURN_DIRECTORY_WITNESS
+    assert witness.is_file(), f"no command the turn ran wrote into {directory}"
+    assert witness.read_text(encoding="utf-8").strip() == str(directory), (
+        "the turn's `pwd` did not name the member's scratch directory as where it ran"
+    )
+    git = (directory / GIT_WITNESS).read_text(encoding="utf-8")
+    assert "not a git repository" in git, git
+    assert git.rstrip().endswith("exit 128"), git
 
 
 def test_the_member_is_given_the_composed_task_whole(followed: Followed) -> None:

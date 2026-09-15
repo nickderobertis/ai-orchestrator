@@ -13,6 +13,13 @@
 # over — so `../personas/follow-up.yaml` is named for the label alone and that composed
 # task is the one copy of its instructions the model is given. The plan node names the
 # same persona because the engine refuses a direct agent node that names none.
+#
+# The member's turn runs in `bypass` mode, and declares no `mode` here. Its working
+# directory is this graph's scratch directory, not a repository, where a `default`-mode
+# turn is refused by codex as an untrusted directory and denied its tools by Claude Code.
+# The mode is declared in `oneharness.follow-up.toml`, because the linked oneagentgraph
+# admits no `mode` on a single-sided member — so the next single-sided member that runs
+# commands declares its mode in its own harness config too.
 # `tests/test_follow_up_agent_arrangement.py` holds this arrangement, and
 # `tests/plan_tooling/test_follow_ups_recipe_e2e.py` launches a direct node naming this
 # graph through the installed engine and reads the composed task out of the member's turn.

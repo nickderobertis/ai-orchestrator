@@ -13,6 +13,11 @@ would silently stop being true if the graph moved:
   `tests/test_pacemaker_discipline.py` holds for the pacemaker — and a judge added here would
   turn it into a two-party member reading that persona instead.
 
+A third thing is where the member's **mode** is declared. Its turn works in the agent graph's
+scratch directory, not a repository, so it has to run in `bypass` — and the oneagentgraph the
+engine links admits no `mode` on a single-sided member, so `oneharness.follow-up.toml` is the
+one place that says so. A `mode` on the member would be a second answer that could disagree.
+
 `tests/plan_tooling/test_follow_ups_recipe_e2e.py` launches a direct node naming this graph
 through the installed engine and reads the composed task out of the member's own turn; this
 holds, on every tree, the arrangement that journey measured.
@@ -21,6 +26,7 @@ holds, on every tree, the arrangement that journey measured.
 from __future__ import annotations
 
 import subprocess
+import tomllib
 
 from orchestrator.root import REPO_ROOT
 
@@ -84,6 +90,21 @@ def test_the_member_reads_its_own_config_and_never_the_judges() -> None:
     assert named == (REPO_ROOT / CONFIG).resolve()
     assert named.is_file()
     assert named != (REPO_ROOT / "oneharness.judge.toml").resolve()
+
+
+def test_the_mode_is_bypass_and_declared_in_the_config_alone() -> None:
+    """The turn's working directory is no repository, so `default` mode leaves it unable to act."""
+    declared = tomllib.loads((REPO_ROOT / CONFIG).read_text(encoding="utf-8")).get("mode")
+
+    assert declared == "bypass", (
+        f"{CONFIG} declares mode {declared!r}. The follow-up agent works in its graph's scratch "
+        "directory, which is not a repository: in any mode but `bypass` codex refuses the turn "
+        "as an untrusted directory and Claude Code is denied every tool it needs"
+    )
+    assert "mode" not in _members()[WORKER], (
+        f"{GRAPH}'s `{WORKER}` declares a `mode`. The linked oneagentgraph admits none on a "
+        f"single-sided member, and {CONFIG} is where the turn's mode is decided"
+    )
 
 
 def test_the_installed_graph_runner_accepts_the_graph() -> None:

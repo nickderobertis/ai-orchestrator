@@ -15,12 +15,27 @@
 #     Every other mask the judge file declares is kept;
 #   * its turns stream to the views, so a manager can watch the verification as it goes.
 #
-# `tests/e2e/test_oneharness_timeout_e2e.py` holds the chain, the pins, the deadline and
-# the streaming against the judge file's effective values, and
-# `tests/e2e/test_dispatch_environment_e2e.py` reads the unmasked token out of a real turn
-# on every identity.
+# And one thing the judge file does not declare at all: the turn runs in `bypass` mode.
+#
+# `tests/e2e/test_oneharness_timeout_e2e.py` holds the chain, the pins, the deadline, the
+# streaming and the mode against the judge file's effective values, and
+# `tests/e2e/test_dispatch_environment_e2e.py` reads the unmasked token and each
+# identity's bypass argument out of a real turn on every identity.
 
 run_mode = "fallback"
+
+# Bypass, because the member's working directory is its agent graph's scratch directory
+# (`…/runs/follow-up-<id>/members/worker`), which is not a repository. In `default` mode
+# there codex refuses the turn outright ("Not inside a trusted directory", which falls
+# through as `untrusted-directory`) and Claude Code runs under `dontAsk` and is denied
+# every tool outside that directory, so the turn can verify nothing and write no ticket.
+# Each identity maps this one value to its own mechanism; no harness argument is written
+# here. Declared in this file rather than on the graph member because the oneagentgraph
+# the engine links admits no `mode` on a single-sided `kind: oneharness` member, and
+# stamps none over the config it hands through — so this is the value the turn uses.
+# `tests/plan_tooling/test_follow_ups_recipe_e2e.py` dispatches the member against a
+# provider that refuses a default-mode turn the way codex does.
+mode = "bypass"
 
 # A bounded job — read the drafts, verify each against the trees, write and copy the
 # tickets — whose size grows with the run's drafts, so an hour rather than the pacemaker's

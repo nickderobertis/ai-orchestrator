@@ -111,18 +111,19 @@ DESIGN_DOC_REVIEWER_CHAIN = [
 ]
 
 #: The follow-up agent's graph and its one single-sided member, whose config is the judge's
-#: routing verbatim — chain order and every identity's model — with three chosen
+#: routing verbatim — chain order and every identity's model — with four chosen
 #: differences: a finite deadline, because it runs after settlement with nothing watching
-#: it; streaming, so its turns reach the views; and no mask on the board credential, since
-#: its whole deliverable is the `followups` board. `oneharness.follow-up.toml` says why.
+#: it; streaming, so its turns reach the views; no mask on the board credential, since its
+#: whole deliverable is the `followups` board; and `bypass` mode, because its working
+#: directory is no repository. `oneharness.follow-up.toml` says why.
 FOLLOW_UP_GRAPH = REPO_ROOT / "graphs" / "follow-up.yaml"
 FOLLOW_UP_MEMBER = "worker"
 FOLLOW_UP_DEADLINE_SECONDS = 3600
 
-#: The credential that config alone leaves unmasked, and the one field besides the three
+#: The credential that config alone leaves unmasked, and the one field besides the four
 #: above it may differ from the judge's in: the history labels that say which side ran.
 BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
-FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness"}
+FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness", "mode"}
 
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
@@ -461,6 +462,10 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "oneharness.follow-up.toml must stream, so the follow-up agent's turns reach the views"
     )
     assert effective["follow-up"]["harnesses"]["value"] == effective["judge"]["harnesses"]["value"]
+    assert effective["follow-up"]["mode"] == {"value": "bypass", "source": str(follow_up)}, (
+        'oneharness.follow-up.toml must declare `mode = "bypass"`: the follow-up agent works '
+        "in a scratch directory that is no repository, where a default-mode turn cannot act"
+    )
     follow_up_routing = _without_sources(effective["follow-up"])
     judge_routing = _without_sources(effective["judge"])
     differing = {
@@ -470,7 +475,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
     }
     assert differing <= FOLLOW_UP_DIFFERENCES, (
         "oneharness.follow-up.toml must be oneharness.judge.toml's routing with only the "
-        f"deadline, streaming, labels and board-credential masks changed; these also differ: "
+        f"deadline, streaming, labels, mode and board-credential masks changed; these also differ: "
         f"{sorted(differing - FOLLOW_UP_DIFFERENCES)}"
     )
     assert _unmasked(judge_routing["harness"], BOARD_CREDENTIAL) == follow_up_routing["harness"], (
@@ -501,16 +506,27 @@ def test_every_side_resolves_its_intended_effective_deadline(
 def test_bypass_sides_do_not_trip_the_approval_wait_safety_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove worker and monitor bypass modes cannot prompt headlessly.
+    """Prove the worker, monitor and follow-up bypass modes cannot prompt headlessly.
 
     oneharness 0.7 retains a separate 120-second approval-wait safety deadline for
     prompt-capable headless modes. `bypass` must remain clean or the release's new
     unbounded turn default would not actually reach these live paths.
+
+    The follow-up agent's mode is read off its config rather than its graph member: the
+    linked oneagentgraph admits no `mode` on a single-sided member, so the config is the
+    one declaration, and a member declaring one beside it could disagree.
     """
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     worker = _named_config(NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config")
+    follow_up = _named_config(FOLLOW_UP_GRAPH, FOLLOW_UP_MEMBER, "oneharness_config")
     assert _member_fields(DAG_SCOPE_GRAPH)[MONITOR_MEMBER].get("mode") == "bypass"
     assert _member_fields(NODE_SCOPE_GRAPH)["worker"].get("mode") == "bypass"
+    assert "mode" not in _member_fields(FOLLOW_UP_GRAPH)[FOLLOW_UP_MEMBER], (
+        f"{FOLLOW_UP_GRAPH.name}'s `{FOLLOW_UP_MEMBER}` declares a `mode`; its turn's mode is "
+        f"{follow_up.name}'s alone"
+    )
+    follow_up_effective = _effective_config(oneharness_bin, follow_up)
+    assert follow_up_effective["mode"]["value"] == "bypass", follow_up_effective["mode"]
 
     catalogue = subprocess.run(
         [oneharness_bin, "list"], text=True, capture_output=True, timeout=e2e_timeout(30)
@@ -528,10 +544,15 @@ def test_bypass_sides_do_not_trip_the_approval_wait_safety_deadline(
     ]
     families = {identity.split(":", 1)[0] for chain in chains for identity in chain}
     assert families, "worker and monitor configs name no harnesses"
-    for family in sorted(families):
+    follow_up_families = {
+        identity.split(":", 1)[0] for identity in follow_up_effective["harnesses"]["value"]
+    }
+    assert follow_up_families, f"{follow_up.name} names no harnesses"
+    for family in sorted(families | follow_up_families):
         assert headless.get(family, {}).get("bypass") == "clean", (
             f"{family} can block on an approval prompt in bypass mode, so removing the "
-            f"deadline in {monitor.name} would make that wait unbounded"
+            f"deadline in {monitor.name} would make that wait unbounded, and a "
+            f"{follow_up.name} turn on it would wait out its whole deadline unanswered"
         )
 
 

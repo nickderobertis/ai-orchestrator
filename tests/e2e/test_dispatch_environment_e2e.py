@@ -151,8 +151,20 @@ MASKED_CANDIDATES = _candidates(MASKED_CONFIGS)
 PLAN_STORE_CANDIDATES = _candidates(PLAN_STORE_CONFIGS)
 DISPATCH_CANDIDATES = _candidates(DISPATCH_CONFIGS)
 
-#: The stand-in: a provider binary that records its environment and answers. Written
-#: per invocation so concurrent tests never share one recording.
+#: The follow-up agent's candidates, whose turn works in a directory that is no repository
+#: and so must be handed each identity's own bypass argument.
+FOLLOW_UP_CANDIDATES = _candidates(_configs_named_by("graphs/follow-up.yaml"))
+
+#: What `bypass` is spelled as on each provider's command line, as `oneharness` builds it:
+#: codex's one flag, and Claude Code's permission mode. Each is the whole of that
+#: provider's answer to an untrusted directory or an unapproved tool.
+BYPASS_ARGUMENTS = {
+    "codex": ("--dangerously-bypass-approvals-and-sandbox",),
+    "claude": ("--permission-mode", "bypassPermissions"),
+}
+
+#: The stand-in: a provider binary that records its environment and its argv, and answers.
+#: Written per invocation so concurrent tests never share one recording.
 RECORDING_PROVIDER = """#!/usr/bin/env python3
 import json, os, pathlib, sys
 
@@ -162,6 +174,7 @@ if {"--version", "-v"}.intersection(sys.argv[1:]):
 pathlib.Path(os.environ["RECORD_ENVIRONMENT_TO"]).write_text(
     json.dumps(dict(os.environ)), encoding="utf-8"
 )
+pathlib.Path(os.environ["RECORD_ARGV_TO"]).write_text(json.dumps(sys.argv), encoding="utf-8")
 print("recorded")
 """
 
@@ -173,7 +186,10 @@ def _provider(directory: Path, record: Path) -> dict[str, str]:
         binary = directory / name
         binary.write_text(RECORDING_PROVIDER, encoding="utf-8")
         binary.chmod(0o755)
-    return {"RECORD_ENVIRONMENT_TO": str(record)}
+    return {
+        "RECORD_ENVIRONMENT_TO": str(record),
+        "RECORD_ARGV_TO": str(record.with_name("argv.json")),
+    }
 
 
 def _indirections(tmp_path: Path) -> dict[str, str]:
@@ -310,6 +326,32 @@ def test_a_role_that_reads_the_plan_store_keeps_the_board_credential(
     assert recorded.get(CREDENTIAL) == PLANTED_CREDENTIAL, (
         f"{candidate.config} no longer hands {candidate.identity} the board credential, "
         f"and this role's task is to read the plan out of the store"
+    )
+
+
+@pytest.mark.parametrize("candidate", FOLLOW_UP_CANDIDATES, ids=_identifiers(FOLLOW_UP_CANDIDATES))
+def test_the_follow_up_agent_hands_every_identity_its_own_bypass_argument(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """Read off the command line the provider was really given, not the config's `mode`.
+
+    The follow-up member's turn works in its agent graph's scratch directory, which is no
+    repository: without its bypass argument codex refuses the turn as an untrusted directory
+    and Claude Code is denied every tool outside that directory. Every identity, because the
+    one reached once the others are spent is the one nobody watches.
+    """
+    _turn(tmp_path, oneharness_bin, candidate)
+    # llmlint: ignore[boundary_inputs_validated] The recorder's own JSON, written by this
+    # module's provider; it is compared whole against a literal below.
+    argv: list[str] = json.loads((tmp_path / "argv.json").read_text(encoding="utf-8"))
+    provider = Path(argv[0]).name
+    expected = BYPASS_ARGUMENTS[provider]
+    windows = [tuple(argv[at : at + len(expected)]) for at in range(len(argv))]
+
+    assert expected in windows, (
+        f"{candidate.config} handed {candidate.identity} {argv[1:-1]} with no {expected}; "
+        f"its turn runs in a scratch directory that is no repository, where {provider} "
+        "without bypass refuses the turn or denies it its tools"
     )
 
 

@@ -1787,8 +1787,13 @@ of them.
 
 After the run, `just follow-ups <run-id>` dispatches the follow-up agent over its drafts:
 one direct node under `graphs/follow-up.yaml`, a single-sided member with no judge on
-`oneharness.follow-up.toml`, given the task `config/follow-up-task.md` composes. It
-verifies each draft against the registered checkouts' `origin/<base>`, writes one verified
+`oneharness.follow-up.toml`, given the task `config/follow-up-task.md` composes. Its turn
+runs in `bypass` mode: the member works in its agent graph's scratch directory, which is
+not a repository, and a `default`-mode turn there is refused by codex as an untrusted
+directory and denied its tools by Claude Code. The mode is declared in that harness config
+rather than on the member because the linked oneagentgraph admits no `mode` on a
+single-sided member, so a single-sided member that has to run commands declares its mode in
+its own harness config. It verifies each draft against the registered checkouts' `origin/<base>`, writes one verified
 ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies each onto
 the `followups` GitHub Projects board, where every session's tickets accumulate —
 commenting on another run's open issue for the same root cause instead of filing a second.
