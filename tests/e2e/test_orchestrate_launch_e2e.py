@@ -3469,7 +3469,7 @@ def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declar
 
     `ONEHARNESS_BIN_*` keys on a harness **id** and reaches no variant, so a journey that
     scripted its provider is scripted for the first candidate of a chain and for none of
-    the rest. Every chain here names five. Without this the guard would refuse the second
+    the rest. Every chain here names six. Without this the guard would refuse the second
     candidate onwards, and a journey whose subject is something else entirely would fail
     on a provider it had already stood in for.
 

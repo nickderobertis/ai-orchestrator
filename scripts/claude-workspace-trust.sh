@@ -249,43 +249,48 @@ mark_claude_config_trust() (
 )
 
 # Every claude-code configuration a dispatch of this host can run under, one absolute
-# path per line, in the order the harness chains name their identities. All five chains
-# name all three claude-code identities and differ only in order, and the primary is
-# last on every one of them: it is what runs once both alternate subscriptions are
-# exhausted, which is exactly when this host is under load. Naming only the alternates
-# therefore leaves a five-identity chain trusted in two directories and blocked in the
-# third at the moment it needs it most.
+# path per line, in the order the harness chains name their identities. Every chain
+# names all four claude-code identities and differs only in order, and the primary is
+# last on every one of them, just after the primary-backup: those two are what run once
+# both alternate subscriptions are exhausted, which is exactly when this host is under
+# load. Naming only some of them therefore leaves a chain trusted in some directories
+# and blocked in the rest at the moment it needs them most.
 #
-# The alternates are named by the overrides oneharness maps into CLAUDE_CONFIG_DIR for
-# their variants. The primary variant *unsets* CLAUDE_CONFIG_DIR, and claude-code with
-# none set keeps its configuration at `$HOME/.claude.json` — measured by running it
-# under a HOME nothing had touched, which is the file it created there. So HOME is the
-# whole of that derivation and there is no override to consult: one could only name a
-# directory the primary identity provably does not read.
+# Every identity — the primary included — is named by the indirection oneharness maps
+# into its variant's CLAUDE_CONFIG_DIR, as scripts/claude-alt-config-dir.sh resolves it,
+# and claude-code with CLAUDE_CONFIG_DIR set keeps its configuration at
+# `$CLAUDE_CONFIG_DIR/.claude.json`. `$HOME/.claude.json` is deliberately not named: it
+# is the file claude-code keeps when nothing sets CLAUDE_CONFIG_DIR, and no chain
+# identity runs that way any more.
 #
-# A half this cannot name costs only that half. An override that misconfigures the
-# alternates says nothing about the primary, whose path it cannot reach, so reporting
-# and continuing marks two identities where returning would have marked none.
+# An identity this cannot name costs only that identity. A misconfigured override says
+# nothing about the others, so reporting and continuing marks three identities where
+# returning would have marked none. A refused identities file is the one failure shared
+# by several: it costs every identity the environment does not name outright, because a
+# file that was refused cannot say which directory it meant.
 claude_trust_config_paths() {
   if (( $# < 1 )); then
     echo "claude-workspace-trust: a caller name is required" >&2
     return 2
   fi
-  local caller=$1 status=0
-  if resolve_claude_alt_config_dir "$caller"; then
-    printf '%s\n' \
-      "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json" \
-      "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR/.claude.json"
-  else
-    echo "$caller: alternate Claude config resolution failed, so only the primary Claude config is named; correct the configured paths, then retry; continuing" >&2
+  local caller=$1 status=0 file_refused=false variable
+  if ! _load_claude_identities_file "$caller"; then
+    echo "$caller: the Claude identities file was refused, so only the identities the environment names are named; correct the file, then retry; continuing" >&2
     status=1
+    file_refused=true
   fi
-  if [[ ${HOME-} == /* ]]; then
-    printf '%s\n' "$HOME/.claude.json"
-  else
-    echo "$caller: HOME is not an absolute path, so the primary Claude config cannot be named; export HOME, then retry; continuing" >&2
-    status=1
-  fi
+  for variable in "${CLAUDE_IDENTITY_CONFIG_VARIABLES[@]}"; do
+    if [[ $file_refused == true && -z ${!variable-} ]]; then
+      echo "$caller: $variable cannot be resolved while the Claude identities file is refused, so that identity's Claude config is not named; correct the identities file as the refusal above says, or set $variable in the environment, then retry; continuing" >&2
+      status=1
+    elif resolve_claude_identity_config_dir "$caller" "$variable"; then
+      # llmlint: ignore[tool_output_is_signal] Each line is this function's return value, not a success message: mark_claude_workspaces reads the stream into an array with mapfile, one configuration path per chain identity, as it read one per identity before this change.
+      printf '%s\n' "${!variable}/.claude.json"
+    else
+      echo "$caller: $variable resolution failed, so that identity's Claude config is not named; correct the configured path, then retry; continuing" >&2
+      status=1
+    fi
+  done
   return "$status"
 }
 

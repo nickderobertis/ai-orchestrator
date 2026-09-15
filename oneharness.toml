@@ -27,17 +27,19 @@ history = true
 # in the config rather than at each call site.
 history_labels = { role = "agent" }
 
-# Every role's chain names the same five identities; only the order differs. The
+# Every role's chain names the same six identities; only the order differs. The
 # worker keeps Claude first, because the personas are tuned against that model
 # tier: an exhausted alternate subscription reaches the SECOND alternate Claude
-# plan before it degrades to Codex. Codex and its second identity follow, and the
-# primary Claude subscription is the last resort everywhere.
+# plan before it degrades to Codex. Codex and its second identity follow, then the
+# primary-backup Claude subscription, and the primary Claude subscription is the
+# last resort everywhere.
 # llmlint: ignore[changed_behavior_has_e2e] integration tests exercise real oneharness fallback selection; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "claude-code:alternate",
     "claude-code:alternate2",
     "codex:primary",
     "codex:alternate",
+    "claude-code:primary-backup",
     "claude-code:primary",
 ]
 
@@ -104,8 +106,8 @@ unset_env = [
 # gone. It is credentialed from its own config directory, derived by the same one
 # helper; a host that never authenticated it reports `failure_kind: "auth"` and
 # falls through, so the candidate costs nothing until `claude login` runs against
-# that directory. tests/test_harness_routing.py holds this routing identical
-# across all four role configs.
+# that directory. tests/e2e/test_oneharness_timeout_e2e.py holds every config's
+# chain as the real CLI resolves it.
 [harness.claude-code.variant.alternate2]
 model = "claude-opus-5"
 env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR", XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
@@ -117,21 +119,38 @@ unset_env = [
     "GH_PROJECTS_TOKEN",
 ]
 
-# The last resort in every chain: Claude's default config directory, which is the
-# primary subscription. Mask every higher-precedence credential selector and any
-# inherited alternate directory, so this identity can never run as one of them.
-[harness.claude-code.variant.primary]
+# The primary-backup subscription, reached just before the primary one. It is
+# credentialed from the directory scripts/claude-alt-config-dir.sh resolves into
+# ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR, which is that helper's to default; a
+# host that never logged it in reports `failure_kind: "auth"` and falls through, so the
+# candidate costs nothing until then.
+[harness.claude-code.variant.primary-backup]
 model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR", XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
 unset_env = [
-    "CLAUDE_CONFIG_DIR",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
     "GH_PROJECTS_TOKEN",
 ]
-# The same runtime-directory repoint as above, for this identity.
-env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+
+# The last resort in every chain: the primary subscription, credentialed from the
+# directory scripts/claude-alt-config-dir.sh resolves into
+# ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR, which is that helper's to default. Every
+# higher-precedence credential selector is masked, so this identity can never run as
+# another account.
+[harness.claude-code.variant.primary]
+model = "claude-opus-5"
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+# Its config directory, and the same runtime-directory repoint as above.
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR", XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
 
 # Inspect the effective, fully layered config (and where each value came from)
 # with `oneharness config`.

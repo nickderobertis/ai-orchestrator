@@ -3,8 +3,8 @@
 `oneharness` refuses to start a variant whose `env_from` indirection is unset, so a
 journey that reaches a **real** oneharness — every one whose member is single-sided
 `kind: oneharness`, which runs its turn through the library rather than through a
-substituted CLI — has to carry `ORCHESTRATOR_CODEX_ALT_HOME` and the two
-`ORCHESTRATOR_CLAUDE_ALT*_CONFIG_DIR` values.
+substituted CLI — has to carry `ORCHESTRATOR_CODEX_ALT_HOME` and every
+`ORCHESTRATOR_CLAUDE_*_CONFIG_DIR` value.
 
 A provisioned planner session and a dispatched worker both carry them already, from
 `scripts/session-setup.sh`; nothing on the `just gate` path does. Inheriting them

@@ -278,6 +278,9 @@ def test_the_drafting_graph_starts_from_a_shell_that_establishes_no_indirection(
     home = tmp_path / "plain-home"
     home.mkdir()
     identity.environment["HOME"] = str(home)
+    # The Claude helper reads the host's identities file from under this or `HOME`, so
+    # its absence is stated rather than inherited from whichever host runs the suite.
+    identity.environment.pop("XDG_CONFIG_HOME", None)
 
     drafted = _draft(identity, WORK_BRANCH, "--repo", str(identity.checkout), "--base", BASE)
 
@@ -407,6 +410,38 @@ def test_an_indirection_its_helper_refuses_stops_the_drafter_before_the_turn(
         f"command refused:\n{refused.stderr}"
     )
     assert not launches.exists(), "a drafting turn was spent on an environment it could not use"
+
+
+def test_a_host_identities_file_its_helper_refuses_stops_the_drafter_before_the_turn(
+    tmp_path: Path,
+) -> None:
+    """A refused identities file is the host's mistake, and no turn is spent reaching it.
+
+    The file admits the four Claude indirections and nothing else, so a name it does not
+    admit is refused where it is written — attributed to the drafter, naming the line,
+    and echoing no value the file holds.
+    """
+    identity = _identity(tmp_path, answers=_conforming(), register=False)
+    home = tmp_path / "identities-home"
+    identities = home / ".config" / "ai-orchestrator" / "claude-identities.env"
+    identities.parent.mkdir(parents=True)
+    identities.write_text(
+        "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR=/a-value-that-must-not-appear\n"
+        "NOT_A_CLAUDE_IDENTITY=another-value-that-must-not-appear\n",
+        encoding="utf-8",
+    )
+    identity.environment["HOME"] = str(home)
+    identity.environment.pop("XDG_CONFIG_HOME", None)
+    launches = Path(identity.environment["FAKE_CODEX_ATTEMPT_LOG"])
+
+    refused = _draft(identity, WORK_BRANCH, "--repo", str(identity.checkout), "--base", BASE)
+
+    assert refused.returncode == 2, f"{refused.stdout}\n{refused.stderr}"
+    assert refused.stdout == ""
+    assert "draft-pr-body" in refused.stderr, refused.stderr
+    assert f"line 2 in {identities} names NOT_A_CLAUDE_IDENTITY" in refused.stderr, refused.stderr
+    assert "value-that-must-not-appear" not in refused.stderr
+    assert not launches.exists(), "a drafting turn was spent on a host file it refused"
 
 
 def test_the_composed_task_carries_onepipelines_sentence_and_the_branchs_own_commits(

@@ -859,11 +859,11 @@ the exact release session setup installs and verifies, and dispatch drives the r
 through its typed SDK. Discovery: `onejudge --help`, `oneharness --help`, and
 [`docs/onejudge-integration.md`](docs/onejudge-integration.md).
 
-**Every role names the same five identities**, differing only in order, because a role
+**Every role names the same six identities**, differing only in order, because a role
 that omitted one would lose that quota once everything ahead of it was exhausted; the
-primary Claude identity is last everywhere, and
-`tests/e2e/test_oneharness_timeout_e2e.py` holds every config's chain to its intended
-order. **Every identity in every chain is spelled as a variant**, the first Codex one as
+primary Claude identity is last everywhere with `claude-code:primary-backup` immediately
+before it, and `tests/e2e/test_oneharness_timeout_e2e.py` holds every config's chain to
+its intended order. **Every identity in every chain is spelled as a variant**, the first Codex one as
 `codex:primary` rather than a bare `codex`, because `unset_env`, `env_from` and
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
 candidate no per-identity environment rule reaches — the `GH_PROJECTS_TOKEN` mask and
@@ -924,8 +924,15 @@ file pins a `model` per harness, which beats `ONEHARNESS_MODEL`, so override
 which has no graph-native field: never point two members at one config to save a copy,
 and never set `ONEHARNESS_TIMEOUT`, which is process-wide and moves every member at
 once. `scripts/claude-alt-config-dir.sh` and `scripts/codex-alt-home.sh` are the one
-source of the alternate identities' directories, sourced by every wrapper so no two
-drift; the codex helper creates its directory because an empty codex home falls through
+source of the identities' directories, sourced by every wrapper and hook so no two drift.
+The claude one exports all four Claude indirections — `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
+(`$HOME/.claude-alt`), `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` (`$HOME/.claude-alt2`),
+`ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` (`$HOME/.claude-primary-backup`) and
+`ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (`$HOME/.claude`) — taking each from the
+environment, then from the host's `ai-orchestrator/claude-identities.env` under its XDG
+config home, outside every checkout, then from that default, so a host
+whose `~/.claude` holds another account says so without editing a config every host
+shares. The codex helper creates its directory because an empty codex home falls through
 as `auth` while an absent one hard-fails, and the claude one creates nothing because
 claude-code classifies an absent directory as it classifies an empty one.
 

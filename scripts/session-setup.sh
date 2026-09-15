@@ -484,7 +484,7 @@ fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
-# All three claude-code identities are dispatch identities, so all three need this
+# Every claude-code identity is a dispatch identity, so each one needs this
 # checkout marked trusted; `claude_trust_config_paths` names each one and reports
 # whichever it could not, and `mark_claude_config_trust` tolerates a config that is
 # not there yet, which is the state of one nobody has logged into.

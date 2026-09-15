@@ -52,7 +52,7 @@ document reads plainly to a technical product manager with no depth in the domai
 this host puts its Claude subscriptions on the side making that call and Codex on the
 side writing to the template. That judge side is also the one supervisory side here
 that keeps the working model tier rather than `oneharness.judge.toml`'s cheaper one,
-because this review *is* the deliverable's quality bar. Both name all five identities
+because this review *is* the deliverable's quality bar. Both name all six identities
 with the primary Claude subscription last, and both state their own finite deadline;
 neither is shared with any other member, for the reason the pacemaker's is not.
 
@@ -323,7 +323,7 @@ matching `oneharness-core`'s types exhaustively and nothing at all for a consume
 the CLI, which is what this repository is. Behind them, 0.8.0 binds a controlled
 turn's mechanism to the **candidate serving it** rather than to the chain as a whole.
 The validator had required one mechanism across every candidate, which a fallback
-chain can never satisfy once it mixes harness families, so the five-identity chains on
+chain can never satisfy once it mixes harness families, so the mixed-family chains on
 this host were refused a control socket that only one candidate would ever hold — see
 [streaming and turn control are independent
 concerns](#streaming-and-turn-control-are-independent-concerns). It in turn succeeds 0.7.2, which
@@ -364,12 +364,14 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 ## Harnesses and the live path
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain.
-**Every role names the same five identities** — `claude-code:alternate`,
-`claude-code:alternate2`, `codex:primary`, `codex:alternate`, `claude-code:primary` —
-and the roles differ only in the order they try them. The worker order is that list as
-written: both alternate Claude subscriptions first, because the personas are tuned
-against that model tier, then Codex, then the primary Claude identity as the last
-resort. A variant is a named per-harness preset selected as `<harness>:<variant>`;
+**Every role names the same six identities** — `claude-code:alternate`,
+`claude-code:alternate2`, `codex:primary`, `codex:alternate`,
+`claude-code:primary-backup`, `claude-code:primary` — and the roles differ only in the
+order they try them. The worker order is that list as written: both alternate Claude
+subscriptions first, because the personas are tuned against that model tier, then Codex,
+then the primary-backup Claude subscription and the primary Claude identity as the last
+resort. Every chain puts `claude-code:primary-backup` immediately before
+`claude-code:primary`. A variant is a named per-harness preset selected as `<harness>:<variant>`;
 it composes the base harness settings with child-only model, environment, and
 credential routing.
 
@@ -379,21 +381,44 @@ top-level or per-harness `env` can only *set* a name — it cannot remove one an
 map one out of the parent process. So a chain naming a bare harness id carries one
 candidate no per-identity environment rule can reach, which is why the first Codex
 identity is `codex:primary` rather than `codex`: the board credential this host masks
-and the runtime directory it repoints would otherwise have covered four candidates out
-of five, and the fifth is the one reached once the subscriptions ahead of it are
+and the runtime directory it repoints would otherwise have covered every candidate in
+the chain but that one, which is reached once the subscriptions ahead of it are
 spent. That variant declares no `unset_env` for `CODEX_HOME` on purpose — that value is
 ambient configuration a developer may export, and this is the identity that honours
 it — so the account behind it, and its position in every chain, are what they were.
-`scripts/claude-alt-config-dir.sh` is the one source of BOTH alternate config
-directories: it derives `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt`
-and `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` as `$HOME/.claude-alt2` unless the caller
-overrides them, and every wrapper — agent, orchestrator, and llmlint — sources it,
-because oneharness refuses to start whenever a named variant's `env_from` source is
-unset in the parent. Each variant maps its portable path to `CLAUDE_CONFIG_DIR`
+`scripts/claude-alt-config-dir.sh` is the one source of every Claude identity's config
+directory: it derives `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt`,
+`ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` as `$HOME/.claude-alt2`,
+`ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` as `$HOME/.claude-primary-backup` and
+`ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` as `$HOME/.claude`. For each, a non-empty value
+in the environment wins, then the host's identities file
+(`$XDG_CONFIG_HOME/ai-orchestrator/claude-identities.env`, or the same path under
+`$HOME/.config`), then that default. Every entry point that reaches oneharness sources it — the agent,
+orchestrator, llmlint and usage wrappers, the launch verbs, the plan reviewer, the drafter
+and the envelope validator — as do session setup and the `post-checkout` hook, because
+oneharness refuses to start whenever a named variant's `env_from` source is unset in the
+parent. Each variant maps its portable path to `CLAUDE_CONFIG_DIR`
 only inside its own child and masks ambient Anthropic API/OAuth credentials so they
 cannot outrank subscription auth. If one directory is absent, unauthenticated, or
 quota-limited, fallback proceeds to the next candidate; a host with only its
 primary Claude identity therefore still dispatches through an authenticated Codex.
+
+### The primary-backup and primary Claude subscriptions
+
+`claude-code:primary-backup` is a further Claude subscription, reached immediately before
+`claude-code:primary` in every chain and credentialed from
+`$ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` (by default
+`$HOME/.claude-primary-backup`). Its variant is its config's own `alternate` with that one
+directory swapped, so it runs the same model under the same masks. A host that never
+logged it in has no such directory: the worker's unselected chain drops it, and every
+other entry point's candidate reports `auth` and falls through to the primary.
+
+`claude-code:primary` reads its directory the same way, from
+`ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (by default `$HOME/.claude`), rather than
+unsetting `CLAUDE_CONFIG_DIR`. That is what lets a host whose `~/.claude` is logged in as
+another account point both identities at the right directories in its identities file
+instead of in a config every host shares. `tests/e2e/test_claude_identity_routing_e2e.py`
+drives the refusal a missing indirection meets and the existing-host fall-through.
 
 ### The second Codex identity
 
@@ -446,10 +471,11 @@ unauthenticated second plan is safe and free in every committed chain exactly as
 unauthenticated `codex:alternate` is. (claude-code also creates its config
 directory itself on first run, which is why there is nothing to pre-create — and
 why `scripts/oneharness-agent.sh` still substitutes a chain without the absent
-alternates: dropping them keeps a dispatch from leaving a config directory on disk
-for an account nobody has logged into. It drops **only** those candidates, reading
-the rest from `oneharness.toml` so the degraded chain is always a subsequence of
-the committed one.)
+alternates and an absent primary-backup: dropping them keeps a dispatch from leaving a
+config directory on disk for an account nobody has logged into. It drops **only** those
+candidates, and never `claude-code:primary` whatever its directory's state, reading the
+rest from `oneharness.toml` so the degraded chain is always a subsequence of the
+committed one.)
 
 The **orchestrator** reverses the worker's order. It is a long-lived supervisory
 process, not a worker, so `oneharness.orchestrator.toml` selects both Codex
@@ -460,9 +486,8 @@ contending for the workers' Claude quota beats stalling a supervisory process ev
 workstream waits on.
 `launch_orchestrator` pins `scripts/oneharness-orchestrator.sh` as the launched
 process's oneharness binary, which forces that config (upward discovery from the
-repo root would find the worker chain) and exports the same shared
-`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` and `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR`
-defaults — so `just orchestrate` launches on a
+repo root would find the worker chain) and exports the same four shared
+`ORCHESTRATOR_CLAUDE_*_CONFIG_DIR` indirections — so `just orchestrate` launches on a
 fresh shell with nothing exported by hand. That launch also forwards
 `--oneharness-mode` (default `bypass`) as `ONEHARNESS_MODE`, like every other
 dispatch entry point; without it the orchestrator runs at claude-code's
@@ -472,11 +497,12 @@ non-interactive default, which denies outright every command outside
 The **judge** leads with Codex for the same reason and, past both Codex
 identities, now reaches the workers' alternate subscriptions before
 `claude-code:primary`. It keeps its cheaper-supervisor intent through `model`
-rather than through isolation: all three of its Claude variants are
+rather than through isolation: all four of its Claude variants are
 `claude-sonnet-5`, where every other role uses `claude-opus-5`. The
-`claude-code:primary` variant removes `CLAUDE_CONFIG_DIR` and higher-precedence
-Anthropic credentials, selecting Claude's default `$HOME/.claude` identity and
-never an alternate account.
+`claude-code:primary` variant is env-driven like the others: it reads its
+`CLAUDE_CONFIG_DIR` from `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (by default
+`$HOME/.claude`) and removes higher-precedence Anthropic credentials, so it runs as the
+account that directory holds and never as an ambient key.
 
 The **design-doc role reverses the reversal**, and is the one place on this host where
 the identity order is chosen for what a side is good at rather than for what it must not
@@ -486,15 +512,15 @@ alternate Claude subscriptions, on `claude-opus-5` rather than the judge config'
 `claude-sonnet-5`. What that reviewer decides is whether the prose reads plainly to a
 non-specialist, which is the document's whole purpose, so the cheaper-supervisor trade
 every other judged tier makes is the wrong one here. Past their leading pair each reaches
-the other provider's two identities and then `claude-code:primary`, so both name all five
-and neither loses a quota once everything ahead of it is exhausted.
+the other provider's two identities and then `claude-code:primary-backup` and
+`claude-code:primary`, so both name all six and neither loses a quota once everything ahead of it is exhausted.
 `tests/e2e/test_design_doc_graph_e2e.py` reads both orders back through the graph that
 routes them, and `tests/e2e/test_oneharness_timeout_e2e.py` reads them beside every other
 config's from the real CLI.
 
 **llmlint** uses `oneharness.llmlint.toml` through
 `scripts/llmlint-oneharness.sh`, and is **no longer Codex-only**: it carries the
-same five identities in the same supervisory order. That trade is deliberate — a
+same six identities in the same supervisory order. That trade is deliberate — a
 blocking pre-push check that can still be judged beats one isolated from the Claude
 quota that is left. It does mean this tier can contend for the workers'
 subscriptions once both Codex accounts are exhausted.
@@ -781,20 +807,27 @@ ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$HOME/.claude-alt" \
 ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR="$HOME/.claude-alt2" \
   oneharness run --config oneharness.toml \
   --harness claude-code:alternate2 --prompt "Reply with OK"
-oneharness run --config oneharness.judge.toml \
+ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR="$HOME/.claude-primary-backup" \
+  oneharness run --config oneharness.llmlint.toml \
+  --harness claude-code:primary-backup --prompt "Reply with OK"
+ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR="$HOME/.claude" \
+  oneharness run --config oneharness.llmlint.toml \
   --harness claude-code:primary --prompt "Reply with OK"
 ORCHESTRATOR_CODEX_ALT_HOME="$HOME/.codex-alt" \
   oneharness run --config oneharness.toml \
   --harness codex:alternate --prompt "Reply with OK"
 ```
 
-A `codex:alternate` or `claude-code:alternate2` probe that reports `fell_through:
+A `codex:alternate`, `claude-code:alternate2` or `claude-code:primary-backup` probe that
+reports `fell_through:
 [{"harness": "...", "reason": "auth"}]` is the unauthenticated state, not a broken
 config; run the `codex login` above, or for the second Claude plan:
 
 ```sh
 CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude
 ```
+
+or for the primary-backup plan, `CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude`,
 
 then `/login` in that session.
 

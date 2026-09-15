@@ -1,14 +1,17 @@
 # shellcheck shell=bash
-# The ONE source of BOTH portable alternate-Claude config directories.
+# The ONE source of every Claude identity's config directory.
 #
-# Every config's `[harness.claude-code.variant.alternate]` and
-# `[harness.claude-code.variant.alternate2]` block maps
-# ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR / ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR into
-# CLAUDE_CONFIG_DIR through `env_from`, so oneharness refuses to run when either
-# indirection is unset in the parent process. Every wrapper that reaches
-# oneharness derives them here rather than each keeping its own copy of the $HOME
-# rule; sourced by scripts/oneharness-agent.sh, scripts/oneharness-orchestrator.sh,
-# and scripts/llmlint-oneharness.sh — every role's chain now names both.
+# Every config maps one of these four indirections into CLAUDE_CONFIG_DIR through
+# `env_from` for each claude-code variant, so oneharness refuses to run when any of them
+# is unset in the parent process:
+#
+#   ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR             $HOME/.claude-alt             claude-code:alternate
+#   ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR            $HOME/.claude-alt2            claude-code:alternate2
+#   ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR  $HOME/.claude-primary-backup  claude-code:primary-backup
+#   ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR         $HOME/.claude                 claude-code:primary
+#
+# Per variable, a non-empty environment value wins, then the host's identities file
+# (docs/host-setup.md, step 4), then the default.
 #
 # Unlike scripts/codex-alt-home.sh, this helper deliberately has NO filesystem
 # side effect: claude-code classifies an absent CLAUDE_CONFIG_DIR exactly as it
@@ -16,28 +19,130 @@
 # next candidate — and creates the directory itself when it runs. See
 # [The second alternate Claude subscription](docs/onejudge-integration.md#the-second-alternate-claude-subscription).
 
-# The wrappers already set these before sourcing, so this changes nothing today.
-# It is here so the `${HOME:?}` guard below still aborts rather than deriving
-# "/.claude-alt" if some later caller sources this module without them.
+# Strict mode. The wrappers already enable it before sourcing, so this changes nothing for
+# them; it is here so a later caller that sources this module without strict mode still
+# refuses rather than deriving a path from an unset HOME.
 set -euo pipefail
 
-# Derive, validate, and export one alternate-Claude config directory. $1 names the
-# calling wrapper so its diagnostics stay attributable, $2 is the human label used
-# in those diagnostics, $3 the variable that both overrides and receives the path,
-# and $4 the $HOME-relative default.
-_resolve_one_claude_config_dir() {
-    local caller=$1 label=$2 variable=$3 default_leaf=$4
-    local config_dir
+# Every Claude identity's indirection, in the order the chains name them relative to
+# each other. The trust marker walks this list, so an identity added here is marked too.
+CLAUDE_IDENTITY_CONFIG_VARIABLES=(
+    ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+    ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR
+    ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR
+    ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR
+)
+
+# What the identities file last read defined, so resolving one identity before any file
+# was read consults nothing rather than an unset array.
+claude_identities_file=""
+claude_identities_file_names=()
+claude_identities_file_values=()
+
+# Where the parser lives, taken while this file is being sourced: a relative
+# BASH_SOURCE would otherwise resolve against whatever directory a caller has moved to
+# by the time it asks for the identities file.
+_claude_identity_helper_dir=$(dirname -- "${BASH_SOURCE[0]}")
+case $_claude_identity_helper_dir in
+    /*) ;;
+    *) _claude_identity_helper_dir="$PWD/$_claude_identity_helper_dir" ;;
+esac
+
+# The $HOME-relative default and the diagnostic label of one indirection. Refuses a
+# name that is not one of the four, so a caller cannot resolve a directory nobody routes.
+_claude_identity_default() {
+    case $1 in
+        ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR) printf '%s\n' ".claude-alt" "alternate Claude config" ;;
+        ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR) printf '%s\n' ".claude-alt2" "second alternate Claude config" ;;
+        ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR) printf '%s\n' ".claude-primary-backup" "primary-backup Claude config" ;;
+        ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR) printf '%s\n' ".claude" "primary Claude config" ;;
+        *) return 1 ;;
+    esac
+}
+
+# The host's identities file, printed when a location can be derived at all. With
+# neither an absolute XDG_CONFIG_HOME nor an absolute HOME there is no such path, and
+# every identity then needs an override from the environment anyway.
+claude_identities_file_path() {
+    if [[ ${XDG_CONFIG_HOME-} == /* ]]; then
+        printf '%s\n' "$XDG_CONFIG_HOME/ai-orchestrator/claude-identities.env"
+    elif [[ ${HOME-} == /* ]]; then
+        printf '%s\n' "$HOME/.config/ai-orchestrator/claude-identities.env"
+    else
+        return 1
+    fi
+}
+
+# Read the host's identities file into `claude_identities_file_names` and
+# `claude_identities_file_values`. An absent file leaves both empty; a refused one leaves
+# both empty and returns non-zero, having said why. $1 names the calling wrapper.
+_load_claude_identities_file() {
+    local caller=$1 parser
+    claude_identities_file=""
+    claude_identities_file_names=()
+    claude_identities_file_values=()
+    claude_identities_file=$(claude_identities_file_path) || return 0
+    [ -e "$claude_identities_file" ] || return 0
+    # Loaded only when there is a file to parse, so a host with none depends on nothing
+    # beyond this file — and a checkout missing the parser is refused by name the moment
+    # it would have been needed, rather than reading the file some other way.
+    if ! declare -F read_env_file >/dev/null; then
+        parser="$_claude_identity_helper_dir/credentials-env.sh"
+        if [ ! -f "$parser" ] || [ ! -r "$parser" ]; then
+            echo "$caller: reading the Claude identities file at $claude_identities_file needs the parser at $parser, which is not a readable regular file; restore it from the repository or run 'just bootstrap', then retry" >&2
+            return 2
+        fi
+        # shellcheck source=scripts/credentials-env.sh
+        if ! . "$parser"; then
+            echo "$caller: the parser at $parser is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+            return 2
+        fi
+    fi
+    read_env_file "$caller" "$claude_identities_file" "Claude identities" \
+        "${CLAUDE_IDENTITY_CONFIG_VARIABLES[@]}" || return $?
+    claude_identities_file_names=(${env_file_names[@]+"${env_file_names[@]}"})
+    claude_identities_file_values=(${env_file_values[@]+"${env_file_values[@]}"})
+}
+
+# Derive, validate, and export one identity's config directory from the environment,
+# then the identities file `_load_claude_identities_file` last read, then the default.
+# $1 names the calling wrapper so its diagnostics stay attributable, $2 the indirection.
+resolve_claude_identity_config_dir() {
+    local caller=$1 variable=$2 default_leaf label config_dir="" index fix in_file=false
+    local -a described=()
+    if ! mapfile -t described < <(_claude_identity_default "$variable") || (( ${#described[@]} != 2 )); then
+        echo "$caller: $variable is not a Claude identity's config indirection; name one of ${CLAUDE_IDENTITY_CONFIG_VARIABLES[*]}, then retry" >&2
+        return 2
+    fi
+    default_leaf=${described[0]}
+    label=${described[1]}
+    fix="set $variable to an absolute directory"
     if [ -n "${!variable-}" ]; then
         config_dir=${!variable}
     else
-        : "${HOME:?$caller: HOME is required to locate the $label; export HOME or set $variable, then retry}"
-        config_dir="$HOME/$default_leaf"
+        for index in "${!claude_identities_file_names[@]}"; do
+            if [ "${claude_identities_file_names[$index]}" = "$variable" ]; then
+                config_dir=${claude_identities_file_values[$index]}
+                in_file=true
+            fi
+        done
+        # A name the file writes is the file's value even when empty, so `NAME=` is
+        # refused by the absolute-path rule below rather than quietly meaning the default.
+        if [ "$in_file" = true ]; then
+            fix="write $variable in $claude_identities_file as an absolute directory (the file expands no variables), or set it in the environment"
+        elif [ -n "${HOME-}" ]; then
+            config_dir="$HOME/$default_leaf"
+        else
+            echo "$caller: HOME is required to locate the $label; export HOME or set $variable, then retry" >&2
+            return 2
+        fi
     fi
+    # Neither the path nor the value is echoed: an operator's override is theirs to read
+    # where they wrote it, and a diagnostic names the variable that decides it.
     case "$config_dir" in
         /*) ;;
         *)
-            echo "$caller: $label path must be absolute; set $variable to an absolute directory and retry" >&2
+            echo "$caller: $label path must be absolute; $fix and retry" >&2
             return 2
             ;;
     esac
@@ -45,18 +150,20 @@ _resolve_one_claude_config_dir() {
         { [ ! -d "$config_dir" ] ||
             [ ! -r "$config_dir" ] ||
             [ ! -x "$config_dir" ]; }; then
-        echo "$caller: $label path is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
+        echo "$caller: $label path named by $variable is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
         return 2
     fi
     export "$variable=$config_dir"
 }
 
-# Derive, validate, and export both alternate-Claude config directories. $1 names
-# the calling wrapper so its diagnostics stay attributable.
+# Derive, validate, and export every Claude identity's config directory. $1 names the
+# calling wrapper so its diagnostics stay attributable. The name is historical: it
+# resolved the two alternates once, and every caller still calls it by this name.
+# llmlint: ignore[names_match_behavior] The name is historical and kept by contract C2 of this run so none of its callers changes; the comment above says it now resolves all four identities.
 resolve_claude_alt_config_dir() {
-    local caller=$1
-    _resolve_one_claude_config_dir \
-        "$caller" "alternate Claude config" ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR .claude-alt || return $?
-    _resolve_one_claude_config_dir \
-        "$caller" "second alternate Claude config" ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR .claude-alt2
+    local caller=$1 variable
+    _load_claude_identities_file "$caller" || return $?
+    for variable in "${CLAUDE_IDENTITY_CONFIG_VARIABLES[@]}"; do
+        resolve_claude_identity_config_dir "$caller" "$variable" || return $?
+    done
 }

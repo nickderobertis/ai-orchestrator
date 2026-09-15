@@ -77,6 +77,7 @@ harnesses = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:primary-backup",
     "claude-code:primary",
 ]
 
@@ -112,7 +113,7 @@ unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN"]
 # refusing; harmless on other harnesses.
 env = { IS_SANDBOX = "1" }
 
-# The Claude fallbacks are the same three identities every other role names, with
+# The Claude fallbacks are the same four identities every other role names, with
 # the same portable indirections and credential masking.
 [harness.claude-code.variant.alternate]
 model = "claude-opus-5"
@@ -137,12 +138,31 @@ unset_env = [
     "GH_PROJECTS_TOKEN",
 ]
 
-# The last resort: Claude's default config directory, with every higher-precedence
-# credential selector and any inherited alternate directory masked off.
+# The primary-backup subscription, reached just before the primary one. It is
+# credentialed from the directory scripts/claude-alt-config-dir.sh resolves into
+# ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR, which is that helper's to default; a
+# host that never logged it in reports `failure_kind: "auth"` and falls through, so the
+# candidate costs nothing until then.
+[harness.claude-code.variant.primary-backup]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+# The last resort in every chain: the primary subscription, credentialed from the
+# directory scripts/claude-alt-config-dir.sh resolves into
+# ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR, which is that helper's to default. Every
+# higher-precedence credential selector is masked, so this identity can never run as
+# another account.
 [harness.claude-code.variant.primary]
 model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR" }
 unset_env = [
-    "CLAUDE_CONFIG_DIR",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",

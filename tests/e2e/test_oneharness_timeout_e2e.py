@@ -100,6 +100,7 @@ DESIGN_DOC_WRITER_CHAIN = [
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:primary-backup",
     "claude-code:primary",
 ]
 DESIGN_DOC_REVIEWER_CHAIN = [
@@ -107,8 +108,43 @@ DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:alternate2",
     "codex:primary",
     "codex:alternate",
+    "claude-code:primary-backup",
     "claude-code:primary",
 ]
+
+#: The identity order every side resolves. Two orders cover all ten configs: the worker
+#: and the design-doc reviewer lead with the Claude subscriptions, every other side with
+#: Codex, and all of them name the same six identities with the primary-backup Claude
+#: subscription immediately before the primary one, which is last everywhere.
+INTENDED_CHAINS = {
+    "worker": DESIGN_DOC_REVIEWER_CHAIN,
+    "judge": DESIGN_DOC_WRITER_CHAIN,
+    "llmlint": DESIGN_DOC_WRITER_CHAIN,
+    "monitor": DESIGN_DOC_WRITER_CHAIN,
+    "pacemaker": DESIGN_DOC_WRITER_CHAIN,
+    "drafter": DESIGN_DOC_WRITER_CHAIN,
+    "reviewer": DESIGN_DOC_WRITER_CHAIN,
+    "design-doc writer": DESIGN_DOC_WRITER_CHAIN,
+    "design-doc reviewer": DESIGN_DOC_REVIEWER_CHAIN,
+    "follow-up": DESIGN_DOC_WRITER_CHAIN,
+}
+
+#: The indirection each Claude identity reads its `CLAUDE_CONFIG_DIR` from, as
+#: `scripts/claude-alt-config-dir.sh` exports it.
+ALTERNATE_INDIRECTION = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"
+PRIMARY_BACKUP_INDIRECTION = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR"
+PRIMARY_INDIRECTION = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"
+
+#: What each side's primary Claude identity masks: exactly what it masked while it read
+#: Claude's default directory, less `CLAUDE_CONFIG_DIR` itself, which it now maps in. The
+#: board credential stays unmasked on the three sides that read the plan store.
+ANTHROPIC_SELECTORS = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+PLAN_STORE_SIDES = {"design-doc writer", "design-doc reviewer", "follow-up"}
 
 #: The follow-up agent's graph and its one single-sided member, whose config is the judge's
 #: routing verbatim — chain order and every identity's model — with four chosen
@@ -371,6 +407,49 @@ def test_every_side_resolves_its_intended_effective_deadline(
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
     }
+    assert {config.name for config in configs.values()} == {
+        path.name for path in REPO_ROOT.glob("oneharness*.toml")
+    }, "a turn config this repository ships is not one of the sides this test resolves"
+
+    for side, config in configs.items():
+        assert effective[side]["harnesses"]["value"] == INTENDED_CHAINS[side], (
+            f"{config.name} resolves {effective[side]['harnesses']['value']}, not "
+            f"{INTENDED_CHAINS[side]}; every chain names all six identities, with "
+            "claude-code:primary-backup immediately before claude-code:primary"
+        )
+        variants = _without_sources(effective[side]["harness"]["claude-code"]["variant"])
+        alternate, backup, primary = (
+            variants["alternate"],
+            variants["primary-backup"],
+            variants["primary"],
+        )
+        assert alternate["env_from"]["CLAUDE_CONFIG_DIR"] == {"value": ALTERNATE_INDIRECTION}
+        assert backup["model"] == alternate["model"], (
+            f"{config.name}'s primary-backup runs {backup['model']}, not its alternate's "
+            f"{alternate['model']}; a side keeps its tier on every Claude identity"
+        )
+        assert backup["env_from"] == {
+            **alternate["env_from"],
+            "CLAUDE_CONFIG_DIR": {"value": PRIMARY_BACKUP_INDIRECTION},
+        }, f"{config.name}'s primary-backup maps a different environment from its alternate"
+        assert backup == {**alternate, "env_from": backup["env_from"]}, (
+            f"{config.name}'s primary-backup differs from its alternate in more than the "
+            "directory it reads"
+        )
+        assert primary["env_from"]["CLAUDE_CONFIG_DIR"] == {"value": PRIMARY_INDIRECTION}, (
+            f"{config.name}'s primary does not read its directory from {PRIMARY_INDIRECTION}"
+        )
+        masked = ANTHROPIC_SELECTORS + ([] if side in PLAN_STORE_SIDES else [BOARD_CREDENTIAL])
+        assert primary["unset_env"]["value"] == masked, (
+            f"{config.name}'s primary masks {primary['unset_env']['value']}, not {masked}"
+        )
+        unsetting = [
+            f"{harness}:{name}"
+            for harness, routing in effective[side]["harness"].items()
+            for name, variant in routing.get("variant", {}).items()
+            if "CLAUDE_CONFIG_DIR" in (variant["unset_env"]["value"] or [])
+        ]
+        assert not unsetting, f"{config.name} still unsets CLAUDE_CONFIG_DIR on {unsetting}"
 
     for side in ("worker", "judge", "llmlint"):
         assert effective[side]["timeout"] == {"value": None, "source": None}, (
@@ -445,7 +524,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
             f"the {side} resolves "
             f"{effective[side]['harnesses']['value']}, not {chain}; this one role pairs "
             "Codex on the side that writes with Claude on the side that reviews — the "
-            "reverse of every other pairing here — and every chain names all five "
+            "reverse of every other pairing here — and every chain names all six "
             "identities with the primary Claude subscription last, so a dropped one is a "
             "quota this host loses entirely"
         )

@@ -13,7 +13,9 @@ ONEPIPELINE = REPO_ROOT / "scripts" / "onepipeline.sh"
 PRESERVED_LOG = REPO_ROOT / "scripts" / "preserved-log.sh"
 
 
-def _load(root: Path, contents: str | None, environment: dict[str, str] | None = None):
+def _load(
+    root: Path, contents: str | None, environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[bytes]:
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
     helper = scripts / HELPER.name
@@ -42,9 +44,72 @@ def test_credentials_file_exports_values_without_overriding_the_environment(tmp_
     assert environment["EMPTY_VALUE"] == ""
 
 
+def test_a_relative_path_handed_to_the_parser_is_refused_before_it_is_read(
+    tmp_path: Path,
+) -> None:
+    """A relative path would read whichever file sits under the caller's current directory."""
+    (tmp_path / ".env").write_text("GH_PROJECTS_TOKEN=a-value-that-must-not-appear\n")
+    parsed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            # The helper's strict mode would end this shell at the refusal, so the status
+            # is read through `||` rather than on the next line.
+            f'source "{HELPER}"; read_env_file test .env credential '
+            '|| echo "status=$? names=${env_file_names[*]-}"',
+        ],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert parsed.stdout.strip() == "status=2 names=", parsed.stderr
+    assert "credential file path handed to read_env_file must be absolute" in parsed.stderr
+    assert "must-not-appear" not in parsed.stderr
+
+
 def test_absent_and_empty_credentials_files_are_ordinary(tmp_path: Path) -> None:
-    assert _load(tmp_path / "absent", None).returncode == 0
+    absent = _load(tmp_path / "absent", None)
+    assert absent.returncode == 0, absent.stderr.decode()
+    assert absent.stderr == b""
     assert _load(tmp_path / "empty", "").returncode == 0
+
+
+@pytest.mark.parametrize("hidden", [False, True], ids=["nothing-there", "beneath-unsearchable"])
+def test_an_absent_path_handed_to_the_parser_returns_success_silently(
+    tmp_path: Path, hidden: bool
+) -> None:
+    """A path this process sees nothing at is an absent file, whatever its ancestors allow.
+
+    Beneath a directory this process may not search, a file somebody wrote is as invisible
+    as none at all, and the parser answers both the same way: success, and not a word.
+    """
+    directory = tmp_path / "config"
+    directory.mkdir()
+    if hidden:
+        (directory / "names.env").write_text("GH_PROJECTS_TOKEN=a-value-that-must-not-appear\n")
+        directory.chmod(0o000)
+    try:
+        parsed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{HELPER}"; read_env_file test "$1" credential '
+                '|| { echo "status=$?"; exit 0; }; echo "status=0 names=${env_file_names[*]-}"',
+                "test",
+                str(directory / "names.env"),
+            ],
+            env={"PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        directory.chmod(0o755)
+
+    assert parsed.stdout.strip() == "status=0 names=", parsed.stderr
+    assert parsed.stderr == ""
 
 
 def test_malformed_line_is_refused_without_printing_a_credential_value(tmp_path: Path) -> None:

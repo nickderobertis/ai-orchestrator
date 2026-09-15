@@ -89,7 +89,7 @@ REAL_BINARY_ENV = "REAL_ONEHARNESS_BIN"
 #: Both flags, and neither is optional. `--mock-harness ID` replaces the provider
 #: process of **that exact identity** and no other — not `ID:variant`, and not the
 #: rest of a `run_mode = "fallback"` chain — so mocking one candidate of a chain
-#: that names five leaves the other four free to reach a paid subscription for
+#: that names six leaves the other five free to reach a paid subscription for
 #: real. `--harness` is what makes the mock total, by leaving exactly one
 #: candidate.
 MOCK_HARNESS = "codex"

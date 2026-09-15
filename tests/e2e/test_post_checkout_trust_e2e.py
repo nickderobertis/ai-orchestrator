@@ -51,17 +51,18 @@ ALREADY_REGISTERED_ENTRY = {"hasTrustDialogAccepted": True, "history": ["a recor
 TRUST_HELPER = REPO_ROOT / "scripts" / "claude-workspace-trust.sh"
 HELPER_DIAGNOSTIC = TRUST_HELPER.stem
 
-#: The resolver the shared helper needs in scope to name the two alternate identities'
-#: config directories. It is sourced rather than read: this module never spells a config
-#: directory or the variables that override them, so a rename there moves these journeys
-#: with it instead of leaving them writing somewhere nothing reads.
+#: The resolver the shared helper needs in scope to name every Claude identity's
+#: config directories. It is sourced rather than read: apart from the one journey that holds
+#: the four default paths the contract names, this module never spells a config directory
+#: or the variables that override them, so a rename there moves these journeys with it
+#: instead of leaving them writing somewhere nothing reads.
 CONFIG_DIR_RESOLVER = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
 
-#: How many configurations a checkout has to reach. Every harness chain names all three
-#: claude-code identities — both alternate subscriptions and the primary, which is last
-#: on every one of them — so a directory trusted in two of the three is a chain that
-#: works until both alternates are exhausted and then blocks on the fallback.
-DISPATCH_IDENTITIES = 3
+#: How many configurations a checkout has to reach. Every harness chain names all four
+#: claude-code identities — both alternate subscriptions, the primary-backup, and the
+#: primary, which is last on every one of them — so a directory trusted in only some of
+#: them is a chain that works until those are exhausted and then blocks on the fallback.
+DISPATCH_IDENTITIES = 4
 
 
 def _identity_config_paths(tmp_path: Path) -> tuple[Path, ...]:
@@ -100,6 +101,10 @@ def _identity_configs(tmp_path: Path) -> tuple[Path, ...]:
 
 def _environment(tmp_path: Path) -> dict[str, str]:
     """The environment a checkout runs under: this test's own `HOME`, and nothing else.
+
+    `XDG_CONFIG_HOME` is deliberately absent too, so the identities file the resolver
+    consults is the one under this `HOME` — which no journey here writes — and never the
+    host's own.
 
     Built from nothing rather than from `os.environ`, because a dispatch exports the
     override that beats `HOME` — inheriting it would send these writes into the
@@ -183,6 +188,50 @@ def test_a_new_worktree_is_recorded_trusted_for_every_dispatch_identity(
             "an entry that was already there was replaced rather than preserved, which "
             "discards the session state a real configuration carries"
         )
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] This module is where this repository
+# proves the post-checkout hook through a real worktree creation, and this node's own
+# criteria name it as the home of the four-file proof. The journey beside the seven the
+# module already holds costs 0.04s under `pytest --durations`, so a separate host-tool
+# project would isolate no cost.
+def test_the_hook_marks_exactly_the_four_chain_identity_files_and_not_the_default_login(
+    repository: Path, tmp_path: Path
+) -> None:
+    """The contract's four files, spelled out, through a real worktree creation.
+
+    Every other journey here asks the resolver where the configurations are, which keeps
+    them from drifting but cannot catch the resolver naming the wrong ones. This one holds
+    what a host exporting nothing must get: each identity's `.claude.json` inside its own
+    default directory, in chain order, and not `$HOME/.claude.json` — the file claude-code
+    keeps only when nothing sets `CLAUDE_CONFIG_DIR`, which no chain identity does now.
+    """
+    expected = tuple(
+        tmp_path / leaf / ".claude.json"
+        for leaf in (".claude-alt", ".claude-alt2", ".claude-primary-backup", ".claude")
+    )
+    assert _identity_config_paths(tmp_path) == expected
+    for config in expected:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({"projects": {}}), encoding="utf-8")
+    default_login = tmp_path / ".claude.json"
+    default_login.write_text(json.dumps({"projects": {}}), encoding="utf-8")
+
+    worktree, added = _add_worktree(repository, tmp_path, "four-identities", _environment(tmp_path))
+
+    assert added.returncode == 0, added.stderr
+    assert HELPER_DIAGNOSTIC not in added.stderr, added.stderr
+    for config in expected:
+        recorded = json.loads(config.read_text(encoding="utf-8"))["projects"]
+        assert recorded.get(str(worktree.resolve())) == {"hasTrustDialogAccepted": True}, (
+            f"{config} does not record {worktree} as trusted: {recorded}"
+        )
+    assert json.loads(default_login.read_text(encoding="utf-8")) == {"projects": {}}, (
+        "the default login's configuration was marked, though no chain identity reads it"
+    )
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def test_an_ordinary_branch_switch_records_the_working_tree_it_updated(

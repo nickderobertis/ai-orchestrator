@@ -6,8 +6,8 @@ hand. Everything below was reconstructed by reading the scripts on a host that h
 just been brought up; this document exists so the next host is something to follow
 rather than an investigation to repeat.
 
-Add a subscription to an existing host? Only [The five harness
-logins](#4-the-five-harness-logins) and [The trust-marking
+Add a subscription to an existing host? Only [The six harness
+logins](#4-the-six-harness-logins) and [The trust-marking
 pass](#5-the-trust-marking-pass-order-matters) apply.
 
 ## What is already automated
@@ -113,32 +113,74 @@ Bootstrap only the canonical checkout. The safety clone needs to exist and stay
 clean: every run clones it again, and the lifecycle points that per-run clone at
 `.githooks` itself before adding a worktree.
 
-## 4. The five harness logins
+## 4. The six harness logins
 
-Every role's chain — worker, judge, orchestrator, llmlint — names the same five
+Every role's chain — worker, judge, orchestrator, llmlint — names the same six
 identities and differs only in their order, so an identity nobody logged into is
-quota that role loses once everything ahead of it is exhausted. Log in to all five:
+quota that role loses once everything ahead of it is exhausted. Log in to all six:
 
 | Identity | Command |
 | --- | --- |
 | `claude-code:primary` | `claude` (the default `$HOME/.claude` config directory) |
 | `claude-code:alternate` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt" claude`, then `/login` |
 | `claude-code:alternate2` | `CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude`, then `/login` |
+| `claude-code:primary-backup` | `CLAUDE_CONFIG_DIR="$HOME/.claude-primary-backup" claude`, then `/login` |
 | `codex` | `codex login` |
 | `codex:alternate` | `CODEX_HOME="$HOME/.codex-alt" codex login` |
 
-Session setup marks trust for all three with `jq`, the primary included: it is last
-on every chain, so a checkout it does not trust blocks the candidate that runs once
-both alternate subscriptions are spent. The primary's configuration is
-`$HOME/.claude.json` — the file claude-code keeps when nothing sets
-`CLAUDE_CONFIG_DIR`, which is what `oneharness.toml`'s primary variant unsets — and it
-is marked exactly like the two directories the alternates name.
+Session setup marks trust for all four Claude identities with `jq`, the primary
+included: it is last on every chain, so a checkout it does not trust blocks the candidate
+that runs once every other subscription is spent. The primary's configuration is
+`$ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR/.claude.json` (by default
+`$HOME/.claude/.claude.json`), marked exactly like the directories the other three
+identities name.
 
 Leaving one unauthenticated is safe but not free of consequence — it reports
 `auth` and falls through to the next candidate, costing that role the quota rather
 than breaking it. Check a Codex login with
 `CODEX_HOME="$HOME/.codex-alt" codex login status`; check every identity with the
 probe in [step 8](#8-verify-the-host).
+
+### Where each Claude identity's directory lives
+
+Each Claude identity reads its config directory from one variable, which
+`scripts/claude-alt-config-dir.sh` derives for every wrapper and hook:
+
+| Identity | Variable | Default |
+| --- | --- | --- |
+| `claude-code:alternate` | `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` | `$HOME/.claude-alt` |
+| `claude-code:alternate2` | `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` | `$HOME/.claude-alt2` |
+| `claude-code:primary-backup` | `ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` | `$HOME/.claude-primary-backup` |
+| `claude-code:primary` | `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` | `$HOME/.claude` |
+
+A host whose directories are not the defaults says so in its **identities file**,
+`$XDG_CONFIG_HOME/ai-orchestrator/claude-identities.env`, or
+`$HOME/.config/ai-orchestrator/claude-identities.env` when `XDG_CONFIG_HOME` is unset,
+empty or not an absolute path. It sits outside every checkout, and every entry point
+reads it — the wrappers, the launch verbs, session setup and the `post-checkout` hook —
+so it reaches the hooks that source no shell profile.
+
+- It admits those four names and nothing else, one `NAME=value` per line, in the same
+  dialect as the credentials `.env`.
+- For each name, a non-empty value in the environment wins over the file, and the file
+  wins over the default.
+- Values are literal: nothing is expanded, so write absolute paths rather than `$HOME/…`
+  or `~`.
+- Any other name, a malformed line, a relative value, or a path that is not a readable
+  file stops every wrapper before oneharness starts, naming the line or the variable and
+  echoing no value.
+
+It is **not** the credentials `.env` at the checkout root: that file belongs to one
+checkout and carries secrets, while this one belongs to the host and carries none.
+
+On the WSL box whose `~/.claude` is logged in as the primary-backup account, because
+that is its remote-control identity, the primary account lives in `~/.claude-primary`,
+and the file reads:
+
+```sh
+ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR=/home/<user>/.claude
+ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR=/home/<user>/.claude-primary
+```
 
 ## 5. The trust-marking pass (order matters)
 
@@ -152,17 +194,27 @@ cd ~/projects/ai-orchestrator
 just session-setup
 ```
 
-Verify all three identities, keyed on the checkout root:
+Verify all four identities, keyed on the checkout root. The files are the ones the
+resolver names, so the loop honours the identities file:
 
 ```sh
-for config in "$HOME/.claude-alt/.claude.json" "$HOME/.claude-alt2/.claude.json" \
-  "$HOME/.claude.json"; do
-  jq -r --arg root "$HOME/projects/ai-orchestrator" \
-    '.projects[$root].hasTrustDialogAccepted' "$config"
-done
+cd ~/projects/ai-orchestrator
+bash -c 'source scripts/claude-alt-config-dir.sh; source scripts/claude-workspace-trust.sh
+  claude_trust_config_paths verify' |
+  while read -r config; do
+    jq -r --arg root "$HOME/projects/ai-orchestrator" \
+      '.projects[$root].hasTrustDialogAccepted' "$config"
+  done
 ```
 
-All three lines must print `true`. `null` means the pass has not run since that
+With nothing exported and no identities file, those four are
+`$HOME/.claude-alt/.claude.json`, `$HOME/.claude-alt2/.claude.json`,
+`$HOME/.claude-primary-backup/.claude.json` and `$HOME/.claude/.claude.json`.
+
+All four lines must print `true`; jq reports a missing file for an identity nobody has
+logged into. `$HOME/.claude.json` is deliberately not marked: it belongs to no chain
+identity, and an interactive default-login `claude` shows claude-code's ordinary trust
+dialog once per new directory. `null` means the pass has not run since that
 configuration was created — rerun the command above. (Session setup marks the git
 common directory's parent and the repository root, which are the same path in the
 canonical checkout.)
@@ -364,15 +416,17 @@ Then probe each identity individually, **through the wrapper**:
 
 ```sh
 cd ~/projects/ai-orchestrator
-for identity in claude-code:alternate claude-code:alternate2 claude-code:primary codex codex:alternate; do
+for identity in claude-code:alternate claude-code:alternate2 claude-code:primary-backup \
+  claude-code:primary codex codex:alternate; do
   scripts/oneharness-agent.sh run --harness "$identity" --prompt "Reply with OK"
 done
 ```
 
 Use `scripts/oneharness-agent.sh` rather than a bare `oneharness run`: it exports
-the portable indirections the variants name in `env_from` —
-`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`, `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR`, and
-`ORCHESTRATOR_CODEX_ALT_HOME` — and oneharness refuses to start when one of them is
+the portable indirections the variants name in `env_from` — the four Claude ones,
+`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`, `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR`,
+`ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR` and
+`ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR`, and `ORCHESTRATOR_CODEX_ALT_HOME` — and oneharness refuses to start when one of them is
 unset in the parent. The wrapper requires `run` as its first argument and supplies
 the agent chain's `--config` itself.
 
@@ -383,7 +437,7 @@ A probe that reports
 ```
 
 is the **not-logged-in** state, not a broken config: finish that identity's login in
-[step 4](#4-the-five-harness-logins).
+[step 4](#4-the-six-harness-logins).
 
 Finally, prove the checkout itself:
 
@@ -396,8 +450,8 @@ just gate
 - [ ] `git`, `just`, `uv`, `jq`, `gh`, `node`/`npm` on `PATH`
 - [ ] `gh auth login`; global git `user.name` and `user.email`
 - [ ] canonical checkout **and** isolated safety clone; `just bootstrap` in the canonical one
-- [ ] all five harness identities logged in
-- [ ] one `just session-setup` **after** the Claude logins; all three
+- [ ] all six harness identities logged in
+- [ ] one `just session-setup` **after** the Claude logins; all four
       `hasTrustDialogAccepted` values `true`
 - [ ] allowlister installed and its codex hook wired
 - [ ] registry rebuilt with checkout **paths**; `just repos --audit-gate-coverage` reviewed

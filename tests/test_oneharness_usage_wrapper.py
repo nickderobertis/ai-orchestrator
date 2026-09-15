@@ -24,12 +24,25 @@ HELPERS = (
 )
 
 
+#: Every Claude identity's indirection, and the directory under the test's own tree each is
+#: pinned to. The probe resolves the same four a dispatch does.
+CLAUDE_INDIRECTIONS = {
+    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "claude-alt",
+    "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": "claude-alt2",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": "claude-primary-backup",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": "claude-primary",
+}
+
+
 def _stub_oneharness(tmp_path: Path) -> tuple[Path, Path]:
-    """A stub `oneharness` that records its argv instead of reaching a provider."""
+    """A stub `oneharness` that records its argv and the Claude indirections it inherited."""
     recorded = tmp_path / "argv.json"
     binary = tmp_path / "oneharness"
     binary.write_text(
-        '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$ONEHARNESS_ARGV_LOG"\nprintf "{}\\n"\n',
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$ONEHARNESS_ARGV_LOG"\n'
+        f"for name in {' '.join(CLAUDE_INDIRECTIONS)}; do\n"
+        '    printf "%s=%s\\n" "$name" "${!name-}" >> "$ONEHARNESS_ENV_LOG"\n'
+        'done\nprintf "{}\\n"\n',
         encoding="utf-8",
     )
     binary.chmod(0o755)
@@ -50,8 +63,8 @@ def _run_wrapper(
             "HOME": str(tmp_path / "home"),
             "ONEHARNESS_BIN": str(binary),
             "ONEHARNESS_ARGV_LOG": str(recorded),
-            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "claude-alt"),
-            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "claude-alt2"),
+            "ONEHARNESS_ENV_LOG": str(tmp_path / "environment.log"),
+            **{name: str(tmp_path / leaf) for name, leaf in CLAUDE_INDIRECTIONS.items()},
             "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
         },
     )
@@ -80,6 +93,8 @@ def test_the_usage_probe_reaches_oneharness_with_every_indirection_resolved(
     assert proc.returncode == 0, proc.stderr
     assert delivered == ["usage", "--harness", "codex", "--format", "json"]
     assert json.loads(proc.stdout) == {}
+    inherited = (tmp_path / "environment.log").read_text(encoding="utf-8").splitlines()
+    assert inherited == [f"{name}={tmp_path / leaf}" for name, leaf in CLAUDE_INDIRECTIONS.items()]
     # `ensure_codex_alt_home` really ran: an absent codex home hard-fails oneharness,
     # which is why that helper — unlike the Claude one — creates its directory.
     assert (tmp_path / "codex-alt").is_dir()

@@ -6,7 +6,7 @@
 # rather than ceremony around it:
 #
 #   1. The agent harness. `scripts/oneharness-agent.sh` is what forces this
-#      repository's five-identity chain, which is the launch path being proven.
+#      repository's six-identity chain, which is the launch path being proven.
 #   2. A status directory of this run's own — the safety check. The pre-push hook
 #      runs this from inside a dispatch, and the wrapper claims `agent.pid` and
 #      clears the terminal markers in whatever directory it is handed: an inherited

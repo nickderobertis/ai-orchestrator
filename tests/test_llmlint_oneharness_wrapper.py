@@ -12,36 +12,53 @@ from orchestrator.root import REPO_ROOT
 WRAPPER = REPO_ROOT / "scripts" / "llmlint-oneharness.sh"
 
 
+#: Every Claude identity's indirection, and the directory under the test's own tree each is
+#: pinned to. The wrapper must export all four: a chain that merely names a variant obliges
+#: oneharness to find its `env_from` source set.
+CLAUDE_INDIRECTIONS = {
+    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "claude-alt",
+    "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": "claude-alt2",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": "claude-primary-backup",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": "claude-primary",
+}
+
+
 def _run(tmp_path: Path, *args: str) -> list[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     output = tmp_path / "args"
     oneharness = bin_dir / "oneharness"
     oneharness.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$@" >"$WRAPPER_ARGS"\n'
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >"$WRAPPER_ARGS"\n'
         'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" >"$WRAPPER_CODEX_HOME"\n'
-        'printf \'%s\\n\' "${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR-}" >"$WRAPPER_CLAUDE_ALT"\n'
-        'printf \'%s\\n\' "${ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR-}" >"$WRAPPER_CLAUDE_ALT2"\n',
+        f"for name in {' '.join(CLAUDE_INDIRECTIONS)}; do\n"
+        '    printf \'%s\\n\' "${!name-}" >"$WRAPPER_EXPORTS/$name"\n'
+        "done\n",
         encoding="utf-8",
     )
     oneharness.chmod(0o755)
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    environment = {
+        **os.environ,
+        # The helper reads the host's identities file from under these two, so they are
+        # this test's own rather than the host's.
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "WRAPPER_ARGS": str(output),
+        "WRAPPER_CODEX_HOME": str(tmp_path / "codex-home-export"),
+        "WRAPPER_EXPORTS": str(exports),
+        # Pin the alternate-Codex home into the test's own tree: the wrapper
+        # creates it when absent, and the default derives from $HOME.
+        "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
+        **{name: str(tmp_path / leaf) for name, leaf in CLAUDE_INDIRECTIONS.items()},
+    }
+    environment.pop("XDG_CONFIG_HOME", None)
     proc = subprocess.run(
         [WRAPPER, *args],
         text=True,
         capture_output=True,
-        env={
-            **os.environ,
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "WRAPPER_ARGS": str(output),
-            "WRAPPER_CODEX_HOME": str(tmp_path / "codex-home-export"),
-            "WRAPPER_CLAUDE_ALT": str(tmp_path / "claude-alt-export"),
-            "WRAPPER_CLAUDE_ALT2": str(tmp_path / "claude-alt2-export"),
-            # Pin the alternate-Codex home into the test's own tree: the wrapper
-            # creates it when absent, and the default derives from the real $HOME.
-            "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
-            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "claude-alt"),
-            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "claude-alt2"),
-        },
+        env=environment,
     )
     assert proc.returncode == 0, proc.stderr
     return output.read_text(encoding="utf-8").splitlines()
@@ -82,24 +99,20 @@ def test_alternate_codex_home_is_exported_and_created_for_the_fallback(tmp_path:
     assert (tmp_path / "codex-alt").is_dir()
 
 
-def test_both_alternate_claude_indirections_are_exported(tmp_path: Path) -> None:
-    """This tier now names both alternate Claude identities, so it must export both.
+def test_every_claude_indirection_is_exported(tmp_path: Path) -> None:
+    """This tier names all four Claude identities, so it must export all four.
 
     oneharness refuses to start whenever a selected variant's `env_from` source is
     unset in the parent — so a chain that merely NAMES the candidates already
     obliges the wrapper to resolve them, logged in or not. Unlike the Codex home,
-    neither directory is created: claude-code classifies an absent one as `auth`
+    no directory is created: claude-code classifies an absent one as `auth`
     exactly as it does an empty one, so there is nothing to pre-create.
     """
     _run(tmp_path, "run", "--mode", "read-only")
-    assert (tmp_path / "claude-alt-export").read_text(encoding="utf-8").strip() == str(
-        tmp_path / "claude-alt"
-    )
-    assert (tmp_path / "claude-alt2-export").read_text(encoding="utf-8").strip() == str(
-        tmp_path / "claude-alt2"
-    )
-    assert not (tmp_path / "claude-alt").exists()
-    assert not (tmp_path / "claude-alt2").exists()
+    for name, leaf in CLAUDE_INDIRECTIONS.items():
+        exported = (tmp_path / "exports" / name).read_text(encoding="utf-8").strip()
+        assert exported == str(tmp_path / leaf), name
+        assert not (tmp_path / leaf).exists(), name
 
 
 def test_missing_claude_alt_helper_is_rejected_before_invoking_oneharness(

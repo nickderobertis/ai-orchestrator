@@ -257,7 +257,7 @@ def _every_identity_config(home: Path) -> tuple[Path, ...]:
     )
     assert named.returncode == 0, named.stderr
     configs = tuple(Path(line) for line in named.stdout.split())
-    assert len(configs) == 3, named.stdout
+    assert len(configs) == 4, named.stdout
     for config in configs:
         config.parent.mkdir(parents=True, exist_ok=True)
     return configs
@@ -315,7 +315,7 @@ def _mark_trust(
     )
 
 
-def _large_config(config: Path, entries: int, **projects: dict[str, object]) -> None:
+def _large_config(config: Path, entries: int, **projects: Mapping[str, object]) -> None:
     recorded: dict[str, object] = {
         f"/synthetic/workspace-{index:06d}": _SYNTHETIC_ENTRY for index in range(entries)
     }
@@ -873,11 +873,11 @@ def test_claude_trust_requires_workspace_argument(
 def test_claude_trust_standalone_resolves_every_identity_config_and_marks_roots(
     tmp_path: Path,
 ) -> None:
-    """All three dispatch identities, because the chain falls through to all three.
+    """All four dispatch identities, because the chain falls through to all four.
 
-    The primary is last on every harness chain, so a host that trusted only the two
-    alternates would meet an untrusted directory exactly when both of those
-    subscriptions are exhausted — the moment the fallback exists for.
+    The primary-backup and the primary are last on every harness chain, so a host that
+    trusted only the two alternates would meet an untrusted directory exactly when both
+    of those subscriptions are exhausted — the moment the fallback exists for.
     """
     configs = _every_identity_config(tmp_path)
     for config in configs:
@@ -904,60 +904,201 @@ def test_claude_trust_standalone_resolves_every_identity_config_and_marks_roots(
             )
 
 
-def test_claude_trust_standalone_resolution_failure_still_marks_the_primary(
-    tmp_path: Path,
-) -> None:
-    """A misconfigured alternate override costs the alternates and nothing else.
+#: Every Claude identity's config indirection, in chain order: the contract the trust
+#: marker names its files by. Stated here rather than read out of the helper, so a helper
+#: that dropped one fails these journeys instead of quietly marking one file fewer.
+CLAUDE_IDENTITY_VARIABLES = (
+    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
+    "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
+)
 
-    It cannot reach the primary's path, which is `HOME` alone, so failing that
-    identity too would trade two marked configurations for none.
+
+def _identity_directories(tmp_path: Path) -> dict[str, Path]:
+    """One logged-in config directory per identity, each holding an empty `.claude.json`."""
+    directories = {}
+    for variable in CLAUDE_IDENTITY_VARIABLES:
+        directory = tmp_path / "identities" / variable.lower()
+        directory.mkdir(parents=True)
+        (directory / ".claude.json").write_text("{}", encoding="utf-8")
+        directories[variable] = directory
+    return directories
+
+
+def _marked(config: Path, root: str) -> bool:
+    """Whether `config` records `root` as trusted."""
+    projects = json.loads(config.read_text(encoding="utf-8")).get("projects", {})
+    return bool(projects.get(root, {}).get("hasTrustDialogAccepted") is True)
+
+
+def _trust_standalone(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Mark `/root` through the standalone entry point, under exactly `environment`."""
+    return subprocess.run(
+        ["bash", str(TRUST_SCRIPT), "/root"],
+        text=True,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin", **environment},
+    )
+
+
+@pytest.mark.parametrize("unresolvable", CLAUDE_IDENTITY_VARIABLES)
+def test_claude_trust_standalone_one_unresolvable_identity_leaves_the_other_three_marked(
+    tmp_path: Path, unresolvable: str
+) -> None:
+    """A misconfigured override costs that identity and nothing else.
+
+    It cannot reach any other identity's path, so failing them too would trade three
+    marked configurations for none. The override itself is never echoed: the diagnostic
+    names the variable an operator has to fix.
     """
-    primary = tmp_path / ".claude.json"
-    primary.write_text("{}", encoding="utf-8")
+    directories = _identity_directories(tmp_path)
+    override = "relative/override-that-must-not-appear"
 
-    result = subprocess.run(
-        ["bash", str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"), "/root"],
-        text=True,
-        capture_output=True,
-        env={
+    result = _trust_standalone(
+        {
             "HOME": str(tmp_path),
-            "PATH": "/usr/bin:/bin",
-            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "relative",
-        },
+            **{variable: str(directory) for variable, directory in directories.items()},
+            unresolvable: override,
+        }
     )
 
-    assert result.returncode == 0
-    assert "alternate Claude config resolution failed" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert f"{unresolvable} resolution failed" in result.stderr
     assert "continuing" in result.stderr
-    projects = json.loads(primary.read_text(encoding="utf-8"))["projects"]
-    assert projects["/root"]["hasTrustDialogAccepted"] is True
+    assert override not in result.stderr
+    for variable, directory in directories.items():
+        assert _marked(directory / ".claude.json", "/root") is (variable != unresolvable), (
+            f"{variable}: {result.stderr}"
+        )
+    assert not (tmp_path / ".claude.json").exists()
 
 
-def test_claude_trust_standalone_unlocatable_primary_still_marks_the_alternates(
+def test_claude_trust_standalone_an_unset_home_costs_only_the_identity_it_leaves_unnamed(
     tmp_path: Path,
 ) -> None:
-    """The other half of the same rule, from the side that cannot name the primary."""
-    alternates = (tmp_path / "alternate", tmp_path / "alternate2")
-    for alternate in alternates:
-        alternate.mkdir()
-        (alternate / ".claude.json").write_text("{}", encoding="utf-8")
+    """The other shape of the same rule: no `HOME`, and no override for the primary.
 
-    result = subprocess.run(
-        ["bash", str(REPO_ROOT / "scripts" / "claude-workspace-trust.sh"), "/root"],
+    The primary's default is `$HOME/.claude`, so without `HOME` it cannot be named, while
+    every identity the environment names outright still can be.
+    """
+    directories = _identity_directories(tmp_path)
+    named = {
+        variable: str(directory)
+        for variable, directory in directories.items()
+        if variable != "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"
+    }
+
+    result = _trust_standalone(named)
+
+    assert result.returncode == 0, result.stderr
+    assert "HOME is required to locate the primary Claude config" in result.stderr
+    assert "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR resolution failed" in result.stderr
+    for variable, directory in directories.items():
+        assert _marked(directory / ".claude.json", "/root") is (variable in named), variable
+
+
+def test_claude_trust_standalone_marks_each_identity_where_the_identities_file_puts_it(
+    tmp_path: Path,
+) -> None:
+    """The host this exists for: `~/.claude` is logged in as the primary-backup account.
+
+    The identities file moves both primaries, the marker names them where it put them, in
+    chain order, and the default login's own `$HOME/.claude.json` — which no chain
+    identity reads — is left exactly as it was.
+    """
+    home = tmp_path / "home"
+    backup = home / ".claude"
+    primary = home / ".claude-primary"
+    for directory in (backup, primary):
+        directory.mkdir(parents=True)
+        (directory / ".claude.json").write_text("{}", encoding="utf-8")
+    default_login = home / ".claude.json"
+    default_login.write_text("{}", encoding="utf-8")
+    identities = home / ".config" / "ai-orchestrator" / "claude-identities.env"
+    identities.parent.mkdir(parents=True)
+    identities.write_text(
+        f"ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR={backup}\n"
+        f"ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR={primary}\n",
+        encoding="utf-8",
+    )
+    environment = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+
+    named = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; source "$2"; claude_trust_config_paths journey',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"),
+            str(TRUST_SCRIPT),
+        ],
         text=True,
         capture_output=True,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternates[0]),
-            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(alternates[1]),
-        },
+        env=environment,
     )
+    result = _trust_standalone({"HOME": str(home)})
 
-    assert result.returncode == 0
-    assert "the primary Claude config cannot be named" in result.stderr
-    for alternate in alternates:
-        projects = json.loads((alternate / ".claude.json").read_text(encoding="utf-8"))["projects"]
-        assert projects["/root"]["hasTrustDialogAccepted"] is True
+    assert named.returncode == 0, named.stderr
+    assert named.stdout.split() == [
+        str(home / ".claude-alt" / ".claude.json"),
+        str(home / ".claude-alt2" / ".claude.json"),
+        str(backup / ".claude.json"),
+        str(primary / ".claude.json"),
+    ]
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert _marked(backup / ".claude.json", "/root")
+    assert _marked(primary / ".claude.json", "/root")
+    assert json.loads(default_login.read_text(encoding="utf-8")) == {}
+
+
+def test_claude_trust_standalone_a_refused_identities_file_costs_every_unnamed_identity(
+    tmp_path: Path,
+) -> None:
+    """A refused file cannot say which directories it meant, so nothing falls back past it.
+
+    The identities the environment names outright are still marked. The two it does not
+    name are reported rather than resolved to their defaults — marking the default
+    directory would record trust for an account the operator said lives elsewhere.
+    """
+    directories = _identity_directories(tmp_path)
+    home = tmp_path / "home"
+    defaults = (home / ".claude-primary-backup", home / ".claude")
+    for directory in defaults:
+        directory.mkdir(parents=True)
+        (directory / ".claude.json").write_text("{}", encoding="utf-8")
+    config_home = tmp_path / "xdg"
+    identities = config_home / "ai-orchestrator" / "claude-identities.env"
+    identities.parent.mkdir(parents=True)
+    identities.write_text(
+        "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR=/a-value-that-must-not-appear\nnot an assignment\n",
+        encoding="utf-8",
+    )
+    named = {
+        variable: str(directories[variable])
+        for variable in (
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
+            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+        )
+    }
+
+    result = _trust_standalone({"HOME": str(home), "XDG_CONFIG_HOME": str(config_home), **named})
+
+    assert result.returncode == 0, result.stderr
+    assert f"malformed Claude identities line 2 in {identities}" in result.stderr
+    assert "a-value-that-must-not-appear" not in result.stderr
+    for variable in (
+        "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
+        "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
+    ):
+        assert f"{variable} cannot be resolved while the Claude identities file is refused" in (
+            result.stderr
+        )
+    for variable in named:
+        assert _marked(directories[variable] / ".claude.json", "/root"), variable
+    for directory in defaults:
+        assert json.loads((directory / ".claude.json").read_text(encoding="utf-8")) == {}
 
 
 def test_claude_trust_standalone_continues_to_second_config(
@@ -1422,9 +1563,9 @@ def test_full_setup_trusts_its_dispatch_checkout_in_the_primary_config(
 ) -> None:
     """The primary subscription dispatches here too, and it is the last resort.
 
-    Its configuration is the one claude-code keeps when nothing sets
-    `CLAUDE_CONFIG_DIR`, which is what the primary variant unsets, so an unmarked
-    checkout there blocks the candidate that runs when the alternates are spent.
+    Its configuration is `.claude.json` inside the directory the primary variant maps into
+    `CLAUDE_CONFIG_DIR`, so an unmarked checkout there blocks the candidate that runs when
+    the alternates are spent.
     """
     configs = _every_identity_config(tmp_path)
     for config in configs:
@@ -1440,6 +1581,40 @@ def test_full_setup_trusts_its_dispatch_checkout_in_the_primary_config(
         assert data["projects"][repo] == {"hasTrustDialogAccepted": True}, (
             f"{config} does not record {repo} as trusted"
         )
+
+
+def test_full_setup_on_an_existing_host_marks_every_identity_it_has_and_refuses_nothing(
+    tmp_path: Path,
+) -> None:
+    """A host set up before the primary-backup identity existed keeps working untouched.
+
+    It exports none of the four indirections, keeps no identities file, and never logged
+    the primary-backup account in. Session setup resolves every identity from `HOME`
+    without a refusal, marks the three it has, creates no directory for the fourth, and
+    leaves the default login's own `$HOME/.claude.json` alone.
+    """
+    logged_in = [
+        tmp_path / leaf / ".claude.json" for leaf in (".claude-alt", ".claude-alt2", ".claude")
+    ]
+    for config in logged_in:
+        config.parent.mkdir()
+        config.write_text('{"theme":"dark"}', encoding="utf-8")
+    default_login = tmp_path / ".claude.json"
+    default_login.write_text("{}", encoding="utf-8")
+
+    result = _run_full_setup_without_bun(tmp_path)
+
+    # Bun is deliberately absent from this fixture, which is the whole of the failure.
+    assert result.returncode == 1
+    assert "bun is required" in result.stderr
+    for refusal in ("resolution failed", "cannot be resolved", "workspace trust setup failed"):
+        assert refusal not in result.stderr, result.stderr
+    repo = str(tmp_path / "repo")
+    for config in logged_in:
+        data = json.loads(config.read_text(encoding="utf-8"))
+        assert data["projects"][repo] == {"hasTrustDialogAccepted": True}, config
+    assert not (tmp_path / ".claude-primary-backup").exists()
+    assert json.loads(default_login.read_text(encoding="utf-8")) == {}
 
 
 def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> None:
@@ -1466,7 +1641,7 @@ def test_full_setup_continues_after_alternate_config_resolution_failure(
 
     assert result.returncode == 1
     assert "alternate Claude config path must be absolute" in result.stderr
-    assert "alternate Claude config resolution failed" in result.stderr
+    assert "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR resolution failed" in result.stderr
     assert "continuing" in result.stderr
     assert "bun is required" in result.stderr
 

@@ -59,14 +59,16 @@ WORKER_MEMBER = "worker"
 
 #: The identity order each side is supposed to resolve, stated here rather than read from
 #: the file under test — a gate that read its expectation out of its subject would pass
-#: whatever that subject said. Both name all five identities this host uses, because a
+#: whatever that subject said. Both name all six identities this host uses, because a
 #: role that omitted one would lose that quota entirely once everything ahead of it was
-#: exhausted, and both end on the primary Claude identity, which is last everywhere.
+#: exhausted, and both end on the primary-backup and then the primary Claude identity,
+#: which is last everywhere.
 WRITER_CHAIN = (
     "codex:primary",
     "codex:alternate",
     "claude-code:alternate",
     "claude-code:alternate2",
+    "claude-code:primary-backup",
     "claude-code:primary",
 )
 REVIEWER_CHAIN = (
@@ -74,6 +76,7 @@ REVIEWER_CHAIN = (
     "claude-code:alternate2",
     "codex:primary",
     "codex:alternate",
+    "claude-code:primary-backup",
     "claude-code:primary",
 )
 
@@ -237,7 +240,7 @@ def test_each_side_resolves_its_intended_identity_order(
     assert resolved == chain, (
         f"the {side} side of {DESIGN_DOC_GRAPH.name} resolves {resolved}, not {chain}; this "
         "role's pairing is deliberately the reverse of this host's ordinary one, and every "
-        "chain names all five identities with the primary Claude subscription last"
+        "chain names all six identities with the primary Claude subscription last"
     )
 
 

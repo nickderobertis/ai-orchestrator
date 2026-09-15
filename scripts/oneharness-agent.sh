@@ -36,7 +36,7 @@ set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
 # The worker config maps these portable, non-secret parent values into
-# CLAUDE_CONFIG_DIR for its two alternate-subscription children; the derivation is
+# CLAUDE_CONFIG_DIR for each of its Claude-subscription children; the derivation is
 # shared with the other wrappers so the roles cannot drift apart.
 alt_config_helper="$script_dir/claude-alt-config-dir.sh"
 if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
@@ -48,6 +48,7 @@ fi
 resolve_claude_alt_config_dir oneharness-agent || exit $?
 alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
 alternate2_config_dir=$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR
+primary_backup_config_dir=$ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR
 # The worker chain's last candidate is a second Codex identity, whose variant maps
 # this portable value into CODEX_HOME. oneharness refuses to run when the
 # indirection is unset, so it must be exported even on a host that never
@@ -434,10 +435,10 @@ if [[ $caller_is_judge == true ]]; then
     # and the judge config's own label stands. Every other inherited label locates the
     # dispatch in the graph and is kept exactly as it arrived.
     drop_history_label agent_role
-    # Keep the portable indirection available while oneharness resolves config.
-    # The judge's explicit primary variant does not consume it and masks
-    # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project
-    # config before applying the caller's --config.
+    # Keep every portable indirection available while oneharness resolves config: each
+    # of the judge's Claude variants, the primary included, reads its CLAUDE_CONFIG_DIR
+    # from one of them, and oneharness may also discover and layer the project config
+    # before applying the caller's --config.
     exec oneharness run "${side_model[@]}" "$@"
 fi
 
@@ -483,30 +484,33 @@ if [ -n "${ORCHESTRATOR_WORKER_HARNESSES-}" ]; then
     apply_side_selection ORCHESTRATOR_WORKER_HARNESSES \
         "$ORCHESTRATOR_WORKER_HARNESSES" "$agent_config" || exit "$?"
 elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
-    # An alternate Claude subscription whose config directory does not exist is a
-    # candidate this host has never set up. claude-code would still start, create
-    # that directory, and report `auth` — so the chain recovers either way, but
-    # substituting a filtered one keeps the dispatch from writing a config
+    # An alternate or primary-backup Claude subscription whose config directory does
+    # not exist is a candidate this host has never set up. claude-code would still
+    # start, create that directory, and report `auth` — so the chain recovers either
+    # way, but substituting a filtered one keeps the dispatch from writing a config
     # directory for an account nobody has logged into.
     #
     # Only those absent candidates are dropped: every other identity keeps its
-    # configured relative order, including the OTHER alternate subscription when
-    # just one is missing, both Codex identities, and the primary Claude one. The
-    # chain is read from the config rather than restated here, so this can only
-    # ever be a subsequence of what oneharness would have selected.
+    # configured relative order, including the OTHER optional subscriptions when just
+    # one is missing, both Codex identities, and the primary Claude one — which is
+    # never dropped, whatever its directory's state, because it is the last resort
+    # every host is expected to have. The chain is read from the config rather than
+    # restated here, so this can only ever be a subsequence of what oneharness would
+    # have selected.
     # Space-delimited on BOTH sides, so `claude-code:alternate` cannot match the
     # `claude-code:alternate2` entry by prefix and drop a candidate that is present.
-    absent_alternates=" "
-    [ -e "$alternate_config_dir" ] || absent_alternates="${absent_alternates}claude-code:alternate "
-    [ -e "$alternate2_config_dir" ] || absent_alternates="${absent_alternates}claude-code:alternate2 "
-    if [ "$absent_alternates" != " " ]; then
+    absent_identities=" "
+    [ -e "$alternate_config_dir" ] || absent_identities="${absent_identities}claude-code:alternate "
+    [ -e "$alternate2_config_dir" ] || absent_identities="${absent_identities}claude-code:alternate2 "
+    [ -e "$primary_backup_config_dir" ] || absent_identities="${absent_identities}claude-code:primary-backup "
+    if [ "$absent_identities" != " " ]; then
         substituted=
         # Read the chain into a variable first: inside a process substitution the
         # reader's own failure would be invisible here, and a config it could not
         # parse would look exactly like one that named nothing to drop.
         if configured_chain=$(config_harness_chain "$agent_config"); then
             while read -r candidate; do
-                case "$absent_alternates" in
+                case "$absent_identities" in
                     *" $candidate "*) continue ;;
                 esac
                 substituted="${substituted:+$substituted,}$candidate"
