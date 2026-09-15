@@ -666,7 +666,35 @@ machine its verification ran on, and its evidence states the same host. A new ti
 reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item
 back. Withdrawal closes a proposal as not planned, and a run never withdraws a ticket the
-board shows as accepted — only a person moves an accepted item.
+board shows as accepted — only a person moves an accepted item. A person may instead move a
+ticket to `Deferred`: not accepted and picked up by no agent, it still takes a later run's
+evidence, and no run withdraws it either. **A dispatch briefed to pick up accepted follow-up
+tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets statuses`
+prints the vocabulary every agent reads, copied here:
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
+- **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
+  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by an
+  agent sent to pick up accepted tickets.
+- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an item
+  there: only a person, which is what accepting a ticket is. **Selected** by an agent sent to
+  pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, written `draft`: deferred for later by a person: not accepted,
+  picked up by no agent, and still taking new evidence. Who moves an item there: only a
+  person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `In Progress`**, written `in progress`: accepted and taken up. Who moves an
+  item there: a person, or a dispatch whose own task says to. Not selected by an agent sent
+  to pick up accepted tickets.
+- **Closed as completed**, written `done`: accepted and finished. Who moves an item there: a
+  person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
+  accepted tickets.
+- **Closed as not planned**, written `cancelled`: withdrawn. Who moves an item there: a
+  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person. Not
+  selected by an agent sent to pick up accepted tickets.
+
+A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing else:
+never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
 that decision with the user. Hooks come with an engine adopted between runs, so a run

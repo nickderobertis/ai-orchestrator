@@ -39,12 +39,14 @@ sources:
       token_env: GH_PROJECTS_TOKEN
       status_mapping:
         # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
-        # source of the option a new follow-up ticket's `backlog` is written to; its other
-        # party is the live board, which no check here may read or write, since that needs
-        # the board's credential. The board carries the Status options `Proposal`, `Todo`,
-        # `In Progress` and `Done`: `todo` and `in-progress` keep the shipped defaults, and
-        # `done` and `cancelled` are closed states. This overrides the shipped default of
-        # `backlog` to `Backlog`, an option that board does not carry, so a board missing
-        # `Proposal` refuses the copy by name.
+        # source of the options a follow-up ticket's `backlog` and `draft` are written to; its
+        # other party is the live board, which no check here may read or write, since that
+        # needs the board's credential. The board carries the Status options `Proposal`,
+        # `Todo`, `Deferred`, `In Progress` and `Done`: `todo` and `in-progress` keep the
+        # shipped defaults, and `done` and `cancelled` are closed states. This overrides the
+        # shipped default of `backlog` to `Backlog`, an option that board does not carry, and
+        # sends `draft`, a ticket a person deferred, to `Deferred`, so a board missing either
+        # option refuses the copy by name.
         backlog: Proposal
+        draft: Deferred
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]

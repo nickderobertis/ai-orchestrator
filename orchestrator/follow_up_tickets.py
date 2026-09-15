@@ -62,8 +62,9 @@ BOARD = "followups"
 
 #: The version of the record below. A reader refuses any other: a ticket is a stored shape
 #: that outlives the agent that wrote it. Schema 2 added `host` and the proposal statuses;
-#: schema 3 added `repositories`, which files a ticket's issue in its root cause's repository.
-SCHEMA = 3
+#: schema 3 added `repositories`, which files a ticket's issue in its root cause's repository;
+#: schema 4 added the body's `## Impact` section.
+SCHEMA = 4
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -74,13 +75,16 @@ class Status(StrEnum):
 
     **The board is the record of the user's decision.** A ticket reaches it as a proposal,
     and a person moving the item to `todo` is what accepts it, so a later agent selects
-    accepted tickets by this category alone. The `followups` source maps `backlog` to the
-    board's `Proposal` option (`onetaskgraph.yaml`); a withdrawn ticket's issue is closed as
-    not planned, and no issue is ever deleted.
+    accepted tickets by this category alone. A person may instead defer it, which the store
+    word `draft` carries: the `followups` source maps `backlog` to the board's `Proposal`
+    option and `draft` to its `Deferred` option (`onetaskgraph.yaml`). A withdrawn ticket's
+    issue is closed as not planned, and no issue is ever deleted. :func:`status_vocabulary`
+    is the one statement of the whole vocabulary an agent reads.
     """
 
     PROPOSED = "backlog"
     ACCEPTED = "todo"
+    DEFERRED = "draft"
     UNDER_WAY = "in-progress"
     FINISHED = "done"
     WITHDRAWN = "cancelled"
@@ -96,6 +100,25 @@ class Status(StrEnum):
         return self in (Status.ACCEPTED, Status.UNDER_WAY, Status.FINISHED)
 
     @property
+    def protected_from_withdrawal(self) -> bool:
+        """Whether no run withdraws an item at this status, because a person decided on it.
+
+        A person accepted every accepted ticket, whoever moved it on from `todo` afterwards,
+        and deferring a ticket is the other such decision: a deferred ticket is not accepted,
+        and it is protected from withdrawal all the same.
+        """
+        return self.accepted or self is Status.DEFERRED
+
+    @property
+    def selected(self) -> bool:
+        """Whether an agent sent to pick up accepted tickets selects an item at this status.
+
+        Narrower than :attr:`accepted`: a ticket under way or finished was accepted, and is
+        not waiting for anybody to pick it up.
+        """
+        return self is Status.ACCEPTED
+
+    @property
     def written(self) -> str:
         """The word a ticket's `status` is written as, which the store reads as this category.
 
@@ -109,11 +132,70 @@ class Status(StrEnum):
 
 _MEANINGS = {
     Status.PROPOSED: "a proposal awaiting the user's decision",
-    Status.ACCEPTED: "accepted",
-    Status.UNDER_WAY: "accepted and under way",
+    Status.ACCEPTED: "accepted, and not yet taken up",
+    Status.DEFERRED: (
+        "deferred for later by a person: not accepted, picked up by no agent, and still "
+        "taking new evidence"
+    ),
+    Status.UNDER_WAY: "accepted and taken up",
     Status.FINISHED: "accepted and finished",
     Status.WITHDRAWN: "withdrawn",
 }
+
+
+class _Place(NamedTuple):
+    """Where the board shows a status, and who moves an item there."""
+
+    shown: str
+    mover: str
+
+
+_PLACES = {
+    Status.PROPOSED: _Place(
+        "Board status `Proposal`", "a follow-up run's first copy of a new ticket"
+    ),
+    Status.ACCEPTED: _Place(
+        "Board status `Todo`", "only a person, which is what accepting a ticket is"
+    ),
+    Status.DEFERRED: _Place("Board status `Deferred`", "only a person"),
+    Status.UNDER_WAY: _Place(
+        "Board status `In Progress`", "a person, or a dispatch whose own task says to"
+    ),
+    Status.FINISHED: _Place(
+        "Closed as completed", "a person, or a dispatch whose own task says to"
+    ),
+    Status.WITHDRAWN: _Place(
+        "Closed as not planned",
+        "a follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person",
+    ),
+}
+
+
+def status_vocabulary() -> str:
+    """What each board status means, as every agent and document that describes it reads it.
+
+    One bullet per :class:`Status`: where the board shows it, the store word a ticket is
+    written with, what it means, who moves an item there, and whether an agent sent to pick
+    up accepted tickets selects it — closing on what such a brief means.
+    """
+    bullets = []
+    for status in Status:
+        place = _PLACES[status]
+        selection = (
+            "**Selected** by an agent sent to pick up accepted tickets, the only status that is"
+            if status.selected
+            else "Not selected by an agent sent to pick up accepted tickets"
+        )
+        bullets.append(
+            f"- **{place.shown}**, written `{status.written}`: {status.meaning}. Who moves an "
+            f"item there: {place.mover}. {selection}.\n"
+        )
+    return (
+        "".join(bullets)
+        + '\nA brief to pick up "accepted" follow-up tickets means the items at `Todo` and '
+        "nothing else: never an item at `Proposal`, `Deferred` or `In Progress`, and never a "
+        "closed one.\n"
+    )
 
 
 #: The identities a ticket names, each a type of its own so that one cannot be passed where
@@ -155,6 +237,7 @@ RECORD_KEYS = (
 #: The level-2 headings a ticket's body carries, in this order, each with content.
 HEADINGS = (
     "Root cause",
+    "Impact",
     "Repository",
     "Examples",
     "Evidence",
@@ -164,6 +247,72 @@ HEADINGS = (
 
 #: The heading whose section names the host the verification ran on.
 EVIDENCE = "Evidence"
+
+#: The heading whose section states what the root cause costs when it fires: prose, then
+#: exactly one of each line below.
+IMPACT = "Impact"
+
+
+class Severity(StrEnum):
+    """How bad a root cause's impact is, most severe first.
+
+    Repository-neutral, because a ticket may be filed against any repository: each meaning
+    speaks of what the affected repository's users and artifacts suffer.
+    """
+
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+    @property
+    def meaning(self) -> str:
+        """What this severity says about the impact."""
+        return _SEVERITY_MEANINGS[self]
+
+    def above(self, other: Severity) -> bool:
+        """Whether this severity is more severe than ``other``."""
+        order = tuple(Severity)
+        return order.index(self) < order.index(other)
+
+
+_SEVERITY_MEANINGS = {
+    Severity.CRITICAL: (
+        "data or work is lost or corrupted, or the affected thing cannot be used at all"
+    ),
+    Severity.HIGH: (
+        "the affected thing fails, or a person must intervene, every time the root cause fires"
+    ),
+    Severity.MEDIUM: "it costs time, resources or quality, but recovers without a person",
+    Severity.LOW: "cosmetic, or rare with negligible cost",
+}
+
+#: The three lines an `## Impact` section carries after its prose, in this order, and the
+#: workaround that says there is none.
+SEVERITY_LINE = "Severity"
+WORKAROUND_LINE = "Workaround"
+MITIGATED_LINE = "Severity with the workaround"
+IMPACT_LINES = (SEVERITY_LINE, WORKAROUND_LINE, MITIGATED_LINE)
+NO_WORKAROUND = "none"
+IMPACT_LINE = re.compile(r"^- (?P<label>[^:\n]+):(?P<value>[^\n]*)$", re.MULTILINE)
+#: What a section holds from its first line on: the three lines in order, and nothing else.
+IMPACT_TAIL = re.compile(
+    "\n".join(rf"- {re.escape(label)}:[^\n]*" for label in IMPACT_LINES) + r"\s*"
+)
+
+
+def impact_section(prose: str, severity: str, workaround: str, with_workaround: str) -> str:
+    """The content of an `## Impact` section: ``prose``, then its three lines.
+
+    The severities are words rather than :class:`Severity` members, so the example ticket
+    :func:`ticket_contract` renders can put a placeholder where each goes.
+    """
+    values = (severity, workaround, with_workaround)
+    lines = "".join(
+        f"- {label}: {value}\n" for label, value in zip(IMPACT_LINES, values, strict=True)
+    )
+    return f"{prose.strip()}\n\n{lines}"
+
 
 #: A root cause's slug, which names the ticket's file.
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -196,7 +345,7 @@ TICKET_SUFFIX = ".md"
 #: two copies of a contract in one task.
 PLACEHOLDER = re.compile(r"@([A-Z][A-Z_]*)@")
 VALUES = ("RUN", "BOARD", "DRAFTS_ROOT", "VALIDATE", "BOARD_STATUS", "CHECKOUT")
-SECTIONS = ("TICKET_CONTRACT", "COMMENT_CONTRACT", "REDISPATCH", "FEEDBACK")
+SECTIONS = ("STATUS_VOCABULARY", "TICKET_CONTRACT", "COMMENT_CONTRACT", "REDISPATCH", "FEEDBACK")
 PLACEHOLDERS = (*VALUES, *SECTIONS)
 
 #: This command's name in its diagnostics.
@@ -204,13 +353,14 @@ PROG = "follow-up-tickets"
 
 #: Exit statuses: every ticket is sound; a ticket failed the shape; the command could not run.
 #: And three of `board-status`'s own, each a ticket not to copy: the board holds its item at a
-#: category no ticket carries; a withdrawal the board's acceptance of the item refuses; and a
-#: ticket whose repository is not one of the board's owner, which nothing asks the board about.
+#: category no ticket carries; a withdrawal a person's decision on the item refuses, whether
+#: they accepted it or deferred it; and a ticket whose repository is not one of the board's
+#: owner, which nothing asks the board about.
 SOUND = 0
 UNSOUND = 1
 UNRUNNABLE = 2
 UNPLACED = 3
-ACCEPTED = 4
+PROTECTED = 4
 OUTSIDE_OWNER = 5
 
 #: The host every repository a ticket's issue may be filed in lives on.
@@ -469,6 +619,64 @@ def _repositories_problems(repositories: object, repository: object) -> list[str
             ]
 
 
+def _impact_problems(text: str) -> list[str]:
+    """Every way an `## Impact` section's content is not prose followed by its three lines."""
+    where = f"the body's `## {IMPACT}` section"
+    lines = [line for line in IMPACT_LINE.finditer(text) if line["label"] in IMPACT_LINES]
+    found = []
+    if not (text[: lines[0].start()] if lines else text).strip():
+        found.append(
+            f"{where} carries no prose before its lines; state there the negative outcome when "
+            "the root cause fires, and what it affects"
+        )
+    values: dict[str, str] = {}
+    for label in IMPACT_LINES:
+        match [line["value"].strip() for line in lines if line["label"] == label]:
+            case []:
+                found.append(f"{where} carries no `- {label}:` line")
+            case [value]:
+                values[label] = value
+            case repeated:
+                found.append(
+                    f"{where} carries its `- {label}:` line {len(repeated)} times, not once"
+                )
+    if len(values) == len(IMPACT_LINES) and not IMPACT_TAIL.fullmatch(text[lines[0].start() :]):
+        found.append(
+            f"{where} does not end with its three lines, in this order and with nothing between "
+            "or after them: " + ", ".join(f"`- {label}:`" for label in IMPACT_LINES)
+        )
+    severities: dict[str, Severity] = {}
+    for label in (SEVERITY_LINE, MITIGATED_LINE):
+        if label not in values:
+            continue
+        if values[label] in tuple(Severity):
+            severities[label] = Severity(values[label])
+        else:
+            found.append(
+                f"{where}'s `- {label}:` line names {values[label]!r}, which is not a "
+                "severity; write one of " + ", ".join(f"`{one}`" for one in Severity)
+            )
+    workaround = values.get(WORKAROUND_LINE)
+    if workaround == "":
+        found.append(
+            f"{where}'s `- {WORKAROUND_LINE}:` line is empty; name the workaround in place and "
+            f"how it is applied, or write `{NO_WORKAROUND}`"
+        )
+    if len(severities) == len((SEVERITY_LINE, MITIGATED_LINE)):
+        severity, mitigated = severities[SEVERITY_LINE], severities[MITIGATED_LINE]
+        if mitigated.above(severity):
+            found.append(
+                f"{where}'s severity with the workaround `{mitigated}` is above its severity "
+                f"`{severity}`; a workaround never makes the impact worse"
+            )
+        if workaround == NO_WORKAROUND and mitigated is not severity:
+            found.append(
+                f"{where}'s workaround is `{NO_WORKAROUND}`, so its severity with the "
+                f"workaround `{mitigated}` has to be its severity `{severity}`"
+            )
+    return found
+
+
 def _body_problems(body: object, host: object) -> list[str]:
     if not isinstance(body, str):
         return ["the ticket has no body"]
@@ -487,6 +695,8 @@ def _body_problems(body: object, host: object) -> list[str]:
             ]
         if not found[at][1].strip():
             return [f"the body's `## {required}` section is empty"]
+        if required == IMPACT and (impact := _impact_problems(found[at][1])):
+            return impact
         if required == EVIDENCE and is_host(host) and str(host) not in found[at][1]:
             return [
                 f"the body's `## {EVIDENCE}` section does not name the host {host!r} the "
@@ -626,14 +836,14 @@ class Unplaced(ValueError):
         )
 
 
-class AcceptedOnBoard(ValueError):
-    """A withdrawal of a ticket the board shows as accepted, which only a person undoes."""
+class ProtectedFromWithdrawal(ValueError):
+    """A withdrawal of a ticket a person accepted or deferred, which only a person undoes."""
 
     def __init__(self, status: Status) -> None:
         super().__init__(
-            f"the board holds this ticket's item at `{status}` ({status.meaning}), so this "
-            "run never withdraws it: copy nothing, leave the local ticket as it is, and "
-            "report that you would have withdrawn it and why"
+            f"the board holds this ticket's item at `{status}` ({status.meaning}), which a "
+            "person accepted or deferred, so this run never withdraws it: copy nothing, leave "
+            "the local ticket as it is, and report that you would have withdrawn it and why"
         )
         self.status = status
 
@@ -715,15 +925,16 @@ def status_before_copy(held: str | None, *, withdraw: bool) -> Status:
 
     A ticket the board holds no item for is a proposal; one it holds carries the board's
     status, so a copy never undoes a person's decision; and a withdrawal closes an item only
-    while nobody has accepted it. :class:`Unplaced` or :class:`AcceptedOnBoard` otherwise.
+    while nobody has accepted or deferred it. :class:`Unplaced` or :class:`ProtectedFromWithdrawal`
+    otherwise.
     """
     if held is None:
         return Status.WITHDRAWN if withdraw else Status.PROPOSED
     if held not in tuple(Status):
         raise Unplaced(held)
     status = Status(held)
-    if withdraw and status.accepted:
-        raise AcceptedOnBoard(status)
+    if withdraw and status.protected_from_withdrawal:
+        raise ProtectedFromWithdrawal(status)
     return Status.WITHDRAWN if withdraw else status
 
 
@@ -788,6 +999,19 @@ def may_comment_on(run: str, item: Mapping[str, object]) -> bool:
 #: What each body heading of the example ticket :func:`ticket_contract` renders says to write.
 _HEADING_GUIDANCE = (
     "<a simple explanation of the root cause>",
+    "<the negative outcome when the root cause fires, and what it affects: which users, "
+    "people, systems or artifacts of the repository. Then the three lines below, each exactly "
+    "once, in this order, with nothing between or after them. A severity is one of these "
+    "words, most severe first: "
+    + "; ".join(f"`{severity}`, {severity.meaning}" for severity in Severity)
+    + ". The severity with the workaround is never above the severity, and a workaround of "
+    f"exactly `{NO_WORKAROUND}` leaves the two the same>\n\n"
+    + impact_section(
+        "",
+        "<the severity with no workaround applied>",
+        "<the workaround in place and how it is applied, or none>",
+        "<the severity that remains once the workaround is accounted for>",
+    ).strip(),
     "<the normalized origin, and the paths inside it>",
     "<one or more examples of it>",
     "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
@@ -844,18 +1068,20 @@ def ticket_contract(run: str, board: str) -> str:
         f"`{Status.PROPOSED.written}`, {Status.PROPOSED.meaning}, which the board shows as "
         "`Proposal`; a person moving it to `Todo` is what accepts it. A ticket the board "
         "already holds carries the status the board holds it at, so a copy never undoes that "
-        f"decision. A ticket this run withdraws is `{Status.WITHDRAWN.written}`, which the "
-        "board holds as closed as not planned, unless the board shows it as accepted: then "
-        "copy nothing, leave the local ticket as it is, and report that you would have "
-        "withdrawn it and why. No issue is ever deleted.\n"
+        "decision: a ticket the board holds at `Deferred` is copied carrying "
+        f"`{Status.DEFERRED.written}`. A ticket this run withdraws is "
+        f"`{Status.WITHDRAWN.written}`, which the board holds as closed as not planned, unless "
+        "the board shows it as accepted or deferred: this run never withdraws a deferred item "
+        "or an accepted one, so copy nothing, leave the local ticket as it is, and report that "
+        "you would have withdrawn it and why. No issue is ever deleted.\n"
         f"- **Before every copy, run `@BOARD_STATUS@ --board {board} <path of the ticket>`** "
         "(adding `--withdraw` for a ticket this run withdraws, before you change that ticket), "
         "write the word it prints as the ticket's `status`, and validate the ticket again. It "
         f"exits {SOUND} with that word; {UNPLACED} when the board holds the item at a status "
-        f"no ticket carries; {ACCEPTED} for a withdrawal of an item the board shows as "
-        f"accepted; and {OUTSIDE_OWNER} when the ticket's repository is not one of the board's "
-        "owner, before anything is asked of the board. On any of these refusals, copy nothing "
-        "and report what it printed.\n"
+        f"no ticket carries; {PROTECTED} for a withdrawal of an item the board shows as "
+        f"accepted or deferred; and {OUTSIDE_OWNER} when the ticket's repository is not one of "
+        "the board's owner, before anything is asked of the board. On any of these refusals, "
+        "copy nothing and report what it printed.\n"
         "- **A refusal is reported, never worked around.** When `board-status` exits "
         f"{OUTSIDE_OWNER}, or `onetaskgraph task copy` refuses the ticket — for a repository the "
         "token cannot see, or one GitHub will not create an issue in — copy nothing for that "
@@ -889,7 +1115,9 @@ def comment_contract(run: str, board: str) -> str:
         "created — it edits that issue instead — and it never changes an issue or a comment "
         "belonging to another run.\n"
         "- An open issue for the same root cause created by another run receives at most "
-        "**one** comment from this run, carrying this run's evidence. Where this run's "
+        "**one** comment from this run, carrying this run's evidence — whatever status the "
+        "board holds it at, so an item at `Deferred` receives this run's one comment like any "
+        "other open item. Where this run's "
         "comment is already there, edit it with `onetaskgraph task comment edit`; never add "
         "a second.\n"
     )
@@ -913,8 +1141,10 @@ comments of this run may already exist. The ownership rules above bind every cha
   `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` prints, never the status the ticket
   held before — the board may have been moved since the last copy;
 - a ticket of an older schema is brought to the current shape before it is copied, its
-  `repositories` naming its record's `repository` and its `host` read from this machine
-  with `hostname`, and validated again.
+  `repositories` naming its record's `repository`, its `host` read from this machine
+  with `hostname`, and its `## Impact` section written from the evidence the ticket
+  already carries, re-verifying only a claim that no longer holds; then it is validated
+  again.
 """
 
 #: The heading the manager's feedback goes under, above the feedback itself.
@@ -971,6 +1201,7 @@ def compose(
     }
     values = {
         **scalars,
+        "STATUS_VOCABULARY": status_vocabulary(),
         "TICKET_CONTRACT": _filled(ticket_contract(run, board), scalars),
         "COMMENT_CONTRACT": _filled(comment_contract(run, board), scalars),
         "REDISPATCH": _filled(REDISPATCH, scalars) if redispatch else "",
@@ -1018,6 +1249,7 @@ def _parser() -> _Parser:
         "--withdraw", action="store_true", help="decide for a ticket this run withdraws"
     )
     placed.add_argument("path", type=Path, metavar="PATH")
+    commands.add_parser("statuses", help="print what each board status means")
     count = commands.add_parser("inventory", help="print how many drafts and tickets a run holds")
     count.add_argument("--root", type=Path, required=True, help=root_help)
     count.add_argument("run", metavar="RUN-ID")
@@ -1088,9 +1320,9 @@ def _placed(arguments: argparse.Namespace) -> int:
     except Unplaced as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return UNPLACED
-    except AcceptedOnBoard as refusal:
+    except ProtectedFromWithdrawal as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
-        return ACCEPTED
+        return PROTECTED
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
@@ -1106,6 +1338,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _validated(arguments.paths)
         case "board-status":
             return _placed(arguments)
+        case "statuses":
+            sys.stdout.write(status_vocabulary())
+            return SOUND
         case _ if not RECORD_COMPONENT.fullmatch(arguments.run):
             print(f"{PROG}: refused: {arguments.run!r} is not a run id", file=sys.stderr)
             return UNRUNNABLE

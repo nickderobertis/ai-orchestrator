@@ -2846,7 +2846,7 @@ FOLLOW_UPS_TEMPLATE = "config/follow-up-task.md"
 FOLLOW_UPS_TEMPLATE_TEXT = (
     "Verify run @RUN@ onto @BOARD@ from @DRAFTS_ROOT@; validate with @VALIDATE@ in @CHECKOUT@.\n"
     "Decide each status with @BOARD_STATUS@.\n"
-    "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\n"
+    "@STATUS_VOCABULARY@\n@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\n"
 )
 
 

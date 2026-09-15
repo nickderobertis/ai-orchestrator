@@ -38,6 +38,9 @@ there gets this run's evidence rather than a second issue.
   `onetaskgraph task show <id> --json`, and comment with
   `onetaskgraph task comment add|list|edit|delete`.
 
+## What each board status means
+
+@STATUS_VOCABULARY@
 ## What to do, in order
 
 1. **Record the basis first.** Before verifying anything, fetch `origin` in the registered
@@ -63,7 +66,8 @@ there gets this run's evidence rather than a second issue.
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
    text (`onetaskgraph task list --source @BOARD@ --search <text> --json`). Both read the
    whole board, whichever repository an item's issue lives in, so narrow neither to a
-   repository.
+   repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
+   searched like any other open item and still takes this run's evidence.
 8. **Decide each ticket's status from the board, before every copy.** Run
    `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>`, adding `--withdraw` for a ticket
    this run withdraws, and write the word it prints as the ticket's `status`, then validate

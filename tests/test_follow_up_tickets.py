@@ -16,6 +16,8 @@ import copy
 import dataclasses
 import json
 import re
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -36,9 +38,26 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 HOST = "verifier-01.build.example"
 
 
-def _body(host: str = HOST) -> str:
+IMPACT_PROSE = "Every reader of a listing misses its last page, and the export built on it too."
+WORKAROUND = "readers request the last page by its number"
+
+
+def _impact(
+    prose: str = IMPACT_PROSE,
+    severity: str = tickets.Severity.HIGH,
+    workaround: str = WORKAROUND,
+    with_workaround: str = tickets.Severity.MEDIUM,
+) -> str:
+    return tickets.impact_section(prose, severity, workaround, with_workaround)
+
+
+IMPACT_TEXT = _impact()
+
+
+def _body(host: str = HOST, impact: str = IMPACT_TEXT) -> str:
     return "\n\n".join(
-        f"## {heading}\n\nWhat this ticket says under {heading}."
+        f"## {heading}\n\n"
+        + (impact if heading == tickets.IMPACT else f"What this ticket says under {heading}.")
         + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
         for heading in tickets.HEADINGS
     )
@@ -46,6 +65,51 @@ def _body(host: str = HOST) -> str:
 
 BODY = _body()
 EVIDENCE_TEXT = f"What this ticket says under {tickets.EVIDENCE}. Verified on `{HOST}`."
+
+#: Every way a body's `## Impact` section is refused, and what the refusal names.
+IMPACT_ORDER = "does not end with its three lines, in this order and with nothing between or after"
+IMPACT_REFUSALS = [
+    (BODY.replace(f"## Impact\n\n{IMPACT_TEXT}\n\n", ""), "no `## Impact` heading in its place"),
+    (_body(impact="\n"), "the body's `## Impact` section is empty"),
+    (_body(impact=_impact(prose="")), "`## Impact` section carries no prose before its lines"),
+    (
+        _body(impact=IMPACT_TEXT.replace(f"- Workaround: {WORKAROUND}\n", "")),
+        "`## Impact` section carries no `- Workaround:` line",
+    ),
+    (
+        _body(impact=IMPACT_TEXT + "- Severity: high\n"),
+        "`## Impact` section carries its `- Severity:` line 2 times, not once",
+    ),
+    (
+        _body(impact=_impact(severity="severe")),
+        "`- Severity:` line names 'severe', which is not a severity",
+    ),
+    (
+        _body(impact=_impact(with_workaround="Low")),
+        "`- Severity with the workaround:` line names 'Low', which is not a severity",
+    ),
+    (_body(impact=_impact(workaround="")), "`- Workaround:` line is empty"),
+    (
+        _body(
+            impact=_impact(severity=tickets.Severity.MEDIUM, with_workaround=tickets.Severity.HIGH)
+        ),
+        "severity with the workaround `high` is above its severity `medium`",
+    ),
+    (
+        _body(impact=_impact(workaround="none", with_workaround=tickets.Severity.LOW)),
+        "workaround is `none`, so its severity with the workaround `low` has to be its "
+        "severity `high`",
+    ),
+    (
+        _body(
+            impact=f"{IMPACT_PROSE}\n\n- Workaround: {WORKAROUND}\n- Severity: high\n"
+            "- Severity with the workaround: medium\n"
+        ),
+        IMPACT_ORDER,
+    ),
+    (_body(impact=IMPACT_TEXT.replace("- Workaround:", "A note.\n- Workaround:")), IMPACT_ORDER),
+    (_body(impact=IMPACT_TEXT + "\nA paragraph after the lines.\n"), IMPACT_ORDER),
+]
 
 
 #: A sound ticket, which each test below states only its departures from.
@@ -99,7 +163,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 3
+    assert held["schema"] == tickets.SCHEMA == 4
     keys = list(held)
     assert keys == list(tickets.RECORD_KEYS)
     assert keys.index("host") == keys.index("verified_at") + 1
@@ -159,14 +223,15 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
             "names 'github.com/nickderobertis/another-service', not its record's `repository`",
         ),
         (_status("unknown"), "the status is 'unknown'"),
-        (_status("draft"), "the status is 'draft'"),
+        (_status("deferred"), "the status is 'deferred'"),
         (_set("status", "open"), "the status is 'open'"),
         (_no_record, "carries no `orchestrator.follow-up` metadata record"),
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 3"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 3"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 4"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 4"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 4"),
         (_set_record("schema", True), "is schema True"),
         (_set_record("root_cause", "Not A Slug"), "is not a kebab-case slug"),
         (_set_record("root_cause", "another-cause"), "is not the file's root cause"),
@@ -199,6 +264,7 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
             _set("content", _body("another-host")),
             f"`## Evidence` section does not name the host '{HOST}'",
         ),
+        *[(_set("content", body), reason) for body, reason in IMPACT_REFUSALS],
     ],
 )
 def test_each_way_an_item_is_not_a_ticket_is_named(
@@ -233,16 +299,77 @@ def test_a_missing_host_is_named_in_the_one_line_naming_every_missing_key() -> N
     assert missing == ["the `orchestrator.follow-up` record is missing basis, host"], found
 
 
-def test_a_schema_2_ticket_is_refused_naming_its_schema_first() -> None:
-    """The shape every ticket on the live board carries: schema 2, and no `repositories`."""
+def test_a_schema_3_ticket_is_refused_naming_its_schema_first() -> None:
+    """The shape a ticket carried before the `## Impact` section: schema 3, and no such section."""
     item = _item()
-    _record(item)["schema"] = 2
-    item["repositories"] = []
+    _record(item)["schema"] = 3
+    item["content"] = BODY.replace(f"## Impact\n\n{IMPACT_TEXT}\n\n", "")
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 2, and this reads schema 3"), found
-    assert any("the ticket carries no `repositories`" in problem for problem in found), found
+    assert found[0].startswith("the record is schema 3, and this reads schema 4"), found
+    assert any("no `## Impact` heading in its place" in problem for problem in found), found
+
+
+@pytest.mark.parametrize(
+    "impact",
+    [
+        IMPACT_TEXT,
+        _impact(workaround="none", with_workaround=tickets.Severity.HIGH),
+        _impact(severity=tickets.Severity.LOW, with_workaround=tickets.Severity.LOW),
+        # Prose may run to several paragraphs, and a bullet of its own is prose, not a line.
+        _impact(prose="Operators of the service lose a day.\n\n- Users: everyone paging."),
+    ],
+)
+def test_an_impact_section_of_prose_and_one_of_each_line_is_accepted(impact: str) -> None:
+    ticket = _ticket(body=_body(impact=impact))
+
+    assert tickets.problems(_item(ticket), run=RUN, root_cause=CAUSE) == []
+
+
+def test_an_impact_section_is_told_every_problem_it_has_at_once() -> None:
+    item = _item(_ticket(body=_body(impact="- Severity: dire\n- Severity: dire\n")))
+
+    found = tickets.problems(item, run=RUN, root_cause=CAUSE)
+
+    assert len(found) == 4, found
+    assert "carries no prose before its lines" in found[0]
+
+
+def test_the_severity_vocabulary_is_ordered_and_means_what_the_contract_states() -> None:
+    assert {severity.value: severity.meaning for severity in tickets.Severity} == {
+        "critical": (
+            "data or work is lost or corrupted, or the affected thing cannot be used at all"
+        ),
+        "high": (
+            "the affected thing fails, or a person must intervene, every time the root cause fires"
+        ),
+        "medium": "it costs time, resources or quality, but recovers without a person",
+        "low": "cosmetic, or rare with negligible cost",
+    }
+    assert (
+        list(tickets.Severity)
+        == sorted(
+            tickets.Severity, key=lambda one: sum(one.above(other) for other in tickets.Severity)
+        )[::-1]
+    )
+    assert tickets.Severity.CRITICAL.above(tickets.Severity.LOW)
+    assert not tickets.Severity.LOW.above(tickets.Severity.LOW)
+
+
+#: Words that belong to this harness rather than to the repository a ticket is filed against.
+ORCHESTRATION_WORDS = re.compile(r"\b(?:runs?|nodes?|dispatch\w*|managers?)\b", re.IGNORECASE)
+
+
+def test_the_impact_guidance_and_severities_speak_of_the_repository_not_of_orchestration() -> None:
+    contract = tickets.ticket_contract(RUN, "followups")
+    guidance = contract.split("## Impact\n", 1)[1].split("\n## Repository\n", 1)[0]
+
+    assert ORCHESTRATION_WORDS.findall(guidance) == [], guidance
+    for severity in tickets.Severity:
+        assert ORCHESTRATION_WORDS.findall(severity.meaning) == [], severity
+    for spoken in ("users", "artifacts of the repository"):
+        assert spoken in guidance, guidance
 
 
 def test_a_repositories_entry_is_compared_only_against_a_record_repository_that_is_an_origin() -> (
@@ -363,6 +490,7 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_comments_only_on_oth
 TEMPLATE = (
     "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
     "Decide each status with @BOARD_STATUS@.\n"
+    "@STATUS_VOCABULARY@\n"
     "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
@@ -452,6 +580,19 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
     decided = steps.index(f"`{BOARD_STATUS} --board followups <path of the ticket>`")
     assert decided < steps.index("**Put each ticket on the board.**"), steps
 
+    vocabulary = tickets.status_vocabulary()
+    assert task.count(vocabulary) == 1, "the task does not carry the status vocabulary once"
+    assert f"## What each board status means\n\n{vocabulary}" in task
+    flat = " ".join(task.split())
+    for rule in (
+        "a ticket the board holds at `Deferred` is copied carrying `draft`",
+        "this run never withdraws a deferred item",
+        "an item at `Deferred` receives this run's one comment like any other open item",
+        "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
+        "like any other open item",
+    ):
+        assert rule in flat, rule
+
 
 def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule() -> None:
     contract = tickets.ticket_contract(RUN, "followups")
@@ -481,11 +622,35 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     assert '\nrepositories: ["<normalized origin the root cause lives in' in contract
     assert f"A new ticket is `{tickets.Status.PROPOSED}`" in contract
     assert "A ticket the board already holds carries the status the board holds it at" in contract
-    assert f"withdraws is `{tickets.Status.WITHDRAWN}`" in contract
-    assert "unless the board shows it as accepted: then copy nothing, leave the local" in contract
-    assert "report that you would have withdrawn it and why" in contract
+    assert f"withdraws is `{tickets.Status.WITHDRAWN}`" in flat
+    assert (
+        "unless the board shows it as accepted or deferred: this run never withdraws a deferred "
+        "item or an accepted one, so copy nothing, leave the local"
+    ) in flat
+    assert "report that you would have withdrawn it and why" in flat
     assert "Run `hostname` on the machine you run on and write exactly what it prints" in contract
     assert "@BOARD_STATUS@ --board followups <path of the ticket>" in contract
+
+    impact = contract.split("\n## Impact\n\n", 1)[1].split("\n## Repository\n", 1)[0]
+    assert contract.index("\n## Root cause\n") < contract.index("\n## Impact\n"), contract
+    assert tickets.HEADINGS[: tickets.HEADINGS.index(tickets.IMPACT) + 2] == (
+        "Root cause",
+        "Impact",
+        "Repository",
+    )
+    for label in ("Severity", "Workaround", "Severity with the workaround"):
+        assert re.search(rf"^- {label}: <", impact, re.MULTILINE), label
+    flat_impact = " ".join(impact.split())
+    assert "the negative outcome when the root cause fires, and what it affects" in flat_impact
+    assert (
+        "Then the three lines below, each exactly once, in this order, with nothing between or "
+        "after them"
+    ) in flat_impact
+    for severity in tickets.Severity:
+        assert f"`{severity}`, {severity.meaning}" in flat_impact, severity
+    assert "`critical`, " in flat_impact.split("`high`, ", 1)[0], "most severe first"
+    assert "The severity with the workaround is never above the severity" in flat_impact
+    assert "a workaround of exactly `none` leaves the two the same" in flat_impact
 
 
 def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
@@ -505,8 +670,9 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     ) in flat
     assert (
         "a ticket of an older schema is brought to the current shape before it is copied, "
-        "its `repositories` naming its record's `repository` and its `host` read from this "
-        "machine with `hostname`"
+        "its `repositories` naming its record's `repository`, its `host` read from this "
+        "machine with `hostname`, and its `## Impact` section written from the evidence the "
+        "ticket already carries, re-verifying only a claim that no longer holds"
     ) in flat
 
 
@@ -517,6 +683,8 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
         (TEMPLATE.replace("@FEEDBACK@", ""), "missing placeholders: FEEDBACK"),
         (TEMPLATE.replace("@BOARD_STATUS@", ""), "missing placeholders: BOARD_STATUS"),
         (TEMPLATE + "@COMMENT_CONTRACT@", "more than once: COMMENT_CONTRACT"),
+        (TEMPLATE + "@STATUS_VOCABULARY@", "more than once: STATUS_VOCABULARY"),
+        (TEMPLATE.replace("@STATUS_VOCABULARY@", ""), "missing placeholders: STATUS_VOCABULARY"),
     ],
 )
 def test_a_template_that_does_not_name_each_placeholder_once_is_refused(
@@ -590,6 +758,26 @@ def test_validate_names_each_problem_of_a_ticket_the_store_reads(
     reported = capsys.readouterr().err
     assert f"{path} is not a sound ticket" in reported
     assert "carries a `project`" in reported
+
+
+@pytest.mark.parametrize(("body", "reason"), IMPACT_REFUSALS)
+def test_the_validate_command_names_each_impact_problem_of_a_ticket_the_store_reads(
+    drafts_root: Path, body: str, reason: str
+) -> None:
+    """The command the follow-up agent and the recipe's closeout run, over a written ticket."""
+    path = _write(drafts_root, _ticket(body=body))
+
+    validated = subprocess.run(  # noqa: S603 - this checkout's own module, as an agent runs it
+        [sys.executable, "-m", "orchestrator.follow_up_tickets", "validate", str(path)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert validated.returncode == tickets.UNSOUND, validated.stdout + validated.stderr
+    assert f"{path} is not a sound ticket" in validated.stderr
+    assert reason in " ".join(validated.stderr.split()), validated.stderr
 
 
 def test_validate_refuses_a_ticket_the_store_cannot_read_or_reads_from_elsewhere(
@@ -715,7 +903,11 @@ def test_board_status_refuses_an_item_the_store_cannot_place_with_a_status_of_it
         status, printed, reported = _decided(ticket, capsys, *extra)
 
         assert status == tickets.UNPLACED, extra
-        assert tickets.UNPLACED not in (tickets.SOUND, tickets.UNRUNNABLE, tickets.ACCEPTED)
+        assert tickets.UNPLACED not in (
+            tickets.SOUND,
+            tickets.UNRUNNABLE,
+            tickets.PROTECTED,
+        )
         assert printed == ""
         assert "at category 'unknown', which no ticket carries" in reported
 
@@ -734,8 +926,23 @@ def test_a_withdrawal_closes_a_ticket_nobody_accepted(
     assert _decided(ticket, capsys, "--withdraw") == (tickets.SOUND, "cancelled\n", "")
 
 
-@pytest.mark.parametrize("held", [status for status in tickets.Status if status.accepted])
-def test_a_withdrawal_of_a_ticket_the_board_shows_as_accepted_is_refused_and_moves_nothing(
+def test_withdrawal_is_refused_at_every_accepted_status_and_the_deferred_one_and_no_other() -> None:
+    decided = [status for status in tickets.Status if status.protected_from_withdrawal]
+
+    assert decided == [
+        tickets.Status.ACCEPTED,
+        tickets.Status.DEFERRED,
+        tickets.Status.UNDER_WAY,
+        tickets.Status.FINISHED,
+    ]
+    assert not tickets.Status.DEFERRED.accepted
+    assert [status for status in tickets.Status if status.selected] == [tickets.Status.ACCEPTED]
+
+
+@pytest.mark.parametrize(
+    "held", [status for status in tickets.Status if status.protected_from_withdrawal]
+)
+def test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_moves_nothing(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], held: tickets.Status
 ) -> None:
     ticket = _write(drafts_root, _ticket())
@@ -745,13 +952,93 @@ def test_a_withdrawal_of_a_ticket_the_board_shows_as_accepted_is_refused_and_mov
 
     status, printed, reported = _decided(ticket, capsys, "--withdraw")
 
-    assert status == tickets.ACCEPTED
-    assert tickets.ACCEPTED not in (tickets.SOUND, tickets.UNRUNNABLE, tickets.UNPLACED)
+    assert status == tickets.PROTECTED == 4
+    assert tickets.PROTECTED not in (tickets.SOUND, tickets.UNRUNNABLE, tickets.UNPLACED)
     assert printed == ""
-    assert f"holds this ticket's item at `{held}`" in reported
+    assert (
+        f"holds this ticket's item at `{held}` ({held.meaning}), which a person accepted or "
+        "deferred, so this run never withdraws it"
+    ) in " ".join(reported.split())
     assert "this run never withdraws it" in reported
     assert _board_category(destination) == held.value
     assert ticket.read_text(encoding="utf-8") == before
+
+
+def test_board_status_over_a_deferred_item_prints_draft_and_refuses_to_withdraw_it(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A person deferred the item: a copy carries `draft`, and a withdrawal is refused."""
+    ticket = _write(drafts_root, _ticket())
+    destination = _on_board(ticket)
+    _moved(destination, "draft")
+    assert _board_category(destination) == tickets.Status.DEFERRED == "draft"
+
+    assert _decided(ticket, capsys) == (tickets.SOUND, "draft\n", "")
+    status, printed, reported = _decided(ticket, capsys, "--withdraw")
+
+    assert (status, printed) == (tickets.PROTECTED, "")
+    assert f"at `draft` ({tickets.Status.DEFERRED.meaning})" in " ".join(reported.split())
+    assert "this run never withdraws it" in reported
+    assert _board_category(destination) == "draft"
+    deferred = _write(drafts_root, _ticket(status=tickets.Status.DEFERRED))
+    assert tickets.read_ticket(deferred).status is tickets.Status.DEFERRED
+
+
+def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_picked_up() -> None:
+    vocabulary = tickets.status_vocabulary()
+    bullets = [line for line in vocabulary.splitlines() if line.startswith("- ")]
+    shown = [
+        "Board status `Proposal`",
+        "Board status `Todo`",
+        "Board status `Deferred`",
+        "Board status `In Progress`",
+        "Closed as completed",
+        "Closed as not planned",
+    ]
+
+    assert len(bullets) == len(tickets.Status) == len(shown)
+    for bullet, status, place in zip(bullets, tickets.Status, shown, strict=True):
+        assert bullet.startswith(f"- **{place}**, written `{status.written}`: "), bullet
+        assert status.meaning in bullet, bullet
+        assert "Who moves an item there: " in bullet, bullet
+    selected = [
+        bullet for bullet in bullets if "**Selected** by an agent sent to pick up" in bullet
+    ]
+    assert selected == [bullets[1]], selected
+    assert all(
+        "Not selected by an agent sent to pick up accepted tickets" in bullet
+        for bullet in bullets
+        if bullet not in selected
+    )
+    assert "Who moves an item there: only a person, which is what accepting" in bullets[1]
+    assert "Who moves an item there: only a person." in bullets[2]
+    deferred = tickets.Status.DEFERRED.meaning
+    for said in ("deferred for later", "not accepted", "picked up by no agent", "new evidence"):
+        assert said in deferred, said
+    assert vocabulary.rstrip("\n").splitlines()[-1] == (
+        'A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing '
+        "else: never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one."
+    )
+
+
+def test_the_statuses_command_prints_the_vocabulary_exactly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    printed = subprocess.run(  # noqa: S603 - this checkout's own module, as an agent runs it
+        [sys.executable, "-m", "orchestrator.follow_up_tickets", "statuses"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert (printed.returncode, printed.stdout, printed.stderr) == (
+        tickets.SOUND,
+        tickets.status_vocabulary(),
+        "",
+    )
+    assert tickets.main(["statuses"]) == tickets.SOUND
+    assert capsys.readouterr().out == tickets.status_vocabulary()
 
 
 def test_board_status_that_cannot_ask_the_board_is_unrunnable(

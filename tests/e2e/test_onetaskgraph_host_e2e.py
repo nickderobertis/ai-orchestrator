@@ -133,6 +133,19 @@ def _configured_project_number() -> int:
 CONFIGURED_PROJECT_NUMBER = _configured_project_number()
 
 
+def _followups_project_number() -> int:
+    """The board number the committed `followups` source names, read for the same reason."""
+    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+    opened = text.index("\n  followups:\n")
+    named = re.compile(r"^\s+project_number:\s*(\d+)\s*$", re.MULTILINE).search(text, opened)
+    if named is None:
+        raise ValueError("onetaskgraph.yaml names no project_number for its `followups` source")
+    return int(named.group(1))
+
+
+FOLLOWUPS_PROJECT_NUMBER = _followups_project_number()
+
+
 def _configured_owner() -> str:
     """The board owner the committed `plans` source names."""
     text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
@@ -302,6 +315,12 @@ STATUS_OPTIONS: tuple[_StatusOption, ...] = (
 # against that board would take the board credential no test may use.
 PROPOSAL = _StatusOption(id=_FieldOptionId("OPT_proposal"), name="Proposal")
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live `followups`
+# board's own option, which `onetaskgraph.yaml` sends a deferred ticket's `draft` to. The
+# stand-in answers it so the journeys can assert that name reaches the wire and reads back;
+# reconciling it against that board would take the board credential no test may use.
+DEFERRED = _StatusOption(id=_FieldOptionId("OPT_deferred"), name="Deferred")
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 #: The node id the fixture answers each repository it knows with, one per `owner/name`.
 #: The journeys assert which of these reaches `createIssue`, which is the whole of what
 #: naming a repository buys — on the source, whose configured one is the fallback a
@@ -358,6 +377,10 @@ class _Issue:
     #: item it already made — a row that forgot it would have every re-copy create a
     #: replacement, and a journey about updating in place would prove nothing.
     origin: str | None = None
+    #: The Status option this row is at, as a person last set it on the board. A copy's own
+    #: Status write is recorded as a request and not applied here, so every journey that
+    #: predates this field reads the row exactly as it always did.
+    status: str = "Todo"
 
     def field_values(self) -> dict[str, object]:
         """This row's board field values, as both routes to it select them.
@@ -376,7 +399,7 @@ class _Issue:
         return {
             "nodes": [
                 {
-                    "name": "Todo",
+                    "name": self.status,
                     "field": {
                         "id": STATUS_FIELD_ID,
                         "name": "Status",
@@ -428,7 +451,7 @@ class _Issue:
                 "nodes": [
                     {
                         "id": self.item_id,
-                        "project": {"number": CONFIGURED_PROJECT_NUMBER},
+                        "project": {"number": BOARD.number},
                         "fieldValues": self.field_values(),
                     }
                 ],
@@ -482,6 +505,8 @@ class _Board:
         self.created: list[_Issue] = []
         #: The Status options this board carries, which one journey narrows.
         self.options: tuple[_StatusOption, ...] = STATUS_OPTIONS
+        #: The number of the board being served, which an issue's membership is filed under.
+        self.number: int = CONFIGURED_PROJECT_NUMBER
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -735,6 +760,7 @@ class _Operation(StrEnum):
     SEARCH = "search"
     ISSUE = "issue"
     SUB_ISSUES = "subIssues"
+    COMMENTS = "comments"
     REPOSITORY = "repository"
     DEPENDENCIES = "dependencies"
     CREATE_ISSUE = "createIssue"
@@ -752,6 +778,7 @@ _OPERATIONS: dict[str, _Operation] = {
     "repositoryOwner": _Operation.BOARD,
     "search(query:": _Operation.SEARCH,
     "subIssues(first:": _Operation.SUB_ISSUES,
+    "comments(first:": _Operation.COMMENTS,
     "node(id:$id){__typename ...BoardIssue}": _Operation.ISSUE,
     "{repository(owner:": _Operation.REPOSITORY,
     "blockedBy(first:": _Operation.DEPENDENCIES,
@@ -885,6 +912,11 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return BOARD.node_response(request.variables.get("id"))
             case _Operation.SUB_ISSUES:
                 return BOARD.sub_issues_response(request.variables.get("id"))
+            case _Operation.COMMENTS:
+                # A `task show` of one item reads its comments too; nothing here comments,
+                # so every issue answers with none.
+                empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+                return {"data": {"node": {"__typename": "Issue", "comments": empty}}}
             case _Operation.REPOSITORY:
                 return self._repository(request.repository)
             case _Operation.DEPENDENCIES:
@@ -926,7 +958,9 @@ class _GitHubFixture(BaseHTTPRequestHandler):
 
 @contextmanager
 def _serving_board(
-    refusal: _Refusal | None = None, options: tuple[_StatusOption, ...] = STATUS_OPTIONS
+    refusal: _Refusal | None = None,
+    options: tuple[_StatusOption, ...] = STATUS_OPTIONS,
+    number: int = CONFIGURED_PROJECT_NUMBER,
 ) -> Iterator[dict[str, str]]:
     """Serve the board fixture, yielding the environment that points `plans` at it.
 
@@ -937,10 +971,12 @@ def _serving_board(
     ``refusal`` makes every request come back as one GitHub refusal instead. It is a
     property of the server rather than of a call because what a caller sees is the
     diagnostic the source composes, and the source retries before it composes one.
-    ``options`` are the Status options the board carries.
+    ``options`` are the Status options the board carries, and ``number`` the board number
+    the source being served is configured with, which an issue's membership answers under.
     """
     BOARD.reset()
     BOARD.options = options
+    BOARD.number = number
     _GitHubFixture.requests = []
     _GitHubFixture.refusal = refusal
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GitHubFixture)
@@ -2066,17 +2102,30 @@ FOLLOWUPS_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__"
 PROPOSED_RUN = "proposal-run"
 PROPOSED_CAUSE = "ticket-lands-as-a-proposal"
 PROPOSED_ID = follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE)
-#: The `followups` board's Status options, `Proposal` among them.
-FOLLOWUPS_OPTIONS = (*STATUS_OPTIONS, PROPOSAL)
+#: The `followups` board's Status options, `Proposal` and `Deferred` among them.
+FOLLOWUPS_OPTIONS = (*STATUS_OPTIONS, PROPOSAL, DEFERRED)
 
 
-def _follow_up_ticket(repository: _Repository) -> follow_up_tickets.Ticket:
-    """One new ticket, `backlog`, about ``repository``, as the agent writes it."""
+def _follow_up_ticket(
+    repository: _Repository,
+    status: follow_up_tickets.Status = follow_up_tickets.Status.PROPOSED,
+    evidence: str = "",
+) -> follow_up_tickets.Ticket:
+    """One ticket about ``repository`` as the agent writes it, new and `backlog` by default.
+
+    ``evidence`` is added to its `## Evidence` section, the way a later run adds its own.
+    """
     host = follow_up_tickets.Host("verifier.example")
     origin = follow_up_tickets.Origin(_hosted(repository))
+    impact = follow_up_tickets.impact_section(
+        "Readers of the board miss the ticket's status.",
+        follow_up_tickets.Severity.MEDIUM,
+        "none",
+        follow_up_tickets.Severity.MEDIUM,
+    )
     return follow_up_tickets.Ticket(
         title=f"{repository.name}: a ticket lands as a proposal",
-        status=follow_up_tickets.Status.PROPOSED,
+        status=status,
         root_cause=follow_up_tickets.RootCause(PROPOSED_CAUSE),
         repository=origin,
         created_by_run=follow_up_tickets.RunId(PROPOSED_RUN),
@@ -2086,7 +2135,13 @@ def _follow_up_ticket(repository: _Repository) -> follow_up_tickets.Ticket:
         verified_at=follow_up_tickets.Timestamp("2026-01-01T00:00:00Z"),
         host=host,
         body="\n\n".join(
-            f"## {heading}\n\nVerified on `{host}` ({heading})."
+            f"## {heading}\n\n"
+            + (
+                impact
+                if heading == follow_up_tickets.IMPACT
+                else f"Verified on `{host}` ({heading})."
+            )
+            + (f" {evidence}" if evidence and heading == follow_up_tickets.EVIDENCE else "")
             for heading in follow_up_tickets.HEADINGS
         ),
     )
@@ -2127,7 +2182,7 @@ def _serving_followups(
     environment: dict[str, str], options: tuple[_StatusOption, ...] = FOLLOWUPS_OPTIONS
 ) -> Iterator[None]:
     """Serve the board fixture as `followups`, carrying ``options``, for ``environment``."""
-    with _serving_board(options=options) as remote:
+    with _serving_board(options=options, number=FOLLOWUPS_PROJECT_NUMBER) as remote:
         environment.update(remote)
         environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = (
             "0"
@@ -2241,6 +2296,97 @@ def test_a_followups_board_without_a_proposal_option_refuses_the_copy_by_name(
         if request.operation is _Operation.UPDATE_FIELD
         and request.input_value("fieldId") == STATUS_FIELD_ID
     ], "a board without the option had some other Status option written instead"
+
+
+# llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for
+# the reason the block around `_Board` above gives; the installed `onetaskgraph`, the committed
+# `followups` source and this checkout's `board-status` are real, and read off their output.
+def _status_writes(requests: list[_GraphQLRequest]) -> list[object]:
+    """The value of every Status field write among ``requests``."""
+    return [
+        request.input_value("value")
+        for request in _sent(_Operation.UPDATE_FIELD, requests)
+        if request.input_value("fieldId") == STATUS_FIELD_ID
+    ]
+
+
+def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_deferred(
+    tmp_path: Path,
+) -> None:
+    """A person moved the ticket's item to `Deferred`; the store reads it as `draft`.
+
+    `board-status` asks the board through the committed mapping and prints `draft`, the agent
+    writes that word into the ticket with the new evidence it verified, and the re-copy
+    updates the same item without selecting any Status option but `Deferred`.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+
+    with _serving_followups(environment):
+        first = _copied_ticket(environment, "--json")
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert _status_writes(_GitHubFixture.requests) == [{"singleSelectOptionId": PROPOSAL.id}]
+        (created,) = BOARD.created
+        (entry,) = json.loads(first.stdout)["items"]
+        # llmlint: ignore-block[tests_mirror_real_usage] Deferring a ticket is a person's edit of
+        # the item's Status on the live board, which no test may reach; the fixture holds the row
+        # at the option that edit leaves. Everything read and copied afterwards is the installed
+        # CLI and this checkout's module unchanged.
+        created.status = DEFERRED.name
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        shown = _followups_command(
+            environment, [str(ONETASKGRAPH_BIN), "task", "show", entry["destination"], "--json"]
+        )
+        decided = _board_status(environment, ticket)
+        assert decided.returncode == 0, decided.stderr
+        _written_ticket(
+            drafts_root,
+            _follow_up_ticket(
+                SIBLING_REPOSITORY,
+                follow_up_tickets.Status(decided.stdout.strip()),
+                "A later run hit it again.",
+            ),
+        )
+        already = len(_GitHubFixture.requests)
+        again = _copied_ticket(environment, "--json")
+        recopied = _GitHubFixture.requests[already:]
+
+    assert shown.returncode == 0, shown.stderr
+    (read,) = json.loads(shown.stdout)["items"]
+    assert read["item"]["status"]["category"] == follow_up_tickets.Status.DEFERRED == "draft"
+    assert decided.stdout == "draft\n"
+    assert again.returncode == 0, again.stdout + again.stderr
+    (recopy,) = json.loads(again.stdout)["items"]
+    assert (recopy["action"], recopy["destination"]) == ("updated", entry["destination"])
+    assert not _sent(_Operation.CREATE_ISSUE, recopied), "the re-copy filed a second issue"
+    written = _status_writes(recopied)
+    assert all(value == {"singleSelectOptionId": DEFERRED.id} for value in written), (
+        f"a re-copy of a deferred ticket has to keep the {DEFERRED.name!r} option; it wrote "
+        f"{written}"
+    )
+
+
+def test_a_draft_ticket_onto_a_followups_board_without_a_deferred_option_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    """The mapping sends `draft` to `Deferred` alone, so no other option stands in for it."""
+    environment, drafts_root = _followups_environment(tmp_path)
+    _written_ticket(
+        drafts_root,
+        _follow_up_ticket(SIBLING_REPOSITORY, follow_up_tickets.Status.DEFERRED),
+    )
+
+    with _serving_followups(environment, (*STATUS_OPTIONS, PROPOSAL)):
+        copied = _copied_ticket(environment)
+
+    assert copied.returncode != 0, copied.stdout + copied.stderr
+    assert DEFERRED.name in copied.stderr, copied.stderr
+    assert _status_writes(_GitHubFixture.requests) == [], (
+        "a board without the option had some other Status option written instead"
+    )
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 def test_a_follow_up_ticket_is_created_in_its_own_repository_and_added_to_the_board(

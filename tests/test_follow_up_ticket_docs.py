@@ -147,14 +147,14 @@ def test_each_follow_up_section_files_a_tickets_issue_in_its_root_causes_reposit
 def test_the_check_names_every_status_option_or_key_neither_source_holds() -> None:
     """The check can fail: a name of each kind that nothing holds is reported, and no other."""
     prose = (
-        "A ticket lands in `Accepted` and then `Todo`, is `draft` rather than `backlog`, "
-        "and its record's `hostname` sits beside the `verified_on` key and `host`; "
-        "`default_sources` is a setting."
+        "A ticket lands in `Accepted` and then `Todo` or `Deferred`, is `unknown` rather than "
+        "`draft` or `backlog`, and its record's `hostname` sits beside the `verified_on` key "
+        "and `host`; `default_sources` is a setting."
     )
 
     assert unheld(prose, store_categories()) == {
         "`Accepted` is a board option the `followups` source does not name",
-        "`draft` is a status category no ticket carries",
+        "`unknown` is a status category no ticket carries",
         "`hostname` is a record key the ticket does not carry",
         "`verified_on` is a record key the ticket does not carry",
     }
@@ -165,3 +165,27 @@ def test_every_ticket_status_is_a_category_of_the_installed_store() -> None:
     categories = store_categories()
 
     assert set(tickets.Status) <= categories, sorted(categories)
+    assert tickets.Status.DEFERRED.value == "draft" in categories
+
+
+@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+def test_each_follow_up_section_carries_the_modules_status_vocabulary(
+    document: str, heading: str
+) -> None:
+    """Each section copies what `status_vocabulary()` renders; line wrapping is its own."""
+    flat = " ".join(section(document, heading).split())
+
+    assert " ".join(tickets.status_vocabulary().split()) in flat, (
+        f"{document}'s section {heading!r} does not carry the status vocabulary "
+        "`python -m orchestrator.follow_up_tickets statuses` prints"
+    )
+
+
+def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -> None:
+    flat = " ".join(section("AGENTS.md", SECTIONS["AGENTS.md"]).split())
+
+    for said in (
+        "A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only",
+        "`python -m orchestrator.follow_up_tickets statuses` prints",
+    ):
+        assert said in flat, said

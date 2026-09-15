@@ -272,22 +272,37 @@ def _ticket(
         verified_at=tickets.Timestamp(VERIFIED_AT),
         host=tickets.Host(host),
         body="\n\n".join(
-            f"## {heading}\n\n{body} ({heading})."
+            f"## {heading}\n\n"
+            + (
+                tickets.impact_section(
+                    f"{body}: some-service's readers lose the last page of every listing.",
+                    tickets.Severity.HIGH,
+                    "readers request the last page by its number",
+                    tickets.Severity.MEDIUM,
+                )
+                if heading == tickets.IMPACT
+                else f"{body} ({heading})."
+            )
             + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
             for heading in tickets.HEADINGS
         ),
     )
 
 
-def _schema_2(ticket: tickets.Ticket) -> str:
-    """``ticket`` as schema 2 stored it, the shape the live tickets carry: no `repositories`."""
+#: A body's `## Impact` section, up to the heading after it.
+IMPACT_SECTION = re.compile(rf"## {tickets.IMPACT}\n\n.*?\n\n(?=## )", re.DOTALL)
+
+
+def _schema_3(ticket: tickets.Ticket) -> str:
+    """``ticket`` as schema 3 stored it, the shape the live tickets carry: no `## Impact`."""
     return frontmatter(
         {
             "title": ticket.title,
             "status": ticket.status.written,
-            "metadata": {tickets.KEY: tickets.record(ticket) | {"schema": 2}},
+            "repositories": [ticket.repository],
+            "metadata": {tickets.KEY: tickets.record(ticket) | {"schema": 3}},
         },
-        ticket.body,
+        IMPACT_SECTION.sub("", ticket.body, count=1),
     )
 
 
@@ -531,6 +546,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         )
         assert copied.returncode == 0, copied.stdout + copied.stderr
         other_issue = f"{BOARD}:{other}/tickets/{SHARED_CAUSE}"
+        # A person deferred the earlier run's ticket: it is still open, and takes evidence.
+        # llmlint: ignore-block[tests_mirror_real_usage] A person's move of a `local-md` item
+        # has no store verb in onetaskgraph 0.2.31, for the reason `_moved`'s directive gives.
+        _moved(bench, other_issue, tickets.Status.DEFERRED.written)
+        # llmlint: ignore-end[tests_mirror_real_usage]
         other_before = _item(bench, other_issue)
 
         # A run with nothing to verify.
@@ -603,8 +623,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         comments_after_first = _comments(bench, other_issue)
         board_after_first = _board_ids(bench)
 
-        # The user accepts the new ticket: its board item is moved to `todo` by hand.
-        _moved(bench, new_issue, tickets.Status.ACCEPTED.written)
+        # The user defers the new ticket: its board item is moved to `draft` by hand.
+        # llmlint: ignore-block[tests_mirror_real_usage] A person's move of a `local-md` item
+        # has no store verb in onetaskgraph 0.2.31, for the reason `_moved`'s directive gives.
+        _moved(bench, new_issue, tickets.Status.DEFERRED.written)
+        # llmlint: ignore-end[tests_mirror_real_usage]
         new_after_move = _item(bench, new_issue)
 
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
@@ -678,9 +701,9 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         unsound = _run(["just", "follow-ups", unsound_run, "--to", BOARD], bench)
         started.append(f"{unsound_run}{SUFFIX}")
 
-        # A run whose tickets were filed at schema 2, before a ticket named its repository —
-        # the shape of the tickets already on the live board — one of them accepted there by
-        # a person. The manager's feedback re-dispatch rewrites that one and leaves the other.
+        # A run whose tickets were filed at schema 3, before a ticket stated its impact — the
+        # shape of the tickets already on the live board — one of them accepted there by a
+        # person. The manager's feedback re-dispatch rewrites that one and leaves the other.
         legacy_run = f"fu-legacy-{pid}"
         legacy_drafts = (f"drafts:{legacy_run}/drafts/a-consumed-draft",)
         rewritten_ticket = tickets.ticket_path(bench.drafts_root, legacy_run, REWRITTEN_CAUSE)
@@ -691,11 +714,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 cause,
                 legacy_drafts,
                 f"some-service: {cause.replace('-', ' ')}",
-                "Filed before repositories",
+                "Filed before impact",
                 HOST,
             )
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(_schema_2(filed), encoding="utf-8")
+            path.write_text(_schema_3(filed), encoding="utf-8")
             copied = _run(
                 [store, "task", "copy", tickets.qualified_id(legacy_run, cause), "--to", BOARD],
                 bench,
@@ -967,6 +990,7 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
     )
     assert contract in task, "the ticket shape is not the one the module renders"
     assert tickets.comment_contract(main, BOARD) in task, "board ownership is not the module's"
+    assert task.count(tickets.status_vocabulary()) == 1, "the status vocabulary is not there once"
     assert "## This is a re-dispatch" not in task
     assert "## Feedback on the previous follow-up run" not in task
 
@@ -998,8 +1022,10 @@ def test_a_verified_ticket_lands_on_the_board_with_its_shape_its_one_repository_
 def test_another_runs_open_issue_gets_one_marked_comment_and_is_otherwise_untouched(
     followed: Followed,
 ) -> None:
+    """The earlier run's issue is held at `draft`, where a person deferred it, and stays there."""
     before, after = followed.other_before, followed.other_after_first
 
+    assert _category(before) == tickets.Status.DEFERRED, "the other run's item was not deferred"
     for field in ("title", "content", "status", "metadata", "project", "repositories"):
         assert after[field] == before[field], field
     (comment,) = followed.comments_after_first
@@ -1037,17 +1063,17 @@ def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_add
 def test_a_re_copy_keeps_the_status_a_person_moved_the_board_item_to(
     followed: Followed,
 ) -> None:
-    """The user accepted the ticket between the passes, and the re-dispatch left it accepted.
+    """The user deferred the ticket between the passes, and the re-dispatch left it deferred.
 
     The re-dispatch's agent staged its edited ticket as the proposal it was first written as
     and asked `board-status` before copying, so what it copied carried the board's status.
     """
-    accepted = tickets.Status.ACCEPTED
+    deferred = tickets.Status.DEFERRED
 
     assert _category(followed.new_after_first) == tickets.Status.PROPOSED
-    assert _category(followed.new_after_move) == accepted, "the board item was not moved"
-    assert _category(followed.new_after_second) == accepted, "a re-copy undid the acceptance"
-    assert _category(followed.local_after_second) == accepted
+    assert _category(followed.new_after_move) == deferred, "the board item was not moved"
+    assert _category(followed.new_after_second) == deferred, "a re-copy undid the deferral"
+    assert _category(followed.local_after_second) == deferred
     assert followed.new_after_second["content"] != followed.new_after_move["content"]
     (comment,) = followed.comments_after_second
     assert comment["id"] == followed.comments_after_first[0]["id"]
@@ -1064,12 +1090,12 @@ def test_an_attached_run_names_every_ticket_that_fails_the_shape(followed: Follo
     assert "carries a `project`" in unsound.stderr
 
 
-def test_a_feedback_re_dispatch_brings_a_schema_2_ticket_to_the_current_shape_updating_its_item(
+def test_a_feedback_re_dispatch_brings_a_schema_3_ticket_to_the_current_shape_updating_its_item(
     followed: Followed,
 ) -> None:
-    """The back-fill of the live tickets: rewritten naming their repository, left accepted.
+    """The back-fill of the live tickets: rewritten stating their impact, left accepted.
 
-    Both tickets were schema 2 and on the board, and a person had accepted one. The re-dispatch
+    Both tickets were schema 3 and on the board, and a person had accepted one. The re-dispatch
     rewrote that one and asked `board-status` before copying it, which updated the item the
     board already held — the same origin, no item added — rather than filing a second; the
     other it never touched, and the attached closeout names it rather than passing it.
@@ -1084,14 +1110,21 @@ def test_a_feedback_re_dispatch_brings_a_schema_2_ticket_to_the_current_shape_up
 
     held_before = before["metadata"]
     assert isinstance(held_before, dict)
-    assert held_before[tickets.KEY]["schema"] == 2
-    assert before["repositories"] == [], "the schema-2 board item already named a repository"
-    assert _category(before) == accepted, "the schema-2 board item was not moved"
+    assert held_before[tickets.KEY]["schema"] == 3
+    assert f"## {tickets.IMPACT}" not in str(before["content"]), (
+        "the schema-3 board item already stated its impact"
+    )
+    assert _category(before) == accepted, "the schema-3 board item was not moved"
 
     (task,) = legacy.prompts
-    assert "a ticket of an older schema is brought to the current shape" in " ".join(task.split())
+    assert (
+        "its `## Impact` section written from the evidence the ticket already carries, "
+        "re-verifying only a claim that no longer holds"
+    ) in " ".join(task.split())
     for shown in (local, after):
         ticket = tickets.from_store_item(shown)
+        impact = ticket.body.split(f"## {tickets.IMPACT}\n", 1)[1].split("\n## ", 1)[0]
+        assert "- Severity: high" in impact and "- Severity with the workaround: medium" in impact
         assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
         assert f"`{HOST}`" in ticket.body.split(f"## {tickets.EVIDENCE}", 1)[1]
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
@@ -1111,7 +1144,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_2_ticket_to_the_current_shape_up
 
     assert legacy.result.returncode == UNSOUND, legacy.result.stdout + legacy.result.stderr
     assert f"{followed.left_ticket} is not a sound ticket" in legacy.result.stderr
-    assert "the record is schema 2, and this reads schema 3" in legacy.result.stderr
+    assert "the record is schema 3, and this reads schema 4" in legacy.result.stderr
     assert f"{followed.rewritten_ticket} is not a sound ticket" not in legacy.result.stderr
 
 

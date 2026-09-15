@@ -1831,6 +1831,35 @@ the record's keys and the board's options are stated in `orchestrator/follow_up_
 and `onetaskgraph.yaml` alone, and `tests/test_follow_up_ticket_docs.py` holds this
 paragraph to them.
 
+**A person may defer a ticket instead of accepting it.** The store word `draft` is written
+to the board's `Deferred` option: a deferred ticket is not accepted and no agent picks it
+up, but a later run verifying the same root cause still comments on it, a re-copy keeps it
+deferred, and a run never withdraws it. The module renders the whole vocabulary, which
+`python -m orchestrator.follow_up_tickets statuses` prints and the follow-up agent's task
+carries, and this copy of it is held to that rendering:
+
+- **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
+  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by an
+  agent sent to pick up accepted tickets.
+- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an item
+  there: only a person, which is what accepting a ticket is. **Selected** by an agent sent to
+  pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, written `draft`: deferred for later by a person: not accepted,
+  picked up by no agent, and still taking new evidence. Who moves an item there: only a
+  person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `In Progress`**, written `in progress`: accepted and taken up. Who moves an
+  item there: a person, or a dispatch whose own task says to. Not selected by an agent sent
+  to pick up accepted tickets.
+- **Closed as completed**, written `done`: accepted and finished. Who moves an item there: a
+  person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
+  accepted tickets.
+- **Closed as not planned**, written `cancelled`: withdrawn. Who moves an item there: a
+  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person. Not
+  selected by an agent sent to pick up accepted tickets.
+
+A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing else:
+never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one.
+
 **The run-end hooks are what launch it.** `just orchestrate` names
 `scripts/run-ended.sh`, by its absolute path in the launching checkout, as both the
 engine's `--success-hook` and its `--failure-hook`, unless the caller named that flag;
