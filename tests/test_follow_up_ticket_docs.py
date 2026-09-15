@@ -125,6 +125,25 @@ def test_each_follow_up_section_describes_the_host_and_the_proposal(
         assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
 
 
+@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+def test_each_follow_up_section_files_a_tickets_issue_in_its_root_causes_repository(
+    document: str, heading: str
+) -> None:
+    """Each section says where a ticket's issue is created, and no longer says the board's own."""
+    flat = " ".join(section(document, heading).split())
+
+    for described in (
+        "issue is created in the repository its root cause lives in",
+        "under the board's owner",
+        "as an item of the one board",
+    ):
+        assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
+    assert "board's own repository" not in flat, (
+        f"{document}'s section {heading!r} still says a ticket is filed in the board's own "
+        "repository"
+    )
+
+
 def test_the_check_names_every_status_option_or_key_neither_source_holds() -> None:
     """The check can fail: a name of each kind that nothing holds is reported, and no other."""
     prose = (

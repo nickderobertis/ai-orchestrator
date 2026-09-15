@@ -120,8 +120,9 @@ READ_FROM_HOSTNAME = "host-read-from-hostname"
 NEW_CAUSE = "listing-cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 
-#: The two schema-1 tickets a run filed before tickets named their host: the one a feedback
-#: re-dispatch brings to the current shape, and the one it leaves as it was.
+#: The two schema-2 tickets a run filed before tickets named their repository — the shape of
+#: every ticket on the live board: the one a feedback re-dispatch brings to the current
+#: shape, and the one it leaves as it was.
 REWRITTEN_CAUSE = "export-drops-a-column"
 LEFT_CAUSE = "retry-loop-never-backs-off"
 LEGACY_FEEDBACK = "Bring the export ticket to the current shape.\n"
@@ -278,16 +279,15 @@ def _ticket(
     )
 
 
-def _schema_1(ticket: tickets.Ticket) -> str:
-    """``ticket`` as schema 1 stored it: no `host` in its record, and none in its evidence."""
-    held = {key: value for key, value in tickets.record(ticket).items() if key != "host"}
+def _schema_2(ticket: tickets.Ticket) -> str:
+    """``ticket`` as schema 2 stored it, the shape the live tickets carry: no `repositories`."""
     return frontmatter(
         {
             "title": ticket.title,
             "status": ticket.status.written,
-            "metadata": {tickets.KEY: held | {"schema": 1}},
+            "metadata": {tickets.KEY: tickets.record(ticket) | {"schema": 2}},
         },
-        ticket.body.replace(f" Verified on `{ticket.host}`.", ""),
+        ticket.body,
     )
 
 
@@ -426,6 +426,8 @@ class Followed(NamedTuple):
     unsound: subprocess.CompletedProcess[str]
     unsound_ticket: Path
     legacy: Pass
+    legacy_board_before: list[str]
+    legacy_board_after: list[str]
     legacy_before: dict[str, object]
     legacy_local: dict[str, object]
     legacy_after: dict[str, object]
@@ -676,9 +678,9 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         unsound = _run(["just", "follow-ups", unsound_run, "--to", BOARD], bench)
         started.append(f"{unsound_run}{SUFFIX}")
 
-        # A run whose tickets were filed at schema 1, before a ticket named its host — the
-        # shape of the tickets already on the live board — one of them accepted there by a
-        # person. The manager's feedback re-dispatch rewrites that one and leaves the other.
+        # A run whose tickets were filed at schema 2, before a ticket named its repository —
+        # the shape of the tickets already on the live board — one of them accepted there by
+        # a person. The manager's feedback re-dispatch rewrites that one and leaves the other.
         legacy_run = f"fu-legacy-{pid}"
         legacy_drafts = (f"drafts:{legacy_run}/drafts/a-consumed-draft",)
         rewritten_ticket = tickets.ticket_path(bench.drafts_root, legacy_run, REWRITTEN_CAUSE)
@@ -689,10 +691,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 cause,
                 legacy_drafts,
                 f"some-service: {cause.replace('-', ' ')}",
-                "Filed before hosts",
+                "Filed before repositories",
+                HOST,
             )
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(_schema_1(filed), encoding="utf-8")
+            path.write_text(_schema_2(filed), encoding="utf-8")
             copied = _run(
                 [store, "task", "copy", tickets.qualified_id(legacy_run, cause), "--to", BOARD],
                 bench,
@@ -724,8 +727,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             ],
         )
         legacy_feedback = _staged(bench, "legacy-feedback.md", LEGACY_FEEDBACK)
+        legacy_board_before = _board_ids(bench)
         legacy = _pass(bench, "legacy", legacy_run, "--feedback", str(legacy_feedback))
         started.append(legacy.run)
+        legacy_board_after = _board_ids(bench)
         legacy_local = _item(bench, tickets.qualified_id(legacy_run, REWRITTEN_CAUSE))
         legacy_after = _item(bench, legacy_issue)
 
@@ -808,6 +813,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             unsound=unsound,
             unsound_ticket=unsound_ticket,
             legacy=legacy,
+            legacy_board_before=legacy_board_before,
+            legacy_board_after=legacy_board_after,
             legacy_before=legacy_before,
             legacy_local=legacy_local,
             legacy_after=legacy_after,
@@ -964,7 +971,7 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
     assert "## Feedback on the previous follow-up run" not in task
 
 
-def test_a_verified_ticket_lands_on_the_board_with_its_shape_and_no_project_or_repositories(
+def test_a_verified_ticket_lands_on_the_board_with_its_shape_its_one_repository_and_no_project(
     followed: Followed,
 ) -> None:
     landed = followed.new_after_first
@@ -977,7 +984,7 @@ def test_a_verified_ticket_lands_on_the_board_with_its_shape_and_no_project_or_r
     assert ticket.root_cause == NEW_CAUSE
     assert ticket.basis == (tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),)
     assert landed["project"] is None
-    assert landed["repositories"] == []
+    assert landed["repositories"] == [REPOSITORY] == [ticket.repository]
     metadata = landed["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["onetaskgraph.origin"] == tickets.qualified_id(followed.main, NEW_CAUSE)
@@ -1057,14 +1064,15 @@ def test_an_attached_run_names_every_ticket_that_fails_the_shape(followed: Follo
     assert "carries a `project`" in unsound.stderr
 
 
-def test_a_feedback_re_dispatch_brings_a_schema_1_ticket_to_the_current_shape_and_keeps_its_status(
+def test_a_feedback_re_dispatch_brings_a_schema_2_ticket_to_the_current_shape_updating_its_item(
     followed: Followed,
 ) -> None:
-    """The back-fill of tickets filed before hosts: rewritten with this machine's, left accepted.
+    """The back-fill of the live tickets: rewritten naming their repository, left accepted.
 
-    Both tickets were schema 1 and on the board, and a person had accepted one. The re-dispatch
-    rewrote that one and asked `board-status` before copying it; the other it never touched, and
-    the attached closeout names it rather than passing it.
+    Both tickets were schema 2 and on the board, and a person had accepted one. The re-dispatch
+    rewrote that one and asked `board-status` before copying it, which updated the item the
+    board already held — the same origin, no item added — rather than filing a second; the
+    other it never touched, and the attached closeout names it rather than passing it.
     """
     legacy, before, local, after = (
         followed.legacy,
@@ -1076,9 +1084,9 @@ def test_a_feedback_re_dispatch_brings_a_schema_1_ticket_to_the_current_shape_an
 
     held_before = before["metadata"]
     assert isinstance(held_before, dict)
-    assert held_before[tickets.KEY]["schema"] == 1
-    assert "host" not in held_before[tickets.KEY]
-    assert _category(before) == accepted, "the schema-1 board item was not moved"
+    assert held_before[tickets.KEY]["schema"] == 2
+    assert before["repositories"] == [], "the schema-2 board item already named a repository"
+    assert _category(before) == accepted, "the schema-2 board item was not moved"
 
     (task,) = legacy.prompts
     assert "a ticket of an older schema is brought to the current shape" in " ".join(task.split())
@@ -1086,16 +1094,24 @@ def test_a_feedback_re_dispatch_brings_a_schema_1_ticket_to_the_current_shape_an
         ticket = tickets.from_store_item(shown)
         assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
         assert f"`{HOST}`" in ticket.body.split(f"## {tickets.EVIDENCE}", 1)[1]
+        assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
         assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
+    metadata_after = after["metadata"]
+    assert isinstance(metadata_after, dict)
+    origin = tickets.qualified_id(*tickets.located_path(followed.rewritten_ticket))
+    assert metadata_after["onetaskgraph.origin"] == held_before["onetaskgraph.origin"] == origin
+    assert followed.legacy_board_after == followed.legacy_board_before, (
+        "bringing a ticket to the current shape filed a second item instead of updating its own"
+    )
     assert after["content"] == followed.legacy_body
     assert after["content"] != before["content"]
 
     assert legacy.result.returncode == UNSOUND, legacy.result.stdout + legacy.result.stderr
     assert f"{followed.left_ticket} is not a sound ticket" in legacy.result.stderr
-    assert "the record is schema 1, and this reads schema 2" in legacy.result.stderr
+    assert "the record is schema 2, and this reads schema 3" in legacy.result.stderr
     assert f"{followed.rewritten_ticket} is not a sound ticket" not in legacy.result.stderr
 
 

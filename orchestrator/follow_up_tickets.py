@@ -61,8 +61,9 @@ TICKETS = drafts.TICKETS
 BOARD = "followups"
 
 #: The version of the record below. A reader refuses any other: a ticket is a stored shape
-#: that outlives the agent that wrote it. Schema 2 added `host` and the proposal statuses.
-SCHEMA = 2
+#: that outlives the agent that wrote it. Schema 2 added `host` and the proposal statuses;
+#: schema 3 added `repositories`, which files a ticket's issue in its root cause's repository.
+SCHEMA = 3
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -202,13 +203,18 @@ PLACEHOLDERS = (*VALUES, *SECTIONS)
 PROG = "follow-up-tickets"
 
 #: Exit statuses: every ticket is sound; a ticket failed the shape; the command could not run.
-#: And two of `board-status`'s own, each a ticket not to copy: the board holds its item at a
-#: category no ticket carries; and a withdrawal the board's acceptance of the item refuses.
+#: And three of `board-status`'s own, each a ticket not to copy: the board holds its item at a
+#: category no ticket carries; a withdrawal the board's acceptance of the item refuses; and a
+#: ticket whose repository is not one of the board's owner, which nothing asks the board about.
 SOUND = 0
 UNSOUND = 1
 UNRUNNABLE = 2
 UNPLACED = 3
 ACCEPTED = 4
+OUTSIDE_OWNER = 5
+
+#: The host every repository a ticket's issue may be filed in lives on.
+GITHUB = "github.com"
 
 #: What a dry-run `onetaskgraph task copy` reports for a ticket the board holds no item for,
 #: and each action it reports for one whose item the board already holds.
@@ -274,11 +280,16 @@ def record(ticket: Ticket) -> dict[str, object]:
 
 
 def render(ticket: Ticket) -> str:
-    """One ticket as the `local-md` record it is stored as: no `project`, no `repositories`."""
+    """One ticket as the `local-md` record it is stored as.
+
+    No `project`, and `repositories` naming exactly the record's `repository` — derived from
+    it rather than held beside it, so nothing written here can make the two differ.
+    """
     return frontmatter(
         {
             "title": ticket.title,
             "status": ticket.status.written,
+            "repositories": [ticket.repository],
             "metadata": {KEY: record(ticket)},
         },
         ticket.body,
@@ -434,6 +445,30 @@ def _record_problems(
     return found
 
 
+def _repositories_problems(repositories: object, repository: object) -> list[str]:
+    """How `repositories` is not exactly the record's `repository`, where the issue is created."""
+    match repositories:
+        case [named]:
+            if _is_origin(repository) and named != repository:
+                return [
+                    f"the ticket's `repositories` names {named!r}, not its record's "
+                    f"`repository` {repository!r}; the two name the one repository its issue "
+                    "is created in"
+                ]
+            return []
+        case [_, _, *_] as several:
+            return [
+                f"the ticket's `repositories` names {len(several)} entries; a ticket names "
+                "exactly one, its record's `repository`, which is the repository its issue is "
+                "created in"
+            ]
+        case _:
+            return [
+                "the ticket carries no `repositories`; a ticket names exactly one, its record's "
+                "`repository`, which is the repository its issue is created in"
+            ]
+
+
 def _body_problems(body: object, host: object) -> list[str]:
     if not isinstance(body, str):
         return ["the ticket has no body"]
@@ -467,25 +502,10 @@ def problems(
     """Every way a store item, as `onetaskgraph task show --json` reports it, is not a ticket.
 
     ``run`` and ``root_cause`` are what the ticket's path says, when it was read from one.
+    The record's problems come first, so a ticket of an older schema is named for its schema
+    before anything its successor added.
     """
     found = []
-    if item.get("project") is not None:
-        found.append(
-            "the ticket carries a `project`; a ticket carries none, so it lands on the "
-            "board as a standalone item"
-        )
-    if item.get("repositories"):
-        found.append(
-            "the ticket carries `repositories`; a ticket carries none, so its issue is "
-            "filed in the board's own repository whatever repository the root cause lives in"
-        )
-    category = _category(item.get("status"))
-    if category not in tuple(Status):
-        found.append(
-            f"the status is {category!r}, where a ticket's status is "
-            + "; ".join(f"`{status}`, {status.meaning}" for status in Status)
-            + " — write the one `board-status` prints"
-        )
     metadata = item.get("metadata")
     held = metadata.get(KEY) if isinstance(metadata, Mapping) else None
     if isinstance(held, Mapping):
@@ -494,6 +514,19 @@ def problems(
     else:
         found.append(f"the ticket carries no `{KEY}` metadata record")
         repository = host = None
+    if item.get("project") is not None:
+        found.append(
+            "the ticket carries a `project`; a ticket carries none, so it lands on the "
+            "board as a standalone item"
+        )
+    found.extend(_repositories_problems(item.get("repositories"), repository))
+    category = _category(item.get("status"))
+    if category not in tuple(Status):
+        found.append(
+            f"the status is {category!r}, where a ticket's status is "
+            + "; ".join(f"`{status}`, {status.meaning}" for status in Status)
+            + " — write the one `board-status` prints"
+        )
     found.extend(_title_problems(item.get("title"), repository))
     found.extend(_body_problems(item.get("content"), host))
     return found
@@ -603,6 +636,55 @@ class AcceptedOnBoard(ValueError):
             "report that you would have withdrawn it and why"
         )
         self.status = status
+
+
+class OutsideOwner(ValueError):
+    """A ticket whose repository is not one of the board's owner, so its issue is filed nowhere.
+
+    Filing an issue in a third party's public repository is an outward action nobody asked
+    for, and the store compares no owner for an item with no parent, which a ticket is.
+    """
+
+    def __init__(self, repository: str, owner: str) -> None:
+        super().__init__(
+            f"the ticket's repository {repository!r} is not a repository of the board's owner "
+            f"{owner!r} ({GITHUB}/{owner}/<name>), so its issue is filed nowhere: copy "
+            "nothing, never change `repositories` to get it filed, and report it"
+        )
+
+
+def board_owner(board: str) -> str | None:
+    """The owner ``board`` is configured with, or `None` for a source that configures none.
+
+    Read through the store's own configuration, the way a source's root is. A source with no
+    owner — a `local-md` store — files no issue in any repository, so it bounds nothing.
+    """
+    owner = plan_store.configured_settings().get(f"sources.{board}.config.owner")
+    if owner is not None and (not isinstance(owner, str) or not owner):
+        raise OSError(f"source {board!r} configures an owner {owner!r} that names no account")
+    return owner
+
+
+def ticket_repository(ticket: str) -> str:
+    """The normalized origin the stored ticket's record names, read through the store."""
+    item = plan_store.one_item(plan_store.store_json(["task", "show", ticket]), "task")
+    metadata = item.get("metadata")
+    held = metadata.get(KEY) if isinstance(metadata, Mapping) else None
+    repository = held.get("repository") if isinstance(held, Mapping) else None
+    if not isinstance(repository, str) or not _is_origin(repository):
+        raise Refused(
+            [
+                f"{ticket} names no `repository` in its `{KEY}` record that is a normalized "
+                "origin; validate the ticket before asking the board about it"
+            ]
+        )
+    return repository
+
+
+def under_owner(repository: str, owner: str) -> bool:
+    """Whether a normalized origin is `github.com/<owner>/<name>`."""
+    host, named_owner, _name = repository.split("/")
+    return host == GITHUB and named_owner == owner
 
 
 def board_category(ticket: str, board: str) -> str | None:
@@ -750,9 +832,11 @@ def ticket_contract(run: str, board: str) -> str:
         f"A ticket is a local Markdown task in the `{SOURCE}` source, written to "
         f"`@DRAFTS_ROOT@/{TASKS_DIRECTORY}/{run}/{TICKETS}/<root-cause>{TICKET_SUFFIX}` — "
         f"qualified id `{ticket}` — where `<root-cause>` is a kebab-case slug.\n\n"
-        "- It carries **no `project`**, so it lands on the board as a standalone item, and "
-        "**no `repositories`**, so its issue is created in the board's own repository "
-        "whatever repository the root cause lives in.\n"
+        "- It carries **no `project`**, so it lands on the board as a standalone item.\n"
+        "- **Its `repositories` names exactly one normalized origin, its record's "
+        "`repository`**: the repository the root cause lives in. Its issue is created in "
+        "that one repository and added to the board as an item, and that repository must "
+        "belong to the board's owner, as `github.com/<owner>/<name>`.\n"
         "- Its title is `<repository name>: <the root cause in one line>`, at most "
         f"{TITLE_LIMIT} characters, where the repository name is the last segment of "
         "`repository`.\n"
@@ -768,8 +852,15 @@ def ticket_contract(run: str, board: str) -> str:
         "(adding `--withdraw` for a ticket this run withdraws, before you change that ticket), "
         "write the word it prints as the ticket's `status`, and validate the ticket again. It "
         f"exits {SOUND} with that word; {UNPLACED} when the board holds the item at a status "
-        f"no ticket carries; and {ACCEPTED} for a withdrawal of an item the board shows as "
-        "accepted. On either refusal, copy nothing and report what it printed.\n"
+        f"no ticket carries; {ACCEPTED} for a withdrawal of an item the board shows as "
+        f"accepted; and {OUTSIDE_OWNER} when the ticket's repository is not one of the board's "
+        "owner, before anything is asked of the board. On any of these refusals, copy nothing "
+        "and report what it printed.\n"
+        "- **A refusal is reported, never worked around.** When `board-status` exits "
+        f"{OUTSIDE_OWNER}, or `onetaskgraph task copy` refuses the ticket — for a repository the "
+        "token cannot see, or one GitHub will not create an issue in — copy nothing for that "
+        "ticket, never retry it with `repositories` removed or changed to get it filed, and "
+        "report what was printed.\n"
         f"- Its front matter carries the `{KEY}` record with every key present, and its body "
         f"the headings {headings}, in that order, each with content. `created_by_run` is "
         "this run, and `owning_runs` includes it.\n"
@@ -822,7 +913,8 @@ comments of this run may already exist. The ownership rules above bind every cha
   `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` prints, never the status the ticket
   held before — the board may have been moved since the last copy;
 - a ticket of an older schema is brought to the current shape before it is copied, its
-  `host` read from this machine with `hostname`, and validated again.
+  `repositories` naming its record's `repository` and its `host` read from this machine
+  with `hostname`, and validated again.
 """
 
 #: The heading the manager's feedback goes under, above the feedback itself.
@@ -984,8 +1076,15 @@ def _placed(arguments: argparse.Namespace) -> int:
     """Print the status a ticket is copied with, for the `board-status` command."""
     try:
         run, root_cause = located_path(arguments.path.absolute())
-        held = board_category(qualified_id(run, root_cause), arguments.board)
+        ticket = qualified_id(run, root_cause)
+        owner = board_owner(arguments.board)
+        if owner is not None and not under_owner(repository := ticket_repository(ticket), owner):
+            raise OutsideOwner(repository, owner)
+        held = board_category(ticket, arguments.board)
         status = status_before_copy(held, withdraw=arguments.withdraw)
+    except OutsideOwner as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return OUTSIDE_OWNER
     except Unplaced as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return UNPLACED

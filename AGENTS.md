@@ -650,7 +650,10 @@ comment is a direct tweak; anything more goes back with `just follow-ups <run-id
 --feedback FILE`. On the `followups` board a run owns only the issues it created and the
 comments its marker names (`orchestrator/follow_up_tickets.py`).
 
-**The `followups` board is the user's decision.** A ticket's record's `host` names the
+**The `followups` board is the user's decision.** A ticket's issue is created in the
+repository its root cause lives in, which must be under the board's owner, as an item of
+the one board; a ticket naming a repository outside that owner is refused and reported,
+never filed. A ticket's record's `host` names the
 machine its verification ran on, and its evidence states the same host. A new ticket
 reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item

@@ -1797,6 +1797,10 @@ its own harness config. It verifies each draft against the registered checkouts'
 ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies each onto
 the `followups` GitHub Projects board, where every session's tickets accumulate —
 commenting on another run's open issue for the same root cause instead of filing a second.
+A ticket's issue is created in the repository its root cause lives in, as an item of the
+one board: the ticket's `repositories` names that one repository, which must be under the
+board's owner, and `board-status` refuses a ticket naming a repository outside that owner
+before anything is asked of the board, so it is reported rather than filed.
 `orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
 ownership on that board: a run changes only the issues its own tickets created and the
 comments whose marker names it. The recipe refuses a run something is still driving,

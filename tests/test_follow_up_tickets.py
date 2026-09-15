@@ -78,7 +78,7 @@ def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
         "status": {"category": held.status.value, "name": held.status.written},
         "labels": [],
         "project": None,
-        "repositories": [],
+        "repositories": [held.repository],
         "metadata": {tickets.KEY: tickets.record(held)},
     }
 
@@ -99,7 +99,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 2
+    assert held["schema"] == tickets.SCHEMA == 3
     keys = list(held)
     assert keys == list(tickets.RECORD_KEYS)
     assert keys.index("host") == keys.index("verified_at") + 1
@@ -136,6 +136,10 @@ def _no_record(item: dict[str, object]) -> None:
     item["metadata"] = {}
 
 
+def _no_repositories(item: dict[str, object]) -> None:
+    del item["repositories"]
+
+
 def _status(word: str) -> Callable[[dict[str, object]], None]:
     return _set("status", {"category": word, "name": word})
 
@@ -144,7 +148,16 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
     ("change", "reason"),
     [
         (_set("project", "listing-run"), "carries a `project`"),
-        (_set("repositories", [REPOSITORY]), "carries `repositories`"),
+        (_set("repositories", []), "the ticket carries no `repositories`"),
+        (_no_repositories, "the ticket carries no `repositories`"),
+        (
+            _set("repositories", [REPOSITORY, "github.com/nickderobertis/another-service"]),
+            "`repositories` names 2 entries",
+        ),
+        (
+            _set("repositories", ["github.com/nickderobertis/another-service"]),
+            "names 'github.com/nickderobertis/another-service', not its record's `repository`",
+        ),
         (_status("unknown"), "the status is 'unknown'"),
         (_status("draft"), "the status is 'draft'"),
         (_set("status", "open"), "the status is 'open'"),
@@ -152,7 +165,8 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 2"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 3"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 3"),
         (_set_record("schema", True), "is schema True"),
         (_set_record("root_cause", "Not A Slug"), "is not a kebab-case slug"),
         (_set_record("root_cause", "another-cause"), "is not the file's root cause"),
@@ -219,16 +233,29 @@ def test_a_missing_host_is_named_in_the_one_line_naming_every_missing_key() -> N
     assert missing == ["the `orchestrator.follow-up` record is missing basis, host"], found
 
 
-def test_a_schema_1_ticket_is_refused_naming_its_schema() -> None:
-    """The shape a ticket was written in before `host`: schema 1, and no `host` key."""
+def test_a_schema_2_ticket_is_refused_naming_its_schema_first() -> None:
+    """The shape every ticket on the live board carries: schema 2, and no `repositories`."""
     item = _item()
-    _record(item)["schema"] = 1
-    del _record(item)["host"]
+    _record(item)["schema"] = 2
+    item["repositories"] = []
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 1, and this reads schema 2"), found
-    assert "the `orchestrator.follow-up` record is missing host" in found
+    assert found[0].startswith("the record is schema 2, and this reads schema 3"), found
+    assert any("the ticket carries no `repositories`" in problem for problem in found), found
+
+
+def test_a_repositories_entry_is_compared_only_against_a_record_repository_that_is_an_origin() -> (
+    None
+):
+    """A record whose `repository` is no origin is named for that, not for a mismatch too."""
+    item = _item()
+    _record(item)["repository"] = "not an origin"
+
+    found = tickets.problems(item, run=RUN, root_cause=CAUSE)
+
+    assert any("`repository` 'not an origin' is not a normalized origin" in one for one in found)
+    assert not any("not its record's `repository`" in one for one in found), found
 
 
 @pytest.mark.parametrize(
@@ -433,7 +460,25 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
         assert f'"{key}"' in contract, key
     for heading in tickets.HEADINGS:
         assert f"## {heading}" in contract, heading
-    assert "no `project`" in contract and "no `repositories`" in contract
+    assert "no `project`" in contract
+    flat = " ".join(contract.split())
+    assert (
+        "**Its `repositories` names exactly one normalized origin, its record's `repository`**"
+    ) in flat
+    assert (
+        "Its issue is created in that one repository and added to the board as an item, and "
+        "that repository must belong to the board's owner"
+    ) in flat
+    assert f"{tickets.OUTSIDE_OWNER} when the ticket's repository is not one of the board's" in flat
+    assert (
+        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `onetaskgraph task copy` refuses "
+        "the ticket"
+    ) in flat
+    assert (
+        "copy nothing for that ticket, never retry it with `repositories` removed or changed to "
+        "get it filed, and report what was printed"
+    ) in flat
+    assert '\nrepositories: ["<normalized origin the root cause lives in' in contract
     assert f"A new ticket is `{tickets.Status.PROPOSED}`" in contract
     assert "A ticket the board already holds carries the status the board holds it at" in contract
     assert f"withdraws is `{tickets.Status.WITHDRAWN}`" in contract
@@ -460,7 +505,8 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     ) in flat
     assert (
         "a ticket of an older schema is brought to the current shape before it is copied, "
-        "its `host` read from this machine with `hostname`"
+        "its `repositories` naming its record's `repository` and its `host` read from this "
+        "machine with `hostname`"
     ) in flat
 
 
@@ -727,10 +773,90 @@ def test_board_status_that_cannot_ask_the_board_is_unrunnable(
     assert "is not where a ticket is stored" in capsys.readouterr().err
 
     # A dry-run answer naming neither a new item nor an existing one, which the installed
-    # store does not give: the one answer here that stands in for the store.
-    monkeypatch.setattr(plan_store, "store_json", lambda _arguments: {"items": []})
+    # store does not give: the one answer here that stands in for the store. Its settings
+    # list is empty, so the board configures no owner and the dry run is what is asked.
+    monkeypatch.setattr(plan_store, "store_json", lambda _arguments: {"items": [], "settings": []})
     assert tickets.main(["board-status", "--board", BOARD, str(ticket)]) == tickets.UNRUNNABLE
     assert "naming neither a new item nor an existing one" in capsys.readouterr().err
+
+
+#: A repository under an owner the committed `followups` source does not configure.
+FOREIGN_REPOSITORY = "github.com/contoso/work"
+
+
+@pytest.mark.parametrize(
+    ("repository", "under"),
+    [
+        (REPOSITORY, True),
+        ("github.com/nickderobertis/another-service", True),
+        (FOREIGN_REPOSITORY, False),
+        ("github.com/nickderobertis-fork/some-service", False),
+        ("gitlab.com/nickderobertis/some-service", False),
+    ],
+)
+def test_a_repository_is_under_the_owner_only_as_github_com_owner_name(
+    repository: str, under: bool
+) -> None:
+    assert tickets.under_owner(repository, "nickderobertis") is under
+
+
+def test_board_status_refuses_a_ticket_outside_the_configured_owner_naming_both(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Against the committed `followups` source, whose `config show` names its owner.
+
+    Nothing reaches the board: the owner is read from the store's configuration, and the
+    refusal is decided before the dry-run copy that would ask GitHub anything.
+    """
+    ticket = _write(
+        drafts_root,
+        _ticket(
+            repository=tickets.Origin(FOREIGN_REPOSITORY),
+            title="work: the listing cursor skips the last page",
+            basis=(tickets.Basis(tickets.Origin(FOREIGN_REPOSITORY), tickets.Commit(COMMIT)),),
+        ),
+    )
+    owner = plan_store.configured_settings()[f"sources.{tickets.BOARD}.config.owner"]
+
+    status = tickets.main(["board-status", "--board", tickets.BOARD, str(ticket)])
+
+    captured = capsys.readouterr()
+    assert status == tickets.OUTSIDE_OWNER == 5
+    assert captured.out == ""
+    assert f"{FOREIGN_REPOSITORY!r} is not a repository of the board's owner {owner!r}" in (
+        captured.err
+    )
+    assert "never change `repositories` to get it filed" in captured.err
+
+
+def test_board_status_that_cannot_read_the_owner_or_the_ticket_repository_is_unrunnable(
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unreadable = _ticket(root_cause=tickets.RootCause("unreadable-repository"))
+    ticket = _write(
+        drafts_root,
+        unreadable,
+        tickets.render(unreadable).replace(f'"repository": "{REPOSITORY}"', '"repository": "x"'),
+    )
+
+    assert tickets.main(["board-status", "--board", tickets.BOARD, str(ticket)]) == (
+        tickets.UNRUNNABLE
+    )
+    assert "names no `repository` in its `orchestrator.follow-up` record" in (
+        capsys.readouterr().err
+    )
+
+    # An owner the store does not give, since its schema holds the setting to a login: the
+    # one answer here that stands in for the store.
+    monkeypatch.setattr(
+        plan_store, "configured_settings", lambda: {f"sources.{tickets.BOARD}.config.owner": ""}
+    )
+    assert tickets.main(["board-status", "--board", tickets.BOARD, str(ticket)]) == (
+        tickets.UNRUNNABLE
+    )
+    assert "configures an owner '' that names no account" in capsys.readouterr().err
 
 
 def test_inventory_counts_a_runs_drafts_and_tickets(

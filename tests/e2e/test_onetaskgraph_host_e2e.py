@@ -353,6 +353,11 @@ class _Issue:
     #: refuse one under another owner — so an issue that answered the configured
     #: repository whatever it was created in would hide both from the journeys.
     repository: _Repository = CONFIGURED_REPOSITORY
+    #: The text this row's `onetaskgraph.origin` field holds, as the last copy wrote it. Kept
+    #: and answered back the way GitHub does, because that value is how a re-copy finds the
+    #: item it already made — a row that forgot it would have every re-copy create a
+    #: replacement, and a journey about updating in place would prove nothing.
+    origin: str | None = None
 
     def field_values(self) -> dict[str, object]:
         """This row's board field values, as both routes to it select them.
@@ -361,6 +366,13 @@ class _Issue:
         an issue's `projectItems` select the same field values, and the whole of what
         the source relies on is that an issue reached either way resolves to one item.
         """
+        origin = (
+            []
+            if self.origin is None
+            else [
+                {"text": self.origin, "field": {"id": ORIGIN_FIELD_ID, "name": ORIGIN_FIELD_NAME}}
+            ]
+        )
         return {
             "nodes": [
                 {
@@ -370,7 +382,8 @@ class _Issue:
                         "name": "Status",
                         "options": [option.rendered() for option in BOARD.options],
                     },
-                }
+                },
+                *origin,
             ],
             "pageInfo": {"hasNextPage": False},
         }
@@ -590,6 +603,34 @@ class _Board:
                 }
             }
         }
+
+    def set_field(self, variables: dict[str, object]) -> dict[str, object]:
+        """Set one field value on a row, keeping the text an origin field is written with."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("updateProjectV2ItemFieldValue requires an input object")
+        item_id = payload.get("itemId")
+        value = payload.get("value")
+        if payload.get("fieldId") == ORIGIN_FIELD_ID:
+            text = value.get("text") if isinstance(value, dict) else None
+            if not isinstance(text, str):
+                raise ValueError(f"the origin field takes a text value, and was sent {value!r}")
+            rows = [issue for issue in self.issues if issue.item_id == item_id]
+            if len(rows) != 1:
+                raise ValueError(f"the board holds no row {item_id!r}")
+            rows[0].origin = text
+        return {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
+
+    def transfer(self, content_id: _IssueNodeId, repository: _Repository) -> _Issue:
+        """Move one issue to ``repository``, as `gh issue transfer` has GitHub do.
+
+        What GitHub keeps across a transfer is what a later copy resolves the issue by: the
+        issue's node, its board row, and the text that row's origin field holds. Only the
+        repository its content answers with changes.
+        """
+        issue = self._issue(content_id)
+        issue.repository = repository
+        return issue
 
     def add_sub_issue(self, variables: dict[str, object]) -> dict[str, object]:
         payload = variables.get("input")
@@ -858,13 +899,7 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.UPDATE_ISSUE:
                 return {"data": {"updateIssue": {"issue": {"id": request.input_value("id")}}}}
             case _Operation.UPDATE_FIELD:
-                return {
-                    "data": {
-                        "updateProjectV2ItemFieldValue": {
-                            "projectV2Item": {"id": request.input_value("itemId")}
-                        }
-                    }
-                }
+                return BOARD.set_field(request.variables)
             case _Operation.ADD_SUB_ISSUE:
                 return BOARD.add_sub_issue(request.variables)
             case _Operation.DELETE_ISSUE:
@@ -2023,31 +2058,31 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
-#: The spelling an ambient override of the `followups` source's mapping would take, removed
-#: from the journeys' environment so the committed file is the mapping applied.
-FOLLOWUPS_STATUS_MAPPING_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__STATUS_MAPPING"
+#: The spelling an ambient override of any `followups` setting would take, removed from the
+#: journeys' environment so the committed file is the source applied — its mapping and its
+#: owner alike.
+FOLLOWUPS_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__"
 #: The run and root cause of the one ticket the journeys below copy.
 PROPOSED_RUN = "proposal-run"
 PROPOSED_CAUSE = "ticket-lands-as-a-proposal"
+PROPOSED_ID = follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE)
+#: The `followups` board's Status options, `Proposal` among them.
+FOLLOWUPS_OPTIONS = (*STATUS_OPTIONS, PROPOSAL)
 
 
-def _proposed_ticket(root: Path) -> follow_up_tickets.Ticket:
-    """Write one new ticket, `backlog`, under a drafts root at ``root``, as the agent does."""
+def _follow_up_ticket(repository: _Repository) -> follow_up_tickets.Ticket:
+    """One new ticket, `backlog`, about ``repository``, as the agent writes it."""
     host = follow_up_tickets.Host("verifier.example")
-    ticket = follow_up_tickets.Ticket(
-        title="ai-orchestrator: a ticket lands as a proposal",
+    origin = follow_up_tickets.Origin(_hosted(repository))
+    return follow_up_tickets.Ticket(
+        title=f"{repository.name}: a ticket lands as a proposal",
         status=follow_up_tickets.Status.PROPOSED,
         root_cause=follow_up_tickets.RootCause(PROPOSED_CAUSE),
-        repository=follow_up_tickets.Origin("github.com/nickderobertis/ai-orchestrator"),
+        repository=origin,
         created_by_run=follow_up_tickets.RunId(PROPOSED_RUN),
         owning_runs=(follow_up_tickets.RunId(PROPOSED_RUN),),
         drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{PROPOSED_RUN}/drafts/noticed"),),
-        basis=(
-            follow_up_tickets.Basis(
-                follow_up_tickets.Origin("github.com/nickderobertis/ai-orchestrator"),
-                follow_up_tickets.Commit("0" * 40),
-            ),
-        ),
+        basis=(follow_up_tickets.Basis(origin, follow_up_tickets.Commit("0" * 40)),),
         verified_at=follow_up_tickets.Timestamp("2026-01-01T00:00:00Z"),
         host=host,
         body="\n\n".join(
@@ -2055,55 +2090,109 @@ def _proposed_ticket(root: Path) -> follow_up_tickets.Ticket:
             for heading in follow_up_tickets.HEADINGS
         ),
     )
+
+
+def _written_ticket(root: Path, ticket: follow_up_tickets.Ticket, text: str | None = None) -> Path:
+    """Write ``ticket`` under a drafts root at ``root``, rendered unless ``text`` says otherwise."""
     path = follow_up_tickets.ticket_path(root, PROPOSED_RUN, PROPOSED_CAUSE)
-    path.parent.mkdir(parents=True)
-    path.write_text(follow_up_tickets.render(ticket), encoding="utf-8")
-    return ticket
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(follow_up_tickets.render(ticket) if text is None else text, encoding="utf-8")
+    return path
 
 
-def _copy_proposed_ticket(
-    tmp_path: Path, options: tuple[_StatusOption, ...]
-) -> tuple[subprocess.CompletedProcess[str], follow_up_tickets.Ticket]:
-    """Copy a new ticket onto `followups`, served by a board carrying ``options``.
+def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """The environment a `followups` command runs under, and the drafts root it names.
 
-    The copy runs from this checkout, so the committed `onetaskgraph.yaml` decides where
-    `backlog` goes; only the endpoint, the credential and the drafts root are pointed
-    elsewhere, and any ambient override of the `followups` mapping is removed.
+    Every command runs from this checkout, so the committed `onetaskgraph.yaml` decides the
+    source's owner and where `backlog` goes; only the endpoint, the credential and the
+    drafts root are pointed elsewhere. This checkout's installed CLIs are put first on
+    `PATH`, since `board-status` resolves the plan store from it.
     """
     drafts_root = tmp_path / "follow-ups"
-    ticket = _proposed_ticket(drafts_root)
     environment = _plan_environment(tmp_path)
-    for name in [
-        name for name in environment if name.startswith(FOLLOWUPS_STATUS_MAPPING_ENV_PREFIX)
-    ]:
+    for name in [name for name in environment if name.startswith(FOLLOWUPS_ENV_PREFIX)]:
         del environment[name]
     environment[follow_up_variables.root_name()] = str(drafts_root)
     environment[follow_up_variables.plugin_name()] = plan_store.WRITABLE_PLUGIN
-    # llmlint: ignore[e2e_not_mocked] The live `followups` board is the one boundary this
-    # journey must not reach: every session's verified tickets accumulate there, and a write
-    # needs a credential no test may use. What is doubled stops at the wire — the installed
-    # CLI and the committed configuration are real.
+    environment["PATH"] = f"{ONETASKGRAPH_BIN.parent}{os.pathsep}{environment['PATH']}"
+    return environment, drafts_root
+
+
+# llmlint: ignore[e2e_not_mocked] The live `followups` board is the one boundary these
+# journeys must not reach: every session's verified tickets accumulate there, and a write
+# needs a credential no test may use. What is doubled stops at the wire — the installed
+# CLI, `board-status` and the committed configuration are real.
+@contextmanager
+def _serving_followups(
+    environment: dict[str, str], options: tuple[_StatusOption, ...] = FOLLOWUPS_OPTIONS
+) -> Iterator[None]:
+    """Serve the board fixture as `followups`, carrying ``options``, for ``environment``."""
     with _serving_board(options=options) as remote:
         environment.update(remote)
         environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = (
             "0"
         )
-        copied = subprocess.run(  # noqa: S603 - the installed plan-store CLI
-            [
-                str(ONETASKGRAPH_BIN),
-                "task",
-                "copy",
-                follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE),
-                "--to",
-                follow_up_tickets.BOARD,
-            ],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(120),
-            check=False,
-        )
+        yield
+
+
+def _followups_command(
+    environment: dict[str, str], command: list[str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - the installed plan-store CLI and this checkout's module
+        command,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+def _copied_ticket(environment: dict[str, str], *extra: str) -> subprocess.CompletedProcess[str]:
+    """Copy the ticket onto `followups` the one way the contract allows."""
+    return _followups_command(
+        environment,
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "copy",
+            PROPOSED_ID,
+            "--to",
+            follow_up_tickets.BOARD,
+            *extra,
+        ],
+    )
+
+
+def _board_status(environment: dict[str, str], ticket: Path) -> subprocess.CompletedProcess[str]:
+    """Ask `board-status` about ``ticket`` on `followups`, as the composed task has the agent."""
+    return _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
+        + ["board-status", "--board", follow_up_tickets.BOARD, str(ticket)],
+    )
+
+
+def _sent(
+    operation: _Operation, requests: list[_GraphQLRequest] | None = None
+) -> list[_GraphQLRequest]:
+    return [
+        request
+        for request in (_GitHubFixture.requests if requests is None else requests)
+        if request.operation is operation
+    ]
+
+
+def _copy_proposed_ticket(
+    tmp_path: Path, options: tuple[_StatusOption, ...]
+) -> tuple[subprocess.CompletedProcess[str], follow_up_tickets.Ticket]:
+    """Copy a new ticket about a sibling repository onto `followups`, carrying ``options``."""
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    _written_ticket(drafts_root, ticket)
+    with _serving_followups(environment, options):
+        copied = _copied_ticket(environment)
     return copied, ticket
 
 
@@ -2121,7 +2210,7 @@ def test_a_new_follow_up_ticket_is_written_to_the_followups_boards_proposal_opti
     That option is what tells the user the ticket awaits their decision, so the write read
     here is the one GitHub would record: the Status field update for the created row.
     """
-    copied, ticket = _copy_proposed_ticket(tmp_path, (*STATUS_OPTIONS, PROPOSAL))
+    copied, ticket = _copy_proposed_ticket(tmp_path, FOLLOWUPS_OPTIONS)
 
     assert copied.returncode == 0, copied.stdout + copied.stderr
     (created,) = [issue for issue in BOARD.created if issue.title == ticket.title]
@@ -2152,6 +2241,131 @@ def test_a_followups_board_without_a_proposal_option_refuses_the_copy_by_name(
         if request.operation is _Operation.UPDATE_FIELD
         and request.input_value("fieldId") == STATUS_FIELD_ID
     ], "a board without the option had some other Status option written instead"
+
+
+def test_a_follow_up_ticket_is_created_in_its_own_repository_and_added_to_the_board(
+    tmp_path: Path,
+) -> None:
+    """A ticket about a sibling of the board's owner files its issue there, not in the configured.
+
+    Read off `createIssue`'s own `repositoryId` rather than off the lookup, because a source
+    that asked about the sibling and then created the issue in the configured repository
+    would pass the lookup alone; and the issue created is the one added to the board.
+    """
+    copied, ticket = _copy_proposed_ticket(tmp_path, FOLLOWUPS_OPTIONS)
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    assert [request.input_value("repositoryId") for request in _sent(_Operation.CREATE_ISSUE)] == [
+        REPOSITORY_NODE_IDS[SIBLING_REPOSITORY]
+    ], "the ticket's issue has to be created in the repository its `repositories` names"
+    (created,) = BOARD.created
+    assert (created.title, created.repository) == (ticket.title, SIBLING_REPOSITORY)
+    assert [request.input_value("contentId") for request in _sent(_Operation.ADD_TO_BOARD)] == [
+        created.content_id
+    ], "the issue created in the sibling has to be added to the board as its item"
+    assert created.origin == PROPOSED_ID, "the board row does not hold the origin the copy wrote"
+
+
+def test_a_follow_up_ticket_naming_a_repository_the_token_cannot_see_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    environment, drafts_root = _followups_environment(tmp_path)
+    _written_ticket(drafts_root, _follow_up_ticket(UNREACHABLE_REPOSITORY))
+
+    with _serving_followups(environment):
+        copied = _copied_ticket(environment)
+
+    assert copied.returncode != 0, copied.stdout
+    assert str(UNREACHABLE_REPOSITORY) in copied.stderr, copied.stderr
+    assert not _sent(_Operation.CREATE_ISSUE), "an issue was created for a refused ticket"
+    assert not _sent(_Operation.ADD_TO_BOARD), "a refused ticket was added to the board"
+    assert not BOARD.created
+
+
+def test_board_status_refuses_a_ticket_outside_the_boards_owner_before_asking_the_board(
+    tmp_path: Path,
+) -> None:
+    """Exit 5 naming the repository and the owner `config show` reports, and no request sent.
+
+    The same board answers a ticket about a sibling of that owner with the status it is
+    copied with, so the refusal is the owner rule and not a board that answers nothing.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    shown = _followups_command(environment, [str(ONETASKGRAPH_BIN), "config", "show", "--json"])
+    assert shown.returncode == 0, shown.stderr
+    (owner,) = [
+        setting["value"]
+        for setting in json.loads(shown.stdout)["settings"]
+        if setting["key"] == f"sources.{follow_up_tickets.BOARD}.config.owner"
+    ]
+    foreign = _written_ticket(drafts_root, _follow_up_ticket(FOREIGN_REPOSITORY))
+
+    with _serving_followups(environment):
+        refused = _board_status(environment, foreign)
+        asked = list(_GitHubFixture.requests)
+        sibling_ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+        sibling = _board_status(environment, sibling_ticket)
+
+    assert refused.returncode == follow_up_tickets.OUTSIDE_OWNER == 5, refused.stderr
+    assert refused.stdout == ""
+    assert f"'{_hosted(FOREIGN_REPOSITORY)}'" in refused.stderr, refused.stderr
+    assert f"the board's owner {owner!r}" in refused.stderr, refused.stderr
+    assert asked == [], f"a refused ticket asked the board {[one.operation for one in asked]}"
+    assert (sibling.returncode, sibling.stdout) == (0, "backlog\n"), sibling.stderr
+
+
+def test_a_transferred_follow_up_issue_is_updated_in_place_by_a_re_copy_of_its_origin(
+    tmp_path: Path,
+) -> None:
+    """The migration of a mis-filed ticket: transfer its issue, then copy the same origin again.
+
+    The first copy is of the schema-2 shape the live tickets carry, naming no repository, so
+    its issue is created in the configured one. The transfer is simulated the way GitHub
+    keeps it — the issue's repository changes, its board row, its issue node and the row's
+    origin value do not — and the current-shape ticket naming that repository is copied
+    again. It has to update that same issue, create nothing and add nothing to the board.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    record = follow_up_tickets.record(ticket) | {"schema": 2}
+    legacy = frontmatter(
+        {
+            "title": ticket.title,
+            "status": ticket.status.written,
+            "metadata": {follow_up_tickets.KEY: record},
+        },
+        ticket.body,
+    )
+    _written_ticket(drafts_root, ticket, legacy)
+
+    with _serving_followups(environment):
+        first = _copied_ticket(environment)
+        assert first.returncode == 0, first.stdout + first.stderr
+        (created,) = BOARD.created
+        assert created.repository == CONFIGURED_REPOSITORY
+        assert created.origin == PROPOSED_ID, "the fixture did not keep the origin the copy wrote"
+        row, node = created.item_id, created.content_id
+        # llmlint: ignore[tests_mirror_real_usage] The transfer is GitHub's own server-side
+        # action, taken with `gh issue transfer` against the live repository, which no test may
+        # reach; the fixture performs what GitHub keeps across it. The re-copy under test runs
+        # through the installed CLI unchanged.
+        BOARD.transfer(created.content_id, SIBLING_REPOSITORY)
+        already = len(_GitHubFixture.requests)
+        _written_ticket(drafts_root, ticket)
+        again = _copied_ticket(environment, "--json")
+        recopied = _GitHubFixture.requests[already:]
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    (entry,) = json.loads(again.stdout)["items"]
+    assert entry["action"] == "updated", entry
+    assert not _sent(_Operation.CREATE_ISSUE, recopied), "the re-copy created a replacement issue"
+    assert not _sent(_Operation.ADD_TO_BOARD, recopied), "the re-copy added a second board item"
+    updated = {request.input_value("id") for request in _sent(_Operation.UPDATE_ISSUE, recopied)}
+    assert updated == {node}, f"the re-copy has to update the transferred issue, not {updated}"
+    rows = [issue for issue in BOARD.issues if issue.origin == PROPOSED_ID]
+    assert [(one.item_id, one.content_id, one.repository) for one in rows] == [
+        (row, node, SIBLING_REPOSITORY)
+    ], "the board has to hold exactly the one transferred row for the ticket"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

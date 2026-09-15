@@ -760,22 +760,29 @@ def project_record(project: str) -> Mapping[str, Any]:
     return one_item(store_json(["project", "show", project]), "project")
 
 
-def source_root(source: str) -> Path:
-    """The directory ``source`` stores its records in, when it is one this may write.
+def configured_settings() -> dict[str, object]:
+    """Every setting the store resolves, keyed by its dotted key, as `config show` reports it.
 
-    Resolved through the CLI's own `config show` rather than by reading
-    `onetaskgraph.yaml` here: the configuration layers a file under environment
-    variables under flags, and a second reader of the file alone would answer for a
-    layer nothing runs at.
+    Read through the CLI's own `config show` rather than by reading `onetaskgraph.yaml`
+    here: the configuration layers a file under environment variables under flags, and a
+    second reader of the file alone would answer for a layer nothing runs at.
     """
     settings = store_json(["config", "show"]).get("settings")
     if not isinstance(settings, list):
         raise OSError(f"{STORE} returned a configuration without a settings list")
-    values = {
+    return {
         setting["key"]: setting.get("value")
         for setting in settings
         if isinstance(setting, dict) and isinstance(setting.get("key"), str)
     }
+
+
+def source_root(source: str) -> Path:
+    """The directory ``source`` stores its records in, when it is one this may write.
+
+    Resolved through :func:`configured_settings`, for the reason it gives.
+    """
+    values = configured_settings()
     plugin = values.get(f"sources.{source}.plugin")
     root = values.get(f"sources.{source}.config.root")
     if plugin != WRITABLE_PLUGIN:

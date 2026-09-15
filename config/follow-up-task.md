@@ -61,21 +61,26 @@ there gets this run's evidence rather than a second issue.
    `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`.
 7. **Search the board for the same root cause** among its open items: first by the
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
-   text (`onetaskgraph task list --source @BOARD@ --search <text> --json`).
+   text (`onetaskgraph task list --source @BOARD@ --search <text> --json`). Both read the
+   whole board, whichever repository an item's issue lives in, so narrow neither to a
+   repository.
 8. **Decide each ticket's status from the board, before every copy.** Run
    `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>`, adding `--withdraw` for a ticket
    this run withdraws, and write the word it prints as the ticket's `status`, then validate
    the ticket again. When it refuses, copy nothing for that ticket and keep what it printed
    for your report.
 9. **Put each ticket on the board.** Where no open item carries the root cause, or the item
-   that does is this run's own, copy the ticket as "The verified ticket" states. Where an
+   that does is this run's own, copy the ticket as "The verified ticket" states. When the
+   store refuses that copy, copy nothing more for that ticket and keep what it printed for
+   your report. Where an
    open item for it was created by another run, copy nothing: add this run's one comment to
    that item, or edit the comment this run already left there, under "Ownership on the
    board" below.
 10. **Report** every issue you created or updated with its URL (its location where the
     board reports no URL), every dropped draft with its reason, every ticket the board
-    refused a status for with what `board-status` printed, and every finding that should
-    have been surfaced live.
+    refused a status for with what `board-status` printed, every ticket the store refused
+    to copy with the refusal it printed, and every finding that should have been surfaced
+    live.
 
 ## The verified ticket
 
