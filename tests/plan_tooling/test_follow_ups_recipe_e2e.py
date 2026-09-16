@@ -338,7 +338,7 @@ def _schema_3(ticket: tickets.Ticket) -> str:
     return frontmatter(
         {
             "title": ticket.title,
-            "status": ticket.status.written,
+            "status": ticket.status.value,
             "repositories": [ticket.repository],
             "metadata": {tickets.KEY: tickets.record(ticket) | {"schema": 3}},
         },
@@ -377,20 +377,15 @@ def _category(item: dict[str, object]) -> object:
     return status["category"]
 
 
-# llmlint: ignore[tests_mirror_real_usage] The board here is a `local-md` store, whose items are
-# files, and onetaskgraph 0.2.31 has no verb that changes an item's status (`task` lists, shows,
-# walks, copies and comments), so editing the item's file is how a person moves it; the store
-# reads the edit back through `task show` below, and the live board is off limits to a test.
-def _moved(bench: Bench, qualified: str, word: str) -> None:
-    """Move a board item to ``word``, the way a person edits its status on the board."""
-    location = _item(bench, qualified)["location"]
-    assert isinstance(location, dict), location
-    path = Path(str(location["path"]))
-    text = path.read_text(encoding="utf-8")
-    path.write_text(
-        re.sub(r"^status: .*$", f"status: {json.dumps(word)}", text, count=1, flags=re.MULTILINE),
-        encoding="utf-8",
-    )
+def _moved(bench: Bench, qualified: str, category: str) -> None:
+    """Move a board item to ``category``, through the store's own verb for it.
+
+    What a person does on the live board, which is off limits to a test: the board here is
+    a `local-md` stand-in, and the adopted store sets an item's status there the same way
+    it sets one anywhere — by category, changing nothing else about the item.
+    """
+    moved = _store(bench, "task", "status", "set", qualified, category)
+    assert moved["status"] == _item(bench, qualified)["status"], moved
 
 
 def _staged(bench: Bench, name: str, text: str) -> Path:
@@ -596,10 +591,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         assert copied.returncode == 0, copied.stdout + copied.stderr
         other_issue = f"{BOARD}:{other}/tickets/{SHARED_CAUSE}"
         # A person deferred the earlier run's ticket: it is still open, and takes evidence.
-        # llmlint: ignore-block[tests_mirror_real_usage] A person's move of a `local-md` item
-        # has no store verb in onetaskgraph 0.2.31, for the reason `_moved`'s directive gives.
-        _moved(bench, other_issue, tickets.Status.DEFERRED.written)
-        # llmlint: ignore-end[tests_mirror_real_usage]
+        _moved(bench, other_issue, tickets.Status.DEFERRED.value)
         other_before = _item(bench, other_issue)
 
         # A run with nothing to verify.
@@ -697,11 +689,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         comments_after_first = _comments(bench, other_issue)
         board_after_first = _board_ids(bench)
 
-        # The user defers the new ticket: its board item is moved to `draft` by hand.
-        # llmlint: ignore-block[tests_mirror_real_usage] A person's move of a `local-md` item
-        # has no store verb in onetaskgraph 0.2.31, for the reason `_moved`'s directive gives.
-        _moved(bench, new_issue, tickets.Status.DEFERRED.written)
-        # llmlint: ignore-end[tests_mirror_real_usage]
+        # The user defers the new ticket: its board item is moved to `draft`.
+        _moved(bench, new_issue, tickets.Status.DEFERRED.value)
         new_after_move = _item(bench, new_issue)
 
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
@@ -799,7 +788,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             )
             assert copied.returncode == 0, copied.stdout + copied.stderr
         legacy_issue = f"{BOARD}:{legacy_run}/tickets/{REWRITTEN_CAUSE}"
-        _moved(bench, legacy_issue, tickets.Status.ACCEPTED.written)
+        _moved(bench, legacy_issue, tickets.Status.ACCEPTED.value)
         legacy_before = _item(bench, legacy_issue)
         rewritten = _ticket(
             legacy_run,

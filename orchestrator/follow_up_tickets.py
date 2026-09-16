@@ -81,6 +81,11 @@ class Status(StrEnum):
     option and `draft` to its `Deferred` option (`onetaskgraph.yaml`). A withdrawn ticket's
     issue is closed as not planned, and no issue is ever deleted. :func:`status_vocabulary`
     is the one statement of the whole vocabulary an agent reads.
+
+    A ticket's `status` is written as the category's own word, for every category: the
+    adopted plan-store release reads each of them back as itself, so there is no status
+    this repository has to spell some other way to be read as the one it means.
+    `tests/test_follow_up_tickets.py` reads every word back through the installed store.
     """
 
     PROPOSED = "backlog"
@@ -118,17 +123,6 @@ class Status(StrEnum):
         not waiting for anybody to pick it up.
         """
         return self is Status.ACCEPTED
-
-    @property
-    def written(self) -> str:
-        """The word a ticket's `status` is written as, which the store reads as this category.
-
-        The category's own spelling for every status but one: onetaskgraph 0.2.31's
-        `local-md` source reads `in-progress` as `unknown` and `in progress` as
-        `in-progress`. `tests/test_follow_up_tickets.py` reads every word back through the
-        installed store.
-        """
-        return "in progress" if self is Status.UNDER_WAY else self.value
 
 
 _MEANINGS = {
@@ -188,7 +182,7 @@ def status_vocabulary() -> str:
             else "Not selected by an agent sent to pick up accepted tickets"
         )
         bullets.append(
-            f"- **{place.shown}**, written `{status.written}`: {status.meaning}. Who moves an "
+            f"- **{place.shown}**, written `{status.value}`: {status.meaning}. Who moves an "
             f"item there: {place.mover}. {selection}.\n"
         )
     return (
@@ -439,7 +433,7 @@ def render(ticket: Ticket) -> str:
     return frontmatter(
         {
             "title": ticket.title,
-            "status": ticket.status.written,
+            "status": ticket.status.value,
             "repositories": [ticket.repository],
             "metadata": {KEY: record(ticket)},
         },
@@ -1066,12 +1060,12 @@ def ticket_contract(run: str, board: str) -> str:
         f"{TITLE_LIMIT} characters, where the repository name is the last segment of "
         "`repository`.\n"
         "- **Its status is the board's to decide.** A new ticket is "
-        f"`{Status.PROPOSED.written}`, {Status.PROPOSED.meaning}, which the board shows as "
+        f"`{Status.PROPOSED.value}`, {Status.PROPOSED.meaning}, which the board shows as "
         "`Proposal`; a person moving it to `Todo` is what accepts it. A ticket the board "
         "already holds carries the status the board holds it at, so a copy never undoes that "
         "decision: a ticket the board holds at `Deferred` is copied carrying "
-        f"`{Status.DEFERRED.written}`. A ticket this run withdraws is "
-        f"`{Status.WITHDRAWN.written}`, which the board holds as closed as not planned, unless "
+        f"`{Status.DEFERRED.value}`. A ticket this run withdraws is "
+        f"`{Status.WITHDRAWN.value}`, which the board holds as closed as not planned, unless "
         "the board shows it as accepted or deferred: this run never withdraws a deferred item "
         "or an accepted one, so copy nothing, leave the local ticket as it is, and report that "
         "you would have withdrawn it and why. No issue is ever deleted.\n"
@@ -1386,7 +1380,7 @@ def _placed(arguments: argparse.Namespace) -> int:
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
-    print(status.written)
+    print(status.value)
     return SOUND
 
 

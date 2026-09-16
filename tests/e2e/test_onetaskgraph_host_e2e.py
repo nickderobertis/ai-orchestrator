@@ -2477,7 +2477,7 @@ def test_a_transferred_follow_up_issue_is_updated_in_place_by_a_re_copy_of_its_o
     legacy = frontmatter(
         {
             "title": ticket.title,
-            "status": ticket.status.written,
+            "status": ticket.status.value,
             "metadata": {follow_up_tickets.KEY: record},
         },
         ticket.body,

@@ -1732,7 +1732,7 @@ carries, and this copy of it is held to that rendering:
 - **Board status `Deferred`**, written `draft`: deferred for later by a person: not accepted,
   picked up by no agent, and still taking new evidence. Who moves an item there: only a
   person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in progress`: accepted and taken up. Who moves an
+- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves an
   item there: a person, or a dispatch whose own task says to. Not selected by an agent sent
   to pick up accepted tickets.
 - **Closed as completed**, written `done`: accepted and finished. Who moves an item there: a

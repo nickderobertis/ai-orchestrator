@@ -1,12 +1,12 @@
 """One plan-authoring root, resolved once by the launch and read by every dispatch of it.
 
 `onetaskgraph.yaml` roots this repository's `authoring` source at the relative `.plans`,
-so every process resolves it against its own working directory — which a planning
-launch's dispatches once did from a worktree of their own, and still do from wherever
-the launch put them. `scripts/plan-root-env.sh` is what
+which the adopted store resolves against the directory of the document it read that root
+from — and a planning launch's dispatches read the copy in a worktree of their own, so
+the root each of them resolves is that worktree's. `scripts/plan-root-env.sh` is what
 makes that root a configured fact instead of a guess: it resolves the source through
 `orchestrator/plan_store.py`, refuses a root no plan could be authored into, and exports
-the one name the plan store reads it back under.
+the one name the plan store reads it back under, at the layer that beats a document.
 
 These journeys drive that helper for real, in this checkout, because this checkout is
 its subject: the value it composes is what *this* tree's plan store resolves, and a copy

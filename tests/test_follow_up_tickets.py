@@ -140,7 +140,7 @@ def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
         "id": f"{RUN}/tickets/{held.root_cause}",
         "title": held.title,
         "content": held.body,
-        "status": {"category": held.status.value, "name": held.status.written},
+        "status": {"category": held.status.value, "name": held.status.value},
         "labels": [],
         "project": None,
         "repositories": [held.repository],
@@ -824,14 +824,18 @@ def test_validate_reads_a_rendered_ticket_through_the_store_as_sound(
 def test_the_store_reads_each_status_a_ticket_is_written_with_as_that_status(
     drafts_root: Path, status: tickets.Status
 ) -> None:
-    """A status is the store's category, written in whichever word the store reads as it."""
+    """A status is written as its category's own word, and the store reads it back as that.
+
+    Every one of them, `in-progress` included: the adopted store reads the canonical word
+    as its own category, so this repository spells none of them some other way.
+    """
     path = _write(drafts_root, _ticket(status=status))
     run, cause = tickets.located_path(path)
     item = plan_store.one_item(
         plan_store.store_json(["task", "show", tickets.qualified_id(run, cause)]), "task"
     )
 
-    assert item["status"] == {"category": status.value, "name": status.written}
+    assert item["status"] == {"category": status.value, "name": status.value}
     assert tickets.read_ticket(path).status is status
 
 
@@ -929,11 +933,17 @@ def _board_item(destination: str) -> dict[str, object]:
 
 
 def _moved(destination: str, word: str) -> None:
-    """Move the board item to ``word``, the way a person edits the item's status.
+    """Move the board item to ``word``, the way a person moves an item on the board.
 
-    A `local-md` item is a file, and the installed store has no verb that changes a status,
-    so a person moves one by editing it; the store reads the edit back through `task show`.
+    Through the store's own `task status set` for a word the store's vocabulary places,
+    which is every move a person makes on the real board. :data:`UNPLACEABLE` is the one
+    word here that names no category, so the store refuses to set it; that one is written
+    into the `local-md` item's file, which is what a `local-md` item is, and the store
+    reads the edit back through `task show`.
     """
+    if word != UNPLACEABLE:
+        plan_store.store_json(["task", "status", "set", destination, word])
+        return
     location = _board_item(destination)["location"]
     assert isinstance(location, dict)
     path = Path(str(location["path"]))
@@ -970,12 +980,12 @@ def test_board_status_answers_the_status_the_board_holds_the_item_at(
 ) -> None:
     ticket = _write(drafts_root, _ticket())
     destination = _on_board(ticket)
-    _moved(destination, held.written)
+    _moved(destination, held.value)
     assert _board_category(destination) == held.value
 
     status, printed, _ = _decided(ticket, capsys)
 
-    assert (status, printed) == (tickets.SOUND, f"{held.written}\n")
+    assert (status, printed) == (tickets.SOUND, f"{held.value}\n")
     written = _write(drafts_root, _ticket(status=tickets.Status(held)))
     assert tickets.read_ticket(written).status is held, "the printed word is not that status"
 
@@ -1010,7 +1020,7 @@ def test_a_withdrawal_closes_a_ticket_nobody_accepted(
 ) -> None:
     ticket = _write(drafts_root, _ticket())
     if held is not None:
-        _moved(_on_board(ticket), held.written)
+        _moved(_on_board(ticket), held.value)
 
     assert _decided(ticket, capsys, "--withdraw") == (tickets.SOUND, "cancelled\n", "")
 
@@ -1037,7 +1047,7 @@ def test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_m
     ticket = _write(drafts_root, _ticket())
     before = ticket.read_text(encoding="utf-8")
     destination = _on_board(ticket)
-    _moved(destination, held.written)
+    _moved(destination, held.value)
 
     status, printed, reported = _decided(ticket, capsys, "--withdraw")
 
@@ -1087,7 +1097,7 @@ def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_pi
 
     assert len(bullets) == len(tickets.Status) == len(shown)
     for bullet, status, place in zip(bullets, tickets.Status, shown, strict=True):
-        assert bullet.startswith(f"- **{place}**, written `{status.written}`: "), bullet
+        assert bullet.startswith(f"- **{place}**, written `{status.value}`: "), bullet
         assert status.meaning in bullet, bullet
         assert "Who moves an item there: " in bullet, bullet
     selected = [

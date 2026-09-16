@@ -501,10 +501,10 @@ load plan-root-env.sh
 export_plan_authoring_root finish-plan || exit "$?"
 
 # The root the helper above resolved, which is where this launch writes its project and
-# where `onepipeline start` then looks for it. It replaces a `.plans` relative to
-# whatever directory the recipe was invoked from: those are the same directory for an
-# ordinary launch and two the moment a caller points the root elsewhere, and the launch
-# gate then refuses the plan the launch has just written.
+# where `onepipeline start` then looks for it. It replaces the `.plans` the store would
+# resolve from whichever `onetaskgraph.yaml` the reading process found: that is this
+# checkout's for an ordinary launch and another one the moment a caller points the root
+# elsewhere, and the launch gate then refuses the plan the launch has just written.
 plan_root=${!PLAN_AUTHORING_ROOT_ENV}
 plan_directory="$plan_root/$PLAN_RECORDS"
 mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not be created" \

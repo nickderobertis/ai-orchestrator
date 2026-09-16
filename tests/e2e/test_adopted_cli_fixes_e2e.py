@@ -1,4 +1,4 @@
-"""The CLIs this host adopted carry the fixes issue #1004's plan landed in their producers.
+"""The CLIs this host adopted carry the fixes its plans landed in their producers.
 
 `config/onepipeline.version`, `config/onevcs.version`, `config/onejudge.version` and
 `config/onetaskgraph.version` moved onto the releases carrying those fixes, and a pin is
@@ -15,7 +15,17 @@ or a recipe reaches it, and each journey fails on the release before the fix:
 * the `github-projects` source refuses a `status_mapping.unknown` naming a closed state —
   https://github.com/nickderobertis/onetaskgraph/pull/915, first cut as 0.2.29;
 * `onejudge run` names each `user.artifacts` path in its judge side's prompt —
-  https://github.com/nickderobertis/onejudge/pull/86, first cut as 0.11.0.
+  https://github.com/nickderobertis/onejudge/pull/86, first cut as 0.11.0;
+* a `local-md` source's relative root resolves against the directory of the
+  configuration document that supplied it, rather than being left for each reading
+  process to resolve against its own working directory —
+  https://github.com/nickderobertis/onetaskgraph/issues/1144.
+
+The status-word half of that same plan-store adoption — the canonical `in-progress`
+reading back as its own category rather than as `unknown`
+(https://github.com/nickderobertis/onetaskgraph/issues/1140) — is driven where this
+repository depends on it, over a real follow-up ticket, in
+`tests/test_follow_up_tickets.py`.
 
 The onetaskgraph refusal is read through `project list` rather than `config show`: the
 released `config show` renders settings without constructing a source, so it accepts the
@@ -435,3 +445,121 @@ def test_a_judge_side_prompt_names_every_configured_artifact_by_its_resolved_pat
         listed = section.split("\n\n", 1)[0]
         assert "  - ./design/notes.md" in listed.splitlines(), listed
         assert f"  - {outside}" in listed.splitlines(), listed
+
+
+#: A configuration document rooting one `local-md` source at a path relative to itself,
+#: which is the shape `onetaskgraph.yaml` gives this repository's own `authoring` and
+#: `drafts` sources.
+RELATIVE_ROOT = (
+    "default_sources: [work]\n"
+    "sources:\n"
+    "  work:\n"
+    "    plugin: local-md\n"
+    "    config:\n"
+    "      root: .tasks\n"
+)
+#: The setting a reader asks `config show` for, and the one record the store finds under it.
+ROOT_SETTING = "sources.work.config.root"
+PROJECT = "demo"
+TASK = "a-task"
+
+
+def _rooted(directory: Path) -> Path:
+    """A directory holding `RELATIVE_ROOT` and one task under the root it names."""
+    records = directory / ".tasks"
+    (records / "projects").mkdir(parents=True)
+    (records / "tasks" / PROJECT).mkdir(parents=True)
+    (directory / "onetaskgraph.yaml").write_text(RELATIVE_ROOT, encoding="utf-8")
+    (records / "projects" / f"{PROJECT}.md").write_text(
+        f'---\ntitle: "{PROJECT}"\nstatus: "todo"\n---\n\nA project.\n', encoding="utf-8"
+    )
+    (records / "tasks" / PROJECT / f"{TASK}.md").write_text(
+        f'---\ntitle: "a task"\nproject: "{PROJECT}"\nstatus: "todo"\n---\n\nA task.\n',
+        encoding="utf-8",
+    )
+    return records
+
+
+def _store_environment(tmp_path: Path) -> dict[str, str]:
+    """This process's environment with every plan-store setting of the launch removed.
+
+    A launch exports absolute roots for this checkout's own sources at the store's
+    environment layer, and this host's dispatches run under them. That layer beats a
+    document, so leaving them in place would measure the launch rather than the release.
+    """
+    kept = {
+        name: value for name, value in os.environ.items() if not name.startswith("ONETASKGRAPH_")
+    }
+    kept["XDG_CONFIG_HOME"] = str(tmp_path / "xdg")
+    return kept
+
+
+def _resolved_root(directory: Path, environment: dict[str, str]) -> str:
+    """What the installed store resolves `ROOT_SETTING` to, read from ``directory``."""
+    shown = _run(ONETASKGRAPH_BIN, "config", "show", "--json", env=environment, cwd=directory)
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    settings = json.loads(shown.stdout)["settings"]
+    named = [setting for setting in settings if setting["key"] == ROOT_SETTING]
+    assert len(named) == 1, f"one `{ROOT_SETTING}` was expected, and {named} was reported"
+    return str(named[0]["value"])
+
+
+def test_a_relative_source_root_resolves_against_the_document_that_supplied_it(
+    tmp_path: Path,
+) -> None:
+    """The root a document names is that document's directory's, whoever reads it from where.
+
+    Read from a *subdirectory* of the checkout holding the document, which is what
+    distinguishes the two answers: on the release before the fix the setting came back as
+    the bare `.tasks`, which each reading process then resolved against its own working
+    directory, so a read one directory down found no records at all.
+    """
+    checkout = tmp_path / "checkout"
+    records = _rooted(checkout)
+    below = checkout / "below"
+    below.mkdir()
+    environment = _store_environment(tmp_path)
+
+    assert _resolved_root(below, environment) == str(records), (
+        "a relative root has to resolve against the document that supplied it"
+    )
+    listed = _run(ONETASKGRAPH_BIN, "task", "list", "--json", env=environment, cwd=below)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    found = [item["item"]["location"]["path"] for item in json.loads(listed.stdout)["items"]]
+    assert found == [str(records / "tasks" / PROJECT / f"{TASK}.md")], found
+
+
+#: How the store spells `ROOT_SETTING` at its environment layer, which is the layer
+#: `scripts/plan-root-env.sh` and `scripts/follow-up-env.sh` export this checkout's own
+#: absolute roots at.
+ROOT_SETTING_ENV = "ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT"
+
+
+def test_an_exported_absolute_root_still_beats_the_document_a_dispatch_reads(
+    tmp_path: Path,
+) -> None:
+    """Why this host still exports an absolute root rather than relying on the fix.
+
+    A dispatch works in a worktree carrying its own copy of `onetaskgraph.yaml`, so
+    resolving against the document it reads puts its records under *that* copy — the
+    directory nothing outside the worktree reads and which is reclaimed with it. The
+    launch's exported root is what answers that, and it answers it at a layer above the
+    document: read from the worktree, the store resolves the launching checkout's
+    records, and the task the launch stored there is the one the dispatch finds.
+    """
+    launching = _rooted(tmp_path / "launching")
+    worktree = _rooted(tmp_path / "worktree")
+    environment = _store_environment(tmp_path)
+
+    assert _resolved_root(worktree.parent, environment) == str(worktree), (
+        "left to the document, a dispatch in a worktree roots its source in that worktree"
+    )
+
+    exported = {**environment, ROOT_SETTING_ENV: str(launching)}
+    assert _resolved_root(worktree.parent, exported) == str(launching), (
+        "an exported absolute root has to beat the document the dispatch reads"
+    )
+    listed = _run(ONETASKGRAPH_BIN, "task", "list", "--json", env=exported, cwd=worktree.parent)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    found = [item["item"]["location"]["path"] for item in json.loads(listed.stdout)["items"]]
+    assert found == [str(launching / "tasks" / PROJECT / f"{TASK}.md")], found

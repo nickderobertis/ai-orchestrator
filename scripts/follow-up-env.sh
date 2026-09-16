@@ -8,10 +8,12 @@
 # the `drafts` plan source (`orchestrator/follow_up_drafts.py` states the record). Every
 # party that may write one — a dispatched worker, the monitor, the pacemaker — runs
 # somewhere other than the launching checkout: a worktree of its own, or a graph member's
-# scratch. `onetaskgraph.yaml` roots `drafts` at the relative `.follow-ups`, so each of
-# them would resolve it against its own working directory and write where nothing reads,
-# into a directory reclaimed with the worktree. So the launch resolves the root once,
-# here, and exports three names:
+# scratch. `onetaskgraph.yaml` roots `drafts` at the relative `.follow-ups`, which the
+# adopted store resolves against the directory of the document it read that root from —
+# and the document a party in a worktree reads is that worktree's own copy, so each of
+# them would write where nothing reads, into a directory reclaimed with the worktree. A
+# party whose scratch holds no configuration file at all has no such document to resolve
+# against. So the launch resolves the root once, here, and exports three names:
 #
 #   * the store's own environment-layer spelling of `sources.drafts.config.root`, holding
 #     the absolute directory `orchestrator/plan_store.py` resolves that source to;

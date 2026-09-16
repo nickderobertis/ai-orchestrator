@@ -3,12 +3,15 @@
 # environment, sourced by scripts/plan.sh.
 #
 # `onetaskgraph.yaml` roots this repository's `authoring` source at the relative
-# `.plans`, so every process resolves it against its own working directory — and a
-# planning launch dispatches its planner into a worktree of its own. Left alone, the
-# plan that planner authors lands in that worktree's own copy of the directory, which
-# nothing outside the worktree reads and which is reclaimed with the worktree. What has
-# kept planning working is dispatched planners guessing the launching checkout's
-# absolute path correctly; nothing configured that and nothing checked it.
+# `.plans`, which the adopted store resolves against the directory of the document it
+# read that root from — and a planning launch dispatches its planner into a worktree of
+# its own, carrying its own copy of that document. Left alone, the plan that planner
+# authors lands in that worktree's own copy of the directory, which nothing outside the
+# worktree reads and which is reclaimed with the worktree. Document-relative resolution
+# does not answer that: the document a dispatch reads is the worktree's, so the root it
+# resolves is the worktree's too. What has kept planning working is dispatched planners
+# guessing the launching checkout's absolute path correctly; nothing configured that and
+# nothing checked it.
 #
 # So the launch resolves the root once, here, and exports it. The name is the plan
 # store's own configuration-layer spelling of `sources.authoring.config.root` — that

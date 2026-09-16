@@ -377,6 +377,7 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
+<!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
 **It is not authored there.** A plan is drafted in the `authoring` source — the
 gitignored `.plans/` root every planner is briefed to write into — reviewed there,
 documented by a second launch, copied onto the board with its documents, approved
@@ -388,13 +389,15 @@ reviewed the plan describes content nobody read; the approval is recorded on the
 destination rather than a drafting surface because a review record is an entry in the
 task's own Markdown document and a board is not a directory, so a plan nothing reviewed
 is refused before it reaches a dispatch. The authoring root is resolved **once by the
-launch** and exported (`scripts/plan-root-env.sh`), because every process would
-otherwise resolve `onetaskgraph.yaml`'s relative root against its own working directory
-— a planner in a worktree of its own wrote plans nothing outside it read. A planning
-launch is stamped as the planning project it is, which exempts it from design approval,
-and the exemption is bounded to the launch — exactly the nodes the stamp claims and no
-design document — because an unbounded one once left a plan's own nodes launchable with
-nobody having approved the document.
+launch** and exported (`scripts/plan-root-env.sh`), because the adopted store resolves
+`onetaskgraph.yaml`'s relative root against the directory of the document that supplied
+it, and a dispatch reads the copy in its own worktree — a planner in a worktree of its
+own wrote plans nothing outside it read, and would still. A planning launch is stamped
+as the planning project it is, which exempts it from design approval, and the exemption
+is bounded to the launch — exactly the nodes the stamp claims and no design document —
+because an unbounded one once left a plan's own nodes launchable with nobody having
+approved the document.
+<!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 **A green run proves nothing about the board.** The settlement write-back is best-effort
 and off the reconcile loop: a projection that never landed settles the run exactly like
@@ -674,6 +677,7 @@ tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets s
 prints the vocabulary every agent reads, copied here:
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
+<!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
 - **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
   Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by an
   agent sent to pick up accepted tickets.
@@ -683,7 +687,7 @@ prints the vocabulary every agent reads, copied here:
 - **Board status `Deferred`**, written `draft`: deferred for later by a person: not accepted,
   picked up by no agent, and still taking new evidence. Who moves an item there: only a
   person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in progress`: accepted and taken up. Who moves an
+- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves an
   item there: a person, or a dispatch whose own task says to. Not selected by an agent sent
   to pick up accepted tickets.
 - **Closed as completed**, written `done`: accepted and finished. Who moves an item there: a
@@ -695,6 +699,7 @@ prints the vocabulary every agent reads, copied here:
 
 A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing else:
 never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one.
+<!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for

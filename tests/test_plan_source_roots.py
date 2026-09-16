@@ -175,6 +175,14 @@ def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli(
     Uncached, because the subject is the installed producer rather than this workspace:
     a memo keyed on the tree here would replay across the very `onetaskgraph` upgrade
     that could change how a source document is loaded.
+
+    A root is compared after being resolved against the directory holding the document,
+    because that is what the adopted release answers: it makes a document's relative root
+    absolute against the document's own directory rather than leaving each reading
+    process to resolve it against a working directory of its own. The reader here reads
+    what the document *says*, so resolving its answer the same way is what puts the two
+    on one footing — and a root the document already states absolutely is left where it
+    is by that join, which is how `test-fixtures` rides along as the control.
     """
     resolved = _resolved_configuration()
     text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
@@ -183,7 +191,7 @@ def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli(
         key: value for key, value in resolved.items() if key.endswith(".plugin")
     }
     assert {
-        f"sources.{name}.config.root": source.root
+        f"sources.{name}.config.root": str(REPO_ROOT / source.root)
         for name, source in read_here.items()
         if source.root is not None
     } == {key: value for key, value in resolved.items() if key.endswith(".config.root")}
