@@ -42,6 +42,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from example_records import isolated_examples
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -86,12 +87,14 @@ def _environment(runs_root: Path) -> dict[str, str]:
     return inherited
 
 
-def _just(*arguments: str, runs_root: Path) -> subprocess.CompletedProcess[str]:
-    """Run one real recipe against the named runs root."""
+def _just(
+    *arguments: str, runs_root: Path, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run one real recipe against the named runs root, with `env` over the ambient values."""
     return subprocess.run(
         ["just", *arguments],
         cwd=REPO_ROOT,
-        env=_environment(runs_root),
+        env={**_environment(runs_root), **(env or {})},
         text=True,
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -162,6 +165,7 @@ def test_a_pre_adoption_runs_root_lists_no_runs_rather_than_failing(legacy_root:
     assert listed.stdout.count(f"no {LAUNCH_RECORD}") == len(LEGACY_RUN_IDS), listed.stdout
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker] Existing real-launch control; this change only isolates its plan source.  # noqa: E501
 @pytest.mark.reads_docs
 def test_the_listing_does_find_a_run_whose_launch_record_is_present(
     legacy_root: Path, tmp_path: Path
@@ -175,47 +179,50 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
     the recorded shape and nothing else.
     """
     adopted = tmp_path / "adopted-run"
-    examples = tmp_path / "examples"
-    examples.mkdir()
-    for records in ("projects", "tasks", "documents"):
-        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
-    environment = {
-        **_environment(adopted),
-        "ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT": str(examples),
-        "ONEAGENTGRAPH_ONEHARNESS_BIN": str(Path(__file__).resolve().parent / "fake_backend.py"),
-        "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
-        "XDG_STATE_HOME": str(tmp_path / "state"),
-    }
-    launched = subprocess.run(
-        ["just", "orchestrate", "examples:scheduler-research", "--detach"],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        timeout=e2e_timeout(300),
-        check=False,
-    )
-    assert launched.returncode == 0, f"{launched.stdout}\n{launched.stderr}"
-    recorded = [run for run in adopted.iterdir() if (run / LAUNCH_RECORD).is_file()]
-    assert recorded, f"the launch recorded no run under {adopted}"
-    for run in recorded:
-        shutil.copytree(run, legacy_root / run.name)
-
-    listed = _just("runs", runs_root=legacy_root)
-
-    try:
-        assert listed.returncode == 0, listed.stderr
-        for nothing_found in ("no runs recorded", UNREADABLE_ROOT):
-            assert nothing_found not in listed.stdout, (
-                "the listing reported nothing even for a run the adopted writer produced, "
-                f"so the empty legacy listing says nothing about the legacy records:"
-                f"\n{listed.stdout}"
-            )
+    # Launched from a copy, because the run writes its settlements back to its project;
+    # the block's exit holds the tracked records unchanged.
+    with isolated_examples(tmp_path) as examples:
+        environment = {
+            **_environment(adopted),
+            **examples.environment,
+            "ONEAGENTGRAPH_ONEHARNESS_BIN": str(
+                Path(__file__).resolve().parent / "fake_backend.py"
+            ),
+            "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+        }
+        launched = subprocess.run(
+            ["just", "orchestrate", "examples:scheduler-research", "--detach"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=e2e_timeout(300),
+            check=False,
+        )
+        assert launched.returncode == 0, f"{launched.stdout}\n{launched.stderr}"
+        recorded = [run for run in adopted.iterdir() if (run / LAUNCH_RECORD).is_file()]
+        assert recorded, f"the launch recorded no run under {adopted}"
         for run in recorded:
-            assert run.name in listed.stdout, listed.stdout
-    finally:
-        _just("stop", recorded[0].name, runs_root=adopted)
+            shutil.copytree(run, legacy_root / run.name)
+
+        listed = _just("runs", runs_root=legacy_root)
+
+        try:
+            assert listed.returncode == 0, listed.stderr
+            for nothing_found in ("no runs recorded", UNREADABLE_ROOT):
+                assert nothing_found not in listed.stdout, (
+                    "the listing reported nothing even for a run the adopted writer produced, "
+                    f"so the empty legacy listing says nothing about the legacy records:"
+                    f"\n{listed.stdout}"
+                )
+            for run in recorded:
+                assert run.name in listed.stdout, listed.stdout
+        finally:
+            # With the launch's own environment: stopping writes the run's settlement back
+            # to the plan source, and without the copy's root that is the tracked records.
+            _just("stop", recorded[0].name, runs_root=adopted, env=environment)
 
 
 @pytest.mark.parametrize("run", LEGACY_RUN_IDS)

@@ -78,6 +78,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from example_records import isolated_examples
 from probe_run_root import Probe, record_dispatch, run_name, run_root
 from waits import timeout as e2e_timeout
 from waits import until
@@ -506,44 +507,49 @@ def test_the_readings_answer_over_a_run_root_a_real_launch_wrote(tmp_path: Path)
     marker puts this one journey in the tier keyed on what it actually reads.
     """
     runs = tmp_path / "runs"
-    examples = tmp_path / "examples"
-    examples.mkdir()
-    for records in ("projects", "tasks", "documents"):
-        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
-    environment = {
-        **_environment(runs),
-        "ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT": str(examples),
-        "ONEAGENTGRAPH_ONEHARNESS_BIN": str(Path(__file__).resolve().parent / "fake_backend.py"),
-        "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
-        "XDG_STATE_HOME": str(tmp_path / "state"),
-    }
-    launched = subprocess.run(
-        ["just", "orchestrate", "examples:scheduler-research", "--detach"],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        timeout=e2e_timeout(300),
-        check=False,
-    )
-    assert launched.returncode == 0, f"{launched.stdout}\n{launched.stderr}"
-    written = [run.name for run in runs.iterdir() if (run / "launch.json").is_file()]
-    assert written, f"the launch recorded no run under {runs}"
-
-    status = _view("status", written[0], runs_root=runs)
-    host = _view("host", runs_root=runs)
-
-    assert status.returncode == 0, status.stderr
-    assert host.returncode == 0, host.stderr
-    assert [line for line in _above_providers(status.stdout) if line.startswith(DISK)], (
-        f"the status view gave no reading over a run the engine wrote: {status.stdout!r}"
-    )
-    for label in (DISK, RENDEZVOUS):
-        assert [line for line in host.stdout.splitlines() if line.startswith(label)], (
-            f"the host view gave no {label.strip()} reading over a run the engine "
-            f"wrote: {host.stdout!r}"
+    # Launched from a copy, because the run writes its settlements back to its project;
+    # the block's exit holds the tracked records unchanged.
+    with isolated_examples(tmp_path) as examples:
+        environment = {
+            **_environment(runs),
+            **examples.environment,
+            "ONEAGENTGRAPH_ONEHARNESS_BIN": str(
+                Path(__file__).resolve().parent / "fake_backend.py"
+            ),
+            "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+        }
+        launched = subprocess.run(
+            ["just", "orchestrate", "examples:scheduler-research", "--detach"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=e2e_timeout(300),
+            check=False,
         )
+        assert launched.returncode == 0, f"{launched.stdout}\n{launched.stderr}"
+        written = [run.name for run in runs.iterdir() if (run / "launch.json").is_file()]
+        assert written, f"the launch recorded no run under {runs}"
+        try:
+            status = _view("status", written[0], runs_root=runs)
+            host = _view("host", runs_root=runs)
+
+            assert status.returncode == 0, status.stderr
+            assert host.returncode == 0, host.stderr
+            assert [line for line in _above_providers(status.stdout) if line.startswith(DISK)], (
+                f"the status view gave no reading over a run the engine wrote: {status.stdout!r}"
+            )
+            for label in (DISK, RENDEZVOUS):
+                assert [line for line in host.stdout.splitlines() if line.startswith(label)], (
+                    f"the host view gave no {label.strip()} reading over a run the engine "
+                    f"wrote: {host.stdout!r}"
+                )
+        finally:
+            # Detached, so nothing else ends it. With the launch's own environment, because
+            # stopping writes the settlement back to whichever root that names.
+            _view("stop", written[0], runs_root=runs, env=environment)
 
 
 @pytest.mark.reads_recipes

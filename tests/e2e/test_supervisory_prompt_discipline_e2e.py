@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import NamedTuple, cast
 
 import pytest
+from example_records import isolated_examples
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
 from waits import timeout as e2e_timeout
@@ -394,6 +395,7 @@ def _flat(prompt: str) -> str:
     return " ".join(prompt.split())
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Existing shared launch; this change only isolates its plan source.  # noqa: E501
 @pytest.fixture(scope="module")
 def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Monitored]:
     """What one run launched through the real recipe really told its monitor, both sides.
@@ -407,71 +409,70 @@ def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("monitor-prompt")
     environment = _environment(tmp_path, oneharness_bin)
-    examples = tmp_path / "examples"
-    examples.mkdir()
-    for records in ("projects", "tasks", "documents"):
-        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
-    environment["ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT"] = str(examples)
-    prompt_log = tmp_path / "prompts.jsonl"
-    environment[PROMPT_LOG_ENV] = str(prompt_log)
-    environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
+    # The run writes its settlements back to the project it was launched from, so it is
+    # launched from a copy, and the block's exit holds the tracked records unchanged.
+    with isolated_examples(tmp_path) as examples:
+        environment.update(examples.environment)
+        prompt_log = tmp_path / "prompts.jsonl"
+        environment[PROMPT_LOG_ENV] = str(prompt_log)
+        environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
 
-    launch = subprocess.run(
-        ["just", "orchestrate", SHIPPED_PROJECT],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(300),
-        check=False,
-    )
-    try:
-        watching = [
-            turn
-            for turn in _recorded(prompt_log)
-            # An agent side, by the one property that separates the two: the judge side
-            # is the turn pinned to the judge config.
-            if WATCH_ROLE in turn.system and Path(turn.config).name != JUDGE_CONFIG_NAME
-        ]
-        assert watching, (
-            "no turn of this run carried the monitoring role, so nothing here reads an "
-            f"effective monitor prompt:\n{launch.stdout}\n{launch.stderr}"
-        )
-        assert f"/members/{MONITOR_MEMBER}/" in watching[0].config, (
-            f"the monitoring role arrived on a member other than `{MONITOR_MEMBER}` of "
-            f"{DAG_SCOPE_GRAPH}: {watching[0].config}"
-        )
-        # The merged config, which is where this launch's own copy of the reviewing bar
-        # is: the monitor's judge side is the bus's onejudge codec rather than a model, so
-        # no turn of the run carries that prose and the two files it is merged from each
-        # hold half of it.
-        # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
-        composed = sorted(
-            Path(environment[GRAPH_STATE_ENV]).glob(
-                f"dag-scope-*/members/{MONITOR_MEMBER}/onejudge.yaml"
-            )
-        )
-        assert composed, (
-            f"the launch wrote no effective config for the `{MONITOR_MEMBER}` member "
-            f"under {environment[GRAPH_STATE_ENV]}, so what its reviewing side was "
-            f"given cannot be read at all:\n{launch.stdout}\n{launch.stderr}"
-        )
-        effective = composed[0].read_text(encoding="utf-8")
-        _, separator, review_bar = effective.partition(REVIEW_SIDE)
-        assert separator, (
-            f"the effective config for `{MONITOR_MEMBER}` carries no `user:` block, so "
-            f"the launch composed no reviewing bar at all:\n{effective}"
-        )
-        yield Monitored(system=watching[0].system, review_bar=review_bar)
-    finally:
-        subprocess.run(
-            ["just", "stop", SHIPPED_RUN],
+        launch = subprocess.run(
+            ["just", "orchestrate", SHIPPED_PROJECT],
             cwd=REPO_ROOT,
             env=environment,
+            text=True,
             capture_output=True,
-            timeout=e2e_timeout(60),
+            timeout=e2e_timeout(300),
             check=False,
         )
+        try:
+            watching = [
+                turn
+                for turn in _recorded(prompt_log)
+                # An agent side, by the one property that separates the two: the judge side
+                # is the turn pinned to the judge config.
+                if WATCH_ROLE in turn.system and Path(turn.config).name != JUDGE_CONFIG_NAME
+            ]
+            assert watching, (
+                "no turn of this run carried the monitoring role, so nothing here reads an "
+                f"effective monitor prompt:\n{launch.stdout}\n{launch.stderr}"
+            )
+            assert f"/members/{MONITOR_MEMBER}/" in watching[0].config, (
+                f"the monitoring role arrived on a member other than `{MONITOR_MEMBER}` of "
+                f"{DAG_SCOPE_GRAPH}: {watching[0].config}"
+            )
+            # The merged config, which is where this launch's own copy of the reviewing bar
+            # is: the monitor's judge side is the bus's onejudge codec rather than a model, so
+            # no turn of the run carries that prose and the two files it is merged from each
+            # hold half of it.
+            # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
+            composed = sorted(
+                Path(environment[GRAPH_STATE_ENV]).glob(
+                    f"dag-scope-*/members/{MONITOR_MEMBER}/onejudge.yaml"
+                )
+            )
+            assert composed, (
+                f"the launch wrote no effective config for the `{MONITOR_MEMBER}` member "
+                f"under {environment[GRAPH_STATE_ENV]}, so what its reviewing side was "
+                f"given cannot be read at all:\n{launch.stdout}\n{launch.stderr}"
+            )
+            effective = composed[0].read_text(encoding="utf-8")
+            _, separator, review_bar = effective.partition(REVIEW_SIDE)
+            assert separator, (
+                f"the effective config for `{MONITOR_MEMBER}` carries no `user:` block, so "
+                f"the launch composed no reviewing bar at all:\n{effective}"
+            )
+            yield Monitored(system=watching[0].system, review_bar=review_bar)
+        finally:
+            subprocess.run(
+                ["just", "stop", SHIPPED_RUN],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                timeout=e2e_timeout(60),
+                check=False,
+            )
 
 
 @pytest.fixture(scope="module")

@@ -32,6 +32,7 @@ from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 import follow_up_variables
 import plan_root_variable
 import pytest
+from example_records import SOURCE, ExampleCopy, isolated_examples, tracked_root
 from fake_backend import (
     AGENT_DELAY_ENV,
     JUDGE_CONFIG_NAME,
@@ -49,7 +50,7 @@ from shared_dispatch_bar import (
     shared_completion_bar,
 )
 from test_observer_judge_ops import judge_argv
-from waits import deadline
+from waits import deadline, until
 from waits import timeout as e2e_timeout
 
 from orchestrator.plan_store import WRITABLE_PLUGIN
@@ -217,6 +218,8 @@ class Launched(NamedTuple):
     #: them. Which member each one is is decided by its `--config`, exactly as the
     #: backend decides it.
     prompt_log: Path
+    #: The copy of the example records the run was launched from and wrote back to.
+    examples: ExampleCopy
 
 
 class RoutedPersonaRun(NamedTuple):
@@ -395,6 +398,7 @@ def _just(*args: str, environment: dict, seconds: float = 300) -> subprocess.Com
     )
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Existing shared launch; this change only isolates its plan source.  # noqa: E501
 @pytest.fixture(scope="module")
 def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Launched]:
     """Launch the shipped example once, and hand every question its settled run."""
@@ -402,41 +406,40 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("orchestrate-launch")
     environment = _environment(tmp_path, oneharness_bin)
-    examples = tmp_path / "examples"
-    examples.mkdir()
-    for records in ("projects", "tasks", "documents"):
-        shutil.copytree(REPO_ROOT / "examples" / records, examples / records)
-    environment["ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT"] = str(examples)
-    prompt_log = tmp_path / "prompts.jsonl"
-    environment[PROMPT_LOG_ENV] = str(prompt_log)
-    # The pacemaker's shipped period is half an hour and this run settles in seconds,
-    # so at the default it would never come due and every claim about what it does
-    # with its turn would be vacuous. `--heartbeat-interval` is the published way to
-    # say when it comes due, so the journey says it rather than editing the graph.
-    launch = _just(
-        "orchestrate",
-        SHIPPED_PROJECT,
-        "--heartbeat-interval",
-        str(PACEMAKER_INTERVAL_SECONDS),
-        environment=environment,
-    )
-    # The newer graph/pipeline pair can have its already-running orchestrator begin
-    # one final reconciliation round just after the attached launcher observes the
-    # first complete boundary. Hand tests a quiescent run, as this fixture promises.
-    settling = deadline(10)
-    while True:
-        status = _just("status", SHIPPED_RUN, environment=environment, seconds=60)
-        if status.returncode == 0 and "SETTLED" in status.stdout:
-            break
-        if time.monotonic() >= settling:
-            pytest.fail(f"the launched run did not quiesce:\n{status.stdout}\n{status.stderr}")
-        time.sleep(0.05)
-    try:
-        yield Launched(environment, launch, prompt_log)
-    finally:
-        # A journey that failed mid-run leaves a driver behind; the supported way to
-        # end one is the recipe, and it is the owner here.
-        _just("stop", SHIPPED_RUN, environment=environment, seconds=60)
+    # The run writes its settlements back to the project it was launched from, so it is
+    # launched from a copy, and the block's exit holds the tracked records unchanged.
+    with isolated_examples(tmp_path) as examples:
+        environment.update(examples.environment)
+        prompt_log = tmp_path / "prompts.jsonl"
+        environment[PROMPT_LOG_ENV] = str(prompt_log)
+        # The pacemaker's shipped period is half an hour and this run settles in seconds,
+        # so at the default it would never come due and every claim about what it does
+        # with its turn would be vacuous. `--heartbeat-interval` is the published way to
+        # say when it comes due, so the journey says it rather than editing the graph.
+        launch = _just(
+            "orchestrate",
+            SHIPPED_PROJECT,
+            "--heartbeat-interval",
+            str(PACEMAKER_INTERVAL_SECONDS),
+            environment=environment,
+        )
+        # The newer graph/pipeline pair can have its already-running orchestrator begin
+        # one final reconciliation round just after the attached launcher observes the
+        # first complete boundary. Hand tests a quiescent run, as this fixture promises.
+        settling = deadline(10)
+        while True:
+            status = _just("status", SHIPPED_RUN, environment=environment, seconds=60)
+            if status.returncode == 0 and "SETTLED" in status.stdout:
+                break
+            if time.monotonic() >= settling:
+                pytest.fail(f"the launched run did not quiesce:\n{status.stdout}\n{status.stderr}")
+            time.sleep(0.05)
+        try:
+            yield Launched(environment, launch, prompt_log, examples)
+        finally:
+            # A journey that failed mid-run leaves a driver behind; the supported way to
+            # end one is the recipe, and it is the owner here.
+            _just("stop", SHIPPED_RUN, environment=environment, seconds=60)
 
 
 @pytest.fixture(scope="module")
@@ -1352,7 +1355,7 @@ def test_every_lifecycle_node_this_repository_ships_states_a_title() -> None:
     """
     lifecycle = [
         (project, node)
-        for project in _plans_in_the_repository()
+        for project in _plans_in_the_repository(tracked_root())
         # llmlint: ignore[suppressions_justified] The CLI fixture validates this list.
         for node in cast(list[dict[str, object]], read_project_plan(project)["tasks"])
         if "repo" in node
@@ -2858,12 +2861,9 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
         _just("stop", "turn-budget-e2e", environment=environment, seconds=60)
 
 
-def _plans_in_the_repository() -> list[str]:
-    """Every committed example project, as its qualified launch id."""
-    return [
-        f"examples:{record.stem}"
-        for record in sorted((REPO_ROOT / "examples" / "projects").glob("*.md"))
-    ]
+def _plans_in_the_repository(root: Path) -> list[str]:
+    """Every committed example project under the examples source's `root`, as its launch id."""
+    return [f"{SOURCE}:{record.stem}" for record in sorted((root / "projects").glob("*.md"))]
 
 
 @pytest.mark.reads_docs
@@ -2885,32 +2885,38 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    plans = _plans_in_the_repository()
-    assert plans, "no plan documents were found to check"
-    environment = _environment(tmp_path, oneharness_bin)
-    absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
-    for project in plans:
-        refused = _just(
-            "orchestrate",
-            project,
-            "--detach",
-            "--dag-graph",
-            absent_graph,
-            environment=environment,
-            seconds=120,
-        )
-        reported = refused.stderr + refused.stdout
-        # Three markers, one per boundary a loaded plan can next reach on this host:
-        # the absent agent graph, a stale session holder, and the repository preflight
-        # refusing to work an identity another session holds. That last one is not a
-        # weaker signal than the others — it is preflight, which runs only on a plan the
-        # launcher has already accepted — and it is the one a lifecycle plan naming this
-        # repository reaches whenever a run of it is live, which is most of the time.
-        reached_downstream_boundary = any(
-            marker in reported
-            for marker in ("dag-scope.yaml", "session holders", "concurrent project work refused")
-        )
-        assert reached_downstream_boundary, f"{project} was not accepted as a plan:\n{reported}"
+    # Refused before it dispatches, but a launch all the same: from a copy, like every other.
+    with isolated_examples(tmp_path) as examples:
+        plans = _plans_in_the_repository(examples.root)
+        assert plans, "no plan documents were found to check"
+        environment = {**_environment(tmp_path, oneharness_bin), **examples.environment}
+        absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
+        for project in plans:
+            refused = _just(
+                "orchestrate",
+                project,
+                "--detach",
+                "--dag-graph",
+                absent_graph,
+                environment=environment,
+                seconds=120,
+            )
+            reported = refused.stderr + refused.stdout
+            # Three markers, one per boundary a loaded plan can next reach on this host:
+            # the absent agent graph, a stale session holder, and the repository preflight
+            # refusing to work an identity another session holds. That last one is not a
+            # weaker signal than the others — it is preflight, which runs only on a plan the
+            # launcher has already accepted — and it is the one a lifecycle plan naming this
+            # repository reaches whenever a run of it is live, which is most of the time.
+            reached_downstream_boundary = any(
+                marker in reported
+                for marker in (
+                    "dag-scope.yaml",
+                    "session holders",
+                    "concurrent project work refused",
+                )
+            )
+            assert reached_downstream_boundary, f"{project} was not accepted as a plan:\n{reported}"
 
 
 #: How long the stand-in holds a worker turn open so a journey can act while the run
@@ -2967,6 +2973,28 @@ def test_a_launch_settles_with_no_verb_left_that_could_have_advanced_it(
     outcomes = _just("results", SHIPPED_RUN, environment=launched.environment, seconds=60)
     assert outcomes.returncode == 0, outcomes.stderr
     assert "research" in outcomes.stdout, outcomes.stdout
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_the_launch_writes_its_settlement_back_to_its_own_copy_of_the_example(
+    launched: Launched,
+) -> None:
+    """The settlement reached the copy the run was launched from, so the copy was what it read.
+
+    The fixture's exit holds the tracked records unchanged, and that alone would also pass
+    for a launch that wrote back nowhere at all — so this is the half that says the
+    redirect is real: the task record the run settled is rewritten in the copy. It shares
+    the module's one launch and reads only that copy, against the tracked bytes the
+    fixture captured before launching.
+    """
+    record = Path("tasks/scheduler-research/research.md")
+    copied = launched.examples.root / record
+    until(
+        "the run's settlement written back to its copy of the example task",
+        lambda: copied.read_bytes() != launched.examples.tracked[record],
+        seconds=60,
+        state=lambda: copied.read_text(encoding="utf-8"),
+    )
 
 
 #: A run's own name on the ledger. Every planner-facing verb takes one, and a plan's
