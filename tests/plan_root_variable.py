@@ -21,17 +21,22 @@ from orchestrator.root import REPO_ROOT
 
 HELPER = REPO_ROOT / "scripts" / "plan-root-env.sh"
 
-#: An accessor rather than a second copy of the contract: what it names is the helper's
-#: own constant, so a helper that stopped defining it fails the read below rather than
-#: answering wrongly.
+#: Accessors rather than second copies of the contract: what each names is the helper's
+#: own constant, so a helper that stopped defining one fails the read below rather than
+#: answering wrongly. The source is held beside the variable because the helper composes
+#: the second out of the first — a reader that spelled the source itself could name a
+#: source this checkout does not plan into.
 NAME_HOLDER = "PLAN_AUTHORING_ROOT_ENV"
+SOURCE_HOLDER = "PLAN_AUTHORING_SOURCE"
 
 
 @functools.cache
-def name() -> str:
-    """The environment variable a planning launch exports its plan-authoring root under."""
+def _held(holder: str) -> str:
     read = subprocess.run(  # noqa: S603 - this repository's own helper, read as its callers do
-        ["bash", "-c", f'source "{HELPER}"; printf "%s" "${NAME_HOLDER}"'],
+        # noqa: S607 - bash from the search path, because that is the interpreter every
+        # recipe sourcing this helper runs it under; an absolute one here would read a
+        # shell the callers never use.
+        ["bash", "-c", f'source "{HELPER}"; printf "%s" "${holder}"'],  # noqa: S607
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -39,7 +44,17 @@ def name() -> str:
     )
     if read.returncode != 0 or not read.stdout.strip():
         raise AssertionError(
-            f"{HELPER} did not answer with the name it composes; it is the one source of "
+            f"{HELPER} did not answer with the {holder} it composes; it is the one source of "
             f"that name, so nothing here can stand in for it:\n{read.stdout}{read.stderr}"
         )
     return read.stdout.strip()
+
+
+def name() -> str:
+    """The environment variable a planning launch exports its plan-authoring root under."""
+    return _held(NAME_HOLDER)
+
+
+def source() -> str:
+    """The plan source that root belongs to, as this checkout's store configures it."""
+    return _held(SOURCE_HOLDER)

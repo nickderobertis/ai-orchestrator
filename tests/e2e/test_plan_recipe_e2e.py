@@ -80,11 +80,6 @@ INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_LAUNCHER",
     "ONEPIPELINE_LAUNCHER_SESSION",
     "ONEPIPELINE_RUN_ID",
-    # The plan-authoring root a *planning* launch exports, read from the one place that
-    # composes it. This suite runs inside a dispatch and launches planners of its own, so
-    # a journey that kept it would write and read through whatever directory some
-    # enclosing launch chose rather than through the one these launches resolve.
-    plan_root_variable.name(),
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -96,12 +91,22 @@ INHERITED_ENVIRONMENT = (
 #: from — and here that is a brief's filename, which is not one until it is sanitized.
 RunId = NewType("RunId", str)
 
-#: Where `scripts/plan.sh` writes what it generates, relative to this checkout.
-PLAN_DIRECTORY = REPO_ROOT / ".plans"
+
+def _plan_directory() -> Path:
+    """Where `scripts/plan.sh` writes what it generates: the root this process states.
+
+    Read from the environment rather than joined onto this checkout, and the launches
+    below keep that name rather than clearing it, because both halves have to agree: the
+    recipe resolves the `authoring` source through whatever root is stated, and every
+    read back here goes through the store under the same one. `tests/conftest.py` states
+    a temporary root for every test process, so what these journeys write is theirs and
+    this checkout's own `.plans` is never the directory a planner here authors into.
+    """
+    return Path(os.environ[plan_root_variable.name()])
 
 
 def _project_record(project: str) -> Path:
-    return PLAN_DIRECTORY / "projects" / f"{project}.md"
+    return _plan_directory() / "projects" / f"{project}.md"
 
 
 def _stored_task(project: str, node_id: str) -> StoredTask:
@@ -137,7 +142,7 @@ def _stored_task(project: str, node_id: str) -> StoredTask:
 
 def _remove_project(project: str) -> None:
     _project_record(project).unlink(missing_ok=True)
-    tasks = PLAN_DIRECTORY / "tasks" / project
+    tasks = _plan_directory() / "tasks" / project
     if tasks.is_dir():
         for task in tasks.iterdir():
             task.unlink(missing_ok=True)

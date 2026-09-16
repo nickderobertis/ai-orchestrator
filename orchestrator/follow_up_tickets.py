@@ -37,6 +37,7 @@ source's root is composed by `scripts/follow-up-env.sh` alone.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -344,7 +345,7 @@ TICKET_SUFFIX = ".md"
 #: prose needs them, and sections it names exactly once, since a section rendered twice is
 #: two copies of a contract in one task.
 PLACEHOLDER = re.compile(r"@([A-Z][A-Z_]*)@")
-VALUES = ("RUN", "BOARD", "DRAFTS_ROOT", "VALIDATE", "BOARD_STATUS", "CHECKOUT")
+VALUES = ("RUN", "BOARD", "DRAFTS_ROOT", "VALIDATE", "BOARD_STATUS", "CHECKOUT", "PLAN_STORE")
 SECTIONS = ("STATUS_VOCABULARY", "TICKET_CONTRACT", "COMMENT_CONTRACT", "REDISPATCH", "FEEDBACK")
 PLACEHOLDERS = (*VALUES, *SECTIONS)
 
@@ -1083,7 +1084,7 @@ def ticket_contract(run: str, board: str) -> str:
         "the board's owner, before anything is asked of the board. On any of these refusals, "
         "copy nothing and report what it printed.\n"
         "- **A refusal is reported, never worked around.** When `board-status` exits "
-        f"{OUTSIDE_OWNER}, or `onetaskgraph task copy` refuses the ticket — for a repository the "
+        f"{OUTSIDE_OWNER}, or `@PLAN_STORE@ task copy` refuses the ticket — for a repository the "
         "token cannot see, or one GitHub will not create an issue in — copy nothing for that "
         "ticket, never retry it with `repositories` removed or changed to get it filed, and "
         "report what was printed.\n"
@@ -1093,7 +1094,7 @@ def ticket_contract(run: str, board: str) -> str:
         "- **`host` is read, never typed.** Run `hostname` on the machine you run on and "
         f"write exactly what it prints, both as `host` and in the `## {EVIDENCE}` section, "
         "never a value you type or recall.\n"
-        f"- It reaches the board only as `onetaskgraph task copy {ticket} --to {board}`. The "
+        f"- It reaches the board only as `@PLAN_STORE@ task copy {ticket} --to {board}`. The "
         "origin that copy records makes a later copy of the same ticket update that same "
         "issue, and that is the only way an issue is edited.\n\n"
         "The shape, with every placeholder to fill:\n\n"
@@ -1118,7 +1119,7 @@ def comment_contract(run: str, board: str) -> str:
         "**one** comment from this run, carrying this run's evidence — whatever status the "
         "board holds it at, so an item at `Deferred` receives this run's one comment like any "
         "other open item. Where this run's "
-        "comment is already there, edit it with `onetaskgraph task comment edit`; never add "
+        "comment is already there, edit it with `@PLAN_STORE@ task comment edit`; never add "
         "a second.\n"
     )
 
@@ -1157,6 +1158,46 @@ verbatim. Act on it within the rules above.
 """
 
 
+#: What a word cannot carry and still survive unquoted in the shell a store instruction is
+#: run in: everything outside the set `shlex.quote` leaves alone. Every store instruction
+#: in the task is shell embedded in Markdown and is read as written, so one of these in the
+#: program word — a space, a quote, a backtick, a `$` — makes it several words or shell
+#: syntax rather than one path, which is the same defect as a bare name by another route.
+_NEEDS_QUOTING = re.compile(r"[^\w@%+=:,./-]", re.ASCII)
+
+
+def _plan_store_problems(plan_store: str) -> list[str]:
+    """Every way the program a composed task writes its store instructions with is not one.
+
+    All three are the same boundary. A value that is not **absolute** leaves the
+    dispatch's own search path to decide what a store instruction runs, which is the whole
+    defect the full spelling closes; a value that is not an **executable file** on this
+    host is one the dispatch would meet as "command not found" after the launch, with the
+    task already written and nothing left to repair it; and a value carrying anything the
+    shell would not read as one word is a path that reaches the dispatch as something
+    other than the program it names, however absolute and executable it is here.
+    """
+    named = Path(plan_store)
+    if not named.is_absolute():
+        return [
+            f"the plan-store program {plan_store!r} is not an absolute path, so what a "
+            "store instruction in this task resolves to would be the dispatch's own "
+            "search path's to decide"
+        ]
+    if not named.is_file() or not os.access(named, os.X_OK):
+        return [
+            f"the plan-store program {plan_store} is not an executable file on this host, "
+            "so every store instruction in this task names a program the dispatch cannot run"
+        ]
+    if unsafe := _NEEDS_QUOTING.search(plan_store):
+        return [
+            f"the plan-store program {plan_store!r} carries {unsafe[0]!r}, which the shell "
+            "a store instruction runs in does not read as part of one word, so the task "
+            "would name something other than that program"
+        ]
+    return []
+
+
 def _filled(text: str, values: Mapping[str, str]) -> str:
     """``text`` with each placeholder ``values`` names filled, and every other left as is."""
     return PLACEHOLDER.sub(lambda matched: values.get(matched[1], matched[0]), text)
@@ -1171,10 +1212,17 @@ def compose(
     validate: str,
     board_status: str,
     checkout: Path,
+    plan_store: str,
     feedback: str | None,
     redispatch: bool,
 ) -> str:
     """The follow-up agent's task: ``template`` with every placeholder filled, once.
+
+    ``plan_store`` is the plan-store program every store instruction in the task is
+    written with, and is refused unless it is an absolute path: the agent reads this task
+    in a directory of its own, where a relative or bare name is answered by that
+    dispatch's own search path. `scripts/follow-ups.sh` resolves it and says what that
+    cost.
 
     The template is filled in a single pass, so what fills a placeholder is never read
     again for one — which is what brings the manager's feedback into the task verbatim,
@@ -1189,6 +1237,7 @@ def compose(
         found.append(f"the task template is missing placeholders: {', '.join(missing)}")
     if repeated := sorted(name for name in SECTIONS if named.count(name) > 1):
         found.append(f"the task template names these more than once: {', '.join(repeated)}")
+    found.extend(_plan_store_problems(plan_store))
     if found:
         raise Refused(found)
     scalars = {
@@ -1198,6 +1247,7 @@ def compose(
         "VALIDATE": validate,
         "BOARD_STATUS": board_status,
         "CHECKOUT": str(checkout),
+        "PLAN_STORE": plan_store,
     }
     values = {
         **scalars,
@@ -1261,6 +1311,15 @@ def _parser() -> _Parser:
     task.add_argument("--validate", required=True, metavar="COMMAND")
     task.add_argument("--board-status", required=True, metavar="COMMAND")
     task.add_argument("--checkout", type=Path, required=True, help="the launching checkout")
+    task.add_argument(
+        "--plan-store",
+        required=True,
+        metavar="PATH",
+        help=(
+            "the absolute path of the plan-store program every store instruction in the "
+            "task is written with"
+        ),
+    )
     task.add_argument("--feedback", type=Path, metavar="FILE")
     return parser
 
@@ -1294,6 +1353,7 @@ def _composed(arguments: argparse.Namespace) -> int:
             validate=arguments.validate,
             board_status=arguments.board_status,
             checkout=arguments.checkout,
+            plan_store=arguments.plan_store,
             feedback=feedback,
             redispatch=feedback is not None or inventory(root, arguments.run)[1] > 0,
         )

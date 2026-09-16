@@ -226,21 +226,6 @@ DISPATCH_APPENDIX = Input(
 
 
 @pytest.fixture(scope="module", autouse=True)
-def this_checkouts_own_plan_root() -> Iterator[None]:
-    """Read this checkout's own plan store here, whatever launch this suite runs inside.
-
-    This module both launches planning runs and asks what its own checkout resolves the
-    `authoring` source to. A planning launch exports that root into every dispatch it
-    makes and this suite runs inside a dispatch, so an enclosing one would otherwise make
-    `plan_store.source_root` here answer about *its* checkout — and every expectation
-    below would be measured against a directory this launch had nothing to do with.
-    """
-    with pytest.MonkeyPatch.context() as patched:
-        patched.delenv(plan_root_variable.name(), raising=False)
-        yield
-
-
-@pytest.fixture(scope="module", autouse=True)
 def repository_credentials_file() -> Iterator[None]:
     """Give this journey a name in the checkout's own `.env`, beside whatever is there.
 
@@ -341,7 +326,25 @@ LAUNCH_GROUP = SHARED_TOOLCHAIN_GROUP
 #: every worker takes the appending branch, and the module passes; on a publication clone
 #: there is none, all four workers take the creating branch at once, and five tests error
 #: in setup and refuse the push. `tests/test_nx_cache_scope.py` holds the rule.
-pytestmark = pytest.mark.xdist_group(LAUNCH_GROUP)
+pytestmark = [
+    pytest.mark.xdist_group(LAUNCH_GROUP),
+    # Read this checkout's own plan store here, whatever launch this suite runs inside and
+    # whatever root the suite's autouse isolation would otherwise state. This module both
+    # launches planning runs and asks what its own checkout resolves the `authoring` source
+    # to, and `scripts/plan-root-env.sh` keeps a root already in the environment by design —
+    # so a stated one would sit on both sides of every comparison below and a launch that
+    # had stopped resolving one at all would go on passing. An enclosing dispatch's exported
+    # root is defeated by the same opt-out, which is what this module's own fixture did
+    # before the isolation existed.
+    pytest.mark.real_plan_store_roots(
+        "authoring",
+        reason=(
+            "every expectation here is measured against what this checkout resolves the "
+            "`authoring` source to, and the launch keeps a root already in the environment: "
+            "an isolated root would be compared against itself"
+        ),
+    ),
+]
 
 #: The two checkouts the node `just plan` writes names, as `scripts/plan.sh` defaults
 #: them. Each launch below seeds a scratch pair under exactly these names, so the

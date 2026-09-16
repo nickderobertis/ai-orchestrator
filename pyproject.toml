@@ -97,6 +97,7 @@ markers = [
     "reads_docs: asserts on this repository's own prose, so it belongs to the whole-workspace test tier rather than the code-only one",
     "reads_recipes: drives this repository's own recipes and scripts and reads nothing else of it, so it belongs to the recipe-scoped test tier rather than the code-only one",
     "reads_checkouts: reconciles this repository's configuration against state that lives outside the workspace — another repository's checkout, the merge path it publishes through, an installed producer whose wire format it reads, or a package registry's published releases — and so outside every cache key, and belongs to the uncached tier rather than any memoized one",
+    "real_plan_store_roots(*sources, reason): keeps the named writable plan sources ('authoring', 'drafts') rooted where this checkout configures them rather than under the suite's own temporary root, for a module whose subject is that resolution; declared at module level with a reason naming what a temporary root would defeat",
 ]
 
 [tool.coverage.run]

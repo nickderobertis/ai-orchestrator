@@ -70,10 +70,25 @@ pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 FAKE_CODEX = helper("fake_codex_untrusted_directory.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
+#: The plan-store release this checkout pins, which is the one a dispatched follow-up agent
+#: has to reach whatever else the caller's search path offers.
+ADOPTED_PLAN_STORE = (REPO_ROOT / "config" / "onetaskgraph.version").read_text("utf-8").strip()
+
+#: A plan-store CLI of another release, and the command that runs the task's own store
+#: instruction with that release ahead of the pinned one; each file's header says what it
+#: does and why the launcher's own search path cannot answer this.
+OLDER_PLAN_STORE = helper("older-plan-store")
+OLDER_PLAN_STORE_VERSION = "0.0.1"
+RUN_TASK_STORE_INSTRUCTION = helper("run_task_store_instruction.py")
+
 #: Files the first pass's turn has real programs write into the directory it runs commands
-#: from: `pwd`'s answer to where that is, and git's answer to whether a repository holds it.
+#: from: `pwd`'s answer to where that is, git's answer to whether a repository holds it,
+#: which plan store the launched process tree's own search path resolves, and what happened
+#: when the store instruction the task hands the agent was run with an older release first.
 TURN_DIRECTORY_WITNESS = "turn-directory.witness"
 GIT_WITNESS = "git-toplevel.witness"
+PLAN_STORE_WITNESS = "plan-store.witness"
+STORE_INSTRUCTION_WITNESS = "store-instruction.witness"
 
 #: The launching session this journey states, and everything an enclosing dispatch would
 #: otherwise decide for these launches.
@@ -104,6 +119,9 @@ SUFFIX = "-follow-ups"
 NODE = "follow-ups"
 GRAPH = "graphs/follow-up.yaml"
 PERSONA = "../personas/follow-up.yaml"
+
+#: The tracked template the recipe composes the agent's task from, relative to this checkout.
+TEMPLATE = "config/follow-up-task.md"
 
 #: The repository every draft here is about, and the commit its claims were verified at.
 REPOSITORY = "github.com/nickderobertis/some-service"
@@ -151,11 +169,12 @@ class Bench(NamedTuple):
     plans: Path
     board: Path
     runs: Path
+    graph_state: Path
 
 
 def _bench(tmp: Path) -> Bench:
-    drafts_root, plans, board, runs = (
-        tmp / name for name in ("follow-ups", "plans", "board", "runs")
+    drafts_root, plans, board, runs, graph_state = (
+        tmp / name for name in ("follow-ups", "plans", "board", "runs", "graph-state")
     )
     # Created rather than left to the first write: a `local-md` source canonicalizes its
     # root when it is built, so an absent one is refused as a broken source.
@@ -173,10 +192,31 @@ def _bench(tmp: Path) -> Bench:
     environment[f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT"] = str(board)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # A plan store of another release, ahead of everything the caller offers — the
+    # condition the ticket names. It is stated here and read again inside the turn,
+    # because the caller's own search path is not where this is decided: `just follow-ups`
+    # reaches the driver through `scripts/onepipeline.sh`'s `exec uv run`, which puts this
+    # checkout's `.venv/bin` ahead of it for the whole launched process tree. What that
+    # leaves — and what a dispatched agent's own shell has instead — is
+    # `test_the_launchers_own_search_path_puts_this_checkouts_venv_first` and
+    # `tests/e2e/run_task_store_instruction.py`.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment["PATH"] = (
+        f"{OLDER_PLAN_STORE}{os.pathsep}{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    )
+    environment["REAL_PLAN_STORE"] = str(ONETASKGRAPH_BIN)
+    environment["OLDER_PLAN_STORE_VERSION"] = OLDER_PLAN_STORE_VERSION
+    environment["OLDER_PLAN_STORE_DIR"] = str(OLDER_PLAN_STORE)
     environment["XDG_STATE_HOME"] = str(tmp / "state")
-    return Bench(environment, tmp, drafts_root, plans, board, runs)
+    # `oneagentgraph` keeps each member's scratch — its report, the effective harness
+    # config it ran under, and everything the turn writes in its working directory —
+    # under a state directory of its own, which it takes from this name rather than from
+    # `XDG_STATE_HOME`. Without it a completed launch here left
+    # `~/.local/state/oneagentgraph/runs/follow-up-*/members/worker/` on the host, which
+    # nothing reclaims and no journey can read as its own.
+    # `tests/e2e/test_orchestrate_launch_e2e.py` states it the same way.
+    environment["ONEAGENTGRAPH_STATE_DIR"] = str(graph_state)
+    return Bench(environment, tmp, drafts_root, plans, board, runs, graph_state)
 
 
 def _run(
@@ -501,8 +541,17 @@ def _turn(bench: Bench, follow_up_run: str) -> Turn | None:
     )
 
 
+def _prompt_log(bench: Bench, name: str) -> Path:
+    """Where one pass records the task its turn was given, named before the pass runs.
+
+    A turn's own commands read it: the store instruction the agent was handed is in the
+    task and nowhere else, so a command that runs that instruction has to find it there.
+    """
+    return bench.tmp / f"prompts-{name}.jsonl"
+
+
 def _pass(bench: Bench, name: str, main: str, *extra: str) -> Pass:
-    log = bench.tmp / f"prompts-{name}.jsonl"
+    log = _prompt_log(bench, name)
     environment = bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(log)}
     result = _run(
         ["just", "follow-ups", main, "--to", BOARD, *extra], bench, environment=environment
@@ -579,6 +628,23 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             bench,
             main,
             [
+                # First, while this run's drafts are still there to list: run the store
+                # instruction the task itself hands the agent, with a plan store of
+                # another release ahead of the pinned one on the search path that
+                # resolves it. The helper's header says why that search path is the
+                # agent's own rather than the launcher's.
+                [
+                    python,
+                    str(RUN_TASK_STORE_INSTRUCTION),
+                    "--prompt-log",
+                    str(_prompt_log(bench, "first")),
+                    "--run",
+                    main,
+                    "--checkout",
+                    str(REPO_ROOT),
+                    "--witness",
+                    STORE_INSTRUCTION_WITNESS,
+                ],
                 ["mkdir", "-p", str(new_ticket.parent)],
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
@@ -604,6 +670,14 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "-c",
                     f"git rev-parse --show-toplevel > {GIT_WITNESS} 2>&1; "
                     f'echo "exit $?" >> {GIT_WITNESS}',
+                ],
+                # Which plan store this turn's own search path resolves, and what that
+                # program reports itself to be.
+                [
+                    "sh",
+                    "-c",
+                    f"command -v onetaskgraph > {PLAN_STORE_WITNESS} 2>&1; "
+                    f"onetaskgraph --version >> {PLAN_STORE_WITNESS} 2>&1",
                 ],
             ],
         )
@@ -930,6 +1004,278 @@ def test_the_members_turn_runs_on_codex_and_runs_commands_from_a_directory_no_re
     assert git.rstrip().endswith("exit 128"), git
 
 
+def test_the_members_scratch_stays_under_this_journeys_own_bench(followed: Followed) -> None:
+    """Nothing this launch wrote for its member is left in the host's persistent state.
+
+    `oneagentgraph` keeps a member's scratch — the report `just transcript` names, the
+    effective harness config the turn ran under, and every file the turn wrote in its
+    working directory — under its own state directory, which it reads from
+    `ONEAGENTGRAPH_STATE_DIR` and not from `XDG_STATE_HOME`. This journey redirected the
+    second and not the first, so every completed launch left
+    `~/.local/state/oneagentgraph/runs/follow-up-*/members/worker/` behind on the host:
+    storage nobody reclaims, and a directory a concurrent dispatch is writing into at the
+    same time.
+
+    Read off the launch that already happened rather than off a live process, so it still
+    answers once every run here has been stopped: the member report is the one artifact
+    whose resolved location says where all of that went, and the turn's own `pwd` witness
+    beside it says the turn ran there too.
+    """
+    bench, turn = followed.bench, followed.first_turn
+    bench_state = bench.graph_state.resolve()
+
+    assert turn.directory.resolve().is_relative_to(bench_state), (
+        f"the member report was written to {turn.directory}, outside this journey's own "
+        f"state directory {bench_state}; a launch here is leaving agent-graph scratch in "
+        "the host's persistent state"
+    )
+    witness = turn.directory.resolve() / TURN_DIRECTORY_WITNESS
+    assert witness.is_file() and Path(witness.read_text(encoding="utf-8").strip()).is_relative_to(
+        bench_state
+    ), f"the turn ran its commands outside {bench_state}"
+
+
+def test_the_composed_task_names_the_plan_store_in_full_and_never_bare(
+    followed: Followed,
+) -> None:
+    """Every store instruction the agent is given resolves to one program, not to a name.
+
+    The agent works in its graph's scratch directory, where a bare `onetaskgraph` is
+    answered by whatever that dispatch's search path offers first — and this journey's
+    launches offer another release there deliberately.
+    """
+    (task,) = followed.first.prompts
+
+    assert str(ONETASKGRAPH_BIN) in task, (
+        f"the composed task never names {ONETASKGRAPH_BIN}, so what a store command there "
+        "resolves to is the dispatch's search path's to decide"
+    )
+    bare = [line for line in task.splitlines() if "`onetaskgraph " in line]
+    assert not bare, f"the composed task still names a bare plan-store invocation: {bare}"
+
+
+def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
+    """The compose command `scripts/follow-ups.sh` runs, with ``plan_store`` in its place.
+
+    Every other word is the recipe's own — this checkout's interpreter, the tracked
+    template, the run's real drafts root, the board this journey stands in, and the two
+    commands the task is written with — so what a refusal below answers is the one value
+    that differs.
+    """
+    python = str(REPO_ROOT / ".venv" / "bin" / "python3")
+    written = f'"{python}" -m orchestrator.follow_up_tickets'
+    return [
+        python,
+        "-m",
+        "orchestrator.follow_up_tickets",
+        "compose",
+        "--template",
+        str(REPO_ROOT / TEMPLATE),
+        "--root",
+        str(bench.drafts_root),
+        "--run",
+        run,
+        "--board",
+        BOARD,
+        "--validate",
+        f"{written} validate",
+        "--board-status",
+        f"{written} board-status",
+        "--checkout",
+        str(REPO_ROOT),
+        "--plan-store",
+        plan_store,
+    ]
+
+
+def test_a_plan_store_the_dispatch_could_not_run_composes_no_task_at_all(
+    followed: Followed,
+) -> None:
+    """The composer refuses a program the dispatch could not run, before a task exists.
+
+    Driven where `scripts/follow-ups.sh` drives it: the real `compose` command, spawned
+    through this checkout's own interpreter over the tracked template and the run's real
+    drafts root, with only `--plan-store` differing between the three invocations. That is
+    the boundary the refusal defends — the recipe writes this command's standard output
+    straight into the task the launch dispatches, so a value it let through would reach the
+    agent as a store instruction that fails after the launch, with the task already written
+    and two real runs' worth of evidence for what that costs.
+
+    Each refusal is read as *no task composed* rather than as a message alone: an empty
+    standard output is what keeps the recipe from launching, and the sound invocation
+    beside them is what says the rest of the argv is not what any of them answered. The
+    third is absolute and really executable — a symlink to the pinned CLI — and is refused
+    only for the space in its directory, which the shell a store instruction runs in would
+    read as two words.
+    """
+    bench, run = followed.bench, followed.main
+
+    composed = _run(_compose_command(bench, run, str(ONETASKGRAPH_BIN)), bench)
+    assert composed.returncode == OK, composed.stdout + composed.stderr
+    assert str(ONETASKGRAPH_BIN) in composed.stdout
+
+    unquotable = bench.tmp / "plan store"
+    unquotable.mkdir(exist_ok=True)
+    (unquotable / "onetaskgraph").symlink_to(ONETASKGRAPH_BIN)
+    for named, refusal in (
+        ("onetaskgraph", "is not an absolute path"),
+        (str(bench.tmp / "no-such-plan-store"), "is not an executable file"),
+        (str(unquotable / "onetaskgraph"), "does not read as part of one word"),
+    ):
+        refused = _run(_compose_command(bench, run, named), bench)
+        assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+        assert refusal in refused.stderr, refused.stderr
+        assert refused.stdout == "", (
+            f"a plan store the dispatch could not run still composed a task: {refused.stdout}"
+        )
+
+
+def _unprovisioned(root: Path) -> Path:
+    """A checkout of this repository nobody has bootstrapped, as a real host would have it.
+
+    What `scripts/follow-ups.sh` reads before it resolves the plan store, copied as it
+    stands: its own `scripts/`, the `config/` it names its template from, the
+    `orchestrator/` package the draft inventory and the board constant are read out of —
+    which the interpreter it falls back to can import from here because that package is
+    stdlib-only — and the `onetaskgraph.yaml` every plan source is resolved against, which
+    a checkout without one answers for as a store configuring no sources at all. What is
+    deliberately absent is `.venv/`, so this checkout has neither the pinned plan-store CLI
+    nor an interpreter of its own: the state of every checkout before `just bootstrap` has
+    run in it.
+    """
+    for directory in ("scripts", "config", "orchestrator"):
+        shutil.copytree(REPO_ROOT / directory, root / directory, dirs_exist_ok=True)
+    shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", root / "onetaskgraph.yaml")
+    return root
+
+
+def test_an_unprovisioned_checkout_refuses_rather_than_naming_the_store_on_the_path(
+    followed: Followed, tmp_path: Path
+) -> None:
+    """The recipe names its own checkout's plan store or none, and never the path's.
+
+    This is the shape both real runs behind issue 1057 had: a host carrying a plan store
+    of another release on its search path, and a checkout whose own pinned copy is not
+    there. Spelling the program in full closes that only while the program spelled is the
+    pinned one — resolving it from the search path instead would write another release's
+    path into the task and hand the agent the same wrong program with the task's own
+    authority behind it. So an unbootstrapped checkout is refused here, and what it is
+    refused with is where to repair it.
+
+    Everything about the condition is real: a checkout of this repository's own `scripts/`,
+    `config/` and `orchestrator/` with no `.venv/` — the state of every checkout before
+    `just bootstrap` runs in it — driven with this bench's ordinary environment, whose
+    search path does offer a plan store. The run it is asked about really holds a draft,
+    written through the real drafting command, so the recipe passes its inventory and
+    reaches the resolution rather than ending at the line for a run with nothing to verify.
+    """
+    bench = followed.bench
+    run = f"fu-unprovisioned-{os.getpid()}"
+    _draft(bench, run, "The sweep trailer omits a family")
+    checkout = _unprovisioned(tmp_path / "checkout")
+    assert shutil.which("onetaskgraph", path=bench.environment["PATH"]) is not None, (
+        "this bench's search path offers no plan store, so a refusal below would say "
+        "nothing about preferring the checkout's own"
+    )
+
+    refused = subprocess.run(  # noqa: S603 - this repository's own recipe, in a copy of it
+        [str(checkout / "scripts" / "follow-ups.sh"), run],
+        cwd=checkout,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert f"has no plan-store CLI at {checkout}/.venv/bin/onetaskgraph" in refused.stderr, (
+        refused.stderr
+    )
+    assert "just bootstrap" in refused.stderr, refused.stderr
+    assert not (bench.plans / "projects" / f"{run}{SUFFIX}.md").exists(), (
+        "the recipe wrote a project for a run whose plan store it could not resolve"
+    )
+    assert not (bench.runs / f"{run}{SUFFIX}").exists(), (
+        "the recipe launched a run whose plan store it could not resolve"
+    )
+
+
+def test_the_launchers_own_search_path_puts_this_checkouts_venv_first(
+    followed: Followed,
+) -> None:
+    """Why putting an older plan store ahead of the caller's path proves nothing on its own.
+
+    This bench places one there, and the launched process tree still resolves a bare
+    `onetaskgraph` to the pinned binary — because `just follow-ups` reaches the driver
+    through `scripts/onepipeline.sh`'s `exec uv run`, which prepends this checkout's
+    `.venv/bin` for everything below it. So this is a reading of the launcher and never a
+    guard of the pin: an assertion resting on it goes green against a task that spells the
+    store as a bare name, which is what the first attempt at that guard did.
+
+    What the two real runs hit is the search path a dispatched agent's *own* shell
+    re-derives, and the guard for that is
+    `test_the_dispatched_agent_runs_the_pinned_plan_store_the_task_names`.
+    """
+    witness = followed.first_turn.directory.resolve() / PLAN_STORE_WITNESS
+    assert witness.is_file(), (
+        f"no command the turn ran wrote {PLAN_STORE_WITNESS} into {followed.first_turn.directory}"
+    )
+    resolved, reported = witness.read_text(encoding="utf-8").splitlines()[:2]
+
+    assert Path(resolved) == ONETASKGRAPH_BIN, (
+        f"the launched process tree resolves `onetaskgraph` to {resolved}, where `uv run` "
+        f"was expected to put this checkout's {ONETASKGRAPH_BIN} first"
+    )
+    assert reported == f"onetaskgraph {ADOPTED_PLAN_STORE}", (
+        f"the binary at {ONETASKGRAPH_BIN} reports {reported!r}, where this checkout pins "
+        f"{ADOPTED_PLAN_STORE}"
+    )
+
+
+def test_the_dispatched_agent_runs_the_pinned_plan_store_the_task_names(
+    followed: Followed,
+) -> None:
+    """A store command the task hands the agent reaches the pinned release, older one first.
+
+    This is the guard for issue 1057, and what it drives is the resolution a dispatched
+    agent actually performs: the instruction is read out of the task that turn was given
+    and run as that task spells it, in the turn, with a plan store of another release ahead
+    of the pinned one on the path that resolves it. A task naming the program in full
+    survives that; the bare `onetaskgraph` this template carried before the pin does not,
+    and two real runs were answered by another release exactly there.
+
+    Three readings, because a resolution rule alone would be this journey reading its own
+    search path back to itself: what the instruction resolved to, that the older program's
+    own log says it never served it, and that the command really listed this run's drafts —
+    so a witness written by an instruction that did nothing cannot pass.
+    """
+    witness = followed.first_turn.directory.resolve() / STORE_INSTRUCTION_WITNESS
+    assert witness.is_file(), (
+        f"no command the turn ran wrote {STORE_INSTRUCTION_WITNESS} into "
+        f"{followed.first_turn.directory}; {_ran(followed.bench)}"
+    )
+    # llmlint: ignore[boundary_inputs_validated] The witness this journey's own helper wrote,
+    # at the path this journey named; every field read here is asserted on below.
+    probe = json.loads(witness.read_text(encoding="utf-8"))
+    assert probe["problem"] is None, probe["problem"]
+
+    assert probe["resolved"] == str(ONETASKGRAPH_BIN), (
+        f"the store instruction the task hands the agent, {probe['command']}, resolves to "
+        f"{probe['resolved']} when a plan store of another release is ahead of the pinned "
+        f"one; this checkout pins {ONETASKGRAPH_BIN}"
+    )
+    served = witness.with_name(witness.name + ".served")
+    assert not served.is_file(), (
+        f"the older plan store served the task's own instruction: {served.read_text('utf-8')}"
+    )
+    assert probe["returncode"] == 0, probe
+    listed = json.loads(probe["stdout"])["items"]
+    assert sorted(str(one["id"]) for one in listed) == sorted(
+        _draft_id(followed.main, draft) for draft in followed.consumed
+    ), probe
+
+
 def test_the_member_is_given_the_composed_task_whole(followed: Followed) -> None:
     first = followed.first
     node = _launched_node(followed.bench, first.run)
@@ -951,7 +1297,7 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
 
     for instruction in (
         f"`{root}/tasks/{main}/drafts/`",
-        f"onetaskgraph task list --source drafts --project {main} --json",
+        f"{ONETASKGRAPH_BIN} task list --source drafts --project {main} --json",
         "`transcript` command",
         f"from the checkout that launched you, `{REPO_ROOT}`",
         "registered checkouts `onevcs repos`",
@@ -969,7 +1315,7 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
         "-m orchestrator.follow_up_tickets validate <path of the ticket>",
         "Then delete the draft files that ticket consumed",
         "`root_cause` and `repository`, then by titles and text",
-        f"onetaskgraph task list --source {BOARD} --search <text> --json",
+        f"{ONETASKGRAPH_BIN} task list --source {BOARD} --search <text> --json",
         "every issue you created or updated with its URL",
         "every dropped draft with its reason",
         "every finding that should have been surfaced live",
@@ -987,9 +1333,11 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
         tickets.ticket_contract(main, BOARD)
         .replace("@DRAFTS_ROOT@", str(root))
         .replace("@BOARD_STATUS@", decided[1])
+        .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
     )
     assert contract in task, "the ticket shape is not the one the module renders"
-    assert tickets.comment_contract(main, BOARD) in task, "board ownership is not the module's"
+    ownership = tickets.comment_contract(main, BOARD).replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
+    assert ownership in task, "board ownership is not the module's"
     assert task.count(tickets.status_vocabulary()) == 1, "the status vocabulary is not there once"
     assert "## This is a re-dispatch" not in task
     assert "## Feedback on the previous follow-up run" not in task

@@ -50,6 +50,20 @@ from orchestrator.root import REPO_ROOT
 #: answered by a different set of files. `tests/plan_tooling/project.json` names that
 #: set as `planToolingWorkspace`, and `tests/conftest.py` holds these tests to it.
 
+#: The `authoring` root this checkout configures is this module's own subject twice
+#: over: one journey asks whether that directory is gitignored, and the closeout
+#: journeys build a *copy* of this checkout by taking the root's path relative to it. A
+#: temporary root outside the tree answers neither question, so this module reads the
+#: configured one and points its own launches at the copy it made.
+pytestmark = pytest.mark.real_plan_store_roots(
+    "authoring",
+    reason=(
+        "one journey asks whether the configured authoring root is gitignored and the "
+        "closeout journeys derive a copied checkout's store from that root's path "
+        "relative to this one; a root outside this checkout answers neither"
+    ),
+)
+
 #: The paid provider's stand-in, and the guard covering the identities
 #: `ONEHARNESS_BIN_*` cannot reach. `just review-plan` spawns the real `oneharness run`,
 #: so the provider binary is the seam — exactly as it is for the change-request drafter.

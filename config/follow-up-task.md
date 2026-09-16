@@ -16,14 +16,19 @@ there gets this run's evidence rather than a second issue.
 ## Where everything is
 
 - **Where to run commands.** Your own working directory is the agent graph's scratch
-  directory, which configures no plan source. Run every `onetaskgraph`, `onepipeline` and
+  directory, which configures no plan source. Run every `@PLAN_STORE@`, `onepipeline` and
   `onevcs` command from the checkout that launched you, `@CHECKOUT@` (`cd` there first).
   That checkout's configuration is what names the `@BOARD@` board and every other source a
   command here reads.
+- **The plan store.** `@PLAN_STORE@` is the plan-store program every command below names,
+  spelled in full. Run it exactly as written and never as a bare `onetaskgraph`: a bare
+  name is answered by whatever your search path offers first, which on two real runs was
+  another release — one filed its tickets as issues of the wrong repository, and one had
+  every sound ticket refused by a validator reading an older record schema.
 - **The drafts.** Run `@RUN@`'s drafts are local Markdown tasks in the `drafts` plan
   source, under `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`. From that checkout, list them with
-  `onetaskgraph task list --source drafts --project @RUN@ --json`, and read one with
-  `onetaskgraph task show <qualified draft id> --json`.
+  `@PLAN_STORE@ task list --source drafts --project @RUN@ --json`, and read one with
+  `@PLAN_STORE@ task show <qualified draft id> --json`.
 - **Each draft's transcript.** A draft's `orchestrator.follow-up-draft` record carries a
   `transcript` command, `onepipeline transcript …` or `onepipeline monitor …`. Run it from
   that checkout to read the turns the draft was written from. A manager's draft carries
@@ -34,9 +39,9 @@ there gets this run's evidence rather than a second issue.
   `git grep <pattern> origin/<base>`. Never check out, commit to, or otherwise modify any
   checkout, and never clone. A repository with no registered checkout cannot be verified.
 - **The board.** `@BOARD@` is the plan source verified tickets are copied onto. Read it with
-  `onetaskgraph task list --source @BOARD@ --json` and
-  `onetaskgraph task show <id> --json`, and comment with
-  `onetaskgraph task comment add|list|edit|delete`.
+  `@PLAN_STORE@ task list --source @BOARD@ --json` and
+  `@PLAN_STORE@ task show <id> --json`, and comment with
+  `@PLAN_STORE@ task comment add|list|edit|delete`.
 
 ## What each board status means
 
@@ -64,7 +69,7 @@ there gets this run's evidence rather than a second issue.
    `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`.
 7. **Search the board for the same root cause** among its open items: first by the
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
-   text (`onetaskgraph task list --source @BOARD@ --search <text> --json`). Both read the
+   text (`@PLAN_STORE@ task list --source @BOARD@ --search <text> --json`). Both read the
    whole board, whichever repository an item's issue lives in, so narrow neither to a
    repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
    searched like any other open item and still takes this run's evidence.

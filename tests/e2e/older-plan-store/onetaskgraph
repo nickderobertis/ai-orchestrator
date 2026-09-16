@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# An *older* plan-store CLI, put ahead of the pinned one on the search path a dispatched
+# follow-up agent resolves its commands through.
+#
+# It reports a version no checkout pins and delegates everything else to the real program,
+# so a launch that resolves it still works and the difference shows up only in what
+# `command -v` and `--version` report, and in the log below — which is the question, and
+# the one thing the two real runs behind this recorded nothing about.
+#
+# `REAL_PLAN_STORE` names the program it delegates to, and is required: a stand-in that
+# quietly did nothing would read as a store with no records rather than as a stand-in.
+#
+# `OLDER_PLAN_STORE_LOG`, when set, names a file this appends one line to per invocation it
+# serves. That line is what proves *which* program answered a command, rather than which
+# one a resolution rule says would have: a journey that only asked `command -v` would be
+# reading its own search path back to itself.
+set -euo pipefail
+
+if [ -n "${OLDER_PLAN_STORE_LOG:-}" ]; then
+    printf '%s\n' "$*" >>"$OLDER_PLAN_STORE_LOG"
+fi
+if [ "${1:-}" = "--version" ]; then
+    printf 'onetaskgraph %s\n' "${OLDER_PLAN_STORE_VERSION:-0.0.1}"
+    exit 0
+fi
+: "${REAL_PLAN_STORE:?older-plan-store: REAL_PLAN_STORE must name the plan-store CLI this stands in front of}"
+exec "$REAL_PLAN_STORE" "$@"

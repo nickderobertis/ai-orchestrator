@@ -41,7 +41,12 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from conftest import READS_CHECKOUTS_MARKER, READS_DOCS_MARKER, READS_RECIPES_MARKER
+from conftest import (
+    READS_CHECKOUTS_MARKER,
+    READS_DOCS_MARKER,
+    READS_RECIPES_MARKER,
+    REAL_PLAN_STORE_ROOTS_MARKER,
+)
 from nx_inputs import (
     ASK_SEAM_ROOT,
     ASK_SEAM_SCOPED,
@@ -309,8 +314,19 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     marker the orchestrator project uses between its four.
     """
     manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    registered = re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE)
-    for marker in (READS_DOCS_MARKER, READS_RECIPES_MARKER, READS_CHECKOUTS_MARKER):
+    # A registration is `"<name>: ..."` or, for one taking arguments, `"<name>(...): ..."`.
+    registered = re.findall(r'^\s*"(\w+)[(:]', manifest, flags=re.MULTILINE)
+    # Every marker `tests/conftest.py` names, not the tier-routing ones alone: an
+    # unregistered marker is silently no marker at all, so the fixture that consults it
+    # would simply never fire. `real_plan_store_roots` is the opt-out from the plan-store
+    # root isolation, and a module that declared it and got the isolation anyway would
+    # fail on assertions about a directory it never chose.
+    for marker in (
+        READS_DOCS_MARKER,
+        READS_RECIPES_MARKER,
+        READS_CHECKOUTS_MARKER,
+        REAL_PLAN_STORE_ROOTS_MARKER,
+    ):
         assert marker in registered, (
             f"pytest must register {marker!r} in [tool.pytest.ini_options] markers"
         )

@@ -18,6 +18,11 @@
 #     `PLAN_DIRECT_PLACEMENT_NOTE`: a direct node works in the launching checkout and
 #     commits nothing, which is exactly what this agent's deliverable is — records under the
 #     gitignored draft root and items on a board, never a branch.
+#   * **Every plan-store instruction in the composed task names this checkout's own CLI**,
+#     resolved here and spelled in full, rather than the bare `onetaskgraph` a dispatch
+#     would resolve from its own search path. Two real runs resolved another release that
+#     way: one filed its tickets as issues of the wrong repository, and one had every
+#     sound ticket refused by a validator reading an older record schema.
 #   * **It names the per-node agent graph `graphs/follow-up.yaml`**, a single-sided member
 #     with no judge, so the task composed here is the only copy of its instructions it is
 #     given. The node still names `../personas/follow-up.yaml`, because the engine refuses a
@@ -126,6 +131,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || fail "this recipe c
 python="$script_dir/../.venv/bin/python3"
 [ -x "$python" ] || python=$(command -v python3) || fail "no Python interpreter was found" \
     "provision this checkout with 'just bootstrap', then retry"
+
 
 load() {
     local helper="$script_dir/$1"
@@ -265,9 +271,21 @@ trap 'rm -f "$scratch" || echo "follow-ups: the scratch file $scratch could not 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own checkout stops being enterable between its first line and this one; no journey can produce that without racing the filesystem the test itself runs on.
 checkout=$(CDPATH='' cd -- "$script_dir/.." && pwd) || fail "this recipe's checkout could not be resolved" \
     "run it from a readable checkout, then retry"
+
+# The plan-store CLI the composed task writes every store instruction with: this
+# checkout's own, spelled from the resolved checkout so the task carries one canonical
+# path. Nothing stands in for it. `config/onetaskgraph.version` is per checkout, so a copy
+# the search path happens to offer answers about whichever checkout provisioned *it* —
+# which is the resolution the header says cost two real runs, and letting it through here
+# would put it back with the task's own authority behind it. A checkout nobody has
+# bootstrapped is refused instead.
+store_cli="$checkout/.venv/bin/onetaskgraph"
+[ -x "$store_cli" ] || fail "this checkout has no plan-store CLI at $store_cli, and a task's store instructions may name no other" \
+    "provision this checkout with 'just bootstrap', then retry"
 compose=(compose --template "$checkout/$TEMPLATE" --root "$drafts_root" --run "$run" --board "$board"
     --validate "\"$python\" -m orchestrator.follow_up_tickets validate"
-    --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status" --checkout "$checkout")
+    --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status" --checkout "$checkout"
+    --plan-store "$store_cli")
 [ -z "$feedback" ] || compose+=(--feedback "$feedback")
 "$python" -m orchestrator.follow_up_tickets "${compose[@]}" >"$scratch" ||
     fail "the follow-up agent's task could not be composed from $TEMPLATE" \

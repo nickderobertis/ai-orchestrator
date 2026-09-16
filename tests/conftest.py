@@ -13,17 +13,20 @@ dispatch's environment, and a test's environment is the test's to state.
 from __future__ import annotations
 
 import builtins
+import functools
 import importlib.metadata
 import io
 import os
 import re
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import follow_up_variables
 import onevcs_state_snapshot
 import plan_fixture_root
+import plan_root_variable
 import pytest
 from nx_inputs import (
     ASK_SEAM_ROOT,
@@ -143,6 +146,98 @@ DISPATCH_SELECTION_ENV = (
     "ONEHARNESS_HARNESSES",
     "ONEHARNESS_MODEL",
 )
+
+
+#: The marker a module declares to keep one of the roots below as this checkout
+#: configures it. Registered in `pyproject.toml`, and read only at module level: a
+#: journey's launch usually happens in a module-scoped fixture, which pytest sets up
+#: before any test's own markers are consulted, so a per-test opt-out would arrive
+#: after the launch it was meant to govern.
+REAL_PLAN_STORE_ROOTS_MARKER = "real_plan_store_roots"
+
+
+@functools.cache
+def _plan_store_root_variables() -> Mapping[str, str]:
+    """Each writable plan source this suite isolates, and the variable its root is set by.
+
+    Both the source and the variable are read out of the launch helper that composes
+    them — the one place either is spelled — rather than written again here:
+    `tests/test_plan_root_composition.py`
+    and `tests/test_follow_up_draft_composition.py` each allow exactly one composition of
+    such a name in this repository's tracked code, and a second copy in the suite is the
+    same defect those gates exist for, since a spelling that drifted would leave every
+    test below isolating a source nothing reads.
+    """
+    return {
+        plan_root_variable.source(): plan_root_variable.name(),
+        follow_up_variables.source(): follow_up_variables.root_name(),
+    }
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Give this test process its own root for the `authoring` and `drafts` plan sources.
+
+    `onetaskgraph.yaml` roots both relatively, inside this checkout — `.plans` and
+    `.follow-ups` — and they hold a developer's own authored plans and unverified
+    follow-up drafts. A launch resolves them once and hands every process below it the
+    absolute answer, so a journey that launches without stating roots of its own reaches
+    the two directories this checkout configures: `just orchestrate`'s success hook runs
+    `just follow-ups <run-id>` there, which *reads* that run's drafts and *writes* a
+    project named after it. A test whose run id collided with real work could therefore
+    verify, consume or replace records nobody asked it to touch, and its own verdict
+    would depend on whatever those directories happened to hold.
+
+    So the roots are stated once, here, for every test process — at session scope and by
+    mutating the environment, because a function-scoped patch is undone between tests and
+    would not be in force while the module- and session-scoped fixtures that spend the
+    real launches are being set up. A journey that states roots of its own is unaffected:
+    it overrides these the way it overrides an enclosing dispatch's.
+    """
+    base = tmp_path_factory.mktemp("plan-store-roots")
+    with pytest.MonkeyPatch.context() as patched:
+        for source, variable in _plan_store_root_variables().items():
+            # Created rather than left to the first write: a `local-md` source
+            # canonicalizes its root when it is built, so an absent one is refused as a
+            # broken source by every read, not only by the write that would have made it.
+            root = base / source
+            root.mkdir()
+            patched.setenv(variable, str(root))
+        yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _real_plan_store_roots(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Hand back the roots this checkout configures to a module whose subject they are.
+
+    A journey that asks what *this checkout* resolves a source to — what a launch helper
+    composes, what a dispatch is then handed — is measuring the resolution itself, and a
+    root already in the environment is kept by those helpers by design. Isolating such a
+    module would leave it comparing one stated value against itself, green whether or not
+    anything resolved anything.
+
+    The marker names the sources it wants back and says why, because an opt-out with no
+    stated reason is indistinguishable from one added to make a failure go away.
+    """
+    marker = request.node.get_closest_marker(REAL_PLAN_STORE_ROOTS_MARKER)
+    if marker is None:
+        yield
+        return
+    variables = _plan_store_root_variables()
+    named = [str(source) for source in marker.args]
+    unknown = sorted(set(named) - set(variables))
+    reason = marker.kwargs.get("reason")
+    if not named or unknown or not isinstance(reason, str) or not reason.strip():
+        pytest.fail(
+            f"@pytest.mark.{REAL_PLAN_STORE_ROOTS_MARKER} names "
+            f"{named or 'no source'}{f' (unknown: {unknown})' if unknown else ''} with "
+            f"reason={reason!r}; it takes one or more of {sorted(variables)} and a "
+            "reason naming what this module exercises that a temporary root would defeat"
+        )
+    with pytest.MonkeyPatch.context() as patched:
+        for source in named:
+            patched.delenv(variables[source], raising=False)
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -43,7 +43,8 @@
       "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
       "{workspaceRoot}/tests/e2e/waits.py",
       "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py",
-      "{workspaceRoot}/tests/onetaskgraph_release.py"
+      "{workspaceRoot}/tests/onetaskgraph_release.py",
+      "{workspaceRoot}/tests/published_tools.py"
     ],
     "planToolingWorkspace": [
       "{workspaceRoot}/nx.json",
@@ -80,7 +81,9 @@
       "{workspaceRoot}/tests/e2e/fake_codex.py",
       "{workspaceRoot}/tests/e2e/fake_codex_untrusted_directory.py",
       "{workspaceRoot}/tests/e2e/no-paid-provider/**/*",
+      "{workspaceRoot}/tests/e2e/older-plan-store/**/*",
       "{workspaceRoot}/tests/e2e/project_fixtures.py",
+      "{workspaceRoot}/tests/e2e/run_task_store_instruction.py",
       "{workspaceRoot}/tests/e2e/scratch_identity.py",
       "{workspaceRoot}/tests/e2e/waits.py"
     ],

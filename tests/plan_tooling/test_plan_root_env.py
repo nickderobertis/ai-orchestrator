@@ -34,10 +34,25 @@ import sys
 from pathlib import Path
 
 import plan_root_variable
+import pytest
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
+
+#: The whole subject here is what *this checkout* resolves the `authoring` source to, and
+#: every journey below compares the helper's exported answer against `plan_store`'s own.
+#: The suite's autouse isolation would put one temporary root on both sides of that
+#: comparison — and the helper keeps a root already in the environment by design, so a
+#: launch that had stopped resolving anything at all would go on passing here.
+pytestmark = pytest.mark.real_plan_store_roots(
+    "authoring",
+    reason=(
+        "these journeys measure the resolution itself: the helper keeps a root already in "
+        "the environment, so an isolated root would be compared against itself and a "
+        "launch that resolved nothing would still pass"
+    ),
+)
 
 
 def _drive(

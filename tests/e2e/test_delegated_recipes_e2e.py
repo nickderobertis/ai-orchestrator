@@ -49,6 +49,7 @@ from typing import NamedTuple
 import follow_up_variables
 import plan_root_variable
 import pytest
+from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2215,7 +2216,7 @@ def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
 FOLLOW_UPS_TEMPLATE = "config/follow-up-task.md"
 FOLLOW_UPS_TEMPLATE_TEXT = (
     "Verify run @RUN@ onto @BOARD@ from @DRAFTS_ROOT@; validate with @VALIDATE@ in @CHECKOUT@.\n"
-    "Decide each status with @BOARD_STATUS@.\n"
+    "Decide each status with @BOARD_STATUS@, and read the store with @PLAN_STORE@.\n"
     "@STATUS_VOCABULARY@\n@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\n"
 )
 
@@ -2233,6 +2234,13 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     """
     checkout, trace = _checkout(tmp_path)
     (checkout / FOLLOW_UPS_TEMPLATE).write_text(FOLLOW_UPS_TEMPLATE_TEXT, encoding="utf-8")
+    # The plan-store CLI this checkout is provisioned with, which is the only program the
+    # recipe will write into the composed task: it names its own checkout's or refuses, so
+    # a checkout without one launches nothing at all. Linked to the installed CLI rather
+    # than written, because the recipe requires an executable and the task carries its path.
+    store = checkout / ".venv" / "bin" / "onetaskgraph"
+    store.parent.mkdir(parents=True)
+    store.symlink_to(ONETASKGRAPH_BIN)
     drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
     drafts.mkdir(parents=True)
     (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
@@ -2257,6 +2265,14 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert '"onepipeline.repo"' not in front_matter, "a direct node names no repository"
     assert "repositories:" not in front_matter, "a direct node names no repository"
     assert f"Verify run run-1 onto followups from {checkout / '.follow-ups'}" in node
+    # The plan store the composed task names: this checkout's own, spelled in full. Never
+    # the one on the search path, which answers about whichever checkout provisioned it —
+    # the resolution two real runs were made wrong by.
+    assert f"read the store with {store}" in node, node
+    assert shutil.which("onetaskgraph", path=os.environ["PATH"]) != str(store), (
+        "this journey's search path already resolves to the checkout's own store, so the "
+        "assertion above would hold however the recipe resolved it"
+    )
 
     (checkout / "runs" / "run-1-follow-ups").mkdir(parents=True)
     second = _run(checkout, trace, "follow-ups", "run-1")

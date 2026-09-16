@@ -24,6 +24,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import plan_root_variable
 import pytest
 from waits import timeout as e2e_timeout
 
@@ -203,6 +204,11 @@ def test_a_plan_node_naming_an_unshipped_persona_fails_before_a_harness_starts(
     environment = dict(os.environ)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    # The probe project is written into this launch directory's own `.plans`, and
+    # `onetaskgraph.yaml` roots the `authoring` source there *relatively* — so the root
+    # is stated here, over whatever one this process was given, or the launch reads a
+    # source rooted somewhere else entirely and never finds the project.
+    environment[plan_root_variable.name()] = str(launch_dir / ".plans")
     environment["ONEPIPELINE_LAUNCHER"] = "pytest"
     environment["ONEPIPELINE_LAUNCHER_SESSION"] = "persona-catalog-e2e"
 

@@ -16,7 +16,10 @@ from orchestrator.root import REPO_ROOT
 
 HELPER = REPO_ROOT / "scripts" / "follow-up-env.sh"
 
-#: The helper's own constants, by the names it holds them under.
+#: The helper's own constants, by the names it holds them under. The source is held here
+#: too, because the helper composes the three names below out of it: a reader that spelled
+#: the source itself could name a source this checkout does not draft into.
+SOURCE_HOLDER = "FOLLOW_UP_DRAFTS_SOURCE"
 ROOT_HOLDER = "FOLLOW_UP_DRAFTS_ROOT_ENV"
 PLUGIN_HOLDER = "FOLLOW_UP_DRAFTS_PLUGIN_ENV"
 COMMAND_HOLDER = "FOLLOW_UP_DRAFT_ENV"
@@ -37,6 +40,11 @@ def _held(holder: str) -> str:
             f"that name, so nothing here can stand in for it:\n{read.stdout}{read.stderr}"
         )
     return read.stdout.strip()
+
+
+def source() -> str:
+    """The plan source a draft is stored in, as this checkout's store configures it."""
+    return _held(SOURCE_HOLDER)
 
 
 def root_name() -> str:

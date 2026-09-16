@@ -23,6 +23,7 @@ from pathlib import Path
 
 import follow_up_variables
 import pytest
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
@@ -489,11 +490,17 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_comments_only_on_oth
 
 TEMPLATE = (
     "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
-    "Decide each status with @BOARD_STATUS@.\n"
+    "Decide each status with @BOARD_STATUS@, and read the store with @PLAN_STORE@.\n"
     "@STATUS_VOCABULARY@\n"
     "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
+
+#: The plan-store program a composed task carries, spelled in full the way the recipe
+#: resolves it. This checkout's own installed CLI rather than a path written down here,
+#: because the composer refuses anything that is not an executable file: what the task
+#: names has to be a program the dispatch can run.
+PLAN_STORE = str(ONETASKGRAPH_BIN)
 
 
 def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-root") -> str:
@@ -502,7 +509,13 @@ def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-roo
         tickets.ticket_contract(run, board)
         .replace("@DRAFTS_ROOT@", root)
         .replace("@BOARD_STATUS@", BOARD_STATUS)
+        .replace("@PLAN_STORE@", PLAN_STORE)
     )
+
+
+def _ownership(run: str = RUN, board: str = "followups") -> str:
+    """Board ownership as a composed task carries it, its one value filled."""
+    return tickets.comment_contract(run, board).replace("@PLAN_STORE@", PLAN_STORE)
 
 
 def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
@@ -514,6 +527,7 @@ def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
         validate="python -m orchestrator.follow_up_tickets validate",
         board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
+        plan_store=PLAN_STORE,
         feedback=feedback,
         redispatch=redispatch,
     )
@@ -528,8 +542,12 @@ def test_the_composed_task_fills_every_placeholder_and_renders_both_contracts() 
     )
     assert task.rstrip().endswith("Again, listing-run.")
     assert _contract() in task
-    assert tickets.comment_contract(RUN, "followups") in task
-    assert f"onetaskgraph task copy drafts:{RUN}/tickets/<root-cause> --to followups" in task
+    assert _ownership() in task
+    assert f"{PLAN_STORE} task copy drafts:{RUN}/tickets/<root-cause> --to followups" in task
+    assert "`onetaskgraph " not in task, (
+        "a composed task names the plan store in full, never a bare program name a "
+        "dispatch would resolve from its own search path"
+    )
     assert tickets.comment_marker(RUN, "<root-cause>") in task
     assert "This is a re-dispatch" not in task
     assert "Feedback on the previous follow-up run" not in task
@@ -544,6 +562,7 @@ def test_a_value_the_template_names_more_than_once_is_filled_everywhere() -> Non
         validate="v",
         board_status="s",
         checkout=Path("/checkout"),
+        plan_store=PLAN_STORE,
         feedback=None,
         redispatch=False,
     )
@@ -567,13 +586,19 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
         validate="python -m orchestrator.follow_up_tickets validate",
         board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
+        plan_store=PLAN_STORE,
         feedback="Merge the two cursor tickets.\n",
         redispatch=True,
     )
 
     assert tickets.PLACEHOLDER.search(task) is None
     assert _contract() in task
-    assert tickets.comment_contract(RUN, "followups") in task
+    assert _ownership() in task
+    # Every store instruction names the program the recipe resolved, in full: a bare name
+    # is answered by the dispatch's own search path.
+    assert PLAN_STORE in task
+    bare = [line for line in task.splitlines() if "`onetaskgraph " in line]
+    assert not bare, f"the tracked template still names a bare plan-store invocation: {bare}"
     assert "## This is a re-dispatch" in task
     assert "Merge the two cursor tickets." in task
     steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
@@ -612,7 +637,7 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     ) in flat
     assert f"{tickets.OUTSIDE_OWNER} when the ticket's repository is not one of the board's" in flat
     assert (
-        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `onetaskgraph task copy` refuses "
+        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `@PLAN_STORE@ task copy` refuses "
         "the ticket"
     ) in flat
     assert (
@@ -699,6 +724,70 @@ def test_a_template_that_does_not_name_each_placeholder_once_is_refused(
             validate="v",
             board_status="s",
             checkout=Path("/checkout"),
+            plan_store=PLAN_STORE,
+            feedback=None,
+            redispatch=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("plan_store", "refusal"),
+    [
+        ("onetaskgraph", "is not an absolute path"),
+        ("/no/such/plan/store", "is not an executable file"),
+    ],
+    ids=["a-bare-name", "a-program-that-is-not-there"],
+)
+def test_a_plan_store_the_dispatch_could_not_run_as_written_is_refused(
+    plan_store: str, refusal: str
+) -> None:
+    """The two ways the program a task names is not one the dispatch can run.
+
+    The agent reads its task in its agent graph's scratch directory, so a relative or bare
+    name there is answered by that dispatch's own search path — the defect the full
+    spelling closes — and a path to nothing is a "command not found" the dispatch meets
+    after the launch, with the task already written.
+    """
+    with pytest.raises(tickets.Refused, match=refusal):
+        tickets.compose(
+            TEMPLATE,
+            run=RUN,
+            board="followups",
+            drafts_root=Path("/drafts-root"),
+            validate="v",
+            board_status="s",
+            checkout=Path("/checkout"),
+            plan_store=plan_store,
+            feedback=None,
+            redispatch=False,
+        )
+
+
+def test_a_plan_store_the_shell_would_not_read_as_one_word_is_refused(tmp_path: Path) -> None:
+    """An absolute, executable path is still no program when the shell would split it.
+
+    Every store instruction in the task is shell embedded in Markdown and is read as
+    written, so a path carrying a space — or a quote, a backtick, a `$` — reaches the
+    dispatch as several words or as shell syntax rather than as the one program the recipe
+    resolved. This is the same defect as a bare name arriving by another route, so it is
+    refused where the other two are, before any task exists.
+    """
+    directory = tmp_path / "plan store"
+    directory.mkdir()
+    program = directory / "onetaskgraph"
+    program.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    program.chmod(0o755)
+
+    with pytest.raises(tickets.Refused, match="does not read as part of one word"):
+        tickets.compose(
+            TEMPLATE,
+            run=RUN,
+            board="followups",
+            drafts_root=Path("/drafts-root"),
+            validate="v",
+            board_status="s",
+            checkout=Path("/checkout"),
+            plan_store=str(program),
             feedback=None,
             redispatch=False,
         )
@@ -1181,6 +1270,8 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         "s",
         "--checkout",
         "/checkout",
+        "--plan-store",
+        PLAN_STORE,
     ]
 
     assert tickets.main(arguments) == tickets.SOUND
@@ -1196,7 +1287,8 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         (["inventory", "--root", "/r", "../escape"], "is not a run id"),
         (
             ["compose", "--template", "/no/such/template", "--root", "/r", "--run", RUN]
-            + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"],
+            + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"]
+            + ["--plan-store", PLAN_STORE],
             "No such file",
         ),
     ],
@@ -1226,6 +1318,7 @@ def test_a_template_the_compose_command_refuses_is_unrunnable(
     status = tickets.main(
         ["compose", "--template", str(template), "--root", str(tmp_path), "--run", RUN]
         + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"]
+        + ["--plan-store", PLAN_STORE]
     )
 
     assert status == tickets.UNRUNNABLE
