@@ -355,49 +355,33 @@ def test_the_follow_up_agent_hands_every_identity_its_own_bypass_argument(
     )
 
 
-@pytest.mark.parametrize("candidate", DISPATCH_CANDIDATES, ids=_identifiers(DISPATCH_CANDIDATES))
-def test_a_dispatched_turn_runs_under_its_own_scratch_as_its_runtime_directory(
-    tmp_path: Path, oneharness_bin: str, candidate: Candidate
-) -> None:
-    """Not the launching session's, which is the one that is mounted `noexec` here.
-
-    Every candidate, for the reason the credential journey gives: `env_from` is
-    declarable on a variant only, so a candidate resolving no variant runs with the
-    session's runtime directory, and it is reached once the ones ahead of it are spent.
-    """
-    recorded = _turn(tmp_path, oneharness_bin, candidate)
-
-    assert recorded.get("XDG_RUNTIME_DIR") == str(tmp_path / "node-scratch"), (
-        f"{candidate.config} handed {candidate.identity} XDG_RUNTIME_DIR "
-        f"{recorded.get('XDG_RUNTIME_DIR')!r} rather than this dispatch's own scratch; "
-        f"the ambient one is where a shebang recipe's body cannot be executed"
-    )
-
-
 #: A recipe of the shape that failed: `just` writes a shebang recipe's body under
-#: `XDG_RUNTIME_DIR` and execs it, so where that directory points decides whether the
-#: recipe runs at all. This repository's own `justfile` carries none, which is why the
-#: defect was invisible here and cost a dispatch in every other repository.
+#: `XDG_RUNTIME_DIR` and execs it, so where that directory points decides where every
+#: shebang recipe of a dispatch runs from. The body reports its own path and that the file
+#: is there while it runs, so where the runner wrote it is read off the recipe itself.
+#: This repository's own `justfile` carries none, which is why the defect was invisible
+#: here and cost a dispatch in every other repository.
 SHEBANG_RECIPE = """demo:
     #!/usr/bin/env bash
-    echo the-shebang-recipe-ran
+    test -f "$0" && echo "shebang-body-at=$0"
 """
 
 
-def _shebang_recipe(directory: Path, runtime: Path) -> subprocess.CompletedProcess[str]:
-    """Run a real shebang recipe with `runtime` as the runner's runtime directory.
+def _shebang_recipe(
+    directory: Path, environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run a real shebang recipe under `environment`, the one a dispatched turn was handed.
 
     `JUST_TEMPDIR` is dropped because `just` prefers it to `XDG_RUNTIME_DIR`, and a
     session's shell may export one (Claude Code's exports `/tmp`): inherited, it decides
-    where the body is written and `runtime` decides nothing.
+    where the body is written and the runtime directory decides nothing.
     """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "justfile").write_text(SHEBANG_RECIPE, encoding="utf-8")
-    environment = {name: value for name, value in os.environ.items() if name != "JUST_TEMPDIR"}
     return subprocess.run(
         ["just", "demo"],
         cwd=directory,
-        env={**environment, "XDG_RUNTIME_DIR": str(runtime)},
+        env={name: value for name, value in environment.items() if name != "JUST_TEMPDIR"},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
@@ -405,37 +389,40 @@ def _shebang_recipe(directory: Path, runtime: Path) -> subprocess.CompletedProce
     )
 
 
-def test_a_shebang_recipe_runs_under_a_dispatchs_own_scratch_and_not_under_a_refusing_one(
-    tmp_path: Path,
+@pytest.mark.parametrize("candidate", DISPATCH_CANDIDATES, ids=_identifiers(DISPATCH_CANDIDATES))
+def test_a_dispatched_turn_runs_its_shebang_recipes_out_of_its_own_scratch(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
 ) -> None:
-    """Why the repoint above is worth a config change, driven through the real runner.
+    """Not out of the launching session's runtime directory, which is mounted `noexec` here.
 
-    The ambient half is a stand-in and says so: this host's session runtime directory is
-    mounted `noexec`, and a test cannot mount one — so what stands in for it is a runtime
-    directory the runner cannot use, which is the same class of failure and the same
-    single cause. What is *not* a stand-in is the other half: a directory of exactly the
-    shape a dispatch's own scratch has, under which the same recipe runs.
+    Every candidate, for the reason the credential journey gives: `env_from` is
+    declarable on a variant only, so a candidate resolving no variant runs with the
+    session's runtime directory, and it is reached once the ones ahead of it are spent.
+    The recipe then runs under exactly what that turn's provider recorded, so the second
+    half reads where the runner really puts a dispatch's runtime files rather than
+    inferring it from a runtime directory the runner refuses.
     """
-    refusing = tmp_path / "refusing-runtime"
-    refusing.mkdir(mode=0o500)
     scratch = tmp_path / "node-scratch"
-    scratch.mkdir()
+    recorded = _turn(tmp_path, oneharness_bin, candidate)
 
-    try:
-        refused = _shebang_recipe(tmp_path / "workspace", refusing)
-    finally:
-        refusing.chmod(0o700)
-
-    assert refused.returncode != 0, (
-        "a runtime directory the runner cannot use did not stop the recipe, so this "
-        f"journey proves nothing about why the repoint matters:\n{refused.stdout}"
+    assert recorded.get("XDG_RUNTIME_DIR") == str(scratch), (
+        f"{candidate.config} handed {candidate.identity} XDG_RUNTIME_DIR "
+        f"{recorded.get('XDG_RUNTIME_DIR')!r} rather than this dispatch's own scratch; "
+        f"the ambient one is where a shebang recipe's body cannot be executed"
     )
-    assert "the-shebang-recipe-ran" not in refused.stdout, refused.stdout
 
-    ran = _shebang_recipe(tmp_path / "workspace", scratch)
+    ran = _shebang_recipe(tmp_path / "workspace", recorded)
 
     assert ran.returncode == 0, (
-        f"a shebang recipe would not run under a dispatch's own scratch either, so the "
-        f"repoint fixes nothing:\n{ran.stdout}\n{ran.stderr}"
+        f"a shebang recipe did not run under the environment {candidate.identity} was "
+        f"handed:\n{ran.stdout}\n{ran.stderr}"
     )
-    assert "the-shebang-recipe-ran" in ran.stdout, ran.stdout
+    written = re.search(r"^shebang-body-at=(.+)$", ran.stdout, re.MULTILINE)
+    assert written is not None, (
+        f"the shebang recipe never reported where its body was written:\n{ran.stdout}"
+    )
+    assert Path(written.group(1)).is_relative_to(scratch), (
+        f"just wrote the shebang recipe's body to {written.group(1)!r}, outside this "
+        f"dispatch's own scratch {scratch}, so the repoint does not decide where a "
+        f"dispatch's recipes run from"
+    )
