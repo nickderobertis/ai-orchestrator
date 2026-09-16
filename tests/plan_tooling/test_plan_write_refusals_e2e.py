@@ -23,8 +23,9 @@ import os
 import shutil
 import subprocess
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, NewType
 
 import plan_root_variable
 import pytest
@@ -60,7 +61,7 @@ INHERITED = (
 )
 
 
-def _environment(root: Path) -> dict[str, str]:
+def _environment(tmp_path: Path, root: Path) -> dict[str, str]:
     """The environment one refused launch runs in, stating the root it is refused over.
 
     Smaller than the one the launching journeys beside this project build, and that is
@@ -68,11 +69,92 @@ def _environment(root: Path) -> dict[str, str]:
     reaches `onepipeline start`, so no run is created, no session is opened and no
     repository registry is touched — there is nothing here for a scratch identity to
     keep off this host's own.
+
+    The run ledger is the one exception, and it is stated for the reason
+    `_tail_environment` states its own: the recipe asks whether both of its run ids are
+    taken before it reaches any of the refusals below, so a journey that inherited this
+    host's ledger would be refused for a run somebody else launched rather than for the
+    state it damaged.
     """
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
     return {
         **{key: value for key, value in os.environ.items() if key not in INHERITED},
         plan_root_variable.name(): str(root),
+        "ONEPIPELINE_RUNS_DIR": str(runs),
     }
+
+
+RunId = NewType("RunId", str)
+
+
+class PlanScript(StrEnum):
+    """A plan flow whose run-id collision this module exercises."""
+
+    PLAN = "plan.sh"
+    FINISH_PLAN = "finish-plan.sh"
+
+
+class Minted(NamedTuple):
+    """One run id a launch in this module mints, and a launch that asks for it first."""
+
+    run_id: RunId
+    script: PlanScript
+    #: The arguments after the brief that make that id the first one the launch checks.
+    arguments: tuple[str, ...]
+
+
+#: Every run id the launches below mint: `brief` from the brief's filename, `half-written`
+#: from the one journey that names its own, and each with the design-document launch's
+#: suffix, which the recipe refuses as taken before its own. Each carries a launch that
+#: checks it first, so `test_the_seeded_ledger_collides_with_every_minted_run_id` holds
+#: this table to what the scripts actually mint rather than to what it says they do.
+MINTED = (
+    Minted(RunId("brief-design"), PlanScript.PLAN, ()),
+    Minted(RunId("brief"), PlanScript.PLAN, ("--no-design-doc",)),
+    Minted(RunId("half-written-design"), PlanScript.PLAN, ("--name", "half-written")),
+    Minted(
+        RunId("half-written"),
+        PlanScript.PLAN,
+        ("--name", "half-written", "--no-design-doc"),
+    ),
+    Minted(RunId("brief-design"), PlanScript.FINISH_PLAN, ()),
+)
+MINTED_RUN_IDS = frozenset(minted.run_id for minted in MINTED)
+
+
+@pytest.fixture
+def colliding_inherited_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An inherited run ledger already holding a run under every id these launches mint.
+
+    This is the host a journey used to fail on: one whose ledger held an unrelated run of
+    the colliding id, so the launch was refused as `already exists` and never reached the
+    refusal the journey is about. Seeded under this test's own directory and exported to
+    the test process, which is where a journey inherits it from — never this checkout's or
+    this host's own ledger.
+    """
+    inherited = tmp_path / "inherited-runs"
+    for run_id in MINTED_RUN_IDS:
+        (inherited / run_id).mkdir(parents=True)
+    monkeypatch.setenv("ONEPIPELINE_RUNS_DIR", str(inherited))
+    return inherited
+
+
+#: Every journey in this module runs over that ledger, so each one proves it reaches the
+#: refusal it is about with a colliding run inherited, rather than only on a host that
+#: happens to hold none.
+# This module copies tracked prose, and tests/plan_tooling/AGENTS.md explicitly assigns
+# such journeys to this project's whole-workspace test-docs target through `reads_docs`.
+# The marker routes within the existing plan-tooling project rather than creating an
+# unowned expensive tier.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see the note above
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see the note above
+pytestmark = [
+    pytest.mark.reads_docs,
+    pytest.mark.usefixtures("colliding_inherited_runs"),
+]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _detached_recipe(tmp_path: Path) -> Path:
@@ -180,7 +262,7 @@ def test_a_launch_whose_appendix_is_unusable_writes_nothing(
     refused = subprocess.run(  # noqa: S603 - the real script, over a checkout with no appendix
         [str(recipe), str(brief)],
         cwd=working,
-        env=_environment(root),
+        env=_environment(tmp_path, root),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
@@ -225,7 +307,7 @@ def test_a_plan_directory_that_cannot_be_created_is_refused_before_the_launch(
     refused = subprocess.run(  # noqa: S603 - the real script, over a root it cannot write into
         [str(recipe), str(brief)],
         cwd=working,
-        env=_environment(root),
+        env=_environment(tmp_path, root),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
@@ -271,7 +353,7 @@ def test_a_plan_that_could_not_be_written_leaves_no_half_written_file_behind(
     refused = subprocess.run(  # noqa: S603 - the real script, over a root it cannot write into
         [str(recipe), str(brief), "--name", "half-written"],
         cwd=working,
-        env=_environment(root),
+        env=_environment(tmp_path, root),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
@@ -553,3 +635,45 @@ def test_a_template_that_is_not_a_file_is_refused_before_the_flow_spends_anythin
         "a directory at the template's path was reported as a template whose markers "
         f"moved, which sends its reader to edit a file that is not there:\n{refused.stderr}"
     )
+
+
+@pytest.mark.parametrize("minted", MINTED, ids=lambda minted: f"{minted.script}:{minted.run_id}")
+def test_the_seeded_ledger_collides_with_every_minted_run_id(
+    tmp_path: Path, colliding_inherited_runs: Path, minted: Minted
+) -> None:
+    """The inherited ledger every journey above runs over really holds their run ids.
+
+    Those journeys pass whether or not their launch would have collided, so on their own
+    they cannot tell a ledger that still holds the ids the scripts mint from one a rename
+    left holding nothing they ask for. This launch is handed that ledger rather than one
+    of its own and has to be refused over exactly the id the table names.
+    """
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    recipe = (
+        _detached_recipe(tmp_path) if minted.script is PlanScript.PLAN else _detached_tail(tmp_path)
+    )
+    working = tmp_path / "working"
+    working.mkdir()
+
+    # llmlint: ignore-block[tests_mirror_real_usage] The same pass-through the tail
+    # journeys above state: `just plan` and `just finish-plan` are `@./scripts/<name>.sh
+    # "$@"`, and these copies are deliberately outside any checkout carrying a `justfile`.
+    refused = subprocess.run(  # noqa: S603 - the real script, over a ledger already holding its run id
+        [str(recipe), str(brief), *minted.arguments],
+        cwd=working,
+        env={
+            **_environment(tmp_path, tmp_path / "plans"),
+            "ONEPIPELINE_RUNS_DIR": str(colliding_inherited_runs),
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+    assert refused.returncode != 0, refused.stdout
+    assert f"run '{minted.run_id}' already exists under {colliding_inherited_runs}" in (
+        refused.stderr
+    ), refused.stderr
