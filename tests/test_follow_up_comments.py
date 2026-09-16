@@ -152,6 +152,234 @@ def test_only_a_persons_comments_after_the_runs_last_marked_comment_are_selected
     assert _snapshot(board) == before, "gathering feedback wrote to the board"
 
 
+def _replied(issue: str, answers: str, cause: str = CAUSE, run: str = RUN) -> str:
+    """``run``'s reply to one comment, posted through the store's own verb as the agent posts it."""
+    listed = plan_store.store_json(["task", "comment", "list", issue])["comments"]
+    assert isinstance(listed, list), listed
+    (answered,) = [one for one in listed if one["id"] == answers]
+    reply = tickets.render_reply(
+        run,
+        cause,
+        answers=answers,
+        url=f"{issue}#comment-{answers}",
+        author=answered["author"],
+        response="Copied the ticket again with that in its examples.",
+    )
+    return _commented(issue, reply, None)
+
+
+def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    person = _commented(own, "The one person's comment.\n")
+    for body in (
+        tickets.render_comment(OTHER_RUN, CAUSE, "Another run's evidence."),
+        tickets.render_reply(
+            OTHER_RUN, CAUSE, answers=person, url="u", author=PERSON, response="Theirs."
+        ),
+        tickets.render_reply(
+            RUN, CAUSE, answers="a-comment-gone", url="u", author=None, response="Ours."
+        ),
+    ):
+        _commented(own, body, None)
+
+    written = _written(drafts_root, capsys)
+
+    assert written.count("### Comment ") == 1, written
+    assert f"- Comment id: {person}\n" in written
+    for absent in ("evidence", "Theirs.", "Ours."):
+        assert absent not in written, written
+
+
+def test_a_replied_comment_is_not_selected_until_a_person_edits_it_after_the_reply(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
+    _next_second()
+    answered = _commented(own, "Answered by a reply.\n")
+    unanswered = _commented(others, "Nobody replied to this one.\n", "a-maintainer")
+    _replied(own, answered)
+
+    written = _written(drafts_root, capsys)
+
+    assert written.count("### Comment ") == 1, written
+    assert "Nobody replied to this one." in written, "a reply naming another comment hid it"
+    assert f"- Comment id: {unanswered}\n- URL: " in written
+    assert "Answered by a reply." not in written
+
+    _next_second()
+    _edited(own, answered, "Edited after the reply, so it is asked again.\n")
+
+    edited = _written(drafts_root, capsys)
+
+    assert "Edited after the reply, so it is asked again." in edited
+    assert f"- Comment id: {answered}\n" in edited
+
+
+def test_a_comment_written_after_the_first_gathering_is_selected_whatever_responses_follow_it(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The gap between a gathering and its replies: a later copy or reply hides nothing."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _next_second()
+    asked = _commented(own, "The first question.\n")
+    _next_second()
+    first = _written(drafts_root, capsys)
+    assert "The first question." in first
+    _next_second()
+    # Written while that gathering's dispatch works, before any of its responses.
+    during = _commented(own, "Written while the dispatch worked.\n")
+    _next_second()
+    _filed(drafts_root, RUN, CAUSE, "Copied again, answering the first question.")
+    evidence = _commented(
+        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+    )
+    _edited(others, evidence, tickets.render_comment(RUN, SHARED_CAUSE, "Evidence, edited."))
+    _replied(own, asked)
+    before = _snapshot(board)
+
+    second = _written(drafts_root, capsys)
+
+    assert second.count("### Comment ") == 1, second
+    assert "Written while the dispatch worked." in second
+    assert f"- Comment id: {during}\n" in second
+    assert "The first question." not in second
+    assert _snapshot(board) == before, "gathering feedback wrote to the board"
+
+
+def test_the_boundary_is_the_last_response_before_the_first_gathering_and_never_moves(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    _next_second()
+    _commented(own, "Answered by the copy that follows.\n")
+    _next_second()
+    _filed(drafts_root, RUN, CAUSE, "Copied again, answering it.")
+    written_at = tickets.ticket_path(drafts_root, RUN, CAUSE).stat().st_mtime
+    # Recorded as the whole second comment times are, which orders every comment alike.
+    boundary = datetime.fromtimestamp(written_at, UTC).replace(microsecond=0)
+    _next_second()
+    missed = _commented(own, "Gathered, and never replied to.\n")
+    _next_second()
+    first = _written(drafts_root, capsys)
+    assert "Gathered, and never replied to." in first
+    assert "Answered by the copy that follows." not in first
+    _next_second()
+    # Responses after the first gathering: a copy, and a feedback file of a later gathering.
+    _filed(drafts_root, RUN, CAUSE, "Copied again after the first gathering.")
+    directory = drafts_root / comments.FEEDBACK_DIRECTORY / RUN
+    (directory / "notes.md").write_text("Not a gathering's file.\n", encoding="utf-8")
+    (first_file,) = directory.glob("2*.md")
+    recorded = comments.boundary_line(boundary)
+    assert first_file.read_text(encoding="utf-8").splitlines()[0] == recorded
+    stamp = datetime.strptime(first_file.stem, comments.STAMP_FORMAT).replace(tzinfo=UTC)
+    assert comments.first_gathering(drafts_root, RUN) == (stamp, comments.Boundary(boundary))
+
+    second = _written(drafts_root, capsys)
+
+    assert f"- Comment id: {missed}\n" in second, "a copy after the first gathering hid it"
+    assert "Answered by the copy that follows." not in second
+    assert f", each changed after {boundary.strftime(comments.MOMENT_FORMAT)}," in second
+    assert len(list(directory.glob("2*.md"))) == 2
+    assert comments.first_gathering(drafts_root, RUN) == (stamp, comments.Boundary(boundary))
+
+    # The record is what decides, not a recomputation that happens to agree with it.
+    text = first_file.read_text(encoding="utf-8")
+    first_file.write_text(text.replace(recorded, comments.boundary_line(None)), encoding="utf-8")
+    _next_second()
+
+    third = _written(drafts_root, capsys)
+
+    assert "Answered by the copy that follows." in third, "the recorded boundary was not read"
+    assert third.splitlines()[0] == comments.boundary_line(None)
+
+
+def test_an_earliest_feedback_file_recording_no_boundary_falls_back_to_the_computed_one(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file written before files recorded a boundary: responses before its stamp decide."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _next_second()
+    _commented(own, "Answered by the evidence comment that follows.\n")
+    _next_second()
+    evidence = _commented(
+        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+    )
+    (listed,) = plan_store.store_json(["task", "comment", "list", others])["comments"]
+    assert listed["id"] == evidence
+    _next_second()
+    missed = _commented(own, "Gathered by the old file, and never replied to.\n")
+    _next_second()
+    directory = drafts_root / comments.FEEDBACK_DIRECTORY / RUN
+    directory.mkdir(parents=True)
+    stamp = datetime.now(UTC).replace(microsecond=0)
+    old = directory / f"{stamp.strftime(comments.STAMP_FORMAT)}.md"
+    old.write_text("People commented on this run's follow-ups.\n", encoding="utf-8")
+    assert comments.first_gathering(drafts_root, RUN) == (stamp, None)
+    _next_second()
+    # A copy after that gathering, which a recomputed boundary with no stamp would rest on.
+    _filed(drafts_root, RUN, CAUSE, "Copied again after the old gathering.")
+
+    written = _written(drafts_root, capsys)
+
+    assert f"- Comment id: {missed}\n" in written
+    assert "Answered by the evidence comment that follows." not in written
+    boundary = comments.moment(listed["updated_at"], "the evidence comment")
+    assert written.splitlines()[0] == comments.boundary_line(boundary)
+
+
+def test_a_boundary_a_feedback_file_records_that_is_no_moment_is_unrunnable(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _commented(_filed(drafts_root, RUN, CAUSE), "A person's comment.\n")
+    directory = drafts_root / comments.FEEDBACK_DIRECTORY / RUN
+    directory.mkdir(parents=True)
+    (directory / "20260101T000000Z.md").write_text(
+        comments.FEEDBACK_BOUNDARY.format(boundary="yesterday") + "\n", encoding="utf-8"
+    )
+    (directory / "20260101T000000Z-2.md").write_text(
+        comments.boundary_line(None) + "\n", encoding="utf-8"
+    )
+
+    status = comments.main(["feedback", "--root", str(drafts_root), "--board", BOARD, RUN])
+
+    assert status == comments.UNRUNNABLE
+    assert "20260101T000000Z.md records reports 'yesterday'" in capsys.readouterr().err
+
+
+def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    identifier = _commented(own, "Please add page 9.\n")
+
+    written = _written(drafts_root, capsys)
+    flat = " ".join(written.split())
+
+    (listed,) = plan_store.store_json(["task", "comment", "list", own])["comments"]
+    assert f"- Comment id: {identifier}\n- URL: file://" in written
+    assert f"- Author: {PERSON}\n- Last changed: {listed['updated_at']}\n" in written
+    for said in (
+        "each is quoted verbatim below with its id, its URL, its author and when it last changed",
+        '1. **Act on it** under "Ownership on the board" above: perform whatever action it calls '
+        "for, or none.",
+        "2. **Post its one reply**, naming the comment's id, as those rules state.",
+        "3. **Report** the comment's URL beside what you did about it, or why you did nothing.",
+        "**Never change a board item's status.** Before every copy, write the status "
+        "`board-status` prints",
+    ):
+        assert said in flat, said
+    assert "edit this run's one comment" not in flat, "the feedback restates an ownership rule"
+    assert written.index("1. **Act on it**") < written.index("2. **Post its one reply**")
+
+
 def test_a_comment_before_the_runs_last_ticket_copy_is_not_selected_and_one_after_is(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -167,7 +395,7 @@ def test_a_comment_before_the_runs_last_ticket_copy_is_not_selected_and_one_afte
 
     assert "A new question after that copy." in written
     assert "Answered by the copy that follows." not in written
-    assert "after the run last responded, at " in written
+    assert ", each changed after " in written
 
 
 def test_a_run_that_never_responded_has_every_persons_comment_selected(
@@ -180,7 +408,7 @@ def test_a_run_that_never_responded_has_every_persons_comment_selected(
 
     written = _written(drafts_root, capsys)
 
-    assert "while the run has not yet responded on the board" in written
+    assert "changed after" not in written
     assert f"- Author: {comments.UNKNOWN_AUTHOR}" in written
 
 
@@ -211,7 +439,10 @@ def test_a_run_with_no_new_comment_is_refused_naming_it_and_its_last_response(
     captured = capsys.readouterr()
     assert status == comments.NOTHING_NEW
     assert f"run {RUN} has no new feedback: of the 1 comment(s) on the 1 issue(s)" in captured.err
-    assert "none is a person's newer than its last response at " in captured.err
+    assert (
+        "none is a person's that no reply of this run answers and that changed after "
+        in captured.err
+    )
 
 
 def test_a_run_whose_every_comment_is_a_runs_own_is_refused_when_it_never_responded(
@@ -224,7 +455,9 @@ def test_a_run_whose_every_comment_is_a_runs_own_is_refused_when_it_never_respon
     status = comments.main(["feedback", "--root", str(drafts_root), "--board", BOARD, RUN])
 
     assert status == comments.NOTHING_NEW
-    assert "none is a person's that no run's marker owns" in capsys.readouterr().err
+    refusal = capsys.readouterr().err
+    assert "none is a person's that no reply of this run answers" in refusal
+    assert "changed after" not in refusal
 
 
 def test_two_feedback_files_in_one_second_are_both_kept(drafts_root: Path, board: Path) -> None:

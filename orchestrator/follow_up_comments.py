@@ -13,21 +13,42 @@ owns (:func:`follow_up_tickets.issue_owner`), and the other runs' issues it has 
 marked comment on (:func:`follow_up_tickets.comment_owner`). Nothing else on the board is
 the run's to answer.
 
-**Which comments.** A comment no run's marker owns is a person's. It is selected when it is
-newer than the run's last response, which is the later of two moments this host can read:
-the run's last ticket copy, read as the moment its ticket files under the drafts root were
-last written, since the follow-up agent writes each one with the status `board-status`
-printed immediately before it copies it, nothing on the board touches them, and no copy is
-recorded anywhere else — and the latest of the run's own marked comments,
-anywhere on the board. A run that has responded in neither way has every person's comment
-selected, because feedback silently missed is the failure this exists to end. A comment is
-dated by its last edit, so a person editing an earlier comment is new feedback.
+**Which comments: gathered until a reply names them.** This is the one statement of the
+rule; the documents point here.
+
+* **Marked comments are never gathered.** A comment whose last line is any run's marker, of
+  either kind, this run's or another's, is not a person's.
+* **Answered.** A person's comment is answered when one of this run's replies names its id in
+  `answers` and that reply is not older than the comment's last change. An answered comment
+  is never gathered, and a person editing a comment after its reply makes it unanswered
+  again, since a comment is dated by its last edit.
+* **The boundary.** Unanswered comments at or before one fixed moment are not gathered: they
+  predate replies, and were answered by edits. That moment is the latest of the run's
+  responses that are not replies — its ticket files last being written, and its evidence
+  comments — taken strictly before the run's **first gathering**. The ticket files stand in
+  for the run's last ticket copy, since the follow-up agent writes each one with the status
+  `board-status` printed immediately before it copies it, nothing on the board touches them,
+  and no copy is recorded anywhere else. The first gathering is the stamp in the name of the
+  earliest feedback file under `<drafts root>/feedback/<run-id>/`; a run with no feedback file
+  yet takes the latest of those responses overall. A run with no such response has no
+  boundary, because feedback silently missed is the failure this exists to end.
+* **The boundary is recorded, not recomputed.** Every feedback file records the boundary its
+  gathering used on a :data:`FEEDBACK_BOUNDARY` line, and every later gathering reads the one
+  the earliest file records: a re-dispatch copies its ticket again, which moves the ticket
+  files' last write past the first gathering, so a recomputed boundary would lose the
+  response it rested on. An earliest file recording none, written before files recorded it,
+  is read as the boundary computed above.
+* **Gathered.** Every other person's comment on a relevant issue. After the first gathering,
+  whether a comment is gathered depends only on whether a reply names it: ticket copies,
+  evidence comments and replies made later hide nothing, so a comment written between one
+  gathering and the replies that gathering's dispatch posts is gathered the next time.
 
 **It reads and never writes the board.** The only file it writes is the feedback, under
 `<drafts root>/feedback/<run-id>/`, outside the `tasks/` tree the store reads, so the
-manager can read what was sent. A person's move of an item to `Todo`, `Deferred` or
-`In Progress` is a decision no run undoes, so the feedback says so again beside the
-re-dispatch rule that copies a ticket carrying the status the board holds.
+manager can read what was sent, and the next gathering when the first was. A person's move
+of an item to `Todo`, `Deferred` or `In Progress` is a decision no run undoes, so the
+feedback says so again beside the re-dispatch rule that copies a ticket carrying the status
+the board holds.
 """
 
 from __future__ import annotations
@@ -39,7 +60,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NewType, NoReturn
+from typing import NamedTuple, NoReturn
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
@@ -60,11 +81,27 @@ UNRUNNABLE = 2
 NOTHING_NEW = 3
 
 
-CommentId = NewType("CommentId", str)
+CommentId = tickets.CommentId
+
+#: A feedback file's name: the stamp of the gathering that wrote it, and a counter when two
+#: gatherings shared a second.
+FEEDBACK_NAME = re.compile(r"(?P<stamp>\d{8}T\d{6}Z)(?:-(?P<attempt>\d+))?\.md")
+
+#: The line a feedback file records its gathering's boundary on, so a later gathering reads
+#: the first one's rather than recomputing it from responses a re-dispatch has since moved;
+#: the grammar every reader uses is this one.
+NO_BOUNDARY = "none"
+FEEDBACK_BOUNDARY = '<!-- orchestrator:follow-up-feedback boundary="{boundary}" -->'
+FEEDBACK_BOUNDARY_LINE = re.compile(
+    "^"
+    + re.escape(FEEDBACK_BOUNDARY).replace(re.escape("{boundary}"), r'(?P<boundary>[^"\n]*)')
+    + "$",
+    re.MULTILINE,
+)
 
 
 class NothingNew(ValueError):
-    """The run has no person's comment newer than its last response; says which and why."""
+    """The run has no person's comment left to gather; says which and why."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +132,7 @@ class Selected:
     """One person's comment selected as feedback, with what the feedback file names."""
 
     issue: Issue
+    id: CommentId
     url: str
     author: str
     last_changed: datetime
@@ -106,7 +144,7 @@ class Selection:
     """What :func:`select` found for one run."""
 
     chosen: list[Selected]
-    #: The run's last response, or ``None`` when it has not responded.
+    #: The boundary the module states, or ``None`` when the run has none.
     since: datetime | None
     #: The issues read: the ones the run owns or has marked a comment on.
     relevant: list[Issue]
@@ -226,31 +264,117 @@ def comment_url(issue: Issue, comment: Comment) -> str:
     raise OSError(f"the board reports no URL and no location for {issue.id} or its comments")
 
 
-def select(run: str, issues: Sequence[Issue], tickets_written: datetime | None) -> Selection:
-    """The comments of ``run``'s issues a person wrote after its last response."""
-    marked = [
-        (issue, comment)
+class Boundary(NamedTuple):
+    """The boundary the module states: a moment, or ``None`` when a run has none."""
+
+    moment: datetime | None
+
+
+class Gathering(NamedTuple):
+    """A run's first gathering: its feedback file's stamp, and the boundary that file records.
+
+    ``recorded`` is ``None`` for a file written before gatherings recorded their boundary.
+    """
+
+    stamp: datetime
+    recorded: Boundary | None
+
+
+def boundary_line(since: datetime | None) -> str:
+    """The line a feedback file records the boundary its gathering used with."""
+    return FEEDBACK_BOUNDARY.format(
+        boundary=NO_BOUNDARY if since is None else since.strftime(MOMENT_FORMAT)
+    )
+
+
+def recorded_boundary(text: str, what: str) -> Boundary | None:
+    """The boundary a feedback file's text records, or ``None`` when it records none.
+
+    :class:`OSError` naming ``what`` for a recorded value that is neither a moment nor
+    :data:`NO_BOUNDARY`, since a boundary this cannot read would move every comment across it.
+    """
+    matched = FEEDBACK_BOUNDARY_LINE.search(text)
+    if matched is None:
+        return None
+    if matched["boundary"] == NO_BOUNDARY:
+        return Boundary(None)
+    return Boundary(moment(matched["boundary"], f"the boundary {what} records"))
+
+
+def first_gathering(root: Path, run: str) -> Gathering | None:
+    """``run``'s first gathering, read off its earliest feedback file, if it was ever gathered.
+
+    A file under the directory whose name is not a gathering's stamp was not written here, so
+    it is not read as one; two gatherings in one second are ordered by their counter.
+    """
+    written = []
+    for path in (root / FEEDBACK_DIRECTORY / run).glob("*.md"):
+        matched = FEEDBACK_NAME.fullmatch(path.name)
+        if matched is not None:
+            stamp = datetime.strptime(matched["stamp"], STAMP_FORMAT).replace(tzinfo=UTC)
+            written.append((stamp, int(matched["attempt"] or 1), path))
+    if not written:
+        return None
+    stamp, _, path = min(written)
+    return Gathering(stamp, recorded_boundary(path.read_text(encoding="utf-8"), str(path)))
+
+
+def _marked(run: str, issues: Sequence[Issue]) -> list[tuple[Issue, Comment, tickets.CommentOwner]]:
+    """Every comment on ``issues`` whose marker names ``run``, of either kind."""
+    return [
+        (issue, comment, owner)
         for issue in issues
         for comment in issue.comments
-        if tickets.may_change_comment(run, comment.body)
+        if (owner := tickets.comment_owner(comment.body)) is not None and owner.run == run
     ]
+
+
+def computed_boundary(
+    run: str,
+    issues: Sequence[Issue],
+    tickets_written: datetime | None,
+    first_gathered: datetime | None,
+) -> Boundary:
+    """The boundary as the module states it, for a run whose first gathering recorded none."""
+    responses = [] if tickets_written is None else [tickets_written]
+    responses.extend(
+        comment.last_changed for _, comment, owner in _marked(run, issues) if owner.answers is None
+    )
+    if first_gathered is not None:
+        responses = [moment for moment in responses if moment < first_gathered]
+    return Boundary(max(responses) if responses else None)
+
+
+def select(run: str, issues: Sequence[Issue], boundary: Boundary) -> Selection:
+    """The person's comments on ``run``'s issues that the module's gathering rule gathers."""
+    marked = _marked(run, issues)
     relevant = [
-        issue for issue in issues if issue.owner == run or any(held is issue for held, _ in marked)
+        issue
+        for issue in issues
+        if issue.owner == run or any(held is issue for held, _, _ in marked)
     ]
-    responses = [comment.last_changed for _, comment in marked]
-    if tickets_written is not None:
-        responses.append(tickets_written)
-    since = max(responses) if responses else None
+    # A reply is posted on the issue holding the comment it answers, so it is looked up there:
+    # a board whose comment ids are unique only within an issue cannot answer the wrong one.
+    replied: dict[tuple[QualifiedTaskId, CommentId], datetime] = {}
+    for issue, comment, owner in marked:
+        if owner.answers is not None:
+            key = (issue.id, owner.answers)
+            replied[key] = max(comment.last_changed, replied.get(key, comment.last_changed))
+    since = boundary.moment
     chosen = []
     for issue in relevant:
         for comment in issue.comments:
             if tickets.comment_owner(comment.body) is not None:
+                continue
+            answered = replied.get((issue.id, comment.id))
+            if answered is not None and answered >= comment.last_changed:
                 continue
             if since is not None and comment.last_changed <= since:
                 continue
             chosen.append(
                 Selected(
                     issue=issue,
+                    id=comment.id,
                     url=comment_url(issue, comment),
                     author=comment.author or UNKNOWN_AUTHOR,
                     last_changed=comment.last_changed,
@@ -268,28 +392,30 @@ def _fenced(text: str) -> str:
 
 
 def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | None) -> str:
-    """The feedback file: what the comments are, the status rule, then each comment verbatim."""
-    after = (
-        f"after the run last responded, at {since.strftime(MOMENT_FORMAT)}"
-        if since is not None
-        else "while the run has not yet responded on the board"
-    )
+    """The feedback file: what the comments are, what to do, then each comment verbatim."""
+    after = f", each changed after {since.strftime(MOMENT_FORMAT)}," if since is not None else ""
     sections = [
-        f"People commented on run `{run}`'s follow-ups on the `{board}` board {after}. "
-        f"Gathered by `just follow-ups-handle-comments {run}`, each is quoted verbatim "
-        "below with its URL and its author.\n\n"
-        "Answer each one within the rules above: change this run's ticket and copy it again "
-        "for an issue this run created, and edit this run's one comment for another run's "
-        "issue. **Never change a board item's status.** Before every copy, write the status "
+        f"{boundary_line(since)}\n\n"
+        f"People commented on run `{run}`'s follow-ups on the `{board}` board{after} and no "
+        f"reply of this run answers them yet. Gathered by `just follow-ups-handle-comments "
+        f"{run}`, each is quoted verbatim below with its id, its URL, its author and when it "
+        "last changed.\n\n"
+        "For each quoted comment, in this order:\n\n"
+        '1. **Act on it** under "Ownership on the board" above: perform whatever action it '
+        "calls for, or none.\n"
+        "2. **Post its one reply**, naming the comment's id, as those rules state.\n"
+        "3. **Report** the comment's URL beside what you did about it, or why you did "
+        "nothing.\n\n"
+        "**Never change a board item's status.** Before every copy, write the status "
         "`board-status` prints, which is the one the board holds the item at, so a person's "
-        "move to `Todo`, `Deferred` or `In Progress` stands whenever they made it. Report "
-        "each comment's URL beside what you did about it, or why you did nothing.\n"
+        "move to `Todo`, `Deferred` or `In Progress` stands whenever they made it.\n"
     ]
     for number, selected in enumerate(chosen, start=1):
         issue = selected.issue
         whose = "this run's issue" if issue.owner == run else f"run `{issue.owner}`'s issue"
         sections.append(
             f"### Comment {number}: on `{issue.id}`, {whose}\n\n"
+            f"- Comment id: {selected.id}\n"
             f"- URL: {selected.url}\n"
             f"- Author: {selected.author}\n"
             f"- Last changed: {selected.last_changed.strftime(MOMENT_FORMAT)}\n"
@@ -301,7 +427,13 @@ def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | N
 def feedback(root: Path, board: str, run: str, now: datetime) -> Path:
     """Write ``run``'s new board feedback under ``root``, or :class:`NothingNew` saying why."""
     issues = board_issues(board)
-    selection = select(run, issues, tickets_last_written(root, run))
+    first = first_gathering(root, run)
+    if first is not None and first.recorded is not None:
+        boundary = first.recorded
+    else:
+        written = tickets_last_written(root, run)
+        boundary = computed_boundary(run, issues, written, None if first is None else first.stamp)
+    selection = select(run, issues, boundary)
     chosen, since, relevant = selection.chosen, selection.since, selection.relevant
     if not relevant:
         raise NothingNew(
@@ -310,10 +442,8 @@ def feedback(root: Path, board: str, run: str, now: datetime) -> Path:
         )
     if not chosen:
         held = sum(len(issue.comments) for issue in relevant)
-        moment_text = (
-            f"newer than its last response at {since.strftime(MOMENT_FORMAT)}"
-            if since is not None
-            else "that no run's marker owns"
+        moment_text = "that no reply of this run answers" + (
+            f" and that changed after {since.strftime(MOMENT_FORMAT)}" if since is not None else ""
         )
         raise NothingNew(
             f"run {run} has no new feedback: of the {held} comment(s) on the {len(relevant)} "

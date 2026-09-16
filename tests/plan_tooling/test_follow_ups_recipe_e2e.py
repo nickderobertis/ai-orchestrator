@@ -35,6 +35,7 @@ drafts, tickets and board. The refusals ride beside it on runs of their own.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -138,9 +139,9 @@ READ_FROM_HOSTNAME = "host-read-from-hostname"
 NEW_CAUSE = "listing-cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 
-#: The two schema-2 tickets a run filed before tickets named their repository — the shape of
-#: every ticket on the live board: the one a feedback re-dispatch brings to the current
-#: shape, and the one it leaves as it was.
+#: The two schema-4 tickets a run filed before a ticket stated one fix — the shape of every
+#: ticket on the live board: the one a feedback re-dispatch brings to the current shape, and
+#: the one it leaves as it was.
 REWRITTEN_CAUSE = "export-drops-a-column"
 LEFT_CAUSE = "retry-loop-never-backs-off"
 LEGACY_FEEDBACK = "Bring the export ticket to the current shape.\n"
@@ -298,8 +299,12 @@ def _ticket(
     title: str,
     body: str,
     host: str = READ_FROM_HOSTNAME,
+    rejected: str | None = None,
 ) -> tickets.Ticket:
-    """A `backlog` ticket, naming ``host`` in its record and in its `## Evidence` section."""
+    """A `backlog` ticket, naming ``host`` in its record and in its `## Evidence` section.
+
+    ``rejected``, when given, is its `## Rejected fixes` section, directly after the fix.
+    """
     return tickets.Ticket(
         title=title,
         status=tickets.Status.PROPOSED,
@@ -324,25 +329,55 @@ def _ticket(
                 else f"{body} ({heading})."
             )
             + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
+            + (
+                f"\n\n## {tickets.REJECTED_FIXES}\n\n{rejected}"
+                if rejected is not None and heading == tickets.SUGGESTED_FIX
+                else ""
+            )
             for heading in tickets.HEADINGS
         ),
     )
 
 
-#: A body's `## Impact` section, up to the heading after it.
-IMPACT_SECTION = re.compile(rf"## {tickets.IMPACT}\n\n.*?\n\n(?=## )", re.DOTALL)
+#: What a schema-4 ticket's `## Suggested fixes` offered: options, rather than one fix.
+OPTIONS = (
+    "- Either page the export by cursor.\n"
+    "- Or keep offsets and re-read the last page.\n"
+    "- Or drop the column from the export."
+)
+#: What the rewrite keeps as its one fix, and what it moves into `## Rejected fixes`.
+ONE_FIX = "Page the export by cursor in `src/export.py`, as the listing already does."
+REJECTED = (
+    "- Keeping offsets and re-reading the last page: it hides the skipped rows rather than "
+    "removing the cause.\n"
+    "- Dropping the column: readers of the export need it."
+)
 
 
-def _schema_3(ticket: tickets.Ticket) -> str:
-    """``ticket`` as schema 3 stored it, the shape the live tickets carry: no `## Impact`."""
+def _schema_4(ticket: tickets.Ticket) -> str:
+    """``ticket`` as schema 4 stored it, the shape the live tickets carry.
+
+    A `## Repository` section after `## Impact`, and a `## Suggested fixes` offering options.
+    """
+    body = re.sub(
+        rf"## {tickets.SUGGESTED_FIX}\n\n.*?\n\n(?=## )",
+        f"## Suggested fixes\n\n{OPTIONS}\n\n",
+        ticket.body,
+        count=1,
+        flags=re.DOTALL,
+    ).replace(
+        "\n\n## Examples\n\n",
+        f"\n\n## Repository\n\n{ticket.repository}, at `src/export.py`.\n\n## Examples\n\n",
+        1,
+    )
     return frontmatter(
         {
             "title": ticket.title,
             "status": ticket.status.value,
             "repositories": [ticket.repository],
-            "metadata": {tickets.KEY: tickets.record(ticket) | {"schema": 3}},
+            "metadata": {tickets.KEY: tickets.record(ticket) | {"schema": 4}},
         },
-        IMPACT_SECTION.sub("", ticket.body, count=1),
+        body,
     )
 
 
@@ -764,9 +799,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         unsound = _run(["just", "follow-ups", unsound_run, "--to", BOARD], bench)
         started.append(f"{unsound_run}{SUFFIX}")
 
-        # A run whose tickets were filed at schema 3, before a ticket stated its impact — the
-        # shape of the tickets already on the live board — one of them accepted there by a
-        # person. The manager's feedback re-dispatch rewrites that one and leaves the other.
+        # A run whose tickets were filed at schema 4, carrying `## Repository` and options under
+        # `## Suggested fixes` — the shape of the tickets already on the live board — one of
+        # them accepted there by a person. The manager's feedback re-dispatch rewrites that
+        # one and leaves the other.
         legacy_run = f"fu-legacy-{pid}"
         legacy_drafts = (f"drafts:{legacy_run}/drafts/a-consumed-draft",)
         rewritten_ticket = tickets.ticket_path(bench.drafts_root, legacy_run, REWRITTEN_CAUSE)
@@ -777,11 +813,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 cause,
                 legacy_drafts,
                 f"some-service: {cause.replace('-', ' ')}",
-                "Filed before impact",
+                "Filed before one fix",
                 HOST,
             )
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(_schema_3(filed), encoding="utf-8")
+            path.write_text(_schema_4(filed), encoding="utf-8")
             copied = _run(
                 [store, "task", "copy", tickets.qualified_id(legacy_run, cause), "--to", BOARD],
                 bench,
@@ -796,6 +832,13 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             legacy_drafts,
             f"some-service: {REWRITTEN_CAUSE.replace('-', ' ')}",
             "Brought to the current shape",
+            rejected=REJECTED,
+        )
+        # Its one fix is the one the evidence supports; the other options it offered are
+        # rejected, each with why.
+        rewritten = dataclasses.replace(
+            rewritten,
+            body=rewritten.body.replace("Brought to the current shape (Suggested fix).", ONE_FIX),
         )
         _script(
             bench,
@@ -1427,15 +1470,16 @@ def test_an_attached_run_names_every_ticket_that_fails_the_shape(followed: Follo
     assert "carries a `project`" in unsound.stderr
 
 
-def test_a_feedback_re_dispatch_brings_a_schema_3_ticket_to_the_current_shape_updating_its_item(
+def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its_item(
     followed: Followed,
 ) -> None:
-    """The back-fill of the live tickets: rewritten stating their impact, left accepted.
+    """The back-fill of the live tickets: rewritten to one fix, left accepted.
 
-    Both tickets were schema 3 and on the board, and a person had accepted one. The re-dispatch
-    rewrote that one and asked `board-status` before copying it, which updated the item the
-    board already held — the same origin, no item added — rather than filing a second; the
-    other it never touched, and the attached closeout names it rather than passing it.
+    Both tickets were schema 4 and on the board — a `## Repository` section, and options under
+    `## Suggested fixes` — and a person had accepted one. The re-dispatch rewrote that one and
+    asked `board-status` before copying it, which updated the item the board already held —
+    the same origin, no item added — rather than filing a second; the other it never touched,
+    and the attached closeout names it rather than passing it.
     """
     legacy, before, local, after = (
         followed.legacy,
@@ -1447,27 +1491,44 @@ def test_a_feedback_re_dispatch_brings_a_schema_3_ticket_to_the_current_shape_up
 
     held_before = before["metadata"]
     assert isinstance(held_before, dict)
-    assert held_before[tickets.KEY]["schema"] == 3
-    assert f"## {tickets.IMPACT}" not in str(before["content"]), (
-        "the schema-3 board item already stated its impact"
-    )
-    assert _category(before) == accepted, "the schema-3 board item was not moved"
+    assert held_before[tickets.KEY]["schema"] == 4
+    before_headings = re.findall(r"^## (.+)$", str(before["content"]), re.MULTILINE)
+    assert "Repository" in before_headings and "Suggested fixes" in before_headings, before
+    assert OPTIONS in str(before["content"]), "the schema-4 board item offered no options"
+    assert _category(before) == accepted, "the schema-4 board item was not moved"
 
     (task,) = legacy.prompts
-    assert (
-        "its `## Impact` section written from the evidence the ticket already carries, "
-        "re-verifying only a claim that no longer holds"
-    ) in " ".join(task.split())
+    flat_task = " ".join(task.split())
+    for step in (
+        "its `## Repository` section removed, any path the ticket still needs moved into "
+        "`## Root cause`",
+        "its `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the "
+        "ticket's evidence supports",
+        "every other option it offered moved into `## Rejected fixes`, with why each was not "
+        "chosen",
+        "its `## Impact` section written from the evidence the ticket already carries",
+    ):
+        assert step in flat_task, step
     for shown in (local, after):
         ticket = tickets.from_store_item(shown)
-        impact = ticket.body.split(f"## {tickets.IMPACT}\n", 1)[1].split("\n## ", 1)[0]
-        assert "- Severity: high" in impact and "- Severity with the workaround: medium" in impact
+        headings = re.findall(r"^## (.+)$", ticket.body, re.MULTILINE)
+        assert headings == [
+            "Root cause",
+            "Impact",
+            "Examples",
+            "Evidence",
+            "Suggested fix",
+            "Rejected fixes",
+            "Owning runs",
+        ], headings
+        fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
+        assert fix == ONE_FIX
+        assert REJECTED in ticket.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1]
         assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
-        assert f"`{HOST}`" in ticket.body.split(f"## {tickets.EVIDENCE}", 1)[1]
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 5
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -1481,7 +1542,10 @@ def test_a_feedback_re_dispatch_brings_a_schema_3_ticket_to_the_current_shape_up
 
     assert legacy.result.returncode == UNSOUND, legacy.result.stdout + legacy.result.stderr
     assert f"{followed.left_ticket} is not a sound ticket" in legacy.result.stderr
-    assert "the record is schema 3, and this reads schema 4" in legacy.result.stderr
+    assert "the record is schema 4, and this reads schema 5" in legacy.result.stderr
+    assert "carries `## Repository` and `## Suggested fixes`" in " ".join(
+        legacy.result.stderr.split()
+    )
     assert f"{followed.rewritten_ticket} is not a sound ticket" not in legacy.result.stderr
 
 

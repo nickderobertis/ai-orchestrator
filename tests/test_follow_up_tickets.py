@@ -55,17 +55,65 @@ def _impact(
 IMPACT_TEXT = _impact()
 
 
-def _body(host: str = HOST, impact: str = IMPACT_TEXT) -> str:
-    return "\n\n".join(
-        f"## {heading}\n\n"
-        + (impact if heading == tickets.IMPACT else f"What this ticket says under {heading}.")
-        + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
-        for heading in tickets.HEADINGS
-    )
+def _body(host: str = HOST, impact: str = IMPACT_TEXT, rejected: str | None = None) -> str:
+    """A body of every heading, with ``rejected`` as a `## Rejected fixes` after the fix."""
+    sections = []
+    for heading in tickets.HEADINGS:
+        sections.append(
+            f"## {heading}\n\n"
+            + (impact if heading == tickets.IMPACT else f"What this ticket says under {heading}.")
+            + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
+        )
+        if heading == tickets.SUGGESTED_FIX and rejected is not None:
+            sections.append(f"## {tickets.REJECTED_FIXES}\n\n{rejected}")
+    return "\n\n".join(sections)
 
 
 BODY = _body()
 EVIDENCE_TEXT = f"What this ticket says under {tickets.EVIDENCE}. Verified on `{HOST}`."
+REJECTED_TEXT = "Paging by offset: it skips a page whenever an item is inserted mid-listing."
+FIX_TEXT = f"What this ticket says under {tickets.SUGGESTED_FIX}."
+
+#: A body as schema 4 wrote it: a `## Repository` section, and several suggested fixes.
+SCHEMA_4_BODY = BODY.replace(
+    "## Examples", f"## Repository\n\n{REPOSITORY}, at `src/cursor.py`.\n\n## Examples"
+).replace(
+    f"## {tickets.SUGGESTED_FIX}\n\n{FIX_TEXT}",
+    "## Suggested fixes\n\n- Either page by cursor.\n- Or retry the last page.",
+)
+
+#: Every way a body's fixes are refused, and what the refusal names.
+REJECTED_ELSEWHERE = "`## Rejected fixes` section is not directly after `## Suggested fix`"
+FIX_REFUSALS = [
+    (BODY.replace(f"## {tickets.SUGGESTED_FIX}\n\n{FIX_TEXT}\n\n", ""), "no `## Suggested fix`"),
+    (BODY.replace(FIX_TEXT, ""), "the body's `## Suggested fix` section is empty"),
+    (_body(rejected="\n"), "the body's `## Rejected fixes` section is empty"),
+    (
+        _body(rejected=f"{REJECTED_TEXT}\n\n## Rejected fixes\n\n{REJECTED_TEXT}"),
+        "the body carries `## Rejected fixes` 2 times; it is optional and appears at most once",
+    ),
+    (BODY + f"\n\n## Rejected fixes\n\n{REJECTED_TEXT}", REJECTED_ELSEWHERE),
+    (f"## Rejected fixes\n\n{REJECTED_TEXT}\n\n" + BODY, REJECTED_ELSEWHERE),
+    (
+        BODY.replace(
+            f"## {tickets.SUGGESTED_FIX}\n",
+            f"## Rejected fixes\n\n{REJECTED_TEXT}\n\n## {tickets.SUGGESTED_FIX}\n",
+        ),
+        REJECTED_ELSEWHERE,
+    ),
+    (
+        BODY.replace("## Examples", "## Repository\n\nThe origin.\n\n## Examples"),
+        "carries `## Repository`, which schema 5 retired; bring the ticket to the current shape",
+    ),
+    (
+        BODY.replace(f"## {tickets.SUGGESTED_FIX}\n", "## Suggested fixes\n"),
+        "carries `## Suggested fixes`, which schema 5 retired; bring the ticket to the current",
+    ),
+    (
+        SCHEMA_4_BODY,
+        "carries `## Repository` and `## Suggested fixes`, which schema 5 retired",
+    ),
+]
 
 #: Every way a body's `## Impact` section is refused, and what the refusal names.
 IMPACT_ORDER = "does not end with its three lines, in this order and with nothing between or after"
@@ -164,7 +212,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 4
+    assert held["schema"] == tickets.SCHEMA == 5
     keys = list(held)
     assert keys == list(tickets.RECORD_KEYS)
     assert keys.index("host") == keys.index("verified_at") + 1
@@ -230,9 +278,10 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 4"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 4"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 4"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 5"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 5"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 5"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 5"),
         (_set_record("schema", True), "is schema True"),
         (_set_record("root_cause", "Not A Slug"), "is not a kebab-case slug"),
         (_set_record("root_cause", "another-cause"), "is not the file's root cause"),
@@ -266,6 +315,7 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
             f"`## Evidence` section does not name the host '{HOST}'",
         ),
         *[(_set("content", body), reason) for body, reason in IMPACT_REFUSALS],
+        *[(_set("content", body), reason) for body, reason in FIX_REFUSALS],
     ],
 )
 def test_each_way_an_item_is_not_a_ticket_is_named(
@@ -300,16 +350,36 @@ def test_a_missing_host_is_named_in_the_one_line_naming_every_missing_key() -> N
     assert missing == ["the `orchestrator.follow-up` record is missing basis, host"], found
 
 
-def test_a_schema_3_ticket_is_refused_naming_its_schema_first() -> None:
-    """The shape a ticket carried before the `## Impact` section: schema 3, and no such section."""
+def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
+    """The shape a ticket carried before one fix: `## Repository`, and `## Suggested fixes`."""
     item = _item()
-    _record(item)["schema"] = 3
-    item["content"] = BODY.replace(f"## Impact\n\n{IMPACT_TEXT}\n\n", "")
+    _record(item)["schema"] = 4
+    item["content"] = SCHEMA_4_BODY
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 3, and this reads schema 4"), found
-    assert any("no `## Impact` heading in its place" in problem for problem in found), found
+    assert found[0].startswith("the record is schema 4, and this reads schema 5"), found
+    assert any(
+        "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
+        "ticket to the current shape" in problem
+        for problem in found
+    ), found
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        BODY,
+        _body(rejected=REJECTED_TEXT),
+        _body(rejected="- Retrying the page: it hides the skip rather than removing it."),
+    ],
+    ids=["without-rejected-fixes", "with-rejected-fixes", "with-a-list-of-rejected-fixes"],
+)
+def test_a_body_with_one_fix_and_rejected_fixes_once_after_it_or_none_is_sound(body: str) -> None:
+    ticket = _ticket(body=body)
+
+    assert tickets.problems(_item(ticket), run=RUN, root_cause=CAUSE) == []
+    assert tickets.from_store_item(_item(ticket)).body == body
 
 
 @pytest.mark.parametrize(
@@ -364,7 +434,7 @@ ORCHESTRATION_WORDS = re.compile(r"\b(?:runs?|nodes?|dispatch\w*|managers?)\b", 
 
 def test_the_impact_guidance_and_severities_speak_of_the_repository_not_of_orchestration() -> None:
     contract = tickets.ticket_contract(RUN, "followups")
-    guidance = contract.split("## Impact\n", 1)[1].split("\n## Repository\n", 1)[0]
+    guidance = contract.split("## Impact\n", 1)[1].split("\n## Examples\n", 1)[0]
 
     assert ORCHESTRATION_WORDS.findall(guidance) == [], guidance
     for severity in tickets.Severity:
@@ -448,16 +518,84 @@ def test_a_path_outside_the_ticket_layout_is_refused_by_name(tmp_path: Path) -> 
     assert tickets.located_path(tickets.ticket_path(tmp_path, RUN, CAUSE)) == (RUN, CAUSE)
 
 
-def test_a_comment_is_owned_by_the_run_its_last_line_names() -> None:
+EVIDENCE_MARKER = f'<!-- orchestrator:follow-up-comment run="{RUN}" root_cause="{CAUSE}" -->'
+COMMENT_ID = "IC_kwDOabc-123"
+COMMENT_URL = "https://github.com/nickderobertis/some-service/issues/7#issuecomment-99"
+
+
+def test_an_evidence_comment_is_owned_by_the_run_its_last_line_names() -> None:
     comment = tickets.render_comment(RUN, CAUSE, "The cursor skipped page 9 too.")
 
     assert comment.splitlines()[0] == f"Additional evidence from follow-up run `{RUN}`."
-    assert comment.rstrip("\n").splitlines()[-1] == (
-        f'<!-- orchestrator:follow-up-comment run="{RUN}" root_cause="{CAUSE}" -->'
-    )
-    assert tickets.comment_owner(comment) == tickets.CommentOwner(RUN, CAUSE)
+    assert comment.rstrip("\n").splitlines()[-1] == EVIDENCE_MARKER
+    owner = tickets.comment_owner(comment)
+    assert owner == tickets.CommentOwner(RUN, CAUSE)
+    assert owner == (RUN, CAUSE, tickets.CommentKind.EVIDENCE, None)
     # The store keeps a body with trailing blank lines; the marker is still the last line.
     assert tickets.comment_owner(comment + "\n\n") == tickets.CommentOwner(RUN, CAUSE)
+
+
+def test_an_evidence_comment_already_on_the_board_still_reads_as_its_runs_evidence() -> None:
+    """A comment written before replies existed, byte for byte, is still its run's evidence."""
+    written_before = (
+        f"Additional evidence from follow-up run `{RUN}`.\n\nPage 9 again.\n\n{EVIDENCE_MARKER}\n"
+    )
+
+    assert tickets.render_comment(RUN, CAUSE, "Page 9 again.") == written_before
+    assert tickets.comment_marker(RUN, CAUSE) == EVIDENCE_MARKER
+    assert tickets.comment_owner(written_before) == tickets.CommentOwner(
+        tickets.RunId(RUN), tickets.RootCause(CAUSE), tickets.CommentKind.EVIDENCE, None
+    )
+
+
+@pytest.mark.parametrize(
+    ("author", "opening"),
+    [
+        ("a-reviewer", f"Reply from follow-up run `{RUN}` to @a-reviewer's comment: "),
+        (None, f"Reply from follow-up run `{RUN}` to the comment: "),
+    ],
+)
+def test_a_reply_opens_naming_the_comment_and_ends_with_a_marker_naming_its_id(
+    author: str | None, opening: str
+) -> None:
+    reply = tickets.render_reply(
+        RUN,
+        CAUSE,
+        answers=COMMENT_ID,
+        url=COMMENT_URL,
+        author=author,
+        response="\nCopied the ticket again with page 9 in its examples.\n",
+    )
+
+    marker = (
+        f'<!-- orchestrator:follow-up-comment run="{RUN}" root_cause="{CAUSE}" kind="reply" '
+        f'answers="{COMMENT_ID}" -->'
+    )
+    assert reply == (
+        f"{opening}{COMMENT_URL}\n\nCopied the ticket again with page 9 in its examples.\n\n"
+        f"{marker}\n"
+    )
+    assert tickets.reply_marker(RUN, CAUSE, COMMENT_ID) == marker
+    assert tickets.comment_owner(reply) == tickets.CommentOwner(
+        tickets.RunId(RUN),
+        tickets.RootCause(CAUSE),
+        tickets.CommentKind.REPLY,
+        tickets.CommentId(COMMENT_ID),
+    )
+    assert tickets.may_change_comment(RUN, reply)
+    assert not tickets.may_change_comment(OTHER_RUN, reply)
+
+
+@pytest.mark.parametrize("answers", ["", "has space", 'a"quote', "an>angle", "tab\there"])
+def test_a_reply_to_an_id_outside_the_grammar_is_refused(answers: str) -> None:
+    with pytest.raises(tickets.Refused, match="is not one a reply's marker can carry"):
+        tickets.render_reply(
+            RUN, CAUSE, answers=answers, url=COMMENT_URL, author=None, response="Done."
+        )
+
+
+def _marker(attributes: str) -> str:
+    return f'<!-- orchestrator:follow-up-comment run="{RUN}" root_cause="{CAUSE}"{attributes} -->'
 
 
 @pytest.mark.parametrize(
@@ -467,6 +605,16 @@ def test_a_comment_is_owned_by_the_run_its_last_line_names() -> None:
         "Just a comment somebody wrote.",
         tickets.comment_marker(RUN, CAUSE) + "\nand a line after it",
         '<!-- orchestrator:follow-up-comment run="../x" root_cause="c" -->',
+        _marker(' kind="evidence"'),
+        _marker(' kind="answer" answers="c-1"'),
+        _marker(' kind=""'),
+        _marker(' kind="reply"'),
+        _marker(' kind="reply" answers=""'),
+        _marker(' kind="reply" answers="has space"'),
+        _marker(' kind="reply" answers="an>angle"'),
+        _marker(' answers="c-1"'),
+        _marker(' kind="evidence" answers="c-1"'),
+        _marker(' answers="c-1" kind="reply"'),
     ],
 )
 def test_a_comment_whose_last_line_is_no_marker_belongs_to_no_run(body: str) -> None:
@@ -474,18 +622,27 @@ def test_a_comment_whose_last_line_is_no_marker_belongs_to_no_run(body: str) -> 
     assert not tickets.may_change_comment(RUN, body)
 
 
-def test_a_run_changes_only_its_own_issues_and_comments_and_comments_only_on_others() -> None:
+def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_on_others() -> None:
     own, other, unowned = _item(), _item(_ticket(created_by_run=OTHER_RUN)), {"metadata": {}}
+    reply = tickets.CommentKind.REPLY
 
     assert tickets.issue_owner(own) == RUN
     assert tickets.may_change_issue(RUN, own)
     assert not tickets.may_change_issue(RUN, other)
     assert not tickets.may_change_issue(RUN, unowned)
-    assert not tickets.may_comment_on(RUN, own), "a run edits its own issue, never comments"
+    assert not tickets.may_comment_on(RUN, own), "a run edits its own issue, never adds evidence"
+    assert not tickets.may_comment_on(RUN, own, tickets.CommentKind.EVIDENCE)
     assert tickets.may_comment_on(RUN, other)
     assert not tickets.may_comment_on(RUN, unowned)
+    assert tickets.may_comment_on(RUN, own, reply), "a reply answers a person on its own issue"
+    assert tickets.may_comment_on(RUN, other, reply)
+    assert not tickets.may_comment_on(RUN, unowned, reply)
     assert tickets.may_change_comment(RUN, tickets.render_comment(RUN, CAUSE, "x"))
     assert not tickets.may_change_comment(RUN, tickets.render_comment(OTHER_RUN, CAUSE, "x"))
+    others_reply = tickets.render_reply(
+        OTHER_RUN, CAUSE, answers=COMMENT_ID, url=COMMENT_URL, author=None, response="x"
+    )
+    assert not tickets.may_change_comment(RUN, others_reply)
 
 
 TEMPLATE = (
@@ -619,6 +776,122 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
         assert rule in flat, rule
 
 
+def _tracked_task(*, feedback: str | None = None, redispatch: bool = True) -> str:
+    """The task the recipe composes from the tracked template, its whitespace collapsed."""
+    template = (REPO_ROOT / "config" / "follow-up-task.md").read_text(encoding="utf-8")
+    return tickets.compose(
+        template,
+        run=RUN,
+        board="followups",
+        drafts_root=Path("/drafts-root"),
+        validate="python -m orchestrator.follow_up_tickets validate",
+        board_status=BOARD_STATUS,
+        checkout=Path("/checkout"),
+        plan_store=PLAN_STORE,
+        feedback=feedback,
+        redispatch=redispatch,
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_composed_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> None:
+    task = _tracked_task(redispatch=False)
+    flat = " ".join(task.split())
+    example = task.split("````markdown\n", 1)[1].split("````", 1)[0]
+
+    for said in (
+        "**`## Suggested fix` states one concrete fix**: a single change, or a single set of "
+        "changes that together remove the root cause, never a list of options or alternatives "
+        "to choose between.",
+        "`## Rejected fixes` is optional: when another fix was considered, it comes directly "
+        "after `## Suggested fix` and gives each rejected fix with why it was rejected",
+        "<a simple explanation of the root cause, naming the paths inside the repository where "
+        "it lives>",
+        "<the one fix this ticket recommends: a single change, or a single set of changes that "
+        "together remove the root cause, concrete enough that whoever picks it up has nothing "
+        "left to choose. Never a list of options or alternatives to choose between>",
+    ):
+        assert said in flat, said
+    headings = re.findall(r"^## (.+)$", example, re.MULTILINE)
+    assert headings == [
+        "Root cause",
+        "Impact",
+        "Examples",
+        "Evidence",
+        "Suggested fix",
+        "Rejected fixes",
+        "Owning runs",
+    ], headings
+    assert "## Repository" not in task and "## Suggested fixes" not in example
+    rejected = example.split("## Rejected fixes\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert rejected.startswith("<optional: leave this section out when no other fix was"), rejected
+    assert "each fix that was considered and not chosen, and why it was rejected" in rejected
+
+
+@pytest.mark.reads_docs
+def test_the_composed_re_dispatch_brings_an_older_ticket_to_one_fix_and_no_repository() -> None:
+    flat = " ".join(_tracked_task().split())
+
+    assert (
+        "a ticket of an older schema is brought to the current shape before it is copied, its "
+        "`repositories` naming its record's `repository`, its `host` read from this machine with "
+        "`hostname`, and its `## Impact` section written from the evidence the ticket already "
+        "carries, re-verifying only a claim that no longer holds; its `## Repository` section "
+        "removed, any path the ticket still needs moved into `## Root cause`; its "
+        "`## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's "
+        "evidence supports; and every other option it offered moved into `## Rejected fixes`, "
+        "with why each was not chosen; then it is validated again."
+    ) in flat
+
+
+@pytest.mark.reads_docs
+def test_the_composed_task_states_the_reply_rules_once_and_every_other_text_points_to_them() -> (
+    None
+):
+    task = _tracked_task(feedback="Merge the two cursor tickets.\n")
+    flat = " ".join(task.split())
+    ownership = task.split("## Ownership on the board\n", 1)[1].split("## This is a re-dispatch")[0]
+    flat_ownership = " ".join(ownership.split())
+
+    reply = tickets.reply_marker(RUN, "<root-cause>", "<comment id>")
+    assert f"`{reply}`" in ownership
+    assert 'kind="reply" answers="<comment id>"' in reply
+    for rule in (
+        "A comment belongs to the run named in its **last line**, whichever of the two kinds "
+        "below it is",
+        "may edit or delete only comments whose marker names `listing-run`",
+        "It goes only on an open issue another run created for the same root cause, which "
+        "receives at most **one** from this run",
+        "edit it in place with",
+        "This run never adds an evidence comment to an issue it created: it edits that issue by "
+        "copying its ticket again instead.",
+        "Each comment the feedback below quotes under a `### Comment` heading, with its id and "
+        "URL, gets exactly **one** new reply from this run, on the issue that holds that "
+        "comment, whichever run owns that issue.",
+        "`answers` is the id of the comment it answers, exactly as the feedback gives it",
+        "`<root-cause>` is the `root_cause` in the ticket record of the issue the reply is "
+        "posted on",
+        f"`{tickets.reply_opening(RUN, '<comment URL>', '<author>')}`",
+        f"`{tickets.reply_opening(RUN, '<comment URL>', None)}` when the feedback reports no "
+        "author",
+        f"Post it with `{PLAN_STORE} task comment add`, after the actions it reports.",
+        "**A reply is never edited to answer a different comment**",
+        "A reply never counts as this run's one evidence comment, and never carries evidence in "
+        "place of the ticket or the evidence comment.",
+        "A comment that appears on the board during this dispatch is left for the next "
+        "gathering, and feedback the manager wrote quotes no board comment, so it gets no reply.",
+    ):
+        assert rule in flat_ownership, rule
+    assert flat.count("new reply") == 1, "the reply rule is stated more than once"
+    redispatch = " ".join(
+        task.split("## This is a re-dispatch", 1)[1].split("## Feedback")[0].split()
+    )
+    assert '"Ownership on the board" above binds every change' in redispatch
+    assert "as those rules say" in redispatch
+    assert "never commented on" not in redispatch and "joined by a second" not in redispatch
+    assert not re.search(r"never comments? on an issue (?:it|this run) created", flat), flat
+
+
 def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule() -> None:
     contract = tickets.ticket_contract(RUN, "followups")
 
@@ -656,12 +929,12 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     assert "Run `hostname` on the machine you run on and write exactly what it prints" in contract
     assert "@BOARD_STATUS@ --board followups <path of the ticket>" in contract
 
-    impact = contract.split("\n## Impact\n\n", 1)[1].split("\n## Repository\n", 1)[0]
+    impact = contract.split("\n## Impact\n\n", 1)[1].split("\n## Examples\n", 1)[0]
     assert contract.index("\n## Root cause\n") < contract.index("\n## Impact\n"), contract
     assert tickets.HEADINGS[: tickets.HEADINGS.index(tickets.IMPACT) + 2] == (
         "Root cause",
         "Impact",
-        "Repository",
+        "Examples",
     )
     for label in ("Severity", "Workaround", "Severity with the workaround"):
         assert re.search(rf"^- {label}: <", impact, re.MULTILINE), label
@@ -810,13 +1083,16 @@ def _write(root: Path, ticket: tickets.Ticket, text: str | None = None) -> Path:
     return path
 
 
+@pytest.mark.parametrize(
+    "body", [BODY, _body(rejected=REJECTED_TEXT)], ids=["one-fix", "one-fix-and-rejected-fixes"]
+)
 def test_validate_reads_a_rendered_ticket_through_the_store_as_sound(
-    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], body: str
 ) -> None:
-    path = _write(drafts_root, _ticket())
+    path = _write(drafts_root, _ticket(body=body))
 
     assert tickets.main(["validate", str(path)]) == tickets.SOUND
-    assert tickets.read_ticket(path) == _ticket()
+    assert tickets.read_ticket(path) == _ticket(body=body)
     assert "is a sound ticket" in capsys.readouterr().out
 
 
@@ -853,8 +1129,8 @@ def test_validate_names_each_problem_of_a_ticket_the_store_reads(
     assert "carries a `project`" in reported
 
 
-@pytest.mark.parametrize(("body", "reason"), IMPACT_REFUSALS)
-def test_the_validate_command_names_each_impact_problem_of_a_ticket_the_store_reads(
+@pytest.mark.parametrize(("body", "reason"), IMPACT_REFUSALS + FIX_REFUSALS)
+def test_the_validate_command_names_each_body_problem_of_a_ticket_the_store_reads(
     drafts_root: Path, body: str, reason: str
 ) -> None:
     """The command the follow-up agent and the recipe's closeout run, over a written ticket."""

@@ -10,8 +10,8 @@ seam and both outlive the agent that wrote them, so both are decided here and no
 * **the ticket** (contract C5): its path, its front matter, its body headings, and the
   `onetaskgraph task copy` that is the only way it reaches the board;
 * **ownership on the board** (contract C6): an issue belongs to the run its ticket's
-  `created_by_run` names, a comment to the run its last-line marker names, and a follow-up
-  run changes nothing that belongs to another run.
+  `created_by_run` names, a comment — evidence or a reply to a person's comment — to the run
+  its last-line marker names, and a follow-up run changes nothing that belongs to another run.
 
 **Three readers, one shape.** `scripts/follow-ups.sh` counts a run's drafts and tickets,
 composes the agent's task — rendering both contracts into it from :func:`ticket_contract`
@@ -64,8 +64,10 @@ BOARD = "followups"
 #: The version of the record below. A reader refuses any other: a ticket is a stored shape
 #: that outlives the agent that wrote it. Schema 2 added `host` and the proposal statuses;
 #: schema 3 added `repositories`, which files a ticket's issue in its root cause's repository;
-#: schema 4 added the body's `## Impact` section.
-SCHEMA = 4
+#: schema 4 added the body's `## Impact` section; schema 5 removed `## Repository`, which the
+#: record's `repository` already says, and replaced `## Suggested fixes` with `## Suggested fix`,
+#: stating the one fix, beside an optional `## Rejected fixes` for the others considered.
+SCHEMA = 5
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -256,12 +258,20 @@ RECORD_KEYS = (
 HEADINGS = (
     "Root cause",
     "Impact",
-    "Repository",
     "Examples",
     "Evidence",
-    "Suggested fixes",
+    "Suggested fix",
     "Owning runs",
 )
+
+#: The heading whose section states the one fix a ticket recommends.
+SUGGESTED_FIX = "Suggested fix"
+
+#: The one optional heading: at most once, directly after :data:`SUGGESTED_FIX`, with content.
+REJECTED_FIXES = "Rejected fixes"
+
+#: Headings an older schema carried, which a current body is refused for carrying.
+RETIRED_HEADINGS = ("Repository", "Suggested fixes")
 
 #: The heading whose section names the host the verification ran on.
 EVIDENCE = "Evidence"
@@ -347,13 +357,31 @@ HOST_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 #: A qualified draft id a ticket consumed.
 DRAFT_ID = re.compile(rf"{re.escape(SOURCE)}:(?P<run>[^/\s]+)/{re.escape(drafts.DRAFTS)}/[^/\s]+")
 
-#: The last line of a comment a follow-up run owns, and the visible line it opens with.
+#: The last line of an evidence comment a follow-up run owns, and the visible line it opens
+#: with — byte for byte what every comment already on the board carries.
 COMMENT_MARKER = '<!-- orchestrator:follow-up-comment run="{run}" root_cause="{root_cause}" -->'
+COMMENT_OPENING = "Additional evidence from follow-up run `{run}`."
+
+#: The last line of a reply a follow-up run owns, naming the one comment it answers, and the
+#: visible line it opens with when the board reports the answered comment's author, or not.
+REPLY_MARKER = (
+    '<!-- orchestrator:follow-up-comment run="{run}" root_cause="{root_cause}"'
+    ' kind="{kind}" answers="{answers}" -->'
+)
+REPLY_OPENING = "Reply from follow-up run `{run}` to @{author}'s comment: {url}"
+REPLY_OPENING_UNATTRIBUTED = "Reply from follow-up run `{run}` to the comment: {url}"
+
+#: Either marker, as a last line: `kind` and `answers` are read, then held to the grammar
+#: :func:`comment_owner` states.
 COMMENT_MARKER_LINE = re.compile(
     r"<!-- orchestrator:follow-up-comment"
-    r' run="(?P<run>[^"\s]+)" root_cause="(?P<root_cause>[^"\s]+)" -->'
+    r' run="(?P<run>[^"\s]+)" root_cause="(?P<root_cause>[^"\s]+)"'
+    r'(?: kind="(?P<kind>[^"\s]*)")?(?: answers="(?P<answers>[^"]*)")? -->'
 )
-COMMENT_OPENING = "Additional evidence from follow-up run `{run}`."
+
+#: A comment's id as the board lists it: one or more characters, none of them whitespace,
+#: `"` or `>`, so it cannot end the marker attribute or the marker that carries it.
+COMMENT_ID = re.compile(r'[^\s">]+')
 
 #: The suffix a ticket's file carries.
 TICKET_SUFFIX = ".md"
@@ -415,11 +443,23 @@ class Ticket:
     body: str
 
 
+CommentId = NewType("CommentId", str)
+
+
+class CommentKind(StrEnum):
+    """What a follow-up run's comment is: its evidence on another run's issue, or a reply."""
+
+    EVIDENCE = "evidence"
+    REPLY = "reply"
+
+
 class CommentOwner(NamedTuple):
-    """What a follow-up run's comment marker names."""
+    """What a follow-up run's comment marker names; ``answers`` is a reply's alone."""
 
     run: RunId
     root_cause: RootCause
+    kind: CommentKind = CommentKind.EVIDENCE
+    answers: CommentId | None = None
 
 
 def qualified_id(run: str, root_cause: str) -> str:
@@ -700,6 +740,12 @@ def _body_problems(body: object, host: object) -> list[str]:
         return ["the ticket has no body"]
     found = drafts.sections(body)
     names = [name for name, _ in found]
+    if retired := [heading for heading in RETIRED_HEADINGS if heading in names]:
+        return [
+            "the body carries "
+            + " and ".join(f"`## {heading}`" for heading in retired)
+            + f", which schema {SCHEMA} retired; bring the ticket to the current shape"
+        ]
     after = 0
     for required in HEADINGS:
         try:
@@ -721,7 +767,33 @@ def _body_problems(body: object, host: object) -> list[str]:
                 "record's `host` states; state there the host the verification ran on"
             ]
         after = at + 1
-    return []
+    return _rejected_fixes_problems(found)
+
+
+def _rejected_fixes_problems(found: Sequence[tuple[str, str]]) -> list[str]:
+    """How an optional `## Rejected fixes` section is not once, after the fix, with content."""
+    names = [name for name, _ in found]
+    held = [at for at, name in enumerate(names) if name == REJECTED_FIXES]
+    match held:
+        case []:
+            return []
+        case [at]:
+            if at == 0 or names[at - 1] != SUGGESTED_FIX:
+                return [
+                    f"the body's `## {REJECTED_FIXES}` section is not directly after "
+                    f"`## {SUGGESTED_FIX}`; when present, it comes right after the fix"
+                ]
+            if not found[at][1].strip():
+                return [
+                    f"the body's `## {REJECTED_FIXES}` section is empty; list each fix "
+                    "considered and why it was not chosen, or leave the section out"
+                ]
+            return []
+        case repeated:
+            return [
+                f"the body carries `## {REJECTED_FIXES}` {len(repeated)} times; it is optional "
+                "and appears at most once"
+            ]
 
 
 def problems(
@@ -957,12 +1029,12 @@ def status_before_copy(held: str | None, *, withdraw: bool) -> Status:
 
 
 def comment_marker(run: str, root_cause: str) -> str:
-    """The exact last line of a comment ``run`` owns about ``root_cause``."""
+    """The exact last line of an evidence comment ``run`` owns about ``root_cause``."""
     return COMMENT_MARKER.format(run=run, root_cause=root_cause)
 
 
 def comment_opening(run: str) -> str:
-    """The visible first line of a comment ``run`` owns."""
+    """The visible first line of an evidence comment ``run`` owns."""
     return COMMENT_OPENING.format(run=run)
 
 
@@ -971,12 +1043,51 @@ def render_comment(run: str, root_cause: str, evidence: str) -> str:
     return f"{comment_opening(run)}\n\n{evidence.strip()}\n\n{comment_marker(run, root_cause)}\n"
 
 
-def comment_owner(body: str) -> CommentOwner | None:
-    """The run and root cause a comment's last line names, or `None` when no run owns it.
+def reply_marker(run: str, root_cause: str, answers: str) -> str:
+    """The exact last line of ``run``'s reply to the comment whose id is ``answers``.
 
-    Both halves are held to their grammars, because the marker is stored text anybody with
-    the board's credential can write: a value that is not a run id or a root-cause slug
-    names no run's comment.
+    ``root_cause`` is the one in the ticket record of the issue the reply is posted on.
+    """
+    return REPLY_MARKER.format(
+        run=run, root_cause=root_cause, kind=CommentKind.REPLY, answers=answers
+    )
+
+
+def reply_opening(run: str, url: str, author: str | None) -> str:
+    """The visible first line of ``run``'s reply to the comment at ``url``."""
+    if author is None:
+        return REPLY_OPENING_UNATTRIBUTED.format(run=run, url=url)
+    return REPLY_OPENING.format(run=run, author=author, url=url)
+
+
+def render_reply(
+    run: str, root_cause: str, *, answers: str, url: str, author: str | None, response: str
+) -> str:
+    """A whole reply ``run`` posts to one comment: opening, response, marker.
+
+    ``author`` is `None` when the board reports none. :class:`Refused` for an id outside the
+    grammar a marker carries, since that reply would be no run's comment.
+    """
+    if not COMMENT_ID.fullmatch(answers):
+        raise Refused(
+            [
+                f"the comment id {answers!r} is not one a reply's marker can carry: one or more "
+                'characters, none of them whitespace, `"` or `>`'
+            ]
+        )
+    opening = reply_opening(run, url, author)
+    marker = reply_marker(run, root_cause, answers)
+    return f"{opening}\n\n{response.strip()}\n\n{marker}\n"
+
+
+def comment_owner(body: str) -> CommentOwner | None:
+    """What a comment's last line names, or `None` when no run owns it.
+
+    Every part is held to its grammar, because the marker is stored text anybody with the
+    board's credential can write: a value that is not a run id or a root-cause slug, a `kind`
+    other than `reply`, a reply naming no id or one outside :data:`COMMENT_ID`, or an
+    evidence marker naming an id, names no run's comment. A marker with no `kind` is an
+    evidence comment, which is every comment written before replies existed.
     """
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     matched = COMMENT_MARKER_LINE.fullmatch(lines[-1]) if lines else None
@@ -986,7 +1097,14 @@ def comment_owner(body: str) -> CommentOwner | None:
         or not SLUG.fullmatch(matched["root_cause"])
     ):
         return None
-    return CommentOwner(RunId(matched["run"]), RootCause(matched["root_cause"]))
+    owner = CommentOwner(RunId(matched["run"]), RootCause(matched["root_cause"]))
+    match matched["kind"], matched["answers"]:
+        case None, None:
+            return owner
+        case CommentKind.REPLY, str(answers) if COMMENT_ID.fullmatch(answers):
+            return owner._replace(kind=CommentKind.REPLY, answers=CommentId(answers))
+        case _:
+            return None
 
 
 def issue_owner(item: Mapping[str, object]) -> RunId | None:
@@ -1003,20 +1121,29 @@ def may_change_issue(run: str, item: Mapping[str, object]) -> bool:
 
 
 def may_change_comment(run: str, body: str) -> bool:
-    """Whether ``run`` may edit or delete a comment: only one its marker names."""
+    """Whether ``run`` may edit or delete a comment: only one its marker names, of either kind."""
     owner = comment_owner(body)
     return owner is not None and owner.run == run
 
 
-def may_comment_on(run: str, item: Mapping[str, object]) -> bool:
-    """Whether ``run`` may comment on ``item``: another run's issue, never its own."""
+def may_comment_on(
+    run: str, item: Mapping[str, object], kind: CommentKind = CommentKind.EVIDENCE
+) -> bool:
+    """Whether ``run`` may add a comment of ``kind`` to ``item``.
+
+    Evidence goes only on another run's issue, since a run edits its own issue instead; a
+    reply goes on any issue a run owns, since it answers a person wherever they wrote.
+    """
     owner = issue_owner(item)
+    if kind is CommentKind.REPLY:
+        return owner is not None
     return owner is not None and owner != run
 
 
 #: What each body heading of the example ticket :func:`ticket_contract` renders says to write.
 _HEADING_GUIDANCE = (
-    "<a simple explanation of the root cause>",
+    "<a simple explanation of the root cause, naming the paths inside the repository where it "
+    "lives>",
     "<the negative outcome when the root cause fires, and what it affects: which users, "
     "people, systems or artifacts of the repository. Then the three lines below, each exactly "
     "once, in this order, with nothing between or after them. A severity is one of these "
@@ -1030,14 +1157,31 @@ _HEADING_GUIDANCE = (
         "<the workaround in place and how it is applied, or none>",
         "<the severity that remains once the workaround is accounted for>",
     ).strip(),
-    "<the normalized origin, and the paths inside it>",
     "<one or more examples of it>",
     "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
     "the qualified draft id, its run and node, the verified claim with `path:line` at the "
     "basis commit, and the transcript command from the draft>",
-    "<the suggested fixes>",
+    "<the one fix this ticket recommends: a single change, or a single set of changes that "
+    "together remove the root cause, concrete enough that whoever picks it up has nothing left "
+    "to choose. Never a list of options or alternatives to choose between>",
     "<every run whose evidence this ticket carries>",
 )
+
+#: What the optional `## Rejected fixes` section of the example ticket says to write.
+_REJECTED_FIXES_GUIDANCE = (
+    "<optional: leave this section out when no other fix was considered. Otherwise each fix that "
+    "was considered and not chosen, and why it was rejected>"
+)
+
+
+def _example_body() -> str:
+    """The body of the example ticket: every heading with its guidance, the optional one too."""
+    sections = []
+    for heading, guidance in zip(HEADINGS, _HEADING_GUIDANCE, strict=True):
+        sections.append(f"## {heading}\n\n{guidance}")
+        if heading == SUGGESTED_FIX:
+            sections.append(f"## {REJECTED_FIXES}\n\n{_REJECTED_FIXES_GUIDANCE}")
+    return "\n\n".join(sections)
 
 
 def ticket_contract(run: str, board: str) -> str:
@@ -1063,10 +1207,7 @@ def ticket_contract(run: str, board: str) -> str:
         ),
         verified_at=Timestamp("<now, in RFC 3339 UTC: YYYY-MM-DDTHH:MM:SSZ>"),
         host=Host("<exactly what `hostname` prints on the machine you run on>"),
-        body="\n\n".join(
-            f"## {heading}\n\n{guidance}"
-            for heading, guidance in zip(HEADINGS, _HEADING_GUIDANCE, strict=True)
-        ),
+        body=_example_body(),
     )
     ticket = qualified_id(run, "<root-cause>")
     headings = ", ".join(f"`## {heading}`" for heading in HEADINGS)
@@ -1108,6 +1249,11 @@ def ticket_contract(run: str, board: str) -> str:
         f"- Its front matter carries the `{KEY}` record with every key present, and its body "
         f"the headings {headings}, in that order, each with content. `created_by_run` is "
         "this run, and `owning_runs` includes it.\n"
+        f"- **`## {SUGGESTED_FIX}` states one concrete fix**: a single change, or a single set "
+        "of changes that together remove the root cause, never a list of options or "
+        f"alternatives to choose between. `## {REJECTED_FIXES}` is optional: when another fix "
+        f"was considered, it comes directly after `## {SUGGESTED_FIX}` and gives each rejected "
+        "fix with why it was rejected; otherwise it is left out.\n"
         "- **`host` is read, never typed.** Run `hostname` on the machine you run on and "
         f"write exactly what it prints, both as `host` and in the `## {EVIDENCE}` section, "
         "never a value you type or recall.\n"
@@ -1121,23 +1267,45 @@ def ticket_contract(run: str, board: str) -> str:
 
 def comment_contract(run: str, board: str) -> str:
     """C6, as the follow-up agent is told it: who owns what on the board."""
+    evidence = comment_marker(run, "<root-cause>")
+    reply = reply_marker(run, "<root-cause>", "<comment id>")
     return (
         f"- **Ownership is by run.** An issue on `{board}` belongs to the run its `{KEY}` "
         "record's `created_by_run` names. A comment belongs to the run named in its **last "
-        "line**, which is exactly\n\n"
-        f"  `{comment_marker(run, '<root-cause>')}`\n\n"
-        f"  and its first line is visible to a reader: `{comment_opening(run)}`\n"
-        f"- This run, `{run}`, may create, edit (by copying its ticket again) or close as not "
-        f"planned only issues whose `created_by_run` is `{run}`. It may add, edit or delete "
-        f"only comments whose marker names `{run}`. It never comments on an issue it "
-        "created — it edits that issue instead — and it never changes an issue or a comment "
-        "belonging to another run.\n"
-        "- An open issue for the same root cause created by another run receives at most "
-        "**one** comment from this run, carrying this run's evidence — whatever status the "
-        "board holds it at, so an item at `Deferred` receives this run's one comment like any "
-        "other open item. Where this run's "
-        "comment is already there, edit it with `@PLAN_STORE@ task comment edit`; never add "
-        "a second.\n"
+        "line**, whichever of the two kinds below it is. This run, "
+        f"`{run}`, may create, edit (by copying its ticket again) or close as not planned only "
+        f"issues whose `created_by_run` is `{run}`, and may edit or delete only comments whose "
+        f"marker names `{run}`. It never changes an issue or a comment belonging to another "
+        "run.\n"
+        "- **An evidence comment** carries this run's evidence on another run's issue. Its last "
+        "line is exactly\n\n"
+        f"  `{evidence}`\n\n"
+        f"  and its first line is visible to a reader: `{comment_opening(run)}`\n\n"
+        "  It goes only on an open issue another run created for the same root cause, which "
+        "receives at most **one** from this run — whatever status the board holds it at, so an "
+        "item at `Deferred` receives this run's one comment like any other open item. Where "
+        "this run's evidence comment is already there, edit it in place with `@PLAN_STORE@ "
+        "task comment edit`; never add a second. This run never adds an evidence comment to "
+        "an issue it created: it edits that issue by copying its ticket again instead.\n"
+        "- **A reply** answers one person's comment. Each comment the feedback below quotes "
+        "under a `### Comment` heading, with its id and URL, gets exactly **one** new reply "
+        "from this run, on the issue that holds that comment, whichever run owns that issue. "
+        "Its last line is exactly\n\n"
+        f"  `{reply}`\n\n"
+        "  where `<root-cause>` is the `root_cause` in the ticket record of the issue the reply "
+        "is posted on, and `answers` is the id of the comment it answers, exactly as the "
+        "feedback gives it. Its first line is visible to a reader: "
+        f"`{reply_opening(run, '<comment URL>', '<author>')}`, or "
+        f"`{reply_opening(run, '<comment URL>', None)}` when the feedback reports no author. "
+        "After a blank line comes the response: what this run did about the comment and why, "
+        "or why it did nothing; after another blank line, the marker. Post it with "
+        "`@PLAN_STORE@ task comment add`, after the actions it reports.\n"
+        "- **A reply is never edited to answer a different comment**, since every comment gets "
+        "a reply of its own. A reply never counts as this run's one evidence comment, and never "
+        "carries evidence in place of the ticket or the evidence comment.\n"
+        "- **Reply only to the comments the feedback quotes.** A comment that appears on the "
+        "board during this dispatch is left for the next gathering, and feedback the manager "
+        "wrote quotes no board comment, so it gets no reply.\n"
     )
 
 
@@ -1147,22 +1315,23 @@ REDISPATCH = """\
 ## This is a re-dispatch
 
 A follow-up agent has already worked run `@RUN@`'s drafts, so tickets, board issues and
-comments of this run may already exist. The ownership rules above bind every change:
+comments of this run may already exist. "Ownership on the board" above binds every change:
 
-- change only what belongs to run `@RUN@` — an issue whose `created_by_run` is `@RUN@`, a
-  comment whose marker names `@RUN@` — and nothing belonging to any other run;
+- change only what belongs to run `@RUN@`, as those rules say, and nothing belonging to any
+  other run;
 - an issue run `@RUN@` created is **edited** — change its ticket and copy the ticket again —
-  and never commented on;
-- a comment run `@RUN@` already left on another run's issue is **edited** in place, never
-  joined by a second;
+  and every comment of run `@RUN@` is added, edited or left as those rules say;
 - an existing ticket of run `@RUN@` is copied again carrying the board's status, which
   `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` prints, never the status the ticket
   held before — the board may have been moved since the last copy;
 - a ticket of an older schema is brought to the current shape before it is copied, its
   `repositories` naming its record's `repository`, its `host` read from this machine
   with `hostname`, and its `## Impact` section written from the evidence the ticket
-  already carries, re-verifying only a claim that no longer holds; then it is validated
-  again.
+  already carries, re-verifying only a claim that no longer holds; its `## Repository`
+  section removed, any path the ticket still needs moved into `## Root cause`; its
+  `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's
+  evidence supports; and every other option it offered moved into `## Rejected fixes`,
+  with why each was not chosen; then it is validated again.
 """
 
 #: The heading the manager's feedback goes under, above the feedback itself.

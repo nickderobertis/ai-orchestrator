@@ -12,11 +12,13 @@ the store's own environment layer and named with `--to`, as that journey and
 `tests/plan_tooling/test_copy_plan_recipe_e2e.py` stand one in. **`tests/e2e/fake_codex.py`
 stands in for the paid model alone**, running the commands the answering agent would choose
 through the real programs: copying the run's ticket again with the status `board-status`
-prints, which is how an agent answers a comment on its own issue.
+prints, which is how an agent answers a comment on its own issue, and posting one reply to
+each comment its task's feedback quotes, read out of the task the turn was given.
 
 One module fixture seeds the board, drives the refusal on a run with nothing new, drives the
-re-dispatch on the run with comments, and asks again once the run has answered — readings of
-one board's life.
+re-dispatch on the run with comments — during which a person comments again, before the
+replies are posted — and gathers again until nothing is left, then once more after a later
+comment: readings of one board's life.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from test_follow_ups_recipe_e2e import (
     _category,
     _comments,
     _decided_and_copied,
+    _from_checkout,
     _item,
     _launched_node,
     _moved,
@@ -79,6 +82,43 @@ ANSWERED = "Asked before the run last responded, and already answered.\n"
 ON_OWN = "Page 9 still never renders — the `cursor` example needs ```page=9```.\n"
 ON_SHARED = "Does this also hit the nightly sweep?\n"
 LATER = "One more thing, after the run answered: the weekly sweep too.\n"
+DURING = "Written while the dispatch worked: the monthly export too.\n"
+
+#: What every reply the answering agent posts says it did.
+RESPONSE = "Copied this run's ticket again with that in its examples."
+
+#: The answering agent's own program: read the feedback its task quotes, and post one reply
+#: to each comment there, on the issue that holds it, naming the comment's id. Run in the turn
+#: with the task's prompt log, from the launching checkout, through the installed store.
+REPLY_TO_FEEDBACK = """\
+import json, subprocess, sys, tempfile
+from orchestrator import follow_up_comments as comments
+from orchestrator import follow_up_tickets as tickets
+
+log, run, store = sys.argv[1:4]
+with open(log, encoding="utf-8") as stream:
+    task = json.loads(stream.read().splitlines()[-1])["prompt"]
+feedback = task.split("## Feedback on the previous follow-up run", 1)[1]
+for section in feedback.split("### Comment ")[1:]:
+    issue = section.split("`", 2)[1]
+    fields = dict(
+        line[2:].split(": ", 1) for line in section.splitlines() if line.startswith("- ")
+    )
+    shown = json.loads(
+        subprocess.run([store, "task", "show", issue, "--json"], check=True,
+                       capture_output=True, text=True).stdout
+    )
+    cause = shown["items"][0]["item"]["metadata"][tickets.KEY]["root_cause"]
+    author = fields["Author"]
+    reply = tickets.render_reply(
+        run, cause, answers=fields["Comment id"], url=fields["URL"],
+        author=None if author == comments.UNKNOWN_AUTHOR else author,
+        response=@RESPONSE@,
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as body:
+        body.write(reply)
+    subprocess.run([store, "task", "comment", "add", issue, "--body-file", body.name], check=True)
+""".replace("@RESPONSE@", repr(RESPONSE))
 QUIET_OLD = "Asked before this run's last copy.\n"
 
 #: The recipe's own line naming the feedback file it wrote.
@@ -103,10 +143,17 @@ class Handled(NamedTuple):
     launched: list[str]
     prompts: list[str]
     statuses_after: dict[str, object]
+    comments_after_first: dict[str, list[dict[str, object]]]
+    first_copy_mtime: float
     again: subprocess.CompletedProcess[str]
+    again_prompts: list[str]
+    comments_after_again: dict[str, list[dict[str, object]]]
+    once_more: subprocess.CompletedProcess[str]
     ledger_refused: subprocess.CompletedProcess[str]
     later: subprocess.CompletedProcess[str]
     later_prompts: list[str]
+    comments_after_later: dict[str, list[dict[str, object]]]
+    statuses_at_end: dict[str, object]
 
 
 def _commented(bench: Bench, issue: str, body: str, author: str | None) -> None:
@@ -151,6 +198,29 @@ def _statuses(bench: Bench) -> dict[str, object]:
     items = _store(bench, "task", "list", "--source", BOARD)["items"]
     assert isinstance(items, list), items
     return {str(one["id"]): _category(one["item"]) for one in items}
+
+
+def _replying(bench: Bench, python: str, log: Path, run: str) -> list[str]:
+    """The answering agent's command posting one reply to each comment its task quotes."""
+    helper = bench.tmp / "reply-to-feedback.py"
+    helper.write_text(REPLY_TO_FEEDBACK, encoding="utf-8")
+    return [
+        "bash",
+        "-c",
+        'cd "$1" && exec "$2" "$3" "$4" "$5" "$6"',
+        "_",
+        str(REPO_ROOT),
+        python,
+        str(helper),
+        str(log),
+        run,
+        str(ONETASKGRAPH_BIN),
+    ]
+
+
+def _board_comments(bench: Bench, *issues: str) -> dict[str, list[dict[str, object]]]:
+    """Every comment each issue holds, as the store lists them."""
+    return {issue: _comments(bench, issue) for issue in issues}
 
 
 def _next_second() -> None:
@@ -204,19 +274,36 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         refused = _run(["just", "follow-ups-handle-comments", quiet, "--to", BOARD], bench)
         statuses_after_refusal = _statuses(bench)
 
-        # The main run, answered by an agent that copies its ticket again from the board's
-        # status.
+        # The main run, answered by an agent that — after the feedback is written, and while
+        # its dispatch works — sees a person comment again, then copies its ticket again from
+        # the board's status and replies to each comment its feedback quotes.
         own_ticket = tickets.ticket_path(bench.drafts_root, main, OWN_CAUSE)
+        log = tmp / "prompts.jsonl"
+        during = bench.tmp / "during.md"
+        during.write_text(DURING, encoding="utf-8")
         _script(
             bench,
             main,
             [
+                _from_checkout(
+                    str(ONETASKGRAPH_BIN),
+                    "task",
+                    "comment",
+                    "add",
+                    own_issue,
+                    "--body-file",
+                    str(during),
+                    "--author",
+                    REVIEWER,
+                ),
+                # The store's clock is whole seconds: the copy and replies come a second later.
+                ["sleep", "1.1"],
                 _decided_and_copied(
                     python, str(ONETASKGRAPH_BIN), own_ticket, tickets.qualified_id(main, OWN_CAUSE)
-                )
+                ),
+                _replying(bench, python, log, main),
             ],
         )
-        log = tmp / "prompts.jsonl"
         environment = bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(log)}
         handled_run = _run(
             ["just", "follow-ups-handle-comments", main, "--detach", "--to", BOARD],
@@ -228,9 +315,23 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         watched = _run(["just", "watch", follow_up_run, "--until", "settled"], bench)
         launched = sorted(path.name for path in bench.runs.glob(f"{main}{SUFFIX}*"))
         statuses_after = _statuses(bench)
+        comments_after_first = _board_comments(bench, own_issue, shared_issue)
+        first_copy_mtime = own_ticket.stat().st_mtime
 
-        # Asked again once the run has answered, there is nothing new.
-        again = _run(["just", "follow-ups-handle-comments", main, f"--to={BOARD}"], bench)
+        # Gathered again right after it settles: the comment written during the dispatch,
+        # answered by a re-dispatch that only replies.
+        again_log = tmp / "again-prompts.jsonl"
+        _script(bench, main, [_replying(bench, python, again_log, main)])
+        again = _run(
+            ["just", "follow-ups-handle-comments", main, f"--to={BOARD}"],
+            bench,
+            environment=bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(again_log)},
+        )
+        started.append(f"{follow_up_run}-2")
+        comments_after_again = _board_comments(bench, own_issue, shared_issue)
+
+        # Once more, with every comment answered: nothing new, and nothing launched.
+        once_more = _run(["just", "follow-ups-handle-comments", main, "--to", BOARD], bench)
 
         # A person writes again, and this time the manager stays attached to the re-dispatch.
         _next_second()
@@ -246,14 +347,17 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         launched_after_ledger_refusal = sorted(
             path.name for path in bench.runs.glob(f"{main}{SUFFIX}*")
         )
-        assert launched_after_ledger_refusal == launched, launched_after_ledger_refusal
+        assert launched_after_ledger_refusal == [follow_up_run, f"{follow_up_run}-2"], (
+            launched_after_ledger_refusal
+        )
         later_log = tmp / "later-prompts.jsonl"
+        _script(bench, main, [_replying(bench, python, later_log, main)])
         later = _run(
             ["just", "follow-ups-handle-comments", main, "--to", BOARD],
             bench,
             environment=bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(later_log)},
         )
-        started.append(f"{follow_up_run}-2")
+        started.append(f"{follow_up_run}-3")
         return Handled(
             bench=bench,
             main=main,
@@ -270,10 +374,17 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
             launched=launched,
             prompts=_prompts(log),
             statuses_after=statuses_after,
+            comments_after_first=comments_after_first,
+            first_copy_mtime=first_copy_mtime,
             again=again,
+            again_prompts=_prompts(again_log),
+            comments_after_again=comments_after_again,
+            once_more=once_more,
             ledger_refused=ledger_refused,
             later=later,
             later_prompts=_prompts(later_log),
+            comments_after_later=_board_comments(bench, own_issue, shared_issue),
+            statuses_at_end=_statuses(bench),
         )
     finally:
         for run in started:
@@ -295,6 +406,24 @@ def _feedback(handled: Handled) -> tuple[Path, str]:
     return path, path.read_text(encoding="utf-8")
 
 
+def _comment_id(listed: list[dict[str, object]], body: str) -> str:
+    (identifier,) = [str(one["id"]) for one in listed if one["body"] == body]
+    return identifier
+
+
+def _replies(
+    listed: list[dict[str, object]], run: str
+) -> dict[str, tuple[tickets.CommentOwner, dict[str, object]]]:
+    """Every reply ``run`` posted among ``listed``, by the id of the comment it answers."""
+    found: dict[str, tuple[tickets.CommentOwner, dict[str, object]]] = {}
+    for one in listed:
+        owner = tickets.comment_owner(str(one["body"]))
+        if owner is not None and owner.run == run and owner.kind is tickets.CommentKind.REPLY:
+            assert owner.answers is not None and owner.answers not in found, listed
+            found[owner.answers] = (owner, one)
+    return found
+
+
 def _comment_url(handled: Handled, issue: str, body: str) -> str:
     location = _item(handled.bench, issue)["location"]
     assert isinstance(location, dict), location
@@ -309,7 +438,10 @@ def test_a_run_with_no_new_feedback_is_refused_naming_it_and_launches_nothing(
 
     assert refused.returncode == REFUSED, refused.stdout + refused.stderr
     assert f"run {handled.quiet} has no new feedback" in refused.stderr
-    assert "none is a person's newer than its last response at " in refused.stderr
+    assert (
+        "none is a person's that no reply of this run answers and that changed after "
+        in refused.stderr
+    )
     assert "nothing was launched. Run it again once somebody comments" in refused.stderr
     assert not (bench.runs / f"{handled.quiet}{SUFFIX}").exists()
     assert not (bench.plans / "projects" / f"{handled.quiet}{SUFFIX}.md").exists()
@@ -328,8 +460,12 @@ def test_the_feedback_file_carries_exactly_the_persons_comments_after_the_runs_l
         (handled.shared_issue, ON_SHARED, MAINTAINER),
     ):
         url = _comment_url(handled, issue, body)
-        assert f"- URL: {url}\n- Author: {author}\n" in feedback, feedback
+        identifier = _comment_id(handled.comments_after_first[issue], body)
+        assert f"- Comment id: {identifier}\n- URL: {url}\n- Author: {author}\n" in feedback, (
+            feedback
+        )
         assert body.rstrip() in feedback
+    assert feedback.splitlines()[0].startswith("<!-- orchestrator:follow-up-feedback boundary=")
     for absent in (ANSWERED, "This run hit it too.", "The earlier run's evidence.", QUIET_OLD):
         assert absent.rstrip() not in feedback, feedback
 
@@ -366,19 +502,108 @@ def test_no_board_items_status_changes_including_one_a_person_moved_after_the_ru
     assert handled.statuses_before[handled.own_issue] == tickets.Status.ACCEPTED.value
     assert handled.statuses_after_refusal == handled.statuses_before
     assert handled.statuses_after == handled.statuses_before, ran
+    assert handled.statuses_at_end == handled.statuses_before, ran
     assert f"task copy {tickets.qualified_id(handled.main, OWN_CAUSE)}" in ran, (
         "the answering agent never copied the ticket, so the status was never put to the test"
     )
 
 
-def test_once_the_run_has_answered_the_same_comments_are_not_feedback_again(
+def test_each_quoted_comment_gets_one_reply_on_its_issue_naming_it_and_its_author(
+    handled: Handled,
+) -> None:
+    """The re-dispatch replied to each comment its feedback quoted, and to nothing else."""
+    _feedback(handled)
+    ran = _ran(handled.bench)
+    after = handled.comments_after_first
+
+    for issue, body, author, cause in (
+        (handled.own_issue, ON_OWN, REVIEWER, OWN_CAUSE),
+        (handled.shared_issue, ON_SHARED, MAINTAINER, SHARED_CAUSE),
+    ):
+        identifier = _comment_id(after[issue], body)
+        replies = _replies(after[issue], handled.main)
+        assert set(replies) == {identifier}, (after, ran)
+        owner, reply = replies[identifier]
+        assert owner == tickets.CommentOwner(
+            handled.main, tickets.RootCause(cause), tickets.CommentKind.REPLY, identifier
+        )
+        url = _comment_url(handled, issue, body)
+        text = str(reply["body"])
+        assert text.splitlines()[0] == (
+            f"Reply from follow-up run `{handled.main}` to @{author}'s comment: {url}"
+        )
+        assert RESPONSE in text
+    (during,) = [one for one in after[handled.own_issue] if one["body"] == DURING]
+    assert during["author"] == REVIEWER
+    assert str(during["id"]) not in _replies(after[handled.own_issue], handled.main), (
+        "a comment written during the dispatch was replied to without being quoted"
+    )
+    evidence = [
+        one
+        for one in after[handled.shared_issue]
+        if (owner := tickets.comment_owner(str(one["body"]))) is not None
+        and owner.run == handled.main
+        and owner.kind is tickets.CommentKind.EVIDENCE
+    ]
+    assert [one["body"] for one in evidence] == [
+        tickets.render_comment(handled.main, SHARED_CAUSE, "This run hit it too.")
+    ], "the run's one evidence comment is not still its only one"
+    assert f"task copy {tickets.qualified_id(handled.main, OWN_CAUSE)}" in ran
+
+
+def test_gathering_again_quotes_only_the_comment_written_during_the_dispatch(
+    handled: Handled,
+) -> None:
+    """Older than the dispatch's copy and replies, and still gathered: no reply names it."""
+    _feedback(handled)
+    again, bench = handled.again, handled.bench
+    own = handled.comments_after_first[handled.own_issue]
+    (during,) = [one for one in own if one["body"] == DURING]
+    moment = comments.moment(during["updated_at"], "the comment written during the dispatch")
+    replied = [
+        comments.moment(one["updated_at"], "a reply")
+        for listed in handled.comments_after_first.values()
+        for _, one in _replies(listed, handled.main).values()
+    ]
+    assert replied and all(moment < at for at in replied), (during, replied)
+    assert moment.timestamp() < handled.first_copy_mtime
+
+    assert again.returncode == OK, again.stdout + again.stderr + _ran(bench)
+    named = WROTE.search(again.stderr)
+    assert named is not None, again.stderr
+    feedback = Path(named[1]).read_text(encoding="utf-8")
+    assert feedback.count("### Comment ") == 1, feedback
+    assert f"- Comment id: {during['id']}\n" in feedback
+    assert DURING.rstrip() in feedback
+    for absent in (ANSWERED, ON_OWN, ON_SHARED, QUIET_OLD):
+        assert absent.rstrip() not in feedback, feedback
+    second = f"{handled.follow_up_run}-2"
+    assert f"follow-ups: launching run {second}" in again.stderr
+    (prompt,) = handled.again_prompts
+    assert feedback.rstrip() in prompt
+    results = _run(["just", "results", second], bench)
+    assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
+
+    for issue in (handled.own_issue, handled.shared_issue):
+        before = _replies(handled.comments_after_first[issue], handled.main)
+        now = _replies(handled.comments_after_again[issue], handled.main)
+        assert {key: now[key] for key in before} == before, "an earlier reply changed"
+    replies = _replies(handled.comments_after_again[handled.own_issue], handled.main)
+    owner, _ = replies[str(during["id"])]
+    assert owner.root_cause == OWN_CAUSE
+    assert len(replies) == 2, replies
+
+
+def test_once_every_comment_is_answered_gathering_finds_nothing_and_launches_nothing(
     handled: Handled,
 ) -> None:
     _feedback(handled)
-    again = handled.again
+    once_more = handled.once_more
 
-    assert again.returncode == REFUSED, again.stdout + again.stderr
-    assert f"run {handled.main} has no new feedback" in again.stderr
+    assert once_more.returncode == REFUSED, once_more.stdout + once_more.stderr
+    assert f"run {handled.main} has no new feedback" in once_more.stderr
+    assert "nothing was launched" in once_more.stderr
+    assert "follow-ups: launching run" not in once_more.stderr
 
 
 def test_a_later_comment_is_re_dispatched_again_attached_carrying_only_itself(
@@ -393,13 +618,25 @@ def test_a_later_comment_is_re_dispatched_again_attached_carrying_only_itself(
     feedback = Path(named[1]).read_text(encoding="utf-8")
     assert feedback.count("### Comment ") == 1, feedback
     assert LATER.rstrip() in feedback
-    assert ON_SHARED.rstrip() not in feedback and ON_OWN.rstrip() not in feedback
-    second = f"{handled.follow_up_run}-2"
-    assert f"follow-ups: launching run {second}" in later.stderr
+    for absent in (ON_SHARED, ON_OWN, DURING):
+        assert absent.rstrip() not in feedback, feedback
+    third = f"{handled.follow_up_run}-3"
+    assert f"follow-ups: launching run {third}" in later.stderr
     (prompt,) = handled.later_prompts
     assert feedback.rstrip() in prompt
-    results = _run(["just", "results", second], handled.bench)
+    results = _run(["just", "results", third], handled.bench)
     assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
+    shared = handled.comments_after_later[handled.shared_issue]
+    identifier = _comment_id(shared, LATER)
+    replies = _replies(shared, handled.main)
+    assert set(replies) == {identifier, _comment_id(shared, ON_SHARED)}, replies
+    owner, reply = replies[identifier]
+    assert owner.root_cause == SHARED_CAUSE
+    assert (
+        str(reply["body"])
+        .splitlines()[0]
+        .startswith(f"Reply from follow-up run `{handled.main}` to @{MAINTAINER}'s comment: ")
+    )
 
 
 def test_a_refusal_of_the_feedback_path_is_the_recipes_and_launches_nothing(
@@ -446,7 +683,7 @@ def test_a_board_the_store_cannot_read_is_refused_naming_what_to_check(handled: 
     assert "follow-up-comments: refused: " in refused.stderr
     assert "Check that --board names a source" in refused.stderr
     assert "wrote run" not in refused.stderr
-    assert not (handled.bench.runs / f"{handled.follow_up_run}-3").exists()
+    assert not (handled.bench.runs / f"{handled.follow_up_run}-4").exists()
 
 
 def test_naming_no_board_reads_the_followups_board_and_launches_nothing_without_it(
@@ -472,7 +709,7 @@ def test_naming_no_board_reads_the_followups_board_and_launches_nothing_without_
     assert f"source {tickets.BOARD} could not answer" in refused.stderr
     assert "GH_PROJECTS_TOKEN is missing or empty" in refused.stderr
     assert "wrote run" not in refused.stderr
-    assert not (handled.bench.runs / f"{handled.follow_up_run}-3").exists()
+    assert not (handled.bench.runs / f"{handled.follow_up_run}-4").exists()
 
 
 @pytest.mark.parametrize(

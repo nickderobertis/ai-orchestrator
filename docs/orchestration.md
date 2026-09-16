@@ -1010,9 +1010,11 @@ run `just orchestrate` launched whose every node ended `done` has it launched fo
 the success hook, and a manager types it for a run that ended any other way or to
 re-dispatch with feedback. `just follow-ups-handle-comments` is that re-dispatch for what
 people wrote on the board: it gathers every comment a person left on an issue the run owns or
-has marked a comment on, newer than the run's last ticket copy or its own last marked comment,
-into one feedback file under the drafts root's `feedback/<run-id>/`, each with its URL, its
-author and its text, and hands it to `just follow-ups --feedback`; a run with no new feedback
+has marked a comment on until a reply of the run naming that comment exists
+(`orchestrator/follow_up_comments.py` states the boundary for comments older than replies),
+into one feedback file under the drafts root's `feedback/<run-id>/`, each with its id, its
+URL, its author and its text, and hands it to `just follow-ups --feedback`, whose agent acts
+on each comment and answers it with a reply under the run's marker; a run with no new feedback
 is refused and nothing is launched. [Follow-ups are drafted, not
 surfaced](#follow-ups-are-drafted-not-surfaced) says what it does and how the hooks
 reach it.
@@ -1731,7 +1733,8 @@ board's owner, and `board-status` refuses a ticket naming a repository outside t
 before anything is asked of the board, so it is reported rather than filed.
 `orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
 ownership on that board: a run changes only the issues its own tickets created and the
-comments whose marker names it. The recipe refuses a run something is still driving,
+comments whose marker names it — its evidence on another run's issue, and its replies to
+people's comments. The recipe refuses a run something is still driving,
 launches nothing for a run holding no drafts or tickets, and checks every ticket once an
 attached run settles. `--feedback FILE` re-dispatches over the same run with the manager's
 words in the task, `--detach` returns at the launch record printing the follow-up run and
