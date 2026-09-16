@@ -971,12 +971,18 @@ just channel-reject RUN "verification failed"
 just channel-continue RUN "apply the edit and continue"
 just follow-ups RUN --detach
 just follow-ups RUN --feedback feedback.md
+just follow-ups-handle-comments RUN
 ```
 
 `just follow-ups` verifies a finished run's drafted follow-ups in a run of its own; a
 run `just orchestrate` launched whose every node ended `done` has it launched for it by
 the success hook, and a manager types it for a run that ended any other way or to
-re-dispatch with feedback. [Follow-ups are drafted, not
+re-dispatch with feedback. `just follow-ups-handle-comments` is that re-dispatch for what
+people wrote on the board: it gathers every comment a person left on an issue the run owns or
+has marked a comment on, newer than the run's last ticket copy or its own last marked comment,
+into one feedback file under the drafts root's `feedback/<run-id>/`, each with its URL, its
+author and its text, and hands it to `just follow-ups --feedback`; a run with no new feedback
+is refused and nothing is launched. [Follow-ups are drafted, not
 surfaced](#follow-ups-are-drafted-not-surfaced) says what it does and how the hooks
 reach it.
 

@@ -607,6 +607,10 @@ follow-up *args:
 follow-ups *args:
     @./scripts/follow-ups.sh "$@"
 
+[doc("Re-dispatch a run's follow-up agent over people's new board comments on its follow-ups.")]
+follow-ups-handle-comments *args:
+    @./scripts/follow-ups-handle-comments.sh "$@"
+
 # Register a repository checkout alias. Publication policy and approvals come from
 # the rules file the identity matches rather than from flags here; `onevcs` detects
 # the gate the checkout itself carries, which is a different thing and not the routing.

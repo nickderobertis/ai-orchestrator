@@ -1,7 +1,10 @@
 """Nothing in this repository launches `just follow-ups` except the success hook.
 
 A finished run's follow-ups are verified by exactly two routes: the engine's success hook,
-which `just orchestrate` wires to `scripts/run-ended.sh`, and a manager typing the recipe.
+which `just orchestrate` wires to `scripts/run-ended.sh`, and a manager typing the recipe —
+either `just follow-ups` itself or `just follow-ups-handle-comments`, which a manager types to
+re-dispatch a run over people's new board comments and which reaches the one feedback path
+by running `scripts/follow-ups.sh --feedback` rather than composing a launch of its own.
 A scripted chain — a launcher running the follow-ups recipe once an attached launch
 returns — was ruled out in favour of the hook, because a chain fires on a run the engine
 did not judge complete and fires a second time beside the hook. So this gate holds the
@@ -41,6 +44,10 @@ ALLOWED = {
     "justfile": '@./scripts/follow-ups.sh "$@"',
     "scripts/run-ended.sh": (
         'output=$(cd -- "$checkout" && just follow-ups "$run" --detach) || status=$?'
+    ),
+    "scripts/follow-ups-handle-comments.sh": (
+        'exec "$checkout/scripts/follow-ups.sh" "$run" --feedback "$feedback" '
+        '${passed[@]+"${passed[@]}"}'
     ),
 }
 
@@ -107,7 +114,8 @@ def test_only_the_success_hook_and_the_recipe_itself_launch_the_follow_ups_recip
 
     assert launches == {name: [line] for name, line in ALLOWED.items()}, (
         f"the follow-ups recipe is launched from {launches}, and only the success hook "
-        f"({ALLOWED['scripts/run-ended.sh']!r}) and the recipe's own line may launch it; "
+        f"({ALLOWED['scripts/run-ended.sh']!r}), the recipe's own line and the comments "
+        "recipe's feedback re-dispatch may launch it; "
         "a finished run's follow-ups are verified by the success hook or by a manager "
         "typing the recipe, never by a chain after another launch returns"
     )

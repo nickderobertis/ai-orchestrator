@@ -659,7 +659,8 @@ decision is not an ending, and a run fires at most one hook.
 
 **Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
 comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
---feedback FILE`. On the `followups` board a run owns only the issues it created and the
+--feedback FILE`, and people's new comments on a run's board issues go back with `just
+follow-ups-handle-comments <run-id>`, which writes that file from the board. On the `followups` board a run owns only the issues it created and the
 comments its marker names (`orchestrator/follow_up_tickets.py`).
 
 **The `followups` board is the user's decision.** A ticket's issue is created in the
