@@ -112,6 +112,7 @@ def test_the_key_changes_with_every_authored_field() -> None:
         "kind": _task(metadata={"onepipeline.id": "route", "onepipeline.kind": "human"}),
         "persona": _task(metadata={"onepipeline.id": "route", "onepipeline.persona": "reviewer"}),
         "deps": _task(deps=("design",)),
+        "cross-DAG deps": _task(metadata=_metadata(deps=["run:r-upstream#adopt"])),
         "expects_no_diff": _task(metadata=_metadata(expects_no_diff=True)),
         "repo (hosted)": _task(repositories=["github.com/nickderobertis/elsewhere"]),
         "repo (local checkout)": _task(metadata=_metadata(repo="/home/nick/projects/org-apps")),
@@ -1117,6 +1118,89 @@ def test_a_record_this_cannot_read_is_answered_as_no_record(record: object) -> N
     assert plan_review.recorded(_task(metadata=metadata)) is None
 
 
+#: What a review key hashed to for a task stating no cross-DAG dependency, taken before
+#: :func:`orchestrator.plan_store.authored_deps` existed. Pinned rather than recomputed,
+#: because a key covers the bar's fingerprint and that fingerprint deliberately does not
+#: cover the module computing the key — so nothing else in this repository fails when
+#: these digests move, and what moving them costs is every review record standing on the
+#: board at once, each plan refused until somebody spends a turn re-reviewing it.
+KEYS_BEFORE_CROSS_DAG_DEPS = {
+    "no dependencies at all": (
+        (),
+        "6ac4e487bc3c04cc7b4401eb6c61185b24e1353c62ae4ebdfe49d39b466ed863",
+    ),
+    "this project's own edges": (
+        ("design", "approve"),
+        "a9b780b400a22f0de497619cc98753bfc59534d772b01c5efda56d6cc3083337",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("deps", "before"), KEYS_BEFORE_CROSS_DAG_DEPS.values(), ids=KEYS_BEFORE_CROSS_DAG_DEPS
+)
+def test_a_task_stating_no_cross_dag_dependency_keys_as_it_always_did(
+    deps: tuple[str, ...], before: str
+) -> None:
+    """The blast radius of reading a second place for dependencies: none.
+
+    A record found by its key is one nobody has to review again, so widening what the
+    key covers is a change every recorded review on this host's board is exposed to.
+    These two digests are what the key answered before it read
+    :data:`~orchestrator.plan_store.CROSS_DAG_DEPS` at all, and they still answer —
+    which is the whole of why the union is a union rather than a field beside `deps`.
+
+    Driven through `unreviewed` as well as through the hash, because that is the reader
+    `just check-plan` and `just copy-plan` both ask: a record written under the old
+    digest has to be *found*, not merely to hash alike.
+    """
+    task = _task(deps=deps)
+
+    assert plan_review.review_key(task, BAR) == before
+    assert plan_review.unreviewed([_recorded(task, before)], BAR) == []
+
+
+def test_one_task_stating_a_cross_dag_dependency_keys_the_same_from_either_reader() -> None:
+    """The store's two halves and the loaded plan's one list are one key.
+
+    `just review-plan` keys a record read out of the store, which keeps this project's
+    own edges apart from the cross-DAG references beside them; `just check-plan` keys a
+    task rebuilt from the loaded plan, whose `deps` the engine has already resolved into
+    one list. The recipes are driven over a real store in
+    `tests/plan_tooling/test_check_plan_recipe_e2e.py`; what is asserted here is the
+    property that made them disagree, over each shape the two readers really hand in.
+    """
+    metadata = _metadata(deps=["run:r-upstream#adopt"])
+    from_the_store = _task(deps=("design",), metadata=metadata)
+    from_the_loaded_plan = _task(deps=("design", "run:r-upstream#adopt"), metadata=metadata)
+
+    assert plan_review.review_key(from_the_store, BAR) == plan_review.review_key(
+        from_the_loaded_plan, BAR
+    )
+    assert plan_store.authored_deps(from_the_store) == ["design", "run:r-upstream#adopt"]
+
+
+@pytest.mark.parametrize(
+    "stated",
+    ["run:r-upstream#adopt", {"run": "adopt"}, [7], None],
+    ids=["a string", "a mapping", "a non-string entry", "absent"],
+)
+def test_a_cross_dag_statement_this_cannot_read_leaves_the_key_where_it_was(
+    stated: object,
+) -> None:
+    """A `deps` the engine's loader refuses keys nothing, rather than keying a shape.
+
+    The loader rules on this long before either reader sees the plan, so what a record
+    under any of these would key is a plan no launch accepts — and inventing a rendering
+    for one would put a second answer to `deps` into the digest.
+    """
+    metadata = _metadata(deps=stated) if stated is not None else _metadata()
+
+    assert plan_review.review_key(_task(metadata=metadata), BAR) == plan_review.review_key(
+        _task(metadata=_metadata()), BAR
+    )
+
+
 def test_a_recorded_pass_is_authoritative_and_a_moved_one_is_not() -> None:
     task = _task()
     current = _recorded(task, plan_review.review_key(task, BAR))
@@ -1647,6 +1731,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
         "persona": "sentinel-persona",
         "expects_no_diff": "sentinel-expects-no-diff",
         "deps": "sentinel-dependency",
+        "cross-DAG deps": "run:r-sentinel#sentinel-cross-dag-dependency",
         "repo": "github.com/nickderobertis/sentinel-repository",
         "adoption": "sentinel-adoption",
         "consumes": "sentinel-consumed-target",
@@ -1670,6 +1755,7 @@ def test_the_reviewer_is_shown_exactly_what_the_key_covers() -> None:
             "onepipeline.adoption": sentinels["adoption"],
             "onepipeline.consumes": {"engine": sentinels["consumes"]},
             "onepipeline.merge_policy": sentinels["merge_policy"],
+            "onepipeline.deps": [sentinels["cross-DAG deps"]],
             "onepipeline.execution_checkout": unkeyed["execution checkout"],
             "onepipeline.steps": [
                 {

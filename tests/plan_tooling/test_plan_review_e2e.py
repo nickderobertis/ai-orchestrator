@@ -1875,3 +1875,85 @@ def test_the_record_the_review_wrote_is_the_record_the_spawned_check_reads(
     )
     assert answered.returncode == 0, answered.stdout + answered.stderr
     assert json.loads(answered.stdout)["refusals"] == [], answered.stdout
+
+
+#: A wait-only edge onto a node of another run, in the one spelling the engine reads.
+#: A store's own dependency edges cannot carry one — their targets are records of this
+#: project — so a record states it under the reserved `onepipeline.deps` key instead.
+#: That second place is the whole of why a task's dependencies have two halves, and why
+#: the two commands that read them could disagree about what a node says.
+CROSS_DAG_EDGE = "run:r-upstream-0001#adopt"
+
+
+def _waiting_on_another_run(name: str) -> str:
+    """One dispatched node waiting on this plan's own node and on a node of another run.
+
+    The cross-DAG half is written onto the stored record because that is the only place
+    it can be written: `orchestrator/project_store.py` turns a node's `deps` into store
+    dependency edges, whose targets are records of this project, so a wait on a node
+    outside the plan reaches a record the way its author puts it there. Both halves at
+    once, because a node carrying one kind alone cannot tell the two renderings apart.
+    """
+    project = local_project(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "goal": {"text": "Deliver the checkout route"},
+                "tasks": [{**_node("route"), "deps": ["design"]}, _node("design")],
+            }
+        ),
+        name,
+    )
+    document = _document(project, "route")
+    written = document.read_text(encoding="utf-8")
+    anchor = '  "onepipeline.id": "route"'
+    assert anchor in written, written
+    document.write_text(
+        written.replace(anchor, f'{anchor}\n  "onepipeline.deps": ["{CROSS_DAG_EDGE}"]', 1),
+        encoding="utf-8",
+    )
+    return project
+
+
+def test_the_reviewer_is_handed_the_cross_dag_dependency_its_record_is_keyed_on(
+    tmp_path: Path,
+) -> None:
+    """Both halves of a node's dependencies reach the turns that rule on it, and its record.
+
+    The key a review records covers every dependency a node states, the cross-DAG half
+    included — so a reviewer shown only this project's own edges would be ruling on a
+    node whose other half nothing read, which is the shape `_prompt` renders the union
+    to avoid. Two prompts are asserted because each rebuilds the pair from a different
+    side: the task's own turn reads the stored record's two halves, and the plan-level
+    turn reads this repository's rendering of the store, which resolves them into one
+    `deps` list the way the engine's loader does. Read out of the provider's own log,
+    so what is asserted is the instruction the reviewer was really handed through the
+    real recipe and the real `oneharness run`; and the plan the reviewer passed is then
+    accepted by the real `just check-plan`, which keys the same content off the loaded
+    plan — the disagreement this journey exists for being visible only across the pair.
+    """
+    project = _waiting_on_another_run("review-cross-dag")
+    prompts = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+    assert "recorded a review of 2 task(s)" in review.stdout, review.stdout
+    assert "the plan as a whole was reviewed and recorded" in review.stdout, review.stdout
+
+    # The waiting node's own turn. The plan-level turn is handed every node's fields
+    # too, so it is excluded by its own instructions rather than by the title it quotes.
+    (task,) = [
+        one
+        for one in _prompts(prompts)
+        if '"title": "feat: add the route"' in one and _flat_plan_prompt() not in one
+    ]
+    assert f'"depends_on": [ "design", "{CROSS_DAG_EDGE}" ]' in task, task
+    assert f'"deps": [ "design", "{CROSS_DAG_EDGE}" ]' in _plan_prompt_given(tmp_path), (
+        "the plan-level turn was shown the node's own edge without the run it waits on"
+    )
+
+    accepted = _just("check-plan", project)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "no review record" not in accepted.stderr, accepted.stderr

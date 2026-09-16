@@ -181,6 +181,50 @@ class StoreTask:
     deps: tuple[NodeId, ...]
 
 
+#: Where a record states its **cross-DAG** dependencies: wait-only references onto
+#: another run's node, spelled `run:<run-id>#<node-id>`. A store's own dependency edges
+#: cannot carry one, because their targets are records of this project, so this key is
+#: the whole of how a task says it waits on a run outside itself — and the engine's
+#: loader refuses an in-plan id written here, which is what makes it exactly the
+#: cross-DAG half. `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives that refusal.
+CROSS_DAG_DEPS = "onepipeline.deps"
+
+
+def authored_deps(task: StoreTask) -> list[str]:
+    """Every dependency ``task`` states, in the one representation its readers share.
+
+    **One source, because three readers reach a task's dependencies from two sides.** A
+    record read out of the store keeps this project's own edges in ``deps`` and its
+    cross-DAG references under :data:`CROSS_DAG_DEPS`; the engine's loader resolves the
+    two into one ``deps`` list, and a task rebuilt from that loaded plan by
+    :func:`orchestrator.plan_check._task_record` therefore arrives with the cross-DAG
+    references already in ``deps``, beside the same metadata. Composing those halves
+    separately is what produced
+    https://github.com/nickderobertis/ai-orchestrator/issues/1071: one task hashed to two
+    review keys, `just review-plan` reported a pass and `just check-plan` reported no
+    record for the same content, and the only way past it was deleting a true dependency
+    and stating the prerequisite in prose.
+
+    So the answer is their **union**, which reaches the same value from either half: a
+    reference stated in both places is one dependency rather than two. A record naming no
+    cross-DAG dependency answers exactly what ``sorted(task.deps)`` answered before this
+    function existed, so every review key already recorded on this host's board still
+    matches — `tests/test_plan_review.py` holds that to a pinned digest, because the bar
+    fingerprint a key also covers deliberately does not cover the module computing it and
+    nothing else would notice those keys moving.
+
+    A cross-DAG entry that is not a string is left out rather than rendered: the engine's
+    loader refuses `deps` that are not strings long before a plan reaches any of the
+    three readers, so what rendering it would key is a plan no launch accepts. The answer
+    is `list[str]` rather than `list[NodeId]` for the same reason the two halves differ at
+    all — a cross-DAG reference names a node of another run and is no id of this plan.
+    """
+    own = list(task.deps)
+    stated = task.metadata.get(CROSS_DAG_DEPS)
+    listed = stated if isinstance(stated, list) else []
+    return sorted([*own, *(one for one in listed if isinstance(one, str) and one not in own)])
+
+
 def store_binary() -> str:
     """The plan-store CLI this checkout spawns, refused by name when it has none.
 
@@ -426,8 +470,15 @@ def read_plan(project: str, records: Sequence[StoreTask]) -> dict[str, Any]:
         node["task"] = record.content
         if record.repositories:
             node["repo"] = record.repositories[0]
-        if record.deps:
-            node["deps"] = list(record.deps)
+        # The union rather than the record's own edges, because a node states its
+        # cross-DAG references on `onepipeline.deps` and the loop above has already
+        # copied them out of the metadata: overwriting with the edges alone dropped them,
+        # so this rendering and the engine's disagreed about what the plan says — and the
+        # plan-level review key is computed over one of them on each side.
+        # `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the pair.
+        dependencies = authored_deps(record)
+        if dependencies:
+            node["deps"] = dependencies
         nodes.append(node)
     plan["tasks"] = nodes
     return plan

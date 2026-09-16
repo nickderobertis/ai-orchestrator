@@ -166,6 +166,15 @@ def _task_record(task: object) -> plan_store.StoreTask:
     key — the same two spellings, in the same order,
     :func:`orchestrator.plan_review.repository_of` reads a store record by — so the
     `repo` the key covers is one value whichever path computed it.
+
+    ``deps`` is filled from the document's **resolved** dependencies, which carry a node's
+    cross-DAG references beside this project's own edges, and the metadata beside it is
+    the store's map verbatim — the two halves
+    :func:`orchestrator.plan_store.authored_deps` reconciles into the one representation
+    a key covers. So this copies the list as it stands rather than trying to take the
+    cross-DAG half back out of it: subtracting here would be the second construction
+    whose drift from the review's own was
+    https://github.com/nickderobertis/ai-orchestrator/issues/1071.
     """
     read = task if isinstance(task, dict) else {}
     node_id = read.get("id")

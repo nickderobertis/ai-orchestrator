@@ -623,9 +623,12 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     """The digest ``task``'s current authored content, reviewed under ``bar``, hashes to.
 
     **Exactly the authored fields, and the bar.** The title, the body prose, the
-    persona, the dependencies, whether the node declares it expects no diff, and — for a
-    lifecycle node, which states its prose and its persona once per `steps` entry rather
-    than in `task` and `persona` — the authored half of each of those steps. Nothing a
+    persona, every dependency the node states — in the one representation
+    :func:`orchestrator.plan_store.authored_deps` composes, which is what keeps this key
+    and the one `just check-plan` reconstructs from the loaded plan the same digest —
+    whether the node declares it expects no diff, and — for a lifecycle node, which
+    states its prose and its persona once per `steps` entry rather than in `task` and
+    `persona` — the authored half of each of those steps. Nothing a
     settlement write-back owns is here. `status` in particular is not: the engine
     projects each settlement back onto the plan it was launched from, so a whole-record
     key would go stale the first time a node ran and this gate would refuse every plan
@@ -648,7 +651,7 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
         "adoption": task.metadata.get(ADOPTION),
         "bar": bar,
         "consumes": task.metadata.get(CONSUMES),
-        "deps": sorted(task.deps),
+        "deps": plan_store.authored_deps(task),
         "expects_no_diff": task.metadata.get(EXPECTS_NO_DIFF),
         "kind": task.metadata.get(KIND),
         "merge_policy": task.metadata.get(MERGE_POLICY),
@@ -918,7 +921,7 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
     authored = {
         "title": task.title,
         "repo": repository_of(task),
-        "depends_on": sorted(task.deps),
+        "depends_on": plan_store.authored_deps(task),
         "adoption": task.metadata.get(ADOPTION),
         "consumes": task.metadata.get(CONSUMES),
         "merge_policy": task.metadata.get(MERGE_POLICY),

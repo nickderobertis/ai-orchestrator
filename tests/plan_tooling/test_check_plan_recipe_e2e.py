@@ -1586,6 +1586,145 @@ def test_a_structural_error_that_reached_a_launch_is_refused_by_the_recipe(
     assert structural.reason in refused.stderr, refused.stderr
 
 
+#: A wait-only edge onto a node of another run, in the one spelling the engine reads —
+#: `run:<run-id>#<node-id>`. The store's own dependency edges cannot express it, because
+#: their targets are records of this project, so a plan states it on the reserved
+#: `onepipeline.deps` key instead. That is the whole reason it is the shape that broke
+#: the review record: it is the one dependency a plan states in a place of its own, and
+#: the two commands read it from different places.
+CROSS_DAG_EDGE = '  "onepipeline.deps": ["run:r-upstream-0001#adopt"]'
+
+#: The same node, waiting on a different run's node. A record granted over the edge above
+#: says nothing about this one.
+MOVED_CROSS_DAG_EDGE = '  "onepipeline.deps": ["run:r-upstream-0002#adopt"]'
+
+
+def _with_own_edge(root: Path, criteria: str) -> Path:
+    """The plan above with its dispatched node also waiting on this plan's own node.
+
+    The half a store *can* express, beside the half only `onepipeline.deps` can — which
+    is the case worth driving twice over, because the engine's loader resolves the two
+    into one `deps` list and this repository's own rendering of the store composes them
+    separately. A node carrying only one kind cannot tell those two renderings apart.
+    """
+    plan = json.loads(_plan(root, criteria).read_text(encoding="utf-8"))
+    plan["tasks"][0]["deps"] = ["approve"]
+    written = root / "both-kinds.json"
+    written.write_text(json.dumps(plan), encoding="utf-8")
+    return written
+
+
+def _rewritten(project: str, old: str, new: str) -> str:
+    """``project``'s dispatched record with one span of it replaced, and its id back."""
+    document = _task_document(project)
+    written = document.read_text(encoding="utf-8")
+    assert old in written, written
+    document.write_text(written.replace(old, new, 1), encoding="utf-8")
+    return project
+
+
+def _own_edge_line(project: str) -> str:
+    """The stored `depends_on` line `route` carries, as the record spells it."""
+    written = _task_document(project).read_text(encoding="utf-8")
+    (line,) = [one for one in written.splitlines() if one.startswith("depends_on:")]
+    return line
+
+
+def _recheck(project: str) -> subprocess.CompletedProcess[str]:
+    """`just check-plan` alone, over a project a journey has already had reviewed.
+
+    Unlike :func:`_check_project` this reviews nothing first, which is the point: what
+    these journeys are about is whether the record a review already wrote is still the
+    one the check finds after an edit.
+    """
+    return subprocess.run(
+        ["just", "check-plan", project],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("also_its_own", (False, True), ids=("cross-DAG only", "both kinds"))
+def test_a_node_with_a_cross_dag_dependency_keeps_the_review_it_was_granted(
+    tmp_path: Path, also_its_own: bool
+) -> None:
+    """The review `just review-plan` records is the one `just check-plan` then finds.
+
+    The two commands compute one key over one plan's authored content, and a node
+    waiting on another run's node is where that stopped being true: the review read the
+    record's own dependency edges and the check read the plan's resolved `deps`, which
+    carry the cross-DAG reference as well. One task hashed to two keys, so the review
+    reported a pass and the check reported no record for the same content, every time —
+    and the only way past it was deleting a true dependency and writing prose in its
+    place. Driven through both recipes over one real project, because a key computed two
+    ways is a disagreement only the pair can show.
+
+    The node carrying both kinds is the second parameter rather than a second journey
+    because it is the same defect one level up: the plan-level key is computed over this
+    repository's rendering of the store on one side and the engine's loaded plan on the
+    other, and those two renderings differ only for a node that states both.
+    """
+    source = (
+        _with_own_edge(tmp_path, STATES_ITS_BAR)
+        if also_its_own
+        else _plan(tmp_path, STATES_ITS_BAR)
+    )
+    project = _with_metadata(project_from_plan(source), CROSS_DAG_EDGE)
+
+    checked = _check_project(project)
+
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "no review record" not in checked.stderr, checked.stderr
+    assert "no plan-level review record" not in checked.stderr, checked.stderr
+
+
+def test_a_change_to_a_nodes_own_dependencies_invalidates_the_record_it_had(
+    tmp_path: Path,
+) -> None:
+    """Dropping this plan's own edge costs that one node its record, and no other.
+
+    The other half of the pair above: a key that covered a cross-DAG reference by
+    ceasing to notice the edges beside it would pass this plan and mean nothing. The
+    count is asserted rather than the presence, because one edited node whose record
+    falls is a working key and a plan whose records all fall is a key over the wrong
+    thing.
+    """
+    project = _with_metadata(
+        project_from_plan(_with_own_edge(tmp_path, STATES_ITS_BAR)), CROSS_DAG_EDGE
+    )
+    assert _check_project(project).returncode == 0
+
+    _rewritten(project, f"{_own_edge_line(project)}\n", "")
+    refused = _recheck(project)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert refused.stderr.count("no review record") == 1, refused.stderr
+    assert "route" in refused.stderr, refused.stderr
+
+
+def test_a_change_to_a_nodes_cross_dag_dependencies_invalidates_the_record_it_had(
+    tmp_path: Path,
+) -> None:
+    """Re-pointing the wait at another run costs that one node its record, and no other.
+
+    A reviewer ruled on a node that waits on `r-upstream-0001`; nothing has read the one
+    that waits on `r-upstream-0002`. Asserted separately from the edge above because a
+    key reading only one of the two halves satisfies exactly one of these journeys.
+    """
+    project = _with_metadata(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)), CROSS_DAG_EDGE)
+    assert _check_project(project).returncode == 0
+
+    _rewritten(project, CROSS_DAG_EDGE.strip(), MOVED_CROSS_DAG_EDGE.strip())
+    refused = _recheck(project)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert refused.stderr.count("no review record") == 1, refused.stderr
+    assert "route" in refused.stderr, refused.stderr
+
+
 def test_a_stepped_node_that_also_carries_a_task_is_refused(tmp_path: Path) -> None:
     """The third of the three, which a plan can state directly.
 
