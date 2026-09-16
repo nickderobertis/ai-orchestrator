@@ -46,7 +46,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
@@ -81,8 +81,6 @@ PATIENCE_SECONDS = 60
 #: `tests/e2e/nx_workspace.py`'s group: every step here is a `just` recipe blocking on
 #: `uv run`, which waits on the lock a journey re-provisioning this checkout holds.
 pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
-
-Found = TypeVar("Found")
 
 
 class HeldRun(NamedTuple):
@@ -161,7 +159,7 @@ def held(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[HeldRun]:
         _just("stop", run, environment=environment, seconds=60)
 
 
-def _waited_for(what: str, look: Callable[[], Found | None]) -> Found:
+def _waited_for[Found](what: str, look: Callable[[], Found | None]) -> Found:
     """Poll `look` until it answers something, or fail naming what never arrived."""
     limit = deadline(PATIENCE_SECONDS)
     while True:

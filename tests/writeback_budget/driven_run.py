@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple, NewType, TypeVar
+from typing import NamedTuple, NewType
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV
@@ -83,8 +83,6 @@ PROJECTIONS_FILE = "writeback-projections.jsonl"
 
 #: The source the engine's shadow project lives in, which is what a `--member` names.
 SHADOW_SOURCE = "onepipeline-writeback"
-
-Found = TypeVar("Found")
 
 
 class DrivenRun(NamedTuple):
@@ -246,7 +244,7 @@ def task(what: str) -> str:
     return f"## What\n{what}\n\n## Why\nKeep the run driven.\n\n## Acceptance criteria\n- Done."
 
 
-def waited_for(what: str, look: Callable[[], Found | None], seconds: float) -> Found:
+def waited_for[Found](what: str, look: Callable[[], Found | None], seconds: float) -> Found:
     """Poll `look` until it answers something, or fail naming what never arrived."""
     limit = deadline(seconds)
     while True:

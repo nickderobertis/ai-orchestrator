@@ -2,7 +2,7 @@
 name = "ai-orchestrator"
 version = "0.1.0"
 description = "Local orchestration harness: drive many onejudge processes to complete a task DAG in parallel."
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "oneagentgraph-cli==0.4.2",
     "oneharness-cli==0.12.1",
@@ -72,13 +72,13 @@ packages = ["orchestrator"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 packages = ["orchestrator"]
 strict = true
 warn_unused_ignores = true

@@ -18,17 +18,12 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TypeVar
 
 import pytest
 
 from orchestrator.root import REPO_ROOT
 
 NODE_MODULES = REPO_ROOT / "node_modules"
-
-#: A test function or class, returned as it was given: applying a mark mutates the
-#: target and hands it back, so the decorator below narrows nothing.
-Marked = TypeVar("Marked")
 
 #: Taking this checkout's own install and joining the group that serialises it are
 #: one decision, so they are one name. Sharing is the point of the symlink below —
@@ -72,7 +67,9 @@ WORKSPACE_INSTALL_MARKS = (
 )
 
 
-def shares_workspace_install(target: Marked) -> Marked:
+# `Marked` is a test function or class, returned as it was given: applying a mark
+# mutates the target and hands it back, so the decorator narrows nothing.
+def shares_workspace_install[Marked](target: Marked) -> Marked:
     """Take this checkout's install *and* join the group that serialises access to it.
 
     Named for both, because both happen: a caller reading only "requires" would not

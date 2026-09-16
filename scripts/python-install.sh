@@ -48,6 +48,10 @@ log=$PRESERVED_LOG
 # silent update from under the change being verified. `uv run` does the opposite —
 # it re-resolves and rewrites `uv.lock` on its way into a target — which on a branch
 # whose subject *is* a pin means the gate verifies something the branch does not say.
+# The interpreter is uv's to choose against `requires-python`, with no
+# `.python-version` pinning one: an existing `.venv` below that floor is recreated on
+# an installed interpreter that satisfies it, or on one uv downloads, so raising the
+# floor needs no hand step in any checkout provisioned before it moved.
 if ! (cd "$repo_root" && uv sync --locked) 2>&1 | redact_secrets >"$log"; then
     cat "$log" >&2
     echo "python-install: provision the locked Python environment and retry; a lockfile that has to move is refreshed with 'uv lock' and committed as part of the change (full output: $log)" >&2

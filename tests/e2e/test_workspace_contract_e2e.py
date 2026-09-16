@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1948,6 +1949,83 @@ def test_a_freshly_created_worktree_provisions_its_python_environment_from_the_l
         _run("git", "worktree", "remove", "--force", str(worktree))
 
 
+class PythonVersion(NamedTuple):
+    """A `major.minor` interpreter version, ordered as Python orders versions."""
+
+    major: int
+    minor: int
+
+
+def _declared_python_floor(checkout: Path) -> PythonVersion:
+    """The `major.minor` lower bound a checkout's `requires-python` declares."""
+    declared = tomllib.loads((checkout / "pyproject.toml").read_text(encoding="utf-8"))
+    floor = re.fullmatch(r">=(\d+)\.(\d+)", declared["project"]["requires-python"])
+    assert floor, f"requires-python is not a bare lower bound: {declared['project']!r}"
+    return PythonVersion(int(floor.group(1)), int(floor.group(2)))
+
+
+def _venv_python_version(checkout: Path) -> PythonVersion:
+    probe = _run(
+        str(checkout / ".venv/bin/python"),
+        "-c",
+        "import sys; print(*sys.version_info[:2])",
+        cwd=checkout,
+    )
+    assert probe.returncode == 0, probe.stderr
+    major, minor = probe.stdout.split()
+    return PythonVersion(int(major), int(minor))
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The subject is the whole
+# checkout's install: `python-install.sh` syncs `pyproject.toml`, `uv.lock` and the editable
+# `orchestrator` package of a copy of every tracked file, so the whole-workspace key is the
+# edge that covers what it reads, as it is for this module's other real-`uv sync` journeys
+# beside it. It costs about two seconds on a warm uv cache.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` is how this
+# repository routes a test to `orchestrator:test-docs`, the tier keyed on the whole
+# workspace, and `tests/test_nx_cache_scope.py` holds the marker to that routing; a separate
+# Nx project would need a key over the same whole tree.
+# llmlint: ignore-block[shell_test_tiers_stay_split] uv is the host tool, and the sibling
+# provisioning journeys above and below drive the same real `uv sync` from this project;
+# moving one of them out would split one install contract across two projects.
+@shares_workspace_install
+@pytest.mark.reads_docs
+def test_an_environment_below_the_declared_floor_is_replaced_by_the_locked_install(
+    tmp_path: Path,
+) -> None:
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
+    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+    """A `.venv` made before the floor moved must not survive the install that follows.
+
+    Every reader of `.venv/bin` would otherwise run this package under an interpreter
+    its own `requires-python` excludes. The stale environment is built for real and
+    measured below the floor first, so an environment that already satisfied it cannot
+    pass for provisioning.
+    """
+    checkout = _provisioning_copy(tmp_path, "below-floor-python")
+    floor = _declared_python_floor(checkout)
+    older = f"{floor.major}.{floor.minor - 1}"
+    environment = _uv_provisioning_env()
+
+    created = _run("uv", "venv", "--python", older, ".venv", cwd=checkout, env=environment)
+    assert created.returncode == 0, created.stderr
+    assert _venv_python_version(checkout) < floor
+
+    install = _run(str(checkout / "scripts/python-install.sh"), cwd=checkout, env=environment)
+
+    assert install.returncode == 0, install.stderr
+    assert _venv_python_version(checkout) >= floor
+    imported = _run(
+        str(checkout / ".venv/bin/python"),
+        "-c",
+        "import jsonschema, mypy, orchestrator, pytest, xdist",
+        cwd=checkout,
+    )
+    assert imported.returncode == 0, imported.stderr
+    assert (checkout / "uv.lock").read_bytes() == (ROOT / "uv.lock").read_bytes()
+
+
 @shares_workspace_install
 @pytest.mark.reads_docs
 def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path) -> None:
@@ -2127,9 +2205,12 @@ def _uv_no_sync_probe(root: Path) -> Path:
     """
     project = root / "no-sync-probe"
     project.mkdir()
+    # The probe runs under this suite's interpreter, so it states the floor that
+    # interpreter was provisioned against rather than a copy of it.
+    floor = _declared_python_floor(ROOT)
     (project / "pyproject.toml").write_text(
         '[project]\nname = "no-sync-probe"\nversion = "0.1.0"\n'
-        'requires-python = ">=3.11"\n'
+        f'requires-python = ">={floor.major}.{floor.minor}"\n'
         'dependencies = ["a-distribution-no-index-supplies-0000"]\n',
         encoding="utf-8",
     )
