@@ -125,6 +125,50 @@ WIDE_BAR = re.compile(
 #: where the repository publishes locally, the host's required checks where it does not.
 DOWNSTREAM = ("downstream", "merge path", "pre-push", "required checks")
 
+#: What a publication check that runs downstream is to a worker and its judge, in the
+#: parts a judge acts on: no worker can run one, no dispatch is held to one having passed,
+#: and a `checks-failed` retry is judged on its task's own local checks — the repair of
+#: what the refusal named — never on the downstream check passing again. A retry that
+#: fixed and locally verified the test its refusal named was failed without this, which
+#: left finished work unpublished and its dependents skipped until a manager intervened.
+PUBLICATION_CHECKS_ARE_NOT_WORKER_RUNNABLE = re.compile(
+    r"downstream\s+publication\s+checks\s+are\s+not\s+runnable\s+by\s+a\s+worker", re.I
+)
+NEVER_HELD_TO_ONE_HAVING_PASSED = re.compile(
+    r"never\s+held\s+to\s+one\s+having\s+passed", re.IGNORECASE
+)
+RETRY_JUDGED_ON_LOCAL_CHECKS = re.compile(
+    r"`checks-failed`\s+retry[^.]*?is\s+judged\s+on\s+its\s+task's\s+stated\s+local"
+    r"\s+acceptance\s+checks",
+    re.IGNORECASE,
+)
+REPAIR_OF_WHAT_THE_REFUSAL_NAMED = re.compile(
+    r"repair\s+of\s+what\s+the\s+refusal\s+named", re.IGNORECASE
+)
+NEVER_BY_THE_DOWNSTREAM_CHECK_PASSING = re.compile(
+    r"never\s+by\s+the\s+downstream\s+check\s+passing\s+again", re.IGNORECASE
+)
+#: Every part above, for the file's test and for the journey reading the judge's prompt.
+DOWNSTREAM_CHECKS_ARE_NOT_JUDGED = (
+    (
+        PUBLICATION_CHECKS_ARE_NOT_WORKER_RUNNABLE,
+        "that downstream publication checks are not runnable by a worker",
+    ),
+    (NEVER_HELD_TO_ONE_HAVING_PASSED, "that no dispatch is held to one having passed"),
+    (
+        RETRY_JUDGED_ON_LOCAL_CHECKS,
+        "that a `checks-failed` retry is judged on its task's stated local acceptance checks",
+    ),
+    (REPAIR_OF_WHAT_THE_REFUSAL_NAMED, "that what those checks prove is the repair"),
+    (
+        NEVER_BY_THE_DOWNSTREAM_CHECK_PASSING,
+        "that the retry is never judged by the downstream check passing again",
+    ),
+)
+#: Where `checks-failed` is defined, so the retry this file names is one the engine settles.
+OUTCOME_TABLE = "docs/repo-lifecycle.md"
+CHECKS_FAILED_OUTCOME = re.compile(r"^\| `failed` \| `checks-failed` \|", re.MULTILINE)
+
 #: The property the withdrawn ordering was serving, in the three parts a worker acts on:
 #: every claim about the finished work is true of the final tree, a delta stated in the
 #: turn that changed something satisfies that, and a claim about something that was never
@@ -495,6 +539,45 @@ def test_the_appendix_names_a_repository_wide_bar_only_as_something_run_downstre
             f"runs downstream on the merge path ({sentence!r}), so it reads as this "
             "dispatch's to run"
         )
+
+
+def test_a_retry_is_judged_on_its_local_checks_never_on_a_downstream_publication_check(
+    appendix: str,
+) -> None:
+    """A check that runs after the dispatch settles is no criterion of that dispatch.
+
+    The judge is the party this is for. A `checks-failed` retry carries the merge path's
+    refusal, and a judge reading "the required check failed" beside a generic completion
+    bar read re-running that check as unmet — so a retry that had fixed and locally
+    verified the failing test was failed, leaving finished work unpublished and its
+    dependents skipped until a manager published it by hand. The statement is held in one
+    paragraph, because a judge weighs its halves together: that downstream checks are not
+    a worker's to run, and what a retry is judged on instead.
+
+    `checks-failed` is anchored to the outcome table `tests/test_engine_contracts.py`
+    reconciles to the engine, so the retry named here stays one the engine really settles.
+    """
+    paragraphs = [
+        block
+        for block in appendix.split("\n\n")
+        if PUBLICATION_CHECKS_ARE_NOT_WORKER_RUNNABLE.search(" ".join(block.split()))
+    ]
+    assert len(paragraphs) == 1, (
+        f"{APPENDIX} states that downstream publication checks are not runnable by a worker "
+        f"in {len(paragraphs)} paragraphs; it is stated once, beside what a retry is judged on"
+    )
+    paragraph = " ".join(paragraphs[0].split())
+    for stated, missing in DOWNSTREAM_CHECKS_ARE_NOT_JUDGED:
+        assert stated.search(paragraph), (
+            f"{APPENDIX} no longer says {missing}. Without it a judge reads a refusal's "
+            "failed required check as a criterion the retry left unmet, and fails a "
+            f"repaired retry for a check it cannot run:\n{paragraph}"
+        )
+    table = (REPO_ROOT / OUTCOME_TABLE).read_text(encoding="utf-8")
+    assert CHECKS_FAILED_OUTCOME.search(table), (
+        f"{OUTCOME_TABLE}'s outcome table no longer defines `checks-failed`, so the retry "
+        f"{APPENDIX} tells a judge how to assess is one the engine does not settle"
+    )
 
 
 def test_the_targeted_check_rule_is_the_first_thing_a_reader_meets(appendix: str) -> None:

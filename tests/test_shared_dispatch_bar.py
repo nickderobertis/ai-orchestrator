@@ -56,7 +56,7 @@ from shared_dispatch_bar import (
     shared_agent_preamble,
     shared_completion_bar,
 )
-from test_dispatch_appendix import WIDE_BAR
+from test_dispatch_appendix import DOWNSTREAM_CHECKS_ARE_NOT_JUDGED, WIDE_BAR
 
 from orchestrator.criteria_guard import APPENDIX, CRITERIA_HEADING
 from orchestrator.root import REPO_ROOT
@@ -205,6 +205,14 @@ CHECK_SELECTION_POLICY = (
     Policy(
         "what a dispatch that changed nothing tracked owes",
         re.compile(r"changed\s+nothing\s+tracked|complete\s+without\s+them", re.IGNORECASE),
+    ),
+    Policy(
+        "what a retry after a refused publication is judged on",
+        re.compile(
+            r"checks-failed|not\s+runnable\s+by\s+a\s+worker|stated\s+local\s+acceptance"
+            r"|downstream\s+check\s+passing",
+            re.IGNORECASE,
+        ),
     ),
 )
 
@@ -457,7 +465,40 @@ def test_no_statement_of_dispatch_policy_stands_in_both_files() -> None:
 
 
 @pytest.mark.reads_docs
-def test_a_policy_sentence_standing_in_both_files_fails_that_gate() -> None:
+def test_what_a_retry_is_judged_on_is_stated_in_the_appendix_alone() -> None:
+    """The statement a judge assesses a `checks-failed` retry by, held to its one source.
+
+    It is dispatch policy — which checks a dispatch is held to — so it is the appendix's,
+    which every judge reads beside the task. Stated in `user.done_when` instead it would
+    be a clause about checks handed to every judge of a plan, a report and a diff alike,
+    which the vocabulary above refuses; stated in both it would be two answers to the one
+    question a repaired retry was failed on.
+    """
+    appendix = " ".join(appendix_text().split())
+    bar = shared_completion_bar()
+    preamble = " ".join(shared_agent_preamble().split())
+    for stated, what in DOWNSTREAM_CHECKS_ARE_NOT_JUDGED:
+        assert stated.search(appendix), f"{APPENDIX} no longer says {what}"
+        for field_name, clause in (("user.done_when", bar), ("system_prompt", preamble)):
+            found = stated.search(clause)
+            assert found is None, (
+                f"{BASE_CONFIG}'s `{field_name}` says {what} ({found.group(0)!r}), which "
+                f"{APPENDIX} already states; dispatch policy has one source"
+            )
+
+
+#: Sentences the appendix carries, each planted into the preamble to prove the gate below
+#: catches a copy of it: the first a check-selection rule, the second the statement of what
+#: a `checks-failed` retry is judged on.
+PLANTED_SENTENCES = (
+    "take the narrowest scope each one supports",
+    "which can only happen once the retry has settled",
+)
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("copied", PLANTED_SENTENCES)
+def test_a_policy_sentence_standing_in_both_files_fails_that_gate(copied: str) -> None:
     """The gate proven to catch what it is for, on the real files rather than on fixtures.
 
     Two documents that happen to agree today pass whether the gate discriminates or not,
@@ -465,8 +506,7 @@ def test_a_policy_sentence_standing_in_both_files_fails_that_gate() -> None:
     again.
     """
     appendix = appendix_text()
-    copied = "take the narrowest scope each one supports"
-    assert copied in appendix, (
+    assert copied in " ".join(appendix.split()), (
         f"{APPENDIX} no longer states {copied!r}, so this gate is being proven against a "
         "sentence that is not in it; plant one this file really carries"
     )

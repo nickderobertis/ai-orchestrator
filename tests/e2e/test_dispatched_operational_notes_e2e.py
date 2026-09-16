@@ -72,6 +72,7 @@ from test_dispatch_appendix import (
     CONCURRENT_RUNS_ALLOWED,
     DEFINITION,
     DOWNSTREAM,
+    DOWNSTREAM_CHECKS_ARE_NOT_JUDGED,
     DRAFT_COMMAND,
     DRAFTING_RULE,
     EXCLUDES_ONLY_ITSELF,
@@ -449,11 +450,11 @@ def judged_notes(dispatched: Dispatched) -> str:
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] reuses the module's one run
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] reads_docs keys its inputs
-# This assertion adds no orchestration journey or expensive edge: it reads the module-scoped
-# `dispatched_run` the module's existing tests already launch once, and `reads_docs`
-# correctly keys that shared run to the tracked appendix it composes into the prompt. Two
-# blocks rather than one line-scoped directive, because the two rule names alone overrun
-# the line limit and a line-scoped directive covers only the single line below it.
+# These two judge-side assertions add no orchestration journey or expensive edge: each reads
+# the module-scoped `dispatched` run the module's existing tests already launch once, and
+# `reads_docs` correctly keys that shared run to the tracked appendix it composes into the
+# prompt. Two blocks rather than one line-scoped directive, because the two rule names alone
+# overrun the line limit and a line-scoped directive covers only the single line below it.
 @pytest.mark.xdist_group("dispatched-operational-notes")
 def test_a_dispatched_workers_judge_is_told_an_inert_commit_leaves_evidence_standing(
     judged_notes: str,
@@ -494,6 +495,29 @@ def test_a_dispatched_workers_judge_is_told_an_inert_commit_leaves_evidence_stan
         assert stated.search(judged_notes), (
             f"the judge of a dispatched worker is no longer handed {missing}, so it reads "
             "any commit after the last check run as invalidating that run"
+        )
+
+
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_workers_judge_is_told_a_retry_is_not_judged_on_a_downstream_check(
+    judged_notes: str,
+) -> None:
+    """What a `checks-failed` retry is judged on, read off the prompt its judge was handed.
+
+    The judge is again the party that misread it: a retry that fixed and locally verified
+    the test its refusal named was failed for not re-running the required check that
+    refused it — a check that runs only after the judge passes — which left finished work
+    unpublished and its dependents skipped until a manager published it by hand. So what
+    is asserted is that the judge side of a real dispatch, launched through `just
+    orchestrate` with only the paid model doubled, is handed every part of the statement:
+    downstream publication checks are not a worker's to run, and a retry is judged on its
+    task's stated local acceptance checks, never on the downstream check passing again.
+    """
+    delivered = " ".join(judged_notes.split())
+    for stated, missing in DOWNSTREAM_CHECKS_ARE_NOT_JUDGED:
+        assert stated.search(delivered), (
+            f"the judge of a dispatched worker is no longer handed {missing}, so it reads "
+            "a refusal's failed required check as a criterion a repaired retry left unmet"
         )
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

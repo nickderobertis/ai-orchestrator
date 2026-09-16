@@ -27,6 +27,18 @@ because running them is slow or inconvenient. `git status` reporting nothing to 
 then a correct and complete outcome, not a problem to solve by writing a file nobody
 asked for.
 
+**A publication check runs downstream, so no worker can run it and none is judged on it.**
+The host's required checks and a repository's `pre-push` gate run on the change this
+work becomes, after this dispatch settles: downstream publication checks are not
+runnable by a worker, and a dispatch is never held to one having passed. That holds on a
+retry too. A `checks-failed` retry — a re-dispatch onto the same branch carrying the
+merge path's refusal and `onevcs`'s evidence — is judged on its task's stated local
+acceptance checks: the repair of what the refusal named, proven by the checks the task
+names, and never by the downstream check passing again, which can only happen once the
+retry has settled. One retry that fixed and locally verified the failing test its
+refusal named was failed for not re-running the required check, which left finished
+work unpublished and its dependents skipped until a manager published it by hand.
+
 **Never signal a process you did not identify by PID, and a PID you got from a pattern is
 still a pattern kill.** Several managers share this host, and their dispatches, drivers,
 publications and test servers run under the same few binary names — `just`, `node`,
