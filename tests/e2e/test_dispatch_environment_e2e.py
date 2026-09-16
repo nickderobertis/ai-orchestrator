@@ -385,13 +385,19 @@ SHEBANG_RECIPE = """demo:
 
 
 def _shebang_recipe(directory: Path, runtime: Path) -> subprocess.CompletedProcess[str]:
-    """Run a real shebang recipe with `runtime` as the runner's runtime directory."""
+    """Run a real shebang recipe with `runtime` as the runner's runtime directory.
+
+    `JUST_TEMPDIR` is dropped because `just` prefers it to `XDG_RUNTIME_DIR`, and a
+    session's shell may export one (Claude Code's exports `/tmp`): inherited, it decides
+    where the body is written and `runtime` decides nothing.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "justfile").write_text(SHEBANG_RECIPE, encoding="utf-8")
+    environment = {name: value for name, value in os.environ.items() if name != "JUST_TEMPDIR"}
     return subprocess.run(
         ["just", "demo"],
         cwd=directory,
-        env={**os.environ, "XDG_RUNTIME_DIR": str(runtime)},
+        env={**environment, "XDG_RUNTIME_DIR": str(runtime)},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),

@@ -522,7 +522,7 @@ CONSTANTS = (
     # manager-note op, and a document still telling a manager to send version 1 is
     # describing the envelope before that break. Held against the crate constant so the
     # next bump comes due here rather than after somebody sends the old shape. Since
-    # onepipeline 0.32.0 the channel runs on `onemessagebus-agent`, whose `channel.rs`
+    # onepipeline 0.33.0 the channel runs on `onemessagebus-agent`, whose `channel.rs`
     # declares the number and whose re-export in onepipeline's own `channel.rs` names no
     # literal, so it is read where it is declared.
     Constant(

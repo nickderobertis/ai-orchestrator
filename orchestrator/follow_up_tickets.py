@@ -82,6 +82,11 @@ class Status(StrEnum):
     issue is closed as not planned, and no issue is ever deleted. :func:`status_vocabulary`
     is the one statement of the whole vocabulary an agent reads.
 
+    `queued` is the one category no person moves an item to. A plan node naming the ticket
+    in its own `delivers` claims it the moment the launch's first projection lands, and the
+    store's relation carries it on from there — so a manager reading the board sees an
+    accepted ticket another run has already taken, rather than picking up work in flight.
+
     A ticket's `status` is written as the category's own word, for every category: the
     adopted plan-store release reads each of them back as itself, so there is no status
     this repository has to spell some other way to be read as the one it means.
@@ -91,6 +96,10 @@ class Status(StrEnum):
     PROPOSED = "backlog"
     ACCEPTED = "todo"
     DEFERRED = "draft"
+    # The one member named for its store word rather than for what it means, because the
+    # category, the board option and the engine's projected word are all `queued` and the
+    # releases this host adopted fix that name. What it means is the meaning below.
+    QUEUED = "queued"
     UNDER_WAY = "in-progress"
     FINISHED = "done"
     WITHDRAWN = "cancelled"
@@ -102,8 +111,14 @@ class Status(StrEnum):
 
     @property
     def accepted(self) -> bool:
-        """Whether a person accepted the ticket, which only a person undoes."""
-        return self in (Status.ACCEPTED, Status.UNDER_WAY, Status.FINISHED)
+        """Whether a person accepted the ticket.
+
+        A person accepted every one of these, and only a person moves an item back out of
+        acceptance — with the one exception `queued` is: the store's `delivers` relation
+        returns a claimed ticket to `todo` when the work that claimed it does not happen,
+        which restores the person's decision rather than undoing it.
+        """
+        return self in (Status.ACCEPTED, Status.QUEUED, Status.UNDER_WAY, Status.FINISHED)
 
     @property
     def protected_from_withdrawal(self) -> bool:
@@ -132,6 +147,10 @@ _MEANINGS = {
         "deferred for later by a person: not accepted, picked up by no agent, and still "
         "taking new evidence"
     ),
+    Status.QUEUED: (
+        "accepted, and claimed by a launched DAG whose node has not started, so it returns "
+        "to `Todo` if that work does not happen"
+    ),
     Status.UNDER_WAY: "accepted and taken up",
     Status.FINISHED: "accepted and finished",
     Status.WITHDRAWN: "withdrawn",
@@ -153,6 +172,10 @@ _PLACES = {
         "Board status `Todo`", "only a person, which is what accepting a ticket is"
     ),
     Status.DEFERRED: _Place("Board status `Deferred`", "only a person"),
+    Status.QUEUED: _Place(
+        "Board status `Queued`",
+        "no person — a launched run's first projection, over the store's `delivers` relation",
+    ),
     Status.UNDER_WAY: _Place(
         "Board status `In Progress`", "a person, or a dispatch whose own task says to"
     ),
@@ -188,8 +211,8 @@ def status_vocabulary() -> str:
     return (
         "".join(bullets)
         + '\nA brief to pick up "accepted" follow-up tickets means the items at `Todo` and '
-        "nothing else: never an item at `Proposal`, `Deferred` or `In Progress`, and never a "
-        "closed one.\n"
+        "nothing else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, "
+        "and never a closed one.\n"
     )
 
 

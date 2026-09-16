@@ -680,28 +680,41 @@ prints the vocabulary every agent reads, copied here:
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
 <!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
 - **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
-  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an item
-  there: only a person, which is what accepting a ticket is. **Selected** by an agent sent to
-  pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, written `draft`: deferred for later by a person: not accepted,
-  picked up by no agent, and still taking new evidence. Who moves an item there: only a
-  person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves an
-  item there: a person, or a dispatch whose own task says to. Not selected by an agent sent
-  to pick up accepted tickets.
-- **Closed as completed**, written `done`: accepted and finished. Who moves an item there: a
-  person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
+  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by
+  an agent sent to pick up accepted tickets.
+- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an
+  item there: only a person, which is what accepting a ticket is. **Selected** by an agent
+  sent to pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, written `draft`: deferred for later by a person: not
+  accepted, picked up by no agent, and still taking new evidence. Who moves an item there:
+  only a person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Queued`**, written `queued`: accepted, and claimed by a launched DAG
+  whose node has not started, so it returns to `Todo` if that work does not happen. Who
+  moves an item there: no person — a launched run's first projection, over the store's
+  `delivers` relation. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
+  an item there: a person, or a dispatch whose own task says to. Not selected by an agent
+  sent to pick up accepted tickets.
+- **Closed as completed**, written `done`: accepted and finished. Who moves an item there:
+  a person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
   accepted tickets.
 - **Closed as not planned**, written `cancelled`: withdrawn. Who moves an item there: a
-  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person. Not
-  selected by an agent sent to pick up accepted tickets.
+  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person.
+  Not selected by an agent sent to pick up accepted tickets.
 
-A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing else:
-never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one.
+A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
+else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
+closed one.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+
+**A brief for a run that works accepted tickets has each node's task record name its
+ticket** in the store's `delivers` field, as a qualified `followups:<native-id>`, one
+ticket per node of a plan. Name a ticket only once it is at `Todo`: one at `Proposal` or
+`Deferred` is left alone. The ticket's status follows its node by the store's rule over
+every task delivering it, which onetaskgraph's documentation states. A failed first
+projection lets the run dispatch before `Queued` reaches the board, and says so on the
+planner channel.
 
 **`complete` waits for the follow-up run's settlement and the links you relayed**, or for
 that decision with the user. Hooks come with an engine adopted between runs, so a run

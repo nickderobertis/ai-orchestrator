@@ -25,10 +25,15 @@ sources:
       token_env: GH_PROJECTS_TOKEN
       status_mapping:
         # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
-        # source of the option `unknown` is written to; its other party is the live board,
-        # which no check here may read or write, since that needs the board's credential. A
-        # board without the option is refused by name at the next write-back or plan copy.
+        # source of the options `unknown` and `queued` are written to; its other party is the
+        # live board, which no check here may read or write, since that needs the board's
+        # credential. A board without either option is refused by name at the next write-back
+        # or plan copy. `queued` is what a launched run writes every node it has not
+        # dispatched yet, so a board missing the option would refuse the launch's first
+        # projection rather than a settlement; the shipped default is `Queued` and this
+        # states it, because a default that moves upstream would move this board silently.
         unknown: Needs attention
+        queued: Queued
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
   followups:
     plugin: github-projects
@@ -39,14 +44,18 @@ sources:
       token_env: GH_PROJECTS_TOKEN
       status_mapping:
         # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
-        # source of the options a follow-up ticket's `backlog` and `draft` are written to; its
-        # other party is the live board, which no check here may read or write, since that
-        # needs the board's credential. The board carries the Status options `Proposal`,
-        # `Todo`, `Deferred`, `In Progress` and `Done`: `todo` and `in-progress` keep the
-        # shipped defaults, and `done` and `cancelled` are closed states. This overrides the
-        # shipped default of `backlog` to `Backlog`, an option that board does not carry, and
-        # sends `draft`, a ticket a person deferred, to `Deferred`, so a board missing either
-        # option refuses the copy by name.
+        # source of the options a follow-up ticket's `backlog`, `draft` and `queued` are
+        # written to; its other party is the live board, which no check here may read or
+        # write, since that needs the board's credential. The board carries the Status options
+        # `Proposal`, `Todo`, `Deferred`, `Queued`, `In Progress` and `Done`: `todo` and
+        # `in-progress` keep the shipped defaults, and `done` and `cancelled` are closed
+        # states. This overrides the shipped default of `backlog` to `Backlog`, an option that
+        # board does not carry, and sends `draft`, a ticket a person deferred, to `Deferred`,
+        # so a board missing either option refuses the copy by name. `queued` is a ticket a
+        # launched run claimed through a node's `delivers`, and it is stated rather than left
+        # to the shipped `Queued` for the same reason `plans` states it: a default that moved
+        # upstream would move this board without a change here saying so.
         backlog: Proposal
         draft: Deferred
+        queued: Queued
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]

@@ -1031,10 +1031,12 @@ def test_withdrawal_is_refused_at_every_accepted_status_and_the_deferred_one_and
     assert decided == [
         tickets.Status.ACCEPTED,
         tickets.Status.DEFERRED,
+        tickets.Status.QUEUED,
         tickets.Status.UNDER_WAY,
         tickets.Status.FINISHED,
     ]
     assert not tickets.Status.DEFERRED.accepted
+    assert tickets.Status.QUEUED.accepted, "a claimed ticket was accepted before it was claimed"
     assert [status for status in tickets.Status if status.selected] == [tickets.Status.ACCEPTED]
 
 
@@ -1083,6 +1085,48 @@ def test_board_status_over_a_deferred_item_prints_draft_and_refuses_to_withdraw_
     assert tickets.read_ticket(deferred).status is tickets.Status.DEFERRED
 
 
+def test_board_status_over_a_queued_item_prints_queued_and_refuses_to_withdraw_it(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A launched run claimed the item: a re-copy carries `queued`, and a withdrawal is refused.
+
+    The command is run as an agent runs it, over the `local-md` stand-in board the fixtures
+    stand up, so what answers is the installed store reading the item a person's edit left.
+    A withdrawal is refused for the reason every accepted status is: the ticket was at `Todo`
+    before a run could claim it, and only a person undoes that.
+    """
+    ticket = _write(drafts_root, _ticket())
+    destination = _on_board(ticket)
+    _moved(destination, "queued")
+    assert _board_category(destination) == tickets.Status.QUEUED == "queued"
+
+    kept = subprocess.run(  # noqa: S603 - this checkout's own module, as an agent runs it
+        [
+            sys.executable,
+            "-m",
+            "orchestrator.follow_up_tickets",
+            "board-status",
+            "--board",
+            BOARD,
+            str(ticket),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert (kept.returncode, kept.stdout, kept.stderr) == (tickets.SOUND, "queued\n", "")
+    assert tickets.status_before_copy("queued", withdraw=False) is tickets.Status.QUEUED
+
+    status, printed, reported = _decided(ticket, capsys, "--withdraw")
+
+    assert (status, printed) == (tickets.PROTECTED, "")
+    assert f"at `queued` ({tickets.Status.QUEUED.meaning})" in " ".join(reported.split())
+    assert "this run never withdraws it" in reported
+    assert _board_category(destination) == "queued"
+
+
 def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_picked_up() -> None:
     vocabulary = tickets.status_vocabulary()
     bullets = [line for line in vocabulary.splitlines() if line.startswith("- ")]
@@ -1090,6 +1134,7 @@ def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_pi
         "Board status `Proposal`",
         "Board status `Todo`",
         "Board status `Deferred`",
+        "Board status `Queued`",
         "Board status `In Progress`",
         "Closed as completed",
         "Closed as not planned",
@@ -1116,7 +1161,8 @@ def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_pi
         assert said in deferred, said
     assert vocabulary.rstrip("\n").splitlines()[-1] == (
         'A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing '
-        "else: never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one."
+        "else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a "
+        "closed one."
     )
 
 

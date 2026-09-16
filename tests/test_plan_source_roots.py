@@ -198,6 +198,51 @@ def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli(
     assert read_default_sources(text) == resolved["default_sources"]
 
 
+#: The board option each status category this host states a mapping for is written to, per
+#: source. The other party is the live board, which no check here may read, so what is held
+#: is the mapping the installed CLI resolves out of the committed file — a `queued` that
+#: stopped resolving to an option of its own would put a claimed item wherever `todo` or
+#: `in progress` already sits, and a manager would read work in flight as free to take.
+MAPPED_OPTIONS = {
+    "plans": {"unknown": "Needs attention", "queued": "Queued"},
+    "followups": {"backlog": "Proposal", "draft": "Deferred", "queued": "Queued"},
+}
+#: The options the two categories `queued` must not collide with reach, which this host
+#: states no mapping for because the shipped defaults are already these. Held here so the
+#: distinctness below is a comparison rather than an assumption; the wire half — that each
+#: word really reaches its own option — is
+#: `tests/e2e/test_onetaskgraph_host_e2e.py`'s.
+UNMAPPED_OPTIONS = {"todo": "Todo", "in-progress": "In Progress"}
+
+
+@pytest.mark.reads_checkouts
+@pytest.mark.parametrize("source", sorted(MAPPED_OPTIONS))
+def test_each_board_source_resolves_queued_to_an_option_of_its_own(source: str) -> None:
+    """`queued` is mapped on both boards, to an option neither `todo` nor `in-progress` takes.
+
+    Read through the installed CLI's own resolution rather than off the file, because the
+    file is one layer of several and a `status_mapping` an environment variable overrode
+    would leave this passing over a mapping nothing applies.
+
+    Uncached for the reason its sibling above gives: the subject is the installed producer.
+    """
+    resolved = _resolved_configuration()
+    prefix = f"sources.{source}.config.status_mapping."
+    mapped = {
+        key[len(prefix) :]: value for key, value in resolved.items() if key.startswith(prefix)
+    }
+
+    assert mapped == MAPPED_OPTIONS[source], (
+        f"onetaskgraph.yaml's `{source}` source resolves {mapped}, and this host states "
+        f"{MAPPED_OPTIONS[source]}"
+    )
+    assert mapped["queued"] not in UNMAPPED_OPTIONS.values(), (
+        f"`queued` resolves to {mapped['queued']!r} on `{source}`, which is where "
+        f"{UNMAPPED_OPTIONS} already sends a category: a claimed item would be "
+        "indistinguishable from one nobody has taken"
+    )
+
+
 def test_every_source_a_planning_closeout_records_into_is_configured_and_writable() -> None:
     """`PLAN_SOURCES` restates names `onetaskgraph.yaml` owns, so it is reconciled here.
 

@@ -53,15 +53,17 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NamedTuple, NewType
 
 from orchestrator.project_store import (
     PROJECTS_DIRECTORY,
     TASKS_DIRECTORY,
+    QualifiedId,
     frontmatter,
     metadata_entry,
+    qualified_id,
 )
 from orchestrator.root import REPO_ROOT
 
@@ -179,6 +181,11 @@ class StoreTask:
     metadata: Mapping[str, object]
     repositories: list[object]
     deps: tuple[NodeId, ...]
+    #: The tickets this task delivers, as its own `delivers` field holds them. Read off the
+    #: record rather than off `onepipeline.` metadata because that is where the engine reads
+    #: a node's `delivers` from, and it is what the store re-evaluates each delivered ticket
+    #: over; a reader that dropped it would answer with a plan whose nodes claim nothing.
+    delivers: tuple[str, ...] = ()
 
 
 #: Where a record states its **cross-DAG** dependencies: wait-only references onto
@@ -304,14 +311,19 @@ def one_item(payload: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
     return item
 
 
-def qualified(project: str) -> tuple[str, str]:
-    """``project`` split into its source and native id, refused when it is neither."""
-    source, separator, native = project.partition(":")
-    if not separator:
-        raise OSError("a project id must be qualified as <source>:<native>")
-    if not source or not native:
-        raise OSError("a qualified project id must contain both <source> and <native> components")
-    return source, native
+def qualified(project: str) -> QualifiedId:
+    """``project`` split into its source and native id, refused when it is neither.
+
+    The shape is `project_store.qualified_id`'s, which is where this repository keeps it:
+    a `delivers` entry is held to the same one, and two encodings of it would drift.
+    """
+    parts = qualified_id(project)
+    if parts is None:
+        raise OSError(
+            f"a project id must be qualified as <source>:<native>, with both halves "
+            f"present, and {project!r} is not"
+        )
+    return parts
 
 
 def paged(arguments: Sequence[str], kind: str) -> list[Any]:
@@ -382,6 +394,11 @@ def _record(item: object) -> StoreTask:
     content = payload.get("content")
     if not isinstance(title, str) or (content is not None and not isinstance(content, str)):
         raise OSError(f"task {item['id']} has invalid title or content")
+    delivers = payload.get("delivers", [])
+    if not isinstance(delivers, list) or not all(
+        isinstance(ticket, str) and qualified_id(ticket) for ticket in delivers
+    ):
+        raise OSError(f"task {item['id']} has an unqualified entry in delivers")
     return StoreTask(
         qualified_id=QualifiedTaskId(item["id"]),
         node_id=NodeId(node_id),
@@ -390,6 +407,7 @@ def _record(item: object) -> StoreTask:
         metadata=metadata,
         repositories=repositories,
         deps=(),
+        delivers=tuple(delivers),
     )
 
 
@@ -428,17 +446,10 @@ def _with_dependencies(records: list[StoreTask]) -> list[StoreTask]:
                 f"{record.qualified_id}: {', '.join(unknown)}"
                 + (f" — {WRITE_BACK_REWROTE}" if rewritten else "")
             )
-        resolved.append(
-            StoreTask(
-                qualified_id=record.qualified_id,
-                node_id=record.node_id,
-                title=record.title,
-                content=record.content,
-                metadata=record.metadata,
-                repositories=record.repositories,
-                deps=tuple(ids[target] for target in targets),
-            )
-        )
+        # `replace` rather than a rebuild: every field but `deps` is the record's own and
+        # carries through, so a field added to :class:`StoreTask` cannot be silently dropped
+        # here — which is how the record's `delivers` was lost on its way to `read_plan`.
+        resolved.append(replace(record, deps=tuple(ids[target] for target in targets)))
     return resolved
 
 
@@ -479,6 +490,8 @@ def read_plan(project: str, records: Sequence[StoreTask]) -> dict[str, Any]:
         dependencies = authored_deps(record)
         if dependencies:
             node["deps"] = dependencies
+        if record.delivers:
+            node["delivers"] = list(record.delivers)
         nodes.append(node)
     plan["tasks"] = nodes
     return plan

@@ -1413,6 +1413,7 @@ def test_project_plan_reconstructs_metadata_repositories_and_dependencies(
                         "content": "Do second.",
                         "metadata": {"onepipeline.id": "second"},
                         "repositories": [],
+                        "delivers": ["followups:I_4"],
                     },
                 },
             ]
@@ -1436,6 +1437,10 @@ def test_project_plan_reconstructs_metadata_repositories_and_dependencies(
     assert plan["schema_version"] == 3
     assert plan["tasks"][0]["repo"] == "github.com/acme/service"
     assert plan["tasks"][1]["deps"] == ["first"]
+    # The record's own `delivers` round-trips as the node field the engine reads, and a
+    # task delivering nothing carries none — so an older plan reads back exactly as before.
+    assert plan["tasks"][1]["delivers"] == ["followups:I_4"]
+    assert "delivers" not in plan["tasks"][0]
 
 
 def test_project_plan_reads_every_task_page(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1542,6 +1547,23 @@ def test_project_plan_requires_a_qualified_id(project: str) -> None:
             ],
             [],
             "more than one repository",
+        ),
+        (
+            {"title": "p"},
+            [
+                {
+                    "id": "s:p/a",
+                    "item": {
+                        "title": "a",
+                        "content": "body",
+                        "metadata": {"onepipeline.id": "a"},
+                        "repositories": [],
+                        "delivers": ["I_created_0"],
+                    },
+                }
+            ],
+            [],
+            "unqualified entry in delivers",
         ),
         (
             {"title": "p"},

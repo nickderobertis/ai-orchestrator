@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.32.0. The whole of that reasoning —
+onepipeline 0.33.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.32.0. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.33.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,7 +323,7 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.32.0; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.33.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
@@ -333,7 +333,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.32.0, that schedule answers only the failures a retry can change. A projection the store
+0.33.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -405,6 +405,37 @@ status and settlement while every unnamed record — one a person had retitled i
 stays byte for byte what it was; and a store refusal recorded once, with no further copy
 across a window longer than the one-minute ceiling until the graph changes, and exactly one
 when it does.
+
+**A launched run claims its own items, and the tickets they deliver.** A node the run has
+not started yet is projected `queued`, which `onetaskgraph.yaml` maps to the `Queued`
+option on both boards; a running node is `in progress`, a settled one its own settlement
+word, and at closeout — settled or stopped — a node that never started is written back to
+`todo`, releasing what it claimed. The first whole projection is attempted **once, bounded,
+before the first dispatch**, so a manager reading the board sees the claim before any of
+the work it claims begins. A node's
+`delivers` names the tickets that node delivers, and the tickets themselves are moved by
+the **store's** `delivers` relation rather than by the write-back: the engine writes the
+node's own word, and onetaskgraph re-evaluates each delivered ticket over every task
+delivering it. A store older than the release carrying `queued` and `delivers` moves
+nothing, writes every unstarted node `todo`, and says so once on the driver's stderr.
+
+**What a delivered ticket reads, while the node delivering it is its only deliverer**, is
+what that rule comes to in the ordinary case — the one a manager reads off the board:
+
+| the node | its ticket |
+| --- | --- |
+| waiting, once the launch's first projection lands | `Queued` |
+| running | `In Progress` |
+| settled done | `Done` |
+| failed, cancelled, parked, skipped, or never started | `Todo` |
+
+A deliverer in another plan, still working the ticket or finished with it, decides
+otherwise: the store resolves the ticket over **every** task delivering it, and that
+resolution is onetaskgraph's own documented rule rather than anything this host applies.
+See [the follow-ups section](#follow-ups-are-drafted-not-surfaced) for what each ticket
+status means, and
+[AGENTS.md](../AGENTS.md#follow-ups-drafted-while-a-run-works-verified-once-it-ends) for
+how a brief names them.
 
 **But write-back is best-effort, and a green run therefore proves nothing about the
 plan store.** It runs on its own worker off the reconcile loop, store reads never
@@ -539,7 +570,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.32.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.33.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -667,7 +698,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.32.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.33.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -1025,7 +1056,7 @@ bound are read from, and the [reply window](#asking-the-manager).
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.32.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.33.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`. Where a frame's task
 opens by naming the run, the codec reads the run from there.
 
@@ -1184,7 +1215,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.32.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.33.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1730,26 +1761,31 @@ deferred, and a run never withdraws it. The module renders the whole vocabulary,
 carries, and this copy of it is held to that rendering:
 
 - **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
-  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an item
-  there: only a person, which is what accepting a ticket is. **Selected** by an agent sent to
-  pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, written `draft`: deferred for later by a person: not accepted,
-  picked up by no agent, and still taking new evidence. Who moves an item there: only a
-  person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves an
-  item there: a person, or a dispatch whose own task says to. Not selected by an agent sent
-  to pick up accepted tickets.
-- **Closed as completed**, written `done`: accepted and finished. Who moves an item there: a
-  person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
+  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by
+  an agent sent to pick up accepted tickets.
+- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an
+  item there: only a person, which is what accepting a ticket is. **Selected** by an agent
+  sent to pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, written `draft`: deferred for later by a person: not
+  accepted, picked up by no agent, and still taking new evidence. Who moves an item there:
+  only a person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Queued`**, written `queued`: accepted, and claimed by a launched DAG
+  whose node has not started, so it returns to `Todo` if that work does not happen. Who
+  moves an item there: no person — a launched run's first projection, over the store's
+  `delivers` relation. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
+  an item there: a person, or a dispatch whose own task says to. Not selected by an agent
+  sent to pick up accepted tickets.
+- **Closed as completed**, written `done`: accepted and finished. Who moves an item there:
+  a person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
   accepted tickets.
 - **Closed as not planned**, written `cancelled`: withdrawn. Who moves an item there: a
-  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person. Not
-  selected by an agent sent to pick up accepted tickets.
+  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person.
+  Not selected by an agent sent to pick up accepted tickets.
 
-A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing else:
-never an item at `Proposal`, `Deferred` or `In Progress`, and never a closed one.
+A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
+else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
+closed one.
 
 **The run-end hooks are what launch it.** `just orchestrate` names
 `scripts/run-ended.sh`, by its absolute path in the launching checkout, as both the
@@ -3313,7 +3349,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.32.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.33.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

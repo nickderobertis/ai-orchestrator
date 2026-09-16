@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +20,7 @@ import follow_up_variables
 import jsonschema
 import plan_root_variable
 import pytest
-from fake_backend import PROMPT_LOG_ENV
+from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
 from nx_workspace import shares_workspace_install
 from onetaskgraph_release import checkout as throwaway_checkout
 from onetaskgraph_release import (
@@ -271,7 +271,6 @@ def _stored_project_content(body: str, project_id: _ProjectId) -> str | None:
 _BoardNodeId = NewType("_BoardNodeId", str)
 _BoardItemId = NewType("_BoardItemId", str)
 _IssueNodeId = NewType("_IssueNodeId", str)
-_FieldNodeId = NewType("_FieldNodeId", str)
 _FieldOptionId = NewType("_FieldOptionId", str)
 _RepositoryNodeId = NewType("_RepositoryNodeId", str)
 #: The board field the source owns and reads a copy's origin back out of, and the
@@ -280,8 +279,19 @@ _RepositoryNodeId = NewType("_RepositoryNodeId", str)
 #: shipped mapping reaches by name, `Done`, which a closed `done` issue selects by its
 #: spelling, and `Needs attention`, which `onetaskgraph.yaml` sends `unknown` to.
 ORIGIN_FIELD_NAME = "onetaskgraph.origin"
-ORIGIN_FIELD_ID = _FieldNodeId("FIELD_origin")
-STATUS_FIELD_ID = _FieldNodeId("FIELD_status")
+
+
+class _BoardField(StrEnum):
+    """The two board fields a copy writes, as the ids GitHub answers them under.
+
+    An enum rather than two constants because what a write *means* is decided by which
+    field it names, and that is one dispatch: `_Board.set_field` matches on it once. A bare
+    constant cannot say so, because an undotted name in a `case` pattern captures rather
+    than compares — so two constants force the repeated conditional this replaces.
+    """
+
+    STATUS = "FIELD_status"
+    ORIGIN = "FIELD_origin"
 
 
 @dataclass(frozen=True)
@@ -298,8 +308,15 @@ class _StatusOption:
 # wire. Reconciling it against the live board would take the board credential no test may use.
 NEEDS_ATTENTION = _StatusOption(id=_FieldOptionId("OPT_attention"), name="Needs attention")
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The option
+# `onetaskgraph.yaml` maps `queued` to on both sources, answered by the stand-in so the
+# journeys can assert that name reaches the wire. Reconciling it against either live board
+# would take the board credential no test may use.
+QUEUED = _StatusOption(id=_FieldOptionId("OPT_queued"), name="Queued")
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 STATUS_OPTIONS: tuple[_StatusOption, ...] = (
     _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
+    QUEUED,
     _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live board's own
     # option, answered so the stand-in carries the options the task names; reconciling it
@@ -372,15 +389,41 @@ class _Issue:
     #: refuse one under another owner — so an issue that answered the configured
     #: repository whatever it was created in would hide both from the journeys.
     repository: _Repository = CONFIGURED_REPOSITORY
+    #: Whether this issue is closed, and why, as the last write left it. Applied rather than
+    #: only recorded for the reason `status` gives: `done` and `cancelled` are closed states
+    #: on a board, so an issue that answered `OPEN` for ever would report a finished ticket
+    #: as unfinished to every reader that asks the store rather than the wire.
+    state: str = "OPEN"
+    state_reason: str | None = None
     #: The text this row's `onetaskgraph.origin` field holds, as the last copy wrote it. Kept
     #: and answered back the way GitHub does, because that value is how a re-copy finds the
     #: item it already made — a row that forgot it would have every re-copy create a
     #: replacement, and a journey about updating in place would prove nothing.
     origin: str | None = None
-    #: The Status option this row is at, as a person last set it on the board. A copy's own
-    #: Status write is recorded as a request and not applied here, so every journey that
-    #: predates this field reads the row exactly as it always did.
+    #: The Status option this row is at: where a person last moved it, or where the last
+    #: write put it. Applied rather than only recorded, because a read-back is what the
+    #: store's own `delivers` relation decides on — it computes a delivered ticket's status
+    #: and writes nothing when the board already reads that way, so a board that answered
+    #: the option it started at would report every release as `unchanged`.
     status: str = "Todo"
+    #: The issues blocking this one, as the copy's `addBlockedBy` left them. Recorded and
+    #: answered back rather than dropped, because a plan's `deps` travel onto a board as this
+    #: relation alone: a fixture that took the write and then answered the read empty would
+    #: hand the engine a plan whose nodes all run at once.
+    blocked_by: list[_IssueNodeId] = field(default_factory=list)
+    #: The board holding this issue, set by that board as it takes the issue on. Two boards
+    #: are served at once for the launch journey — this repository's `plans` and its
+    #: `followups` — and both the Status options a row answers with and the project number
+    #: its membership is filed under are the *holding* board's, so an issue that read a
+    #: module-level board would answer for whichever was reset last.
+    board: _Board | None = None
+
+    @property
+    def held_by(self) -> _Board:
+        """The board holding this issue, which every answer about its row is that board's."""
+        if self.board is None:
+            raise ValueError(f"issue {self.content_id!r} was never taken on by a board")
+        return self.board
 
     def field_values(self) -> dict[str, object]:
         """This row's board field values, as both routes to it select them.
@@ -393,7 +436,10 @@ class _Issue:
             []
             if self.origin is None
             else [
-                {"text": self.origin, "field": {"id": ORIGIN_FIELD_ID, "name": ORIGIN_FIELD_NAME}}
+                {
+                    "text": self.origin,
+                    "field": {"id": _BoardField.ORIGIN, "name": ORIGIN_FIELD_NAME},
+                }
             ]
         )
         return {
@@ -401,9 +447,9 @@ class _Issue:
                 {
                     "name": self.status,
                     "field": {
-                        "id": STATUS_FIELD_ID,
+                        "id": _BoardField.STATUS,
                         "name": "Status",
-                        "options": [option.rendered() for option in BOARD.options],
+                        "options": [option.rendered() for option in self.held_by.options],
                     },
                 },
                 *origin,
@@ -421,8 +467,8 @@ class _Issue:
             "url": f"https://github.com/{self.repository}/issues/{self.item_id}",
             "createdAt": "2026-08-26T00:00:00Z",
             "updatedAt": "2026-08-26T00:00:00Z",
-            "state": "OPEN",
-            "stateReason": None,
+            "state": self.state,
+            "stateReason": self.state_reason,
             "repository": {"nameWithOwner": str(self.repository)},
             "parent": None if self.parent_id is None else {"id": self.parent_id},
             "subIssuesSummary": {"total": self.sub_issues},
@@ -451,7 +497,7 @@ class _Issue:
                 "nodes": [
                     {
                         "id": self.item_id,
-                        "project": {"number": BOARD.number},
+                        "project": {"number": self.held_by.number},
                         "fieldValues": self.field_values(),
                     }
                 ],
@@ -503,6 +549,8 @@ class _Board:
         )
         self.issues: list[_Issue] = [parent, child]
         self.created: list[_Issue] = []
+        for issue in self.issues:
+            issue.board = self
         #: The Status options this board carries, which one journey narrows.
         self.options: tuple[_StatusOption, ...] = STATUS_OPTIONS
         #: The number of the board being served, which an issue's membership is filed under.
@@ -522,13 +570,13 @@ class _Board:
                             "nodes": [
                                 {
                                     "__typename": "ProjectV2SingleSelectField",
-                                    "id": STATUS_FIELD_ID,
+                                    "id": _BoardField.STATUS,
                                     "name": "Status",
                                     "options": [option.rendered() for option in self.options],
                                 },
                                 {
                                     "__typename": "ProjectV2Field",
-                                    "id": ORIGIN_FIELD_ID,
+                                    "id": _BoardField.ORIGIN,
                                     "name": ORIGIN_FIELD_NAME,
                                 },
                             ],
@@ -592,6 +640,50 @@ class _Board:
             }
         return {"data": {"node": None}}
 
+    def dependencies_response(self, node_id: object) -> dict[str, object]:
+        """One issue's dependency edges, both ways, as the copy wrote them."""
+        for issue in self.issues:
+            if issue.content_id != node_id:
+                continue
+            blocking = [held for held in self.issues if issue.content_id in held.blocked_by]
+            return {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "blockedBy": self._connection(
+                            [self._issue(held) for held in issue.blocked_by]
+                        ),
+                        "blocking": self._connection(blocking),
+                    }
+                }
+            }
+        return {"data": {"node": None}}
+
+    @staticmethod
+    def _connection(issues: list[_Issue]) -> dict[str, object]:
+        return {
+            "nodes": [issue.board_issue() for issue in issues],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
+
+    def add_blocked_by(self, variables: dict[str, object]) -> dict[str, object]:
+        """Record that one issue is blocked by another, which is how a `deps` edge lands."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("addBlockedBy requires an input object")
+        issue = self._issue(payload.get("issueId"))
+        blocking = self._issue(payload.get("blockingIssueId"))
+        if blocking.content_id not in issue.blocked_by:
+            issue.blocked_by.append(blocking.content_id)
+        return {
+            "data": {
+                "addBlockedBy": {
+                    "issue": {"id": issue.content_id},
+                    "blockingIssue": {"id": blocking.content_id},
+                }
+            }
+        }
+
     def create_issue(self, variables: dict[str, object]) -> dict[str, object]:
         payload = variables.get("input")
         if not isinstance(payload, dict):
@@ -607,6 +699,7 @@ class _Board:
             body=body,
             repository=_repository_of(payload.get("repositoryId")),
         )
+        created.board = self
         self.created.append(created)
         self.issues.append(created)
         return {"data": {"createIssue": {"issue": {"id": created.content_id}}}}
@@ -616,6 +709,21 @@ class _Board:
             if issue.content_id == content_id:
                 return issue
         raise ValueError(f"the board holds no issue {content_id!r}")
+
+    def update_issue(self, variables: dict[str, object]) -> dict[str, object]:
+        """Apply one issue update — its body, its title, and the state a close carries."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("updateIssue requires an input object")
+        issue = self._issue(payload.get("id"))
+        if isinstance(body := payload.get("body"), str):
+            issue.body = body
+        if isinstance(title := payload.get("title"), str):
+            issue.title = title
+        if isinstance(state := payload.get("stateInput"), dict):
+            issue.state = str(state.get("value"))
+            issue.state_reason = str(state.get("stateReason"))
+        return {"data": {"updateIssue": {"issue": {"id": issue.content_id}}}}
 
     def add_to_board(self, variables: dict[str, object]) -> dict[str, object]:
         payload = variables.get("input")
@@ -630,21 +738,40 @@ class _Board:
         }
 
     def set_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Set one field value on a row, keeping the text an origin field is written with."""
+        """Set one field value on a row, keeping what an origin or a Status write puts there."""
         payload = variables.get("input")
         if not isinstance(payload, dict):
             raise ValueError("updateProjectV2ItemFieldValue requires an input object")
         item_id = payload.get("itemId")
         value = payload.get("value")
-        if payload.get("fieldId") == ORIGIN_FIELD_ID:
-            text = value.get("text") if isinstance(value, dict) else None
-            if not isinstance(text, str):
-                raise ValueError(f"the origin field takes a text value, and was sent {value!r}")
-            rows = [issue for issue in self.issues if issue.item_id == item_id]
-            if len(rows) != 1:
-                raise ValueError(f"the board holds no row {item_id!r}")
-            rows[0].origin = text
+        match payload.get("fieldId"):
+            case _BoardField.STATUS:
+                self._row(item_id).status = self._option_named(value)
+            case _BoardField.ORIGIN:
+                self._row(item_id).origin = self._text(value)
         return {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
+
+    def _option_named(self, value: object) -> str:
+        """The Status option a write names, refused when this board carries no such option."""
+        option = value.get("singleSelectOptionId") if isinstance(value, dict) else None
+        named = {held.id: held.name for held in self.options}
+        if option not in named:
+            raise ValueError(f"this board carries no Status option {option!r}")
+        return named[_FieldOptionId(str(option))]
+
+    @staticmethod
+    def _text(value: object) -> str:
+        """The text an origin write carries, refused when it is not one."""
+        text = value.get("text") if isinstance(value, dict) else None
+        if not isinstance(text, str):
+            raise ValueError(f"the origin field takes a text value, and was sent {value!r}")
+        return text
+
+    def _row(self, item_id: object) -> _Issue:
+        rows = [issue for issue in self.issues if issue.item_id == item_id]
+        if len(rows) != 1:
+            raise ValueError(f"the board holds no row {item_id!r}")
+        return rows[0]
 
     def transfer(self, content_id: _IssueNodeId, repository: _Repository) -> _Issue:
         """Move one issue to ``repository``, as `gh issue transfer` has GitHub do.
@@ -767,6 +894,7 @@ class _Operation(StrEnum):
     ADD_TO_BOARD = "addToBoard"
     UPDATE_FIELD = "updateField"
     ADD_SUB_ISSUE = "addSubIssue"
+    ADD_BLOCKED_BY = "addBlockedBy"
     UPDATE_ISSUE = "updateIssue"
     DELETE_ISSUE = "deleteIssue"
 
@@ -786,6 +914,7 @@ _OPERATIONS: dict[str, _Operation] = {
     "addProjectV2ItemById(": _Operation.ADD_TO_BOARD,
     "updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELD,
     "addSubIssue(": _Operation.ADD_SUB_ISSUE,
+    "addBlockedBy(": _Operation.ADD_BLOCKED_BY,
     "updateIssue(": _Operation.UPDATE_ISSUE,
     "deleteIssue(": _Operation.DELETE_ISSUE,
 }
@@ -874,6 +1003,12 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     requests: ClassVar[list[_GraphQLRequest]]
     #: What every request is refused with, or `None` to answer the board normally.
     refusal: ClassVar[_Refusal | None] = None
+    #: The board this handler answers for. A class attribute rather than an argument
+    #: because the stdlib constructs a handler per request; a second board is served by
+    #: a subclass of this one carrying its own board and its own request log, which is
+    #: what lets one journey serve `plans` and `followups` at once without either
+    #: board's items showing up on the other.
+    board: ClassVar[_Board]
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         length = int(self.headers["Content-Length"])
@@ -905,13 +1040,13 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             return {"errors": [{"message": str(unknown)}]}
         match operation:
             case _Operation.BOARD:
-                return BOARD.board_response()
+                return self.board.board_response()
             case _Operation.SEARCH:
-                return BOARD.search_response(request.string("search"))
+                return self.board.search_response(request.string("search"))
             case _Operation.ISSUE:
-                return BOARD.node_response(request.variables.get("id"))
+                return self.board.node_response(request.variables.get("id"))
             case _Operation.SUB_ISSUES:
-                return BOARD.sub_issues_response(request.variables.get("id"))
+                return self.board.sub_issues_response(request.variables.get("id"))
             case _Operation.COMMENTS:
                 # A `task show` of one item reads its comments too; nothing here comments,
                 # so every issue answers with none.
@@ -920,22 +1055,21 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.REPOSITORY:
                 return self._repository(request.repository)
             case _Operation.DEPENDENCIES:
-                empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
-                return {
-                    "data": {"node": {"__typename": "Issue", "blockedBy": empty, "blocking": empty}}
-                }
+                return self.board.dependencies_response(request.variables.get("id"))
             case _Operation.CREATE_ISSUE:
-                return BOARD.create_issue(request.variables)
+                return self.board.create_issue(request.variables)
             case _Operation.ADD_TO_BOARD:
-                return BOARD.add_to_board(request.variables)
+                return self.board.add_to_board(request.variables)
             case _Operation.UPDATE_ISSUE:
-                return {"data": {"updateIssue": {"issue": {"id": request.input_value("id")}}}}
+                return self.board.update_issue(request.variables)
             case _Operation.UPDATE_FIELD:
-                return BOARD.set_field(request.variables)
+                return self.board.set_field(request.variables)
             case _Operation.ADD_SUB_ISSUE:
-                return BOARD.add_sub_issue(request.variables)
+                return self.board.add_sub_issue(request.variables)
+            case _Operation.ADD_BLOCKED_BY:
+                return self.board.add_blocked_by(request.variables)
             case _Operation.DELETE_ISSUE:
-                return BOARD.delete_issue(request.variables)
+                return self.board.delete_issue(request.variables)
 
     @staticmethod
     def _repository(named: _Repository) -> dict[str, object]:
@@ -974,24 +1108,41 @@ def _serving_board(
     ``options`` are the Status options the board carries, and ``number`` the board number
     the source being served is configured with, which an issue's membership answers under.
     """
-    BOARD.reset()
-    BOARD.options = options
-    BOARD.number = number
-    _GitHubFixture.requests = []
     _GitHubFixture.refusal = refusal
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _GitHubFixture)
+    try:
+        with _served(_GitHubFixture, BOARD, options, number) as endpoint:
+            yield {
+                "GH_PROJECTS_TOKEN": "fixture-token",
+                "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
+                "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": endpoint,
+            }
+    finally:
+        _GitHubFixture.refusal = None
+
+
+@contextmanager
+def _served(
+    handler: type[_GitHubFixture],
+    board: _Board,
+    options: tuple[_StatusOption, ...],
+    number: int,
+) -> Iterator[str]:
+    """Serve ``board`` through ``handler`` on a loopback port, yielding its endpoint.
+
+    Split out of :func:`_serving_board` so a journey needing two boards at once stands
+    the second one up the same way rather than a second way: what a board has to be reset
+    to, and how its server is stopped and waited out, are stated once.
+    """
+    board.reset()
+    board.options = options
+    board.number = number
+    handler.requests = []
+    handler.board = board
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        yield {
-            "GH_PROJECTS_TOKEN": "fixture-token",
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": (
-                f"http://127.0.0.1:{server.server_port}/graphql"
-            ),
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": (
-                f"http://127.0.0.1:{server.server_port}/graphql"
-            ),
-        }
+        yield f"http://127.0.0.1:{server.server_port}/graphql"
     finally:
         server.shutdown()
         # The finding the two directives answer is about which Nx project owns this
@@ -1010,7 +1161,49 @@ def _serving_board(
         # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
         # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
         server.server_close()
-        _GitHubFixture.refusal = None
+
+
+class _FollowUpsFixture(_GitHubFixture):
+    """The second board, served beside the first so one journey can reach both.
+
+    A subclass rather than a second instance because the stdlib builds a handler per
+    request and takes the class: its own `board` and its own `requests` are what keep
+    `followups`'s items off `plans` and let each board's traffic be read apart from the
+    other's. One journey needs that — a launch claims its plan's items on one board and
+    the ticket a node delivers on the other — and a single board answering both sources
+    would file every item on whichever number it was configured with.
+    """
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+
+
+#: The board the `followups` source reaches when both are served, kept beside the `plans`
+#: one so a journey reads each board's own items rather than one shared list.
+FOLLOWUPS_BOARD = _Board()
+
+
+@contextmanager
+def _serving_both_boards() -> Iterator[dict[str, str]]:
+    """Serve `plans` and `followups` as two boards, yielding the environment for both.
+
+    Two servers rather than one, because the two sources are configured with different
+    project numbers and an issue's board membership is answered under the number of the
+    board holding it: one server would file every item under one number, and the source
+    configured with the other would find none of its own.
+    """
+    with (
+        _served(_GitHubFixture, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as plans,
+        _served(
+            _FollowUpsFixture, FOLLOWUPS_BOARD, FOLLOWUPS_OPTIONS, FOLLOWUPS_PROJECT_NUMBER
+        ) as followups,
+    ):
+        yield {
+            "GH_PROJECTS_TOKEN": "fixture-token",
+            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": plans,
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": followups,
+            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
+        }
 
 
 # llmlint: ignore-end[e2e_not_mocked]
@@ -1967,6 +2160,7 @@ class _ProjectedStatus(StrEnum):
     """
 
     TODO = "todo"
+    QUEUED = "queued"
     IN_PROGRESS = "in progress"
     DONE = "done"
     CANCELLED = "cancelled"
@@ -2026,20 +2220,32 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
 ) -> None:
     """A failed, parked or skipped node is filed under `Needs attention`, never refused.
 
+    `queued` — the word a launched run writes every node it has not dispatched — rides
+    along as the sharpest case of the control below: it is a category word like `todo`
+    and `in progress`, so it has to reach an option of its own rather than the one the
+    words outside the vocabulary share.
+
     The committed `onetaskgraph.yaml` is what is exercised: the copy runs from this
     checkout with only the endpoint and credential pointed at the fixture, and any
     ambient `status_mapping` override is removed so the mapping written there is the one
     applied. A copy writes a task's status through the same classification and mapping a
-    settlement write-back does, so each word is fed as a task's status, and what is read
-    is the Status option each task's board row is set to.
+    settlement write-back does, so each word is fed as a task's status, and what is read is
+    the Status option the store then reports each task at — asked of the store, the way a
+    reader of the board asks, rather than read off the writes the copy sent.
 
     The category words ride along as the control for the one property a single option
-    for `unknown` could break: that no option is written for two categories.
+    for `unknown` could break: that no option is written for two categories. A reader tells
+    items apart by the category *and* option the store reports together, because a closed
+    item — `cancelled` — has no option written at all and keeps whichever it had; an open
+    item's category is read back from its option, so two categories sent to one option
+    still read back as one pair.
     """
-    titled = _write_projected_project(tmp_path)
+    _write_projected_project(tmp_path)
     environment = _plan_environment(tmp_path)
     for name in [name for name in environment if name.startswith(STATUS_MAPPING_ENV_PREFIX)]:
         del environment[name]
+    word_of_task = {status.value.replace(" ", "-"): status for status in _ProjectedStatus}
+    reached: dict[tuple[str, str], set[_ProjectedStatus]] = {}
     # llmlint: ignore[e2e_not_mocked] The live `plans` board is the one boundary this
     # journey must not reach: a write to it lands on the board holding this repository's
     # real plans and needs a credential no test may use. What is doubled stops at the wire
@@ -2048,45 +2254,69 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
     with _serving_board() as remote:
         environment.update(remote)
         environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
-        copied = subprocess.run(
-            ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        copied = _plans_json(environment, "project", "copy", LOCAL_QUALIFIED, "--to", "plans")
+        assert "is disabled for source plans" not in copied.stderr, copied.stderr
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        for entry in json.loads(copied.stdout)["items"]:
+            word = word_of_task.get(str(entry["source"]).rpartition("/")[2])
+            if word is None:
+                continue
+            status = _read_item(environment, str(entry["destination"])).get("status")
+            assert isinstance(status, dict), status
+            reached.setdefault((str(status["category"]), str(status["name"])), set()).add(word)
 
-    assert "is disabled for source plans" not in copied.stderr, copied.stderr
-    assert copied.returncode == 0, copied.stdout + copied.stderr
-    word_of_item = {
-        issue.item_id: titled[issue.title] for issue in BOARD.created if issue.title in titled
-    }
-    assert set(word_of_item.values()) == set(_ProjectedStatus), (
-        f"the copy has to file one issue per projected word, and it filed {word_of_item}"
+    assert set().union(*reached.values()) == set(_ProjectedStatus), (
+        f"the copy has to file one task per projected word, and the store reports {reached}"
     )
-    option_names = {option.id: option.name for option in STATUS_OPTIONS}
-    written: dict[str, set[_ProjectedStatus]] = {}
-    for request in _GitHubFixture.requests:
-        if request.operation is not _Operation.UPDATE_FIELD:
-            continue
-        if request.input_value("fieldId") != STATUS_FIELD_ID:
-            continue
-        word = word_of_item.get(_BoardItemId(str(request.input_value("itemId"))))
-        if word is None:
-            continue
-        value = request.input_value("value")
-        assert isinstance(value, dict), value
-        option = option_names[_FieldOptionId(str(value.get("singleSelectOptionId")))]
-        written.setdefault(option, set()).add(word)
+    assert reached.get(("unknown", NEEDS_ATTENTION.name), set()) == set(OUTSIDER_STATUSES), (
+        f"every word outside the category vocabulary has to sit at the "
+        f"{NEEDS_ATTENTION.name!r} option and no category word with them; the store reports "
+        f"{reached}"
+    )
+    assert reached.get(("queued", QUEUED.name), set()) == {_ProjectedStatus.QUEUED}, (
+        f"`queued` has to sit at the {QUEUED.name!r} option and nothing else has to sit there; "
+        f"the store reports {reached}"
+    )
+    shared = {placed: words for placed, words in reached.items() if len(words) > 1}
+    assert shared.keys() == {("unknown", NEEDS_ATTENTION.name)}, (
+        f"only `unknown`'s words may share an option, and the store reports {reached}"
+    )
 
-    assert written.get(NEEDS_ATTENTION.name, set()) == set(OUTSIDER_STATUSES), (
-        f"every word outside the category vocabulary has to be written as the "
-        f"{NEEDS_ATTENTION.name!r} option and no category word with them; the copy wrote {written}"
+
+def test_a_queued_task_onto_a_plans_board_without_a_queued_option_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    """The mapping sends `queued` to `Queued` alone, so a board lacking it refuses the write.
+
+    A copy writes a task's status through the classification and mapping a launch's first
+    projection does, so a `queued` task copied onto a `plans` board that carries every
+    option but `Queued` is what that projection meets: refused naming the option, with no
+    item filed for the task under another option.
+    """
+    root = tmp_path
+    write_plan_project(
+        root, PlanDocument(name=LOCAL_PROJECT, tasks=[PlanNode(id="waiting", title="waiting")])
     )
-    shared = {option: words for option, words in written.items() if len(words) > 1}
-    assert shared.keys() == {NEEDS_ATTENTION.name}, (
-        f"only `unknown`'s words may share an option, and the copy wrote {written}"
+    environment = _plan_environment(tmp_path)
+    waiting = f"{LOCAL_QUALIFIED}/waiting"
+    queued = _plans_json(environment, "task", "status", "set", waiting, "queued")
+    assert queued.returncode == 0, queued.stdout + queued.stderr
+    assert _category(_read_item(environment, waiting)) == "queued"
+    for name in [name for name in environment if name.startswith(STATUS_MAPPING_ENV_PREFIX)]:
+        del environment[name]
+    without_queued = tuple(option for option in STATUS_OPTIONS if option != QUEUED)
+    # llmlint: ignore[e2e_not_mocked] The live `plans` board is the one boundary this journey
+    # must not reach, for the reason the journey above gives; the installed CLI and the
+    # committed configuration are real.
+    with _serving_board(options=without_queued) as remote:
+        environment.update(remote)
+        environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
+        copied = _plans_json(environment, "project", "copy", LOCAL_QUALIFIED, "--to", "plans")
+
+    assert copied.returncode != 0, copied.stdout + copied.stderr
+    assert QUEUED.name in copied.stderr, copied.stderr
+    assert not [issue for issue in BOARD.created if issue.title == "waiting"], (
+        "a board without the option had the queued task filed under some other option"
     )
 
 
@@ -2102,7 +2332,7 @@ FOLLOWUPS_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__"
 PROPOSED_RUN = "proposal-run"
 PROPOSED_CAUSE = "ticket-lands-as-a-proposal"
 PROPOSED_ID = follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE)
-#: The `followups` board's Status options, `Proposal` and `Deferred` among them.
+#: The `followups` board's Status options, `Proposal`, `Deferred` and `Queued` among them.
 FOLLOWUPS_OPTIONS = (*STATUS_OPTIONS, PROPOSAL, DEFERRED)
 
 
@@ -2220,6 +2450,16 @@ def _copied_ticket(environment: dict[str, str], *extra: str) -> subprocess.Compl
     )
 
 
+def _followups_items(environment: dict[str, str]) -> list[object]:
+    """The ids of every task `followups` lists, read the way a reader of that board lists it."""
+    listed = _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", follow_up_tickets.BOARD, "--json"],
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    return sorted(row["item"]["id"] for row in json.loads(listed.stdout)["items"])
+
+
 def _board_status(environment: dict[str, str], ticket: Path) -> subprocess.CompletedProcess[str]:
     """Ask `board-status` about ``ticket`` on `followups`, as the composed task has the agent."""
     return _followups_command(
@@ -2273,7 +2513,7 @@ def test_a_new_follow_up_ticket_is_written_to_the_followups_boards_proposal_opti
         request.input_value("value")
         for request in _GitHubFixture.requests
         if request.operation is _Operation.UPDATE_FIELD
-        and request.input_value("fieldId") == STATUS_FIELD_ID
+        and request.input_value("fieldId") == _BoardField.STATUS
         and request.input_value("itemId") == created.item_id
     ]
     assert status_writes == [{"singleSelectOptionId": PROPOSAL.id}], (
@@ -2294,7 +2534,7 @@ def test_a_followups_board_without_a_proposal_option_refuses_the_copy_by_name(
         request
         for request in _GitHubFixture.requests
         if request.operation is _Operation.UPDATE_FIELD
-        and request.input_value("fieldId") == STATUS_FIELD_ID
+        and request.input_value("fieldId") == _BoardField.STATUS
     ], "a board without the option had some other Status option written instead"
 
 
@@ -2306,7 +2546,7 @@ def _status_writes(requests: list[_GraphQLRequest]) -> list[object]:
     return [
         request.input_value("value")
         for request in _sent(_Operation.UPDATE_FIELD, requests)
-        if request.input_value("fieldId") == STATUS_FIELD_ID
+        if request.input_value("fieldId") == _BoardField.STATUS
     ]
 
 
@@ -2366,6 +2606,107 @@ def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_de
     )
 
 
+#: The qualified id of the plan node standing in for the deliverer that claimed the ticket.
+#: A node of some other run rather than one this journey launches: what is under test is a
+#: re-copy of a ticket a deliverer already claimed, and who that deliverer is decides nothing.
+DELIVERER = "authoring:claiming-run/the-node-that-delivers-it"
+#: Where the store holds a delivered task's deliverers on a `github-projects` item: an entry
+#: of the issue's own metadata block, which is the body a copy rewrites. Stated here because
+#: the fixture has to plant one the way the store's relation would have written it.
+DELIVERED_BY_KEY = "onetaskgraph.delivered_by"
+
+
+def _claimed_by_a_deliverer(issue: _Issue) -> None:
+    """Hold ``issue`` where the store's `delivers` relation leaves a claimed ticket.
+
+    Both halves of what that relation writes, because either alone is a different item: the
+    row moves to `Queued`, and the issue's metadata block gains the deliverer that moved it.
+    Planted on the fixture rather than driven, because driving it means a deliverer on a
+    second board and this journey is about what a *re-copy* does to the result.
+    """
+    issue.status = QUEUED.name
+    issue.body = issue.body.replace(
+        '{"onetaskgraph.item_kind"',
+        f'{{"{DELIVERED_BY_KEY}":["{DELIVERER}"],"onetaskgraph.item_kind"',
+        1,
+    )
+
+
+def test_a_queued_followups_item_reads_back_claimed_and_a_re_copy_keeps_it_queued(
+    tmp_path: Path,
+) -> None:
+    """A run claimed the ticket through its node's `delivers`; a re-copy leaves both marks.
+
+    The two marks are the point and neither stands in for the other: the row is at `Queued`,
+    which is what stops a second manager taking work already in flight, and the item names
+    the deliverer that claimed it, which is what the store re-evaluates the ticket over. A
+    re-copy is the ordinary thing a later run does — it verifies the same root cause and
+    copies its ticket again — and it owns neither mark, so it has to carry both through.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+
+    with _serving_followups(environment):
+        first = _copied_ticket(environment, "--json")
+        assert first.returncode == 0, first.stdout + first.stderr
+        (entry,) = json.loads(first.stdout)["items"]
+        (created,) = BOARD.created
+        # llmlint: ignore-block[tests_mirror_real_usage] The claim is the store's `delivers`
+        # relation writing this item on the live board, which no test may reach; the fixture
+        # holds the row and the body exactly where that write leaves them. Everything read and
+        # copied afterwards is the installed CLI and this checkout's module unchanged.
+        _claimed_by_a_deliverer(created)
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        claimed = _followups_command(
+            environment, [str(ONETASKGRAPH_BIN), "task", "show", entry["destination"], "--json"]
+        )
+        decided = _board_status(environment, ticket)
+        assert decided.returncode == 0, decided.stderr
+        _written_ticket(
+            drafts_root,
+            _follow_up_ticket(
+                SIBLING_REPOSITORY,
+                follow_up_tickets.Status(decided.stdout.strip()),
+                "A later run hit it again.",
+            ),
+        )
+        before = _followups_items(environment)
+        again = _copied_ticket(environment, "--json")
+        kept = _read_item(environment, str(entry["destination"]))
+        after = _followups_items(environment)
+
+    assert claimed.returncode == 0, claimed.stderr
+    (read,) = json.loads(claimed.stdout)["items"]
+    assert read["item"]["status"]["category"] == follow_up_tickets.Status.QUEUED == "queued"
+    assert read["item"]["delivered_by"] == [DELIVERER], (
+        f"the claimed item has to name the deliverer that claimed it: {read['item']}"
+    )
+    assert decided.stdout == "queued\n", (
+        f"`board-status` has to print the word a re-copy then carries: {decided.stdout!r}"
+    )
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    (recopy,) = json.loads(again.stdout)["items"]
+    assert (recopy["action"], recopy["destination"]) == ("updated", entry["destination"])
+    assert str(entry["destination"]).removeprefix(f"{follow_up_tickets.BOARD}:") in before
+    assert after == before, (
+        f"the re-copy has to rewrite the one ticket rather than file a second: {before} -> {after}"
+    )
+    # Both marks read back off the store rather than off what the re-copy sent: what a
+    # later reader of this ticket gets is the board's answer, and a copy whose write the
+    # board applied differently would satisfy an assertion on the request that carried it.
+    assert _category(kept) == follow_up_tickets.Status.QUEUED == "queued", (
+        f"a re-copy of a claimed ticket has to leave it claimed, and the store reports {kept}"
+    )
+    assert kept.get("status") == {"category": "queued", "name": QUEUED.name}, (
+        f"a claimed ticket has to sit at the board's own {QUEUED.name!r} option, which no "
+        f"other category takes, and the store reports {kept.get('status')}"
+    )
+    assert kept.get("delivered_by") == [DELIVERER], (
+        f"the re-copy dropped the deliverer the store owns from the item it rewrote: {kept}"
+    )
+
+
 def test_a_draft_ticket_onto_a_followups_board_without_a_deferred_option_is_refused_by_name(
     tmp_path: Path,
 ) -> None:
@@ -2381,6 +2722,27 @@ def test_a_draft_ticket_onto_a_followups_board_without_a_deferred_option_is_refu
 
     assert copied.returncode != 0, copied.stdout + copied.stderr
     assert DEFERRED.name in copied.stderr, copied.stderr
+    assert _status_writes(_GitHubFixture.requests) == [], (
+        "a board without the option had some other Status option written instead"
+    )
+
+
+def test_a_queued_ticket_onto_a_followups_board_without_a_queued_option_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    """The mapping sends `queued` to `Queued` alone, so no other option stands in for it."""
+    environment, drafts_root = _followups_environment(tmp_path)
+    _written_ticket(
+        drafts_root,
+        _follow_up_ticket(SIBLING_REPOSITORY, follow_up_tickets.Status.QUEUED),
+    )
+    without_queued = tuple(option for option in FOLLOWUPS_OPTIONS if option != QUEUED)
+
+    with _serving_followups(environment, without_queued):
+        copied = _copied_ticket(environment)
+
+    assert copied.returncode != 0, copied.stdout + copied.stderr
+    assert QUEUED.name in copied.stderr, copied.stderr
     assert _status_writes(_GitHubFixture.requests) == [], (
         "a board without the option had some other Status option written instead"
     )
@@ -2892,6 +3254,403 @@ def test_run_settlements_and_live_edits_reach_the_plan_store(
     added_settlement = by_pipeline_id["record-follow-up"].settlement
     assert added_settlement.status == "done"
     assert added_settlement.outcome == "no-changes"
+
+
+#: The plan the launch journey below runs from the `plans` board. Two nodes, because the
+#: claim is about work a run has **not** started: with one, the only unstarted item would
+#: be the one about to run, and nothing would tell a claim apart from a dispatch. The
+#: second node delivers the ticket, so the ticket is claimed while the node delivering it
+#: is still waiting on the first.
+DELIVERING_PROJECT = _ProjectId("claiming")
+DELIVERING_QUALIFIED = f"{AUTHORING_SOURCE}:{DELIVERING_PROJECT}"
+FIRST_TASK_TITLE = "test: the node that runs first"
+DELIVERING_TASK_TITLE = "test: the node that delivers the ticket"
+#: The two nodes' own ids, which are what a live edit names one by and what the store calls
+#: each task's record, and the name the journeys read the delivered ticket back under.
+FIRST_NODE = _NodeId("first")
+DELIVERING_NODE = _NodeId("delivering")
+TICKET = "the ticket"
+#: How often a journey below looks for the gate's marker, a run's record or a released claim.
+GATE_POLL_SECONDS = 0.05
+
+
+def _write_delivering_plan(root: Path, delivers: str) -> None:
+    """Write and approve the two-node plan, its second node delivering ``delivers``.
+
+    Approved through the real recipe for the reason `_write_local_project` gives: a launch
+    is refused without an approved design document, and nothing here is about that gate.
+    """
+    write_plan_project(
+        root,
+        {
+            "schema_version": 3,
+            "name": DELIVERING_PROJECT,
+            "tasks": [
+                {
+                    "id": FIRST_NODE,
+                    "persona": "engineer",
+                    "title": FIRST_TASK_TITLE,
+                    "task": "## What\nReply with done.\n\n## Why\nHold the second node back.\n\n"
+                    "## Acceptance criteria\n- The task settles.\n",
+                },
+                {
+                    "id": DELIVERING_NODE,
+                    "persona": "engineer",
+                    "title": DELIVERING_TASK_TITLE,
+                    "deps": [FIRST_NODE],
+                    "delivers": [delivers],
+                    "task": "## What\nReply with done.\n\n## Why\nDeliver the ticket.\n\n"
+                    "## Acceptance criteria\n- The task settles.\n",
+                },
+            ],
+        },
+    )
+    documents = root / "documents"
+    documents.mkdir(parents=True, exist_ok=True)
+    (documents / f"{DELIVERING_PROJECT}-design.md").write_text(
+        frontmatter(
+            {"title": f"Design: {DELIVERING_PROJECT}", "project": DELIVERING_PROJECT},
+            "## What\n\nTwo probes.\n\n## Why\n\nA launch needs a plan.\n\n"
+            "## Architecture\n\nTwo nodes, the second behind the first.\n\n"
+            "## Contracts\n\nNone.\n\n## Acceptance criteria\n\nBoth nodes settle.\n\n"
+            "## Planned tasks\n\n"
+            "| Task | What it delivers | Depends on | Where it lives |\n"
+            "| --- | --- | --- | --- |\n"
+            f"| {FIRST_TASK_TITLE} | the first probe | none | {root} |\n"
+            f"| {DELIVERING_TASK_TITLE} | the ticket | first | {root} |\n",
+        ),
+        encoding="utf-8",
+    )
+    recording = subprocess.run(
+        ["just", "approve-design", DELIVERING_QUALIFIED],
+        cwd=REPO_ROOT,
+        env={**os.environ, AUTHORING_ROOT_ENV: str(root)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert recording.returncode == 0, (
+        f"the fixture could not approve {DELIVERING_QUALIFIED}: "
+        f"{recording.stdout}{recording.stderr}"
+    )
+
+
+def _read_item(environment: dict[str, str], qualified: str) -> Mapping[str, object]:
+    """One item as the store answers it — the way a reader of the board asks.
+
+    The journeys below assert through this rather than off the requests the fixture
+    captured wherever the board can be asked at all: what matters to a manager is what the
+    store reports, and a write the board applied differently would pass an assertion on the
+    request that sent it. The exceptions are the two properties a read cannot hold — the
+    *order* two writes arrived in, and that a row was at a status it has since moved on
+    from — and each says so where it is asserted.
+    """
+    shown = _plans_json(environment, "task", "show", qualified)
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    (read,) = json.loads(shown.stdout)["items"]
+    item = read["item"]
+    assert isinstance(item, dict), read
+    return item
+
+
+def _category(item: Mapping[str, object]) -> object:
+    """The status category the store places one item at."""
+    status = item.get("status")
+    assert isinstance(status, dict), item
+    return status.get("category")
+
+
+def _copied_onto(environment: dict[str, str], *args: str) -> list[Mapping[str, object]]:
+    """Run one `just plans` copy and answer with the entries it reports."""
+    copied = _plans_json(environment, *args)
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    entries = json.loads(copied.stdout)["items"]
+    assert isinstance(entries, list) and entries, copied.stdout
+    return entries
+
+
+def _at_the_turn_gate(launch: subprocess.Popen[str], gate: Path) -> None:
+    """Wait until the launch's first worker turn is held at the paid-model boundary.
+
+    At that moment the engine has dispatched work and no worker has taken a turn: the
+    stand-in writes its marker before it records or answers anything. It is therefore the
+    moment a claim made before the first dispatch has to be readable from the board, and a
+    journey reads the store there rather than inferring the order from traffic. A launch
+    that ends first is named with its own output rather than left to the deadline.
+    """
+    reached = gate / TURN_GATE_REACHED
+    deadline = time.monotonic() + e2e_timeout(180)
+    while not reached.exists():
+        if launch.poll() is not None:
+            stdout, stderr = launch.communicate()
+            raise AssertionError(f"the launch ended before any worker turn: {stdout}{stderr}")
+        if time.monotonic() > deadline:
+            raise AssertionError(f"no worker turn reached the gate at {gate}")
+        time.sleep(GATE_POLL_SECONDS)
+
+
+def _release_the_turn_gate(gate: Path) -> None:
+    """Let the held turn, and every later one, through."""
+    (gate / TURN_GATE_RELEASED).touch()
+
+
+def _statuses(claiming: _Claiming) -> dict[str, object]:
+    """Each plan item's and the delivered ticket's status category, as the store reports it."""
+    return {
+        name: _category(_read_item(claiming.environment, held))
+        for name, held in ({**claiming.task_items, TICKET: claiming.ticket_item}).items()
+    }
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
+# inputs as every journey beside it — the installed plan-store CLI and the real recipes
+# driven against the loopback board — so `nx affected` already selects this module together,
+# and a project of one function would buy no selection. It runs in `orchestrator:test`.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
+# the edge it pays is the one every other launching journey in this file already pays.
+# llmlint: ignore-block[e2e_not_mocked] Two boundaries are doubled in the two journeys
+# below and in the machinery they share, and no more: GitHub's Projects API, for the reason
+# the block around `_Board` gives — driving it for real writes to the two live boards this
+# repository plans and files its follow-ups on — and the paid provider process. The
+# recipes, the installed store, the engine, its write-back and the committed configuration
+# are all real. One block rather than a directive per journey, because both double exactly
+# these two boundaries for exactly this reason.
+def test_a_launch_claims_its_plan_items_and_the_ticket_a_node_delivers(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A launched run claims its whole plan, and the accepted ticket one node delivers.
+
+    This is what stops a second manager taking work already in flight. Before the releases
+    this journey is written against, an accepted ticket sat at `Todo` from the moment a plan
+    naming it was launched until the node delivering it actually started — which on a plan
+    of any depth is hours — and every manager reading the board in that window saw work
+    nobody had taken.
+
+    Both boards are real sources here: the plan is read from and projected back to the
+    loopback `plans` board, and the ticket lives on the loopback `followups` board, moved by
+    the store's own `delivers` relation rather than by anything this host writes.
+
+    Every status is read the way a manager reads it, through `just plans task show`. The
+    first worker's turn is held at the paid-model boundary — the one process doubled here —
+    so the board is read at the moment the engine has dispatched work and no worker has
+    taken a turn, which is when the claim has to be there already. Holding the turn is what
+    makes that moment long enough for a store read, rather than a race a read would lose.
+
+    At that moment the node being dispatched already reads `In Progress`: the engine marks a
+    node running, and projects it so, when it dispatches it, which is before its model
+    turn. So what the board shows then is the claim as a reader meets it — nothing the plan
+    names reads `Todo`, the node not yet started and the ticket it delivers read `Queued`,
+    and the dispatched node reads `In Progress`. No board write is held or altered to reach
+    that reading; only the model's turn is.
+    """
+    with _serving_both_boards() as remote:
+        claiming = _prepare_claiming_launch(tmp_path, oneharness_bin, remote)
+        launch = _launching(claiming)
+        try:
+            _at_the_turn_gate(launch, claiming.gate)
+            claimed = _statuses(claiming)
+        finally:
+            _release_the_turn_gate(claiming.gate)
+            stdout, stderr = launch.communicate(timeout=e2e_timeout(600))
+        settled = _statuses(claiming)
+
+    assert "todo" not in claimed.values(), (
+        f"before any worker takes a turn, nothing the plan names may read `todo` on the board, "
+        f"and the store reports {claimed}\n{stdout}{stderr}"
+    )
+    assert claimed == {
+        FIRST_NODE: "in-progress",
+        DELIVERING_NODE: "queued",
+        TICKET: "queued",
+    }, (
+        f"before any worker takes a turn, the node not yet started and the ticket it delivers "
+        f"have to read `queued` and the dispatched node `in-progress`, and the store reports "
+        f"{claimed}\n{stdout}{stderr}"
+    )
+    assert launch.returncode == 0, stdout + stderr
+    assert json.loads(stdout.strip().splitlines()[-1])["settlement"] == "complete", stdout
+
+    assert settled == {FIRST_NODE: "done", DELIVERING_NODE: "done", TICKET: "done"}, (
+        f"every plan item and the ticket it delivers has to read `done` once the run "
+        f"settles, and the store reports {settled}\n{stdout}{stderr}"
+    )
+
+
+@dataclass(frozen=True)
+class _Claiming:
+    """One prepared launch of the delivering plan: what to run, and the rows to watch."""
+
+    environment: dict[str, str]
+    project: str
+    gate: Path
+    #: Each task's qualified id on the `plans` board, by node id, and the ticket's on
+    #: `followups` — what a reader names them, which is how the journeys ask the store what
+    #: became of them rather than reading it off the writes the fixture captured.
+    task_items: dict[str, str]
+    ticket_item: str
+
+
+def _prepare_claiming_launch(
+    tmp_path: Path, oneharness_bin: str, remote: dict[str, str]
+) -> _Claiming:
+    """Put the ticket, the plan and its design document on the two served boards.
+
+    In this order because the plan's node has to name the ticket it delivers, and the
+    ticket's native id is the board's own answer at the moment it is filed — so the ticket
+    is copied first and the plan is written against what came back.
+    """
+    drafts = tmp_path / "execution" / "follow-ups"
+    environment = _launch_environment(tmp_path / "execution", oneharness_bin)
+    environment.update(_prepare_plan_sources(tmp_path))
+    environment.update(remote)
+    gate = tmp_path / "turn-gate"
+    gate.mkdir()
+    environment[TURN_GATE_ENV] = str(gate)
+    _written_ticket(
+        drafts, _follow_up_ticket(SIBLING_REPOSITORY, follow_up_tickets.Status.ACCEPTED)
+    )
+
+    (filed,) = _copied_onto(
+        environment, "task", "copy", PROPOSED_ID, "--to", follow_up_tickets.BOARD
+    )
+    _write_delivering_plan(tmp_path, str(filed["destination"]))
+    copied = _copied_onto(environment, "project", "copy", DELIVERING_QUALIFIED, "--to", "plans")
+    _copied_onto(
+        environment,
+        "document",
+        "copy",
+        f"{AUTHORING_SOURCE}:{DELIVERING_PROJECT}-design",
+        "--to",
+        "plans",
+    )
+    return _Claiming(
+        environment=environment,
+        project=next(
+            str(entry["destination"]) for entry in copied if entry["source"] == DELIVERING_QUALIFIED
+        ),
+        task_items={
+            str(entry["source"]).rpartition("/")[2]: str(entry["destination"])
+            for entry in copied
+            if entry["source"] != DELIVERING_QUALIFIED
+        },
+        ticket_item=str(filed["destination"]),
+        gate=gate,
+    )
+
+
+def _launching(claiming: _Claiming) -> subprocess.Popen[str]:
+    """`just orchestrate` on the prepared project, left running so a journey can watch it."""
+    return subprocess.Popen(  # noqa: S603 - this repository's own recipe
+        ["just", "orchestrate", claiming.project, "--dag-graph", "off"],
+        cwd=REPO_ROOT,
+        env=claiming.environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _run_id(runs: Path) -> str:
+    """The one run this launch minted under its own ledger, waited for rather than guessed."""
+    deadline = time.monotonic() + e2e_timeout(180)
+    while time.monotonic() < deadline:
+        minted = [held.name for held in runs.iterdir()] if runs.is_dir() else []
+        assert len(minted) <= 1, f"this launch's own ledger holds several runs: {minted}"
+        if minted:
+            return minted[0]
+        time.sleep(GATE_POLL_SECONDS)
+    raise AssertionError(f"no run was minted under {runs}")
+
+
+def _given_back_or_still_claimed(claiming: _Claiming) -> Mapping[str, object]:
+    """The ticket as the store reads it once its claim is released, or as it stands at the deadline.
+
+    Waited for while the first node's turn is still held, so the node that delivers the
+    ticket cannot start between a cancel being accepted and the engine applying it.
+    """
+    deadline = time.monotonic() + e2e_timeout(120)
+    while True:
+        ticket = _read_item(claiming.environment, claiming.ticket_item)
+        if _category(ticket) == "todo" or time.monotonic() > deadline:
+            return ticket
+        time.sleep(GATE_POLL_SECONDS)
+
+
+def test_a_cancelled_node_gives_back_the_ticket_it_had_claimed(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A claim a run gives up is given back, so the ticket is pickable again.
+
+    This is the half that makes the claim safe to trust. A claim that only ever went one
+    way would be worse than none: a ticket left at `Queued` by work that never happened is
+    one no manager's board shows as free and no agent sent to pick up accepted tickets
+    selects, so it would sit there until somebody noticed it by hand.
+
+    Driven the way a manager gives up on a node — a `cancel` over the run's own channel,
+    while the node that delivers the ticket is still waiting on the one ahead of it — so
+    the run ends of its own accord and its closeout is what is under test. The run records
+    that node as **parked**, which is what a cancel leaves behind, and the release follows
+    from the word the write-back then projects rather than from the verb the manager used.
+    `just stop` would not do: it ends a run and its whole dispatch tree, so a stopped
+    driver never reaches the closeout at all.
+
+    The claim is read from the store too, before the cancel, because a run that never
+    claimed the ticket would also leave it at `Todo`. The first node's turn is held at the
+    paid-model boundary throughout, which is what keeps the delivering node from starting
+    while the claim is read and while the cancel takes effect.
+    """
+    with _serving_both_boards() as remote:
+        claiming = _prepare_claiming_launch(tmp_path, oneharness_bin, remote)
+        launch = _launching(claiming)
+        try:
+            run = _run_id(Path(claiming.environment["ONEPIPELINE_RUNS_DIR"]))
+            _at_the_turn_gate(launch, claiming.gate)
+            claimed = _read_item(claiming.environment, claiming.ticket_item)
+            cancelled = subprocess.run(  # noqa: S603 - this repository's own recipe
+                ["just", "channel-reply", run],
+                cwd=REPO_ROOT,
+                env=claiming.environment,
+                input=json.dumps(
+                    {
+                        "version": 2,
+                        "commands": [
+                            {
+                                "op": "cancel",
+                                "id": DELIVERING_NODE,
+                                "reason": "the ticket is being worked elsewhere",
+                            }
+                        ],
+                    }
+                ),
+                text=True,
+                capture_output=True,
+                timeout=e2e_timeout(120),
+                check=False,
+            )
+            given_back = _given_back_or_still_claimed(claiming)
+        finally:
+            _release_the_turn_gate(claiming.gate)
+            stdout, stderr = launch.communicate(timeout=e2e_timeout(600))
+        released = _read_item(claiming.environment, claiming.ticket_item)
+
+    assert _category(claimed) == follow_up_tickets.Status.QUEUED == "queued", (
+        f"the launch has to have claimed the ticket for its release to be what is under "
+        f"test, and before the cancel the store reports {claimed}\n{stdout}{stderr}"
+    )
+    assert cancelled.returncode == 0, cancelled.stdout + cancelled.stderr
+    assert _category(given_back) == follow_up_tickets.Status.ACCEPTED == "todo", (
+        f"cancelling the node delivering a ticket has to give the ticket back while the run "
+        f"is live, and the store reports {given_back}\n{stdout}{stderr}"
+    )
+    assert _category(released) == follow_up_tickets.Status.ACCEPTED == "todo", (
+        f"a run that gave up the node delivering a ticket has to give the ticket back, and "
+        f"the store reports {released}\n{stdout}{stderr}"
+    )
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 #: What a person writes on a board and nothing in a run has any business touching.

@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, NamedTuple, NotRequired, TypedDict, cast
 
 
 class PlanNode(TypedDict):
@@ -18,6 +18,7 @@ class PlanNode(TypedDict):
     title: NotRequired[str]
     deps: NotRequired[list[str]]
     repo: NotRequired[str]
+    delivers: NotRequired[list[str]]
 
 
 class PlanDocument(TypedDict):
@@ -54,6 +55,35 @@ TASKS_DIRECTORY = "tasks"
 #: whitespace, a query string or a control character in a segment is not an origin.
 _HOSTED_ORIGIN = re.compile(r"[A-Za-z0-9.-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 _CLONE_SCHEME = re.compile(r"^https?://")
+
+
+class QualifiedId(NamedTuple):
+    """One qualified `<source>:<native>` id, as its two halves.
+
+    Named rather than positional because both halves are read by name at every call site —
+    which source answers for the id, and what that source calls the record — and a bare
+    pair leaves each caller re-deciding which index is which.
+    """
+
+    source: str
+    native: str
+
+
+def qualified_id(value: str) -> QualifiedId | None:
+    """``value`` split into the source and native halves of a qualified id, or `None`.
+
+    The one parser for that shape in this repository, and the reason it sits in this module
+    rather than beside its first caller: three places ask it — `plan_store.qualified`, which
+    refuses a project id that is not one, and both writers of a `delivers` entry, which
+    refuse a ticket id that is not one — and this is the module the other two import. A
+    second encoding of the same shape is a contract that drifts.
+
+    A `delivers` entry is promoted into a record another program then resolves, so an
+    unqualified or empty one is refused where it is written rather than by whichever later
+    reader cannot find what it names.
+    """
+    source, separator, native = value.partition(":")
+    return QualifiedId(source, native) if separator and source and native else None
 
 
 def hosted_origin(repo: str) -> str | None:
@@ -186,6 +216,7 @@ def render_plan_project(
         title = node.pop("title", node_id)
         deps = node.pop("deps", [])
         repo = node.pop("repo", None)
+        delivers = node.pop("delivers", [])
         if not isinstance(body, str) or not isinstance(title, str):
             raise ValueError(f"generated task {node_id!r} requires string title and task")
         if not isinstance(deps, list) or not all(
@@ -214,6 +245,20 @@ def render_plan_project(
                 fields["repositories"] = [hosted]
             else:
                 node["repo"] = repo
+        # The tickets this node delivers are the record's **own** `delivers`, never an
+        # `onepipeline.` key: the engine reads a node's `delivers` off the task's own field
+        # and refuses the namespaced one by name, and it is the store — not the engine —
+        # that moves what a node delivers, so the field has to reach the store's model of
+        # the record rather than the engine's opaque metadata riding on it.
+        if not isinstance(delivers, list) or not all(
+            isinstance(ticket, str) and qualified_id(ticket) for ticket in delivers
+        ):
+            raise ValueError(
+                f"generated task {node_id!r} requires a list of qualified <source>:<native> "
+                f"task ids in delivers, and has {delivers!r}"
+            )
+        if delivers:
+            fields["delivers"] = delivers
         if deps:
             fields["depends_on"] = [f"{project}/{task_names[dependency]}" for dependency in deps]
         # llmlint: ignore[boundary_inputs_validated] Decoded JSON, for the reason stated

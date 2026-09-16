@@ -161,7 +161,7 @@ REQUIRED_INPUTS = (ASK_WRAPPER, RUN_ID)
 #: the engine itself reads — and this file measures it anyway, because that fallback is
 #: exactly what a *lifecycle* dispatch cannot use: its working directory is a session
 #: worktree holding no `runs`, and this variable is the only thing in its environment that
-#: says where the run's channel actually is. onepipeline 0.32.0's contract composes it,
+#: says where the run's channel actually is. onepipeline 0.33.0's contract composes it,
 #: absolute, into every dispatch of every node (its `docs/contract-divergences.md`, "The
 #: dispatch environment").
 RUNS_ROOT = Input(
@@ -1372,7 +1372,7 @@ def test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_u
     `${ONEPIPELINE_RUNS_DIR:-runs}/<run>/channel` and resolves nothing else, so a dispatch
     whose runs root is relative or absent asks under whatever `runs` its working directory
     holds — none, in a session worktree — and its question reaches no manager. onepipeline
-    0.32.0 composes it for every dispatch; that is the producer's to change, so it is held
+    0.33.0 composes it for every dispatch; that is the producer's to change, so it is held
     here against a real dispatch of every launch shape rather than restated.
 
     Read off the dispatch's own turn: absolute, and naming the root this launch really

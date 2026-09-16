@@ -186,6 +186,7 @@ NODE_FIELDS = frozenset(
         "resume",
         "adoption",
         "consumes",
+        "delivers",
     }
 )
 

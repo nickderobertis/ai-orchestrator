@@ -357,6 +357,21 @@ def _read_the_stream(
 #: journey wanting only the worker delayed launches with no observer graph.
 AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 
+#: Optionally hold a dispatched worker's first turn at this boundary — before the turn is
+#: recorded or answered — until a journey lets it go. Names a directory: the turn writes
+#: `TURN_GATE_REACHED` there and waits for `TURN_GATE_RELEASED`, so a journey can read a run's
+#: state at the one moment the engine has dispatched work and no worker has taken a turn.
+#:
+#: A gate rather than a delay because what it replaces is a race: a delay lets a turn be
+#: recorded and then waits, so a journey polling for "no turn yet" can only ever lose. The
+#: judge side is never held, and once released the gate stays open for every later turn.
+TURN_GATE_ENV = "FAKE_BACKEND_TURN_GATE"
+TURN_GATE_REACHED = "reached"
+TURN_GATE_RELEASED = "released"
+#: How long a held turn waits before giving up, so a journey that failed before releasing
+#: the gate ends its run instead of leaving a dispatch parked for ever.
+TURN_GATE_CEILING_SECONDS = 600
+
 #: Set to anything non-empty, the stand-in's supervisor sends the worker back **once**
 #: before it accepts. It is what gives a journey a conversation of more than one worker
 #: turn: the second turn opens on the supervisor's own words, which is the turn
@@ -577,6 +592,29 @@ def _answer(argv: list[str], text: str) -> int:
     return completed.returncode
 
 
+def _await_turn_gate(config: str | None) -> None:
+    """Hold a dispatched worker's turn at `TURN_GATE_ENV`'s gate until it is released."""
+    gate = os.environ.get(TURN_GATE_ENV)
+    member = MEMBER_OF_CONFIG.search(config or "")
+    if (
+        not gate
+        or config is None
+        or member is None
+        or member.group(1) != DISPATCHED_MEMBER
+        or Path(config).name == JUDGE_CONFIG_NAME
+    ):
+        return
+    released = Path(gate) / TURN_GATE_RELEASED
+    if released.exists():
+        return
+    (Path(gate) / TURN_GATE_REACHED).touch()
+    deadline = time.monotonic() + TURN_GATE_CEILING_SECONDS
+    while not released.exists():
+        if time.monotonic() > deadline:
+            raise SystemExit("fake_backend: the turn gate was never released")
+        time.sleep(0.05)
+
+
 def main(argv: list[str]) -> int:
     """Answer one harness turn."""
     if not argv or argv[0] != "run":
@@ -585,6 +623,8 @@ def main(argv: list[str]) -> int:
     original = list(argv)
     argv, prompt = _prompt(argv)
     config = _flag(argv, CONFIG_FLAG)
+    # First, before anything records the turn: that ordering is the gate's whole promise.
+    _await_turn_gate(config)
     system = _flag(argv, SYSTEM_FLAG) or ""
     watching = MEMBER_OF_CONFIG.search(config or "")
     scripted = os.environ.get(OBSERVER_ANSWER_ENV)

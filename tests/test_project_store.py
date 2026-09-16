@@ -29,7 +29,7 @@ def test_render_plan_project_covers_supported_node_shapes(tmp_path: Path) -> Non
                 "repo": "/tmp/service",
                 "deps": ["first"],
             },
-            {"id": "third", "task": "Do third."},
+            {"id": "third", "task": "Do third.", "delivers": ["followups:I_4"]},
         ],
     }
 
@@ -38,9 +38,15 @@ def test_render_plan_project_covers_supported_node_shapes(tmp_path: Path) -> Non
     assert native == "stored-plan"
     first = (tmp_path / "tasks/stored-plan/first.md").read_text()
     second = (tmp_path / "tasks/stored-plan/second.md").read_text()
+    third = (tmp_path / "tasks/stored-plan/third.md").read_text()
     assert 'repositories: ["github.com/acme/service"]' in first
     assert '"onepipeline.repo": "/tmp/service"' in second
     assert 'depends_on: ["stored-plan/first"]' in second
+    # The record's own field and never `onepipeline.delivers`: the engine refuses the
+    # namespaced key by name, and it is the store that moves what a node delivers.
+    assert 'delivers: ["followups:I_4"]' in third
+    assert "onepipeline.delivers" not in third
+    assert "delivers" not in first, "a node delivering nothing carries no empty list"
 
 
 def test_a_rendered_plan_lists_its_project_document_last() -> None:
@@ -70,6 +76,13 @@ def test_a_rendered_plan_lists_its_project_document_last() -> None:
         {"name": "plan", "tasks": [{"id": "node", "task": None}]},
         {"name": "plan", "tasks": [{"id": "node", "repo": 7}]},
         {"name": "plan", "tasks": [{"id": "node", "deps": [7]}]},
+        {"name": "plan", "tasks": [{"id": "node", "delivers": "followups:I_4"}]},
+        {"name": "plan", "tasks": [{"id": "node", "delivers": [7]}]},
+        # A `delivers` entry names a task in another source, so an unqualified or empty one
+        # is refused where it is written rather than by whichever reader cannot resolve it.
+        {"name": "plan", "tasks": [{"id": "node", "delivers": ["I_4"]}]},
+        {"name": "plan", "tasks": [{"id": "node", "delivers": [""]}]},
+        {"name": "plan", "tasks": [{"id": "node", "delivers": ["followups:"]}]},
         {"name": "plan", "tasks": [{"id": "node", "deps": ["absent"]}]},
         {"name": "plan", "tasks": [{"id": "same id"}, {"id": "same-id"}]},
     ),
@@ -77,6 +90,27 @@ def test_a_rendered_plan_lists_its_project_document_last() -> None:
 def test_render_plan_project_rejects_invalid_generated_fields(plan: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         project_store.render_plan_project(plan)
+
+
+@pytest.mark.parametrize(
+    ("value", "parts"),
+    (
+        ("followups:I_created_0", ("followups", "I_created_0")),
+        ("drafts:a-run/tickets/a-cause", ("drafts", "a-run/tickets/a-cause")),
+        # The native half is the source's own answer about its own records, so a colon in
+        # it is the source's business: only the first one separates.
+        ("followups:a:b", ("followups", "a:b")),
+        ("I_created_0", None),
+        ("", None),
+        (":native", None),
+        ("followups:", None),
+    ),
+)
+def test_a_qualified_id_is_a_source_and_a_native_half(
+    value: str, parts: tuple[str, str] | None
+) -> None:
+    """The one parser for the shape, which both `delivers` writers and `qualified` ask."""
+    assert project_store.qualified_id(value) == parts
 
 
 def test_slug_rejects_a_value_with_no_identifier() -> None:
