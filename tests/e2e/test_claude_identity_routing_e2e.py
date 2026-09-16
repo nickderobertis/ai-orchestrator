@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from project_fixtures import project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -114,6 +115,21 @@ if name == "claude":
                       "result": "recorded", "session_id": "identity-recorder"}))
 else:
     print("{}")
+"""
+
+LOGIN_REFUSAL = """#!/usr/bin/env python3
+import json, sys
+if "--version" in sys.argv[1:]:
+    print("1.0.0 (login-refusal)")
+    raise SystemExit(0)
+print(json.dumps({
+    "type": "result", "subtype": "success", "is_error": True,
+    "duration_ms": 429, "num_turns": 1,
+    "result": "Not logged in · Please run /login",
+    "session_id": "host-login-refusal", "total_cost_usd": 0,
+    "usage": {"input_tokens": 0, "output_tokens": 0}, "modelUsage": {},
+}))
+raise SystemExit(1)
 """
 
 
@@ -311,6 +327,99 @@ def test_a_never_logged_in_primary_backup_falls_through_as_auth_where_nothing_fi
     assert isinstance(handed, dict)
     assert handed["CLAUDE_CONFIG_DIR"] == str(host.home / ".claude")
     assert not (host.home / ".claude-primary-backup").exists()
+
+
+def _assert_login_refusal_is_authentication(rendered: str) -> None:
+    """The operator verdict whose legacy failure this adoption must expose."""
+    assert "fell through 'claude-code' (auth)" in rendered, rendered
+    assert "rate-limit" not in rendered, rendered
+
+
+def test_the_login_refusal_assertion_rejects_the_legacy_rate_limit_classification() -> None:
+    """The regression assertion fails specifically when the old classification returns."""
+    legacy = "provider: fell through 'claude-code' (rate-limit)"
+    with pytest.raises(AssertionError, match="fell through 'claude-code' \\(auth\\)"):
+        _assert_login_refusal_is_authentication(legacy)
+
+
+# Only the paid Claude process is substituted. A single-sided node graph keeps the turn
+# inside the oneagentgraph and oneharness-core libraries linked into the installed engine.
+# llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] see the reason above
+def test_the_adopted_engine_reports_a_claude_login_refusal_as_authentication(
+    tmp_path: Path,
+) -> None:
+    provider = tmp_path / "claude"
+    provider.write_text(LOGIN_REFUSAL, encoding="utf-8")
+    provider.chmod(0o755)
+    harness = tmp_path / "oneharness.toml"
+    harness.write_text('run_mode = "fallback"\nharnesses = ["claude-code"]\n', encoding="utf-8")
+    graph = tmp_path / "node-scope.yaml"
+    graph.write_text(
+        "version: 1\nname: node-scope\nmembers:\n  worker:\n"
+        "    kind: oneharness\n    oneharness_config: ./oneharness.toml\n",
+        encoding="utf-8",
+    )
+    run = f"login-refusal-{os.getpid()}"
+    plan = tmp_path / "login-refusal.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "goal": {"text": "Observe the login refusal."},
+                "name": run,
+                "tasks": [
+                    {
+                        "id": "work",
+                        "persona": "engineer",
+                        "task": "Report without changing files.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment.pop("ONEAGENTGRAPH_ONEHARNESS_BIN", None)
+    environment.update(
+        {
+            "CLAUDE_CODE_SESSION_ID": "e2e-claude-login-refusal",
+            "ONEPIPELINE_RUNS_DIR": str(tmp_path / "runs"),
+            "ONEPIPELINE_NODE_GRAPH": str(graph),
+            "ONEAGENTGRAPH_STATE_DIR": str(tmp_path.parent / "login-refusal-graphs"),
+            "ONEHARNESS_BIN_CLAUDE_CODE": str(provider),
+            "XDG_STATE_HOME": str(tmp_path.parent / "login-refusal-state"),
+        }
+    )
+    project = project_from_plan(plan, run)
+    launched = subprocess.run(  # noqa: S603 - this checkout's installed-engine recipe
+        [
+            "just",
+            "orchestrate",
+            project,
+            "--dag-graph",
+            "off",
+            "--success-hook=",
+            "--failure-hook=",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+    assert launched.returncode != 0, launched.stdout + launched.stderr
+    results = subprocess.run(  # noqa: S603 - this checkout's installed-engine results recipe
+        ["just", "results", run],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert results.returncode == 0, results.stderr
+    _assert_login_refusal_is_authentication(results.stdout)
 
 
 class EntryPoint(NamedTuple):

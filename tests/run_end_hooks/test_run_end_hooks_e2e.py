@@ -35,7 +35,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict
 
 import follow_up_variables
 import plan_root_variable
@@ -138,6 +138,39 @@ class Succeeded(NamedTuple):
     follow_up: str
     watched: subprocess.CompletedProcess[str]
     mine: subprocess.CompletedProcess[str]
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These are typed views
+# of the public wire input this journey sends to the installed engine; its real reply
+# validator is the drift gate, so a field removed or changed by the authority refuses
+# the journey rather than letting a parallel local implementation accept it.
+class RetryNode(TypedDict):
+    """The replacement node sent through the public retry envelope."""
+
+    id: str
+    task: str
+    expects_no_diff: bool
+
+
+class RetryCommand(TypedDict):
+    """One retry command in that envelope."""
+
+    op: str
+    id: str
+    node: RetryNode
+
+
+class RetryEnvelope(TypedDict):
+    """The manager reply that reopens the failed run."""
+
+    version: int
+    completion: bool
+    message: str
+    reason: str
+    commands: list[RetryCommand]
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 def _bench(tmp: Path, oneharness_bin: str) -> Bench:
@@ -403,6 +436,65 @@ def test_a_hook_leaves_a_failed_runs_settlement_and_exit_status_as_they_were(
     failed: Ended,
 ) -> None:
     _assert_the_twins_settled_alike(failed)
+
+
+def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A later successful ending gets its own hook epoch on this host's real recipes."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin)
+    run = f"hooks-recovered-{os.getpid()}"
+    follow_up = ""
+    try:
+        _draft(bench, run)
+        failed = _launch(bench, run, persona=UNCLAIMED_PERSONA)
+        assert _settlement(failed)["settlement"] != "complete", failed.result.stdout
+        assert (bench.runs / run / "hooks" / "failure.log").is_file()
+
+        envelope: RetryEnvelope = {
+            "version": 3,
+            "completion": False,
+            "message": "Retry the configuration failure with the normal worker role.",
+            "reason": "The corrected node can now complete.",
+            "commands": [
+                {
+                    "op": "retry",
+                    "id": NODE,
+                    "node": {
+                        "id": f"{NODE}-2",
+                        "task": "Report without changing files.",
+                        "expects_no_diff": True,
+                    },
+                }
+            ],
+        }
+        replied = subprocess.run(  # noqa: S603 - this checkout's real engine wrapper
+            [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "reply", run],
+            cwd=REPO_ROOT,
+            env=bench.environment,
+            input=json.dumps(envelope),
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert replied.returncode == 0, replied.stdout + replied.stderr
+        adopted = _just(bench, "orchestrate", "--adopt", run)
+        assert adopted.returncode == 0, adopted.stdout + adopted.stderr
+        assert _settlement(Launch(adopted, run)) == {"run_id": run, "settlement": "complete"}
+
+        success_log = (bench.runs / run / "hooks" / "success.log").read_text(encoding="utf-8")
+        matched = LAUNCHED.search(success_log)
+        assert matched is not None, success_log
+        follow_up = matched["follow_up"]
+        assert follow_up == f"{run}{FOLLOW_UPS_SUFFIX}"
+        results = _just(bench, "results", run, seconds=60)
+        assert "failure hook fired" in results.stdout, results.stdout
+        assert "success hook fired" in results.stdout, results.stdout
+    finally:
+        _stop(bench, run, *([follow_up] if follow_up else []))
 
 
 def _assert_the_twins_settled_alike(ended: Ended) -> None:

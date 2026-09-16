@@ -9,7 +9,7 @@ dependencies = [
     "onejudge==0.12.0",
     "onemessagebus-cli==0.4.0",
     "onepipeline-api-cli==0.7.3",
-    "onepipeline-cli==0.33.0",
+    "onepipeline-cli==0.34.0",
     "onevcs-cli==0.24.0",
 ]
 

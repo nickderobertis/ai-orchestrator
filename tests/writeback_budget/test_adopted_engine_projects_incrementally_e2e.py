@@ -80,6 +80,9 @@ ADDED_NODE = NodeId("follow-up")
 #: The outcome the settled node is put at. `failed` rather than `done`, so no dependent's
 #: state moves with it and the transition is that one node's alone.
 SETTLED_OUTCOME = "failed"
+#: A manager-observed landing, deliberately unrelated to the failed dispatch branch so
+#: the destination can only learn it from the stated settlement evidence.
+STATED_LANDING = "https://github.com/octo-org/example/pull/17"
 
 #: The engine's `writeback::RETRY_CEILING`: the longest a failing projection waits before
 #: it is attempted again on a timer. A refusal watched for longer than this and not asked
@@ -102,6 +105,9 @@ class DestinationTask(NamedTuple):
     record: Path
     status: str
     settlement: object
+    landing: object
+    landing_evidence: object
+    change_url: object
 
 
 @pytest.fixture
@@ -170,6 +176,9 @@ def _destination(driven: DrivenRun) -> dict[str, DestinationTask]:
             record=record,
             status=json.dumps(item.get("status"), sort_keys=True),
             settlement=metadata.get("onepipeline.settlement"),
+            landing=metadata.get("onepipeline.landing"),
+            landing_evidence=metadata.get("onepipeline.landing_evidence"),
+            change_url=metadata.get("onepipeline.change_url"),
         )
     return tasks
 
@@ -224,6 +233,7 @@ def test_a_projection_carries_only_what_changed_and_a_refusal_waits_for_the_grap
             "id": SETTLED_NODE,
             "outcome": SETTLED_OUTCOME,
             "evidence": "settled so one node's transition is projected alone",
+            "landing": STATED_LANDING,
         },
     )
     waited_for(
@@ -248,6 +258,11 @@ def test_a_projection_carries_only_what_changed_and_a_refusal_waits_for_the_grap
     assert isinstance(settlement, dict) and settlement.get("status") == SETTLED_OUTCOME, after[
         SETTLED_NODE
     ]
+    assert (
+        after[SETTLED_NODE].landing,
+        after[SETTLED_NODE].landing_evidence,
+        after[SETTLED_NODE].change_url,
+    ) == ("landed", "stated-change-request", STATED_LANDING), after[SETTLED_NODE]
     assert after[SETTLED_NODE].status != before[SETTLED_NODE].status, (
         before[SETTLED_NODE],
         after[SETTLED_NODE],

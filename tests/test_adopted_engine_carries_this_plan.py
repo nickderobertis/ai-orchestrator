@@ -239,6 +239,38 @@ FOLLOW_UPS_LIFECYCLE_LANDINGS = (
     ),
 )
 
+#: The four engine-side nodes of the host-fixes plan. Together they make cached test
+#: inputs honest, scope hook idempotency to an ending epoch, carry the linked Claude
+#: authentication classifier through a real dispatch, and make a manager's stated
+#: landing authoritative everywhere this host reads it. The host journeys exercise the
+#: two manager-visible changes; the linked-library gate reads the relink from the wheel.
+HOST_FIXES_LANDINGS = (
+    Landing(
+        node="op-test-inputs-r2",
+        change_request=310,
+        commit="1b54297711ca640a9db31fc191757e811626efcf",
+        did="declare the scripts crate tests drive and serve the label-strict store in process",
+    ),
+    Landing(
+        node="op-hook-epoch-r2",
+        change_request=311,
+        commit="727a2bad025fca5987c0e7a9f9804f28e837491a",
+        did="give each ending a hook epoch when an accepted edit makes the run live again",
+    ),
+    Landing(
+        node="op-relink-oneharness-r2",
+        change_request=319,
+        commit="59019824d1a753a5ff550c42ed3d2d481db2e545",
+        did="drive a Claude login refusal through the linked authentication classifier",
+    ),
+    Landing(
+        node="op-stated-landing-r2",
+        change_request=318,
+        commit="693a91100744973d7789eb0242de43f205a4d1e0",
+        did="make a stated landing authoritative in views, write-back and release evidence",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -247,6 +279,7 @@ LANDINGS = (
     *WRITEBACK_BUDGET_LANDINGS,
     *WRITEBACK_QUOTA_LANDINGS,
     *FOLLOW_UPS_LIFECYCLE_LANDINGS,
+    *HOST_FIXES_LANDINGS,
 )
 
 

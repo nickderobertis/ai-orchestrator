@@ -172,6 +172,14 @@ JUDGE_PANEL_FLOOR = Release(0, 10, 0)
 #: attributes it, so a chain that stopped on a candidate with nothing to show for
 #: itself is told apart from one that stopped after work.
 CHAIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 1)
+#: oneharness https://github.com/nickderobertis/oneharness/issues/1290, first linked by
+#: onepipeline in #314 and driven through its real dispatch graph in #319: a Claude
+#: `Not logged in` refusal is an authentication failure, not a rate limit. This is the
+#: operator-facing distinction between authenticating the named configuration directory
+#: and waiting for quota that was never exhausted. The installed-engine journey in
+#: `tests/e2e/test_claude_identity_routing_e2e.py` drives the linked classifier through
+#: a single-sided node graph and holds the host-visible verdict to that distinction.
+CLAUDE_LOGIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 2)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -535,10 +543,8 @@ class LinkedCore(NamedTuple):
 #: between them would mean anything. Measured 2026-09-12 on this host's installed
 #: wheels: `config/oneharness.version` reads 0.12.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.13.1 — which the engine wheel links too, this time. One wheel, its own
-#: library, and a number that agrees with the engine's by the coincidence of two
-#: cadences meeting: the adoption before this one measured 0.12.2 against 0.12.2 as
-#: well, and the one before that 0.12.1 against 0.12.2.
+#: against as 0.13.1, while the engine wheel now links 0.13.2. They are independently
+#: released artifacts, so the mismatch is expected and equality would assert no contract.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
 #: What each dependent resolves that crate at in the adopted engine. The whole
@@ -551,8 +557,8 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.2", core="0.13.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.12.0", core="0.13.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.2", core="0.13.2"),
+    LinkedCore(dependent="onejudge", dependent_version="0.12.0", core="0.13.2"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -769,8 +775,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.13.0", "0.13.1"),
-        "onejudge-cli": ("0.13.0", "0.13.1"),
+        "oneagentgraph-cli": ("0.13.0", "0.13.2"),
+        "onejudge-cli": ("0.13.0", "0.13.2"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "
@@ -794,8 +800,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         ),
         (
             UNRECONCILABLE_PIN.crate,
-            CHAIN_CLASSIFICATION_CORE_FLOOR,
-            "decides and attributes what an unclassified fallback failure stops",
+            CLAUDE_LOGIN_CLASSIFICATION_CORE_FLOOR,
+            "classifies a Claude login refusal as authentication rather than rate limiting",
         ),
     ],
     ids=("onevcs", "oneagentgraph", "onejudge", UNRECONCILABLE_PIN.crate),

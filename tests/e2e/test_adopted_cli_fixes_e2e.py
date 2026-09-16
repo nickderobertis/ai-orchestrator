@@ -50,6 +50,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 import pytest
 from onejudge_sdk import OneJudge, RunConfig
@@ -111,6 +112,41 @@ RELEASE_TARGETS = (
     'published_by = "Nothing: this journey only needs a landing with no baseline."\n'
 )
 SILENT_PROBE = '#!/bin/sh\necho "no registry answers here" >&2\nexit 3\n'
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These are typed views
+# of the public wire input this journey sends to the installed engine; its real reply
+# validator is the drift gate, so a field removed or changed by the authority refuses
+# the journey rather than letting a parallel local implementation accept it.
+class SettleCommand(TypedDict):
+    """A manager correction carrying the landing the run failed to observe."""
+
+    op: str
+    id: str
+    outcome: str
+    evidence: str
+    landing: str
+    release: NotRequired[Release]
+
+
+class Release(TypedDict):
+    """A released artifact the operator correlates with a stated landing."""
+
+    target: str
+    version: str
+
+
+class SettleEnvelope(TypedDict):
+    """The public reply envelope used by the stated-landing journey."""
+
+    version: int
+    completion: bool
+    message: str
+    reason: str
+    commands: list[SettleCommand]
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 def _installed(binary: str, pin: str) -> Path:
@@ -193,6 +229,71 @@ def test_a_monitor_resumed_from_its_cursor_renders_only_what_was_recorded_since(
         )
     assert resumed.stdout.splitlines()[-1] != cursors[0], (
         "the resumed pass has to hand back a cursor past the events it rendered"
+    )
+
+
+def test_a_stated_landing_is_authoritative_in_the_results_view(tmp_path: Path) -> None:
+    """A manager correction is rendered from its evidence, not the superseded branch."""
+    runs = tmp_path / "runs"
+    env = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)}
+    landings = (
+        ("stated-change-request", "https://github.com/octo-org/example/pull/17"),
+        ("stated-commit", "0123456789abcdef0123456789abcdef01234567"),
+    )
+    for tier, landing in landings:
+        run = tier
+        shutil.copytree(RECORDED_RUN, runs / run)
+        envelope = _settle_envelope(landing)
+        replied = _reply(run, envelope, env)
+        assert replied.returncode == 0, replied.stdout + replied.stderr
+
+        results = _run("just", "results", run, env=env, cwd=REPO_ROOT)
+        assert results.returncode == 0, results.stderr
+        line = next(line for line in results.stdout.splitlines() if "gate-parity-land" in line)
+        assert "landed on its base" in line, line
+        assert tier in line, line
+        assert landing in line, line
+        assert "NOT landed" not in line, line
+
+    refused_run = "unusable-stated-landing"
+    shutil.copytree(RECORDED_RUN, runs / refused_run)
+    envelope = _settle_envelope("not-a-landing")
+    refused = _reply(refused_run, envelope, env)
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert 'landing of "not-a-landing", which is neither' in refused.stderr, refused.stderr
+
+
+def _settle_envelope(landing: str, *, release: Release | None = None) -> SettleEnvelope:
+    command: SettleCommand = {
+        "op": "settle",
+        "id": "gate-parity-land",
+        "outcome": "failed",
+        "evidence": "the operator observed the landing",
+        "landing": landing,
+    }
+    if release is not None:
+        command["release"] = release
+    return {
+        "version": 3,
+        "completion": False,
+        "message": "Record the landing the run did not observe.",
+        "reason": "The landing completed after the dispatch failed.",
+        "commands": [command],
+    }
+
+
+def _reply(
+    run: str, envelope: SettleEnvelope, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - this checkout's real engine wrapper
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "reply", run],
+        cwd=REPO_ROOT,
+        env=env,
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
     )
 
 
@@ -292,6 +393,51 @@ def test_an_automated_landing_with_no_baseline_is_released_by_an_acknowledgement
     )
     assert acknowledged.returncode == 0, acknowledged.stderr
 
+    released = _run(onevcs, "release", "status", branch, "--target", "wheel", env=env, cwd=checkout)
+    assert released.returncode == 0, released.stderr
+    assert released.stdout.strip() == "released: wheel 1.0.0 (automated, acknowledged)", (
+        released.stdout
+    )
+
+
+def test_a_settle_correlates_its_stated_landing_with_the_release(tmp_path: Path) -> None:
+    """The installed engine records a valid release and refuses an invalid one."""
+    onevcs = _installed("onevcs", "onevcs")
+    env = _scratch_onevcs(tmp_path)
+    branch = "feat/work"
+    checkout = _registered_checkout(
+        tmp_path,
+        "settled-lib",
+        branch,
+        env,
+        seeded={"release-targets.toml": RELEASE_TARGETS, "probe.sh": SILENT_PROBE},
+    )
+    landed = _run(onevcs, "publish-branch", branch, "--repo", checkout, env=env, cwd=tmp_path)
+    assert landed.returncode == 0, landed.stderr
+    synced = _run(onevcs, "sync", env=env, cwd=checkout)
+    assert synced.returncode == 0, synced.stderr
+    landing_commit = _run("git", "rev-parse", branch, env=env, cwd=checkout).stdout.strip()
+
+    runs = tmp_path / "runs"
+    refused_run = "refused-release-correlation"
+    shutil.copytree(RECORDED_RUN, runs / refused_run)
+    run_env = {**env, "ONEPIPELINE_RUNS_DIR": str(runs)}
+    refused = _reply(
+        refused_run,
+        _settle_envelope(landing_commit, release={"target": "wheel", "version": "the-nightly"}),
+        run_env,
+    )
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "is not a semantic version" in refused.stderr, refused.stderr
+
+    run = "release-correlation"
+    shutil.copytree(RECORDED_RUN, runs / run)
+    replied = _reply(
+        run,
+        _settle_envelope(landing_commit, release={"target": "wheel", "version": "1.0.0"}),
+        run_env,
+    )
+    assert replied.returncode == 0, replied.stdout + replied.stderr
     released = _run(onevcs, "release", "status", branch, "--target", "wheel", env=env, cwd=checkout)
     assert released.returncode == 0, released.stderr
     assert released.stdout.strip() == "released: wheel 1.0.0 (automated, acknowledged)", (

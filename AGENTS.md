@@ -655,7 +655,9 @@ dropped with why, and anything it found that should have been surfaced during th
 
 **When a run ends any other way**, the failure hook launches nothing. Decide with the user
 whether to verify its drafts by hand with `just follow-ups <run-id>`. A pause on a
-decision is not an ending, and a run fires at most one hook.
+decision is not an ending. A run fires at most one hook for each ending it reaches; an
+accepted edit that makes the run live again starts a new epoch, so a recovered run fires
+the hook for its later ending too.
 
 **Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
 comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
