@@ -49,9 +49,10 @@ model = "gpt-5.6-sol"
 # from a deliberate one.
 unset_env = ["GH_PROJECTS_TOKEN"]
 
-# The second Codex identity; held identical to oneharness.toml's by
-# tests/test_harness_routing.py, since one drifted copy would silently change how
-# a role authenticates. See scripts/codex-alt-home.sh for the indirection.
+# The second Codex identity, which this side's chain names like every other side's;
+# tests/e2e/test_oneharness_timeout_e2e.py holds this config's resolved order to that
+# chain, since a side that dropped this candidate would silently lose its quota. See
+# scripts/codex-alt-home.sh for the indirection.
 [harness.codex.variant.alternate]
 model = "gpt-5.6-sol"
 env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }

@@ -309,10 +309,19 @@ def test_recoverable_scoped_by_repo_lists_that_identity_in_its_drafting_form(
         "the scoped listing is not the verb's own report with its resume commands rewritten:\n"
         f"{listed.stdout}\n--- expected ---\n{expected}"
     )
-    assert _resume_lines(listed.stdout) == [
-        f"Resume: just publish-branch {COMPLETE_BRANCH} --repo {registry.checkout}",
-        f"Resume: just repo-recover {INCOMPLETE_BRANCH} --repo {registry.checkout}",
-    ], f"the scoped listing does not offer the recipes that draft a body:\n{listed.stdout}"
+    # Compared as a set of lines rather than a sequence: which of two preserved branches
+    # the verb lists first is outside this wrapper's contract, and the fixture gives them
+    # no distinct ordering key, so both orders are correct answers. The line-for-line
+    # comparison just above already holds the recipe to the verb's own order, whatever it
+    # is; this asks the separate question of *which* commands are offered, and still fails
+    # if either is wrong, missing, or left in its raw `onevcs` form.
+    offered = sorted(_resume_lines(listed.stdout))
+    assert offered == sorted(
+        [
+            f"Resume: just publish-branch {COMPLETE_BRANCH} --repo {registry.checkout}",
+            f"Resume: just repo-recover {INCOMPLETE_BRANCH} --repo {registry.checkout}",
+        ]
+    ), f"the scoped listing does not offer the recipes that draft a body:\n{listed.stdout}"
 
 
 def test_recoverable_scoped_to_an_unregistered_repo_fails_with_the_verbs_refusal(

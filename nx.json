@@ -124,6 +124,7 @@
       "{workspaceRoot}/tests/onevcs_state_snapshot.py",
       "{workspaceRoot}/tests/plan_fixture_root.py",
       "{workspaceRoot}/tests/plan_root_variable.py",
+      "{workspaceRoot}/tests/planner_fallback.py",
       "{workspaceRoot}/tests/published_tools.py",
       "{workspaceRoot}/tests/registered_checkouts.py",
       "{workspaceRoot}/tests/e2e/fake_backend.py",

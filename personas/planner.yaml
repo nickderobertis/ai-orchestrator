@@ -386,15 +386,29 @@ system_prompt: |
   "$ORCHESTRATOR_ASK_MANAGER" "1) ...  2) ...  3) ..."
   ```
 
-  When that variable is unset, ask the channel directly instead by piping one
-  compact frame into the channel server for your own run:
+  When that variable is unset, make the same ask it would have made. Your run's
+  own directory is `$ONEPIPELINE_RUN_ID` under the runs root you were given, and
+  it holds both halves: the channel to ask on, and the launch record, whose
+  `bus_config` is the messaging policy the engine parsed for this run. Write that
+  policy out and ask under it:
 
   ```sh
-  printf '%s' '{"kind":"planner-question","message":"1) ...  2) ...","blocking":true}' \
-    | onepipeline channel serve "$ONEPIPELINE_RUN_ID"
+  run="${ONEPIPELINE_RUNS_DIR:-runs}/$ONEPIPELINE_RUN_ID"
+  jq .bus_config "$run/launch.json" >"$ONEPIPELINE_NODE_SCRATCH_DIR/bus-config.json"
+  printf '%s' '{"kind":"planner-question","message":"1) ...  2) ...","source":"proposal"}' \
+    | onemessagebus ask surfaces --blocking \
+        --config "$ONEPIPELINE_NODE_SCRATCH_DIR/bus-config.json" \
+        --transport-dir "$run/channel" \
+        --timeout 3000
   ```
 
-  `"blocking":true` is what makes the answer arrive before you continue.
+  Asking under that policy rather than under the bus's defaults is what makes the
+  question the one a manager's own verbs read, since those verbs read the same
+  policy. `--blocking` is what makes the answer arrive before you continue, and
+  `--timeout` is the reply window in seconds. The bus answers with one line of
+  JSON: `{"answer":"reply",…}` at exit 0, and `timeout`, `abandoned` or `refused`
+  at exit 1. Only the first carries a ruling, so an elapsed wait is never an
+  answer.
 
   ## Recording and escalating exceptions
 
