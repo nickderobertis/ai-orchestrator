@@ -164,6 +164,10 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: skilltest}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: spanish-language-tutor}
     publication: local-direct
     approvals: none
