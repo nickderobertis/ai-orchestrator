@@ -19,7 +19,11 @@ or a recipe reaches it, and each journey fails on the release before the fix:
 * a `local-md` source's relative root resolves against the directory of the
   configuration document that supplied it, rather than being left for each reading
   process to resolve against its own working directory —
-  https://github.com/nickderobertis/onetaskgraph/issues/1144.
+  https://github.com/nickderobertis/onetaskgraph/issues/1144;
+* a `local-md` listing that meets a malformed record refuses, naming the record's path
+  and its parse diagnostic, instead of listing everything else as if the record were
+  not there — https://github.com/nickderobertis/onetaskgraph/issues/1313, first cut as
+  0.2.35.
 
 The status-word half of that same plan-store adoption — the canonical `in-progress`
 reading back as its own category rather than as `unknown`
@@ -709,3 +713,51 @@ def test_an_exported_absolute_root_still_beats_the_document_a_dispatch_reads(
     assert listed.returncode == 0, listed.stdout + listed.stderr
     found = [item["item"]["location"]["path"] for item in json.loads(listed.stdout)["items"]]
     assert found == [str(launching / "tasks" / PROJECT / f"{TASK}.md")], found
+
+
+#: A task record whose front matter never closes its quoted title: the shape a planner's
+#: interrupted write, or a hand edit, leaves behind.
+MALFORMED_TASK = "broken"
+MALFORMED_FRONT_MATTER = '---\ntitle: "broken\nstatus: [\n---\n\nA task nothing can parse.\n'
+#: The exit the store reserves for a query some source could not answer, as its own
+#: `--help` states it; `--allow-partial` is what turns that into an answer without them.
+SOURCE_REFUSED = 4
+
+
+def test_a_listing_that_meets_a_malformed_record_names_it_instead_of_omitting_it(
+    tmp_path: Path,
+) -> None:
+    """One unparseable task fails the whole listing, with the path and the diagnostic.
+
+    The release before the fix listed the parseable records and said nothing, exit 0,
+    so a plan carrying a broken task read as a smaller plan — to a manager, and to the
+    engine, which reads every plan through this CLI. Here the listing refuses with the
+    record's own path, the parser's own words, and the store's partial-answer exit, and
+    the JSON form classifies the refusal as `malformed` rather than folding it into an
+    empty page.
+    """
+    checkout = tmp_path / "checkout"
+    records = _rooted(checkout)
+    broken = records / "tasks" / PROJECT / f"{MALFORMED_TASK}.md"
+    broken.write_text(MALFORMED_FRONT_MATTER, encoding="utf-8")
+    environment = _store_environment(tmp_path)
+
+    listed = _run(ONETASKGRAPH_BIN, "task", "list", env=environment, cwd=checkout)
+    assert listed.returncode == SOURCE_REFUSED, listed.stdout + listed.stderr
+    assert str(broken) in listed.stderr, (
+        f"a refused listing has to name the record it could not parse: {listed.stderr}"
+    )
+    assert "line 1" in listed.stderr, (
+        f"a refused listing has to carry the parser's own diagnostic: {listed.stderr}"
+    )
+    assert TASK not in listed.stdout, (
+        f"a listing that refused must not also print the records it could parse: {listed.stdout}"
+    )
+
+    as_json = _run(ONETASKGRAPH_BIN, "task", "list", "--json", env=environment, cwd=checkout)
+    assert as_json.returncode == SOURCE_REFUSED, as_json.stdout + as_json.stderr
+    answer = json.loads(as_json.stdout)
+    assert answer["items"] == [], answer
+    (error,) = answer["errors"]
+    assert error["error"]["kind"] == "malformed", error
+    assert str(broken) in error["error"]["message"], error

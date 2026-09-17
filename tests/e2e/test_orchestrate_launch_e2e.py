@@ -3297,6 +3297,16 @@ CANCEL_GRACE_SECONDS = 5
 #: expiring *is* the behaviour under test.
 STOPPING_GRACE_SECONDS = round(e2e_timeout(CANCEL_GRACE_SECONDS))
 
+#: The grace the *requeue* journey runs under. There the deadline is only the premise
+#: too: the requeue has to reach the driver while the cancelled dispatch is still in
+#: flight, and that dispatch is in flight only until the grace expires. Each reply the
+#: journey sends first runs its judged bar, cold in the fresh worktree a publication gate
+#: builds, and under that gate's load the two replies took nine seconds against the
+#: unscaled five — the requeue then arrived after the kill and was applied, or after the
+#: driver had ended and was never read. So this one is a minute, well inside the held
+#: worker's lifetime below, and the journey never waits for it to expire.
+REQUEUE_GRACE_SECONDS = 60
+
 #: How long the worker below is held for. Comfortably past the grace above, because the
 #: stand-in answers on a timer and takes no redirection: it is the dispatch that does
 #: *not* stop when asked, which is exactly the arm the deadline exists for.
@@ -3348,6 +3358,18 @@ def cancellable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
         RunId("cancel-escalation-e2e"),
         CANCELLED_WORKER_HELD_SECONDS,
         CANCEL_GRACE_SECONDS,
+    )
+
+
+@pytest.fixture
+def requeueable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
+    """A run whose only node is held, under a grace long enough to send a second reply into."""
+    yield from _cancellable(
+        tmp_path,
+        oneharness_bin,
+        RunId("cancel-requeue-e2e"),
+        CANCELLED_WORKER_HELD_SECONDS,
+        REQUEUE_GRACE_SECONDS,
     )
 
 
@@ -3422,9 +3444,16 @@ def test_a_cancel_reaches_the_dispatch_and_kills_what_outlives_the_grace_period(
     _awaited(cancellable_run, KILLED, seconds=CANCEL_GRACE_SECONDS + 120)
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey spends
+# the one launch it always spent: `requeueable_run` replaces the function-scoped
+# `cancellable_run` it took before, under a longer cancel grace, so the tier gains no run.
+# Re-homing `tests/e2e` into an Nx project of its own is a restructuring of that whole
+# tree and is enforcement configuration this change may not move in order to pass.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same site, same
+# reason.
 @pytest.mark.xdist_group("cancellation")
 def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
-    cancellable_run: LiveRun,
+    requeueable_run: LiveRun,
 ) -> None:
     """Parked is not stopped, so the requeue that follows a cancel too fast is refused.
 
@@ -3435,8 +3464,8 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
     looking for a wedge that was not there. So the refusal is the behaviour, and it has
     to name what is being waited for rather than only saying no.
     """
-    _dispatched(cancellable_run)
-    environment, run = cancellable_run.environment, cancellable_run.run
+    _dispatched(requeueable_run)
+    environment, run = requeueable_run.environment, requeueable_run.run
     cancelled = _sent(
         environment, run, {"version": 2, "commands": [{"op": "cancel", "id": "held"}]}
     )
@@ -3454,6 +3483,10 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
     # Named, not merely refused: a supervisor told only "it is still running" has
     # nothing to look at while it waits.
     assert "running for" in reported, reported
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 @pytest.mark.xdist_group("cancellation")

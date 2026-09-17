@@ -377,6 +377,12 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
+**A `Status` option is added to either board through the plan-store verb, never by a
+hand-written mutation.** Read the plan with `just plans sources status-options <source>`,
+which writes nothing, then add only what it names with `just plans sources
+status-options <source> --apply`. A hand-written `updateProjectV2Field` mutation re-mints
+every option id, which clears every item's status.
+
 <!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
 **It is not authored there.** A plan is drafted in the `authoring` source — the
 gitignored `.plans/` root every planner is briefed to write into — reviewed there,

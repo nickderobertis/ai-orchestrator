@@ -3387,6 +3387,33 @@ def _statuses(claiming: _Claiming) -> dict[str, object]:
     }
 
 
+CLAIMED_STATUSES: dict[str, object] = {
+    FIRST_NODE: "in-progress",
+    DELIVERING_NODE: "queued",
+    TICKET: "queued",
+}
+
+
+def _claimed_or_still_projecting(
+    claiming: _Claiming, at_the_gate: dict[str, object]
+) -> dict[str, object]:
+    """The claim once the dispatched node's projection lands, or as it stands at the deadline.
+
+    The whole-plan claim is projected before the first dispatch, so the read at the gate
+    already holds it. The dispatched node's own `In Progress` is not: the engine records
+    `node-dispatched` and starts that projection in the same millisecond, beside the
+    dispatch rather than ahead of it, so under the load of a publication gate the worker
+    reaches the turn gate before the store has been told. Waited for while the first turn
+    is still held, so no worker has taken a turn by the time the claim is read.
+    """
+    deadline = time.monotonic() + e2e_timeout(120)
+    claimed = at_the_gate
+    while claimed != CLAIMED_STATUSES and time.monotonic() < deadline:
+        time.sleep(GATE_POLL_SECONDS)
+        claimed = _statuses(claiming)
+    return claimed
+
+
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
 # inputs as every journey beside it — the installed plan-store CLI and the real recipes
 # driven against the loopback board — so `nx affected` already selects this module together,
@@ -3421,33 +3448,30 @@ def test_a_launch_claims_its_plan_items_and_the_ticket_a_node_delivers(
     taken a turn, which is when the claim has to be there already. Holding the turn is what
     makes that moment long enough for a store read, rather than a race a read would lose.
 
-    At that moment the node being dispatched already reads `In Progress`: the engine marks a
-    node running, and projects it so, when it dispatches it, which is before its model
-    turn. So what the board shows then is the claim as a reader meets it — nothing the plan
-    names reads `Todo`, the node not yet started and the ticket it delivers read `Queued`,
-    and the dispatched node reads `In Progress`. No board write is held or altered to reach
-    that reading; only the model's turn is.
+    At that moment nothing the plan names reads `Todo` any more, because the whole-plan
+    claim is projected before the first dispatch: the node not yet started and the ticket it
+    delivers read `Queued`. The dispatched node reads `In Progress` once its own projection
+    lands, which the engine starts beside the dispatch rather than ahead of it, so that
+    reading is waited for while the turn is still held. No board write is held or altered
+    to reach either reading; only the model's turn is.
     """
     with _serving_both_boards() as remote:
         claiming = _prepare_claiming_launch(tmp_path, oneharness_bin, remote)
         launch = _launching(claiming)
         try:
             _at_the_turn_gate(launch, claiming.gate)
-            claimed = _statuses(claiming)
+            at_the_gate = _statuses(claiming)
+            claimed = _claimed_or_still_projecting(claiming, at_the_gate)
         finally:
             _release_the_turn_gate(claiming.gate)
             stdout, stderr = launch.communicate(timeout=e2e_timeout(600))
         settled = _statuses(claiming)
 
-    assert "todo" not in claimed.values(), (
+    assert "todo" not in at_the_gate.values(), (
         f"before any worker takes a turn, nothing the plan names may read `todo` on the board, "
-        f"and the store reports {claimed}\n{stdout}{stderr}"
+        f"and the store reports {at_the_gate}\n{stdout}{stderr}"
     )
-    assert claimed == {
-        FIRST_NODE: "in-progress",
-        DELIVERING_NODE: "queued",
-        TICKET: "queued",
-    }, (
+    assert claimed == CLAIMED_STATUSES, (
         f"before any worker takes a turn, the node not yet started and the ticket it delivers "
         f"have to read `queued` and the dispatched node `in-progress`, and the store reports "
         f"{claimed}\n{stdout}{stderr}"

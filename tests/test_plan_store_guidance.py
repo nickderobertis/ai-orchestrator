@@ -10,12 +10,16 @@ is exactly what a half-finished retreat would leave behind.
 The one claim here that reads no prose is the artifact half of "in force by merging":
 whether the installed plan-store CLI ships any of the crate the two landings that
 document classifies that way actually touch, measured on the binary this checkout
-installed.
+installed. The operator rule for adding a board `Status` option is read both ways: the
+prose has to state the verb and its `--apply` flag once, and the installed CLI has to
+carry them, because a rule naming a verb the binary lacks sends an operator back to the
+hand-written mutation the rule exists to forbid.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 
 import pytest
 from plan_sources import read_default_sources, read_plan_sources
@@ -182,4 +186,85 @@ def test_the_installed_plan_store_cli_ships_none_of_the_live_crate() -> None:
         f"allowance re-check landings touch. {MANAGER} classifies all three as in force "
         "by merging with no pin to move, and that is now wrong: re-read the paragraph "
         "naming pull/433, pull/538 and pull/821 against what this release actually ships"
+    )
+
+
+#: The plan-store verb that adds a board's missing `Status` options, and the flag that
+#: turns its read-only plan into the write. Named as literals because they are the
+#: contract the prose and the binary are both held to: the verb preserves every existing
+#: option id where a hand-written `updateProjectV2Field` mutation re-mints them all,
+#: which is what once cleared every item's status on the `followups` board.
+#: onetaskgraph https://github.com/nickderobertis/onetaskgraph/issues/1312.
+STATUS_OPTIONS_VERB = ("sources", "status-options")
+APPLY_FLAG = "--apply"
+#: How the manager's document is told to run it: through this repository's plan-store
+#: recipe, which is what establishes the board credential, and with `--apply` only after
+#: the plan a bare invocation prints has been read.
+STATUS_OPTIONS_RECIPE = "just plans " + " ".join(STATUS_OPTIONS_VERB) + " <source>"
+
+
+def _paragraphs(name: str) -> list[str]:
+    return [_flat(paragraph) for paragraph in _document(name).split("\n\n")]
+
+
+def test_the_manager_states_once_that_a_status_option_is_added_through_the_verb() -> None:
+    """One paragraph names the verb, its `--apply` flag, and the mutation it replaces.
+
+    Stated once because a second statement is where the two drift apart: the operator
+    reads whichever one they found, and a copy that still says to mutate by hand is the
+    one that wipes a board.
+    """
+    naming = [
+        paragraph
+        for paragraph in _paragraphs(MANAGER)
+        if " ".join(STATUS_OPTIONS_VERB) in paragraph
+    ]
+    assert len(naming) == 1, (
+        f"{MANAGER} has to state how a board Status option is added exactly once, in the "
+        f"paragraph describing the boards; found {len(naming)} paragraphs naming "
+        f"`{' '.join(STATUS_OPTIONS_VERB)}`"
+    )
+    (rule,) = naming
+    assert f"`{STATUS_OPTIONS_RECIPE}`" in rule, (
+        f"{MANAGER} has to send an operator through the plan-store recipe, as "
+        f"`{STATUS_OPTIONS_RECIPE}`, so the board credential is established the way every "
+        "other board read establishes it"
+    )
+    assert f"`{STATUS_OPTIONS_RECIPE} {APPLY_FLAG}`" in rule, (
+        f"{MANAGER} has to name the `{APPLY_FLAG}` form as the one that writes, after the "
+        "bare invocation's plan has been read"
+    )
+    assert "updateProjectV2Field" in rule and "never" in rule, (
+        f"{MANAGER} has to say the hand-written `updateProjectV2Field` mutation is never "
+        "the way, because that mutation is what re-mints every option id"
+    )
+
+
+def test_the_installed_plan_store_cli_carries_the_status_options_verb_and_its_apply_flag() -> None:
+    """The verb the rule names, and its `--apply` flag, run on this checkout's own binary.
+
+    Read off `--help` rather than off a live board: the rule says nothing a board has to
+    be touched to check, and a `--help` that refuses is exactly what the release before
+    the fix answers (`onetaskgraph sources` had no such subcommand, exit 2).
+    """
+    assert ONETASKGRAPH_BIN.is_file(), (
+        f"this checkout's own onetaskgraph is missing at {ONETASKGRAPH_BIN} — run 'just bootstrap'"
+    )
+    shown = subprocess.run(
+        [str(ONETASKGRAPH_BIN), *STATUS_OPTIONS_VERB, "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert shown.returncode == 0, (
+        f"the installed plan-store CLI has no `{' '.join(STATUS_OPTIONS_VERB)}` verb "
+        f"(exit {shown.returncode}): {shown.stderr}\n{MANAGER} tells an operator to add a "
+        "board Status option with it, so the pin has to be on a release that carries it"
+    )
+    options = [
+        line.strip().split()[0] for line in shown.stdout.splitlines() if line.startswith("      --")
+    ]
+    assert APPLY_FLAG in options, (
+        f"`{' '.join(STATUS_OPTIONS_VERB)} --help` lists {options} and no `{APPLY_FLAG}`, "
+        f"the flag {MANAGER} names as the one that writes"
     )
