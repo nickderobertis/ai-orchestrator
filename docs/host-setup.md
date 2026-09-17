@@ -1,5 +1,8 @@
 # Host setup
 
+The plan-store SDK and its matching `onetaskgraph` CLI are installed from `uv.lock`;
+`config/onetaskgraph.version` is reconciled with those locked distributions.
+
 The one-time, **manual** steps that bring a new machine to a working state — and,
 just as importantly, what is **already automated**, so nothing here is redone by
 hand. Everything below was reconstructed by reading the scripts on a host that had

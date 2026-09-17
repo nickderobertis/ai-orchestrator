@@ -203,7 +203,7 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   files). `config/oneharness.version` governs the CLI the wrapper scripts and `just
   smoke` spawn; a dispatch's turn goes through the core library the engine links.
   `oneharness --help`; https://github.com/nickderobertis/oneharness.
-- **`onetaskgraph`** — the plan store: the `authoring` source a plan is drafted in and
+- **`onetaskgraph`** — the plan store, installed with its SDK from the project lock: the `authoring` source a plan is drafted in and
   the `plans` board it is approved and launched from, as `onetaskgraph.yaml`
   configures them. `config/onetaskgraph.version` governs the standalone CLI.
   `onetaskgraph --help`; https://github.com/nickderobertis/onetaskgraph.

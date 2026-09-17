@@ -13,8 +13,8 @@ older than a response waits for the clock to pass a second between them.
 
 from __future__ import annotations
 
+import dataclasses
 import time
-from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +35,39 @@ THIRD_RUN = "unrelated-run"
 CAUSE = "cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 PERSON = "a-reviewer"
+
+
+def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
+    with pytest.raises(OSError, match="reports no time"):
+        comments.moment(None, "comment")
+    with pytest.raises(OSError, match="names no offset"):
+        comments.moment(datetime(2026, 1, 1), "comment")
+
+    comment = comments.Comment(
+        comments.CommentId("c-1"),
+        PERSON,
+        "body",
+        "https://example.invalid/comment",
+        datetime.now(UTC),
+    )
+    issue = comments.Issue(
+        comments.QualifiedTaskId(f"{BOARD}:x"),
+        "title",
+        tickets.RunId(RUN),
+        "/tmp/issue.md",
+        "https://example.invalid/issue",
+        (comment,),
+    )
+    assert comments.comment_url(issue, comment) == "https://example.invalid/comment"
+    assert comments.comment_url(issue, dataclasses.replace(comment, url=None)).startswith(
+        "https://example.invalid/issue#comment-"
+    )
+    assert comments.comment_url(
+        dataclasses.replace(issue, url=None), dataclasses.replace(comment, url=None)
+    ).startswith("file:///tmp/issue.md#comment-")
+    without_urls = dataclasses.replace(issue, url=None, location=None)
+    with pytest.raises(OSError, match="no URL and no location"):
+        comments.comment_url(without_urls, dataclasses.replace(comment, url=None))
 
 
 @pytest.fixture
@@ -72,30 +105,29 @@ def _filed(root: Path, run: str, cause: str, body: str = "What the ticket says."
         f"{body}\n",
         encoding="utf-8",
     )
-    copied = plan_store.store_json(
-        ["task", "copy", tickets.qualified_id(run, cause), "--to", BOARD]
+    copied = plan_store.sdk(
+        plan_store.client().task_copy([tickets.qualified_id(run, cause)], to=BOARD)
     )
-    destination = copied["items"][0]["destination"]
-    assert isinstance(destination, str), copied
-    return destination
+    destination = copied.items[0].root.destination
+    assert destination is not None, copied
+    return destination.model_dump()
 
 
 def _commented(issue: str, body: str, author: str | None = PERSON) -> str:
     """Add a comment through the store's own verb; its id."""
     path = Path(plan_store.source_root(BOARD)).parent / f"comment-{time.monotonic_ns()}.md"
     path.write_text(body, encoding="utf-8")
-    arguments = ["task", "comment", "add", issue, "--body-file", str(path)]
-    added = plan_store.store_json([*arguments, *(["--author", author] if author else [])])
+    added = plan_store.sdk(
+        plan_store.client().task_comment_add(issue, body_file=str(path), author=author)
+    )
     path.unlink()
-    identifier = added["id"]
-    assert isinstance(identifier, str), added
-    return identifier
+    return added.id.model_dump()
 
 
 def _edited(issue: str, identifier: str, body: str) -> None:
     path = Path(plan_store.source_root(BOARD)).parent / f"edit-{time.monotonic_ns()}.md"
     path.write_text(body, encoding="utf-8")
-    plan_store.store_json(["task", "comment", "edit", issue, identifier, "--body-file", str(path)])
+    plan_store.sdk(plan_store.client().task_comment_edit(issue, identifier, body_file=str(path)))
     path.unlink()
 
 
@@ -154,7 +186,10 @@ def test_only_a_persons_comments_after_the_runs_last_marked_comment_are_selected
 
 def _replied(issue: str, answers: str, cause: str = CAUSE, run: str = RUN) -> str:
     """``run``'s reply to one comment, posted through the store's own verb as the agent posts it."""
-    listed = plan_store.store_json(["task", "comment", "list", issue])["comments"]
+    listed = [
+        comment.model_dump(mode="json")
+        for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
+    ]
     assert isinstance(listed, list), listed
     (answered,) = [one for one in listed if one["id"] == answers]
     reply = tickets.render_reply(
@@ -311,7 +346,8 @@ def test_an_earliest_feedback_file_recording_no_boundary_falls_back_to_the_compu
     evidence = _commented(
         others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
     )
-    (listed,) = plan_store.store_json(["task", "comment", "list", others])["comments"]
+    (comment,) = plan_store.sdk(plan_store.client().task_comment_list(others)).comments
+    listed = comment.model_dump(mode="json")
     assert listed["id"] == evidence
     _next_second()
     missed = _commented(own, "Gathered by the old file, and never replied to.\n")
@@ -363,7 +399,8 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
     written = _written(drafts_root, capsys)
     flat = " ".join(written.split())
 
-    (listed,) = plan_store.store_json(["task", "comment", "list", own])["comments"]
+    (comment,) = plan_store.sdk(plan_store.client().task_comment_list(own)).comments
+    listed = comment.model_dump(mode="json")
     assert f"- Comment id: {identifier}\n- URL: file://" in written
     assert f"- Author: {PERSON}\n- Last changed: {listed['updated_at']}\n" in written
     for said in (
@@ -470,109 +507,6 @@ def test_two_feedback_files_in_one_second_are_both_kept(drafts_root: Path, board
     second = comments.feedback(drafts_root, BOARD, RUN, now)
 
     assert (first.name, second.name) == ("20260101T000000Z.md", "20260101T000000Z-2.md")
-
-
-def _answering(
-    listing: dict[str, object], listed: object
-) -> Callable[[Sequence[str]], dict[str, object]]:
-    def answer(arguments: Sequence[str]) -> dict[str, object]:
-        return listing if arguments[:2] == ["task", "list"] else {"comments": listed}
-
-    return answer
-
-
-def _item(**extra: object) -> dict[str, object]:
-    return {"title": "t", "metadata": {tickets.KEY: {"created_by_run": RUN}}, **extra}
-
-
-COMMENT = {"id": "c-1", "body": "b", "created_at": "2026-01-01T00:00:00Z"}
-
-
-@pytest.mark.parametrize(
-    ("listing", "listed", "expected"),
-    [
-        ({"items": ["not an object"]}, [], "listed an item without an id and a payload"),
-        ({"items": [{"id": f"{BOARD}:x"}]}, [], "listed an item without an id and a payload"),
-        ({"items": [{"id": f"{BOARD}:x", "item": _item()}]}, "no", "as something not a list"),
-        ({"items": [{"id": f"{BOARD}:x", "item": _item()}]}, [1], "that is not an object"),
-        ({"items": [{"id": "elsewhere:x", "item": _item()}]}, [], "which is not one of its ids"),
-        ({"items": [{"id": f"{BOARD}:", "item": _item()}]}, [], "which is not one of its ids"),
-        ({"items": [{"id": f"{BOARD}:x", "item": _item(title=None)}]}, [], "without a title"),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item()}]},
-            [{**COMMENT, "body": None}],
-            "comment 'c-1' on commentboard:x has no text",
-        ),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item()}]},
-            [{**COMMENT, "author": 7}],
-            "the author of comment 'c-1' on commentboard:x is not a string",
-        ),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item(location={"path": "/b.md"})}]},
-            [{**COMMENT, "created_at": None}],
-            "reports no time",
-        ),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item(location={"path": "/b.md"})}]},
-            [{**COMMENT, "updated_at": "yesterday"}],
-            "which is not an RFC 3339 time",
-        ),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item(location={"path": "/b.md"})}]},
-            [{**COMMENT, "created_at": "2026-01-01T00:00:00"}],
-            "which names no offset",
-        ),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item(location={"path": "/b.md"})}]},
-            [{**COMMENT, "id": None}],
-            "a comment on commentboard:x without an id",
-        ),
-        (
-            {"items": [{"id": f"{BOARD}:x", "item": _item(location="nowhere")}]},
-            [COMMENT],
-            "reports no URL and no location",
-        ),
-    ],
-)
-def test_a_board_answer_this_cannot_account_for_is_unrunnable(
-    listing: dict[str, object],
-    listed: object,
-    expected: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Another program's records, narrowed at the boundary rather than trusted past it."""
-    monkeypatch.setattr(plan_store, "store_json", _answering(listing, listed))
-
-    status = comments.main(["feedback", "--root", str(tmp_path), "--board", BOARD, RUN])
-
-    assert status == comments.UNRUNNABLE
-    refusal = capsys.readouterr().err
-    assert expected in refusal
-    assert "Check that --board names a source" in refusal and refusal.rstrip().endswith("retry")
-
-
-def test_a_url_the_board_reports_is_the_one_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A hosted board names each comment's URL, or at least its issue's."""
-    issue = "https://github.com/nickderobertis/some-service/issues/7"
-    listing = {
-        "items": [
-            {"id": f"{BOARD}:hosted", "item": _item(url=issue)},
-            {"id": f"{BOARD}:unowned", "item": {"title": "u", "metadata": {}}},
-        ]
-    }
-    own = {**COMMENT, "id": "c-2", "url": f"{issue}#issuecomment-99"}
-    monkeypatch.setattr(plan_store, "store_json", _answering(listing, [COMMENT, own]))
-
-    written = comments.feedback(tmp_path, BOARD, RUN, datetime(2026, 1, 2, tzinfo=UTC))
-
-    text = written.read_text(encoding="utf-8")
-    assert f"- URL: {issue}#comment-c-1\n" in text
-    assert f"- URL: {issue}#issuecomment-99\n" in text
 
 
 def test_an_invocation_that_cannot_run_is_its_own_status(

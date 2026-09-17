@@ -2,7 +2,9 @@
 
 Eight repositories publish the tools this harness configures, and each publishes
 several artifacts — a crate, a wheel, an npm launcher, an SDK — of which this host
-installs exactly one: the wheel `pyproject.toml` pins. A node waiting on a release
+installs exactly one: the wheel `pyproject.toml` pins, or, for `onejudge` and
+`onetaskgraph`, the CLI wheel the pinned SDK carries from `uv.lock` at its own version,
+which is the one `config/onetaskgraph.version` names. A node waiting on a release
 has to say *which* artifact it waits for, because "the crate is out" and "the wheel is
 out" are different waits, and `config/onevcs.releases.yml` says it once per producer as
 that producer's ``default_target``. This module is the one table the pieces of that

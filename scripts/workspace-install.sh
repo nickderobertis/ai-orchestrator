@@ -76,10 +76,8 @@ else
     exit 1
 fi
 
-# The lock itself — preparing `.logs`, securing it, holding the descriptors — is
-# `scripts/install-lock.sh`'s, shared with `scripts/onetaskgraph-install.sh` so that
-# neither installer can be hardened without the other. What stays here is *which*
-# checkout's lock to take.
+# The lock itself — preparing `.logs`, securing it, holding the descriptors — belongs
+# to `scripts/install-lock.sh`. What stays here is *which* checkout's lock to take.
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being readable between the resolution at the head of this file and here; no journey can produce that without racing the filesystem the test itself runs on.
 lock_helper="$script_dir/install-lock.sh"
 if [ ! -f "$lock_helper" ] || [ ! -r "$lock_helper" ]; then

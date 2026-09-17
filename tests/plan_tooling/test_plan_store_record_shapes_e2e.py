@@ -285,6 +285,22 @@ def _requires_just() -> None:
         pytest.skip("just is not installed")
 
 
+def _without_the_review_entry(written: bytes) -> bytes:
+    """``written`` with the one line a review record occupies in a rendered record taken out.
+
+    A metadata write lands as exactly one `metadata` line, so one line is what may differ
+    between the file before and after; exactly one has to be there, or the record was
+    either not written or written as something other than one entry.
+    """
+    kept = [
+        line
+        for line in written.splitlines(keepends=True)
+        if not line.startswith(f'  "{plan_review.RECORD_KEY}": '.encode())
+    ]
+    assert len(kept) == written.count(b"\n") - 1, written.decode("utf-8")
+    return b"".join(kept)
+
+
 @pytest.mark.xdist_group("plan-store-record-shapes")
 def test_a_review_is_recorded_on_a_record_whose_metadata_holds_a_block_sequence(
     store: Store, tmp_path: Path
@@ -305,6 +321,8 @@ def test_a_review_is_recorded_on_a_record_whose_metadata_holds_a_block_sequence(
     record = plan_store.task_document(STORED, f"{native}/landing")
     body = record.read_text(encoding="utf-8")
     assert "\n  onepipeline.steps:\n  - id: build\n" in body, body
+    plan_record = plan_store.source_root(STORED) / "projects" / f"{native}.md"
+    untouched = {path: path.read_bytes() for path in (record, plan_record)}
 
     before = store.metadata("task", f"{STORED}:{native}/landing")
     assert [step["id"] for step in before["onepipeline.steps"]] == ["build", "prove"]
@@ -313,6 +331,11 @@ def test_a_review_is_recorded_on_a_record_whose_metadata_holds_a_block_sequence(
     environment = _environment(tmp_path, PASSES)
     reviewed = _just("review-plan", project, environment=environment)
     assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
+
+    # Byte for byte, each record the review wrote is the file the store rendered plus
+    # its one review entry: the task's and the plan's, the two records the verbs write.
+    for path, held in untouched.items():
+        assert _without_the_review_entry(path.read_bytes()) == held, path
 
     after = store.metadata("task", f"{STORED}:{native}/landing")
     # The sequence entry survives whole — both items, in order, with the block-scalar

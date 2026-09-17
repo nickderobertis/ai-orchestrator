@@ -35,15 +35,15 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: import — named one by one rather than as a directory, so a journey added beside them
 #: does not silently start invalidating this tier.
 ASK_SEAM_WORKSPACE = "askSeamWorkspace"
-#: The key `plan-store-install:test` is memoized on: what the host-tool journeys over
-#: this checkout's own plan-store provisioning drive and read. Named file by file rather
-#: than as `scripts/**/*` or `config/**/*`: these journeys race real processes for a real
-#: lock and install a real release archive over and over, so every glob wider than the
-#: two scripts and the one pin they actually read makes an unrelated edit pay for that.
-PLAN_STORE_INSTALL_WORKSPACE = "planStoreInstallWorkspace"
+#: The key `session-setup:test` is memoized on: what the journey over this checkout's
+#: own provisioning drives and reads. Named file by file rather than as `scripts/**/*`
+#: or `config/**/*`: the journey runs the real `scripts/session-setup.sh`, which
+#: re-provisions the project environment from the lock, so every glob wider than the
+#: script, the lock and the one pin it reads makes an unrelated edit pay for that.
+SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 
 #: The key the `unwatched` project's one tier is memoized on, and it names files rather
-#: than trees for the reason `planStoreInstallWorkspace` does: these journeys arm real
+#: than trees because these journeys arm real
 #: watches, kill real processes, hold this checkout's project-environment lock and spend
 #: three real launches, so every path in the key that they never read makes an unrelated
 #: edit pay for all of that. What they read was measured rather than guessed — the whole
@@ -173,21 +173,6 @@ DAG_UI_SCOPED = "test"
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 DAG_UI_ROOT = "tests/dag_ui"
 
-#: The project whose test target owns the host-tool journeys over this checkout's own
-#: plan-store provisioning — the real `scripts/onetaskgraph-install.sh`, the real
-#: `install_onetaskgraph` it sources, and the lock they serialize on. A project of its
-#: own for the reason `plan-tooling` and `ask-seam` are: a concurrency journey races four
-#: real processes and each of them installs a real release archive, which is a cost
-#: `nx affected` can only keep off an unrelated edit where it is a separate project. It
-#: declares no Python distribution either, for the same reason.
-PLAN_STORE_INSTALL_PROJECT = "plan-store-install"
-#: That project's one test target. One rather than two, as `ask-seam` has one: nothing
-#: here reads this repository's prose.
-PLAN_STORE_INSTALL_SCOPED = "test"
-#: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
-PLAN_STORE_INSTALL_ROOT = "tests/plan_store_install"
-
 #: The project whose test target owns the journeys over `onepipeline unwatched` and the
 #: `Stop` hook that reads it — the real hook script, the real recipe, the installed engine
 #: they ask, and the launch shapes whose runs it has to name. A project of its own for the
@@ -240,6 +225,17 @@ RUN_END_HOOKS_PROJECT = "run-end-hooks"
 RUN_END_HOOKS_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 RUN_END_HOOKS_ROOT = "tests/run_end_hooks"
+
+#: The project whose test target owns the journey over this checkout's own session
+#: setup: the real `scripts/session-setup.sh`, verifying the plan-store CLI the lock
+#: installs and creating the plan root. A project of its own for the reason `unwatched`
+#: is: a real re-provisioning of the project environment is a cost `nx affected` can
+#: only keep off an unrelated edit where it is a separate project.
+SESSION_SETUP_PROJECT = "session-setup"
+#: That project's one test target: nothing here reads this repository's prose.
+SESSION_SETUP_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+SESSION_SETUP_ROOT = "tests/session_setup"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

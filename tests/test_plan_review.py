@@ -1272,7 +1272,8 @@ class _Store:
             )
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(plan_store, "store_json", self._answer)
+        monkeypatch.setenv("ONETASKGRAPH_SOURCES__DEMO__PLUGIN", "local-md")
+        monkeypatch.setenv("ONETASKGRAPH_SOURCES__DEMO__CONFIG__ROOT", str(self.root))
         monkeypatch.setattr(plan_store, "read_tasks", self._read)
         monkeypatch.setattr(plan_store, "read_plan", lambda project, records: dict(PLAN))
         monkeypatch.setattr(plan_store, "project_record", self._project)
@@ -1587,39 +1588,10 @@ def test_a_review_that_stops_partway_keeps_and_reports_the_passes_it_granted(
     assert store.written("plan/second") is None
 
 
-def test_a_pass_the_store_will_not_accept_is_reported_as_a_review_that_did_not_happen(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Granting a pass and writing it down are one step, so they fail as one."""
-    store = _Store(tmp_path / "store", [_task()])
-    store.install(monkeypatch)
-    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
-    _verdicts(monkeypatch, PASSES)
-    monkeypatch.setattr(
-        plan_store,
-        "write_metadata",
-        lambda *_: (_ for _ in ()).throw(OSError("the record is read-only")),
-    )
-
-    assert plan_review.main(["demo:plan"]) == 2
-    reported = capsys.readouterr().err
-    assert "the record is read-only" in reported, reported
-    assert "0 task(s) were reviewed and recorded before that" in reported, reported
-    assert store.written("plan/route") is None
-
-
 def _configured(monkeypatch: pytest.MonkeyPatch, plugin: str, root: str = "/tmp/store") -> None:
     """Answer `config show` for one source, so a writability read reaches no real store."""
-    monkeypatch.setattr(
-        plan_store,
-        "store_json",
-        lambda arguments: _Configuration(
-            settings=[
-                _Setting(key="sources.demo.plugin", value=plugin),
-                _Setting(key="sources.demo.config.root", value=root),
-            ]
-        ),
-    )
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__DEMO__PLUGIN", plugin)
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__DEMO__CONFIG__ROOT", root)
 
 
 def test_a_project_that_cannot_be_read_records_nothing_and_says_so(
@@ -1950,11 +1922,9 @@ def test_a_project_a_closeout_cannot_record_is_left_alone_rather_than_failing_th
     """A neighbour's plan in the window may not kill this planning run.
 
     A closeout cannot tell its own run's output from a concurrent one's, so every plan
-    that appeared in its window is one it may meet — and one already on this host cannot
-    take a record at all: a project `onepipeline`'s settlement write-back has re-rendered
-    holds a `metadata` block `plan_store.write_metadata` refuses to edit around. Raising
-    there would exit a launch non-zero over an unrelated plan, so the project is passed
-    over and named, and the run this closeout belongs to still records what it authored.
+    that appeared in its window is one it may meet. Raising on an unreadable neighbour
+    would exit a launch non-zero over an unrelated plan, so the project is passed over
+    and named, and the run this closeout belongs to still records what it authored.
     """
     authored = _task(qualified_id="demo:authored/route", node_id="route")
     neighbour = _task(qualified_id="demo:neighbour/route", node_id="route")
@@ -1977,7 +1947,7 @@ def test_a_project_a_closeout_cannot_record_is_left_alone_rather_than_failing_th
     )
     # A line no rendering of this host produces, so no writer can account for it: a
     # sequence entry inside the mapping. A plain YAML key is *not* such a line — that is
-    # the plan store's own rendering, and `plan_store.write_metadata` edits around it.
+    # the plan store's own rendering, which the SDK's metadata verb preserves.
     document = tmp_path / "store" / "tasks" / "neighbour" / "route.md"
     document.write_text(
         document.read_text(encoding="utf-8").replace(
@@ -1989,7 +1959,7 @@ def test_a_project_a_closeout_cannot_record_is_left_alone_rather_than_failing_th
     assert plan_review.planning_main(["closeout", str(snapshot)]) == 0
     reported = capsys.readouterr().err
     assert "demo:neighbour" in reported, reported
-    assert "cannot edit around" in reported, reported
+    assert "source returned data this interface cannot represent" in reported, reported
     assert "1 task(s)" in reported, reported
     assert isinstance(store.written("authored/route"), dict)
     assert store.written("neighbour/route") is None

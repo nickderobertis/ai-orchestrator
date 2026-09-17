@@ -896,7 +896,7 @@ def read_ticket(path: Path) -> Ticket:
     run, root_cause = located_path(resolved)
     ticket = qualified_id(run, root_cause)
     try:
-        item = plan_store.one_item(plan_store.store_json(["task", "show", ticket]), "task")
+        item = plan_store.task_record(ticket)
     except OSError as exc:
         raise Refused(
             [
@@ -967,7 +967,7 @@ def board_owner(board: str) -> str | None:
 
 def ticket_repository(ticket: str) -> str:
     """The normalized origin the stored ticket's record names, read through the store."""
-    item = plan_store.one_item(plan_store.store_json(["task", "show", ticket]), "task")
+    item = plan_store.task_record(ticket)
     metadata = item.get("metadata")
     held = metadata.get(KEY) if isinstance(metadata, Mapping) else None
     repository = held.get("repository") if isinstance(held, Mapping) else None
@@ -994,11 +994,16 @@ def board_category(ticket: str, board: str) -> str | None:
     correspondence between a ticket and its item: the dry-run reports whether the copy would
     create an item or reach an existing one, and names that one.
     """
-    planned = plan_store.store_json(["task", "copy", ticket, "--to", board, "--dry-run"])
-    entries = planned.get("items")
-    entry = entries[0] if isinstance(entries, list) and len(entries) == 1 else None
-    action = entry.get("action") if isinstance(entry, Mapping) else None
-    destination = entry.get("destination") if isinstance(entry, Mapping) else None
+    planned = plan_store.sdk(plan_store.client().task_copy([ticket], to=board, dry_run=True))
+    entries = planned.items
+    entry = entries[0] if len(entries) == 1 else None
+    outcome = entry.root if entry else None
+    action = outcome.action if outcome else None
+    destination = (
+        outcome.destination.model_dump()
+        if outcome and getattr(outcome, "destination", None)
+        else None
+    )
     if action == CREATED:
         return None
     if action not in EXISTING or not isinstance(destination, str):
@@ -1006,7 +1011,7 @@ def board_category(ticket: str, board: str) -> str | None:
             f"the dry-run copy of {ticket} onto {board} answered {entries!r}, naming neither "
             "a new item nor an existing one"
         )
-    item = plan_store.one_item(plan_store.store_json(["task", "show", destination]), "task")
+    item = plan_store.task_record(destination)
     return str(_category(item.get("status")))
 
 

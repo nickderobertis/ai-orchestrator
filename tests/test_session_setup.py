@@ -1902,6 +1902,8 @@ def test_full_setup_reports_every_published_tool_it_verified(tmp_path: Path) -> 
     for tool in PUBLISHED_TOOLS:
         assert f"ready ({tool.binary}: {tool.adopted_version} at " in result.stderr
     assert "releases are required" not in result.stderr
+    assert (tmp_path / "repo" / ".plans" / "tasks").is_dir()
+    assert (tmp_path / "repo" / ".plans" / "projects").is_dir()
 
 
 @pytest.mark.parametrize(

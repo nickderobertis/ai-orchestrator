@@ -56,7 +56,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -150,82 +150,55 @@ class Selection:
     relevant: list[Issue]
 
 
-def moment(value: object, what: str) -> datetime:
-    """An RFC 3339 time the board reports, or :class:`OSError` naming ``what`` carried it."""
-    if not isinstance(value, str):
+def moment(value: datetime | str | None, what: str) -> datetime:
+    """A time the board reports, or :class:`OSError` when it reports none."""
+    if value is None:
         raise OSError(f"{what} reports no time")
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        raise OSError(f"{what} reports {value!r}, which is not an RFC 3339 time") from None
-    if parsed.tzinfo is None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            raise OSError(f"{what} reports {value!r}, which is not an RFC 3339 time") from None
+    if value.tzinfo is None:
         raise OSError(f"{what} reports {value!r}, which names no offset")
-    return parsed.astimezone(UTC)
-
-
-def _optional_text(value: object, what: str) -> str | None:
-    """A string the board may leave out, or :class:`OSError` when it is something else."""
-    if value is None or value == "":
-        return None
-    if not isinstance(value, str):
-        raise OSError(f"{what} is not a string")
-    return value
-
-
-def read_comment(held: object, issue: QualifiedTaskId) -> Comment:
-    """One comment the board listed on ``issue``, or :class:`OSError` naming what is wrong.
-
-    Its time is its last edit, or its creation where the board reports no edit.
-    """
-    if not isinstance(held, Mapping):
-        raise OSError(f"the board listed a comment on {issue} that is not an object")
-    identifier, body = held.get("id"), held.get("body")
-    if not isinstance(identifier, str) or not identifier:
-        raise OSError(f"the board listed a comment on {issue} without an id")
-    what = f"comment {identifier!r} on {issue}"
-    if not isinstance(body, str):
-        raise OSError(f"{what} has no text")
-    edited = held.get("updated_at")
-    return Comment(
-        id=CommentId(identifier),
-        author=_optional_text(held.get("author"), f"the author of {what}"),
-        body=body,
-        url=_optional_text(held.get("url"), f"the URL of {what}"),
-        last_changed=moment(held.get("created_at") if edited is None else edited, what),
-    )
+    return value.astimezone(UTC)
 
 
 def board_issues(board: str) -> list[Issue]:
     """Every item on ``board`` a follow-up run owns, each with its comments, oldest first."""
     found = []
-    for record in plan_store.paged(["task", "list", "--source", board], "task"):
-        match record:
-            case {"id": str(listed_id), "item": Mapping() as item}:
-                pass
-            case _:
-                raise OSError(f"the board {board!r} listed an item without an id and a payload")
+    answer = plan_store.complete(plan_store.sdk(plan_store.client().task_list(source=[board])))
+    for held in answer.items:
+        listed_id = held.id.model_dump()
         if not listed_id.startswith(f"{board}:") or listed_id == f"{board}:":
             raise OSError(f"the board {board!r} listed {listed_id!r}, which is not one of its ids")
         qualified = QualifiedTaskId(listed_id)
+        item = held.item.model_dump(mode="python")
         owner = tickets.issue_owner(item)
         if owner is None:
             continue
-        title = item.get("title")
-        if not isinstance(title, str):
-            raise OSError(f"the board listed {qualified} without a title")
-        listed = plan_store.store_json(["task", "comment", "list", qualified]).get("comments")
-        if not isinstance(listed, list):
-            raise OSError(f"the board listed the comments of {qualified} as something not a list")
-        location = item.get("location")
-        path = location.get("path") if isinstance(location, Mapping) else None
+        listed = plan_store.sdk(plan_store.client().task_comment_list(str(qualified))).comments
+        location = held.item.location.model_dump(mode="python") if held.item.location else {}
         found.append(
             Issue(
                 id=qualified,
-                title=title,
+                title=held.item.title,
                 owner=owner,
-                location=_optional_text(path, f"the location of {qualified}"),
-                url=_optional_text(item.get("url"), f"the URL of {qualified}"),
-                comments=tuple(read_comment(one, qualified) for one in listed),
+                location=location.get("path"),
+                url=held.item.url,
+                comments=tuple(
+                    Comment(
+                        id=CommentId(comment.id.model_dump()),
+                        author=comment.author,
+                        body=comment.body,
+                        url=comment.url,
+                        last_changed=moment(
+                            comment.updated_at or comment.created_at,
+                            f"comment {comment.id.model_dump()!r} on {qualified}",
+                        ),
+                    )
+                    for comment in listed
+                ),
             )
         )
     return found

@@ -19,10 +19,8 @@
 #   5. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
 #      can run in dispatched worktrees.
 #   6. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
-#   7. The standalone onetaskgraph CLI is installed from the checksum-verified release
-#      archive at the version in `config/onetaskgraph.version` (its wheel is not the
-#      release path this host relies on), into this checkout's own `.venv/bin` rather
-#      than a directory every checkout on the host shares.
+#   7. The onetaskgraph SDK dependency installs its matching CLI from the lock at the
+#      version in `config/onetaskgraph.version`, into this checkout's own `.venv/bin`.
 #
 # Before any of that it runs `scripts/hold-run-lease.sh`, which holds this
 # dispatch's run-root occupancy lease against a sibling `onevcs session open`
@@ -43,7 +41,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly ONEJUDGE_VERSION_FILE="$REPO_ROOT/config/onejudge.version"
 readonly ONEHARNESS_VERSION_FILE="$REPO_ROOT/config/oneharness.version"
-readonly ONETASKGRAPH_VERSION_FILE="$REPO_ROOT/config/onetaskgraph.version"
 # The published tools this repository is a configuration layer over, as
 # `<CLI binary>|<PyPI distribution>|<config version file>`. Each publishes a
 # binary wheel whose console script reports `<binary> <version>`, so one table
@@ -57,23 +54,17 @@ readonly PUBLISHED_TOOL_SPECS=(
   "onepipeline|onepipeline-cli|onepipeline.version"
   "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
   "onemessagebus|onemessagebus-cli|onemessagebus.version"
+  "onetaskgraph|onetaskgraph-cli|onetaskgraph.version"
 )
 declare -A PUBLISHED_TOOL_VERSIONS=()
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
 readonly ADOPTED_ONEJUDGE_VERSION
 ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
 readonly ADOPTED_ONEHARNESS_VERSION
-ADOPTED_ONETASKGRAPH_VERSION="$(tr -d '[:space:]' <"$ONETASKGRAPH_VERSION_FILE")"
-readonly ADOPTED_ONETASKGRAPH_VERSION
 readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
-# This checkout's own environment, beside every other pinned tool, because
-# `verify_onetaskgraph` below demands the *reading* checkout's pin: a destination the
-# host shares makes that unsatisfiable whenever another checkout is live. A copy already
-# at the old shared path is left alone; it belongs to whichever checkout put it there.
-readonly ONETASKGRAPH_BIN="$PROJECT_VENV_BIN/onetaskgraph"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 # shellcheck source=scripts/claude-alt-config-dir.sh
 source "$SCRIPT_DIR/claude-alt-config-dir.sh"
@@ -99,13 +90,6 @@ if [[ ! $ADOPTED_ONEJUDGE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 if [[ ! $ADOPTED_ONEHARNESS_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   log "invalid adopted oneharness version in $ONEHARNESS_VERSION_FILE: '$ADOPTED_ONEHARNESS_VERSION'"
-  if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
-    return 1
-  fi
-  exit 1
-fi
-if [[ ! $ADOPTED_ONETASKGRAPH_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  log "invalid adopted onetaskgraph version in $ONETASKGRAPH_VERSION_FILE: '$ADOPTED_ONETASKGRAPH_VERSION'"
   if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     return 1
   fi
@@ -293,18 +277,6 @@ verify_published_tools() {
   return "$status"
 }
 
-onetaskgraph_target() {
-  local machine
-  machine="$(uname -m)"
-  case "$(uname -s):$machine" in
-    Linux:x86_64) printf '%s\n' x86_64-unknown-linux-gnu ;;
-    Linux:aarch64 | Linux:arm64) printf '%s\n' aarch64-unknown-linux-gnu ;;
-    Darwin:x86_64) printf '%s\n' x86_64-apple-darwin ;;
-    Darwin:arm64 | Darwin:aarch64) printf '%s\n' aarch64-apple-darwin ;;
-    *) log "onetaskgraph has no release archive for $(uname -s) $machine"; return 1 ;;
-  esac
-}
-
 create_plan_root() {
   # The gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses a
   # root it cannot canonicalize, and it refuses it for the *whole* read: one absent
@@ -312,55 +284,6 @@ create_plan_root() {
   # checkout carries none, so it is created here rather than on first write. `.plans` is
   # what `just plan` authors into.
   mkdir -p "$REPO_ROOT/.plans/tasks" "$REPO_ROOT/.plans/projects"
-}
-
-verify_onetaskgraph() {
-  local binary="$ONETASKGRAPH_BIN" actual expected
-  expected="onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION"
-  [ -x "$binary" ] || return 1
-  actual="$("$binary" --version 2>/dev/null)" || return 1
-  [ "$actual" = "$expected" ]
-}
-
-install_onetaskgraph() {
-  if verify_onetaskgraph; then
-    create_plan_root
-    return $?
-  fi
-  local target archive base temporary checksum
-  target="$(onetaskgraph_target)" || return 1
-  archive="onetaskgraph-v${ADOPTED_ONETASKGRAPH_VERSION}-${target}.tar.gz"
-  base="https://github.com/nickderobertis/onetaskgraph/releases/download/v${ADOPTED_ONETASKGRAPH_VERSION}"
-  temporary="$(mktemp -d)" || return 1
-  if ! curl --fail --location --silent --show-error "$base/$archive" -o "$temporary/$archive" \
-    || ! curl --fail --location --silent --show-error "$base/$archive.sha256" -o "$temporary/$archive.sha256"; then
-    log "onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION release archive download failed"
-    rm -rf "$temporary"
-    return 1
-  fi
-  checksum="$(awk '{print $1}' "$temporary/$archive.sha256")"
-  local actual_checksum
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual_checksum="$(sha256sum "$temporary/$archive" | awk '{print $1}')"
-  else
-    actual_checksum="$(shasum -a 256 "$temporary/$archive" | awk '{print $1}')"
-  fi
-  if [[ ! $checksum =~ ^[[:xdigit:]]{64}$ ]] || [ "$actual_checksum" != "$checksum" ]; then
-    log "onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION release archive checksum verification failed"
-    rm -rf "$temporary"
-    return 1
-  fi
-  if ! tar -xzf "$temporary/$archive" -C "$temporary" \
-    || [ ! -f "$temporary/onetaskgraph" ] \
-    || ! mkdir -p "$PROJECT_VENV_BIN" \
-    || ! install -m 0755 "$temporary/onetaskgraph" "$ONETASKGRAPH_BIN"; then
-    log "onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION release archive installation failed"
-    rm -rf "$temporary"
-    return 1
-  fi
-  rm -rf "$temporary"
-  hash -r
-  verify_onetaskgraph && create_plan_root
 }
 
 install_bun() {
@@ -474,7 +397,7 @@ bash "$SCRIPT_DIR/hold-run-lease.sh" "$REPO_ROOT" || log "run-root lease unavail
 
 toolchain_failed=0
 install_project_dependencies || toolchain_failed=1
-install_onetaskgraph || toolchain_failed=1
+create_plan_root || toolchain_failed=1
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
   just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" sweep >&2 \
     || log "workspace sweep failed; continuing session setup"
@@ -523,12 +446,6 @@ if verify_published_tools; then
   done
 else
   log "the adopted oneagentgraph, onevcs, onepipeline, and onepipeline-ui releases are required — 'just check' will fail until setup succeeds"
-  toolchain_failed=1
-fi
-if verify_onetaskgraph; then
-  log "ready (onetaskgraph: $ADOPTED_ONETASKGRAPH_VERSION at $ONETASKGRAPH_BIN)"
-else
-  log "onetaskgraph $ADOPTED_ONETASKGRAPH_VERSION is required — 'just check' will fail until setup succeeds"
   toolchain_failed=1
 fi
 if ! verify_bun; then

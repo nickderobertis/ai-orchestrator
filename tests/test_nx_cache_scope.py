@@ -60,8 +60,6 @@ from nx_inputs import (
     MERGE_POLICY_ROOT,
     MERGE_POLICY_SCOPED,
     NX_CACHE_CHECK,
-    PLAN_STORE_INSTALL_ROOT,
-    PLAN_STORE_INSTALL_SCOPED,
     PLAN_TOOLING_DOCS_SCOPED,
     PLAN_TOOLING_PROJECT,
     PLAN_TOOLING_ROOT,
@@ -71,6 +69,8 @@ from nx_inputs import (
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_SCOPED,
     SELECTED_TARGETS,
+    SESSION_SETUP_ROOT,
+    SESSION_SETUP_SCOPED,
     UNCONDITIONAL_TARGETS,
     UNWATCHED_ROOT,
     UNWATCHED_SCOPED,
@@ -585,9 +585,11 @@ def _reprovisioning_tests() -> list[str]:
     found: list[str] = []
     # Every journey module of the suite, not one directory of them: a journey that
     # re-provisions this checkout constrains scheduling wherever it lives, and the
-    # journeys now span three test projects. Still the `_e2e` naming rather than every
-    # test module, because a unit test that *reads* `session-setup.sh` runs none of it.
-    for module in sorted(REPO_ROOT.joinpath("tests").rglob("test_*_e2e.py")):
+    # journeys now span three test projects. Plan-root resolution is the one host-tool
+    # journey whose established module name predates the `_e2e` suffix convention.
+    modules = set(REPO_ROOT.joinpath("tests").rglob("test_*_e2e.py"))
+    modules.add(REPO_ROOT / "tests" / "plan_tooling" / "test_plan_root_env.py")
+    for module in sorted(modules):
         source = module.read_text(encoding="utf-8")
         if OWN_PROVISIONING not in source:
             continue
@@ -859,8 +861,8 @@ def _collected(selection: list[str]) -> set[str]:
 #: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
 #: owns the host-tool journeys over the ask seam in one, the `dag-ui` project owns the
 #: journeys over this repository's composition of the Observatory in one, the
-#: `plan-store-install` project owns the journeys that race real installs for a real lock
-#: in one, the `unwatched` project owns the journeys over the verb a `Stop` hook reads
+#: `session-setup` project owns the journey over this checkout's own provisioning in
+#: one, the `unwatched` project owns the journeys over the verb a `Stop` hook reads
 #: and the hook itself in one, the `merge-policy` project owns the journeys that hold
 #: the restated `merge_policy` vocabulary to the launcher in one, the `writeback-budget`
 #: project owns the journey that holds the adopted engine to the copy deadline its items
@@ -869,9 +871,9 @@ def _collected(selection: list[str]) -> set[str]:
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
+    (f"{SESSION_SETUP_ROOT}/project.json", SESSION_SETUP_SCOPED),
     (f"{ASK_SEAM_ROOT}/project.json", ASK_SEAM_SCOPED),
     (f"{DAG_UI_ROOT}/project.json", DAG_UI_SCOPED),
-    (f"{PLAN_STORE_INSTALL_ROOT}/project.json", PLAN_STORE_INSTALL_SCOPED),
     (f"{UNWATCHED_ROOT}/project.json", UNWATCHED_SCOPED),
     (f"{MERGE_POLICY_ROOT}/project.json", MERGE_POLICY_SCOPED),
     (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
@@ -884,7 +886,7 @@ SUITE_TIERS = (
 
 
 def test_every_tier_of_the_suite_partitions_it_between_them() -> None:
-    """Nine selections, one suite: no test may be collected twice or not at all.
+    """Every selection partitions one suite: no test may be collected twice or not at all.
 
     The tiers exist because they are keyed on different trees, and a test lands in
     exactly one of them — in the project whose directory holds it, and then in the

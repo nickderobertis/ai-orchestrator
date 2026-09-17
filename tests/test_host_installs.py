@@ -98,17 +98,17 @@ RELEASE_RULE = re.compile(
     r"(?P<fields>(?:    \S.*\n)*)"
 )
 
-#: The distribution this host installs from `onetaskgraph`, which `pyproject.toml`
-#: does not pin: it is a standalone release archive `scripts/onetaskgraph-install.sh`
-#: installs into `.venv/bin` at `config/onetaskgraph.version`, because the plan-store
-#: CLI is spawned as its own executable rather than imported.
-INSTALLED_OUTSIDE_PYPROJECT = frozenset({"onetaskgraph-cli"})
+#: Every installed CLI now arrives from a dependency in the project lock.
+INSTALLED_OUTSIDE_PYPROJECT = frozenset()
 #: The one pinned distribution that is not itself a row's artifact: `pyproject.toml`
 #: pins the `onejudge` SDK, and the CLI wheel this host runs — the row's artifact —
 #: arrives as that SDK's own dependency at the same version. `scripts/session-setup.sh`
 #: verifies both, and the reconciliation below reads the SDK's requirement rather than
 #: taking the pairing on trust.
-SDK_CARRYING_A_ROWS_WHEEL = {"onejudge": "onejudge-cli"}
+SDK_CARRYING_A_ROWS_WHEEL = {
+    "onejudge": "onejudge-cli",
+    "onetaskgraph-sdk": "onetaskgraph-cli",
+}
 
 
 def test_the_table_holds_exactly_the_expected_rows_in_the_overrides_order() -> None:

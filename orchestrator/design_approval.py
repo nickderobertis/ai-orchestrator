@@ -419,12 +419,17 @@ def approve(project: str) -> Approved:
     key = approval_key(document, template_fingerprint())
     if recorded(document) == key:
         return Approved(document.qualified_id, located(document), held=True)
-    plan_store.write_document_metadata(
-        document,
-        RECORD_KEY,
-        {"key": key, "approved_at": datetime.now(UTC).isoformat()},
+    value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
+    written = plan_store.sdk(
+        plan_store.client().document_metadata_set(
+            str(document.qualified_id), RECORD_KEY, json.dumps(value)
+        )
     )
-    return Approved(document.qualified_id, located(document), held=False)
+    location = plan_store.located(
+        written.location.model_dump(mode="python") if written.location else None,
+        written.id.model_dump(),
+    )
+    return Approved(document.qualified_id, location, held=False)
 
 
 def assess(project: str) -> Assessment:
@@ -528,14 +533,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def configured_sources() -> frozenset[str]:
     """Every source name this checkout's plan-store configuration names."""
-    settings = plan_store.store_json(["config", "show"]).get("settings")
-    if not isinstance(settings, list):
-        raise OSError(f"{plan_store.STORE} returned a configuration without a settings list")
+    settings = plan_store.sdk(plan_store.client().config_show()).settings
     named: set[str] = set()
     for setting in settings:
-        if not isinstance(setting, dict) or not isinstance(setting.get("key"), str):
-            continue
-        parts = setting["key"].split(".")
+        parts = setting.key.model_dump().split(".")
         if len(parts) > 1 and parts[0] == "sources":
             named.add(parts[1])
     return frozenset(named)

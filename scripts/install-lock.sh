@@ -1,10 +1,6 @@
 # shellcheck shell=bash
-# The ONE source of the install lock both self-heals serialize on.
-#
-# `scripts/workspace-install.sh` and `scripts/onetaskgraph-install.sh` provision two
-# different things and lock in the same place, `<root>/.logs`. One implementation
-# rather than one per installer, so neither can be hardened without the other:
-# `tests/test_install_lock_source.py` holds both to it.
+# The one implementation of the workspace install lock under `<root>/.logs`.
+# `tests/test_install_lock_source.py` holds its caller to this helper.
 #
 # Every step below either creates its own object or acts on a descriptor it has already
 # opened and read back, because checking a path and then operating on it again is two
@@ -18,7 +14,7 @@
 # refused. A caller that needs its own descriptors stays off those four, and arms no
 # EXIT trap of its own: the fallback below releases its mutex directories from the
 # sourcing shell's one EXIT trap, and `trap` replaces rather than chains.
-# `tests/test_install_lock_source.py` holds both installers to that.
+# `tests/test_install_lock_source.py` holds the installer to that.
 #
 # Strict mode is established here rather than inherited from the sourcing caller,
 # exactly as scripts/credentials-env.sh and scripts/codex-alt-home.sh do: a failure in

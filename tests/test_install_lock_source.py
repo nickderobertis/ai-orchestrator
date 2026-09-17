@@ -1,20 +1,4 @@
-"""One helper owns the install lock, and both installers that take it go through it.
-
-`scripts/workspace-install.sh` and `scripts/onetaskgraph-install.sh` provision two
-different things and lock in one place — `<root>/.logs` of one checkout. Each prepared
-that directory itself, and only one of the two was ever hardened: an audit of the pair
-found three symlink checks and ten descriptor re-checks on the plan-store side and none
-at all on the workspace side, over the same path. Nothing was exploited. What makes it
-worth a gate is *why* the second instance existed — the first was fixed by writing the
-checks inline rather than by extracting them, so the next installer to lock here would
-have been written the same way.
-
-What each installer *does* about a hostile `.logs` is driven for real, per installer, in
-`tests/e2e/test_workspace_contract_e2e.py` and
-`tests/plan_store_install/test_onetaskgraph_setup.py`. This is the other half, which no
-journey can state: that there is one implementation to harden rather than two that
-happen to agree today.
-"""
+"""The workspace installer takes its hardened lock through one shared helper."""
 
 from __future__ import annotations
 
@@ -33,7 +17,7 @@ ENTRY_POINT = "install_lock_take"
 
 #: Every installer that locks in this checkout's `.logs`. Adding one here is the whole
 #: obligation this gate imposes: a third installer that takes this lock has to say so.
-INSTALLERS = ("scripts/workspace-install.sh", "scripts/onetaskgraph-install.sh")
+INSTALLERS = ("scripts/workspace-install.sh",)
 
 #: Preparing the lock directory, in the two shapes an installer would write it as if it
 #: prepared its own. Matched on the *path* rather than on the command, because what must

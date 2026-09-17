@@ -184,7 +184,8 @@ def test_a_root_that_cannot_be_created_is_refused_before_the_launch_goes_on(
         sealed.chmod(0o700)
 
     assert driven.returncode == 2, driven.stdout + driven.stderr
-    assert f"{root}, which could not be created" in driven.stderr, driven.stderr
+    assert str(root) in driven.stderr, driven.stderr
+    assert "Permission denied" in driven.stderr, driven.stderr
     assert not root.exists(), "a root the helper reported it could not create is there"
 
 
@@ -245,7 +246,7 @@ def test_a_checkout_without_its_own_interpreter_resolves_its_own_root_anyway(
 
     driven = _drive(
         helper=checkout / "scripts" / plan_root_variable.HELPER.name,
-        path=f"{binaries}:/usr/bin:/bin",
+        path=f"{REPO_ROOT / '.venv' / 'bin'}:{binaries}:/usr/bin:/bin",
     )
 
     assert not (checkout / ".venv").exists(), "this checkout was provisioned after all"
@@ -280,7 +281,7 @@ def test_a_source_no_plan_could_be_stored_in_is_refused_naming_its_plugin(
 
     driven = _drive(
         helper=checkout / "scripts" / plan_root_variable.HELPER.name,
-        path=f"{binaries}:/usr/bin:/bin",
+        path=f"{REPO_ROOT / '.venv' / 'bin'}:{binaries}:/usr/bin:/bin",
     )
 
     assert driven.returncode == 2, driven.stdout + driven.stderr

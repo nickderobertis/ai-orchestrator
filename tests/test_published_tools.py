@@ -32,11 +32,11 @@ def test_pyproject_pins_the_distribution_to_the_adopted_version(tool: PublishedT
     """`config/<tool>.version` is the pin, so the dependency spec may not drift from it."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = pyproject["project"]["dependencies"]
-    specs = [item for item in dependencies if item.split("==")[0] == tool.distribution]
+    declared = "onetaskgraph-sdk" if tool.distribution == "onetaskgraph-cli" else tool.distribution
+    specs = [item for item in dependencies if item.split("==")[0] == declared]
 
-    assert specs == [f"{tool.distribution}=={tool.adopted_version}"], (
-        f"pyproject.toml must pin {tool.distribution} exactly to config/{tool.version_file}; "
-        f"found {specs!r}"
+    assert specs == [f"{declared}=={tool.adopted_version}"], (
+        f"pyproject.toml must pin {declared} exactly to config/{tool.version_file}; found {specs!r}"
     )
 
 

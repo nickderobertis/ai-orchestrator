@@ -772,13 +772,16 @@ def write_record(project: str, task: StoreTask, key: ReviewKey, by: By) -> Path:
             f"task {task.qualified_id!r} is not one of {project!r}'s, so recording its "
             f"review against that project would write into a record it does not describe"
         )
-    document = plan_store.task_document(source, task_native)
-    plan_store.write_metadata(
-        document,
-        RECORD_KEY,
-        {"key": key, "reviewed_at": datetime.now(UTC).isoformat(), "by": by.value},
+    value = {"key": key, "reviewed_at": datetime.now(UTC).isoformat(), "by": by.value}
+    written = plan_store.sdk(
+        plan_store.client().task_metadata_set(str(task.qualified_id), RECORD_KEY, json.dumps(value))
     )
-    return document
+    return Path(
+        plan_store.located(
+            written.location.model_dump(mode="python") if written.location else None,
+            written.id.model_dump(),
+        )
+    )
 
 
 #: Every field the verdict schema declares, at each of its two levels. The schema sets
@@ -1136,14 +1139,17 @@ def plan_unreviewed(
 
 def write_plan_record(project: str, key: ReviewKey, by: By) -> Path:
     """Record ``key`` as ``project``'s reviewed plan, and answer where it was written."""
-    source, native = plan_store.qualified(project)
-    document = plan_store.project_document(source, native)
-    plan_store.write_metadata(
-        document,
-        RECORD_KEY,
-        {"key": key, "reviewed_at": datetime.now(UTC).isoformat(), "by": by.value},
+    plan_store.qualified(project)
+    value = {"key": key, "reviewed_at": datetime.now(UTC).isoformat(), "by": by.value}
+    written = plan_store.sdk(
+        plan_store.client().project_metadata_set(project, RECORD_KEY, json.dumps(value))
     )
-    return document
+    return Path(
+        plan_store.located(
+            written.location.model_dump(mode="python") if written.location else None,
+            written.id.model_dump(),
+        )
+    )
 
 
 def _plan_prompt(plan: object) -> str:
@@ -1399,8 +1405,8 @@ def record_projects_new_since(before: Sequence[str]) -> Recorded:
     than raised**, and that follows from the same fact: this cannot tell its own run's
     output from a neighbour's, so failing the launch would let any unrelated plan kill a
     planning run. One such plan already exists here — a project `onepipeline`'s
-    settlement write-back has re-rendered carries a `metadata` block
-    `plan_store.write_metadata` will not edit around — so a launch overlapping another's
+    settlement write-back has re-rendered carries metadata the SDK may refuse to update —
+    so a launch overlapping another's
     would otherwise exit non-zero for a reason having nothing to do with it. Leaving the
     project alone fails in the safe direction: unrecorded is what `just check-plan`
     refuses, and the caller names each one.

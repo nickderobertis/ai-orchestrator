@@ -45,6 +45,7 @@ from fake_backend import (
     RecordedTurn,
 )
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from onetaskgraph_sdk import TaskDetail
 from planner_channel import just
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
@@ -363,7 +364,9 @@ def _store_item(launched: Launched) -> dict[str, object]:
         check=False,
     )
     assert shown.returncode == 0, shown.stdout + shown.stderr
-    return dict(plan_store.one_item(json.loads(shown.stdout), "task"))
+    answer = TaskDetail.model_validate_json(shown.stdout)
+    assert len(answer.items) == 1, answer
+    return answer.items[0].item.model_dump(mode="json")
 
 
 def test_the_installed_store_reads_the_draft_back_with_every_value_and_type_intact(

@@ -330,7 +330,6 @@ review-plan *args:
 # header is the one account of why.
 [doc("Record the user's approval of one plan project's design document.")]
 approve-design *args:
-    @./scripts/onetaskgraph-install.sh
     @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"
 
 # Copy a cleared plan onto the board this repository plans against: `just copy-plan
@@ -375,7 +374,6 @@ approve-design *args:
 # header is the one account of why.
 [doc('Copy a reviewed plan project, and its tasks, onto the plan board this repository launches from.')]
 copy-plan *args:
-    @./scripts/onetaskgraph-install.sh
     @./scripts/plan-store.sh uv run orchestrator-copy-plan "$@"
 # llmlint: ignore-end[tool_output_is_signal]
 
@@ -819,7 +817,6 @@ session-setup:
 # header is the one account of why.
 # llmlint: ignore[tool_output_is_signal] The selected query's result is this viewing command's product.
 plans *args:
-    @./scripts/onetaskgraph-install.sh
     @./scripts/plan-store.sh ./.venv/bin/onetaskgraph {{args}}
 
 # --- llmlint (LLM-judge tier) --------------------------------------------

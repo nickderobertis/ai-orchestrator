@@ -100,19 +100,6 @@ case "${1:-}" in
         # shellcheck source=scripts/ask-manager-env.sh
         . "$ask_manager_helper"
         export_ask_manager onepipeline || exit $?
-        # A launch reads its plan out of a onetaskgraph project, which `onepipeline`
-        # spawns the standalone CLI for. That CLI is installed into this checkout's
-        # own `.venv/bin` — the environment `uv run` below puts first on the search
-        # path — rather than a directory the whole host shares, so a fresh worktree or
-        # publication clone arrives with none and the launch resolves whatever copy
-        # some other checkout left on `PATH`, or nothing at all. Healed here because
-        # this is the launching process and nothing else on this path runs Nx, whose
-        # own wrapper performs the same self-heal for every target. A read-only view
-        # reads no plan, so it stays outside this case exactly as the helpers above do.
-        if ! "$script_dir/onetaskgraph-install.sh"; then
-            echo "onepipeline: this checkout's plan store CLI could not be provisioned, and a launch reads its plan through it; the diagnostic above names the failing step, and 'just session-setup' performs the same install" >&2
-            exit 2
-        fi
         ;;
 esac
 

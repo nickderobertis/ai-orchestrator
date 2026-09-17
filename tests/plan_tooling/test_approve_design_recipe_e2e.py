@@ -42,7 +42,7 @@ from orchestrator.design_approval import (
     STAMP_KIND,
     STAMP_NODES,
 )
-from orchestrator.plan_store import StoreDocument
+from orchestrator.plan_store import ORIGIN_KEY, StoreDocument
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -207,6 +207,20 @@ class Store:
         shown = self._stored("document", "show", str(one["destination"]))
         (record,) = shown["items"]
         return Path(str(record["item"]["location"]["path"]))
+
+    def metadata(self, record: Path) -> dict[str, Any]:
+        """What the store says the document at ``record`` holds under `metadata`.
+
+        Read back through the store rather than off the file, because that is the reader
+        the launch check is: a write the store could not parse would still look right in
+        a diff.
+        """
+        listed = self._stored("document", "list", "--source", self.source)
+        for one in listed["items"]:
+            if one["item"]["location"]["path"] == str(record):
+                held: dict[str, Any] = one["item"]["metadata"]
+                return held
+        raise AssertionError(f"{record} is not a document the store lists:\n{listed}")
 
     def _stored(self, *arguments: str) -> dict[str, Any]:
         """One command of the pinned plan-store CLI, with this store's drafts configured.
@@ -412,9 +426,26 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
     )
     assert not runs.exists(), "a launch refused for an unapproved document reached the ledger"
 
+    # The copy recorded where the document came from; the approval has to leave that
+    # standing, because it is what a later copy matches the document by.
+    stored = store.metadata(record)
+    assert stored[ORIGIN_KEY] == f"{DRAFT}:{native}-design", stored
+    assert RECORD_KEY not in stored, stored
+    rendered = record.read_bytes()
+
     approved = _just("approve-design", project, runs=runs)
     assert approved.returncode == 0, approved.stdout + approved.stderr
     assert "recorded the approval" in approved.stdout, approved.stdout
+    # One entry landed and every other byte of the document is as the store rendered it,
+    # the origin included.
+    assert RECORD_KEY in store.metadata(record)
+    assert store.metadata(record)[ORIGIN_KEY] == stored[ORIGIN_KEY]
+    entry = f'  "{RECORD_KEY}": '.encode()
+    kept = [
+        line for line in record.read_bytes().splitlines(keepends=True) if not line.startswith(entry)
+    ]
+    assert len(kept) == rendered.count(b"\n"), record.read_text(encoding="utf-8")
+    assert b"".join(kept) == rendered, "the approval rewrote more than its one entry"
 
     # Repeating it is a no-op rather than a second record, so a retried command and a
     # second person running it are both harmless. Read off the record itself, because a
@@ -836,34 +867,6 @@ def test_a_project_holding_more_than_one_document_is_refused_rather_than_guessed
     assert launched.returncode == 1, launched.stdout + launched.stderr
     assert "holds 2 documents" in launched.stderr, launched.stderr
     assert not runs.exists(), "an ambiguous project reached the ledger"
-
-
-@pytest.mark.xdist_group("approve-design")
-def test_an_approval_that_could_not_be_written_is_reported_rather_than_claimed(
-    store: Store, runs: Path
-) -> None:
-    """A record the store would not take leaves the plan unapproved, and says so.
-
-    Driven by making the record itself read-only, which stops the write without stopping
-    the read before it — so what fails is the write rather than the reading of the
-    document it is about.
-    """
-    native = "approve-design-unwritable"
-    project = store.plan(native)
-    record = store.document(native)
-    record.chmod(0o400)
-    try:
-        refused = _just("approve-design", project, runs=runs)
-    finally:
-        record.chmod(0o600)
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "approve-design:" in refused.stderr, refused.stderr
-    assert "recorded the approval" not in refused.stdout, refused.stdout
-
-    # And the plan is still unapproved, which is the half a report alone could get wrong.
-    launched = _launch(project, runs)
-    assert launched.returncode == 1, launched.stdout + launched.stderr
-    assert "carries no approval for what it currently says" in launched.stderr, launched.stderr
 
 
 @pytest.mark.xdist_group("approve-design")

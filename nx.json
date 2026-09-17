@@ -45,7 +45,6 @@
       "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
       "{workspaceRoot}/tests/e2e/waits.py",
       "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py",
-      "{workspaceRoot}/tests/onetaskgraph_release.py",
       "{workspaceRoot}/tests/published_tools.py"
     ],
     "planToolingWorkspace": [
@@ -89,20 +88,18 @@
       "{workspaceRoot}/tests/e2e/scratch_identity.py",
       "{workspaceRoot}/tests/e2e/waits.py"
     ],
-    "planStoreInstallWorkspace": [
+    "sessionSetupWorkspace": [
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/pyproject.toml",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/config/onetaskgraph.version",
-      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
       "{workspaceRoot}/orchestrator/root.py",
-      "{workspaceRoot}/tests/plan_store_install/**/*",
+      "{workspaceRoot}/tests/session_setup/**/*",
       "{workspaceRoot}/tests/conftest.py",
-      "{workspaceRoot}/tests/nx_inputs.py",
-      "{workspaceRoot}/tests/onetaskgraph_release.py"
+      "{workspaceRoot}/tests/nx_workspace.py",
+      "{workspaceRoot}/tests/published_tools.py"
     ],
     "askSeamWorkspace": [
       "{workspaceRoot}/nx.json",
@@ -149,7 +146,6 @@
       "{workspaceRoot}/scripts/install-lock.sh",
       "{workspaceRoot}/scripts/workspace-install.sh",
       "{workspaceRoot}/scripts/python-install.sh",
-      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/tests/fixtures/nx-cache/**/*"
     ],
     "sharedGlobals": [
@@ -210,7 +206,6 @@
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/follow-ups.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
@@ -270,7 +265,6 @@
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/follow-ups.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
@@ -325,7 +319,6 @@
       "{workspaceRoot}/scripts/follow-ups.sh",
       "{workspaceRoot}/scripts/install-lock.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
@@ -388,7 +381,6 @@
       "{workspaceRoot}/scripts/follow-ups.sh",
       "{workspaceRoot}/scripts/install-lock.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/onetaskgraph-install.sh",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",

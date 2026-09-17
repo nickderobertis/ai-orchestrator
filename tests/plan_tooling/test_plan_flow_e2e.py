@@ -1028,13 +1028,9 @@ def _the_board_is_a_directory(checkout: Path, board: Path) -> None:
 def _provisioned(checkout: Path) -> None:
     """Give a copied checkout the toolchain a `SessionStart` hook would have given it.
 
-    Two halves, because this repository installs its tools in two ways. The published
-    CLIs are project dependencies, so `uv sync --locked` resolves exactly the releases
-    this checkout pins. The plan-store CLI is a release archive session setup installs
-    into `<root>/.venv/bin`, which a copy never fires the hook for — so the copy is given
-    the binary this checkout already pinned, and `scripts/onetaskgraph-install.sh`, which
-    every step of the flow runs, then finds its pin already installed and asks the
-    network nothing.
+    The published CLIs and plan-store SDK are project dependencies, so `uv sync --locked`
+    resolves exactly the releases this checkout pins, including the plan-store console
+    script installed by the SDK's exact CLI dependency.
     """
     environment = dict(os.environ)
     for named in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
@@ -1049,7 +1045,6 @@ def _provisioned(checkout: Path) -> None:
         check=False,
     )
     assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
-    shutil.copy2(ONETASKGRAPH_BIN, checkout / ".venv" / "bin" / ONETASKGRAPH_BIN.name)
 
 
 @pytest.fixture(scope="module")

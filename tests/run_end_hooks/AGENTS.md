@@ -5,8 +5,8 @@
   rather than trees, measured from what the tier opens: every journey here spends real
   launches and waits out a follow-up run, so a path the key names that nothing reads makes
   an unrelated edit pay for all of it. Every pin in `config/` is read, the UI pin included:
-  a launch provisions the plan-store CLI through `scripts/onetaskgraph-install.sh`, which
-  sources `scripts/session-setup.sh`, and that reads all four published-tool pins. A launch
+  session setup verifies the plan-store CLI provisioned through the project lock and reads
+  all four published-tool pins before the launch. A launch
   path that starts reading a new file is a re-measurement, not a glob to widen.
 - **A hook fires only on a launch that names it.** Launch through `just orchestrate`, which
   adds both hooks, and name them blank (`--success-hook=`, `--failure-hook=`) for a twin

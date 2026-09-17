@@ -437,15 +437,6 @@ if [ -z "$destination" ]; then
             "restore the pinned toolchain with 'just bootstrap', then retry, or name one with --to"
 fi
 
-# The store CLI this checkout pins, healed into its own `.venv/bin` before anything asks
-# the store a question: session setup runs on a `SessionStart` hook that a fresh worktree
-# and a publication clone never fire, so a run there resolves whatever copy another
-# checkout left on `PATH`, or nothing at all. It is here for the steps that read the store
-# and heal nothing themselves — the review and the check; `just copy-plan` performs its
-# own, which is why this is not that one repeated.
-"$script_dir/onetaskgraph-install.sh" || fail "this checkout's plan store CLI could not be provisioned" \
-    "the diagnostic above names the failing step, and 'just session-setup' performs the same install"
-
 # 1. The review, which is what makes every step below it a step about reviewed content.
 # Its own exit statuses are carried through unchanged in meaning: 1 is a refusal naming
 # every refused criterion, which this flow ends on rather than repairing — the planner's

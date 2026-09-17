@@ -31,6 +31,7 @@ from pathlib import Path
 
 import follow_up_variables
 import pytest
+from onetaskgraph_sdk import TaskDetail
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_drafts as drafts
@@ -288,8 +289,9 @@ def _store_show(qualified: str, *, cwd: Path, stated: dict[str, str]) -> dict[st
         check=False,
     )
     assert shown.returncode == 0, shown.stdout + shown.stderr
-    item = plan_store.one_item(json.loads(shown.stdout), "task")
-    return dict(item)
+    answer = TaskDetail.model_validate_json(shown.stdout)
+    assert len(answer.items) == 1, answer
+    return answer.items[0].item.model_dump(mode="json")
 
 
 @pytest.mark.parametrize(

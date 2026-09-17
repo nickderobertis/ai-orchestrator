@@ -55,14 +55,13 @@ PUBLISHED_TOOLS = (
         "onepipeline-ui.version", "onepipeline-api-cli", "onepipeline-api", "onepipeline-ui"
     ),
     PublishedTool("onemessagebus.version", "onemessagebus-cli", "onemessagebus"),
+    PublishedTool("onetaskgraph.version", "onetaskgraph-cli", "onetaskgraph"),
 )
 #: onejudge and oneharness are pinned here too, but each is read and verified by its
 #: own named function — onejudge's check also proves the `onejudge_sdk` import — so
 #: they stay outside the uniform table. Named so a caller enumerating
 #: `config/*.version` can say which files `PUBLISHED_TOOLS` is deliberately silent about.
-SEPARATELY_GATED_VERSION_FILES = frozenset(
-    {"onejudge.version", "oneharness.version", "onetaskgraph.version"}
-)
+SEPARATELY_GATED_VERSION_FILES = frozenset({"onejudge.version", "oneharness.version"})
 
 #: Where this checkout's own provisioning installs the standalone `onetaskgraph` CLI,
 #: and the one place the suite reads it from. It is per checkout rather than a

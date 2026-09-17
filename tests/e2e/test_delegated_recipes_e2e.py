@@ -83,11 +83,6 @@ WRAPPER_SCRIPTS = (
     "finish-plan.sh",
     "plan-brief.sh",
     "review-plan.sh",
-    # A launch reads its plan through the standalone CLI this repository installs into
-    # the checkout's own `.venv/bin`, so `onepipeline.sh` heals a checkout that carries
-    # none before it launches. The checkout here declares no adopted release, which is
-    # the case that heal no-ops in — but it has to be there to no-op.
-    "onetaskgraph-install.sh",
     "credentials-env.sh",
     # Every board command goes through this one, which is where this checkout's own
     # credential file is read for a command that is not a launch.

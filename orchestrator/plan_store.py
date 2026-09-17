@@ -1,179 +1,67 @@
-"""Read the onetaskgraph store this repository plans against, and write one record back.
-
-`just check-plan` and `just review-plan` both read a plan out of the store, and the
-review command writes its verdict back into the task it reviewed. Both directions live
-here so that neither is reinvented beside the other: the reading half was
-`orchestrator/criteria_guard.py`'s private helper until a second caller needed it, and
-the writing half exists at all because onetaskgraph's CLI has no update verb — a
-`local-md` source is a directory, and the record goes into the file.
-
-**Every refusal here is driven in `tests/test_plan_store.py` and by no journey**, and
-that is a property of what they refuse rather than a gap. They are guards over another
-program's records: a source served by a plugin this may not write, a native id that is
-not a local record's path, frontmatter this cannot edit narrowly. Reaching one through
-`just review-plan` means putting a malformed record into a plan root the suite's other
-tiers are concurrently walking — and a local Markdown source that meets one refuses the
-*whole* walk rather than skipping the record, which is the hazard
-`tests/plan_fixture_root.py` records having already failed a publication. So each is
-driven against a root the test owns outright.
-
-Writing is deliberately narrow. It sets **one** namespaced key of one task's metadata
-map and touches nothing else, and it refuses frontmatter it cannot edit that way rather
-than reformatting the file. A plan record is an operator's authored document; rewriting
-one to normalize it would make the review gate the thing that most often changes the
-content it reviews.
-
-**A document is written the other way round, and the difference is what a board can
-take.** A task's review record goes into the file because only a local Markdown source
-has a file; a *document* carries the design approval, and a plan is approved wherever it
-is held — so :func:`write_document_metadata` goes through `onetaskgraph document copy`,
-which is the store's own write side and answers for a directory and a board alike. It
-stages the document it already read into a source of its own, adds the one entry, and
-copies that over the record it came from, matched by title because the destination's
-recorded origin names whatever copy created it rather than this one. Two costs come with
-that and neither is hidden: the store rewrites `onetaskgraph.origin` to name the staging
-source, because that key is the store's own bookkeeping of the last copy; and the write
-is a whole-record replacement, so what is staged is everything the store just reported
-rather than the fields this repository happens to care about.
-"""
-
-# llmlint: ignore-file[changed_behavior_has_e2e] Every refusal below is a guard over
-# another program's records, and the module docstring above states why no journey drives
-# one: reaching it means leaving a malformed record in a plan root the suite's other
-# tiers walk concurrently, which refuses the whole walk rather than that record. They are
-# driven in tests/test_plan_store.py against a root that test owns.
+"""Synchronous plan-store helpers backed by :mod:`onetaskgraph_sdk`."""
 
 from __future__ import annotations
 
-import hashlib
-import json
+import asyncio
 import os
 import re
-import shutil
-import subprocess
-import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, NamedTuple, NewType
+from typing import NewType
+
+from onetaskgraph_sdk import (  # type: ignore[import-untyped]  # Package omits py.typed.
+    Client,
+    OnetaskgraphError,
+)
 
 from orchestrator.project_store import (
     PROJECTS_DIRECTORY,
     TASKS_DIRECTORY,
     QualifiedId,
-    frontmatter,
-    metadata_entry,
     qualified_id,
 )
 from orchestrator.root import REPO_ROOT
 
-#: The standalone plan-store CLI this host spawns. `config/onetaskgraph.version` pins
-#: it; nothing here reads that pin, because the installed program is what answers and
-#: a pin that disagreed with it would only mislead.
-STORE = "onetaskgraph"
-
-#: How many task records one listing page holds. Small on purpose: paging is a contract
-#: this reader depends on, and a page size no plan ever exceeds would leave the second
-#: page unread on every host until the first plan that needed it.
-PAGE_SIZE = 2
-
-#: What `onepipeline` names the plan-store CLI in, and what has to be **removed** from
-#: the environment of every store command this module spawns. It is the engine's way of
-#: pointing at a binary; `onetaskgraph`'s own configuration layer reads every
-#: `ONETASKGRAPH_*` name as a *setting*, so a process that inherits it refuses `bin` as an
-#: unknown field and answers nothing at all — for `config show`, for a listing, for
-#: everything. The engine strips it before it spawns; so does this, or a launch made from
-#: inside a run that set it would be refused for a plan store that is perfectly readable.
-BIN_ENV = "ONETASKGRAPH_BIN"
-
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The producer of this
-# string is onepipeline 0.19.0, a release this host has never installed — it was held
-# below it while the rewrite stood, and is now past the 0.20.0 that repaired it — so
-# there is no installed artifact to generate it from or reconcile it against. It is a
-# recogniser for records nothing here authors rather than a contract either side must
-# hold to: a producer that changes its source or encoding makes this stop matching, and
-# the reader falls back to the bare unresolvable-target refusal it gave before, which is
-# a degraded diagnostic and never a wrong answer.
-#: The source `onepipeline`'s settlement write-back stages a projection in, and the one
-#: it must never leave behind in a record it wrote back. onepipeline 0.19.0 replaced a
-#: settled record's own `onetaskgraph.origin` and every `depends_on` edge with an
-#: identity under this source — which exists only as scratch beneath `runs/<run>/` — so
-#: the plan could not be read back at all afterwards. It is
-#: https://github.com/nickderobertis/onepipeline/issues/189, repaired by
-#: https://github.com/nickderobertis/onepipeline/pull/191 in onepipeline 0.20.0.
-#:
-#: **The recogniser outlives the repair on purpose.** It is about *records*, not about
-#: this host's pin: a plan carried here from a host that ran 0.19.0 still carries the
-#: rewrite, and the id decodes to hex and reads like a corrupt store rather than like
-#: the engine that wrote it.
 WRITE_BACK_SOURCE = "onepipeline-writeback"
-
-#: What a reader is told when a dependency edge points into that source. The engine and
-#: the issue are both named: a plan whose edges were rewritten is unreadable for a
-#: reason nothing in the store can report.
-WRITE_BACK_REWROTE = (
-    f"the plan's dependency edges point into `{WRITE_BACK_SOURCE}:`, which is the "
-    "scratch source onepipeline 0.19.0's settlement write-back rewrote a settled "
-    "record's own origin and edges into, so this plan can no longer be read back — "
-    "https://github.com/nickderobertis/onepipeline/issues/189, repaired in onepipeline "
-    "0.20.0. These records were written by an engine at that one release; nothing this "
-    "host installs writes them"
-)
-
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-
-#: The plugin whose records this module may write. Every other source is read-only
-#: here — a GitHub Projects board is not a directory, and a record written into one
-#: would go through an API this repository deliberately does not call.
+WRITE_BACK_REWROTE = "the dependency points into onepipeline's old write-back scratch source"
 WRITABLE_PLUGIN = "local-md"
-
-
-#: A task's address in the store, `<source>:<native-id>` — what a store command is
-#: given. Distinct from :data:`NodeId`, which is what a *plan* calls the same task and
-#: what a dependency edge resolves to: the two are both strings, they travel together
-#: through every function here, and mixing them addresses the wrong record.
-QualifiedTaskId = NewType("QualifiedTaskId", str)
-
-#: A document's address in the store, `<source>:<native-id>`. Its own namespace: a
-#: document and a task of one project may wear the same native id and address different
-#: records, so the two are never interchanged even though both are strings.
-QualifiedDocumentId = NewType("QualifiedDocumentId", str)
-
-#: A project's address in the store, `<source>:<native-id>`. Its own namespace for the
-#: reason the two above are: a project, a task and a document of one plan may wear the
-#: same native id, and a copy gives the destination's project an id of the destination's
-#: own choosing — a board mints a number where a directory keeps the name.
-QualifiedProjectId = NewType("QualifiedProjectId", str)
-
-#: What the store stamps on a record it created by copying, naming what it was copied
-#: from. It is the store's own bookkeeping rather than anything this repository writes,
-#: and it is the only thing that ties a landed record back to the one it came from: a
-#: destination decides its own native id, so nothing about the source's name survives
-#: the copy for a reader to compose an address out of.
 ORIGIN_KEY = "onetaskgraph.origin"
-
-#: The source name the write below stages a document under, which exists only for the
-#: length of one copy. Deliberately unlike anything `onetaskgraph.yaml` configures: it is
-#: added to the configuration of that one invocation, and a name a real source already
-#: holds would repoint that source for the command doing the writing.
-STAGING_SOURCE = "orchestrator-record-staging"
-
-#: How the copy is told which destination record it is updating. A document a plan store
-#: already holds was created by some earlier copy, so its recorded origin names *that*
-#: source rather than the staging one below — the correspondence a bare copy would
-#: follow is one this write can never satisfy, and following it would duplicate the
-#: document instead of updating it. The title is what both records share.
-MATCH_BY = "title"
-
-#: A task's id within its plan — `onepipeline.id`, the name a run's journal, its branch,
-#: and every refusal use.
+CROSS_DAG_DEPS = "onepipeline.deps"
+RECORD_COMPONENT = re.compile(r"(?!\.+$)[\w.@+-]+")
+QualifiedTaskId = NewType("QualifiedTaskId", str)
+QualifiedDocumentId = NewType("QualifiedDocumentId", str)
+QualifiedProjectId = NewType("QualifiedProjectId", str)
 NodeId = NewType("NodeId", str)
+
+
+def sdk[T](awaitable: Coroutine[object, object, T]) -> T:
+    """Bridge the SDK's async API once for synchronous repository commands."""
+    try:
+        return asyncio.run(awaitable)
+    except OnetaskgraphError as exc:
+        raise OSError(str(exc)) from exc
+
+
+def client() -> Client:
+    return Client(cwd=REPO_ROOT)
+
+
+def complete[T](answer: T) -> T:
+    """Refuse an SDK query whose source failures make its answer partial."""
+    errors = getattr(answer, "errors", [])
+    if errors:
+        details = "; ".join(
+            f"source {error.source.model_dump()} could not answer: "
+            f"{error.error.model_dump_json(exclude_none=True)}"
+            for error in errors
+        )
+        raise OSError(details)
+    return answer
 
 
 @dataclass(frozen=True)
 class StoreTask:
-    """A validated task record returned by onetaskgraph."""
-
     qualified_id: QualifiedTaskId
     node_id: NodeId
     title: str
@@ -181,347 +69,11 @@ class StoreTask:
     metadata: Mapping[str, object]
     repositories: list[object]
     deps: tuple[NodeId, ...]
-    #: The tickets this task delivers, as its own `delivers` field holds them. Read off the
-    #: record rather than off `onepipeline.` metadata because that is where the engine reads
-    #: a node's `delivers` from, and it is what the store re-evaluates each delivered ticket
-    #: over; a reader that dropped it would answer with a plan whose nodes claim nothing.
     delivers: tuple[str, ...] = ()
-
-
-#: Where a record states its **cross-DAG** dependencies: wait-only references onto
-#: another run's node, spelled `run:<run-id>#<node-id>`. A store's own dependency edges
-#: cannot carry one, because their targets are records of this project, so this key is
-#: the whole of how a task says it waits on a run outside itself — and the engine's
-#: loader refuses an in-plan id written here, which is what makes it exactly the
-#: cross-DAG half. `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives that refusal.
-CROSS_DAG_DEPS = "onepipeline.deps"
-
-
-def authored_deps(task: StoreTask) -> list[str]:
-    """Every dependency ``task`` states, in the one representation its readers share.
-
-    **One source, because three readers reach a task's dependencies from two sides.** A
-    record read out of the store keeps this project's own edges in ``deps`` and its
-    cross-DAG references under :data:`CROSS_DAG_DEPS`; the engine's loader resolves the
-    two into one ``deps`` list, and a task rebuilt from that loaded plan by
-    :func:`orchestrator.plan_check._task_record` therefore arrives with the cross-DAG
-    references already in ``deps``, beside the same metadata. Composing those halves
-    separately is what produced
-    https://github.com/nickderobertis/ai-orchestrator/issues/1071: one task hashed to two
-    review keys, `just review-plan` reported a pass and `just check-plan` reported no
-    record for the same content, and the only way past it was deleting a true dependency
-    and stating the prerequisite in prose.
-
-    So the answer is their **union**, which reaches the same value from either half: a
-    reference stated in both places is one dependency rather than two. A record naming no
-    cross-DAG dependency answers exactly what ``sorted(task.deps)`` answered before this
-    function existed, so every review key already recorded on this host's board still
-    matches — `tests/test_plan_review.py` holds that to a pinned digest, because the bar
-    fingerprint a key also covers deliberately does not cover the module computing it and
-    nothing else would notice those keys moving.
-
-    A cross-DAG entry that is not a string is left out rather than rendered: the engine's
-    loader refuses `deps` that are not strings long before a plan reaches any of the
-    three readers, so what rendering it would key is a plan no launch accepts. The answer
-    is `list[str]` rather than `list[NodeId]` for the same reason the two halves differ at
-    all — a cross-DAG reference names a node of another run and is no id of this plan.
-    """
-    own = list(task.deps)
-    stated = task.metadata.get(CROSS_DAG_DEPS)
-    listed = stated if isinstance(stated, list) else []
-    return sorted([*own, *(one for one in listed if isinstance(one, str) and one not in own)])
-
-
-def store_binary() -> str:
-    """The plan-store CLI this checkout spawns, refused by name when it has none.
-
-    One source for every command here that runs it, so a read and the write beside it
-    cannot resolve two different binaries — which on this host is not a theoretical
-    difference: `config/onetaskgraph.version` is per checkout, and a copy of this
-    program provisioned by another checkout answers about a different release.
-
-    Resolved from `PATH` rather than from a path spelled here, because every recipe
-    that reaches this runs under `uv run`, which puts this checkout's own `.venv/bin`
-    first — the destination `scripts/session-setup.sh` installs the pinned release into
-    and `scripts/onetaskgraph-install.sh` heals.
-    """
-    binary = shutil.which(STORE)
-    if binary is None:
-        raise OSError(f"{STORE} is not installed on PATH")
-    return binary
-
-
-def staged_name(qualified_id: QualifiedDocumentId) -> str:
-    """What one document's staged copy is called inside the staging source.
-
-    A digest of the identity rather than the identity itself, and both halves of that
-    matter. It is **derived** because the store's own id is another program's answer about
-    another program's records, and interpolating one into a path is how a separator or a
-    `..` in it reaches the filesystem. It is **per document** because the copy that writes
-    the record leaves its own origin on the destination, and every document staged under
-    one name would then carry one correspondence between them — so the next document
-    written would match the first one's record and land on it. It is **stable** because a
-    second write of the same document should find the record the first one left.
-    """
-    return hashlib.sha256(qualified_id.encode("utf-8")).hexdigest()
-
-
-def store_environment() -> dict[str, str]:
-    """The environment a store command runs under: this process's, less :data:`BIN_ENV`."""
-    environment = dict(os.environ)
-    environment.pop(BIN_ENV, None)
-    return environment
-
-
-# llmlint: ignore[suppressions_justified] Open CLI JSON; consumed fields narrow at each caller.
-def store_json(arguments: Sequence[str]) -> dict[str, Any]:
-    """Read one JSON answer from the installed store CLI."""
-    binary = store_binary()
-    read = subprocess.run(
-        [binary, *arguments, "--json"],
-        cwd=REPO_ROOT,
-        env=store_environment(),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if read.returncode != 0:
-        raise OSError(read.stderr.strip() or f"{STORE} exited {read.returncode}")
-    try:
-        payload = json.loads(read.stdout)
-    except json.JSONDecodeError as exc:
-        raise OSError(f"{STORE} returned invalid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise OSError(f"{STORE} returned a non-object response")
-    return payload
-
-
-# llmlint: ignore[suppressions_justified] Store values stay open until validated here.
-def one_item(payload: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
-    """Require one store item and return its typed payload mapping."""
-    items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list) or len(items) != 1:
-        raise OSError(
-            f"{STORE} returned {len(items) if isinstance(items, list) else 0} {kind} records"
-        )
-    record = items[0]
-    item = record.get("item") if isinstance(record, dict) else None
-    if not isinstance(item, dict):
-        raise OSError(f"{STORE} returned a {kind} without an object payload")
-    return item
-
-
-def qualified(project: str) -> QualifiedId:
-    """``project`` split into its source and native id, refused when it is neither.
-
-    The shape is `project_store.qualified_id`'s, which is where this repository keeps it:
-    a `delivers` entry is held to the same one, and two encodings of it would drift.
-    """
-    parts = qualified_id(project)
-    if parts is None:
-        raise OSError(
-            f"a project id must be qualified as <source>:<native>, with both halves "
-            f"present, and {project!r} is not"
-        )
-    return parts
-
-
-def paged(arguments: Sequence[str], kind: str) -> list[Any]:
-    """Every item the store lists for ``arguments``, following its own paging to the end.
-
-    One walk for every listing this module makes rather than one per record kind: the
-    paging contract — a `next` token that is a non-empty string, is not one already
-    followed, and is absent on the last page — is the store's, and a second copy of it
-    would be a second reading of somebody else's protocol. ``kind`` names the records for
-    the refusals, which is the only thing that differs between callers.
-
-    A repeated token is refused rather than followed, because a source that hands back a
-    cursor that does not advance is one this would otherwise walk forever.
-    """
-    #: The store's own JSON, held untyped only until it is validated below: what a
-    #: page holds is the store's contract rather than this module's, and narrowing it
-    #: here would state a second version of a shape the validator already decides.
-    listed: list[Any] = []
-    page: str | None = None
-    seen_pages: set[str] = set()
-    while True:
-        asked = [*arguments, "--limit", str(PAGE_SIZE)]
-        if page is not None:
-            asked.extend(["--page", page])
-        answer = store_json(asked)
-        items = answer.get("items")
-        if not isinstance(items, list):
-            raise OSError(f"{STORE} returned a {kind} listing that is not a list")
-        listed.extend(items)
-        following = answer.get("next")
-        if following is None:
-            return listed
-        if not isinstance(following, str) or not following:
-            raise OSError(f"{STORE} returned an invalid next-page token")
-        if following in seen_pages:
-            raise OSError(f"{STORE} returned a repeated next-page token")
-        seen_pages.add(following)
-        page = following
-
-
-def read_tasks(project: str) -> list[StoreTask]:
-    """Every task of ``project``, validated, and each carrying the node ids it depends on."""
-    source, native = qualified(project)
-    listed = paged(["task", "list", "--source", source, "--project", native], "task")
-    return _with_dependencies([_record(item) for item in listed])
-
-
-# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.
-def _record(item: object) -> StoreTask:
-    """One listed task, validated down to the fields a plan and a review key read."""
-    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-        raise OSError(f"{STORE} returned a task without a qualified id")
-    payload = item.get("item")
-    if not isinstance(payload, dict):
-        raise OSError(f"{STORE} returned a task without an object payload")
-    metadata = payload.get("metadata", {})
-    node_id = metadata.get("onepipeline.id") if isinstance(metadata, dict) else None
-    if not isinstance(node_id, str):
-        raise OSError(f"task {item['id']} has no string onepipeline.id")
-    repositories = payload.get("repositories", [])
-    if not isinstance(repositories, list):
-        raise OSError(f"task {item['id']} has non-list repositories")
-    if not all(isinstance(repository, str) for repository in repositories):
-        raise OSError(f"task {item['id']} has a non-string repository")
-    if len(repositories) > 1:
-        raise OSError(f"task {item['id']} has more than one repository")
-    title = payload.get("title")
-    content = payload.get("content")
-    if not isinstance(title, str) or (content is not None and not isinstance(content, str)):
-        raise OSError(f"task {item['id']} has invalid title or content")
-    delivers = payload.get("delivers", [])
-    if not isinstance(delivers, list) or not all(
-        isinstance(ticket, str) and qualified_id(ticket) for ticket in delivers
-    ):
-        raise OSError(f"task {item['id']} has an unqualified entry in delivers")
-    return StoreTask(
-        qualified_id=QualifiedTaskId(item["id"]),
-        node_id=NodeId(node_id),
-        title=title,
-        content=content,
-        metadata=metadata,
-        repositories=repositories,
-        deps=(),
-        delivers=tuple(delivers),
-    )
-
-
-def _with_dependencies(records: list[StoreTask]) -> list[StoreTask]:
-    """``records`` with each one's dependency edges resolved to node ids."""
-    ids: dict[QualifiedTaskId, NodeId] = {}
-    node_ids: set[NodeId] = set()
-    for record in records:
-        if record.qualified_id in ids or record.node_id in node_ids:
-            raise OSError(
-                f"{STORE} returned duplicate task identity {record.qualified_id!r} or "
-                f"onepipeline.id {record.node_id!r}"
-            )
-        ids[record.qualified_id] = record.node_id
-        node_ids.add(record.node_id)
-    resolved: list[StoreTask] = []
-    for record in records:
-        edges = store_json(["task", "deps", record.qualified_id]).get("items")
-        if not isinstance(edges, list):
-            raise OSError(f"{STORE} returned non-list dependencies for {record.qualified_id}")
-        targets: list[QualifiedTaskId] = []
-        for edge in edges:
-            match edge:
-                case {"to": {"id": str(target_id)}}:
-                    targets.append(QualifiedTaskId(target_id))
-                case _:
-                    raise OSError(
-                        "onetaskgraph returned a dependency edge without a string target id "
-                        f"for {record.qualified_id}"
-                    )
-        unknown = [target for target in targets if target not in ids]
-        if unknown:
-            rewritten = any(target.startswith(f"{WRITE_BACK_SOURCE}:") for target in unknown)
-            raise OSError(
-                f"{STORE} returned unknown dependency targets for "
-                f"{record.qualified_id}: {', '.join(unknown)}"
-                + (f" — {WRITE_BACK_REWROTE}" if rewritten else "")
-            )
-        # `replace` rather than a rebuild: every field but `deps` is the record's own and
-        # carries through, so a field added to :class:`StoreTask` cannot be silently dropped
-        # here — which is how the record's `delivers` was lost on its way to `read_plan`.
-        resolved.append(replace(record, deps=tuple(ids[target] for target in targets)))
-    return resolved
-
-
-# llmlint: ignore[suppressions_justified] Engine plan metadata is an open contract.
-def read_plan(project: str, records: Sequence[StoreTask]) -> dict[str, Any]:
-    """Map a qualified store project and its already-read tasks onto the engine's plan."""
-    held = one_item(store_json(["project", "show", project]), "project")
-    metadata = held.get("metadata", {})
-    if not isinstance(metadata, dict):
-        raise OSError(f"{STORE} returned project metadata that is not an object")
-    project_title = held.get("title")
-    if not isinstance(project_title, str):
-        raise OSError(f"{STORE} returned a project without a string title")
-    plan = {
-        key.removeprefix("onepipeline."): value
-        for key, value in metadata.items()
-        if isinstance(key, str) and key.startswith("onepipeline.")
-    }
-    plan.setdefault("name", project_title)
-    # llmlint: ignore[suppressions_justified] Nodes include open validated metadata.
-    nodes: list[dict[str, Any]] = []
-    for record in records:
-        node = {
-            key.removeprefix("onepipeline."): value
-            for key, value in record.metadata.items()
-            if isinstance(key, str) and key.startswith("onepipeline.")
-        }
-        node["title"] = record.title
-        node["task"] = record.content
-        if record.repositories:
-            node["repo"] = record.repositories[0]
-        # The union rather than the record's own edges, because a node states its
-        # cross-DAG references on `onepipeline.deps` and the loop above has already
-        # copied them out of the metadata: overwriting with the edges alone dropped them,
-        # so this rendering and the engine's disagreed about what the plan says — and the
-        # plan-level review key is computed over one of them on each side.
-        # `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the pair.
-        dependencies = authored_deps(record)
-        if dependencies:
-            node["deps"] = dependencies
-        if record.delivers:
-            node["delivers"] = list(record.delivers)
-        nodes.append(node)
-    plan["tasks"] = nodes
-    return plan
-
-
-def read_project(project: str) -> tuple[dict[str, Any], list[StoreTask]]:
-    """One qualified project as the plan the engine reads, beside the records it came from.
-
-    Both halves in one call because both callers need both and each half costs its own
-    walk of the store: `just check-plan` reads the plan to check its nodes and the
-    records to check what has reviewed them, and asking twice would double every
-    listing and every dependency query a plan makes.
-    """
-    records = read_tasks(project)
-    return read_plan(project, records), records
 
 
 @dataclass(frozen=True)
 class StoreDocument:
-    """A validated document record returned by onetaskgraph.
-
-    Every field the store reports that a write may carry back, because
-    :func:`write_document_metadata` replaces the record whole: a field read and not
-    staged is a field the write deletes.
-    """
-
-    #: `<source>:<native>`, held to that shape where the store's answer is read. The
-    #: whole identity and nothing beside it: the store also reports the native half on
-    #: its own, and two identities that can disagree is one a record could be staged
-    #: under while being addressed by the other.
     qualified_id: QualifiedDocumentId
     title: str
     content: str
@@ -529,689 +81,226 @@ class StoreDocument:
     labels: list[str]
     repositories: list[str]
     metadata: Mapping[str, object]
-    #: Where the store says this record is — a path for a directory, a link for a
-    #: board — reported back rather than composed. `None` when the store reports none.
-    #: Untyped because its shape is the store's to choose and differs per plugin; this
-    #: module reports it onward rather than reading into it, so naming a shape here would
-    #: be a claim about somebody else's payload that nothing checks.
-    location: Mapping[str, Any] | None
-
-
-def read_documents(project: str) -> list[StoreDocument]:
-    """Every document of ``project``, validated, in the order the store lists them.
-
-    Addressed by the qualified project id alone, which narrows the query to that
-    project's own source: a bare native id is asked of every configured source, and a
-    second source holding a project of the same name would answer for it.
-    """
-    qualified(project)
-    listed = paged(["document", "list", "--project", project], "document")
-    return [_document(item) for item in listed]
-
-
-# llmlint: ignore[suppressions_justified] A label is one of two open shapes; each is named
-# or refused.
-def _label_names(document_id: str, labels: object) -> list[str]:
-    """``labels`` as the names a reader here holds them by, refusing a shape it cannot name.
-
-    **This reads the store's answer rather than an author's frontmatter, and the two are
-    not the same shape.** A label is one canonical type on the way out — `{id, name,
-    color}`, the plugin contract every plugin constructs — while the sugar an author types
-    into a local record is a `LabelInput`, which admits a bare string as well and is
-    normalised on read. This reader was written against what is *typed*, so a document
-    carrying any label at all was refused as *"labels that are not a list of strings"*, and
-    a plan whose design document carried one could be neither approved nor copied.
-
-    Both are accepted, because the second costs nothing and a reader that took only the
-    canonical mapping would be the same mistake pointing the other way — a store that
-    answered a bare string, or a record staged by :func:`write_document_metadata`, would
-    then be the shape it refused.
-
-    The name and nothing else: it is what identifies a label to a person, it is the one
-    field every variant carries, and it is what this writes back. A colour read and not
-    written back would be a field the write silently dropped; a colour neither read nor
-    written is one this never claimed to keep.
-    """
-    if not isinstance(labels, list):
-        raise OSError(f"document {document_id} has labels that are not a list")
-    named: list[str] = []
-    for label in labels:
-        match label:
-            case str():
-                named.append(label)
-            case {"name": str(name)}:
-                named.append(name)
-            case _:
-                raise OSError(
-                    f"document {document_id} has a label that is neither a name nor an "
-                    f"object naming one: {label!r}"
-                )
-    return named
-
-
-# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked
-# here or by the reader it is handed to.
-def _document(item: object) -> StoreDocument:
-    """One listed document, validated down to the fields a record is keyed and staged from.
-
-    The identity is held to a **qualified** `<source>:<native>` here rather than wherever
-    it is next used, because that is what makes :data:`QualifiedDocumentId` mean what its
-    name says: the write below takes one and has to name the source it copies into, and a
-    type whose values are only sometimes qualified pushes that check onto every caller.
-    """
-    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-        raise OSError(f"{STORE} returned a document without a qualified id")
-    source, separator, native = item["id"].partition(":")
-    if not separator or not source or not native:
-        raise OSError(
-            f"{STORE} addressed a document as {item['id']!r}, which is not a qualified "
-            f"`<source>:<native>` id, so there is no source to write a record back into"
-        )
-    payload = item.get("item")
-    if not isinstance(payload, dict):
-        raise OSError(f"{STORE} returned a document without an object payload")
-    title = payload.get("title")
-    content = payload.get("content")
-    project = payload.get("project")
-    labels = payload.get("labels", [])
-    repositories = payload.get("repositories", [])
-    metadata = payload.get("metadata", {})
-    location = payload.get("location")
-    if not isinstance(title, str):
-        raise OSError(f"document {item['id']} has no string title")
-    if content is not None and not isinstance(content, str):
-        raise OSError(f"document {item['id']} has non-string content")
-    if project is not None and not isinstance(project, str):
-        raise OSError(f"document {item['id']} has a non-string project")
-    label_names = _label_names(item["id"], labels)
-    if not isinstance(repositories, list) or not all(
-        isinstance(repository, str) for repository in repositories
-    ):
-        raise OSError(f"document {item['id']} has repositories that are not a list of strings")
-    if not isinstance(metadata, dict):
-        raise OSError(f"document {item['id']} has metadata that is not an object")
-    if location is not None and not isinstance(location, dict):
-        raise OSError(f"document {item['id']} has a location that is not an object")
-    return StoreDocument(
-        qualified_id=QualifiedDocumentId(item["id"]),
-        title=title,
-        content=content or "",
-        project=project,
-        labels=label_names,
-        repositories=repositories,
-        metadata=metadata,
-        location=location,
-    )
-
-
-def located(location: Mapping[str, Any] | None, fallback: str) -> str:
-    """Where the store says a record is, in the form the store reports it.
-
-    A link where the store puts it on a website, a path where it puts it in a file on
-    this machine, and ``fallback`` — the record's own qualified id — when the store
-    reports neither. **Never a location composed here**, which is the same rule the
-    design document's own planned-tasks table follows: a destination decides where its
-    records live, and a path or a URL assembled from a project name is one that names
-    nothing the moment the destination is a board rather than a directory.
-
-    One renderer for every record kind, because the question is the store's answer
-    rather than the record's: a project, a task and a document are all reported with the
-    same `location` object, and a second reading of it would answer differently the day
-    the store grows a third form.
-    """
-    held = location or {}
-    for form in ("url", "path"):
-        answered = held.get(form)
-        if isinstance(answered, str) and answered:
-            return answered
-    return fallback
+    location: Mapping[str, object] | None
 
 
 @dataclass(frozen=True)
 class StoreProject:
-    """A validated project record returned by onetaskgraph.
-
-    Narrower than :class:`StoreDocument` deliberately: nothing writes a project record
-    back, so this carries only what a reader asks a project — where it is, and what it
-    was copied from.
-    """
-
-    #: `<source>:<native>`, held to that shape where the store's answer is read.
     qualified_id: QualifiedProjectId
     title: str
     metadata: Mapping[str, object]
-    #: Where the store says this record is, reported back rather than composed. `None`
-    #: when the store reports none.
-    location: Mapping[str, Any] | None
+    location: Mapping[str, object] | None
+
+
+def qualified(project: str) -> QualifiedId:
+    parts = qualified_id(project)
+    if parts is None:
+        raise OSError(f"a project id must be qualified as <source>:<native>, got {project!r}")
+    return parts
+
+
+def authored_deps(task: StoreTask) -> list[str]:
+    own = list(task.deps)
+    stated = task.metadata.get(CROSS_DAG_DEPS)
+    listed = stated if isinstance(stated, list) else []
+    return sorted([*own, *(x for x in listed if isinstance(x, str) and x not in own)])
+
+
+def read_tasks(project: str) -> list[StoreTask]:
+    source, native = qualified(project)
+    answer = complete(sdk(client().task_list(source=[source], project=native)))
+    records = []
+    for held in answer.items:
+        held_id = held.id.model_dump()
+        if not held_id.startswith(f"{source}:{native}/"):
+            raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
+        item, metadata = held.item, held.item.metadata or {}
+        node_id = metadata.get("onepipeline.id")
+        if not isinstance(node_id, str):
+            raise OSError(f"task {held.id} has no string onepipeline.id")
+        repositories = [repository.model_dump() for repository in item.repositories or []]
+        if len(repositories) > 1:
+            raise OSError(f"task {held.id} has more than one repository")
+        records.append(
+            StoreTask(
+                QualifiedTaskId(held_id),
+                NodeId(node_id),
+                item.title,
+                item.content,
+                metadata,
+                repositories,
+                (),
+                tuple(x.model_dump() for x in item.delivers or []),
+            )
+        )
+    ids = {record.qualified_id: record.node_id for record in records}
+    node_ids = {record.node_id for record in records}
+    if len(ids) != len(records) or len(node_ids) != len(records):
+        raise OSError("the store returned duplicate task or node identities")
+    resolved = []
+    for record in records:
+        targets = [
+            QualifiedTaskId(edge.to.id.model_dump())
+            for edge in complete(sdk(client().task_deps(str(record.qualified_id)))).items
+        ]
+        unknown = [target for target in targets if target not in ids]
+        if unknown:
+            extra = (
+                f" — {WRITE_BACK_REWROTE}"
+                if any(x.startswith(f"{WRITE_BACK_SOURCE}:") for x in unknown)
+                else ""
+            )
+            raise OSError(
+                f"unknown dependency targets for {record.qualified_id}: {', '.join(unknown)}{extra}"
+            )
+        resolved.append(replace(record, deps=tuple(ids[target] for target in targets)))
+    return resolved
+
+
+def project_record(project: str) -> Mapping[str, object]:
+    answer = complete(sdk(client().project_show(project)))
+    if len(answer.items) != 1:
+        raise OSError(f"project show for {project!r} returned {len(answer.items)} records")
+    return dict(answer.items[0].item.model_dump(mode="python"))
+
+
+def task_record(task: str) -> Mapping[str, object]:
+    answer = complete(sdk(client().task_show(task)))
+    if len(answer.items) != 1:
+        raise OSError(f"task show for {task!r} returned {len(answer.items)} records")
+    return dict(answer.items[0].item.model_dump(mode="python"))
+
+
+def read_plan(project: str, records: Sequence[StoreTask]) -> dict[str, object]:
+    held = project_record(project)
+    raw_metadata = held.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
+    plan = {
+        k.removeprefix("onepipeline."): v
+        for k, v in metadata.items()
+        if k.startswith("onepipeline.")
+    }
+    plan.setdefault("name", held["title"])
+    nodes = []
+    for record in records:
+        node = {
+            k.removeprefix("onepipeline."): v
+            for k, v in record.metadata.items()
+            if k.startswith("onepipeline.")
+        }
+        node.update(title=record.title, task=record.content)
+        if record.repositories:
+            node["repo"] = record.repositories[0]
+        if deps := authored_deps(record):
+            node["deps"] = deps
+        if record.delivers:
+            node["delivers"] = list(record.delivers)
+        nodes.append(node)
+    plan["tasks"] = nodes
+    return plan
+
+
+def read_project(project: str) -> tuple[dict[str, object], list[StoreTask]]:
+    records = read_tasks(project)
+    return read_plan(project, records), records
+
+
+def read_documents(project: str) -> list[StoreDocument]:
+    source, native = qualified(project)
+    result = []
+    for held in complete(sdk(client().document_list(source=[source], project=native))).items:
+        held_id = held.id.model_dump()
+        item = held.item
+        item_project = item.project.model_dump() if item.project else None
+        if not held_id.startswith(f"{source}:") or item_project != native:
+            raise OSError(f"project {project!r} returned document {held_id!r} outside itself")
+        location = item.location.model_dump(mode="python") if item.location else None
+        result.append(
+            StoreDocument(
+                QualifiedDocumentId(held_id),
+                item.title,
+                item.content or "",
+                item_project,
+                [label.name for label in item.labels],
+                [x.model_dump() for x in item.repositories or []],
+                item.metadata or {},
+                location,
+            )
+        )
+    return result
 
 
 def read_projects(source: str) -> list[StoreProject]:
-    """Every project ``source`` holds, validated, in the order the store lists them.
-
-    Narrowed to one source rather than asked of every configured one, because the caller
-    is asking which record a copy landed on in a named destination — and a second source
-    holding a project copied from the same origin would answer for it.
-
-    That narrowing is **checked** rather than assumed, because it is the whole of what
-    this answer means: the caller reports one of these records as where a named
-    destination holds a plan, so a listing carrying a record of some other source would
-    send a reviewer to a project that destination does not hold. It is another program's
-    answer to a query this one wrote, and a query is not a guarantee.
-    """
-    listed = paged(["project", "list", "--source", source], "project")
-    projects = [_project(item) for item in listed]
-    strayed = [held for held in projects if not str(held.qualified_id).startswith(f"{source}:")]
-    if strayed:
-        named = ", ".join(str(held.qualified_id) for held in strayed)
-        raise OSError(
-            f"{STORE} answered a listing of source {source!r} with {len(strayed)} record(s) "
-            f"of another source ({named}), so what it holds cannot be told from what it "
-            f"does not"
+    projects = [
+        StoreProject(
+            QualifiedProjectId(x.id.model_dump()),
+            x.item.title,
+            x.item.metadata or {},
+            x.item.location.model_dump(mode="python") if x.item.location else None,
         )
+        for x in complete(sdk(client().project_list(source=[source]))).items
+    ]
+    if any(not str(project.qualified_id).startswith(f"{source}:") for project in projects):
+        raise OSError(f"source {source!r} returned a project outside its own ids")
     return projects
 
 
-# llmlint: ignore[suppressions_justified] The item payload is open; every field read is checked.
-def _project(item: object) -> StoreProject:
-    """One listed project, validated down to the fields a reader locates a copy by.
-
-    The identity is held to a **qualified** `<source>:<native>` here rather than wherever
-    it is next used, for the reason :func:`_document` gives: that is what makes
-    :data:`QualifiedProjectId` mean what its name says. It is not only naming here — a
-    caller reports this id as where the destination holds a plan when the store says
-    nothing about its location, and an unqualified one addresses a project in no store.
-    """
-    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-        raise OSError(f"{STORE} returned a project without a qualified id")
-    source, separator, native = item["id"].partition(":")
-    if not separator or not source or not native:
-        raise OSError(
-            f"{STORE} addressed a project as {item['id']!r}, which is not a qualified "
-            f"`<source>:<native>` id, so nothing can be asked of the store about it"
-        )
-    payload = item.get("item")
-    if not isinstance(payload, dict):
-        raise OSError(f"{STORE} returned a project without an object payload")
-    title = payload.get("title")
-    metadata = payload.get("metadata", {})
-    location = payload.get("location")
-    if not isinstance(title, str):
-        raise OSError(f"project {item['id']} has no string title")
-    if not isinstance(metadata, dict):
-        raise OSError(f"project {item['id']} has metadata that is not an object")
-    if location is not None and not isinstance(location, dict):
-        raise OSError(f"project {item['id']} has a location that is not an object")
-    return StoreProject(
-        qualified_id=QualifiedProjectId(item["id"]),
-        title=title,
-        metadata=metadata,
-        location=location,
-    )
-
-
-def write_document_metadata(document: StoreDocument, key: str, value: object) -> None:
-    """Set one namespaced metadata entry of ``document``, wherever its store keeps it.
-
-    The record is staged whole — every field :class:`StoreDocument` carries — into a
-    local Markdown source of this call's own, and copied over the record it was read
-    from. The copy is the store's own write verb, so a board takes this write exactly as
-    a directory does; the module docstring states the two costs that come with it.
-
-    The destination the store reports is checked against the document this was asked
-    about, because the correspondence is matched by title: a second document of that
-    title would be updated silently, and a record written over the wrong document reads
-    as sound from every side afterwards.
-
-    ``document`` is one :func:`read_documents` returned, and that is where its identity
-    was held to a qualified `<source>:<native>` — the source half is what this copies
-    into, and it is the only half that reaches anything here. The native half is the
-    store's own answer about its own records and is never interpolated into a path; see
-    :func:`staged_name`.
-    """
-    # Qualified by construction: `_document` refuses an identity that is not, which is
-    # what makes this partition a read of the source half rather than a second check.
-    source = document.qualified_id.partition(":")[0]
-    fields: dict[str, object] = {"title": document.title}
-    if document.project is not None:
-        fields["project"] = document.project
-    if document.labels:
-        fields["labels"] = document.labels
-    if document.repositories:
-        fields["repositories"] = document.repositories
-    fields["metadata"] = dict(document.metadata) | {key: value}
-    name = staged_name(document.qualified_id)
-    with tempfile.TemporaryDirectory(prefix="ai-orchestrator-record-") as staging:
-        staged = Path(staging) / "documents"
-        staged.mkdir(parents=True)
-        (staged / f"{name}.md").write_text(frontmatter(fields, document.content), encoding="utf-8")
-        answer = store_json(
-            [
-                "--set",
-                f"sources.{STAGING_SOURCE}.plugin={WRITABLE_PLUGIN}",
-                "--set",
-                f"sources.{STAGING_SOURCE}.config.root={staging}",
-                "document",
-                "copy",
-                f"{STAGING_SOURCE}:{name}",
-                "--to",
-                source,
-                "--match-by",
-                MATCH_BY,
-            ]
-        )
-    written = answer.get("items")
-    if not isinstance(written, list) or len(written) != 1 or not isinstance(written[0], dict):
-        raise OSError(
-            f"{STORE} reported {len(written) if isinstance(written, list) else 0} copied "
-            f"records for {document.qualified_id}, so what it wrote cannot be told"
-        )
-    landed = written[0].get("destination")
-    if landed != document.qualified_id:
-        raise OSError(
-            f"{STORE} wrote the record onto {landed!r} rather than onto "
-            f"{document.qualified_id!r}; the two share a title and the write was matched "
-            f"by {MATCH_BY}, so leave one of them a title of its own and run this again"
-        )
-
-
-def project_record(project: str) -> Mapping[str, Any]:
-    """One qualified project's own record, as the store reports it.
-
-    Distinct from :func:`read_plan`, which keeps the `onepipeline.`-prefixed metadata
-    and drops everything else: what a *project* says about itself — that it is the plan
-    a planning launch is writing, say — is not a plan field and would be dropped there.
-    """
-    return one_item(store_json(["project", "show", project]), "project")
+def located(location: Mapping[str, object] | None, fallback: str) -> str:
+    held = location or {}
+    for key in ("url", "path"):
+        value = held.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return fallback
 
 
 def configured_settings() -> dict[str, object]:
-    """Every setting the store resolves, keyed by its dotted key, as `config show` reports it.
-
-    Read through the CLI's own `config show` rather than by reading `onetaskgraph.yaml`
-    here: the configuration layers a file under environment variables under flags, and a
-    second reader of the file alone would answer for a layer nothing runs at.
-    """
-    settings = store_json(["config", "show"]).get("settings")
-    if not isinstance(settings, list):
-        raise OSError(f"{STORE} returned a configuration without a settings list")
     return {
-        setting["key"]: setting.get("value")
-        for setting in settings
-        if isinstance(setting, dict) and isinstance(setting.get("key"), str)
+        setting.key.model_dump(): setting.value for setting in sdk(client().config_show()).settings
     }
 
 
 def source_root(source: str) -> Path:
-    """The directory ``source`` stores its records in, when it is one this may write.
-
-    Resolved through :func:`configured_settings`, for the reason it gives.
-    """
     values = configured_settings()
-    plugin = values.get(f"sources.{source}.plugin")
-    root = values.get(f"sources.{source}.config.root")
+    plugin, root = (
+        values.get(f"sources.{source}.plugin"),
+        values.get(f"sources.{source}.config.root"),
+    )
     if plugin != WRITABLE_PLUGIN:
-        raise OSError(
-            f"source {source!r} is a {plugin!r} source, and a review record is only ever "
-            f"written into a {WRITABLE_PLUGIN!r} one"
-        )
-    if not isinstance(root, str) or not root:
-        raise OSError(f"source {source!r} names no root directory")
-    # Refused here rather than left to the first syscall that touches it: a NUL is the
-    # one character `Path` accepts and every filesystem call then rejects with
-    # `ValueError`, which is outside the `OSError` every caller of this reads — so a
-    # launcher would report a traceback where it promised a sentence.
-    if "\0" in root:
-        raise OSError(
-            f"source {source!r} names a root containing a NUL character, which no "
-            f"filesystem path can hold"
-        )
-    held = Path(root)
-    return held if held.is_absolute() else REPO_ROOT / held
+        raise OSError(f"source {source!r} is a {plugin!r} source")
+    if not isinstance(root, str) or not root or "\0" in root:
+        raise OSError(f"source {source!r} names no valid root")
+    path = Path(root)
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def ensure_writable_source_root(source: str) -> Path:
-    """:func:`source_root`, made into a directory records can actually be written into.
-
-    `source_root` answers what the configuration *says*; this answers whether a plan
-    could be authored there, and is what a planning launch resolves before it writes
-    anything. A root that does not exist yet is the ordinary state of a host that has
-    never planned — the first launch makes one — so it is created rather than refused,
-    and what is refused is a path that is not a directory, one that cannot be made, and
-    one this process may not write into.
-
-    Every refusal names the source and the path, because the caller is a launcher whose
-    operator has to repair one of the two.
-    """
     root = source_root(source)
     if root.exists() and not root.is_dir():
-        raise OSError(
-            f"source {source!r} is rooted at {root}, which is not a directory, so no plan "
-            f"can be stored there"
-        )
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise OSError(
-            f"source {source!r} is rooted at {root}, which could not be created: {exc}"
-        ) from exc
+        raise OSError(f"source {source!r} root {root} is not a directory")
+    root.mkdir(parents=True, exist_ok=True)
     if not os.access(root, os.W_OK | os.X_OK):
-        raise OSError(
-            f"source {source!r} is rooted at {root}, which this process may not write into"
-        )
+        raise OSError(f"source {source!r} root {root} is not writable")
     return root
 
 
+def local_projects(source: str) -> list[str]:
+    root = source_root(source) / PROJECTS_DIRECTORY
+    return (
+        [] if not root.exists() else [f"{source}:{path.stem}" for path in sorted(root.glob("*.md"))]
+    )
+
+
 def task_document(source: str, native_task_id: str) -> Path:
-    """The Markdown file holding one task of a local Markdown source.
-
-    A local task's native id is `<project>/<task>`, which is also its path below the
-    root's `tasks/` directory — the layout `orchestrator/project_store.py` writes and
-    `examples/tasks/` ships.
-
-    Both components are held to :data:`RECORD_COMPONENT` rather than merely to "not
-    empty and not nested". The id arrives from the store, which is a plugin this
-    repository does not own answering about a directory this one writes into, so a
-    component of `..` would name a record outside the project — and the caller is about
-    to edit whatever this returns.
-    """
+    """Return the existing local task path for read-only journey assertions."""
     project, separator, task = native_task_id.partition("/")
     if (
         not separator
         or not RECORD_COMPONENT.fullmatch(project)
         or not RECORD_COMPONENT.fullmatch(task)
     ):
-        raise OSError(
-            f"task id {native_task_id!r} is not a local record's `<project>/<task>`, so the "
-            f"document holding it cannot be named"
-        )
+        raise OSError(f"task id {native_task_id!r} is not <project>/<task>")
     document = source_root(source) / TASKS_DIRECTORY / project / f"{task}.md"
     if not document.is_file():
         raise OSError(f"task {source}:{native_task_id} has no record at {document}")
     return document
-
-
-def project_document(source: str, native_project_id: str) -> Path:
-    """The Markdown file holding one project of a local Markdown source.
-
-    A local project's native id is its file's stem below the root's `projects/`
-    directory — the layout `orchestrator/project_store.py` writes and
-    :func:`local_projects` lists — and the plan-level review record
-    `orchestrator/plan_review.py` writes goes into this file, exactly as a task's goes
-    into the one :func:`task_document` names. Held to :data:`RECORD_COMPONENT` for the
-    same reason: the id is the store's answer about a directory this repository writes
-    into, and the caller is about to edit whatever this returns.
-    """
-    if not RECORD_COMPONENT.fullmatch(native_project_id):
-        raise OSError(
-            f"project id {native_project_id!r} is not a local record's own name, so the "
-            f"document holding it cannot be named"
-        )
-    document = source_root(source) / PROJECTS_DIRECTORY / f"{native_project_id}.md"
-    if not document.is_file():
-        raise OSError(f"project {source}:{native_project_id} has no record at {document}")
-    return document
-
-
-#: What a project or task component of a local record's id may be. Deliberately an
-#: allowlist: this decides a path a caller then writes to, and `.` and `..` are the two
-#: values that would carry that write out of the project it names.
-RECORD_COMPONENT = re.compile(r"(?!\.+$)[\w.@+-]+")
-
-
-_FENCE = "---"
-_METADATA_OPEN = re.compile(r"^metadata:\s*$")
-#: One entry of a `metadata` block, in either rendering this host produces. This
-#: module and `orchestrator/project_store.py` write a JSON-quoted key; the plan
-#: store's own renderer, and the settlement write-back that goes through it, write
-#: a plain YAML key. Both parse to the same key, so a record written by one has to
-#: be editable by the other — a writer that refused the store's own rendering left
-#: every review record unwritable after a run settled onto the plan it launched from.
-_METADATA_ENTRY = re.compile(r'^\s+(?:"(?P<quoted>[^"]*)"|(?P<plain>[A-Za-z_][A-Za-z0-9_.-]*)): \S')
-_INDENTED = re.compile(r"^\s+\S")
-#: An entry that opens a block: a key stating no value of its own, or stating only a
-#: block-scalar indicator, with its contents on the more-indented lines below it. The
-#: settlement write-back renders the pin and the record it projects onto a task the first
-#: way and the detail it records the second, so a plan that has ever settled holds both,
-#: and a writer that could not account for them refused every task of it.
-_METADATA_NEST = re.compile(
-    r'^(?P<indent>\s+)(?:"(?P<quoted>[^"]*)"|(?P<plain>[A-Za-z_][A-Za-z0-9_.-]*)):'
-    r"(?:\s*|\s+(?P<scalar>[|>][+-]?\d*)\s*)$"
-)
-#: One item of a block sequence. YAML lets a sequence stand at its own key's indent
-#: rather than below it, and the plan store's renderer takes that option — so
-#: `onepipeline.steps:` opens a block whose items sit *level* with the entries around
-#: them. It is the one shape here whose indentation does not say whose it is, which is
-#: why matching this is never on its own enough to place a line: see
-#: :meth:`_Entry.admits_indentless_sequence`.
-_METADATA_SEQUENCE = re.compile(r"^\s+-(?: |$)")
-
-
-def _closing_fence(lines: Sequence[str]) -> int:
-    """The index of the fence closing this document's frontmatter."""
-    if not lines or lines[0].strip() != _FENCE:
-        raise OSError("the record does not open with a `---` frontmatter fence")
-    for index in range(1, len(lines)):
-        if lines[index].strip() == _FENCE:
-            return index
-    raise OSError("the record's frontmatter fence is never closed")
-
-
-def write_metadata(document: Path, key: str, value: object) -> None:
-    """Set one namespaced metadata entry of ``document``, leaving everything else alone.
-
-    The entry is rendered by `orchestrator/project_store.py`'s
-    :func:`~orchestrator.project_store.metadata_entry`, which is the one renderer of that
-    line, so a record this writes and a record that module wrote read back identically —
-    and cannot come apart later, which a second copy of the rendering here could.
-    """
-    lines = document.read_text(encoding="utf-8").split("\n")
-    closing = _closing_fence(lines)
-    entry = metadata_entry(key, value)
-    opened = [index for index in range(1, closing) if _METADATA_OPEN.match(lines[index])]
-    if len(opened) > 1:
-        raise OSError(
-            f"the record opens `metadata` {len(opened)} times, so which block a review "
-            f"record belongs in cannot be decided; leave it one block"
-        )
-    if not opened:
-        if any(line.startswith("metadata:") for line in lines[1:closing]):
-            raise OSError(
-                "the record states `metadata` on one line; a review record is written as an "
-                "indented entry, so re-render the record with its metadata as a block"
-            )
-        updated = [*lines[:closing], "metadata:", entry, *lines[closing:]]
-    else:
-        start = opened[0] + 1
-        end = start
-        while end < closing and (_INDENTED.match(lines[end]) or not lines[end].strip()):
-            end += 1
-        # A blank line is inside this block only while its content goes on past one, so
-        # the run of them the scan ended on belongs to whatever follows instead. Scanning
-        # over them at all is what a block scalar needs: the store renders a settled
-        # record's own prose as one, and a paragraph break in it is an ordinary blank line.
-        while end > start and not lines[end - 1].strip():
-            end -= 1
-        # The whole block is held to the entry shapes rather than only its leading run,
-        # because anything else in it is a line this cannot account for — and the cost of
-        # guessing is a second entry for a key already there, which is a duplicate YAML
-        # key rather than a visible failure.
-        grouped = _entries(lines[start:end])
-        held = [line for entry in grouped if entry.key != key for line in entry.lines]
-        updated = [*lines[:start], *held, entry, *lines[end:]]
-    _replace(document, "\n".join(updated))
-
-
-class _Entry(NamedTuple):
-    """One metadata entry: the key it states, and the lines it owns."""
-
-    key: str
-    lines: list[str]
-    #: Whether this entry's own line left its value to the lines below — stating
-    #: nothing after the colon, or only a block-scalar indicator — so what follows it is
-    #: its contents rather than an entry of its own. *Below* rather than *indented*
-    #: because a block sequence stands at its own key's indent: the lines an entry owns
-    #: are the more-indented ones and the sequence items level with it.
-    opened_a_block: bool
-    #: Whether that block is a block *scalar* — the key stated a `|` or `>` indicator, so
-    #: its value is text, always written past its indent. Held apart from
-    #: :attr:`opened_a_block` because the two shapes that open a block differ in exactly
-    #: one way that matters here: a scalar has no items.
-    block_scalar: bool
-
-    def admits_indentless_sequence(self, base: int) -> bool:
-        """Whether a `- ` line at ``base`` could still be an item of this entry's block.
-
-        Opening a block is not on its own what makes such a line this entry's, and reading
-        it as though it were is how a malformed record would be edited around rather than
-        refused. A key that states a block-scalar indicator leaves text below it, and text
-        has no items. A key that states nothing takes either shape, and the first line
-        below it is what says which: at ``base`` it is the indentless sequence YAML
-        permits, and deeper it is a mapping or an indented sequence — whose neighbour back
-        at ``base`` is a line nothing here can place rather than a second item.
-
-        Undecided while nothing is below the key yet, which is where an indentless
-        sequence begins and so the one state that has to admit one.
-        """
-        if self.block_scalar:
-            return False
-        for line in self.lines[1:]:
-            if line.strip():
-                return len(line) - len(line.lstrip()) == base
-        return True
-
-
-def _entries(block: Sequence[str]) -> list[_Entry]:
-    """``block``'s metadata entries, each with the lines it owns, refusing what it cannot read.
-
-    An entry is one line stating a key and a value, or a key opening a block together
-    with the lines below that belong to it — the more-indented ones, and the items of a
-    block sequence, which YAML writes at the opening key's own indent. A line that is
-    neither — a `- ` item standing beside a block scalar's text, beside a mapping's own
-    entries, or with nothing open at all; a key with a space before its colon — is one
-    nothing here can account for, and editing around it would leave a second entry for a
-    key already present.
-    """
-    grouped: list[_Entry] = []
-    base: int | None = None
-    for line in block:
-        if not line.strip():
-            # A blank line stands for nothing on its own, so it is content of a block
-            # scalar something opened or it is a line nothing here can place. Reading one
-            # as the end of the block is what would insert a review record into the middle
-            # of a paragraph the write-back recorded.
-            if grouped and grouped[-1].opened_a_block:
-                grouped[-1].lines.append(line)
-                continue
-            raise OSError(
-                "the record's `metadata` block holds a blank line no entry above it "
-                "accounts for; a review record is written beside entries of the form "
-                '`"<key>": <json>`, so re-render the record'
-            )
-        indent = len(line) - len(line.lstrip())
-        if base is None:
-            base = indent
-        # Deeper than the entries themselves belongs to the entry above — but only where
-        # that entry opened a block. Beneath one that stated a value it is a line
-        # nothing here can account for, and swallowing it would edit around a shape this
-        # never read.
-        if indent > base and grouped and grouped[-1].opened_a_block:
-            grouped[-1].lines.append(line)
-            continue
-        # A sequence item standing at the block's own indent belongs to the entry above
-        # for the same reason and under a narrower condition: a block sequence is written
-        # at its key's indent rather than below it, so this is the one shape whose
-        # position says nothing about whose it is. It is read as content only where an
-        # entry above opened a block *that takes items* — with nothing open, and beside a
-        # block scalar's text or a mapping's entries, a `- ` line is the unplaceable line
-        # it always was, and is refused below.
-        if (
-            indent == base
-            and grouped
-            and grouped[-1].opened_a_block
-            and grouped[-1].admits_indentless_sequence(base)
-            and _METADATA_SEQUENCE.match(line)
-        ):
-            grouped[-1].lines.append(line)
-            continue
-        # The nested shape is tried first: a block-scalar opener states a value the flat
-        # shape also matches, and reading it as one would refuse the lines it owns.
-        nested = _METADATA_NEST.match(line)
-        matched = nested or _METADATA_ENTRY.match(line)
-        # An entry of this block stands at the block's own indent, exactly. Deeper than
-        # that, and not the contents of a mapping something opened, it is a line nothing
-        # here can place — reading it as a sibling would move it up a level it was never
-        # at. Shallower is the same line at the other end: it sits outside the block its
-        # neighbours are in, and reading it as one of them would write this record at a
-        # depth that puts it somewhere else again.
-        if matched is None or indent != base:
-            raise OSError(
-                f"the record's `metadata` block holds a line this cannot edit around: "
-                f"{line.strip()!r}; a review record is written beside entries of "
-                f'the form `"<key>": <json>`, so re-render the record'
-            )
-        quoted = matched["quoted"]
-        key = quoted if quoted is not None else matched["plain"]
-        scalar = nested["scalar"] if nested is not None else None
-        grouped.append(_Entry(key, [line], nested is not None, scalar is not None))
-    return grouped
-
-
-def _replace(document: Path, content: str) -> None:
-    """Write ``content`` over ``document`` without ever leaving a half-written record.
-
-    A local Markdown source opens a project's task directory and reads every file in
-    it, so a reader that arrives mid-write does not see a shorter file — it sees a
-    record whose frontmatter is truncated, and refuses the whole walk.
-
-    The whole file is staged at the source root rather than beside the record, because a
-    reader walking the record's directory lists the staged file, and when the rename
-    takes it away before the reader opens it, the walk is refused: `the source returned
-    data this interface cannot represent: … (os error 2)`. No walk lists the root's own
-    entries, and a rename within one root never crosses a filesystem.
-
-    A rename that fails removes what it staged. The root can admit a file while the
-    record's own directory refuses one, so the staging succeeds exactly where the rename
-    is then refused, and the source root is shared by every writer of the store.
-    """
-    handle, temporary = tempfile.mkstemp(dir=str(_record_root(document)), suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as opened:
-            opened.write(content)
-        os.replace(temporary, document)
-    except OSError:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-
-def _record_root(document: Path) -> Path:
-    """The source root holding ``document``, in either layout :func:`project_document`
-    and :func:`task_document` name: `<root>/projects/<project>.md` or
-    `<root>/tasks/<project>/<task>.md`.
-
-    The task layout is read first because `projects` is a project name
-    :data:`RECORD_COMPONENT` admits: read the other way, a task of that project would
-    stage in `<root>/tasks/`, which a walk lists to find its projects.
-
-    Refused rather than guessed for any other path: the answer is a directory a file is
-    then created in, so a record in neither layout would stage it somewhere this cannot
-    say a walk of the source never lists.
-    """
-    parent = document.parent
-    if parent.parent.name == TASKS_DIRECTORY:
-        return parent.parent.parent
-    if parent.name == PROJECTS_DIRECTORY:
-        return parent.parent
-    raise OSError(
-        f"{document} is in neither record layout of a local source — "
-        f"`<root>/{PROJECTS_DIRECTORY}/<project>.md` or "
-        f"`<root>/{TASKS_DIRECTORY}/<project>/<task>.md` — so where its replacement may be "
-        f"staged cannot be decided"
-    )
-
-
-def local_projects(source: str) -> list[str]:
-    """Every project ``source`` holds, as qualified ids; none when it holds no root."""
-    root = source_root(source) / PROJECTS_DIRECTORY
-    if not root.is_dir():
-        return []
-    return sorted(f"{source}:{document.stem}" for document in root.glob("*.md"))

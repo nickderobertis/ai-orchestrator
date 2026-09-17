@@ -29,7 +29,6 @@ from typing import NamedTuple
 import pytest
 from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from nx_workspace import copy_checkout, copy_working_tree, shares_workspace_install
-from onetaskgraph_release import path_without
 from waits import timeout as e2e_timeout
 
 # Deliberately no module-level tier mark. Most of this file drives `just` recipes
@@ -903,7 +902,7 @@ def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
     """A checkout the *real* `scripts/nx.sh` runs in, with Nx doubled.
 
     Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, `workspace-install.sh`,
-    `python-install.sh` and `onetaskgraph-install.sh` are the real files, because what
+    and `python-install.sh` are the real files, because what
     they choose to do — which log to write, and whether to provision the workspace
     first — is what is under test. This checkout declares no adopted release, which is
     the case the plan-store heal is written to no-op in: `tests/fixtures/nx-cache` is
@@ -919,7 +918,6 @@ def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
         "install-lock.sh",
         "workspace-install.sh",
         "python-install.sh",
-        "onetaskgraph-install.sh",
     ):
         shutil.copy2(ROOT / "scripts" / script, checkout / "scripts" / script)
         (checkout / "scripts" / script).chmod(0o755)
@@ -1428,13 +1426,29 @@ FLOCKLESS_RACERS = 3
 BUN_INSTALL_SECONDS = "2"
 
 
+def _path_without(root: Path, tool: str) -> Path:
+    """A PATH directory containing the host's executables except ``tool``."""
+    directory = root / "no-tool"
+    directory.mkdir(parents=True, exist_ok=True)
+    for entry in os.environ["PATH"].split(os.pathsep):
+        source = Path(entry)
+        if not source.is_dir():
+            continue
+        for candidate in sorted(source.iterdir()):
+            destination = directory / candidate.name
+            if candidate.name == tool or destination.is_symlink() or destination.exists():
+                continue
+            destination.symlink_to(candidate)
+    return directory
+
+
 def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str) -> dict[str, str]:
     """The wrapper environment on a platform that ships no `flock`.
 
     Stated rather than assumed: every journey below passes under `flock` too, so
     without establishing it is gone each would prove the `flock` path a second time.
     """
-    stripped = os.pathsep.join((str(checkout / "bin"), str(path_without(tmp_path, "flock"))))
+    stripped = os.pathsep.join((str(checkout / "bin"), str(_path_without(tmp_path, "flock"))))
     resolves = subprocess.run(
         ["bash", "-c", "command -v flock"],
         env={"PATH": stripped},

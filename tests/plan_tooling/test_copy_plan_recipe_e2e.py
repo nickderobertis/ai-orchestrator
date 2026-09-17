@@ -28,11 +28,10 @@ import json
 import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import NewType
+from typing import Any, NewType
 
 import pytest
 from project_fixtures import approved, local_project, reviewed
-from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_review, plan_store
@@ -183,6 +182,11 @@ def _stored_documents(project: str) -> list[dict[str, object]]:
     return [one["item"] for one in items]
 
 
+def _reported(output: str) -> list[dict[str, Any]]:
+    """The copy's per-record report lines, one JSON object each, in the order printed."""
+    return [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+
+
 def _records(root: Path) -> list[str]:
     """Every record file the destination store holds, as paths below its root."""
     return sorted(str(one.relative_to(root)) for one in root.rglob("*.md")) if root.is_dir() else []
@@ -246,9 +250,23 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert trial.returncode == 0, trial.stdout + trial.stderr
     assert native in trial.stdout, trial.stdout
     assert _records(destination) == [], "a trial run wrote to the destination"
+    # The trial reports every record the copy would create — the document among them, so
+    # the flag reached the document copy — and names no destination, because nothing was.
+    would_create = {f"{project}", f"{project}/route", f"{project}-design"}
+    assert {one["source"] for one in _reported(trial.stdout)} == would_create, trial.stdout
+    assert {(one["action"], one.get("destination")) for one in _reported(trial.stdout)} == {
+        ("created", None)
+    }, trial.stdout
 
     copy = _just("copy-plan", project, "--to", DESTINATION)
     assert copy.returncode == 0, copy.stdout + copy.stderr
+    # One report line per record, the project's before its document's, each naming the
+    # id it landed under: the store's own per-record report, reaching the operator whole.
+    assert [(one["action"], one["destination"]) for one in _reported(copy.stdout)] == [
+        ("created", copied_id),
+        ("created", f"{copied_id}/route"),
+        ("created", f"{copied_id}-design"),
+    ], copy.stdout
     # The plan's **document** lands beside its tasks, and that is the store's own
     # `project copy` being composed with rather than trusted: that verb carries a project
     # and its tasks and no document at all, so a plan copied without this arrives with
@@ -322,7 +340,7 @@ def test_a_plan_cleared_task_by_task_but_not_whole_is_refused_by_both_commands(
     assert _just("check-plan", project).returncode == 0
 
     source, native = plan_store.qualified(project)
-    record = plan_store.project_document(source, native)
+    record = plan_store.source_root(source) / "projects" / f"{native}.md"
     written = record.read_text(encoding="utf-8")
     assert GOAL in written, written
     record.write_text(written.replace(GOAL, "Deliver something else"), encoding="utf-8")
@@ -535,7 +553,7 @@ def test_a_plan_that_landed_without_its_document_says_so_rather_than_reporting_a
 
 
 def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binary(
-    destination: Path, monkeypatch: pytest.MonkeyPatch
+    destination: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """`ONETASKGRAPH_BIN` is the engine's pointer and that CLI's own unknown setting.
 
@@ -547,9 +565,6 @@ def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binar
     one call, because each of these spawns the store for itself: the review, the approval
     the fixture records, the pre-flight read, the project copy and the document copy.
     """
-    # llmlint: ignore[e2e_not_mocked] The real installed CLI, named the way the engine
-    # names it; nothing is substituted, and the point is that this name is present.
-    monkeypatch.setenv("ONETASKGRAPH_BIN", str(ONETASKGRAPH_BIN))
     project = _project("copy-under-engine-pointer")
     _, _, native = project.partition(":")
     # `reviewed` reaches this record the way an operator does — the real `just
@@ -557,6 +572,20 @@ def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binar
     # and substitutes the paid provider process alone, this suite's one sanctioned double.
     # llmlint: ignore[e2e_not_mocked] see the note above this line
     reviewed(project)
+
+    marker = tmp_path / "poison-ran"
+    poison = tmp_path / "onetaskgraph-poison"
+    poison.write_text(f"#!/bin/sh\ntouch {marker}\nexit 91\n", encoding="utf-8")
+    poison.chmod(0o700)
+    baseline = _just("copy-plan", project, "--to", DESTINATION, "--dry-run")
+    monkeypatch.setenv("ONETASKGRAPH_BIN", str(poison))
+    poisoned = _just("copy-plan", project, "--to", DESTINATION, "--dry-run")
+    assert (poisoned.returncode, poisoned.stdout, poisoned.stderr) == (
+        baseline.returncode,
+        baseline.stdout,
+        baseline.stderr,
+    )
+    assert not marker.exists(), "the SDK routed a store read through ONETASKGRAPH_BIN"
 
     copy = _just("copy-plan", project, "--to", DESTINATION)
     assert copy.returncode == 0, copy.stdout + copy.stderr

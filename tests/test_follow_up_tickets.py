@@ -20,9 +20,11 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import follow_up_variables
 import pytest
+from onetaskgraph_sdk import CopyReport
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_tickets as tickets
@@ -37,6 +39,19 @@ REPOSITORY = "github.com/nickderobertis/some-service"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 #: A well-formed hostname that is not this machine's: the validator checks the shape alone.
 HOST = "verifier-01.build.example"
+
+
+def test_board_category_refuses_a_copy_report_naming_no_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plan_store,
+        "client",
+        lambda: SimpleNamespace(task_copy=lambda *_args, **_kwargs: object()),
+    )
+    monkeypatch.setattr(plan_store, "sdk", lambda _answer: CopyReport(items=[]))
+    with pytest.raises(OSError, match="neither a new item nor an existing one"):
+        tickets.board_category("drafts:run/ticket", "board")
 
 
 IMPACT_PROSE = "Every reader of a listing misses its last page, and the export built on it too."
@@ -1107,9 +1122,7 @@ def test_the_store_reads_each_status_a_ticket_is_written_with_as_that_status(
     """
     path = _write(drafts_root, _ticket(status=status))
     run, cause = tickets.located_path(path)
-    item = plan_store.one_item(
-        plan_store.store_json(["task", "show", tickets.qualified_id(run, cause)]), "task"
-    )
+    item = plan_store.task_record(tickets.qualified_id(run, cause))
 
     assert item["status"] == {"category": status.value, "name": status.value}
     assert tickets.read_ticket(path).status is status
@@ -1196,16 +1209,16 @@ def board(drafts_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def _on_board(ticket: Path) -> str:
     """Copy ``ticket`` onto the board through the store, as the agent does; its item's id."""
     run, cause = tickets.located_path(ticket)
-    copied = plan_store.store_json(
-        ["task", "copy", tickets.qualified_id(run, cause), "--to", BOARD]
+    copied = plan_store.sdk(
+        plan_store.client().task_copy([tickets.qualified_id(run, cause)], to=BOARD)
     )
-    destination = copied["items"][0]["destination"]
-    assert isinstance(destination, str), copied
-    return destination
+    destination = copied.items[0].root.destination
+    assert destination is not None, copied
+    return destination.model_dump()
 
 
 def _board_item(destination: str) -> dict[str, object]:
-    return dict(plan_store.one_item(plan_store.store_json(["task", "show", destination]), "task"))
+    return dict(plan_store.task_record(destination))
 
 
 def _moved(destination: str, word: str) -> None:
@@ -1218,7 +1231,7 @@ def _moved(destination: str, word: str) -> None:
     reads the edit back through `task show`.
     """
     if word != UNPLACEABLE:
-        plan_store.store_json(["task", "status", "set", destination, word])
+        plan_store.sdk(plan_store.client().task_status_set(destination, word))
         return
     location = _board_item(destination)["location"]
     assert isinstance(location, dict)
@@ -1479,13 +1492,6 @@ def test_board_status_that_cannot_ask_the_board_is_unrunnable(
     stray = tmp_path / "not-a-ticket.md"
     assert tickets.main(["board-status", "--board", BOARD, str(stray)]) == tickets.UNRUNNABLE
     assert "is not where a ticket is stored" in capsys.readouterr().err
-
-    # A dry-run answer naming neither a new item nor an existing one, which the installed
-    # store does not give: the one answer here that stands in for the store. Its settings
-    # list is empty, so the board configures no owner and the dry run is what is asked.
-    monkeypatch.setattr(plan_store, "store_json", lambda _arguments: {"items": [], "settings": []})
-    assert tickets.main(["board-status", "--board", BOARD, str(ticket)]) == tickets.UNRUNNABLE
-    assert "naming neither a new item nor an existing one" in capsys.readouterr().err
 
 
 #: A repository under an owner the committed `followups` source does not configure.

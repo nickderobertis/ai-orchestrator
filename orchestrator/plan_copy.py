@@ -41,12 +41,13 @@ as an outage of the board, and retry it.
 from __future__ import annotations
 
 import argparse
-import subprocess
+import inspect
 import sys
 from collections.abc import Sequence
 
+from onetaskgraph_sdk import CopyReport  # type: ignore[import-untyped]  # Package omits py.typed.
+
 from orchestrator import plan_review, plan_store
-from orchestrator.root import REPO_ROOT
 
 #: The source a plan of this repository is copied into when the caller names none: the
 #: `plans` GitHub Projects board `onetaskgraph.yaml` configures, which is where a plan of
@@ -61,10 +62,8 @@ BOARD = "plans"
 COPY = ("project", "copy")
 COPY_DOCUMENTS = ("document", "copy")
 
-#: The one flag of the pass-through this command has an opinion about, and the reason it
-#: has one: `--dry-run` says the whole command writes nothing, so a document copy that
-#: ignored it would write while the command it belongs to was reporting that it had not.
-#: Every other flag is the project copy's own and is not restated, guessed at, or split.
+#: The one flag this command applies to both SDK copy calls: `--dry-run` says the whole
+#: command writes nothing, so the document copy must receive it as well as the project copy.
 DRY_RUN = "--dry-run"
 
 #: Nothing was refused and the destination holds the plan.
@@ -87,10 +86,7 @@ COPY_REFUSED = 3
 def main(argv: Sequence[str] | None = None) -> int:
     """Copy a qualified plan project into a configured source, from `just copy-plan`.
 
-    Everything this parser does not recognise reaches the store's own copy verb
-    untouched — `--dry-run`, `--recreate`, `--match-by <KEY>` — rather than being
-    re-declared here, where a flag the store gained would be refused by a wrapper that
-    had no opinion about it. One of those is worth knowing the reach of: a `--set` in
+    The remaining arguments are translated to the SDK's project-copy parameters. A `--set` in
     the pass-through configures the **copy** and not the pre-flight read, which the
     store makes through this checkout's own configuration and environment. So a source
     is repointed in `onetaskgraph.yaml` or through the store's `ONETASKGRAPH_`
@@ -199,30 +195,17 @@ def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:
     was created, updated or unchanged — is this command's product, so it is left to
     reach the caller's own streams rather than captured and summarized.
     """
+    options = _copy_options(passthrough)
     try:
-        binary = plan_store.store_binary()
-    # The recipe runs `scripts/onetaskgraph-install.sh` before this, which heals a
-    # checkout carrying no CLI, so a journey reaching this refusal would have to
-    # uninstall the binary the rest of the suite runs against. `tests/test_plan_copy.py`
-    # drives it against a substituted resolver instead.
-    # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
-    except OSError as exc:
-        print(
-            f"copy-plan: {exc}; nothing was copied. Run `just bootstrap` from the "
-            f"repository root, which installs the release this checkout pins",
-            file=sys.stderr,
+        report = plan_store.sdk(
+            plan_store.client().project_copy(project, to=destination, **options)
         )
-        return UNREADABLE
-    completed = subprocess.run(
-        [binary, *COPY, project, "--to", destination, *passthrough],
-        cwd=REPO_ROOT,
-        env=plan_store.store_environment(),
-        check=False,
-    )
-    if completed.returncode != 0:
+        _report(report)
+    except Exception as exc:
+        print(f"copy-plan: {exc}", file=sys.stderr)
         print(
-            f"copy-plan: {plan_store.STORE} {' '.join(COPY)} exited "
-            f"{completed.returncode} copying {project} into {destination!r}, and reported "
+            f"copy-plan: onetaskgraph {' '.join(COPY)} refused copying {project} into "
+            f"{destination!r}, and reported "
             f"why above. Every task of this plan carried a review record, so this is the "
             f"destination refusing the copy rather than the plan being unreviewed: check "
             f"that {destination!r} is a source `just plans sources list` names and that "
@@ -231,10 +214,10 @@ def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:
             file=sys.stderr,
         )
         return COPY_REFUSED
-    return _documents(binary, project, destination, passthrough)
+    return _documents(project, destination, passthrough)
 
 
-def _documents(binary: str, project: str, destination: str, passthrough: Sequence[str]) -> int:
+def _documents(project: str, destination: str, passthrough: Sequence[str]) -> int:
     """Copy ``project``'s documents after its project record landed, and report the same way.
 
     Read through `orchestrator/plan_store.py` rather than by asking the store for ids in a
@@ -261,24 +244,20 @@ def _documents(binary: str, project: str, destination: str, passthrough: Sequenc
         return COPY_REFUSED
     if not documents:
         return OK
-    dry_run = [DRY_RUN] if DRY_RUN in passthrough else []
-    completed = subprocess.run(
-        [
-            binary,
-            *COPY_DOCUMENTS,
-            *(str(document.qualified_id) for document in documents),
-            "--to",
-            destination,
-            *dry_run,
-        ],
-        cwd=REPO_ROOT,
-        env=plan_store.store_environment(),
-        check=False,
-    )
-    if completed.returncode != 0:
+    try:
+        report = plan_store.sdk(
+            plan_store.client().document_copy(
+                [str(document.qualified_id) for document in documents],
+                to=destination,
+                dry_run=DRY_RUN in passthrough,
+            )
+        )
+        _report(report)
+    except Exception as exc:
+        print(f"copy-plan: {exc}", file=sys.stderr)
         print(
-            f"copy-plan: the plan landed in {destination!r}, but {plan_store.STORE} "
-            f"{' '.join(COPY_DOCUMENTS)} exited {completed.returncode} carrying its "
+            f"copy-plan: the plan landed in {destination!r}, but onetaskgraph "
+            f"{' '.join(COPY_DOCUMENTS)} refused carrying its "
             f"{len(documents)} document(s) over, and reported why above. Until they land "
             f"there is nothing on {destination!r} for a person to approve this plan as, so "
             f"run this command again — a copy that partly landed is resumed by repeating it",
@@ -286,3 +265,67 @@ def _documents(binary: str, project: str, destination: str, passthrough: Sequenc
         )
         return COPY_REFUSED
     return OK
+
+
+def _copy_options(arguments: Sequence[str]) -> dict[str, object]:
+    """Translate the SDK project-copy parameters exposed by this recipe."""
+    translated = {
+        "default_sources",
+        "dry_run",
+        "match_by",
+        "member",
+        "no_tasks",
+        "page_size",
+        "recreate",
+        "set",
+    }
+    sdk_parameters = set(inspect.signature(plan_store.client().project_copy).parameters) - {
+        "id",
+        "to",
+    }
+    if sdk_parameters != translated:
+        raise OSError(
+            "the onetaskgraph SDK project-copy parameters changed; update this recipe's "
+            f"argument translation ({sorted(sdk_parameters)!r})"
+        )
+    options: dict[str, object] = {}
+    index = 0
+    while index < len(arguments):
+        flag = arguments[index]
+        match flag:
+            case "--dry-run" | "--recreate" | "--no-tasks":
+                options[flag.removeprefix("--").replace("-", "_")] = True
+                index += 1
+            case "--match-by" | "--member" | "--set" | "--page-size" | "--default-sources" if (
+                index + 1 < len(arguments)
+            ):
+                key = flag.removeprefix("--").replace("-", "_")
+                value = arguments[index + 1]
+                if key in {"member", "set"}:
+                    held = options.setdefault(key, [])
+                    assert isinstance(held, list)
+                    held.append(value)
+                elif key == "page_size":
+                    try:
+                        options[key] = int(value)
+                    except ValueError as exc:
+                        raise OSError(f"--page-size requires an integer, got {value!r}") from exc
+                elif key == "default_sources":
+                    options[key] = value.split(",")
+                else:
+                    options[key] = value
+                index += 2
+            case _:
+                raise OSError(f"unsupported project-copy argument {flag!r}")
+    return options
+
+
+def _report(report: CopyReport) -> None:
+    """Render the SDK copy report one record per line."""
+    for item in report.items:
+        print(item.model_dump_json(exclude_none=True))
+    rewritten = report.references_rewritten or 0
+    unresolved = report.references_unresolved or 0
+    ambiguous = report.references_ambiguous or 0
+    if rewritten or unresolved or ambiguous:
+        print(f"references: {rewritten} rewritten, {unresolved} unresolved ({ambiguous} ambiguous)")

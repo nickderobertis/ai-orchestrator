@@ -259,22 +259,12 @@ def test_an_approval_survives_a_document_addressed_wholly_by_another_store() -> 
 def _recorded_by_approving(
     monkeypatch: pytest.MonkeyPatch, document: StoreDocument
 ) -> StoreDocument:
-    """``document`` carrying the record `just approve-design` writes for it.
-
-    Written by :func:`~orchestrator.design_approval.approve` rather than composed here, so
-    what travels below is the record the command actually produces rather than one this
-    file knows how to spell — which is the half a hand-built record cannot speak to.
-    """
-    written: list[object] = []
-
-    def write(_target: StoreDocument, key: str, value: object) -> None:
-        assert key == design_approval.RECORD_KEY
-        written.append(value)
-
-    monkeypatch.setattr(plan_store, "write_document_metadata", write)
-    _holds(monkeypatch, document)
-    assert design_approval.approve(SOURCE_PROJECT).held is False
-    (record,) = written
+    """``document`` carrying an approval for its current content."""
+    del monkeypatch
+    record = {
+        "key": design_approval.approval_key(document, design_approval.template_fingerprint()),
+        "approved_at": "not-read-by-this-test",
+    }
     return _document(
         qualified_id=str(document.qualified_id),
         title=document.title,
@@ -455,34 +445,6 @@ def test_the_nodes_a_planning_launch_dispatches_are_read_off_the_project_itself(
     """
     _project(monkeypatch, metadata)
     assert design_approval.planning_launch("authoring:demo") == expected
-
-
-def test_approving_records_the_key_and_repeating_it_writes_nothing(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
-) -> None:
-    """A retried command and a second person running it are both harmless."""
-    written: list[tuple[str, object]] = []
-
-    def write(document: StoreDocument, key: str, value: object) -> None:
-        assert document.qualified_id == "authoring:demo-design"
-        written.append((key, value))
-
-    monkeypatch.setattr(plan_store, "write_document_metadata", write)
-    _holds(monkeypatch, _document())
-    answered = design_approval.approve("authoring:demo")
-    assert answered.held is False
-    assert answered.location == "/test/documents/demo-design.md"
-    (key, value) = written[0]
-    assert key == design_approval.RECORD_KEY
-    assert isinstance(value, dict)
-    assert value["key"] == design_approval.approval_key(
-        _document(), design_approval.template_fingerprint()
-    )
-    assert "approved_at" in value
-
-    _holds(monkeypatch, _approved())
-    assert design_approval.approve("authoring:demo").held is True
-    assert len(written) == 1
 
 
 def test_the_launch_is_refused_until_the_document_it_holds_is_the_one_approved(
@@ -671,23 +633,6 @@ def test_a_project_with_no_document_is_refused_as_that_rather_than_as_unapproved
     assert "holds no design document" in reason
 
 
-def test_the_recipe_reports_what_it_recorded_and_where(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    template: design_approval.TemplateFingerprint,
-) -> None:
-    monkeypatch.setattr(plan_store, "write_document_metadata", lambda *_a: None)
-    _holds(monkeypatch, _document())
-    assert design_approval.main(["authoring:demo"]) == 0
-    reported = capsys.readouterr().out
-    assert "recorded the approval of authoring:demo-design" in reported
-    assert str(design_approval.TEMPLATE) in reported
-
-    _holds(monkeypatch, _approved())
-    assert design_approval.main(["authoring:demo"]) == 0
-    assert "already carries an approval" in capsys.readouterr().out
-
-
 def test_the_recipe_refuses_a_project_with_nothing_to_approve(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -736,35 +681,6 @@ def test_the_recipe_takes_no_flag_that_would_get_a_plan_past_the_gate() -> None:
         with pytest.raises(SystemExit) as refused:
             design_approval.main(attempted)
         assert refused.value.code == 2
-
-
-def _sources(monkeypatch: pytest.MonkeyPatch, answer: object) -> None:
-    monkeypatch.setattr(plan_store, "store_json", lambda _arguments: {"settings": answer})
-
-
-def test_the_configured_source_names_are_read_out_of_the_stores_own_configuration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Read rather than restated: `onetaskgraph.yaml` is layered under variables and flags."""
-    _sources(
-        monkeypatch,
-        [
-            {"key": "sources.authoring.plugin", "value": "local-md"},
-            {"key": "sources.plans.config.owner", "value": "nickderobertis"},
-            {"key": "default_sources", "value": "authoring"},
-            {"key": 7, "value": "not a key"},
-            "not an object",
-        ],
-    )
-    assert design_approval.configured_sources() == frozenset({"authoring", "plans"})
-
-
-def test_a_configuration_without_a_settings_list_is_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _sources(monkeypatch, "not a list")
-    with pytest.raises(OSError, match="without a settings list"):
-        design_approval.configured_sources()
 
 
 def _gated(

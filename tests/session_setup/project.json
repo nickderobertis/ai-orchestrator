@@ -1,0 +1,21 @@
+{
+  "name": "session-setup",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/session_setup",
+  "tags": [
+    "scope:session-setup",
+    "type:tests"
+  ],
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_setup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "sessionSetupWorkspace"
+      ]
+    }
+  }
+}

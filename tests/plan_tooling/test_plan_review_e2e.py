@@ -1807,7 +1807,7 @@ def test_editing_the_goal_invalidates_the_plan_level_record_and_no_tasks(
     standing = {node: _record_of(project, node) for node in ("adopt", "engine")}
 
     source, native = plan_store.qualified(project)
-    record = plan_store.project_document(source, native)
+    record = plan_store.source_root(source) / "projects" / f"{native}.md"
     written = record.read_text(encoding="utf-8")
     assert NEEDS_THE_FIX_HERE in written, written
     record.write_text(
