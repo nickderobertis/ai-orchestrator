@@ -28,6 +28,7 @@ Keep this deterministic and stdlib-only — this file *is* the provider binary.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -47,8 +48,19 @@ def working_directory(argv: list[str]) -> Path:
 
 
 def inside_a_repository(directory: Path) -> bool:
-    """Whether `directory` or any directory above it holds a git repository's `.git`."""
-    return any((candidate / ".git").exists() for candidate in (directory, *directory.parents))
+    """Whether git itself says `directory` is inside a work tree.
+
+    Asked of git rather than read off an ancestor `.git` path, because a `.git` entry that is
+    not a repository — an empty `/tmp/.git` — would otherwise trust every directory beneath it.
+    """
+    probed = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],  # noqa: S607 - git from PATH, as codex
+        cwd=directory,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return probed.returncode == 0 and probed.stdout.strip() == "true"
 
 
 def refused(argv: list[str]) -> bool:

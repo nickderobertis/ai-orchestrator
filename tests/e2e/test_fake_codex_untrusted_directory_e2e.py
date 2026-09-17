@@ -67,7 +67,7 @@ def _codex_turn(oneharness_bin: str, directory: Path, mode: str) -> dict[str, An
 
 def _outside_every_repository(tmp_path: Path) -> Path:
     directory = tmp_path / "scratch"
-    directory.mkdir()
+    directory.mkdir(parents=True)
     probed = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=directory,
@@ -104,6 +104,22 @@ def test_a_bypass_turn_outside_every_repository_carries_the_trust_argument_and_r
         f"{sorted(TRUST_ARGUMENTS)}, so the stand-in would refuse a turn the real codex runs"
     )
     assert result["status"] == "ok", result
+
+
+def test_a_stray_ancestor_git_entry_that_is_no_repository_leaves_a_turn_untrusted(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    ancestor = tmp_path / "ancestor"
+    (ancestor / ".git").mkdir(parents=True)
+    directory = _outside_every_repository(ancestor / "below")
+
+    result = _codex_turn(oneharness_bin, directory, "default")
+
+    assert result["exit_code"] == 1, result
+    assert result["failure_kind"] == UNTRUSTED, (
+        f"an empty {ancestor / '.git'} above {directory} made the stand-in trust a directory "
+        f"git says no work tree holds: {result}"
+    )
 
 
 def test_a_default_mode_turn_inside_a_repository_runs(tmp_path: Path, oneharness_bin: str) -> None:
