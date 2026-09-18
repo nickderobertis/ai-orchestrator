@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NewType
 
-from onetaskgraph_sdk import (  # type: ignore[import-untyped]  # Package omits py.typed.
+from onetaskgraph_sdk import (
     Client,
     OnetaskgraphError,
 )

@@ -47,14 +47,17 @@ sources:
         # source of the options a follow-up ticket's `backlog`, `draft` and `queued` are
         # written to; its other party is the live board, which no check here may read or
         # write, since that needs the board's credential. The board carries the Status options
-        # `Proposal`, `Todo`, `Deferred`, `Queued`, `In Progress` and `Done`: `todo` and
-        # `in-progress` keep the shipped defaults, and `done` and `cancelled` are closed
-        # states. This overrides the shipped default of `backlog` to `Backlog`, an option that
-        # board does not carry, and sends `draft`, a ticket a person deferred, to `Deferred`,
-        # so a board missing either option refuses the copy by name. `queued` is a ticket a
-        # launched run claimed through a node's `delivers`, and it is stated rather than left
-        # to the shipped `Queued` for the same reason `plans` states it: a default that moved
-        # upstream would move this board without a change here saying so.
+        # `Proposal`, `Todo`, `Deferred`, `Queued`, `In Progress`, `Done` and `Cancelled`:
+        # `todo` and `in-progress` keep the shipped defaults, and `done` and `cancelled` are
+        # closed states that select the shipped `Done` and `Cancelled` before closing the
+        # issue, refused by name on a board missing either, so both are left to the shipped
+        # names the board carries. This overrides the shipped default of `backlog` to
+        # `Backlog`, an option that board does not carry, and sends `draft`, a ticket a
+        # person deferred, to `Deferred`, so a board missing either option refuses the copy
+        # by name. `queued` is a ticket a launched run claimed through a node's `delivers`,
+        # and it is stated rather than left to the shipped `Queued` for the same reason
+        # `plans` states it: a default that moved upstream would move this board without a
+        # change here saying so.
         backlog: Proposal
         draft: Deferred
         queued: Queued

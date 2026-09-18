@@ -999,14 +999,10 @@ def board_category(ticket: str, board: str) -> str | None:
     entry = entries[0] if len(entries) == 1 else None
     outcome = entry.root if entry else None
     action = outcome.action if outcome else None
-    destination = (
-        outcome.destination.model_dump()
-        if outcome and getattr(outcome, "destination", None)
-        else None
-    )
+    destination = outcome.destination.root if outcome and outcome.destination else None
     if action == CREATED:
         return None
-    if action not in EXISTING or not isinstance(destination, str):
+    if action not in EXISTING or destination is None:
         raise OSError(
             f"the dry-run copy of {ticket} onto {board} answered {entries!r}, naming neither "
             "a new item nor an existing one"

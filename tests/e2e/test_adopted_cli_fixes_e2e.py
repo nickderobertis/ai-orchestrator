@@ -13,7 +13,10 @@ or a recipe reaches it, and each journey fails on the release before the fix:
 * `onevcs release acknowledge` accepts an automated target whose landing captured no
   baseline — https://github.com/nickderobertis/onevcs/pull/143, first cut as 0.22.0;
 * the `github-projects` source refuses a `status_mapping.unknown` naming a closed state —
-  https://github.com/nickderobertis/onetaskgraph/pull/915, first cut as 0.2.29;
+  https://github.com/nickderobertis/onetaskgraph/pull/915, first cut as 0.2.29, and
+  since https://github.com/nickderobertis/onetaskgraph/pull/1791, first cut as 0.2.37,
+  a mapping is an option name or `null` and nothing else, so the closed-state form is
+  refused by the configuration schema before a source is built at all;
 * `onejudge run` names each `user.artifacts` path in its judge side's prompt —
   https://github.com/nickderobertis/onejudge/pull/86, first cut as 0.11.0;
 * a `local-md` source's relative root resolves against the directory of the
@@ -32,8 +35,9 @@ repository depends on it, over a real follow-up ticket, in
 `tests/test_follow_up_tickets.py`.
 
 The onetaskgraph refusal is read through `project list` rather than `config show`: the
-released `config show` renders settings without constructing a source, so it accepts the
-mapping on both releases, while building the source refuses it before any request.
+released `config show` renders settings without constructing a source, so it accepted the
+mapping on both releases while a source refused it, and the schema refusal that replaced
+it is read through the same verb so the journey keeps reading what a recipe meets.
 
 What is doubled is the boundary each engine is proven at in its own repository and
 nothing above it: the paid codex provider, answered by `fake_codex.py` at the path
@@ -492,20 +496,24 @@ def _board_source(tmp_path: Path, unknown: str) -> subprocess.CompletedProcess[s
     return _run(ONETASKGRAPH_BIN, "project", "list", env=env, cwd=tmp_path)
 
 
-@pytest.mark.parametrize(
-    ("closed", "read_back"), [("completed", "done"), ("not-planned", "cancelled")]
-)
+@pytest.mark.parametrize("closed", ["completed", "not-planned"])
 def test_the_board_source_refuses_an_unknown_status_mapped_to_a_closed_state(
-    tmp_path: Path, closed: str, read_back: str
+    tmp_path: Path, closed: str
 ) -> None:
+    """An `unknown` word can never be filed as finished or withdrawn work.
+
+    The release that first carried the fix refused the closed-state form by name, because a
+    copy read such an item back as `done` or `cancelled`; the installed release has no
+    closed-state form to refuse, a mapping being an option name or `null`, so the same
+    configuration is refused by the schema, naming the field and the value it will not
+    take. Either way the mapping never reaches a board.
+    """
     refused = _board_source(tmp_path, f"{{closed: {closed}}}")
 
     said = refused.stdout + refused.stderr
     assert refused.returncode != 0, said
-    assert (
-        f"status_mapping.unknown of source board cannot target the closed state {closed} "
-        f"because a copy reads that item back as {read_back}"
-    ) in said, said
+    assert "sources.board.config.status_mapping.unknown" in said, said
+    assert f'{{"closed":"{closed}"}} is not valid' in said, said
 
 
 def test_the_board_source_mapping_unknown_to_an_option_reaches_for_the_board(

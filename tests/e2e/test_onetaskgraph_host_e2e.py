@@ -267,8 +267,9 @@ _RepositoryNodeId = NewType("_RepositoryNodeId", str)
 #: The board field the source owns and reads a copy's origin back out of, and the
 #: `Status` field every board carries. A category this board cannot represent refuses
 #: the write naming it, so the options below are the `plans` board's own: the three the
-#: shipped mapping reaches by name, `Done`, which a closed `done` issue selects by its
-#: spelling, and `Needs attention`, which `onetaskgraph.yaml` sends `unknown` to.
+#: shipped mapping reaches by name, `Done` and `Cancelled`, which a closed `done` or
+#: `cancelled` issue selects by its spelling before it is closed, and `Needs attention`,
+#: which `onetaskgraph.yaml` sends `unknown` to.
 ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 
 
@@ -313,6 +314,14 @@ STATUS_OPTIONS: tuple[_StatusOption, ...] = (
     # option, answered so the stand-in carries the options the task names; reconciling it
     # against that board would take the board credential no test may use.
     _StatusOption(id=_FieldOptionId("OPT_done"), name="Done"),
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The option the
+    # shipped mapping sends `cancelled` to, answered so the stand-in carries what the
+    # pinned CLI refuses a `cancelled` write without: since onetaskgraph 0.2.37 a terminal
+    # write selects its mapped option and then closes the issue, and a board lacking the
+    # option refuses by name. Reconciling it against either live board would take the
+    # board credential no test may use.
+    _StatusOption(id=_FieldOptionId("OPT_cancelled"), name="Cancelled"),
     # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
     _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
     NEEDS_ATTENTION,
@@ -382,8 +391,9 @@ class _Issue:
     repository: _Repository = CONFIGURED_REPOSITORY
     #: Whether this issue is closed, and why, as the last write left it. Applied rather than
     #: only recorded for the reason `status` gives: `done` and `cancelled` are closed states
-    #: on a board, so an issue that answered `OPEN` for ever would report a finished ticket
-    #: as unfinished to every reader that asks the store rather than the wire.
+    #: on a board, each selecting its option and then closing the issue, so an issue that
+    #: answered `OPEN` for ever would report a finished ticket as unfinished to every reader
+    #: that asks the store rather than the wire.
     state: str = "OPEN"
     state_reason: str | None = None
     #: The text this row's `onetaskgraph.origin` field holds, as the last copy wrote it. Kept
@@ -2221,9 +2231,12 @@ def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_b
     The category words ride along as the control for the one property a single option
     for `unknown` could break: that no option is written for two categories. A reader tells
     items apart by the category *and* option the store reports together, because a closed
-    item — `cancelled` — has no option written at all and keeps whichever it had; an open
-    item's category is read back from its option, so two categories sent to one option
-    still read back as one pair.
+    item — `done` or `cancelled` — reads its category back off the reason it was closed
+    with, whatever option it displays; an open item's category is read back from its
+    option, so two categories sent to one option still read back as one pair. The two
+    closed words select their own options — `Done` and `Cancelled`, the shipped names —
+    before closing, so the board this journey serves carries both, the way the live one
+    must for the pinned CLI to write either word at all.
     """
     _write_projected_project(tmp_path)
     environment = _plan_environment(tmp_path)

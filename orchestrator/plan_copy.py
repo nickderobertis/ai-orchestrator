@@ -44,8 +44,9 @@ import argparse
 import inspect
 import sys
 from collections.abc import Sequence
+from typing import TypedDict
 
-from onetaskgraph_sdk import CopyReport  # type: ignore[import-untyped]  # Package omits py.typed.
+from onetaskgraph_sdk import CopyReport, GlobalId
 
 from orchestrator import plan_review, plan_store
 
@@ -267,18 +268,29 @@ def _documents(project: str, destination: str, passthrough: Sequence[str]) -> in
     return OK
 
 
-def _copy_options(arguments: Sequence[str]) -> dict[str, object]:
+class CopyOptions(TypedDict, total=False):
+    """The SDK project-copy parameters this recipe exposes, typed as the SDK takes them.
+
+    A typed shape rather than ``dict[str, object]`` because it is splatted into the SDK's
+    call: mypy reads the SDK's signature now, and a dictionary of ``object`` values is one
+    it cannot hold to any parameter. Its keys are also the one list `_copy_options`
+    reconciles against the SDK's real parameters, so a parameter the SDK gains or renames
+    fails there by name rather than passing through untyped.
+    """
+
+    default_sources: list[str]
+    dry_run: bool
+    match_by: str
+    member: list[GlobalId | str]
+    no_tasks: bool
+    page_size: int
+    recreate: bool
+    set: list[str]
+
+
+def _copy_options(arguments: Sequence[str]) -> CopyOptions:
     """Translate the SDK project-copy parameters exposed by this recipe."""
-    translated = {
-        "default_sources",
-        "dry_run",
-        "match_by",
-        "member",
-        "no_tasks",
-        "page_size",
-        "recreate",
-        "set",
-    }
+    translated = CopyOptions.__required_keys__ | CopyOptions.__optional_keys__
     sdk_parameters = set(inspect.signature(plan_store.client().project_copy).parameters) - {
         "id",
         "to",
@@ -288,35 +300,34 @@ def _copy_options(arguments: Sequence[str]) -> dict[str, object]:
             "the onetaskgraph SDK project-copy parameters changed; update this recipe's "
             f"argument translation ({sorted(sdk_parameters)!r})"
         )
-    options: dict[str, object] = {}
+    options: CopyOptions = {}
     index = 0
     while index < len(arguments):
         flag = arguments[index]
+        value = arguments[index + 1] if index + 1 < len(arguments) else None
         match flag:
-            case "--dry-run" | "--recreate" | "--no-tasks":
-                options[flag.removeprefix("--").replace("-", "_")] = True
-                index += 1
-            case "--match-by" | "--member" | "--set" | "--page-size" | "--default-sources" if (
-                index + 1 < len(arguments)
-            ):
-                key = flag.removeprefix("--").replace("-", "_")
-                value = arguments[index + 1]
-                if key in {"member", "set"}:
-                    held = options.setdefault(key, [])
-                    assert isinstance(held, list)
-                    held.append(value)
-                elif key == "page_size":
-                    try:
-                        options[key] = int(value)
-                    except ValueError as exc:
-                        raise OSError(f"--page-size requires an integer, got {value!r}") from exc
-                elif key == "default_sources":
-                    options[key] = value.split(",")
-                else:
-                    options[key] = value
-                index += 2
+            case "--dry-run":
+                options["dry_run"] = True
+            case "--recreate":
+                options["recreate"] = True
+            case "--no-tasks":
+                options["no_tasks"] = True
+            case "--member" if value is not None:
+                options.setdefault("member", []).append(value)
+            case "--set" if value is not None:
+                options.setdefault("set", []).append(value)
+            case "--page-size" if value is not None:
+                try:
+                    options["page_size"] = int(value)
+                except ValueError as exc:
+                    raise OSError(f"--page-size requires an integer, got {value!r}") from exc
+            case "--default-sources" if value is not None:
+                options["default_sources"] = value.split(",")
+            case "--match-by" if value is not None:
+                options["match_by"] = value
             case _:
                 raise OSError(f"unsupported project-copy argument {flag!r}")
+        index += 1 if value is None or flag in {"--dry-run", "--recreate", "--no-tasks"} else 2
     return options
 
 
