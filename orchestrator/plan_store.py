@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -43,8 +44,67 @@ def sdk[T](awaitable: Coroutine[object, object, T]) -> T:
         raise OSError(str(exc)) from exc
 
 
+#: The one environment name the SDK would otherwise resolve its binary from. Named here
+#: so the refusal below can say which variable it is refusing.
+SDK_BINARY_VARIABLE = "ONETASKGRAPH_SDK_BINARY"
+#: The CLI the SDK drives, as the lock installs it beside the interpreter.
+CLI_NAME = "onetaskgraph"
+#: This checkout's provisioning recipe, the remedy every refusal below names.
+BOOTSTRAP = "just bootstrap"
+
+
+def locked_binary(interpreter: str | Path | None = None) -> Path:
+    """The ``onetaskgraph`` this checkout's lock installed, beside the running interpreter.
+
+    Every plan-store read in this package runs this file and nothing else. The SDK this
+    module imports and the CLI it drives come from one ``uv sync`` of one lock —
+    ``pyproject.toml`` pins ``onetaskgraph-sdk``, which brings the CLI, at the release
+    ``config/onetaskgraph.version`` names — so the interpreter that imported the SDK is
+    the one authority on where the matching CLI is: ``<its directory>/onetaskgraph``,
+    which is ``.venv/bin/`` under ``uv run`` and under every wrapper here. The directory
+    is taken from ``sys.executable`` *without* resolving symlinks, because
+    ``.venv/bin/python`` is a symlink into uv's managed interpreter directory, where no
+    ``onetaskgraph`` lives.
+
+    Left to itself the SDK resolves its binary from ``ONETASKGRAPH_SDK_BINARY``, then from
+    ``PATH``, and a host with any other ``onetaskgraph`` ahead on ``PATH`` turned every read
+    here — a plan check, a design approval, a board listing, a ticket validation, a copy —
+    into a read about the wrong release: a follow-up re-dispatch whose shell resolved
+    ``~/.local/bin/onetaskgraph`` (0.2.12) had every ticket refused, because that
+    release's ``task show`` reports no ``location``. So ``PATH`` is never consulted, and
+    ``ONETASKGRAPH_SDK_BINARY`` is neither honoured nor ignored but **refused by name**:
+    honouring it recreates that failure through a different door, and ignoring it
+    silently leaves a lever connected to nothing, the shape ``AGENTS.md`` refuses under
+    "Which pin governs a dispatch". ``config/onetaskgraph.version`` and the lock are the
+    one answer to which release runs, and a second answer in the environment is the
+    incident by another route. (The SDK strips the variable from the child's environment
+    on its own, so nothing downstream reads it either way.)
+
+    ``interpreter`` defaults to ``sys.executable`` and exists so a check can drive the
+    resolution against a real interpreter beside which no CLI is installed. An absent or
+    non-executable file is refused by name before the SDK's own generic "binary not
+    found", with this checkout's provisioning recipe as the remedy — the refusal
+    ``scripts/follow-ups.sh`` makes of an unprovisioned checkout, one layer down.
+    """
+    expected = Path(interpreter if interpreter is not None else sys.executable).parent / CLI_NAME
+    if os.environ.get(SDK_BINARY_VARIABLE):
+        raise OSError(
+            f"{SDK_BINARY_VARIABLE} is set, and it is not a lever here: every plan-store "
+            f"read of this package runs the locked install at {expected}, because "
+            f"config/onetaskgraph.version and the lock are the one answer to which release "
+            f"runs; unset it"
+        )
+    if not expected.is_file() or not os.access(expected, os.X_OK):
+        raise OSError(
+            f"this checkout has no plan-store CLI at {expected}, and a plan-store read may "
+            f"run no other; provision this checkout with '{BOOTSTRAP}', then retry"
+        )
+    return expected
+
+
 def client() -> Client:
-    return Client(cwd=REPO_ROOT)
+    """The SDK client every plan-store read here goes through, on :func:`locked_binary`."""
+    return Client(binary=locked_binary(), cwd=REPO_ROOT)
 
 
 def complete[T](answer: T) -> T:

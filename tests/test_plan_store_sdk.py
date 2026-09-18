@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
+import venv
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from onetaskgraph_sdk import QueryResponseOfQualifiedTask
+from project_fixtures import helper
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import design_approval, follow_up_comments, plan_copy, plan_store
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
+
+#: A plan-store CLI of another release, the suite's own decoy: it reports a version no
+#: checkout pins, delegates everything else to `REAL_PLAN_STORE`, and appends one line
+#: per invocation it serves to `OLDER_PLAN_STORE_LOG`. Its header says why that log,
+#: rather than a resolution rule, is what proves which program answered.
+OLDER_PLAN_STORE = helper("older-plan-store")
 
 
 def _source(monkeypatch: pytest.MonkeyPatch, name: str, root: Path) -> None:
@@ -85,6 +97,129 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     write_plan_project(empty, {"name": "empty", "tasks": []})
     _source(monkeypatch, "empty", empty)
     assert plan_copy._documents("empty:empty", "sdkdestination", []) == plan_copy.OK
+
+
+def test_a_read_runs_the_locked_install_with_a_decoy_first_on_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `onetaskgraph` a shell puts first on `PATH` never answers a read of this package.
+
+    The condition is the incident's: another release of the plan store ahead of the
+    locked one on the search path. The read goes through the real SDK to the real
+    installed CLI against a real `local-md` source, and three readings say which program
+    answered — the read answered at all, the decoy's own log says it served nothing, and
+    the client's binary is this checkout's locked install — because a resolution rule
+    alone would read the test's own search path back to itself.
+    """
+    root = tmp_path / "source"
+    write_plan_project(
+        root, {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]}
+    )
+    _source(monkeypatch, "sdksource", root)
+    served = tmp_path / "older-plan-store.served"
+    monkeypatch.setenv("PATH", f"{OLDER_PLAN_STORE}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("REAL_PLAN_STORE", str(ONETASKGRAPH_BIN))
+    monkeypatch.setenv("OLDER_PLAN_STORE_LOG", str(served))
+    decoy = shutil.which("onetaskgraph")
+    assert decoy is not None and Path(decoy).samefile(OLDER_PLAN_STORE / "onetaskgraph"), (
+        f"the search path resolves `onetaskgraph` to {decoy}, so the condition this test "
+        f"exists for — a decoy ahead of {ONETASKGRAPH_BIN} — was never set up"
+    )
+
+    assert plan_store.task_record("sdksource:demo/task")["title"] == "Task"
+    assert plan_store.read_tasks("sdksource:demo")[0].node_id == "task"
+
+    assert not served.exists() or served.read_text(encoding="utf-8") == "", (
+        f"the decoy ahead on PATH served a read of this package: {served.read_text('utf-8')}"
+    )
+    assert Path(plan_store.client().binary).samefile(ONETASKGRAPH_BIN)
+    assert Path(plan_store.client().binary) == ONETASKGRAPH_BIN.resolve()
+
+
+def test_a_missing_locked_install_is_refused_by_name_with_the_bootstrap_remedy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An interpreter with no `onetaskgraph` beside it refuses, and never falls to `PATH`.
+
+    The interpreter is a real one — a bare virtual environment built from this suite's
+    own, with nothing installed into it — so what is driven is the resolution the package
+    performs against a directory that really holds a Python and really holds no CLI,
+    while the search path still offers one.
+    """
+    bare = tmp_path / "bare"
+    venv.create(bare, with_pip=False)
+    interpreter = bare / "bin" / "python3"
+    assert interpreter.exists() and os.access(interpreter, os.X_OK), interpreter
+    expected = bare / "bin" / "onetaskgraph"
+    assert not expected.exists()
+    assert shutil.which("onetaskgraph") is not None, (
+        "the search path offers no plan store, so a refusal below says nothing about "
+        "never falling through to it"
+    )
+
+    with pytest.raises(OSError, match="just bootstrap") as refused:
+        plan_store.locked_binary(interpreter)
+    assert str(expected) in str(refused.value)
+
+    monkeypatch.setattr(sys, "executable", str(interpreter))
+    with pytest.raises(OSError, match="just bootstrap") as refused:
+        plan_store.client()
+    assert str(expected) in str(refused.value)
+    with pytest.raises(OSError, match="just bootstrap"):
+        plan_store.task_record("sdksource:demo/task")
+
+    # A file that is there but cannot be run — a half-finished provisioning — is the
+    # same refusal, never handed to the SDK to fail on.
+    expected.write_text("not a program\n", encoding="utf-8")
+    expected.chmod(0o644)
+    with pytest.raises(OSError, match="just bootstrap") as refused:
+        plan_store.client()
+    assert str(expected) in str(refused.value)
+
+
+def test_the_variable_refused_is_the_one_the_installed_sdk_resolves_from() -> None:
+    """`SDK_BINARY_VARIABLE` names the SDK's own environment lever, held to the real SDK.
+
+    The name is the SDK's contract, restated in the package so a refusal can say which
+    variable it refuses. It is held here to what the installed SDK does rather than to a
+    literal: handed an environment naming the locked install under that variable and
+    offering no search path, the SDK resolves exactly that file, and with the variable
+    absent it finds nothing — so a release that renamed the lever fails here instead of
+    leaving the package refusing a name nothing reads. The SDK stripping the variable
+    from the child's environment is read off the same client, because the refusal's
+    reasoning rests on nothing downstream reading it either way.
+    """
+    honoured = plan_store.Client(
+        environment={plan_store.SDK_BINARY_VARIABLE: str(ONETASKGRAPH_BIN), "PATH": ""}
+    )
+    assert Path(honoured.binary).samefile(ONETASKGRAPH_BIN)
+    assert plan_store.SDK_BINARY_VARIABLE not in honoured.environment
+    with pytest.raises(FileNotFoundError, match=plan_store.SDK_BINARY_VARIABLE):
+        plan_store.Client(environment={"PATH": ""})
+
+
+def test_the_sdk_binary_variable_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ONETASKGRAPH_SDK_BINARY` is neither honoured nor ignored: it is refused, naming both.
+
+    It is set to the locked install itself, so the refusal is for the variable being set
+    at all rather than for where it points — the pin and the lock are the one answer to
+    which release runs, and a second answer in the environment is refused as such.
+    """
+    root = tmp_path / "source"
+    write_plan_project(
+        root, {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]}
+    )
+    _source(monkeypatch, "sdksource", root)
+    assert plan_store.task_record("sdksource:demo/task")["title"] == "Task"
+
+    monkeypatch.setenv(plan_store.SDK_BINARY_VARIABLE, str(ONETASKGRAPH_BIN))
+    with pytest.raises(OSError, match="ONETASKGRAPH_SDK_BINARY") as refused:
+        plan_store.client()
+    assert str(ONETASKGRAPH_BIN) in str(refused.value)
+    with pytest.raises(OSError, match="ONETASKGRAPH_SDK_BINARY"):
+        plan_store.task_record("sdksource:demo/task")
 
 
 def test_sdk_helpers_report_real_local_source_refusals(

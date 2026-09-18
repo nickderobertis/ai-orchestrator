@@ -84,12 +84,16 @@ RUN_TASK_STORE_INSTRUCTION = helper("run_task_store_instruction.py")
 
 #: Files the first pass's turn has real programs write into the directory it runs commands
 #: from: `pwd`'s answer to where that is, git's answer to whether a repository holds it,
-#: which plan store the launched process tree's own search path resolves, and what happened
-#: when the store instruction the task hands the agent was run with an older release first.
+#: which plan store the launched process tree's own search path resolves, what happened
+#: when the store instruction the task hands the agent was run with an older release first,
+#: and what happened when the task's *validate* instruction was run the same way.
 TURN_DIRECTORY_WITNESS = "turn-directory.witness"
 GIT_WITNESS = "git-toplevel.witness"
 PLAN_STORE_WITNESS = "plan-store.witness"
 STORE_INSTRUCTION_WITNESS = "store-instruction.witness"
+VALIDATE_WITNESS = "validate-older-first.witness"
+#: The older plan store's own log of what it served during that validate, under the bench.
+VALIDATE_SERVED = "validate-older-first.served"
 
 #: The launching session this journey states, and everything an enclosing dispatch would
 #: otherwise decide for these launches.
@@ -431,6 +435,47 @@ def _staged(bench: Bench, name: str, text: str) -> Path:
     return staged
 
 
+def _without_this_checkouts_venv(path: str) -> str:
+    """``path`` with this checkout's ``.venv/bin`` removed, as a dispatched agent's shell has it.
+
+    `uv run` puts that directory first for the whole launched process tree, so a search
+    path that still carries it resolves `onetaskgraph` to the pinned one however the rest
+    is ordered — which is why the bench's own ordering proves nothing here and this is
+    composed instead: the incident's shell had no `.venv/bin` at all.
+    """
+    venv_bin = REPO_ROOT / ".venv" / "bin"
+    kept = [entry for entry in path.split(os.pathsep) if entry and Path(entry) != venv_bin]
+    assert kept, "the search path has nothing left once this checkout's .venv/bin is removed"
+    return os.pathsep.join(kept)
+
+
+def _validated_older_first(bench: Bench, python: str, ticket: Path, served: Path) -> list[str]:
+    """The task's validate instruction, run as the incident's shell ran it.
+
+    The interpreter is this checkout's own `.venv/bin/python3`, spelled in full as the
+    task spells it, while the search path the command runs under has a plan store of
+    another release first and this checkout's `.venv/bin` nowhere — the shape of the
+    re-dispatch whose every ticket was refused with `the store reads … from None`. The
+    witness records what `onetaskgraph` resolved to under that path, what validate
+    printed, and its exit status; ``served`` is the older program's own log, absolute
+    because the store is run from the checkout rather than from the turn's directory.
+    """
+    without_venv = _without_this_checkouts_venv(bench.environment["PATH"])
+    path = f"{OLDER_PLAN_STORE}{os.pathsep}{without_venv}"
+    # Every operand is quoted, the interpreter included: the checkout path it carries is
+    # wherever this suite happens to run, and one holding a shell metacharacter would
+    # otherwise change the command rather than name the program.
+    validate = shlex.join([python, "-m", "orchestrator.follow_up_tickets", "validate", str(ticket)])
+    return [
+        "sh",
+        "-c",
+        f"PATH={shlex.quote(path)}; export PATH\n"
+        f"command -v onetaskgraph > {VALIDATE_WITNESS} 2>&1\n"
+        f"OLDER_PLAN_STORE_LOG={shlex.quote(str(served))} {validate} >> {VALIDATE_WITNESS} 2>&1\n"
+        f'echo "exit $?" >> {VALIDATE_WITNESS}\n',
+    ]
+
+
 def _from_checkout(*command: str) -> list[str]:
     """A command the task tells the agent to run from the launching checkout, run there.
 
@@ -676,6 +721,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
                 [*validate, str(new_ticket), str(shared_ticket)],
+                # The same validate instruction, under the search path the incident's
+                # shell had: the older plan store first and this checkout's `.venv/bin`
+                # absent. The helper says what it records and why.
+                _validated_older_first(bench, python, shared_ticket, bench.tmp / VALIDATE_SERVED),
                 ["rm", str(new_draft), str(shared_draft)],
                 _decided_and_copied(
                     python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
@@ -1306,6 +1355,45 @@ def test_the_dispatched_agent_runs_the_pinned_plan_store_the_task_names(
     assert sorted(str(one["id"]) for one in listed) == sorted(
         _draft_id(followed.main, draft) for draft in followed.consumed
     ), probe
+
+
+def test_the_validate_instruction_runs_the_locked_plan_store_with_an_older_one_first(
+    followed: Followed,
+) -> None:
+    """Validate reaches the locked plan store when the agent's shell resolves another.
+
+    This is the shape of the follow-up re-dispatch whose worker resolved `onetaskgraph`
+    to a `~/.local/bin` copy of release 0.2.12 while running validate on
+    `.venv/bin/python3`: that release's `task show` reports no `location`, so every
+    ticket was refused with `the store reads … from None`. The package's plan-store
+    reads now run the CLI beside the interpreter rather than the search path's, and
+    this drives that where it was hit — in the turn, with the older plan store first on
+    the path and this checkout's `.venv/bin` absent from it.
+
+    Three readings again, because a resolution rule alone would read the search path
+    back to itself: that the path really resolved `onetaskgraph` to the older program,
+    that validate reported the ticket sound and exited so, and that the older program's
+    own log says it served nothing.
+    """
+    witness = followed.first_turn.directory.resolve() / VALIDATE_WITNESS
+    assert witness.is_file(), (
+        f"no command the turn ran wrote {VALIDATE_WITNESS} into "
+        f"{followed.first_turn.directory}; {_ran(followed.bench)}"
+    )
+    resolved, *reported, status = witness.read_text(encoding="utf-8").splitlines()
+
+    assert Path(resolved) == OLDER_PLAN_STORE / "onetaskgraph", (
+        f"the search path validate ran under resolves `onetaskgraph` to {resolved}, so "
+        "the condition this journey exists for — an older plan store ahead, and this "
+        "checkout's .venv/bin absent — was never set up"
+    )
+    ticket = tickets.ticket_path(followed.bench.drafts_root, followed.main, SHARED_CAUSE)
+    assert reported == [f"{tickets.PROG}: {ticket} is a sound ticket"], reported
+    assert status == f"exit {tickets.SOUND}", (resolved, reported, status)
+    served = followed.bench.tmp / VALIDATE_SERVED
+    assert not served.is_file() or served.read_text(encoding="utf-8") == "", (
+        f"the older plan store served the task's validate instruction: {served.read_text('utf-8')}"
+    )
 
 
 def test_the_member_is_given_the_composed_task_whole(followed: Followed) -> None:

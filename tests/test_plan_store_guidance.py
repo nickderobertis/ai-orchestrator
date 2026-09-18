@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 from plan_sources import read_default_sources, read_plan_sources
 from published_tools import ONETASKGRAPH_BIN
 
+from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_docs
@@ -267,4 +269,78 @@ def test_the_installed_plan_store_cli_carries_the_status_options_verb_and_its_ap
     assert APPLY_FLAG in options, (
         f"`{' '.join(STATUS_OPTIONS_VERB)} --help` lists {options} and no `{APPLY_FLAG}`, "
         f"the flag {MANAGER} names as the one that writes"
+    )
+
+
+#: The roster entry that states which `onetaskgraph` a plan-store read of the package
+#: runs: the one the lock installed beside the interpreter, at this path relative to the
+#: checkout, and never one from the search path or from the SDK's own environment name.
+#: `orchestrator/plan_store.py` is the one authoritative statement; the sentence in the
+#: manager's document is a copy, and this is the check that goes red when the two part.
+ROSTER_ENTRY = "**`onetaskgraph`**"
+LOCKED_INSTALL = ".venv/bin/onetaskgraph"
+RESOLUTION_MODULE = "orchestrator/plan_store.py"
+
+
+def _roster_entry(name: str) -> str:
+    """The plan store's one bullet of the tool roster, flattened to a line.
+
+    The roster is one list with no blank line between its bullets, so a paragraph split
+    would hand back every tool's entry at once and a claim made of a sibling would pass
+    for this one: the bullet is cut from its own opening to the next bullet's.
+    """
+    entries = re.findall(
+        rf"^- {re.escape(ROSTER_ENTRY)}.*?(?=^- \*\*`|\Z)",
+        _document(name),
+        re.MULTILINE | re.DOTALL,
+    )
+    assert len(entries) == 1, (
+        f"{name} has to carry exactly one roster bullet opening `- {ROSTER_ENTRY}`; found "
+        f"{len(entries)}"
+    )
+    return _flat(entries[0])
+
+
+def test_the_packages_plan_store_reads_run_the_locked_install_the_roster_names() -> None:
+    """The resolution in the code and the sentence in the prose name one binary.
+
+    Held both ways under the suite's own interpreter: the package's resolution answers
+    the path the suite says provisioning installs the CLI at, and the manager's roster
+    entry states that rule — the locked install beside the interpreter, never a
+    `onetaskgraph` from `PATH` or from `ONETASKGRAPH_SDK_BINARY` — pointing at the
+    module that says why. A resolution that moved, or a sentence that stopped being
+    true, fails here rather than diverging silently.
+    """
+    resolved = plan_store.locked_binary()
+    assert resolved == ONETASKGRAPH_BIN, (
+        f"{RESOLUTION_MODULE} resolves the plan-store CLI to {resolved}, where the suite "
+        f"says provisioning installs it at {ONETASKGRAPH_BIN}"
+    )
+    assert Path(plan_store.client().binary).samefile(ONETASKGRAPH_BIN), (
+        "the SDK client the package builds runs a binary other than the locked install"
+    )
+
+    entry = _roster_entry(MANAGER)
+    assert f"`{LOCKED_INSTALL}`" in entry, (
+        f"{MANAGER}'s `onetaskgraph` roster entry has to name `{LOCKED_INSTALL}` as the "
+        "install every plan-store read runs"
+    )
+    assert "plan-store read" in entry and "`orchestrator/`" in entry, (
+        f"{MANAGER}'s `onetaskgraph` roster entry has to say the rule is about every "
+        "plan-store read in `orchestrator/`"
+    )
+    assert "never" in entry and "`PATH`" in entry, (
+        f"{MANAGER}'s `onetaskgraph` roster entry has to say a `onetaskgraph` from `PATH` "
+        "is never the one a read runs"
+    )
+    assert f"`{plan_store.SDK_BINARY_VARIABLE}`" in entry, (
+        f"{MANAGER}'s `onetaskgraph` roster entry has to name `{plan_store.SDK_BINARY_VARIABLE}` "
+        "as a name a read never resolves the CLI from"
+    )
+    assert f"`{RESOLUTION_MODULE}`" in entry, (
+        f"{MANAGER}'s `onetaskgraph` roster entry has to point at `{RESOLUTION_MODULE}` for "
+        "the reason, which is stated there once"
+    )
+    assert re.search(r"\b\d{4}-\d{2}-\d{2}\b", entry) is None, (
+        "the roster entry carries a bare date, which reads as a measurement to re-take"
     )
