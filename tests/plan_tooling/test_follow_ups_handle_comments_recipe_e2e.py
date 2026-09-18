@@ -19,6 +19,13 @@ One module fixture seeds the board, drives the refusal on a run with nothing new
 re-dispatch on the run with comments — during which a person comments again, before the
 replies are posted — and gathers again until nothing is left, then once more after a later
 comment: readings of one board's life.
+
+**The board is longer than one page as the recipe lists it.** An earlier run's fifty
+tickets sit ahead of the main run's own issue in listing order, so that issue is past the
+store's default page — the shape in which `just follow-ups-handle-comments` once read a
+board's first fifty items as the whole board and answered "no new feedback" for a run whose
+every issue sat on the second page. The fixture records that first page as the installed
+store reports it, with no `--page`, so the premise is read rather than assumed.
 """
 
 from __future__ import annotations
@@ -72,6 +79,11 @@ pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 OWN_CAUSE = "listing-cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 QUIET_CAUSE = "export-drops-a-column"
+
+#: How many tickets a filler run files ahead of the main run's issue in listing order: one
+#: default page of the installed store, so the main run's own issue is on the page after
+#: it. The store's page size is left unnamed — the point is the page nobody sized.
+FILLED = 50
 
 #: The people commenting, as the board records their authors.
 REVIEWER = "a-reviewer"
@@ -134,6 +146,9 @@ class Handled(NamedTuple):
     own_issue: QualifiedTaskId
     shared_issue: QualifiedTaskId
     quiet_issue: QualifiedTaskId
+    filled: list[QualifiedTaskId]
+    #: The board's first page as the installed store lists it with no ``--page``.
+    first_page: dict[str, object]
     statuses_before: dict[str, object]
     refused: subprocess.CompletedProcess[str]
     statuses_after_refusal: dict[str, object]
@@ -193,11 +208,27 @@ def _filed(bench: Bench, run: str, cause: str) -> QualifiedTaskId:
     return QualifiedTaskId(f"{BOARD}:{run}/tickets/{cause}")
 
 
+def _first_page(bench: Bench) -> dict[str, object]:
+    """The board's first page exactly as an unpaged listing sees it."""
+    return _store(bench, "task", "list", "--source", BOARD)
+
+
 def _statuses(bench: Bench) -> dict[str, object]:
-    """The category every board item is held at."""
-    items = _store(bench, "task", "list", "--source", BOARD)["items"]
-    assert isinstance(items, list), items
-    return {str(one["id"]): _category(one["item"]) for one in items}
+    """The category every board item is held at, read page by page to the last."""
+    found: dict[str, object] = {}
+    page: str | None = None
+    while True:
+        listed = _store(
+            bench, "task", "list", "--source", BOARD, *(["--page", page] if page else [])
+        )
+        items = listed["items"]
+        assert isinstance(items, list), items
+        found.update({str(one["id"]): _category(one["item"]) for one in items})
+        cursor = listed["next"]
+        if cursor is None:
+            return found
+        assert isinstance(cursor, str), listed
+        page = cursor
 
 
 def _replying(bench: Bench, python: str, log: Path, run: str) -> list[str]:
@@ -241,16 +272,18 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
     bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp / "commands.json")
     bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp / "commands-ran.jsonl")
     pid = os.getpid()
-    main, earlier, quiet = (
-        tickets.RunId(f"hc-{role}-{pid}") for role in ("main", "earlier", "quiet")
+    main, earlier, filler, quiet = (
+        tickets.RunId(f"hc-{role}-{pid}") for role in ("main", "earlier", "filler", "quiet")
     )
     python = str(REPO_ROOT / ".venv" / "bin" / "python3")
     started: list[str] = []
     try:
-        # The board as three earlier follow-up runs left it.
+        # The board as four earlier follow-up runs left it, one of them a whole page of
+        # tickets that list ahead of the main run's own issue.
         own_issue = _filed(bench, main, OWN_CAUSE)
         shared_issue = _filed(bench, earlier, SHARED_CAUSE)
         quiet_issue = _filed(bench, quiet, QUIET_CAUSE)
+        filled = [_filed(bench, filler, f"filler-{index:02d}") for index in range(FILLED)]
         _next_second()
         _commented(bench, own_issue, ANSWERED, REVIEWER)
         _commented(bench, quiet_issue, QUIET_OLD, REVIEWER)
@@ -268,6 +301,7 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         _commented(bench, own_issue, owned, None)
         # A person accepts the main run's ticket after the run last touched it.
         _moved(bench, own_issue, tickets.Status.ACCEPTED.value)
+        first_page = _first_page(bench)
         statuses_before = _statuses(bench)
 
         # A run whose every comment predates its last response.
@@ -365,6 +399,8 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
             own_issue=own_issue,
             shared_issue=shared_issue,
             quiet_issue=quiet_issue,
+            filled=filled,
+            first_page=first_page,
             statuses_before=statuses_before,
             refused=refused,
             statuses_after_refusal=statuses_after_refusal,
@@ -468,6 +504,27 @@ def test_the_feedback_file_carries_exactly_the_persons_comments_after_the_runs_l
     assert feedback.splitlines()[0].startswith("<!-- orchestrator:follow-up-feedback boundary=")
     for absent in (ANSWERED, "This run hit it too.", "The earlier run's evidence.", QUIET_OLD):
         assert absent.rstrip() not in feedback, feedback
+
+
+def test_a_comment_on_an_issue_past_the_boards_first_page_is_gathered(
+    handled: Handled,
+) -> None:
+    """The board is longer than one page as the recipe lists it; the own issue is past it."""
+    first = handled.first_page
+    items = first["items"]
+    assert isinstance(items, list), first
+    listed = [str(one["id"]) for one in items]
+
+    assert first["errors"] == []
+    assert first["next"] is not None, "the board fits one page, so nothing here is past it"
+    assert handled.own_issue not in listed, listed
+    assert handled.shared_issue in listed, listed
+    assert set(handled.statuses_before) > set(listed)
+    assert set(handled.statuses_before) >= {*handled.filled, handled.own_issue}
+
+    _, feedback = _feedback(handled)
+    assert f"on `{handled.own_issue}`, this run's issue" in feedback, feedback
+    assert ON_OWN.rstrip() in feedback
 
 
 def test_the_recipe_re_dispatches_once_through_the_feedback_path_with_the_file_verbatim(

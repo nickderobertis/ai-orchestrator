@@ -247,6 +247,52 @@ def test_partial_sdk_answers_are_refused_through_the_generated_model() -> None:
         plan_store.complete(answer)
 
 
+def test_a_later_page_a_source_failed_to_answer_refuses_the_whole_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`complete`'s rule holds on every page: nothing from a partial listing is returned."""
+    root = tmp_path / "source"
+    write_plan_project(
+        root,
+        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
+    )
+    _source(monkeypatch, "sdksource", root)
+    whole = plan_store.sdk(plan_store.client().task_list(source=["sdksource"], project="demo"))
+    assert whole.next is None
+    first = QueryResponseOfQualifiedTask.model_validate(
+        {**whole.model_dump(mode="json", by_alias=True), "next": "ab"}
+    )
+    second = QueryResponseOfQualifiedTask.model_validate(
+        {
+            "errors": [
+                {
+                    "class": "refused",
+                    "source": "sdksource",
+                    "error": {"kind": "auth", "message": "credential missing"},
+                }
+            ],
+            "items": [],
+            "plan": {"per_source": []},
+        }
+    )
+    pages = [first, second]
+    asked: list[object] = []
+    monkeypatch.setattr(
+        plan_store,
+        "client",
+        lambda: SimpleNamespace(task_list=lambda **keywords: asked.append(keywords)),
+    )
+    monkeypatch.setattr(plan_store, "sdk", lambda _answer: pages.pop(0))
+
+    with pytest.raises(OSError, match="source sdksource could not answer"):
+        plan_store.read_tasks("sdksource:demo")
+
+    assert asked == [
+        {"source": ["sdksource"], "project": "demo", "page": None},
+        {"source": ["sdksource"], "project": "demo", "page": "ab"},
+    ]
+
+
 def test_typed_listings_are_still_held_to_the_requested_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

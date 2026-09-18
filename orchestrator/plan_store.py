@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import NewType
+from typing import NewType, Protocol
 
 from onetaskgraph_sdk import (
     Client,
@@ -60,6 +60,73 @@ def complete[T](answer: T) -> T:
     return answer
 
 
+#: How many pages one listing may read before it is refused. The store answers a
+#: ``next`` cursor page after page until every source is exhausted, so a store that
+#: kept answering one for ever — a bug, or a cursor that never advances — would spin the
+#: caller without this bound. It exists for termination, never as a budget: at the
+#: store's default page of 50 it is fifty thousand items, far past any board or plan
+#: project this host reads.
+LISTING_PAGE_CEILING = 1000
+
+
+class PageCursor(Protocol):
+    """The cursor a page reports: an opaque token handed back as ``page=``."""
+
+    @property
+    def root(self) -> str:
+        """The token exactly as the store wrote it."""
+
+
+class Paged[T](Protocol):
+    """One page of an SDK listing, as every ``QueryResponseOf…`` model reports it."""
+
+    @property
+    def items(self) -> Sequence[T]:
+        """This page's items."""
+
+    @property
+    def errors(self) -> Sequence[object]:
+        """The sources that failed to answer this page."""
+
+    @property
+    def next(self) -> PageCursor | None:
+        """Where to resume, or ``None`` on the last page."""
+
+
+def every_page[T](
+    what: str, query: Callable[..., Coroutine[object, object, Paged[T]]], **keywords: object
+) -> list[T]:
+    """Read one paged SDK listing to exhaustion: every page's items, in listing order.
+
+    A plan-store listing is a page, not an answer. ``task_list``, ``document_list``,
+    ``project_list`` and ``task_deps`` each return one page of the store's ``page_size``
+    (50 unless configured) and a ``next`` cursor when more remain, so a reader that takes
+    the first answer as the whole listing silently reads a board as smaller than it is —
+    which is how a run's follow-up comments went unseen once the ``followups`` board
+    passed fifty items. Every listing in this package reads through here, so a reader
+    added later cannot make that mistake again: ``query`` is the client's bound listing
+    method, ``keywords`` its query, and ``what`` names the listing in a refusal.
+
+    The cursor is bound to the query that produced it, so each page repeats ``keywords``
+    with ``page=`` added. :func:`complete`'s rule holds on every page — a page any
+    source failed to answer refuses the whole listing, and nothing partial is returned —
+    and more pages than :data:`LISTING_PAGE_CEILING` refuses rather than spinning.
+    """
+    items: list[T] = []
+    cursor: str | None = None
+    for _ in range(LISTING_PAGE_CEILING):
+        answer = complete(sdk(query(**keywords, page=cursor)))
+        items.extend(answer.items)
+        if answer.next is None:
+            return items
+        cursor = answer.next.root
+    raise OSError(
+        f"listing {what} read {LISTING_PAGE_CEILING} pages (the ceiling "
+        "plan_store.LISTING_PAGE_CEILING sets) and the store still answered a next cursor; "
+        "refusing to read on"
+    )
+
+
 @dataclass(frozen=True)
 class StoreTask:
     qualified_id: QualifiedTaskId
@@ -108,9 +175,9 @@ def authored_deps(task: StoreTask) -> list[str]:
 
 def read_tasks(project: str) -> list[StoreTask]:
     source, native = qualified(project)
-    answer = complete(sdk(client().task_list(source=[source], project=native)))
+    listed = every_page(f"project {project!r}", client().task_list, source=[source], project=native)
     records = []
-    for held in answer.items:
+    for held in listed:
         held_id = held.id.model_dump()
         if not held_id.startswith(f"{source}:{native}/"):
             raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
@@ -141,7 +208,11 @@ def read_tasks(project: str) -> list[StoreTask]:
     for record in records:
         targets = [
             QualifiedTaskId(edge.to.id.model_dump())
-            for edge in complete(sdk(client().task_deps(str(record.qualified_id)))).items
+            for edge in every_page(
+                f"the dependencies of {record.qualified_id}",
+                client().task_deps,
+                id=str(record.qualified_id),
+            )
         ]
         unknown = [target for target in targets if target not in ids]
         if unknown:
@@ -208,7 +279,10 @@ def read_project(project: str) -> tuple[dict[str, object], list[StoreTask]]:
 def read_documents(project: str) -> list[StoreDocument]:
     source, native = qualified(project)
     result = []
-    for held in complete(sdk(client().document_list(source=[source], project=native))).items:
+    listed = every_page(
+        f"the documents of {project!r}", client().document_list, source=[source], project=native
+    )
+    for held in listed:
         held_id = held.id.model_dump()
         item = held.item
         item_project = item.project.model_dump() if item.project else None
@@ -238,7 +312,7 @@ def read_projects(source: str) -> list[StoreProject]:
             x.item.metadata or {},
             x.item.location.model_dump(mode="python") if x.item.location else None,
         )
-        for x in complete(sdk(client().project_list(source=[source]))).items
+        for x in every_page(f"the projects of {source!r}", client().project_list, source=[source])
     ]
     if any(not str(project.qualified_id).startswith(f"{source}:") for project in projects):
         raise OSError(f"source {source!r} returned a project outside its own ids")

@@ -167,8 +167,10 @@ def moment(value: datetime | str | None, what: str) -> datetime:
 def board_issues(board: str) -> list[Issue]:
     """Every item on ``board`` a follow-up run owns, each with its comments, oldest first."""
     found = []
-    answer = plan_store.complete(plan_store.sdk(plan_store.client().task_list(source=[board])))
-    for held in answer.items:
+    items = plan_store.every_page(
+        f"the board {board!r}", plan_store.client().task_list, source=[board]
+    )
+    for held in items:
         listed_id = held.id.model_dump()
         if not listed_id.startswith(f"{board}:") or listed_id == f"{board}:":
             raise OSError(f"the board {board!r} listed {listed_id!r}, which is not one of its ids")
