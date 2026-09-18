@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.34.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.37.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,11 +143,11 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.12.1/0.12.0 upgrade (`config/oneharness.version` and
+after the 0.12.1/0.13.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
-this paragraph whenever either pin moves. That re-check has now been made six times
+this paragraph whenever either pin moves. That re-check has now been made seven times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -193,7 +193,13 @@ to 0.12.0 on the same terms: `onejudge-cli` 0.12.0 is still compiled against
 own SBOM, and neither `crates/onejudge/src/report.rs` (schema 12) nor
 `crates/onejudge/src/usage.rs` changes between the two tags; what 0.12.0 changes is where
 its note contract and frame protocol come from — `onemessagebus` 0.4.0 — which writes
-nothing into a record's `usage`. `dispatches`,
+nothing into a record's `usage`. It has since moved to 0.13.1 on the same terms:
+`crates/onejudge/src/report.rs` (schema 12) and `crates/onejudge/src/usage.rs` are
+unchanged between the two tags; `onejudge-cli` 0.13.1 is compiled against
+`oneharness-core` 0.14.0 and the engine wheel links 0.14.1, read off each wheel's own SBOM,
+and the `Usage` those write is the same five fields as before — history schema 1.9 admits a
+`server_overloaded` failure kind beside the block rather than inside it; what 0.13.1 adds
+is the `turn` outcome on a `supervisor` frame, which writes nothing into a record's `usage`. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 
@@ -278,22 +284,31 @@ served them.
    watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.7.3**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.9.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 16 on the envelope, where
-   0.7.2 served 15 and 0.6.5 served 14; `timeline_schema_version` 8, where 0.7.0 served
-   7 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
+   what re-opens this paragraph: `telemetry_schema_version` 17 on the envelope, where
+   0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10, where 0.7.3 served
+   8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
    answer); spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here; no run read served the `dispatching` this paragraph used to name.
-   On 0.7.3 this was re-read against the recorded runs under
+   On 0.9.0 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.
+   **A lane is a member the run's own graphs declared**, from 0.9.0: a session's
+   `agent_role` is the member name the run recorded for it, served only where one of
+   the run's recorded graph declarations — the `record.json` `oneagentgraph` keeps per
+   graph run, read from `ONEAGENTGRAPH_STATE_DIR` — names that member, and absent
+   otherwise; nothing is built into the reader, so a conversation's `agentRole` is
+   optional. The recorded runs predate this host keeping those records beside them, so
+   the journey serves them with the records their graph documents imply, written at test
+   time from the members each document under `graphs/` declares.
    **The dispatch tier is two span kinds, and confusing them is the easy mistake.** A
    **`dispatch`** span is one supervisory conversation, parented on the *run*, with an
-   `agent_role` of `orchestrator` (the monitor) or `check-in` (the pacemaker), a
+   `agent_role` of `monitor` or `check-in` (the pacemaker) — the monitor was served as
+   `orchestrator` before 0.9.0 — a
    `transport_role`, a `status`, and a `reference` of `{kind: conversation}`. A
    **`rollup`** span is the per-node tier, parented on the *node*, and comes in two
    shapes: labelled `dispatch` it carries `agent_role` — `worker` or `pr-author` — a
@@ -313,8 +328,8 @@ served them.
    publication statuses, and both supervisory `agent_role`s. One of those runs is
    **derived rather than recorded**, and the only one here that is: `dag-ui-truth` is
    the sole run on this
-   host whose *monitor* member ever completed a turn — which is what makes an
-   `orchestrator` label exist at all — and it is 8.9MB of journal whose worker
+   host whose *monitor* member ever completed a turn — which is what makes a `monitor`
+   label exist at all — and it is 8.9MB of journal whose worker
    transcripts quote an `llmlint: ignore` directive the linter then reads as a real
    one, so the whole run cannot be checked in. `dag-ui-truth-monitor-slice` is the six
    events of its dag-scope graph, kept verbatim; the fixture's own docstring records

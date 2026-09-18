@@ -56,7 +56,6 @@ ROOT = Path(__file__).resolve().parents[2]
 
 #: Copied into the checkout so a recipe that delegates through a script finds it.
 WRAPPER_SCRIPTS = (
-    "planner-verdict.sh",
     "planner-surface.sh",
     "new-persona.sh",
     "telemetry-server.sh",
@@ -428,14 +427,14 @@ DELEGATIONS = (
     # pass one through untouched when the caller does.
     Delegation(
         "channel-next",
-        ("run-1", "--filter", "monitor"),
-        "uv run onepipeline next run-1 --filter monitor",
+        ("run-1", "--filter", "detailed"),
+        "uv run onepipeline next run-1 --filter detailed",
     ),
     Delegation("channel-next", ("run-1", "--all"), "uv run onepipeline next run-1 --all"),
     Delegation(
         "monitor",
-        ("run-1", "--filter", "monitor"),
-        "uv run onepipeline monitor run-1 --filter monitor",
+        ("run-1", "--filter", "detailed"),
+        "uv run onepipeline monitor run-1 --filter detailed",
     ),
     Delegation("monitor", ("run-1", "--all"), "uv run onepipeline monitor run-1 --all"),
     # A verdict named as a file is `onemessagebus reply`, which binds it to the pending
@@ -1417,31 +1416,37 @@ def test_lint_llm_validate_reaches_the_validator(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("invocation", "envelope"),
     [
-        (("channel-approve", "run-1"), '{"completion": true, "reason": "approved"}'),
+        (("channel-approve", "run-1"), '{"version":3,"completion":true,"reason":"approved"}'),
         (
             ("channel-reject", "run-1", "the gate never ran"),
-            '{"completion": false, "reason": "the gate never ran", '
-            '"message": "the gate never ran"}',
+            '{"version":3,"completion":false,"reason":"the gate never ran",'
+            '"message":"the gate never ran"}',
         ),
         (
             ("channel-continue", "run-1", "split the api node"),
-            '{"completion": false, "reason": "split the api node", '
-            '"message": "split the api node"}',
+            '{"version":3,"completion":false,"reason":"split the api node",'
+            '"message":"split the api node"}',
         ),
     ],
     ids=("approve", "reject", "continue"),
 )
-def test_a_legacy_verdict_recipe_pipes_the_envelope_reply_accepts(
+def test_a_verdict_recipe_sends_its_envelope_through_the_reply_recipe(
     tmp_path: Path, invocation: tuple[str, ...], envelope: str
 ) -> None:
-    """`onepipeline reply` takes one envelope; the three verdicts are how it is spelled."""
+    """The three verdicts are spellings of one envelope, and `channel-reply` sends it.
+
+    So a verdict reaches the channel by the one route every reply takes — the bus's
+    `reply surfaces` over this host's configuration and the run's own channel — rather
+    than by a second path beside it.
+    """
     checkout, trace = _checkout(tmp_path)
 
     result = _run(checkout, trace, *invocation)
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onepipeline reply run-1",
+        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
+        "--transport-dir runs/run-1/channel",
         f"stdin {envelope}",
     ]
 
@@ -1461,9 +1466,10 @@ def test_a_verdict_message_reaches_the_envelope_as_json_rather_than_as_text(
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onepipeline reply run-1",
-        'stdin {"completion": false, "reason": "it said \\"no\\"; try\\nagain", '
-        '"message": "it said \\"no\\"; try\\nagain"}',
+        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
+        "--transport-dir runs/run-1/channel",
+        'stdin {"version":3,"completion":false,"reason":"it said \\"no\\"; try\\nagain",'
+        '"message":"it said \\"no\\"; try\\nagain"}',
     ]
 
 

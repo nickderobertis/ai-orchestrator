@@ -218,9 +218,10 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   `onepipeline-api`: `onepipeline-api --help`;
   https://github.com/nickderobertis/onepipeline-ui and [`docs/dag-ui.md`](docs/dag-ui.md).
 - **`onemessagebus`** — the typed message bus the stack's channel, events and notes run
-  on, and the `serve --codec onejudge` the observer's judge side will run. Governed by
-  `config/onemessagebus.version`, which governs the CLI the host runs; a dispatch reaches
-  the bus through the crates the engine links. `onemessagebus --help`;
+  on, and the observer's judge side: `serve --codec monitor`, the bus's generic binding
+  interpreter running the binding this host declares in `config/onemessagebus.yaml`.
+  Governed by `config/onemessagebus.version`, which governs the CLI the host runs; a
+  dispatch reaches the bus through the crates the engine links. `onemessagebus --help`;
   https://github.com/nickderobertis/onemessagebus.
 - **`llmlint`** — the judged lint tier (`llmlint.yml`; `just lint-llm`, `just
   lint-llm-diff`), the blocking pre-push check beside the deterministic `just check`.
@@ -624,8 +625,8 @@ After `just orchestrate`, use **only** `just channel-next`, `just channel-reply`
 stop`, `just watch`, and the read-only `just monitor` / `just runs` / `just status` /
 `just unwatched` views. Nothing advances a run; the engine reconciles continuously.
 `just channel-next` and `just monitor` read through the `planner` profile — the
-pipeline's decisions and settlements, not every worker's turns; `--filter monitor`
-widens to the detailed stream and `--all` bypasses profiles. Rendering a surface in
+pipeline's decisions and settlements, not every worker's turns; `--filter detailed`
+widens to the whole merged stream and `--all` bypasses profiles. Rendering a surface in
 `monitor` is not reading it; only `channel-next` consumes one. `orchestrate` stays
 attached and returns when the run settles, a blocking surface waits, or nothing is
 driving it; Ctrl-C detaches without stopping; `--detach` is for several runs supervised
@@ -646,7 +647,9 @@ human-action attestation, and the watch. The planner owns decomposition, contrac
 persona choice, and task authoring. The engine owns scheduling, ledger writes,
 integration of finished work, and publication closeout. The monitor owns noticing — and
 applying a fix inside the allowlist its edit author is bounded to — `retry`, `requeue`,
-`cancel`, `finding` and `add`, as `config/onemessagebus.yaml` grants them; a finding it or the
+`cancel`, `finding` and `add`, the grants this host declares for the monitor's author in
+`config/onemessagebus.yaml` beside the reason each other op is refused; neither the bus
+nor the engine builds the monitor in. A finding it or the
 pacemaker calls a rule violation names the file and line the rule comes from, and its
 own supervisor sends an observation back until it is one. None of these roles authors
 target-project content.
@@ -787,6 +790,14 @@ was.
   this host's messaging policy lives: change the policy there, never in a wrapper.
   `just channel-reply`, the ask `ORCHESTRATOR_ASK_MANAGER` names and the observer's
   judge side are that bus's verbs, so the rules below are the bus's.
+- **The observer's judge side is a binding this host declares**: `onemessagebus serve
+  surfaces --codec monitor` runs `codecs.monitor` — what a taken turn is told, the
+  `monitor-failed` and `monitor-completion` kinds it raises, what a lost turn is called
+  — as data, under the grammar onemessagebus's `codecs.md` states. **Who may speak is
+  declared there too**: the planner is the bus's one built-in author, and the monitor's
+  author — its grants and the reason each other op is refused, in the channel's words —
+  is this host's `authors.monitor`, so an author the file does not declare is refused
+  before anything is appended.
 - **Read the queue before replying**, and confirm the `pending` surface is the one
   being answered: a reply binds by correlation, never by arrival. A question carries
   the correlation the bus stamped on it, and `just channel-reply
@@ -917,7 +928,8 @@ decision:
 - **Monitor side** — `oneharness.orchestrator.toml`: both codex identities first, so
   this long-lived process does not queue ahead of the workers, and the one side with no
   per-turn deadline (`timeout = 0`), because it watches for the life of the run. Its
-  judge side is the live manager, over `onemessagebus serve --codec onejudge`.
+  judge side is the live manager, over `onemessagebus serve surfaces --codec monitor`, the
+  binding this host declares in `config/onemessagebus.yaml`.
 - **Pacemaker side** — `oneharness.check-in.toml`: the monitor's routing verbatim with a
   finite deadline, a separate file for that one reason — an unbounded deadline reaching
   a scheduled member leaves a wedged turn alive forever, silently. Re-merging the two

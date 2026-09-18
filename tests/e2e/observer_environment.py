@@ -8,7 +8,7 @@ statement like that outlives the release it was measured against unless somethin
 measures it again, which is exactly how the opposite claim survived here for as
 long as it did.
 
-So this stands where the bus's onejudge codec stands — as the `judge.command` of a
+So this stands where this host's monitor binding stands — as the `judge.command` of a
 `kind: onejudge` observer member — and writes its own whole environment out for
 `tests/e2e/test_orchestrate_launch_e2e.py` to read. It is the same measurement a
 maintainer would take by hand, kept in the suite so a release that moves the export
@@ -37,8 +37,8 @@ ENVIRONMENT_PATH_ENV = "OBSERVER_ENVIRONMENT_PATH"
 class SupervisorRuling(TypedDict):
     """The object onejudge's `supervisor` op reads back from a judge-side command.
 
-    The same shape the bus's onejudge codec answers a taken turn with, stated here
-    because this probe stands in the codec's place and answers the same conversation.
+    The same shape the monitor binding answers a taken turn with, stated here because
+    this probe stands in the binding's place and answers the same conversation.
     """
 
     completion: bool

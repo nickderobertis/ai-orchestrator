@@ -43,8 +43,7 @@ QUESTION_KIND=planner-question
 QUESTION_SOURCE=proposal
 
 #: What a run id may be before it is composed into the channel directory's path: one
-#: word the bus's own run grammar also accepts, which cannot start a flag or climb out
-#: of the runs root. `tests/test_planner_seam_contracts.py` holds it to the bus.
+#: word, which cannot start a flag or climb out of the runs root.
 SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_.-]*$'
 
 fail() {
@@ -153,8 +152,8 @@ well_formed_utf8 "$question" || fail "the question is not well-formed UTF-8 text
 run="${ONEPIPELINE_RUN_ID-}"
 [ -n "$run" ] || fail "ONEPIPELINE_RUN_ID is not set, so there is no run whose channel to ask on" \
     "run this from inside a dispatch, which exports it, or export the run id from 'just runs' yourself"
-# Byte-wise, as the bus reads it: under a UTF-8 locale `[A-Za-z]` also matches accented
-# letters, which name no run the bus would open.
+# Byte-wise: under a UTF-8 locale `[A-Za-z]` also matches accented letters, which name no
+# run the engine mints.
 safe_run_id() {
     local LC_ALL=C
     # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so the check would accept nothing.
@@ -178,6 +177,7 @@ encoded=""
 store_json_string_in_encoded "$question"
 frame="{\"kind\":\"$QUESTION_KIND\",\"message\":$encoded,\"source\":\"$QUESTION_SOURCE\"}"
 
+# llmlint: ignore[boundary_inputs_validated] `ONEPIPELINE_RUNS_DIR` is the engine's own export naming the runs root, and it reaches nothing but the bus's `--transport-dir`, which refuses an unusable directory naming it; the run id composed beneath it is validated above.
 arguments=(ask "$QUEUE" --blocking --config "$config"
     --transport-dir "${ONEPIPELINE_RUNS_DIR:-runs}/$run/channel")
 [ -z "$asker" ] || arguments+=(--asker "$asker")

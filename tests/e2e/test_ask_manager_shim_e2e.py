@@ -46,7 +46,7 @@ ASKER = "worker-7"
 PREFIX_WITHOUT_CHANNEL = ["ask", "surfaces", "--blocking", "--config", str(CONFIG)]
 
 #: The shim's reply window when none is named, which is `config/onemessagebus.yaml`'s
-#: `codecs.onejudge.reply_window_seconds` (`tests/test_onemessagebus_config.py`).
+#: `codecs.monitor.reply_window_seconds` (`tests/test_onemessagebus_config.py`).
 DEFAULT_WINDOW = "3000"
 
 REPLY_ANSWER = (

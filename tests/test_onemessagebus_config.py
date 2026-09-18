@@ -2,12 +2,19 @@
 
 The file is read by the installed `onemessagebus` release on every channel verb and by the
 engine at every launch, so the first thing proven is that the release loads it: through
-the command line's own `Config::load` and `Config::resolve`, beside a copy carrying one
+the command line's own `Config::load` and link resolution, beside a copy carrying one
 unknown key that the same load refuses by name — without that control, a verb that
 ignored `--config` would pass too. Then each value is held to the statement it comes from:
-the monitor's grants to `AGENTS.md`, the reply window to the shim's default, the session
-variable to the installed engine that owns its name, and the validator to the one in-repo
-entry point.
+the monitor's author to `AGENTS.md` and to the reasons the bus gave before it stopped
+naming the monitor, the reply window to the shim's default, the validator to the one
+in-repo entry point, and the schema link to the onejudge this host adopts.
+
+The link is proven with no request leaving the host. Every copy here differs from the
+committed file only in where its link points — at a bundle on disk, or at a loopback
+server this module starts — and the bundle is derived from the installed onejudge
+(`tests/onejudge_bundle.py`), never a copy somebody maintains. The later comparison of the
+committed URL against what GitHub actually serves is session setup's warm step on a real
+host, which reports each link with the version it stored.
 
 The workspace installs no YAML library, so each value is read off the file's own lines,
 with comments removed, the way this suite's other readers of YAML documents read them; the
@@ -16,24 +23,48 @@ release's load above is what holds the whole document well-formed.
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import os
 import re
 import subprocess
-import time
+from collections.abc import Iterator
 from pathlib import Path
 
+import monitor_conversation
+import onejudge_bundle
 import pytest
-from test_linked_libraries import ENGINE_DISTRIBUTION
+from onejudge_bundle import LoopbackOrigin
 
 from orchestrator.root import REPO_ROOT
 
 CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
+ONEJUDGE_VERSION = REPO_ROOT / "config" / "onejudge.version"
+
+#: The bus this checkout pins, never one the ambient PATH offers first.
+BUS = str(REPO_ROOT / ".venv" / "bin" / "onemessagebus")
 
 #: A verdict alone: judged by no validator (it carries no commands), so a `validate` of it
 #: answers what loading and resolving the configuration answered.
 VERDICT = '{"version":3,"completion":true,"message":"main"}'
+
+#: The binding the monitor's judge side serves, as graphs/dag-scope.yaml names it.
+BINDING = "monitor"
+
+#: The monitor's refused ops, each with the reason the bus's built-in profile gave it
+#: before this host declared the monitor itself (onemessagebus 0.4.0's
+#: `crates/onemessagebus-agent/src/channel.rs`), verbatim, so a refusal the monitor meets
+#: reads exactly as it did.
+REFUSED = {
+    "complete": "whether the run is finished is the planner's verdict, not an observation",
+    "attest": "a human action is attested by the person who took it, never by a watcher",
+    "drop": "removing work from the graph is a decomposition decision the planner owns",
+    "reparent": "rewiring dependencies is a decomposition decision the planner owns",
+    "amend": "what a node is judged against is a decomposition decision the planner owns",
+    "note": "a note may bind a criterion the node's judge decides against, which is the "
+    "planner's decision rather than an observation",
+    "settle": "settling a node from evidence declares an outcome this run never observed, "
+    "which is the planner's decision rather than an observation",
+}
 
 
 def _lines() -> str:
@@ -56,24 +87,24 @@ def _bus(
     *arguments: str, config: Path, channel: Path, stdin: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["onemessagebus", *arguments, "--config", str(config), "--transport-dir", str(channel)],
+        [BUS, *arguments, "--config", str(config), "--transport-dir", str(channel)],
         input=stdin,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,
         check=False,
         cwd=REPO_ROOT,
     )
 
 
 def test_the_release_loads_and_resolves_the_configuration(tmp_path: Path) -> None:
-    """`validate` and `serve` both open the file through the release's own loader."""
+    """`validate` and `serve` both open the file, and its link, through the release."""
     validated = _bus("validate", "replies", config=CONFIG, channel=tmp_path, stdin=VERDICT)
     assert validated.returncode == 0, validated.stderr
     assert json.loads(validated.stdout)["verdict"] == "pass"
 
     served = _bus(
-        "serve", "surfaces", "--codec", "onejudge", config=CONFIG, channel=tmp_path, stdin=""
+        "serve", "surfaces", "--codec", BINDING, config=CONFIG, channel=tmp_path, stdin=""
     )
     assert served.returncode == 0, served.stderr
 
@@ -107,115 +138,62 @@ def test_the_monitors_grants_are_the_allowlist_agents_md_states() -> None:
     )
     assert stated is not None, "AGENTS.md no longer names the monitor's allowlist"
     named = re.findall(r"`(\w+)`", stated.group(1))
-    assert re.search(
-        r"^authors:\n  monitor: \{capabilities: \[([^\]]*)\]\}\n(?! )", _lines(), re.MULTILINE
-    )
-    granted = _value(r"^  monitor: \{capabilities: \[([^\]]*)\]\}$")
+    granted = _value(r"^authors:\n  monitor:\n    capabilities: \[([^\]]*)\]$")
     assert [op.strip() for op in granted.split(",")] == named
 
 
-def test_the_reply_window_is_the_shims_own_default() -> None:
-    """The codec's window and the shim's `--timeout` default are one decision."""
+def test_the_monitor_is_refused_every_other_op_for_the_reason_the_bus_once_gave(
+    tmp_path: Path,
+) -> None:
+    """Each refused op reads back, through the release, with its reason in the channel's words.
+
+    Beside the two controls that make the refusals mean something: a granted op by the
+    same author passes the same load, and an author the file does not declare is refused
+    for that — so the reasons below are the declaration's doing, not a channel refusing
+    every monitor envelope.
+    """
+    refusals = re.search(r"^    refusals:\n((?:      .+\n)+)", _lines(), re.MULTILINE)
+    assert refusals is not None, "config/onemessagebus.yaml declares no `authors.monitor.refusals`"
+    assert [line.split(":", 1)[0].strip() for line in refusals.group(1).splitlines()] == list(
+        REFUSED
+    )
+    for op, reason in REFUSED.items():
+        envelope = {"version": 2, "author": "monitor", "commands": [{"op": op, "id": "research"}]}
+        refused = _bus(
+            "validate", "replies", config=CONFIG, channel=tmp_path, stdin=json.dumps(envelope)
+        )
+        assert refused.returncode == 1, refused.stdout
+        assert (
+            f"'{op}' is not an op the monitor may issue: {reason}. Surface it to the planner "
+            "instead" in refused.stderr
+        ), refused.stderr
+
+    granted = {"version": 2, "author": "monitor", "commands": [{"op": "requeue", "id": "research"}]}
+    passed = _bus("validate", "replies", config=CONFIG, channel=tmp_path, stdin=json.dumps(granted))
+    assert passed.returncode == 0, passed.stderr
+
+    stranger = {**granted, "author": "pacemaker"}
+    unknown = _bus(
+        "validate", "replies", config=CONFIG, channel=tmp_path, stdin=json.dumps(stranger)
+    )
+    assert unknown.returncode == 1, unknown.stdout
+    assert "the envelope's author `pacemaker` is not declared" in unknown.stderr, unknown.stderr
+
+
+def test_the_binding_opens_on_the_shims_reply_window_and_the_engines_asker() -> None:
+    """The binding's window and the shim's `--timeout` default are one decision."""
     shim = (REPO_ROOT / "scripts" / "ask-manager.sh").read_text(encoding="utf-8")
     default = re.search(r"^DEFAULT_TIMEOUT_SECONDS=(\d+)$", shim, re.MULTILINE)
     assert default is not None
-    codec = _value(r"^codecs:\n  onejudge:\n((?:    .+\n)+)")
-    assert codec.splitlines() == [
+    binding = _value(rf"^codecs:\n  {BINDING}:\n((?:    .+\n)+)")
+    assert binding.splitlines()[:6] == [
         "    queue: surfaces",
         "    asker_env: ONEPIPELINE_CHANNEL_ASKER",
-        "    session_env: ONEPIPELINE_SERVE_SESSION_SECONDS",
+        "    session_env: ORCHESTRATOR_MONITOR_SESSION_SECONDS",
         f"    reply_window_seconds: {default.group(1)}",
+        "    select: op",
+        "    frames:",
     ]
-
-
-def _engine_binary() -> Path:
-    """The `onepipeline` executable the adopted engine wheel installed on this host."""
-    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
-    installed = [
-        Path(str(distribution.locate_file(entry)))
-        for entry in distribution.files or []
-        if Path(entry).parent.name == "bin" and Path(entry).name == "onepipeline"
-    ]
-    assert installed, f"the {ENGINE_DISTRIBUTION} wheel installed no bin/onepipeline"
-    return installed[0]
-
-
-def test_the_session_variable_is_the_one_the_installed_engine_names() -> None:
-    """`session_env` names the engine's variable, read off the engine this host runs.
-
-    The name is `onepipeline`'s — its `channel serve` bounds a per-turn session by it,
-    and the bus's codec takes the same word so a host bounding one bounds the other — and
-    the engine documents it only in its source repository, so the installed binary is the
-    one copy on this host to reconcile against. A release that renamed it would leave
-    this configuration naming a variable nothing reads, and the codec's session unbounded.
-    """
-    named = _value(r"^    session_env: (\S+)$")
-    engine = _engine_binary().resolve()
-    # A boolean first, so a failure names the variable rather than dumping the executable.
-    carried = named.encode() in engine.read_bytes()
-    assert carried, (
-        f"config/onemessagebus.yaml bounds the codec's session by {named}, which the "
-        f"installed engine at {engine} no longer names; re-measure the engine's variable "
-        "and move the configuration with it"
-    )
-
-
-def _serve(channel: Path, environment: dict[str, str]) -> subprocess.Popen[str]:
-    """A judge side as the graph spawns one, with its frame stream held open."""
-    return subprocess.Popen(  # noqa: S603 - the installed bus, as graphs/dag-scope.yaml execs it
-        [
-            "onemessagebus",
-            "serve",
-            "surfaces",
-            "--codec",
-            "onejudge",
-            "--config",
-            str(CONFIG),
-            "--transport-dir",
-            str(channel),
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=environment,
-        cwd=REPO_ROOT,
-    )
-
-
-def test_the_codec_bounds_its_session_by_the_variable_this_configuration_names(
-    tmp_path: Path,
-) -> None:
-    """Setting the named variable ends a session whose frame stream never closes.
-
-    Beside a control that sets nothing and is still serving after the same wait, so the
-    ending is the variable's doing rather than a session that stops on its own.
-    """
-    named = _value(r"^    session_env: (\S+)$")
-    unbounded = {key: value for key, value in os.environ.items() if key != named}
-
-    bounded = _serve(tmp_path / "bounded", {**unbounded, named: "1"})
-    try:
-        # A wait rather than `communicate`, which closes stdin, and a session whose frame
-        # stream closes ends for that reason whatever its bound.
-        bounded.wait(timeout=60)
-    finally:
-        bounded.kill()
-    assert bounded.stderr is not None
-    stderr = bounded.stderr.read()
-    assert bounded.returncode == 0, stderr
-    assert "reached its 1-second bound" in stderr, stderr
-
-    control = _serve(tmp_path / "control", unbounded)
-    try:
-        time.sleep(3)
-        assert control.poll() is None, (
-            f"a session with no {named} stopped on its own, so the bound above proves "
-            f"nothing:\n{control.communicate()[1]}"
-        )
-    finally:
-        control.kill()
-        control.communicate()
 
 
 def test_every_reply_carrying_commands_is_judged_by_the_envelope_review_with_a_cache() -> None:
@@ -241,4 +219,163 @@ def test_the_pass_cache_the_configuration_names_is_the_one_git_ignores() -> None
     assert f"/{cache_dir}/" in ignored, (
         f"config/onemessagebus.yaml keeps envelope passes under {cache_dir}, which "
         f".gitignore does not ignore as /{cache_dir}/"
+    )
+
+
+def _link() -> tuple[str, str]:
+    """The committed link's location and its `@` pin."""
+    (link,) = onejudge_bundle.configured_links()
+    location, pin = link.rsplit("@", 1)
+    return location, pin
+
+
+def test_the_link_names_the_adopted_onejudge_release_and_the_protocol_it_speaks() -> None:
+    """The tag is `config/onejudge.version`'s and the pin is the installed release's protocol.
+
+    Contract G's URL form, read off onejudge's own `docs/protocol.md`: the bundle a release
+    publishes sits at its tag, and a consumer pins the protocol version that release
+    speaks. A pin file moved without the link would leave the judge side validating
+    frames against the release before it; a pin that disagreed with the protocol would be
+    refused on the first frame of every run.
+    """
+    location, pin = _link()
+    adopted = ONEJUDGE_VERSION.read_text(encoding="utf-8").strip()
+    assert location == (
+        "https://raw.githubusercontent.com/nickderobertis/onejudge/"
+        f"v{adopted}/schemas/judge-seat-frames.json"
+    ), location
+    assert pin == onejudge_bundle.protocol(), (
+        f"the link pins @{pin}, and the installed onejudge {adopted} speaks protocol "
+        f"{onejudge_bundle.protocol()}"
+    )
+
+
+def _checked(frame: str, schema: str, config: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [BUS, "schema", "check", schema, "--config", str(config)],
+        input=frame,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        cwd=REPO_ROOT,
+    )
+
+
+def test_a_supervisor_frame_onejudge_writes_validates_through_the_pinned_link(
+    tmp_path: Path,
+) -> None:
+    """The frame the binding branches on is one the pinned bundle admits, as onejudge writes it.
+
+    The frame is recorded off a real conversation the installed onejudge held; the bundle
+    is derived from the same release; and the bus resolves it through a `file://` link
+    carrying the committed pin, so a pin the bundle does not admit is refused here before
+    any frame reaches a run. A copy of that frame without its `turn` — the field a lost
+    turn is told by — is refused by the same check, which is what makes the pass mean
+    something.
+    """
+    _, pin = _link()
+    bundle = onejudge_bundle.write_bundle(tmp_path / "judge-seat-frames.json")
+    config = onejudge_bundle.relinked_copy(
+        tmp_path / "onemessagebus.yaml", f"file://{bundle}@{pin}"
+    )
+    frame = monitor_conversation.recorded_frame(
+        "supervisor", tmp_path / "recorded", dict(os.environ)
+    )
+    assert json.loads(frame)["turn"] == {"outcome": "taken"}, frame
+
+    schema = f"agent.onejudge-frame.supervisor@{pin}"
+    accepted = _checked(frame, schema, config)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+    without_turn = {key: value for key, value in json.loads(frame).items() if key != "turn"}
+    refused = _checked(json.dumps(without_turn), schema, config)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert '"turn" is a required property' in refused.stderr + refused.stdout
+
+
+@pytest.fixture
+def origin() -> Iterator[LoopbackOrigin]:
+    served = LoopbackOrigin(json.dumps(onejudge_bundle.bundle()).encode())
+    yield served
+    served.server.shutdown()
+
+
+def _fetch(config: Path, cache: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [BUS, "schemas", "fetch", "--config", str(config), "--format", "json"],
+        env={**os.environ, onejudge_bundle.CACHE_DIR_ENV: str(cache)},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def test_a_file_link_with_this_hosts_pin_reads_the_derived_bundle(tmp_path: Path) -> None:
+    """A `file://` link is read on every resolution, its pin still asserted, nothing cached."""
+    _, pin = _link()
+    bundle = onejudge_bundle.write_bundle(tmp_path / "judge-seat-frames.json")
+    config = onejudge_bundle.relinked_copy(
+        tmp_path / "onemessagebus.yaml", f"file://{bundle}@{pin}"
+    )
+    cache = tmp_path / "cache"
+
+    read = _fetch(config, cache)
+
+    assert read.returncode == 0, read.stderr
+    (link,) = json.loads(read.stdout)["links"]
+    assert (link["outcome"], link["version"]) == ("read", onejudge_bundle.protocol()), link
+
+
+def test_this_hosts_pin_fetches_into_an_empty_cache_and_revalidates_the_entry(
+    tmp_path: Path, origin: LoopbackOrigin
+) -> None:
+    """The first fetch stores the bundle under its declared version; the second revalidates it."""
+    _, pin = _link()
+    config = onejudge_bundle.relinked_copy(tmp_path / "onemessagebus.yaml", f"{origin.url}@{pin}")
+    cache = tmp_path / "cache"
+
+    first = _fetch(config, cache)
+    assert first.returncode == 0, first.stderr
+    (fetched,) = json.loads(first.stdout)["links"]
+    assert (fetched["outcome"], fetched["version"]) == ("fetched", onejudge_bundle.protocol())
+    listed = subprocess.run(
+        [BUS, "schemas", "--format", "json"],
+        env={**os.environ, onejudge_bundle.CACHE_DIR_ENV: str(cache)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    assert [(entry["url"], entry["version"]) for entry in json.loads(listed.stdout)["entries"]] == [
+        (origin.url, onejudge_bundle.protocol())
+    ], listed.stdout
+
+    second = _fetch(config, cache)
+    assert second.returncode == 0, second.stderr
+    (confirmed,) = json.loads(second.stdout)["links"]
+    assert (confirmed["outcome"], confirmed["version"]) == ("confirmed", onejudge_bundle.protocol())
+    assert origin.requests == [None, LoopbackOrigin.ETAG], (
+        f"the second fetch was not a conditional request against the stored entry: "
+        f"{origin.requests}"
+    )
+
+
+def test_a_bundle_declaring_a_version_this_hosts_pin_does_not_admit_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A bundle from the next protocol is a hard error naming the link, never a fallback."""
+    _, pin = _link()
+    later = str(int(pin) + 1)
+    bundle = onejudge_bundle.write_bundle(tmp_path / "judge-seat-frames.json", version=later)
+    link = f"file://{bundle}@{pin}"
+    config = onejudge_bundle.relinked_copy(tmp_path / "onemessagebus.yaml", link)
+
+    refused = _fetch(config, tmp_path / "cache")
+
+    assert refused.returncode == 2, refused.stdout
+    assert link in refused.stderr + refused.stdout, refused.stderr
+    assert f"the bundle declares version {later}, which the pin @{pin} does not admit" in (
+        refused.stderr + refused.stdout
     )

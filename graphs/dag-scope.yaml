@@ -26,7 +26,7 @@
 # gate run and fails if `{task}` reached it literally,
 # tests/e2e/test_observer_graph_liveness_e2e.py reads the paced fields back off a real
 # launch, and the range is re-read off the pinned binary at each adoption, which
-# refuses 0 and 10 by naming it. oneagentgraph 0.4.2 reads 1 through 9.
+# refuses 0 and 10 by naming it. oneagentgraph 0.4.4 reads 1 through 9.
 version: 9
 name: dag-scope
 members:
@@ -48,10 +48,11 @@ members:
     # The planner channel IS this member's judge side, so the planner's replies
     # reach the monitor in its own conversation rather than only as graph edits.
     #
-    # `onemessagebus serve surfaces --codec onejudge` is that side, over this host's
-    # config/onemessagebus.yaml. What the codec answers each frame is the bus's to say,
-    # in onemessagebus's docs/codecs.md; what is this host's is the configuration it
-    # reads and the run's channel it serves.
+    # `onemessagebus serve surfaces --codec monitor` is that side: the bus's generic
+    # binding interpreter, reading the `monitor` binding this host declares in
+    # config/onemessagebus.yaml. The grammar is the bus's, in onemessagebus's
+    # docs/codecs.md; what each frame is answered — the texts, the two surface kinds,
+    # what a lost turn is called — is this host's policy, written there as data.
     #
     # The channel directory is the run's own, and an argv cannot name a run it is not
     # told: the engine exports `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID` to both
@@ -69,7 +70,7 @@ members:
         - bash
         - -c
         - >-
-          exec onemessagebus serve surfaces --codec onejudge
+          exec onemessagebus serve surfaces --codec monitor
           --config config/onemessagebus.yaml
           --transport-dir "${ONEPIPELINE_RUNS_DIR:-runs}/$ONEPIPELINE_RUN_ID/channel"
     mode: bypass
@@ -124,7 +125,7 @@ members:
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
   # set to the run id, to an observer member, beside `ONEPIPELINE_RUNS_DIR` and the
   # launcher identity —
-  # measured against onepipeline 0.34.0 on both of that member's sides, by dumping
+  # measured against onepipeline 0.37.0 on both of that member's sides, by dumping
   # each one's whole environment on a real launch. `{task}` is still what this member
   # is written against: it is this graph's own contract rather than a per-release
   # export, and it carries the run's goal as well as its id.

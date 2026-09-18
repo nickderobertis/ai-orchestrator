@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
+import onejudge_bundle
+import pytest
+from onejudge_bundle import LoopbackOrigin
 from provisioning import (
     ONEHARNESS_VERSION,
     path_without_uv,
@@ -23,6 +28,9 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
 
     assert installed.returncode == 0, installed.stderr
     assert f"at {repo / '.venv' / 'bin' / 'onejudge'}" in installed.stderr
+    # This checkout carries no `config/onemessagebus.yaml`, so the warm step's fetch fails
+    # whole and reports no link at all — which setup says, and survives.
+    assert "schema cache: no link warmed:" in installed.stderr, installed.stderr
     # Both halves of the composed sweep reach a session, and this fixture's `HOME` and
     # `TMPDIR` put every family it judges inside `tmp_path` — where nothing has written
     # one yet. So the answer is the short form for a sweep with *nothing to judge*,
@@ -212,3 +220,73 @@ def test_session_setup_rejects_missing_distribution_metadata(tmp_path: Path) -> 
     assert result.returncode == 1
     assert "oneharness distribution verification failed" in result.stderr
     assert "oneharness-cli metadata is unavailable" in result.stderr
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey sits beside
+# the other session-setup journeys of this module, which share its `setup_repo` and
+# `run_setup` fixture family in the `tests/e2e` tree; moving one of them alone would split a
+# single family across two Nx projects, and which project owns this module is not this
+# change's to move.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same site, same reason.
+# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is a
+# pytest journey over the real setup script, not a shell test suite.
+def test_session_setup_warms_every_schema_link_and_reports_each_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every link `config/onemessagebus.yaml` names is warmed, and each is reported by name.
+
+    The configuration is this host's own with its one link pointed at a loopback origin
+    the journey serves, beside a `file://` link to the same bundle and a third whose bundle
+    this host's pin refuses. The first setup reports the version it stored for the served
+    link (`fetched`), the file it read (`read`), and that it could not warm the refused one,
+    and still succeeds although the warming fetch itself exited non-zero, as `onemessagebus
+    schemas fetch` does when any link is refused. A second setup revalidates the stored
+    entry against the origin (`confirmed`), and a third, with the origin gone, keeps it and
+    says so (`reused`) — the cache is a speed-up, and a host that went offline still sets
+    up. The cache is the journey's own, empty until the first setup, and nothing leaves the
+    host.
+    """
+    repo = setup_repo(tmp_path)
+    pin = onejudge_bundle.protocol()
+    origin = LoopbackOrigin(json.dumps(onejudge_bundle.bundle()).encode())
+    local = onejudge_bundle.write_bundle(tmp_path / "frames.json")
+    refused = onejudge_bundle.write_bundle(tmp_path / "next.json", version=str(int(pin) + 1))
+    served, read, cold = (
+        f"{origin.url}@{pin}",
+        f"file://{local}@{pin}",
+        f"file://{refused}@{pin}",
+    )
+    config = onejudge_bundle.relinked_copy(repo / "config" / "onemessagebus.yaml", served)
+    text = config.read_text(encoding="utf-8")
+    linked = "".join(f'\n  - "{link}"' for link in (read, cold))
+    config.write_text(text.replace(f'  - "{served}"', f'  - "{served}"{linked}'))
+    cache = tmp_path / "schema-cache"
+    monkeypatch.setenv(onejudge_bundle.CACHE_DIR_ENV, str(cache))
+    try:
+        first = run_setup(repo, tmp_path)
+        second = run_setup(repo, tmp_path)
+    finally:
+        origin.server.shutdown()
+    offline = run_setup(repo, tmp_path)
+
+    for setup, outcome in ((first, "fetched"), (second, "confirmed"), (offline, "reused")):
+        assert setup.returncode == 0, setup.stderr
+        warmed = f"schema cache: {served} warmed, bundle version {pin} ({outcome})"
+        assert warmed in setup.stderr, setup.stderr
+        assert f"schema cache: {read} warmed, bundle version {pin} (read)" in setup.stderr
+        assert f"schema cache: {cold} could not be warmed" in setup.stderr, setup.stderr
+    listed = subprocess.run(
+        [repo / ".venv" / "bin" / "onemessagebus", "schemas", "--format", "json"],
+        env={**os.environ, onejudge_bundle.CACHE_DIR_ENV: str(cache)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert [(one["url"], one["version"]) for one in json.loads(listed.stdout)["entries"]] == [
+        (origin.url, pin)
+    ]
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

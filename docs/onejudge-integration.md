@@ -91,7 +91,7 @@ side and answer rather than fail.
 
 **The rule used to be the absence of `--config`**, because onejudge left the agent
 side's config implicit and named only the judge's. That was never the property which
-distinguished the sides — only a proxy for it — and, measured against onepipeline 0.34.0,
+distinguished the sides — only a proxy for it — and, measured against onepipeline 0.37.0,
 the proxy stopped holding: a dispatched agent side now arrives carrying
 `--config <member-scratch>/oneharness.toml`. Under the old rule every agent turn was
 read as a judge turn. `just smoke` and the manual probes below are what run through
@@ -138,11 +138,11 @@ members:
 **This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
 `oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
 side, and every dispatch keeps its single simulated user; stacking one is a change to a
-graph and a manager's decision. The shape is stated in [onejudge v0.12.0's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.12.0/docs/judges.md)
+graph and a manager's decision. The shape is stated in [onejudge v0.13.1's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.13.1/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
-graph member, in [oneagentgraph v0.4.2's
-`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.2/docs/contract.md).
+graph member, in [oneagentgraph v0.4.4's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.4/docs/contract.md).
 `tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
@@ -157,13 +157,16 @@ This repository uses three onejudge provider arrangements:
 - The monitor is a two-sided onejudge member whose judge side is the **live
   planner**: its agent side runs under `oneharness.orchestrator.toml`, and its
   judge side is a command provider running `onemessagebus serve surfaces --codec
-  onejudge` over `config/onemessagebus.yaml` (`graphs/dag-scope.yaml` names it). The
-  **onejudge codec** reads onejudge's judge-side frames itself (onemessagebus's
-  `codecs.md`): a `supervisor` turn with content is answered with a non-completion
-  and raises nothing, a lost turn raises one bounded `monitor-failed` surface and ends
-  the member, and a `judge` frame raises the completion bar as a non-blocking
-  `monitor-completion` question whose ruling is relayed as the score.
-  <!-- llmlint: ignore[no_redundant_instruction_pointers] The codec's behaviour has one source, onemessagebus's `codecs.md`, and `contracts_have_one_source_or_a_drift_gate` is why it is not restated further here; this names where this host's account of it lives rather than re-advertising the document. -->
+  monitor` over `config/onemessagebus.yaml` (`graphs/dag-scope.yaml` names it) — the
+  bus's generic binding interpreter running the `monitor` binding this host declares
+  there, under the grammar onemessagebus's `codecs.md` states. The binding reads
+  what onejudge reports on each frame rather than anything it derives: a `supervisor`
+  frame whose `turn.outcome` is `taken` is answered with a non-completion and raises
+  nothing, one whose outcome is `lost` raises one `monitor-failed` surface naming the
+  cause and harness onejudge reported and ends the member, and a `judge` frame asks the
+  completion bar as a non-blocking `monitor-completion` question whose ruling is
+  relayed as the score. The onejudge codec it replaced is history.
+  <!-- llmlint: ignore[no_redundant_instruction_pointers] The binding grammar has one source, onemessagebus's `codecs.md`, and `contracts_have_one_source_or_a_drift_gate` is why it is not restated further here; this names where this host's account of the binding lives rather than re-advertising the document. -->
   [Serving the channel as the monitor's judge
   side](orchestration.md#serving-the-channel-as-the-monitors-judge-side) holds what
   each frame gets, and what the filter it replaced measured.
@@ -1151,8 +1154,8 @@ owning orchestrator still alive.
 > `node-failed` / `step-settled` events, `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT`,
 > `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT`, and the `terminate_processes` /
 > `terminate_tree` / `terminate_process_group` / `owned_tree` / `tear_down`
-> functions — are in neither `onepipeline` v0.34.0,
-> `oneagentgraph` 0.4.2, nor `onevcs` 0.24.0. **Do not configure against them.** The
+> functions — are in neither `onepipeline` v0.37.0,
+> `oneagentgraph` 0.4.4, nor `onevcs` 0.24.2. **Do not configure against them.** The
 > teardown functions are named one by one rather than as a `terminate_*` family,
 > because that wildcard was **wrong**: `onevcs` has its own `git::terminate_group`,
 > which tears down a git process group when a bound fires and has nothing to do with
@@ -1437,7 +1440,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.12.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.12.0/docs/protocol.md)),
+([onejudge v0.13.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.13.1/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

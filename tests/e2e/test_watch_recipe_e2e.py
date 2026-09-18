@@ -631,7 +631,7 @@ def test_an_engine_that_cannot_be_asked_is_not_reported_as_one_without_the_verb(
 #: reading: a value-taking option, one written with `=`, and the two that take none.
 OPTIONS_BEFORE_THE_RUN = (
     ("--timeout", "600"),
-    ("--filter=monitor",),
+    ("--filter=detailed",),
     ("--all",),
     ("--tick-interval", "5"),
     ("--all", "--cursor", "c-7"),

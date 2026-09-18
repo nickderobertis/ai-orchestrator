@@ -246,6 +246,11 @@ def _linked_by_dependent(crate: str) -> tuple[LinkedCore, ...]:
     sboms = [entry for entry in (distribution.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
     document = json.loads(Path(str(distribution.locate_file(sboms[0]))).read_text("utf-8"))
     components = {component["bom-ref"]: component for component in document["components"]}
+    # The engine's own crate is the document's subject rather than one of its
+    # components, and from onepipeline 0.37.0 it depends on the core directly.
+    subject = document.get("metadata", {}).get("component", {})
+    if "bom-ref" in subject:
+        components.setdefault(subject["bom-ref"], {**subject, "name": "onepipeline"})
     brought: list[LinkedCore] = []
     for edge in document.get("dependencies", ()):
         for depended in edge.get("dependsOn", ()):
@@ -540,10 +545,10 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Measured 2026-09-12 on this host's installed
+#: between them would mean anything. Measured 2026-09-18 on this host's installed
 #: wheels: `config/oneharness.version` reads 0.12.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.13.1, while the engine wheel now links 0.13.2. They are independently
+#: against as 0.13.1, while the engine wheel now links 0.14.1. They are independently
 #: released artifacts, so the mismatch is expected and equality would assert no contract.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
@@ -557,8 +562,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.2", core="0.13.2"),
-    LinkedCore(dependent="onejudge", dependent_version="0.12.0", core="0.13.2"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.4", core="0.14.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.13.1", core="0.14.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.37.0", core="0.14.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -775,8 +781,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.13.0", "0.13.2"),
-        "onejudge-cli": ("0.13.0", "0.13.2"),
+        "oneagentgraph-cli": ("0.14.0", "0.14.1"),
+        "onejudge-cli": ("0.14.0", "0.14.1"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

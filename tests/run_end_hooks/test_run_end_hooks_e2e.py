@@ -394,6 +394,26 @@ def test_the_follow_up_run_is_owned_by_the_session_that_owns_the_main_run(
         ), succeeded.mine.stdout
 
 
+#: The hook the engine runs before every dispatch rather than at a run's end. From
+#: onepipeline 0.36.0 a launch naming it records it beside the run-end hooks and logs it
+#: under the same `hooks/` directory, so what these journeys hold about run-end hooks is
+#: read with it left out.
+DISPATCH_ENV_HOOK = "dispatch_env_hook"
+RUN_END_HOOK_LOGS = ("success.log", "failure.log")
+
+
+def _run_end_hooks_named(launched: dict[str, object]) -> set[str]:
+    """The run-end hook keys a launch record carries, the dispatch-environment hook aside."""
+    return {key for key in launched if "hook" in key and not key.startswith(DISPATCH_ENV_HOOK)}
+
+
+def _run_end_hook_logs(run_root: Path) -> list[Path]:
+    """The run-end hook logs a run's root holds."""
+    return [
+        run_root / "hooks" / log for log in RUN_END_HOOK_LOGS if (run_root / "hooks" / log).exists()
+    ]
+
+
 def test_a_follow_up_run_names_no_hook_and_launches_no_follow_up_run_of_its_own(
     succeeded: Succeeded,
 ) -> None:
@@ -401,8 +421,8 @@ def test_a_follow_up_run_names_no_hook_and_launches_no_follow_up_run_of_its_own(
 
     assert succeeded.watched.returncode == 0, succeeded.watched.stdout + succeeded.watched.stderr
     launched = _launch_record(bench, follow_up)
-    assert not {key for key in launched if "hook" in key}, launched
-    assert not (bench.runs / follow_up / "hooks").exists()
+    assert not _run_end_hooks_named(launched), launched
+    assert not _run_end_hook_logs(bench.runs / follow_up)
     assert not list(bench.runs.glob(f"{follow_up}{FOLLOW_UPS_SUFFIX}*"))
 
 
@@ -413,7 +433,7 @@ def test_a_hook_leaves_a_completed_runs_settlement_and_exit_status_as_they_were(
 
     _assert_the_twins_settled_alike(ended)
     assert ended.hooked.result.returncode == 0, ended.hooked.result.stderr
-    assert not (ended.bench.runs / ended.twin.run / "hooks").exists()
+    assert not _run_end_hook_logs(ended.bench.runs / ended.twin.run)
 
 
 def test_a_run_that_ends_with_a_failed_node_launches_nothing_and_says_how_to_verify_by_hand(

@@ -1,28 +1,33 @@
-"""A monitor turn, answered by the judge side `graphs/dag-scope.yaml` really spawns.
+"""A monitor's conversation, answered by the judge side `graphs/dag-scope.yaml` really spawns.
 
-The monitor's judge side is `onemessagebus serve surfaces --codec onejudge` over this
-host's `config/onemessagebus.yaml`, and the codec's own rules — onemessagebus's
-`docs/codecs.md` — decide what a turn costs: a turn that produced content is answered with a
-non-completion and raises nothing, and a turn the agent side lost raises one bounded
-`monitor-failed` surface and ends the member. Those rules are the bus's, proven in its own
-suite. What is this repository's is the wiring, and it is what these journeys prove: that the
-argv the graph declares, spawned from the directory a launch spawns it from, with the
-environment a launch gives it, reaches those rules on a real run's channel.
+The monitor's judge side is `onemessagebus serve surfaces --codec monitor` over this host's
+`config/onemessagebus.yaml`: the bus's generic binding interpreter, running the `monitor`
+binding this host declares there as data. What the binding says is this host's policy, so
+it is proven here, end to end: a turn the monitor took is answered with a non-completion and
+raises nothing; a turn its agent side lost raises one bounded `monitor-failed` surface and
+ends the member (`tests/e2e/test_lost_turn_wire_contract_e2e.py` loses that turn for real);
+the completion bar is put to the planner as one non-blocking `monitor-completion` question
+and scored from the ruling, never a pass nobody gave; and every frame the binding has no
+entry for is refused.
 
-Why the rules matter here is incidents on this host. While a turn's prose was raised
+Every frame here is onejudge's own. The installed `onejudge run` holds each conversation
+(`tests/monitor_conversation.py`), with the argv read out of the graph as its judge side,
+spawned where a launch spawns it, over a run directory the real engine made, and the
+channel is read back through `onemessagebus status`. Only the paid model is doubled —
+oneharness's own mock responder answers the monitor's turns — plus, for the one frame no
+path of onejudge writes, the frame itself (see the refusal journey).
+
+Why the rules matter is incidents on this host. While a turn's prose was raised
 automatically, a monitor filing a finding had three moves and none was clean: of
 `root-causes-94-plan`'s 54 surfaces, 19 are findings and 8 are prose restating the finding
 immediately before them. And obeying an instruction to be quiet used to be fatal on the first
 quiet turn — `spanish-language-tutor-upgrade` lost its observer five minutes into a two-hour
-run, with nothing announcing the loss.
-
-So each outcome is driven twice. At the judge command, against a run directory the real
-engine made and read back through `onemessagebus status`, where every shape a turn arrives in
-can be put to it in turn. And across a whole `just orchestrate` launch whose monitor really
-takes its turns, with only the paid model's words scripted: a run of quiet turns, where the
-member has to survive and the channel has to stay empty of its prose — beside the periodic
-`check-in` member's own update, which is what makes "nothing was raised" a statement about the
-monitor — and a run of lost turns, where the member has to die and say so once each time.
+run, with nothing announcing the loss. So the two outcomes are also driven across a whole
+`just orchestrate` launch whose monitor really takes its turns: a run of quiet turns, where
+the member has to survive and the channel has to stay empty of its prose — beside the
+periodic `check-in` member's own update, which is what makes "nothing was raised" a
+statement about the monitor — and a run of lost turns, where the member has to die and say
+so once each time.
 """
 
 from __future__ import annotations
@@ -31,18 +36,25 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, NamedTuple, TypedDict, cast
 
+import monitor_conversation
+import onejudge_bundle
 import pytest
 from fake_backend import (
     AGENT_DELAY_ENV,
     OBSERVER_ANSWER_ENV,
+    OBSERVER_LOSES_ENV,
     OBSERVER_MEMBER_ENV,
     PACEMAKER_REPORT,
     PROMPT_LOG_ENV,
 )
+from monitor_conversation import Conversation, Held, Taken
+from planner_channel import BUS_CONFIG
+from planner_channel import reply as channel_reply
 from project_fixtures import project_from_plan
 
 # How many turns the monitor's AGENT side took, read the one way a turn is observable —
@@ -56,23 +68,23 @@ from test_monitor_survives_the_channel_e2e import _monitor_prompts
 from test_orchestrate_launch_e2e import (
     MONITOR_MEMBER,
     PACEMAKER_MEMBER,
+    RUN_ID_ENV,
     SETTLES_UNWATCHED,
+    _judge_command,
     _judge_side,
     _just,
-    _queue_state,
     _settling_project,
-    _supervisor_frame,
 )
 from test_orchestrate_launch_e2e import _environment as _launched_environment
+from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: What the scripted monitor says on every turn of the launched run below. Ordinary
-#: prose, deliberately: there is no sentinel and no fixed string on this path, so what is
-#: under test is that *any* words at all keep the member watching and queue nothing. It
-#: names no node and quotes no frame, so a surface carrying it could only have come from
-#: a judge side that raised prose.
+#: What the scripted monitor says on every turn. Ordinary prose, deliberately: there is no
+#: sentinel and no fixed string on this path, so what is under test is that *any* words at
+#: all keep the member watching and queue nothing. It names no node, so a surface carrying
+#: it could only have come from a judge side that raised prose.
 SAID_ON_A_QUIET_TURN = "read the detailed stream; nothing needed raising this turn"
 
 #: What the answer to a taken turn has to say about the turn after it. The graph paces
@@ -81,97 +93,35 @@ SAID_ON_A_QUIET_TURN = "read the detailed stream; nothing needed raising this tu
 #: finished.
 NEXT_TURN_OPENS_AFTER_THE_HOLD = "next turn opens after the graph's hold"
 
-#: How long a turn that raises nothing may take to answer before this journey calls it
-#: hung. Such a turn asks the planner nothing, so what this really bounds is the
-#: regression: a judge side that asked instead would sit out its whole reply window.
-ANSWERED_WITHOUT_ASKING_SECONDS = 30
-
-#: The kind the codec raises a turn its agent side lost under.
+#: The two kinds this host's binding raises: a lost turn, and the completion bar.
 SURFACE_KIND_OF_A_LOST_TURN = "monitor-failed"
+SURFACE_KIND_OF_A_COMPLETION_SCORE = "monitor-completion"
 
-#: The ceiling a lost turn's surface may not exceed, for any transcript, identity, and
-#: run id these journeys drive through it. The raw transcript it replaces was 21,531
-#: characters.
+#: The ceiling a lost turn's surface may not exceed, for any cause, identity, and run id
+#: these journeys drive through it. The raw transcript it replaced was 21,531 characters.
 NAMED_FAILURE_LIMIT = 400
-
-#: How the recorded transcript's harness classified the refusal it ended on.
-LOST_TURN_CAUSE = "usageLimitExceeded"
-
-#: Text that occurs only inside the transcript, asserted absent from the surface: a
-#: frame name, a key, and the URL out of the refusal's own prose.
-ONLY_IN_THE_TRANSCRIPT = ("turn/completed", "codexErrorInfo", "chatgpt.com")
-
-#: The prompt the harness echoes back at itself, which is most of a lost turn's weight.
-ECHOED_PROMPT = (
-    "Actively monitor one executing tracked graph and report what drifts from it.\n" * 100
-)
 
 #: The judge command's verdict on a turn the agent side lost: the member failed. onejudge
 #: reads any exit but 0 as its judge side failing, and `oneagentgraph` then ends the member.
 MEMBER_FAILED = 1
 
+#: The judge command's verdict on a frame the binding has no entry for.
+REFUSED = 2
 
-def _lost_turn_transcript(codex_home: str) -> str:
-    """What a monitor turn its agent side lost leaves as the last thing it "said".
+#: The one line of this host's configuration a copy changes, so the reply window elapses
+#: in seconds rather than the fifty minutes a manager is given. Nothing else differs.
+REPLY_WINDOW = "    reply_window_seconds: 3000"
+SHORT_WINDOW_SECONDS = 3
 
-    The shape measured off this host's own `runs/rc-fixes-brief` channel queue: the
-    harness's own JSON-RPC stream, one frame per line, opening with the home the
-    identity it ran as is credentialed from, echoing the whole prompt back, and ending
-    in an error frame and a `turn/completed` whose status is `failed`. Twenty of these
-    queued unread on one run, each one 21,531 characters that had to be opened to find
-    out it said nothing.
+#: The variable this host's binding bounds one serving session by.
+SESSION_ENV = "ORCHESTRATOR_MONITOR_SESSION_SECONDS"
 
-    Thread and session identifiers are this fixture's own and the echoed prompt is the
-    monitor's role rather than the recorded run's; the frames, their order, and the two
-    that carry the refusal are as recorded.
-    """
-    refusal = (
-        "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
-        "to purchase more credits or try again at Aug 20th, 2026 3:30 AM."
-    )
-    thread = "01a01a5d-8df8-77b0-aace-730d932eefe4"
-    turn = "01a01a5d-8f08-7642-947f-d6103de39e42"
-    echoed = {
-        "type": "userMessage",
-        "id": "01a01a5d-9351-77a1-b947-d7aa89759a9c",
-        "content": [{"type": "text", "text": ECHOED_PROMPT}],
-    }
-    error = {"message": refusal, "codexErrorInfo": LOST_TURN_CAUSE, "additionalDetails": None}
-    frames: list[dict[str, object]] = [
-        {
-            "id": 1,
-            "result": {
-                "userAgent": "oneharness/0.145.0 (Ubuntu 24.4.0; x86_64)",
-                "codexHome": codex_home,
-                "platformFamily": "unix",
-                "platformOs": "linux",
-            },
-        },
-        {"method": "thread/started", "params": {"thread": {"id": thread}}},
-        {
-            "method": "turn/started",
-            "params": {"threadId": thread, "turn": {"id": turn, "status": "inProgress"}},
-        },
-        {"method": "item/started", "params": {"item": echoed}},
-        {"method": "item/completed", "params": {"item": echoed}},
-        {
-            "method": "account/rateLimits/updated",
-            "params": {"rateLimits": {"credits": {"hasCredits": False, "balance": "0"}}},
-        },
-        {
-            "method": "thread/status/changed",
-            "params": {"threadId": thread, "status": {"type": "systemError"}},
-        },
-        {"method": "error", "params": {"error": error, "willRetry": False, "threadId": thread}},
-        {
-            "method": "turn/completed",
-            "params": {
-                "threadId": thread,
-                "turn": {"id": turn, "items": [], "status": "failed", "error": error},
-            },
-        },
-    ]
-    return "\n".join(json.dumps(frame) for frame in frames)
+#: The asker the engine names an observer member's judge side with.
+ASKER_ENV = "ONEPIPELINE_CHANNEL_ASKER"
+ASKER = "dag-scope-monitor"
+
+#: How long a journey waits for the binding to put its question on the channel.
+ASKED_SECONDS = 120
 
 
 class QueuedSurface(TypedDict, total=False):
@@ -182,38 +132,75 @@ class QueuedSurface(TypedDict, total=False):
     message: str
     blocking: bool
     source: str
+    correlation: str
 
 
-def _surfaces(environment: dict[str, str], run: str) -> list[QueuedSurface]:
-    """Every surface the run's channel is holding, read through `onemessagebus status`."""
-    waiting = _queue_state(environment, run, "surfaces")["waiting"]
-    surfaces: list[QueuedSurface] = []
-    for record in waiting:
+class ChannelState(TypedDict):
+    """`onemessagebus status surfaces`, narrowed to what these journeys read."""
+
+    records: int
+    waiting: list[QueuedSurface]
+    abandoned: list[QueuedSurface]
+
+
+def _channel(environment: dict[str, str], run: str) -> ChannelState:
+    """The run's surfaces queue, read through the bus rather than the file behind it."""
+    channel = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "channel"
+    if not channel.is_dir():
+        return {"records": 0, "waiting": [], "abandoned": []}
+    read = subprocess.run(
+        ["onemessagebus", "status", "surfaces", "--config", str(BUS_CONFIG)]
+        + ["--transport-dir", str(channel)],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert read.returncode == 0, f"`onemessagebus status surfaces` over {channel}:\n{read.stderr}"
+    # The bus owns this schema; `ChannelState` states the fields read here, each checked.
+    state: Any = json.loads(read.stdout)[0]
+    for record in [*state["waiting"], *state["abandoned"]]:
         assert isinstance(record.get("kind"), str), record
         assert isinstance(record.get("message"), str), record
         assert isinstance(record.get("blocking"), bool), record
-        # Each field above is checked before it is read as the narrowed shape.
-        surfaces.append(cast(QueuedSurface, record))
-    return surfaces
+    return cast(ChannelState, state)
 
 
-def _raised_since(environment: dict[str, str], run: str, before: int) -> list[QueuedSurface]:
-    """The surfaces appended to the run's channel after it held `before` records."""
-    return [surface for surface in _surfaces(environment, run) if surface.get("id", -1) >= before]
+def _surfaces(environment: dict[str, str], run: str) -> list[QueuedSurface]:
+    """Every surface the run's channel is holding."""
+    return _channel(environment, run)["waiting"]
 
 
-def _records(environment: dict[str, str], run: str) -> int:
-    return _queue_state(environment, run, "surfaces")["records"]
+def _held(environment: dict[str, str], run: str) -> list[QueuedSurface]:
+    """Every surface the run's channel holds, waiting or abandoned, once each.
+
+    The bus lists an abandoned question under `abandoned` and still under `waiting`,
+    because it is still unread; one record is one surface.
+    """
+    state = _channel(environment, run)
+    return list({one["id"]: one for one in [*state["waiting"], *state["abandoned"]]}.values())
 
 
-#: The run whose directory the judge-command journeys drive against. One per worker the
+def _records(environment: dict[str, str], run: str) -> set[int]:
+    """The ids of every surface the run's channel holds now, to read what is raised after."""
+    return {one["id"] for one in _held(environment, run)}
+
+
+def _raised_since(environment: dict[str, str], run: str, before: set[int]) -> list[QueuedSurface]:
+    """The surfaces the run's channel came to hold after it held `before`."""
+    return [one for one in _held(environment, run) if one["id"] not in before]
+
+
+#: The run whose directory the judge-side journeys drive against. One per worker the
 #: module lands on, and every such journey shares its xdist group, so each reads the
 #: records it appended rather than another's.
 JUDGED_RUN = "monitor-judge-side"
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] One real launch per
-# worker, because what the judge-command journeys below prove is this host's wiring over a
+# worker, because what the judge-side journeys below prove is this host's wiring over a
 # run directory the engine itself made rather than one this suite assembled. It sits in
 # `tests/e2e` for the reason this file's block over the whole-run journeys states: which Nx
 # project owns that tree is not this change's to move.
@@ -221,11 +208,12 @@ JUDGED_RUN = "monitor-judge-side"
 def judged_run(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
 ) -> Iterator[dict[str, str]]:
-    """A run root the real engine made, and the environment that names it.
+    """The environment a judge side runs under, over a run root the real engine made.
 
     Launched and settled through the real recipe with nothing watching it, so the run
     directory is the engine's own and the channel inside it is empty until a judge side
-    writes to it.
+    writes to it. The run and the asker are named by the variables the engine exports to
+    an observer member's judge side.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -241,7 +229,7 @@ def judged_run(
         assert launch.returncode == 0, launch.stdout + launch.stderr
         run_root = Path(environment["ONEPIPELINE_RUNS_DIR"]) / JUDGED_RUN
         assert (run_root / "launch.json").is_file(), f"the launch made no run root at {run_root}"
-        yield environment
+        yield {**environment, RUN_ID_ENV: JUDGED_RUN, ASKER_ENV: ASKER}
     finally:
         _just("stop", JUDGED_RUN, environment=environment, seconds=60)
 
@@ -249,159 +237,415 @@ def judged_run(
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-def _answered_without_asking(
-    environment: dict[str, str], said: str
-) -> subprocess.CompletedProcess[str]:
-    """Put one supervisor frame to the judge side and wait for it to answer on its own."""
-    try:
-        return _judge_side(
-            _supervisor_frame(JUDGED_RUN, said),
-            environment,
-            JUDGED_RUN,
-            seconds=ANSWERED_WITHOUT_ASKING_SECONDS,
-        )
-    except subprocess.TimeoutExpired as waited:
-        raise AssertionError(
-            f"the judge side did not answer run {JUDGED_RUN} on its own within the wait, "
-            "which is what asking the planner looks like from here: a question queued and "
-            "a reply window nobody is coming to answer"
-        ) from waited
+def _short_window(tmp_path: Path) -> Path:
+    """This host's configuration with only its reply window shortened."""
+    copy = tmp_path / "onemessagebus.yaml"
+    text = BUS_CONFIG.read_text(encoding="utf-8")
+    assert text.count(REPLY_WINDOW) == 1, f"{BUS_CONFIG} no longer states {REPLY_WINDOW!r}"
+    copy.write_text(
+        text.replace(REPLY_WINDOW, f"    reply_window_seconds: {SHORT_WINDOW_SECONDS}"),
+        encoding="utf-8",
+    )
+    return copy
 
 
-def test_the_recorded_supervisor_frame_is_one_the_bus_codec_reads() -> None:
-    """The frame these journeys feed the judge side is onejudge's protocol v6, as the bus has it.
-
-    The bus registers the five onejudge frames as schemas, and a fixture this suite wrote
-    is a second copy of somebody else's wire format. So it is checked against the
-    registered one, beside a copy missing a required field that the same check refuses —
-    without that control, a check that accepted anything would pass too.
-    """
-    schema = "agent.onejudge-frame.supervisor@6"
-
-    def checked(frame: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["onemessagebus", "schema", "check", schema],
-            cwd=REPO_ROOT,
-            input=frame,
-            text=True,
-            capture_output=True,
-            timeout=e2e_timeout(60),
-            check=False,
-        )
-
-    frame = _supervisor_frame(JUDGED_RUN, SAID_ON_A_QUIET_TURN)
-    accepted = checked(frame)
-    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
-
-    without_persona = {key: value for key, value in json.loads(frame).items() if key != "persona"}
-    refused = checked(json.dumps(without_persona))
-    assert refused.returncode == 1, refused.stdout + refused.stderr
+def _question(environment: dict[str, str], before: set[int]) -> QueuedSurface | None:
+    """The completion question the binding raised after `before`, once it has."""
+    asked = [
+        one
+        for one in _raised_since(environment, JUDGED_RUN, before)
+        if one["kind"] == SURFACE_KIND_OF_A_COMPLETION_SCORE
+    ]
+    return asked[0] if asked else None
 
 
+def _asked(
+    environment: dict[str, str], before: set[int], running: subprocess.Popen[str]
+) -> QueuedSurface:
+    """Wait for the binding to ask, failing with what onejudge said if it never does."""
+    limit = deadline(ASKED_SECONDS)
+    while (question := _question(environment, before)) is None:
+        if running.poll() is not None or time.monotonic() >= limit:
+            running.kill()
+            stdout, stderr = running.communicate()
+            pytest.fail(
+                f"the binding never asked this run's channel to score the bar (onejudge "
+                f"exited {running.returncode}):\n{stderr}\n{stdout[-2000:]}\n"
+                f"{_channel(environment, JUDGED_RUN)}"
+            )
+        time.sleep(0.2)
+    return question
+
+
+#: How `onejudge run` exits on a conversation it held to its end: 0 when every criterion
+#: was scored met, 1 when one was scored unmet.
+SCORED_MET, SCORED_UNMET = 0, 1
+
+
+def _finished(held: Held, *, met: bool) -> None:
+    """The conversation ended without error, and exited as its score says it should."""
+    assert held.report is not None and held.report.get("error") is None, _unfinished(held)
+    assert held.completed.returncode == (SCORED_MET if met else SCORED_UNMET), _unfinished(held)
+
+
+def _unfinished(held: Held) -> str:
+    """Why a conversation that should have finished did not: its error, verdicts, and decisions."""
+    report = held.report or {}
+    shown = {key: report.get(key) for key in ("error", "verdicts", "judge_decisions")}
+    return f"{json.dumps(shown)}\n{held.completed.stderr}"
+
+
+def _said_by(held: Held, role: str) -> list[str]:
+    """What one party said in the conversation onejudge recorded, in order."""
+    transcript = (held.report or {}).get("transcript", {}).get("messages", [])
+    return [str(message["content"]) for message in transcript if message.get("role") == role]
+
+
+# llmlint: ignore-block[e2e_not_mocked] Only the paid model is doubled in these journeys:
+# a `Taken` turn runs oneharness's own `--mock-harness` responder in place of the provider
+# process, the seam `tests/e2e/fake_backend.py` substitutes at for every launched run, and
+# everything above it — oneharness, onejudge, the graph's judge argv, the bus, the engine's
+# run directory — is the real installed release.
 @pytest.mark.xdist_group("monitor-judge-side")
-@pytest.mark.parametrize(
-    ("case", "said"),
-    [
-        ("a turn that found nothing", SAID_ON_A_QUIET_TURN),
-        ("an observation written as prose", "issue: node api has drifted from its criteria"),
-        (
-            "a machine transcript no failure can be proven inside",
-            '{"result": {"codexHome": "/home/nick/.codex"}}\n'
-            '{"method": "turn/completed", "params": {"turn": {"status": "completed"}}}',
-        ),
-    ],
-)
-def test_a_monitor_turn_that_produced_content_costs_the_planner_no_surface(
-    judged_run: dict[str, str], case: str, said: str
+def test_a_taken_turn_is_answered_with_the_hold_raises_nothing_and_keeps_the_member_watching(
+    judged_run: dict[str, str], tmp_path: Path
 ) -> None:
-    """Content is content: the member is answered, it lives, and nothing is queued.
+    """Behaviour 1: content is content, and the member is answered, lives, and queues nothing.
 
     Three things have to be true at once and none is enough alone. Nothing may reach the
-    planner's queue — an observation belongs on it as a `finding` op the monitor issues
-    itself. onejudge has to be handed a ruling it can act on, because the alternative is
-    the exit status that killed this host's monitors: a non-completion settles nothing and
-    leaves the member watching. And what the monitor said may not come back inside that
-    ruling, because a message composed from the monitor's own words is a republication by
-    another route.
+    planner's queue for the turn — an observation belongs on it as a `finding` op the
+    monitor issues itself. onejudge has to be handed a ruling it can act on, because the
+    alternative is the exit status that killed this host's monitors: a non-completion
+    settles nothing, so the monitor takes its next turn with the binding's answer as its
+    user turn. And what the monitor said may not come back inside that answer.
 
-    The three cases are the three shapes a turn's content arrives in, and the point of
-    driving all of them is that the judge side does not branch between them at all.
+    The conversation is two turns long, and the only surface it may raise is the one
+    question its completion bar is owed when it ends — the reply window of the copy it runs
+    under is shortened so that question is not waited on for fifty minutes.
     """
     before = _records(judged_run, JUDGED_RUN)
 
-    answered = _answered_without_asking(judged_run, said)
+    held = monitor_conversation.hold(
+        Conversation(Taken(SAID_ON_A_QUIET_TURN), _judge_command(), max_turns=2),
+        judged_run,
+        tmp_path / "conversation",
+        config=_short_window(tmp_path),
+    )
 
-    assert answered.returncode == 0, f"{case}: {answered.stderr}"
+    _finished(held, met=False)
+    assert _said_by(held, "assistant") == [SAID_ON_A_QUIET_TURN] * 2, (
+        "the monitor did not take a second turn, so its first was not answered with a ruling "
+        f"onejudge could act on: {held.report}"
+    )
+    decisions = [turn["decisions"][0] for turn in (held.report or {})["judge_decisions"]]
+    assert [decision["decision"] for decision in decisions] == ["continue"], decisions
+    assert decisions[0]["reason"].strip(), f"a bare non-completion reads as a refusal: {decisions}"
+    answered = _said_by(held, "user")[1]
+    assert NEXT_TURN_OPENS_AFTER_THE_HOLD in answered, answered
+    assert "finding" in answered, (
+        f"the answer does not name the one route a report reaches the planner by: {answered}"
+    )
+    assert SAID_ON_A_QUIET_TURN not in answered, f"the turn came back inside its answer: {answered}"
     raised = _raised_since(judged_run, JUDGED_RUN, before)
-    assert raised == [], (
-        f"{case} put a surface on the planner's queue, which is the update a monitor's "
-        f"report is supposed to arrive as exactly once: {raised}"
+    assert [one["kind"] for one in raised] == [SURFACE_KIND_OF_A_COMPLETION_SCORE], (
+        f"a taken turn put a surface on the planner's queue beside the bar's one question: {raised}"
     )
-    ruling = json.loads(answered.stdout)
-    assert ruling["completion"] is False, (
-        f"{case} answered onejudge with a completion, which settles a watch nobody ruled "
-        f"on: {ruling}"
+
+
+class Ruling(NamedTuple):
+    """One shape a planner rules in, and the score it has to be relayed as.
+
+    `envelope` is the ruling as the planner sends it; `value` and `reason` are what the
+    relayed score has to carry — the ruling's `completion`, and its own `reason` or,
+    where it gives none, its `message`.
+    """
+
+    envelope: dict[str, object]
+    value: bool
+    reason: str
+
+
+RULINGS = (
+    Ruling(
+        {"completion": True, "reason": "the watch reported every drift"},
+        value=True,
+        reason="the watch reported every drift",
+    ),
+    Ruling(
+        {"completion": False, "message": "two drifts went unreported"},
+        value=False,
+        reason="two drifts went unreported",
+    ),
+)
+
+
+@pytest.mark.xdist_group("monitor-judge-side")
+@pytest.mark.parametrize("ruling", RULINGS, ids=["met", "unmet-by-message"])
+def test_the_bar_is_asked_once_non_blocking_and_the_ruling_is_the_score(
+    judged_run: dict[str, str], tmp_path: Path, ruling: Ruling
+) -> None:
+    """Behaviours 4 and 5: the criterion is one non-blocking question; the ruling is the score.
+
+    A one-turn conversation's first frame is the `judge` frame for its bar, which onejudge
+    always asks. It is put to the planner on this run's channel, quoting the criterion, and
+    the planner answers it the way any question here is answered — `just channel-reply
+    --correlation` — under this host's own configuration and reply window.
+    """
+    before = _records(judged_run, JUDGED_RUN)
+    running = monitor_conversation.start(
+        Conversation(Taken(SAID_ON_A_QUIET_TURN), _judge_command(), max_turns=1),
+        judged_run,
+        tmp_path / "conversation",
     )
-    assert said not in ruling["message"], f"{case} came back inside its own ruling: {ruling}"
-    assert "finding" in ruling["message"], (
-        f"{case} was answered without naming the one route a report reaches the planner "
-        f"by, so a monitor writing prose is never told it reached nobody: {ruling}"
+    question = _asked(judged_run, before, running)
+
+    assert question["blocking"] is False, f"the bar was asked as a BLOCKING question: {question}"
+    assert question.get("source") == "proposal", question
+    assert monitor_conversation.DONE_WHEN in question["message"], question
+    assert "NOT BLOCKED" in question["message"], question
+    sent = channel_reply(
+        JUDGED_RUN,
+        judged_run,
+        json.dumps({"version": 3, **ruling.envelope}),
+        question["correlation"],
     )
-    assert ruling["reason"].strip(), (
-        f"{case} answered with a bare non-completion, which reads in a transcript like a "
-        f"planner who refused the watch: {ruling}"
+    assert sent.returncode == 0, sent.stderr + sent.stdout
+    held = monitor_conversation.finish(running)
+
+    _finished(held, met=ruling.value)
+    assert (held.report or {})["verdicts"] == [
+        {
+            "criterion": monitor_conversation.DONE_WHEN,
+            "kind": "boolean",
+            "verdict": {"value": ruling.value, "reason": ruling.reason},
+        }
+    ]
+    raised = _raised_since(judged_run, JUDGED_RUN, before)
+    assert [one["kind"] for one in raised] == [SURFACE_KIND_OF_A_COMPLETION_SCORE], raised
+
+
+@pytest.mark.xdist_group("monitor-judge-side")
+def test_no_ruling_scores_unsatisfied_and_the_ended_stream_abandons_the_question(
+    judged_run: dict[str, str], tmp_path: Path
+) -> None:
+    """Behaviours 6 and 8: a window nobody answered in is `false`, and the question is let go.
+
+    onejudge closes the frame stream after each frame, so once the unanswered score is
+    written the serving session reaches the end of its stream — which marks the question
+    it still holds abandoned rather than leaving a manager a question nobody is waiting on.
+    """
+    before = _records(judged_run, JUDGED_RUN)
+
+    held = monitor_conversation.hold(
+        Conversation(Taken(SAID_ON_A_QUIET_TURN), _judge_command(), max_turns=1),
+        judged_run,
+        tmp_path / "conversation",
+        config=_short_window(tmp_path),
     )
-    assert NEXT_TURN_OPENS_AFTER_THE_HOLD in ruling["message"], (
-        f"{case} was answered as if the monitor's next turn were now, and the graph holds "
-        f"that conversation between turns: {ruling}"
+
+    _finished(held, met=False)
+    (verdict,) = (held.report or {})["verdicts"]
+    assert verdict["verdict"]["value"] is False, f"an unanswered bar scored a pass: {verdict}"
+    assert "nobody ruled" in verdict["verdict"]["reason"], verdict
+    abandoned = [
+        one for one in _channel(judged_run, JUDGED_RUN)["abandoned"] if one["id"] not in before
+    ]
+    assert [one["kind"] for one in abandoned] == [SURFACE_KIND_OF_A_COMPLETION_SCORE], abandoned
+
+
+@pytest.mark.xdist_group("monitor-judge-side")
+def test_a_session_reaching_its_bound_with_the_stream_open_leaves_the_question_counted(
+    judged_run: dict[str, str], tmp_path: Path
+) -> None:
+    """Behaviour 8's other ending: a bound, not the stream, ends the session, and asks survive.
+
+    onejudge closes its stream after every frame, so a session that ends on its bound with
+    the stream still open is one only a replay can reach: the `judge` frame a real
+    onejudge wrote, fed to the graph's argv from a pipe this journey holds open, with the
+    session bounded by this host's variable. The question is then still counted — not
+    abandoned — and the ending says why.
+    """
+    frame = monitor_conversation.recorded_frame("judge", tmp_path / "recorded", judged_run)
+    scratch = tmp_path / "bounded"
+    (scratch / "config").mkdir(parents=True)
+    (scratch / "config" / "onemessagebus.yaml").symlink_to(_short_window(tmp_path))
+    before = _records(judged_run, JUDGED_RUN)
+
+    serving = subprocess.Popen(  # noqa: S603 - the graph's own judge command
+        _judge_command(),
+        cwd=scratch,
+        env={**judged_run, SESSION_ENV: "1"},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert serving.stdin is not None
+    # llmlint: ignore[tests_mirror_real_usage] onejudge closes its stream after every frame,
+    # so the one ending this journey owns — a bound reached with the stream open — is one
+    # no real onejudge caller produces; the frame is the one a real onejudge wrote, replayed,
+    # which is the arrangement this node's acceptance criteria name for behaviour 8.
+    serving.stdin.write(frame)
+    serving.stdin.flush()
+    try:
+        # A wait rather than `communicate`, which closes stdin, and a session whose stream
+        # closes ends for that reason whatever its bound.
+        serving.wait(timeout=e2e_timeout(60))
+    finally:
+        serving.kill()
+    stdout, stderr = serving.communicate()
+
+    assert serving.returncode == 0, stderr
+    assert json.loads(stdout)["value"] is False, stdout
+    assert "reached its 1-second bound" in stderr, stderr
+    state = _channel(judged_run, JUDGED_RUN)
+    assert not [one for one in state["abandoned"] if one["id"] not in before], state
+    asked = [one for one in state["waiting"] if one["id"] not in before]
+    assert [one["kind"] for one in asked] == [SURFACE_KIND_OF_A_COMPLETION_SCORE], state
+
+
+#: A `user` frame, composed. The one op of the four no path of the installed onejudge
+#: writes: its `docs/protocol.md` keeps `user` "for API compatibility and explicit
+#: role-play calls", and the engine's loop asks `supervisor` instead — so, on the
+#: manager's ruling, this frame is validated against `agent.onejudge-frame.user@<pin>`
+#: from the bundle derived from the installed onejudge before it is offered.
+COMPOSED_USER_FRAME = {
+    "op": "user",
+    "persona": monitor_conversation.PERSONA,
+    "messages": [{"role": "user", "content": monitor_conversation.TASK}],
+    "session": "dag-scope-1-monitor-user",
+}
+
+
+def _refused_by_onejudges_own_frame(
+    judged_run: dict[str, str], tmp_path: Path, conversation: Conversation
+) -> Held:
+    return monitor_conversation.hold(
+        conversation, judged_run, tmp_path / "conversation", config=_short_window(tmp_path)
     )
 
 
 @pytest.mark.xdist_group("monitor-judge-side")
-@pytest.mark.parametrize(
-    ("case", "said", "named"),
-    [
-        (
-            "a turn whose transcript proves it was lost",
-            _lost_turn_transcript("/home/nick/.codex"),
-            f"monitor turn failed: {LOST_TURN_CAUSE} on codex.",
-        ),
-        ("a turn carrying no assistant content at all", None, "monitor turn failed:"),
-    ],
-)
-def test_a_monitor_turn_its_agent_side_lost_raises_one_bounded_surface_and_fails_the_member(
-    judged_run: dict[str, str], case: str, said: str | None, named: str
+@pytest.mark.parametrize("op", ["respond", "assess", "numeric judge", "user"])
+def test_every_frame_the_binding_has_no_entry_for_is_refused(
+    judged_run: dict[str, str], tmp_path: Path, op: str
 ) -> None:
-    """The one surface left on this path, and the control for every assertion above.
+    """Behaviour 7: `respond`, `user`, `assess` and a numeric `judge` end the side with exit 2.
 
-    "Nothing was queued" is evidence only because the same judge side, the same
-    environment and the same channel really do queue a surface here. A turn the agent side
-    lost writes the harness's own stream where its words go — or nothing at all — and
-    reading that as content would let a monitor whose agent side is failing look healthy
-    for the rest of the run. So it is raised once, non-blocking, named rather than
-    transcribed, and the member is failed rather than handed a verdict it would act on.
+    Three are written by a real onejudge: `respond` by making the graph's argv its agent
+    side as well, and `assess` and a numeric `judge` by asking for an assessment and a
+    numeric criterion after the bar (whose question elapses in the shortened window). The
+    fourth, `user`, is composed — see `COMPOSED_USER_FRAME` — and checked against the
+    schema the bus resolves through this host's own link before the binding sees it, with
+    a malformed copy refused by that check as the control.
     """
     before = _records(judged_run, JUDGED_RUN)
+    if op == "user":
+        schema = f"agent.onejudge-frame.user@{onejudge_bundle.protocol()}"
+        checks = [
+            subprocess.run(
+                ["onemessagebus", "schema", "check", schema, "--config", str(BUS_CONFIG)],
+                cwd=REPO_ROOT,
+                env=judged_run,
+                input=json.dumps(frame),
+                text=True,
+                capture_output=True,
+                timeout=e2e_timeout(60),
+                check=False,
+            ).returncode
+            for frame in (
+                COMPOSED_USER_FRAME,
+                {k: v for k, v in COMPOSED_USER_FRAME.items() if k != "persona"},
+            )
+        ]
+        assert checks == [0, 1], checks
+        # llmlint: ignore[tests_mirror_real_usage] No path of the installed onejudge writes a
+        # `user` frame (its docs/protocol.md keeps the op for API compatibility and role-play
+        # calls), so on the manager's ruling this one is composed and checked against the
+        # installed release's own schema above before the judge side is handed it.
+        refused = _judge_side(json.dumps(COMPOSED_USER_FRAME), judged_run, JUDGED_RUN)
+        assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+        assert refused.stdout == "", refused.stdout
+    else:
+        conversation = {
+            "respond": Conversation(
+                Taken(SAID_ON_A_QUIET_TURN), _judge_command(), judge_answers_the_agent=True
+            ),
+            "assess": Conversation(
+                Taken(SAID_ON_A_QUIET_TURN), _judge_command(), max_turns=1, assessment="Say more."
+            ),
+            "numeric judge": Conversation(
+                Taken(SAID_ON_A_QUIET_TURN),
+                _judge_command(),
+                max_turns=1,
+                evals=[{"criterion": "how thorough", "kind": "numeric", "scale": [1, 5]}],
+            ),
+        }[op]
+        held = _refused_by_onejudges_own_frame(judged_run, tmp_path, conversation)
+        asked = "respond" if op == "respond" else "judge" if op == "numeric judge" else op
+        assert f"provider error ({asked}): provider exited with exit status: {REFUSED}" in (
+            held.error()
+        ), _unfinished(held)
+    raised = [one["kind"] for one in _raised_since(judged_run, JUDGED_RUN, before)]
+    # What a refusal leaves behind is onejudge's to decide, not the binding's: a refused
+    # `respond` is the agent side's turn failing, which onejudge reports to the judge side
+    # as a lost turn — and that is raised. Anything else a refusal leaves is only the bar's
+    # question, asked before the frame that was refused.
+    expected = {
+        "respond": [SURFACE_KIND_OF_A_LOST_TURN],
+        "user": [],
+    }.get(op, [SURFACE_KIND_OF_A_COMPLETION_SCORE])
+    assert raised == expected, f"a refused {op} frame left {raised} on the channel"
 
-    failed = _judge_side(_supervisor_frame(JUDGED_RUN, said), judged_run, JUDGED_RUN)
 
-    assert failed.returncode == MEMBER_FAILED, f"{case}: {failed.stdout}{failed.stderr}"
-    assert "completion" not in failed.stdout, (
-        f"{case} produced a verdict onejudge would act on: {failed.stdout}"
-    )
-    raised = _raised_since(judged_run, JUDGED_RUN, before)
-    assert len(raised) == 1, f"{case} raised {len(raised)} surface(s): {raised}"
-    surface = raised[0]
-    assert surface["kind"] == SURFACE_KIND_OF_A_LOST_TURN, surface
-    assert surface["blocking"] is False, (
-        f"{case} was raised as a blocking surface, which holds a manager on a question "
-        f"about watching rather than about work: {surface}"
-    )
-    assert surface["message"].startswith(named), surface["message"]
-    assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, surface["message"]
-    for buried in ONLY_IN_THE_TRANSCRIPT:
-        assert buried not in surface["message"], f"the transcript reached the surface: {surface}"
-    assert ECHOED_PROMPT.splitlines()[0] not in surface["message"], surface
+# llmlint: ignore-end[e2e_not_mocked]
+
+
+#: How `personas/planner.yaml` states what `onepipeline surface --kind` takes.
+PLANNER_PERSONA = REPO_ROOT / "personas" / "planner.yaml"
+PLANNER_KIND_STATEMENT = re.compile(
+    r"`--kind` is an open word: any kind matching `(?P<form>[^`]+)`"
+)
+
+
+class KindCase(NamedTuple):
+    """A kind on one side of that statement, and whether the engine has to relay it."""
+
+    kind: str
+    relayed: bool
+
+
+KINDS_AND_WHETHER_RELAYED = (
+    KindCase("check-in", relayed=True),
+    KindCase("planner-exceptions", relayed=True),
+    KindCase("x" * 64, relayed=True),
+    KindCase("x" * 65, relayed=False),
+    KindCase("Planner-Exceptions", relayed=False),
+    KindCase("planner_exceptions", relayed=False),
+)
+
+
+@pytest.mark.xdist_group("monitor-judge-side")
+def test_the_planners_statement_of_surface_kinds_is_what_the_engine_relays(
+    judged_run: dict[str, str],
+) -> None:
+    """The kind vocabulary the planner is told is the one the adopted engine implements.
+
+    Every kind the statement admits is raised through the installed engine's own verb and
+    read back off the run's channel under that kind; every kind it refuses is refused by
+    the verb, with nothing appended.
+    """
+    stated = PLANNER_KIND_STATEMENT.search(" ".join(PLANNER_PERSONA.read_text("utf-8").split()))
+    assert stated is not None, f"{PLANNER_PERSONA.name} no longer states what `--kind` takes"
+    form = re.compile(stated.group("form"))
+    for kind, relayed in KINDS_AND_WHETHER_RELAYED:
+        assert bool(form.fullmatch(kind)) is relayed, f"the stated form misreads {kind!r}"
+        before = _records(judged_run, JUDGED_RUN)
+        raised = _raised_by_the_pacemakers_own_verb(judged_run, JUDGED_RUN, kind)
+        assert (raised.returncode == 0) is relayed, f"{kind!r}: {raised.stderr}"
+        queued = _raised_since(judged_run, JUDGED_RUN, before)
+        expected = [(kind, PACEMAKER_REPORT)] if relayed else []
+        assert [(one["kind"], one["message"].strip()) for one in queued] == expected, queued
 
 
 #: The plan the quiet launch below runs, and the run id `onepipeline` mints from its name.
@@ -443,9 +687,8 @@ JUDGE_DECIDED = "judge-decided"
 TURNS_PROVING_IT_KEPT_WATCHING = 2
 
 #: How onejudge spells the decision a judge side's answer came to, in `judge-decided`:
-#: a turn answered with a next instruction, and a judge side that failed.
+#: a turn answered with a next instruction.
 DECIDED_CONTINUE = "continue"
-DECIDED_ERROR = "error"
 
 
 def _launch_environment(tmp_path: Path, oneharness_bin: str, answer: str) -> dict[str, str]:
@@ -726,7 +969,7 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
     # And the periodic member's own route still reaches that queue, driven in the SAME
     # run rather than asserted. `graphs/dag-scope.yaml`'s `check-in` member is
     # single-sided — `kind: oneharness`, with no judge side — so it never reaches the
-    # bus codec at all: its task tells it to raise its update with `onepipeline surface`,
+    # bus binding at all: its task tells it to raise its update with `onepipeline surface`,
     # and that verb is what is run here, under the kind read out of the shipped task
     # rather than retyped. Its schedule is half an hour and this run is under a minute, so
     # the member does not come due inside it; what is under test here is the route, and
@@ -754,15 +997,14 @@ def test_a_monitor_whose_turns_are_lost_dies_saying_so_once_each_time(
 ) -> None:
     """A lost turn ends the member, and the planner is told once per member life, by name.
 
-    The launch is scripted so that every monitor turn is lost the way this host's were:
-    the harness's own transcript where the monitor's words go, credentialed from the
-    alternate codex home. What the wiring owes is three things the codec cannot owe
-    alone. The member really dies — its judge side's exit reaches onejudge unswallowed,
-    so the run is not left reporting a watcher that is not there. Each death is announced
-    exactly once, as the bounded non-blocking line a manager reads, on this run's own
-    channel. And the line names the identity whose quota to look at as `codex:alternate`,
-    which the codec can only do if the launch handed the judge side the same
-    `ORCHESTRATOR_CODEX_ALT_HOME` the monitor's agent side ran under.
+    The launch is scripted so that every monitor turn is lost: the monitor's provider
+    process fails under oneharness's own mock responder, the real oneharness reports the
+    candidate failed, and the real onejudge the engine links reports the turn to its judge
+    side as lost, naming the cause and the harness. What the wiring owes is two things the
+    binding cannot owe alone. The member really dies — its judge side's exit reaches
+    onejudge unswallowed, so the run is not left reporting a watcher that is not there. And
+    each death is announced exactly once, as the bounded non-blocking line a manager reads,
+    on this run's own channel.
 
     The driver relaunches an observer graph whose monitor died, a bounded number of times,
     so a run of lost turns records several lives; the claim is one surface per death,
@@ -771,23 +1013,28 @@ def test_a_monitor_whose_turns_are_lost_dies_saying_so_once_each_time(
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     environment = _launch_environment(tmp_path, oneharness_bin, "")
-    # The alternate home this launch establishes for its identities, which is what the
-    # monitor's agent side would have been credentialed from on that identity.
-    # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
-    environment[OBSERVER_ANSWER_ENV] = _lost_turn_transcript(
-        environment["ORCHESTRATOR_CODEX_ALT_HOME"]
-    )
+    # llmlint: ignore[e2e_not_mocked] Only the paid model's provider process is scripted.
+    environment[OBSERVER_LOSES_ENV] = "1"
     printed = _launch_to_settlement(environment, LOST_RUN, tmp_path)
 
     events = _graph_events(Path(environment[GRAPH_STATE_ENV]))
+    # onejudge ends a member whose judge side failed a lost turn with the turn's own
+    # classified failure — the judge side's exit preserves it rather than replacing it —
+    # so a death of a lost turn is a provider failure, and the surface is what says so.
+    lost = [
+        death
+        for death in _of_the_monitor(events, MEMBER_DIED)
+        if death["payload"].get("rule") == "provider-failure"
+    ]
     deaths = _of_the_monitor(events, MEMBER_DIED)
-    lost = [death for death in deaths if "was lost" in str(death["payload"].get("detail"))]
     assert lost, (
         f"no `{MONITOR_MEMBER}` member died of a lost turn, so its judge side's failure "
         f"never reached onejudge; the graph recorded {json.dumps(deaths)}:\n{printed}"
     )
+    # onejudge records no judge decision for a lost turn's exchange, only for a turn taken,
+    # so what shows a lost turn was never answered as one is that no turn was answered at all.
     decided = [event["payload"].get("decision") for event in _of_the_monitor(events, JUDGE_DECIDED)]
-    assert decided and set(decided) == {DECIDED_ERROR}, (
+    assert DECIDED_CONTINUE not in decided, (
         "a lost monitor turn was answered with a ruling onejudge could act on, so the member "
         f"would have gone on looking alive: {decided}"
     )
@@ -803,15 +1050,10 @@ def test_a_monitor_whose_turns_are_lost_dies_saying_so_once_each_time(
     )
     for surface in announced:
         assert surface["blocking"] is False, surface
-        assert surface["message"].startswith(
-            f"monitor turn failed: {LOST_TURN_CAUSE} on codex:alternate."
-        ), (
-            "the surface did not name the alternate identity the turn was lost on, so a "
-            f"manager is sent to a quota that is fine: {surface['message']!r}"
+        assert re.match(r"monitor turn failed: \S+ on codex\b", surface["message"]), (
+            f"the surface does not name the cause and harness onejudge reported: {surface}"
         )
         assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, surface["message"]
-        for buried in ONLY_IN_THE_TRANSCRIPT:
-            assert buried not in surface["message"], surface
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

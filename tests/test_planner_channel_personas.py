@@ -1,11 +1,11 @@
 """No member served by the planner channel is asked a question it cannot answer.
 
-A member whose judge side is `onemessagebus serve --codec onejudge` is served only what a
-planner can rule on: `supervisor` at each turn boundary, and a `boolean` `judge` scoring
-its completion bar. The codec refuses `assess` and a `numeric` `judge` by name, with exit 2
-(onemessagebus's `docs/codecs.md`, "Refused by name") — after which `oneagentgraph`
+A member whose judge side is `onemessagebus serve --codec monitor` — the binding this host
+declares in `config/onemessagebus.yaml` — is served only what a planner can rule on:
+`supervisor` at each turn boundary, and a `boolean` `judge` scoring its completion bar. The
+binding refuses `assess` and a `numeric` `judge`, with exit 2 — after which `oneagentgraph`
 classifies the member `provider-failure`/`protocol` and kills it, and the run carries on
-reporting `ACTIVE` with nobody watching it. Measured against onejudge 0.12.0 with a
+reporting `ACTIVE` with nobody watching it. Measured against onejudge 0.13.1 with a
 `kind: command` judge that logged every op it was asked:
 
 - `assessment` is asked as `assess`, once the conversation ends.
@@ -17,7 +17,7 @@ The first two are **declared unset**, which a persona can do and which this file
 enforces: `assess` is refused outright, and every eval is one more `judge` the planner
 would be asked — a `numeric` one refused. The third cannot be declined at all, and is
 closed by being *served* instead; that half is `tests/test_observer_judge_ops.py`, which
-holds the judge side to the codec that serves it rather than to what a persona declares.
+holds the judge side to the binding that serves it rather than to what a persona declares.
 
 None of this is a property of one line in one persona, so the gate is not written
 against one. A persona is a **delta** over `config/onejudge.base.yaml`, and the base is
@@ -25,7 +25,7 @@ shared with the dispatched workers that legitimately want all three keys. So the
 question is always about the *merged* pair: a key the base declares and the persona says
 nothing about is a key the member inherits, which is exactly how the monitor came to be
 asked questions its judge side had to refuse. Which members those are is read out of the
-graph documents rather than listed, so a second observer wired to the same codec is
+graph documents rather than listed, so a second observer wired to the same binding is
 covered the day it is wired.
 
 Reading the merge is only as good as knowing how a persona says "not asked", and that is
@@ -58,13 +58,13 @@ import pytest
 from orchestrator.root import REPO_ROOT
 
 #: The judge side this gate is about, as a graph document's `judge.command` spells it:
-#: the bus's `serve` verb running the onejudge codec. Both words, because another codec
-#: served by the same verb would refuse a different set of ops.
+#: the bus's `serve` verb running this host's `monitor` binding. Both words, because
+#: another binding served by the same verb would refuse a different set of ops.
 CHANNEL_SERVE = "onemessagebus serve"
-CHANNEL_CODEC = "--codec onejudge"
+CHANNEL_CODEC = "--codec monitor"
 
 #: The directory holding this repository's agent-graph documents, every one of which
-#: could wire a member's judge side to that codec.
+#: could wire a member's judge side to that binding.
 GRAPHS = REPO_ROOT / "graphs"
 
 #: The onejudge keys that ask a question the planner channel cannot answer AND that a
@@ -135,10 +135,10 @@ def _indent(line: str) -> int:
 
 
 def _channel_served_members() -> list[ChannelServedMember]:
-    """Every member of every shipped graph whose judge side is the bus's onejudge codec.
+    """Every member of every shipped graph whose judge side is this host's monitor binding.
 
     Discovered rather than listed. The bug this gate is about is one a *second*
-    member wired to this codec would have on the day it was wired, and a list would
+    member wired to this binding would have on the day it was wired, and a list would
     cover it only if somebody remembered to add it here as well.
     """
     found: list[ChannelServedMember] = []
@@ -178,7 +178,7 @@ def _channel_served_members() -> list[ChannelServedMember]:
 
 
 def _serves_the_channel(body: list[str]) -> bool:
-    """Whether this member's `judge:` block runs the bus's onejudge codec.
+    """Whether this member's `judge:` block runs this host's monitor binding.
 
     Scoped to that block rather than matched anywhere in the member, because the question
     here is what onejudge asks its supervisor. The block's lines are joined first, since a
@@ -325,7 +325,7 @@ def test_no_channel_served_member_is_asked_a_question_the_channel_cannot_answer(
 
     Asserted against the merged pair, which is the only place the answer lives: a
     persona that says nothing about a key the base declares is asked the base's
-    question, and the codec refuses it by name and the member dies. Declaring the key
+    question, and the binding refuses it and the member dies. Declaring the key
     unset in the persona is what says "not asked" loudly enough to override a base that
     asks — in the spelling `UNSET_BY` carries for that key, which is the producers' to
     decide and not the same word for both.
@@ -338,7 +338,7 @@ def test_no_channel_served_member_is_asked_a_question_the_channel_cannot_answer(
             f"{member.graph}'s `{member.name}` member is served by `{CHANNEL_SERVE} "
             f"{CHANNEL_CODEC}`, which answers only what a planner can rule on, but "
             f"{asked.declared_in} asks it for `{path}` ({asked.value!r}). onejudge would put "
-            f"that question to the planner channel, the codec would refuse it, and "
+            f"that question to the planner channel, the binding would refuse it, and "
             f"oneagentgraph would kill the member and leave the run unwatched. Declare "
             f"`{key}: {unset}` in {member.persona} to override the base, or stop asking it there"
         )

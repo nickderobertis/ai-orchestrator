@@ -183,6 +183,16 @@ MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 OBSERVER_ANSWER_ENV = "FAKE_BACKEND_OBSERVER_ANSWER"
 OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 
+#: Optionally have THAT member's every agent turn LOST instead of answered.
+#:
+#: A lost turn is the provider failing, so what is scripted is the provider process
+#: exiting non-zero under oneharness's own mock responder (`MOCK_EXIT`): the real
+#: oneharness reports the candidate failed, and the real onejudge reports the turn to its
+#: judge side as `turn.outcome: lost`, naming the cause and harness it read off that
+#: report. Nothing here writes what a lost turn looks like.
+OBSERVER_LOSES_ENV = "FAKE_BACKEND_OBSERVER_LOSES"
+MOCK_EXIT_ENV = "MOCK_EXIT"
+
 #: Optionally have the dispatched agent turn WRITE the files a real one would.
 #:
 #: A planner's whole deliverable is a plan it authors as records in a local Markdown
@@ -565,14 +575,19 @@ def _run_on_marker(config: str | None, prompt: str, cwd: str | None) -> None:
                 )
 
 
-def _answer(argv: list[str], text: str) -> int:
-    """Run the real CLI for this turn, with `text` as the provider's answer."""
+def _answer(argv: list[str], text: str, *, lost: bool = False) -> int:
+    """Run the real CLI for this turn, with `text` as the provider's answer.
+
+    `lost` has the provider process fail instead, which is how a turn is lost.
+    """
     real = os.environ.get(REAL_BINARY_ENV)
     if not real:
         print(f"fake_backend: {REAL_BINARY_ENV} is not set", file=sys.stderr)
         return 2
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
+    if lost:
+        environment[MOCK_EXIT_ENV] = "1"
     # `--mock-harness ID` replaces the selected harness's *provider process* and
     # nothing above it — this repository's one sanctioned fake, under a different
     # name. Proof: under `--mock-harness codex`
@@ -629,11 +644,9 @@ def main(argv: list[str]) -> int:
     watching = MEMBER_OF_CONFIG.search(config or "")
     scripted = os.environ.get(OBSERVER_ANSWER_ENV)
     observing_member = os.environ.get(OBSERVER_MEMBER_ENV)
-    scripted_answer = (
-        scripted
-        if scripted and watching is not None and watching.group(1) == observing_member
-        else None
-    )
+    observed = watching is not None and watching.group(1) == observing_member
+    scripted_answer = scripted if scripted and observed else None
+    loses = observed and bool(os.environ.get(OBSERVER_LOSES_ENV))
     if prompt_log := os.environ.get(PROMPT_LOG_ENV):
         named = [key for key in os.environ.get(ENVIRONMENT_KEYS_ENV, "").split(",") if key]
         with Path(prompt_log).open("a", encoding="utf-8") as recorded:
@@ -668,14 +681,14 @@ def main(argv: list[str]) -> int:
         )
     # Before the single-sided branch below, and that ordering is the whole of what makes
     # this seam reach the member it names. `graphs/dag-scope.yaml`'s monitor is two-party
-    # but its JUDGE side is a `command` — `onemessagebus serve --codec onejudge` — so
+    # but its JUDGE side is a `command` — `onemessagebus serve --codec monitor` — so
     # `oneagentgraph` writes no judge harness config beside its agent one, and the "no judge
     # sibling" test below reads that member as single-sided. Answered there, every scripted
     # monitor answer was replaced by the pacemaker's report while the prompt log went on
     # recording the script, so a journey asserting on the log passed while the model said
     # something else entirely.
-    if scripted_answer is not None:
-        return _answer(argv, scripted_answer)
+    if scripted_answer is not None or loses:
+        return _answer(argv, scripted_answer or "", lost=loses)
     # Before the single-sided branch for the same reason as the scripted answer above.
     read = _read_the_stream(original, config, system, _flag(argv, CWD_FLAG))
     if read is not None:

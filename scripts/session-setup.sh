@@ -21,6 +21,11 @@
 #   6. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #   7. The onetaskgraph SDK dependency installs its matching CLI from the lock at the
 #      version in `config/onetaskgraph.version`, into this checkout's own `.venv/bin`.
+#   8. The schema cache holds every bundle `config/onemessagebus.yaml` links, so the
+#      monitor's judge side never waits on the network (`serve` uses a cached bundle
+#      without revalidating). Never fatal: each link is reported by name with the
+#      version it stored, or why it could not be warmed, and a cold link is fetched on
+#      first use instead.
 #
 # Before any of that it runs `scripts/hold-run-lease.sh`, which holds this
 # dispatch's run-root occupancy lease against a sibling `onevcs session open`
@@ -277,6 +282,21 @@ verify_published_tools() {
   return "$status"
 }
 
+warm_schema_cache() {
+  local errors report link outcome version reason
+  errors="$(mktemp)"
+  report="$("$PROJECT_VENV_BIN/onemessagebus" schemas fetch --config "$REPO_ROOT/config/onemessagebus.yaml" --format text 2>"$errors")"
+  [ -n "$report" ] || log "schema cache: no link warmed: $(tr '\n' ' ' <"$errors")"
+  rm -f "$errors"
+  while read -r link outcome version reason; do
+    [ -n "$link" ] || continue
+    case "$outcome" in
+      fetched | confirmed | reused | read) log "schema cache: $link warmed, bundle version $version ($outcome)" ;;
+      *) log "schema cache: $link could not be warmed ${reason:-}" ;;
+    esac
+  done <<<"$report"
+}
+
 create_plan_root() {
   # The gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses a
   # root it cannot canonicalize, and it refuses it for the *whole* read: one absent
@@ -444,6 +464,7 @@ if verify_published_tools; then
     IFS='|' read -r published_tool_binary _ _ <<<"$published_tool_spec"
     log "ready ($published_tool_binary: ${PUBLISHED_TOOL_VERSIONS[$published_tool_binary]} at $PROJECT_VENV_BIN/$published_tool_binary)"
   done
+  warm_schema_cache
 else
   log "the adopted oneagentgraph, onevcs, onepipeline, and onepipeline-ui releases are required — 'just check' will fail until setup succeeds"
   toolchain_failed=1

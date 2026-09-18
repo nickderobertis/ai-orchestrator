@@ -1,14 +1,15 @@
 """The run's monitor lives through everything the planner channel hands it, and is scored by it.
 
 `graphs/dag-scope.yaml`'s monitor is the thing that notices a run going wrong, and its judge
-side is the planner channel: `onemessagebus serve surfaces --codec onejudge` over this host's
-`config/onemessagebus.yaml`. It had two ways of dying on that side — both of which leave the
-run reporting `ACTIVE` with nobody watching, because nothing announces the loss:
+side is the planner channel: `onemessagebus serve surfaces --codec monitor`, the binding
+this host declares in `config/onemessagebus.yaml`. It had two ways of dying on that side —
+both of which leave the run reporting `ACTIVE` with nobody watching, because nothing
+announces the loss:
 
 1. **A question the channel cannot answer.** onejudge asks its judge side other ops at the
    end of a conversation — `assess` for an `assessment`, `judge` for each `evals` criterion
-   *and* for `user.done_when` — and the codec serves only a boolean `judge`, refusing the
-   rest by name, after which `oneagentgraph` kills the member. Which keys produce which op
+   *and* for `user.done_when` — and the binding serves only a boolean `judge`, refusing
+   the rest, after which `oneagentgraph` kills the member. Which keys produce which op
    is a declaration, and `tests/test_planner_channel_personas.py` holds it. What a
    declaration cannot say is whether the merged configuration a **launch** composes still
    carries one, or whether the member actually lives to the end.
@@ -137,7 +138,7 @@ EDITED_NODE = "noted-by-the-manager-"
 #: half cannot start refusing what the other half asks for.
 DECLINED = {"assessment": ("null",), "evals": ("[]",)}
 
-#: And the one it always carries however it is declared, which is why the codec serves
+#: And the one it always carries however it is declared, which is why the binding serves
 #: the op that scores it. Asserted PRESENT deliberately; see the test below.
 UNDECLINABLE = "done_when:"
 
@@ -193,7 +194,7 @@ class Watched(NamedTuple):
     an_edit_reached_the_monitor: bool
     #: What `just channel-reply` answered each edit with, oldest first.
     reply_answers: list[ReplyAnswer]
-    #: `just monitor --filter monitor` over the settled run.
+    #: `just monitor --filter detailed` over the settled run.
     stream: str
     #: The graph's own events, which name the member behind each one. `Any` because
     #: `oneagentgraph` owns this envelope and this journey reads two keys out of it —
@@ -597,7 +598,7 @@ def watched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
                 an_edit_reached_the_monitor=reached,
                 reply_answers=manager.answers,
                 stream=_just(
-                    "monitor", RUN, "--filter", "monitor", environment=environment, seconds=60
+                    "monitor", RUN, "--filter", "detailed", environment=environment, seconds=60
                 ).stdout,
                 graph_events=_graph_events(scratch),
                 stop_requests=_stop_requests(scratch),
@@ -642,7 +643,7 @@ def test_the_merged_config_a_launch_hands_the_monitor_declines_what_it_can(
         assert not asked, (
             f"the launch handed the `{MONITOR_MEMBER}` member a `{question}` to "
             f"answer ({asked}), and its judge side is the planner channel. onejudge asks "
-            f"that question once the conversation ends, the codec refuses it, and the "
+            f"that question once the conversation ends, the binding refuses it, and the "
             f"member dies on the refusal:\n{effective}"
         )
 
@@ -658,7 +659,7 @@ def test_the_bar_the_member_cannot_decline_is_still_there_to_be_served(
     the base's rather than over it, so a null adds nothing; and
     `user.done_when_replaces_base` is refused outright with nothing to replace it with.
     A `kind: onejudge` member therefore always carries a bar onejudge always asks its
-    judge side to score, whether or not that judge side is a model — and the codec
+    judge side to score, whether or not that judge side is a model — and the binding
     serving that op, which the journey below drives, is a workaround for exactly that.
 
     So this is the gate on the gap. The day a release lets a member decline the bar, this
@@ -673,7 +674,7 @@ def test_the_bar_the_member_cannot_decline_is_still_there_to_be_served(
     assert carried, (
         f"the `{MONITOR_MEMBER}` member was launched with no `{UNDECLINABLE.rstrip(':')}` at "
         "all, which the adopted oneagentgraph refuses to compose. If a release now allows "
-        "it, the completion score the codec puts to the planner exists to work around a "
+        "it, the completion score the binding puts to the planner exists to work around a "
         f"gap that has closed:\n{effective}"
     )
 

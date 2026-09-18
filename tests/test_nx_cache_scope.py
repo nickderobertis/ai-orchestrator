@@ -41,6 +41,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import (
     READS_CHECKOUTS_MARKER,
     READS_DOCS_MARKER,
@@ -1050,36 +1051,69 @@ def _imported_suite_modules(relative: str, modules: dict[str, str]) -> set[str]:
     return reached - {relative}
 
 
-def test_the_recipe_key_covers_every_module_that_routes_a_test_into_it() -> None:
-    """A recipe-tier test in an unkeyed file would replay a verdict predating it.
+#: The orchestrator project's memoized tiers, and for each one module it collects that
+#: reaches the tier through `import` alone — a helper under `tests/` that no test opens
+#: as a file, so only the import scan below can see it. Each is the sentinel that proves
+#: the guard is holding something, because a guard that reached no helper would pass
+#: silently forever. The code and docs keys carry theirs by glob; the recipe key had to
+#: name its by path, which is the difference this guard exists to notice.
+MEMOIZED_ORCHESTRATOR_TIERS = {
+    CODE_SCOPED: "tests/monitor_conversation.py",
+    DOCS_SCOPED: "tests/monitor_conversation.py",
+    RECIPE_SCOPED: "tests/onejudge_bundle.py",
+}
 
-    The tier's whole claim is that a commit touching none of `justfile`,
-    `scripts/`, `package.json`, `bun.lock`, or the fixtures may replay its verdict.
-    That is only true while the modules *defining* those tests are in the key too —
-    a marker moved into a file the key does not carry, or a helper imported from
-    one, is a test that can change its own answer without changing its hash.
+
+@pytest.mark.parametrize("target", sorted(MEMOIZED_ORCHESTRATOR_TIERS))
+def test_every_memoized_tier_is_keyed_on_every_module_that_routes_a_test_into_it(
+    target: str,
+) -> None:
+    """A test in an unkeyed module would replay a verdict predating it.
+
+    A tier's whole claim is that a tree whose key has not changed may replay its
+    verdict. That is only true while every module *defining* its tests is in the key
+    too, and every helper those modules import: a test module the key does not carry,
+    or a helper imported from one, is a test that can change its own answer without
+    changing its hash. What each tier collects is taken from its real command rather
+    than from a marker scan, because the code tier collects by the absence of a marker
+    and a scan for one cannot see that.
+
+    This is what owns a helper under `tests/`: no project definition names that
+    directory's modules, so a helper belongs to a tier by being inside its key, and
+    this guard is what makes that ownership a checked property rather than a glob's
+    coincidence.
     """
-    globs = _effective_inputs("orchestrator", RECIPE_SCOPED)
-    modules = _suite_modules()
+    project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
     declaring = sorted(
-        str(source.relative_to(REPO_ROOT))
-        for source in sorted(REPO_ROOT.joinpath("tests").rglob("test_*.py"))
-        if f"pytest.mark.{READS_RECIPES_MARKER}" in source.read_text(encoding="utf-8")
+        {
+            test_id.split("::")[0]
+            for test_id in _collected(_selection(project["targets"][target]["command"]))
+        }
     )
-    assert declaring, f"nothing declares {READS_RECIPES_MARKER}; the tier would run empty"
+    assert declaring, f"orchestrator:{target} collects nothing; the tier would run empty"
 
+    modules = _suite_modules()
     needed = {"tests/conftest.py", *declaring}
     for module in declaring:
         needed |= _imported_suite_modules(module, modules)
     needed |= _imported_suite_modules("tests/conftest.py", modules)
+    sentinel = MEMOIZED_ORCHESTRATOR_TIERS[target]
+    assert sentinel in needed, (
+        f"orchestrator:{target} no longer reaches {sentinel} by import; keep a helper "
+        "that only an import routes into this tier here, or this guard stops guarding"
+    )
+
+    globs = _effective_inputs("orchestrator", target)
     uncovered = sorted(path for path in needed if not covers(globs, path))
     assert not uncovered, (
-        f"orchestrator:{RECIPE_SCOPED} collects these modules but is not keyed on them, "
+        f"orchestrator:{target} collects these modules but is not keyed on them, "
         f"so editing one replays a stale verdict: {uncovered}"
     )
 
-    # And the narrower key must stay inside the wider one, or a recipe test could
-    # read something the code-key guard permits and this tier does not carry.
+
+def test_the_recipe_key_stays_inside_the_code_key() -> None:
+    """A recipe test could otherwise read something the code-key guard permits and
+    this tier does not carry."""
     code_globs = named_input_globs(CODE_WORKSPACE)
     outside = sorted(
         path

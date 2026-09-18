@@ -383,8 +383,8 @@ copy-plan *args:
 # Reads through the `planner` profile, which is `onepipeline`'s own default and the
 # reason this recipe adds no flag: that profile is the pipeline's own events — node
 # and step completion and failure, decisions, planner surfaces, and the monitor and
-# check-in updates — and not each dispatched worker's turns. `--filter monitor`
-# widens it to the detailed activity stream the monitor member reads, `--filter
+# check-in updates — and not each dispatched worker's turns. `--filter detailed`
+# widens it to the whole merged stream the monitor member reads, `--filter
 # <spec>` takes a filter file or inline JSON, and `--all` reads the store through no
 # profile at all. The two are mutually exclusive; the CLI says so.
 # llmlint: ignore[tool_output_is_signal] channel-next returns a structured bounded status or a validated transport error for planner recovery.
@@ -444,17 +444,28 @@ channel-reply run *args:
 channel-surface *args:
     @./scripts/planner-surface.sh "$@"
 
-# The three legacy verdicts, each rendered as the reply envelope
-# `onepipeline reply` accepts: `just channel-approve <run-id>`,
-# `just channel-reject <run-id> <why>`, `just channel-continue <run-id> <what-next>`.
-channel-approve *args:
-    @./scripts/planner-verdict.sh approve "$@"
+# jq encodes the prose, so a quote or a newline in a reason reaches the envelope intact
+# rather than truncating it. `just channel-reject <run-id> <why>` and `just
+# channel-continue <run-id> <what-next>` are the other two.
+# Send a verdict as a reply envelope through `just channel-reply`: `just channel-approve <run-id>`.
+channel-approve run *text:
+    @"{{just_executable()}}" --justfile "{{justfile()}}" _verdict approve "$@"
 
-channel-reject *args:
-    @./scripts/planner-verdict.sh reject "$@"
+channel-reject run *text:
+    @"{{just_executable()}}" --justfile "{{justfile()}}" _verdict reject "$@"
 
-channel-continue *args:
-    @./scripts/planner-verdict.sh continue "$@"
+channel-continue run *text:
+    @"{{just_executable()}}" --justfile "{{justfile()}}" _verdict continue "$@"
+
+_verdict verdict run *text:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    verdict="$1" run="$2"; shift 2; text="$*"
+    command -v jq >/dev/null || { echo "channel-$verdict: jq is not on PATH, so the verdict cannot be encoded; install jq, then send it again" >&2; exit 2; }
+    if [ "$verdict" = approve ] && [ -n "$text" ]; then echo "channel-approve: approve does not accept a message; send it again with the run id alone" >&2; exit 2; fi
+    if [ "$verdict" != approve ] && [ -z "$text" ]; then echo "channel-$verdict: $verdict requires a message; send it again with the reason after the run id" >&2; exit 2; fi
+    jq -cn --arg verdict "$verdict" --arg text "$text" 'if $verdict == "approve" then {version: 3, completion: true, reason: "approved"} else {version: 3, completion: false, reason: $text, message: $text} end' \
+        | "{{just_executable()}}" --justfile "{{justfile()}}" channel-reply "$run"
 
 # Reclaim the dead working directories this host accumulates: `scripts/sweep.sh`
 # composes `oneagentgraph sweep` and `onevcs sweep` and adds the trailer naming what
@@ -660,8 +671,8 @@ history-show *args:
 #
 # Same profiles as `just channel-next`, and the same default: the `planner` profile
 # the CLI already applies, which is the pipeline's own events rather than every
-# dispatched worker's turns. Widen it with `--filter monitor` (what the monitor
-# member reads), narrow it with `--filter <spec>`, or bypass profiles entirely with
+# dispatched worker's turns. Widen it with `--filter detailed` (the whole merged
+# stream, what the monitor member reads), narrow it with `--filter <spec>`, or bypass profiles entirely with
 # `--all`.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:

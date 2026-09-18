@@ -24,6 +24,7 @@ import re
 import shutil
 import signal
 import subprocess
+import textwrap
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -144,7 +145,7 @@ MEMBER_OF_CONFIG = re.compile(r"/members/([^/]+)/")
 #: The pacemaker member, whose turn reports and never edits.
 PACEMAKER_MEMBER = "check-in"
 
-#: The probe that stands exactly where the bus's onejudge codec stands — as an observer
+#: The probe that stands exactly where this host's monitor binding stands — as an observer
 #: member's `judge.command` — and writes out the environment it was started with, so the
 #: export below is measured rather than asserted from prose.
 OBSERVER_PROBE = Path(__file__).resolve().parent / "observer_environment.py"
@@ -178,13 +179,13 @@ FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
 #: only what the run is, so this is the only thing that says what the member is for.
 WATCH_ROLE = "Actively monitor one executing tracked graph"
 
-#: The read the monitor's persona tells it to make: the `monitor` profile, which carries
-#: each dispatched worker's turns as well as the pipeline's own node events. The whole
-#: command rather than the profile name, because naming `monitor` alone would also match
-#: the member, the recipe, and the verb — and with the run spelled as the variable the
-#: launch exports, because that is what binds the read to this run rather than to
-#: whichever one the member inferred it was watching.
-DETAILED_STREAM_COMMAND = 'onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter monitor'
+#: The read the monitor's persona tells it to make: the `detailed` profile, the whole
+#: merged stream, which carries each dispatched worker's turns as well as the pipeline's
+#: own node events. The whole command rather than the profile name, so the read is held
+#: to the verb that makes it — and with the run spelled as the variable the launch
+#: exports, because that is what binds the read to this run rather than to whichever one
+#: the member inferred it was watching.
+DETAILED_STREAM_COMMAND = 'onepipeline monitor "$ONEPIPELINE_RUN_ID" --filter detailed'
 
 #: A launching session the journey states rather than inherits. The suite runs
 #: inside a dispatch whose own harness session would otherwise decide these
@@ -549,11 +550,11 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     assert "run-started" in launch.stderr, launch.stderr
 
     # What the run actually did is read from the replayed stream, which is the whole
-    # settled ledger rather than a race. Read through `--filter monitor` so the
+    # settled ledger rather than a race. Read through `--filter detailed` so the
     # dispatched worker's own graph is visible too: without this the assertion is the
     # one it is here to make, that "complete" is not describing an empty run.
     stream = _just(
-        "monitor", SHIPPED_RUN, "--filter", "monitor", environment=launched.environment, seconds=60
+        "monitor", SHIPPED_RUN, "--filter", "detailed", environment=launched.environment, seconds=60
     )
     assert stream.returncode == 0, stream.stderr
     assert "node-dispatched" in stream.stdout, stream.stdout
@@ -566,7 +567,7 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
 ) -> None:
     """The launch forwards each side config and only the persona a node names.
 
-    Read through `--filter monitor`: the per-node `oneagentgraph` launches this asks
+    Read through `--filter detailed`: the per-node `oneagentgraph` launches this asks
     about are dispatched-agent events, which the default planner profile drops.
     """
     launch = routed_persona_run.launch
@@ -575,7 +576,7 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
         "monitor",
         "routed-persona-e2e",
         "--filter",
-        "monitor",
+        "detailed",
         environment=routed_persona_run.environment,
         seconds=60,
     )
@@ -679,13 +680,13 @@ def test_every_dag_scope_member_starts_with_the_graph(
     How many to expect is the graph's own declaration rather than a number written
     here, so a member added to `graphs/dag-scope.yaml` has to start too.
 
-    Read through `--filter monitor`, because a member starting is an `oneagentgraph`
+    Read through `--filter detailed`, because a member starting is an `oneagentgraph`
     event and the planner profile this recipe defaults to carries only the pipeline's
     own. The default view is held to that by
     `test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable`.
     """
     stream = _just(
-        "monitor", SHIPPED_RUN, "--filter", "monitor", environment=launched.environment, seconds=60
+        "monitor", SHIPPED_RUN, "--filter", "detailed", environment=launched.environment, seconds=60
     )
     assert stream.returncode == 0, stream.stderr
     started = [
@@ -766,11 +767,10 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         )
 
     # The composed task is the OPENING instruction of the conversation, so it is the
-    # first watching turn that carries it — and it is where the bus's onejudge codec
-    # reads the run out of. Every turn after one is given whatever its judge side
-    # answered the turn before with, which for a taken turn is the codec's own
-    # acknowledgement rather than the task again. That is onejudge's design rather than a
-    # prompt that lost its run.
+    # first watching turn that carries it. Every turn after one is given whatever its
+    # judge side answered the turn before with, which for a taken turn is the monitor
+    # binding's own acknowledgement rather than the task again. That is onejudge's design
+    # rather than a prompt that lost its run.
     named = RUN_TASK.search(watching[0]["prompt"])
     assert named is not None, f"the opening watching turn named no run:\n{watching[0]['prompt']}"
     assert named.group(1) == SHIPPED_RUN
@@ -1445,11 +1445,11 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
     )
 
     detailed = _just(
-        "monitor", SHIPPED_RUN, "--filter", "monitor", environment=launched.environment, seconds=60
+        "monitor", SHIPPED_RUN, "--filter", "detailed", environment=launched.environment, seconds=60
     )
     assert detailed.returncode == 0, detailed.stderr
     assert [line for line in detailed.stdout.splitlines() if AGENT_LINE in line], (
-        f"`--filter monitor` did not widen the view past the planner profile:\n{detailed.stdout}"
+        f"`--filter detailed` did not widen the view past the planner profile:\n{detailed.stdout}"
     )
 
     unfiltered = _just(
@@ -1467,7 +1467,7 @@ def test_the_planner_profile_is_the_default_and_the_detailed_one_is_reachable(
         "monitor",
         SHIPPED_RUN,
         "--filter",
-        "monitor",
+        "detailed",
         "--all",
         environment=launched.environment,
         seconds=60,
@@ -1544,10 +1544,43 @@ def test_an_op_outside_the_monitor_allowlist_is_refused_by_its_author_grants(
 
     assert refused.returncode != 0, refused.stdout
     reported = refused.stderr + refused.stdout
-    assert f"'{command['op']}' is not an op the monitor may issue" in reported, reported
-    # Every refusal names the available action, which is the whole design: an op the
-    # monitor may not apply is one it is meant to escalate.
-    assert "Surface it to the planner" in reported, reported
+    # The reason is this host's, declared beside the grants, and it reaches the author in
+    # the channel's own words — ending in the available action, which is the whole design:
+    # an op the monitor may not apply is one it is meant to escalate.
+    reason = _refusal_reason(str(command["op"]))
+    assert (
+        f"'{command['op']}' is not an op the monitor may issue: {reason}. Surface it to the "
+        "planner instead" in reported
+    ), reported
+
+
+def _refusal_reason(op: str) -> str:
+    """The reason `config/onemessagebus.yaml` declares the monitor is refused `op` for."""
+    declared = re.search(
+        rf'^      {op}: "([^"]+)"$', BUS_CONFIG.read_text(encoding="utf-8"), re.MULTILINE
+    )
+    assert declared is not None, f"{BUS_CONFIG.name} declares no refusal reason for `{op}`"
+    return declared.group(1)
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_an_author_the_configuration_does_not_declare_is_refused(launched: Launched) -> None:
+    """Who may speak on the channel is this host's declaration, and nobody else speaks.
+
+    The pacemaker is the author a manager would most expect to find here — it is a member
+    of the same observer graph — and it is deliberately undeclared: its task scopes it to
+    reporting, so an edit arriving under its name is refused for the author before any op
+    in it is read.
+    """
+    refused = _monitor_reply(
+        launched,
+        {"version": 2, "author": "pacemaker", "commands": [{"op": "requeue", "id": "research"}]},
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "the envelope's author `pacemaker` is not declared" in refused.stderr + refused.stdout, (
+        refused.stderr + refused.stdout
+    )
 
 
 class Receipt(TypedDict):
@@ -1647,6 +1680,55 @@ def _sent(environment: dict[str, str], run: str, envelope: ReplyEnvelope) -> Rec
     receipt = cast(Receipt, json.loads(sent.stdout))
     assert receipt["queue"] == "commands", (
         f"a commands-only envelope was not routed to the engine's command path: {receipt}"
+    )
+    return receipt
+
+
+#: The monitor's persona, whose reply examples are the commands a monitor copies.
+MONITOR_PERSONA = REPO_ROOT / "personas" / "orchestrator.yaml"
+SHELL_BLOCK = re.compile(r"```sh\n(?P<body>.*?)```", re.DOTALL)
+
+
+def _persona_example(op: str) -> str:
+    """The persona's one `sh` example sending an envelope of the `op` it demonstrates."""
+    blocks = [
+        textwrap.dedent(block.group("body"))
+        for block in SHELL_BLOCK.finditer(MONITOR_PERSONA.read_text(encoding="utf-8"))
+        if f'"op":"{op}"' in block.group("body") and "<<'JSON'" in block.group("body")
+    ]
+    assert len(blocks) == 1, f"{MONITOR_PERSONA.name} spells {len(blocks)} `{op}` send(s)"
+    return blocks[0]
+
+
+def _sent_as_the_persona_spells_it(
+    environment: dict[str, str], run: str, op: str, envelope: ReplyEnvelope
+) -> Receipt:
+    """Send `envelope` with the persona's own `op` example, as a monitor copying it would.
+
+    Only the envelope line is this journey's; the verb, its configuration and the channel
+    it names are the example's, run where a monitor runs it — the launch directory — with
+    the run named by the variable the engine exports to an observer member.
+    """
+    example = _persona_example(op)
+    (line,) = [line for line in example.splitlines() if line.startswith('{"version"')]
+    script = example.replace(line, json.dumps(envelope, separators=(",", ":")))
+    # llmlint: ignore[no_injection_from_untrusted_input] The persona's own example is the
+    # program under test, and the one line substituted is JSON this journey composed.
+    sent = subprocess.run(  # noqa: S603 - the example, as the monitor runs it
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        env={**environment, RUN_ID_ENV: run},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert sent.returncode == 0, sent.stderr + sent.stdout
+    # The bus's one-line answer, stated by `Receipt`, and its one field read here is
+    # checked on the next line.
+    receipt = cast(Receipt, json.loads(sent.stdout))
+    assert receipt["queue"] == "commands", (
+        f"the persona's example did not route its edits where `just channel-reply` does: {receipt}"
     )
     return receipt
 
@@ -1790,9 +1872,12 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
     monitor also having to report it.
     """
     live = monitor_edit_run
-    receipt = _sent(
+    # Sent the way the persona tells a monitor to send an edit — its own example, with
+    # this edit in it — so the route a monitor copies is the one proven to apply.
+    receipt = _sent_as_the_persona_spells_it(
         live.environment,
         live.run,
+        "cancel",
         {
             "version": 2,
             "author": "monitor",
@@ -1812,7 +1897,7 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
     stream = _just("monitor", live.run, "--all", environment=live.environment, seconds=60)
     assert stream.returncode == 0, stream.stderr
     assert "edit-committed" in stream.stdout, stream.stdout
-    assert "monitor-edit" in stream.stdout, (
+    assert "edit-applied" in stream.stdout, (
         "the engine queued no planner surface naming the monitor's edit, so a fix "
         f"the monitor applied is invisible to the planner:\n{stream.stdout}"
     )
@@ -1833,9 +1918,10 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
         if handed["surface"] is None:
             break
         seen.append(handed["surface"]["kind"])
-        if handed["surface"]["kind"] == "monitor-edit":
+        if handed["surface"]["kind"] == "edit-applied":
+            assert handed["surface"].get("source") == "monitor", handed["surface"]
             break
-    assert "monitor-edit" in seen, (
+    assert "edit-applied" in seen, (
         f"no surface naming the monitor's edit was handed out; got {seen}"
     )
     assert sources and sources == {"pipeline"}, (
@@ -1924,7 +2010,7 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     graph, and tells the monitor both of the things asserted here — so a release that
     moved either would leave that persona teaching something the engine no longer does.
     It adds no node, and unlike every other op the monitor may issue it raises *no*
-    `monitor-edit` surface beside itself: the finding is the report, and a second
+    `edit-applied` surface beside itself: the finding is the report, and a second
     surface would double every observation in the one line a planner may not filter.
     Both are read through the planner's own views — the surfaces off `channel-next`,
     the graph off `results` — because those are where a monitor's report is either
@@ -1947,9 +2033,10 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
         assert refused_finding.refusal in reported, outcome
 
     said = "issue: the finding op reached the engine"
-    receipt = _sent(
+    receipt = _sent_as_the_persona_spells_it(
         environment,
         run,
+        "finding",
         {
             "version": 2,
             "author": "monitor",
@@ -1972,12 +2059,12 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
         f"a finding is an observation, and must not stop the frontier: {raised[0]}"
     )
 
-    # The half a one-surface assertion would miss. `monitor-edit` is what every other
+    # The half a one-surface assertion would miss. `edit-applied` is what every other
     # in-allowlist op queues, so its absence from the whole drained queue is the claim:
     # the persona tells the model a finding arrives once, and this is what makes that
     # true.
-    assert "monitor-edit" not in [surface["kind"] for surface in handed], (
-        f"the engine raised a `monitor-edit` surface beside the finding, so every "
+    assert "edit-applied" not in [surface["kind"] for surface in handed], (
+        f"the engine raised an `edit-applied` surface beside the finding, so every "
         f"observation now costs the planner two surfaces: {handed}"
     )
 
@@ -2116,11 +2203,12 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
 ) -> None:
     """`just orchestrate` passes `--bus-config config/onemessagebus.yaml`, and the engine kept it.
 
-    Every channel verb of the run — the reply validator, the monitor's grants, the codec's
-    reply window — is the configuration the engine was handed, so a launch that stopped
-    naming this file would run a planner channel with the layout's defaults: no envelope
-    review, a monitor granted every op, a thirty-second window on a question a manager
-    answers in minutes. Nothing about the run would fail.
+    Every channel verb of the run — the reply validator, the monitor's author and grants,
+    the monitor binding's reply window — is the configuration the engine was handed, so a
+    launch that stopped naming this file would run a planner channel with the layout's
+    defaults: no envelope review, no monitor author to accept a fix from, and no binding
+    for the monitor's judge side at all. Nothing about the run would fail until the
+    monitor spoke.
 
     So this reads the run's own launch record, where the engine records the configuration
     it parsed, rather than the command line, and holds each value that is this host's
@@ -2145,12 +2233,12 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
         return found.group(1)
 
     assert bus.get("profile") == declared(r"^profile: (\S+)$"), bus
-    codec = bus["codecs"]["onejudge"]
+    codec = bus["codecs"]["monitor"]
     assert codec["reply_window_seconds"] == int(declared(r"^    reply_window_seconds: (\d+)$")), (
         f"the launch recorded a reply window other than this checkout's: {codec}"
     )
     assert codec["queue"] == declared(r"^    queue: (\S+)$"), codec
-    granted = declared(r"^  monitor: \{capabilities: \[([^\]]*)\]\}$")
+    granted = declared(r"^    capabilities: \[([^\]]*)\]$")
     grants = [op.strip() for op in granted.split(",")]
     assert bus["authors"]["monitor"]["capabilities"] == grants, (
         f"the launch recorded monitor grants other than this checkout's {grants}: {bus['authors']}"
@@ -2168,33 +2256,6 @@ def test_the_launch_hands_the_engine_this_checkouts_bus_configuration(
 #: driving it goes on driving what a launch spawns after the graph moves.
 def _judge_command() -> list[str]:
     return judge_argv(DAG_SCOPE_GRAPH, MONITOR_MEMBER)
-
-
-#: The supervisor frame onejudge writes to a judge-side command's stdin, as recorded off
-#: a real `oneagentgraph run` whose judge side was a frame-dumping command, with the run
-#: and the monitor's closing message filled in. Its shape is onejudge's protocol v6, which
-#: the bus registers as `agent.onejudge-frame.supervisor@6`;
-#: `tests/e2e/test_monitor_quiet_turn_e2e.py` checks this frame against that schema, so
-#: the fixture cannot drift from what the codec reads.
-def _supervisor_frame(run: str, said: str | None) -> str:
-    """One supervisor frame naming `run`, ending in what the monitor said or in nothing.
-
-    `None` is the case rather than an absence to tolerate: a conversation the monitor has
-    not spoken in is what a turn its agent side lost can leave behind.
-    """
-    spoken = [] if said is None else [{"role": "assistant", "content": said}]
-    return json.dumps(
-        {
-            "op": "supervisor",
-            "task": f"onepipeline run `{run}`.\n\nGoal: prove the channel is the judge side",
-            "persona": "Act as the live planner reviewing the run's monitor.",
-            "done_when": "the run has settled",
-            "worktree": str(REPO_ROOT),
-            "history_name": "dag-scope-1-monitor-skill",
-            "messages": [{"role": "user", "content": f"onepipeline run `{run}`."}, *spoken],
-            "session": "dag-scope-1-monitor-user",
-        }
-    )
 
 
 def _judge_side(
@@ -2364,7 +2425,7 @@ def observed_launch(
 
     An observer graph is attached by path and nothing else about it is this
     repository's to choose, so the graph here is `graphs/dag-scope.yaml`'s monitor
-    member with one substitution: the probe takes the bus codec's place as
+    member with one substitution: the probe takes the monitor binding's place as
     `judge.command`. Everything the environment could come from is left real — the
     `just` recipe, `onepipeline`'s driver, and the `oneagentgraph` run it starts the
     observer with.
@@ -2542,8 +2603,7 @@ def test_a_launch_names_its_run_to_the_graph_watching_it(
     change as this one.
 
     It is also what the monitor's judge side runs on: `graphs/dag-scope.yaml` composes
-    the channel directory `onemessagebus serve` is spawned over from this variable, and
-    the codec reads a scoring frame's run from it, since that frame carries no task. The
+    the channel directory `onemessagebus serve` is spawned over from this variable. The
     `check-in` pacemaker takes its run from the composed task instead, which is this
     graph's own contract.
     """
@@ -3379,9 +3439,8 @@ class VerdictRecipe(NamedTuple):
     arguments: tuple[str, ...]
 
 
-#: Every verdict recipe, and the envelope each renders. The three are the planner's
-#: whole legacy vocabulary on the channel, and each is sent here through the recipe an
-#: operator types rather than as JSON a test wrote.
+#: Every verdict recipe. The three are the planner's spellings of a verdict envelope, and
+#: each is sent here through the recipe an operator types rather than as JSON a test wrote.
 VERDICT_RECIPES = (
     VerdictRecipe("channel-continue", ("keep going",)),
     VerdictRecipe("channel-reject", ("the gate never ran",)),
@@ -3403,7 +3462,7 @@ CONVERSATION_ENDS_AT_ITS_CAP = (
     f"members.{MONITOR_MEMBER}.schedule.every=1",
 )
 
-#: The kind the bus's onejudge codec puts a completion score to the planner under.
+#: The kind this host's monitor binding puts a completion score to the planner under.
 SURFACE_KIND_OF_A_COMPLETION_SCORE = "monitor-completion"
 
 
@@ -3477,16 +3536,17 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
 ) -> None:
     """Each verdict recipe renders an envelope the real channel takes and delivers.
 
-    `tests/e2e/test_delegated_recipes_e2e.py` proves what these three write, against a
-    traced `uv`; it cannot prove that `onepipeline reply` accepts it, and an envelope
-    the CLI refuses would pass there and fail an operator. So each one is sent here to
-    a real run whose channel holds a question, through the recipe as typed.
+    `tests/e2e/test_delegated_recipes_e2e.py` proves what these three write and that they
+    send it through `just channel-reply`, against a traced `uv`; it cannot prove that the
+    bus binds it to a question, and an envelope the bus refuses would pass there and fail
+    an operator. So each one is sent here to a real run whose channel holds a question,
+    through the recipe as typed.
 
     The question is the completion score the monitor's judge side asks once its
     conversation ends, found by reading the channel through the bus. It is sent against
     successive questions rather than once, because a verdict is refused outright when
-    nothing is waiting to read it — the engine says so by name — and which question
-    is open when a recipe is typed is not this journey's claim.
+    nothing is pending to bind it to — the bus says so by name — and which question is
+    open when a recipe is typed is not this journey's claim.
     """
     environment, run = supervised_channel
     limit = deadline(180)
@@ -3507,7 +3567,10 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
             delivered = answered.stdout
         else:
             time.sleep(0.2)
-    assert '"state":"delivered"' in "".join(delivered.split()), delivered
+    # The bus's receipt: the question it bound the verdict to, by correlation.
+    receipt = json.loads(delivered)
+    assert receipt["answered"]["record"]["kind"] == SURFACE_KIND_OF_A_COMPLETION_SCORE, delivered
+    assert receipt["correlation"] == receipt["answered"]["record"]["correlation"], delivered
 
 
 #: How long the cancelled dispatch below has to stop itself before the engine reaps it.

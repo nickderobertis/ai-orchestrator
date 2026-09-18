@@ -261,9 +261,18 @@ RUN_SCOPED_COMMANDS = (
     "onepipeline monitor",
     "onepipeline status",
     "onepipeline results",
-    "onepipeline reply",
     "onepipeline surface",
 )
+
+#: How the monitor's reply examples send an envelope of edits: the bus's own verb, over
+#: this host's configuration and the channel of the run the launch bound it to — the
+#: route `just channel-reply` takes for an edits-only envelope. The engine verb it
+#: replaced is named here so its return fails the journey below.
+SENT_ON_THIS_RUNS_CHANNEL = (
+    "onemessagebus send replies --config config/onemessagebus.yaml "
+    '--transport-dir "${ONEPIPELINE_RUNS_DIR:-runs}/$ONEPIPELINE_RUN_ID/channel"'
+)
+RETIRED_SEND = "onepipeline reply"
 
 #: The bound on what the member may act on, and the permission that bound deliberately
 #: does not take away. Both, because a rule that only forbade would cost the finding a
@@ -443,7 +452,7 @@ def monitored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
                 f"{DAG_SCOPE_GRAPH}: {watching[0].config}"
             )
             # The merged config, which is where this launch's own copy of the reviewing bar
-            # is: the monitor's judge side is the bus's onejudge codec rather than a model, so
+            # is: the monitor's judge side is this host's bus binding rather than a model, so
             # no turn of the run carries that prose and the two files it is merged from each
             # hold half of it.
             # llmlint: ignore[tests_mirror_real_usage] No operator view carries a merged config.
@@ -689,6 +698,14 @@ def test_the_monitor_is_told_which_run_it_observes(monitored: Monitored) -> None
         f"so those examples name whichever run the member decides it is watching:"
         f"\n{monitored.system}"
     )
+    assert SENT_ON_THIS_RUNS_CHANNEL in flat, (
+        "the monitor's reply examples no longer send through the bus onto the channel of "
+        f"the run the launch bound it to:\n{monitored.system}"
+    )
+    assert RETIRED_SEND not in flat, (
+        f"the monitor's prompt still offers `{RETIRED_SEND}`, which bypasses the bus:"
+        f"\n{monitored.system}"
+    )
 
 
 @pytest.mark.xdist_group("supervisory-prompts")
@@ -696,8 +713,8 @@ def test_the_monitors_reviewing_side_holds_it_to_that_same_run(monitored: Monito
     """The bar the planner rules against is bound to the same run, and read from a launch.
 
     This half reaches no model at all: the monitor's judge side is `onemessagebus serve
-    --codec onejudge`, which rules on a turn itself and puts only the completion bar to the
-    live manager. So it is the statement of what a *person* holds the monitor to, read in
+    --codec monitor`, whose binding answers a turn itself and puts only the completion bar
+    to the live manager. So it is the statement of what a *person* holds the monitor to, read in
     the persona it was merged from, and a bar that still said `<run-id>` would describe an
     edit aimed anywhere.
     """
@@ -727,7 +744,7 @@ def test_the_monitor_is_told_the_structured_way_to_report_a_finding(
         f"what makes it safe to reach for on any observation:\n{monitor_prompt}"
     )
     assert FINDING_RAISES_ONE_SURFACE in flat, (
-        "the monitor is no longer told a `finding` raises no second `monitor-edit` "
+        "the monitor is no longer told a `finding` raises no second `edit-applied` "
         f"surface, so it may report the same observation twice:\n{monitor_prompt}"
     )
 

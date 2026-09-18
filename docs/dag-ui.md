@@ -67,15 +67,14 @@ separately, and the reader links whatever its release was built against. So the
 two are expected to differ; what the field is for is being able to say which
 reader is answering rather than assuming it.
 
-**Today the two differ by four minor releases, and the reading to carry is still that
-neither number constrains the other**: the adopted `onepipeline-ui` 0.7.3 statically
-links onepipeline 0.29.0 and onejudge 0.10.0, while `config/onepipeline.version` reads
-0.33.0, whose engine writes a run's reports through onejudge 0.12.0. The reader was last
-moved with the engine because a reader linking an older onejudge than the one writing a
-run's reports refuses a newer report schema and renders no transcript; onejudge 0.12.0
-writes the same report schema, 12, as 0.10.0, so that reason does not apply to this gap.
-Through an earlier adoption the reader linked onepipeline 0.19.0 while the CLI a dispatch
-ran was nine minor releases ahead.
+**Today the two agree, and the reading to carry is still that neither number constrains
+the other**: the adopted `onepipeline-ui` 0.9.0 statically links onepipeline 0.37.0 and
+onejudge 0.13.1, and `config/onepipeline.version` reads 0.37.0 — because the two were
+adopted together, the reader for the lanes it serves for the engine's open member names,
+not because anything requires it. The reader has been moved with the engine before
+because a reader linking an older onejudge than the one writing a run's reports refuses
+a newer report schema and renders no transcript. Through an earlier adoption the reader
+linked onepipeline 0.19.0 while the CLI a dispatch ran was nine minor releases ahead.
 It was the reverse for two adoptions — the engine pin was held at 0.18.4 for a
 settlement write-back defect that had nothing to do with reading runs, and the
 Observatory was adopted anyway because the reader carries its own engine. That hold is
@@ -90,7 +89,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.7.3**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.9.0**, the release `config/onepipeline-ui.version` pins, carries
 what 0.6.3 added: it shows which release carried each landed node, alongside every
 release event.
 Opening a node whose dependency was adopted `published` shows what it waited on and
@@ -149,7 +148,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.2**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.4**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
@@ -210,7 +209,7 @@ over this host's own root a first page of the run list answered in 17 to 40 seco
 *warm*, a run detail or a run-scoped timeline in about 20, and a browser — one page
 load, one `/api/v2/events` subscription, one run list, then the selected run's detail
 and timeline — sat on `Loading execution history…` for over a minute and a half before
-showing anything. **0.7.0 bounds that** — and the adopted 0.7.3 keeps it, which is why the numbers below
+showing anything. **0.7.0 bounds that** — and the adopted 0.9.0 keeps it, which is why the numbers below
 are that release's rather than this pin's — and it is the difference between a view an
 operator opens and one they avoid: on the same root the same request answers in
 **0.09-0.17 s** warm, against 41 s on the first cold one; a run detail in

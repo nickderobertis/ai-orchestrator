@@ -31,6 +31,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -89,7 +90,12 @@ HELD_NODE = "held"
 #: worker is held. Thirty-eight seconds outlasts three twelve-second holds: the second
 #: turn is the pacing, the third puts the member's ~15-second heartbeat inside a hold,
 #: and the last hold ends within a few seconds of the settlement it has to be cancelled
-#: at — later, and a hold expiring during the write-back would read as one waited out.
+#: at — later, and a hold expiring during the driver's own closeout would read as one
+#: waited out. That arithmetic holds only while the worker is held **once**: the
+#: launched environment's session store sits under `tmp_path`, whose control-socket
+#: address is past the 108 bytes Linux allows, so every controlled turn there is refused
+#: and re-taken without control — a worker held twice, and a settlement landing wherever
+#: in a hold the second delay puts it. `_paced_launch` gives the run a short store.
 PACED_HOLD_SECONDS = 12
 HELD_SECONDS = 38
 
@@ -378,6 +384,36 @@ def _judge_closes(events: list[Envelope], member: str) -> list[Envelope]:
     ]
 
 
+#: The line `just monitor --filter detailed` renders the driver's hook firing on: the
+#: event's own stamp first, then the graph column, then the kind.
+LET_GO_LINE = re.compile(r"^(?P<at>\S+)\s+\S+\s+run-hook-fired\b", re.MULTILINE)
+
+
+def _let_go(environment: dict[str, str]) -> datetime | None:
+    """When the driver fired the run-end hook, read through the run's detailed stream.
+
+    `just orchestrate` names a hook for both endings, and the driver fires it last: after
+    the engine loop has finished, the observer has been cancelled and the settlement
+    announced, and before the hook's own command runs. So its `run-hook-fired` event is
+    the engine's stamp for having let go of the run, on the clock the graph's events
+    carry — which is what the closing assertion below needs, because the launch process
+    returns only once that hook's `just` recipe has, and how long a recipe takes on a
+    loaded host says nothing about whether a hold was cancelled.
+    """
+    rendered = subprocess.run(
+        ["just", "monitor", LAUNCHED_RUN, "--filter", "detailed"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    fired = LET_GO_LINE.search(rendered.stdout + rendered.stderr)
+    return _instant(fired.group("at")) if fired else None
+
+
 class Hold(NamedTuple):
     """One hold of the monitor's conversation: from the judge closing a turn to the next."""
 
@@ -421,7 +457,9 @@ def _status_readings(
     fell inside one.
     """
     readings: list[StatusReading] = []
+    consumed = False
     while launch.poll() is None:
+        consumed = consumed or _a_surface_raised_and_consumed(environment)
         began = datetime.now(UTC)
         status = subprocess.run(
             ["just", "status", LAUNCHED_RUN],
@@ -440,12 +478,56 @@ def _status_readings(
     return readings
 
 
+#: The text of the one surface a paced launch raises and reads, as a planner would.
+CONSUMED_SURFACE = "a planner-visible update, raised so that reading it resets a clock"
+
+
+def _a_surface_raised_and_consumed(environment: dict[str, str]) -> bool:
+    """Raise one surface on the live run and read it through the planner's own recipe.
+
+    Reading a surface is what restarts a resettable member's clock — the engine resets
+    every member the run's observer graph declares `resettable` — so this is what makes
+    the graph record which of its members the launched document declared resettable.
+    `False` until the run exists to raise on.
+    """
+    raised = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "surface", "--kind", "check-in"]
+        + [LAUNCHED_RUN],
+        cwd=REPO_ROOT,
+        env=environment,
+        input=CONSUMED_SURFACE,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    if raised.returncode != 0:
+        return False
+    read = subprocess.run(
+        ["just", "channel-next", LAUNCHED_RUN],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert read.returncode == 0, read.stderr
+    return True
+
+
 class Paced(NamedTuple):
     """One real launch under the shipped document, paced small, and what it recorded."""
 
     events: list[Envelope]
     readings: list[StatusReading]
-    #: When the launch process returned, by this journey's own clock, and how.
+    #: When the driver let go of the run, by the engine's own clock: the instant it
+    #: fired the run-end hook, which it does after cancelling the observer and announcing
+    #: the settlement and before the hook's command runs. `None` when the stream renders
+    #: no such firing.
+    let_go: datetime | None
+    #: When the launch process returned, by this journey's own clock, and how. Later than
+    #: `let_go` by however long the hook's recipe took, which is said beside a failure.
     returned: datetime
     status: int
     printed: str
@@ -460,6 +542,10 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
     scripted quiet, so the pacing measured is the graph's and not the model's.
     """
     environment = _launched_environment(tmp_path, oneharness_bin)
+    # A session store of its own, and a deliberately short one: `HELD_SECONDS` explains
+    # why, and `test_monitor_cursor_e2e.py`'s `session_state` is the same remedy.
+    session_store = Path(tempfile.mkdtemp(prefix="ogl-"))
+    environment["XDG_STATE_HOME"] = str(session_store)
     # llmlint: ignore-block[live_tier_compiles_and_requires_credential] The boundary under
     # test is the graph's pacing of a conversation, and a credentialed turn would prove
     # nothing more about it; the paid provider is the one thing this suite doubles.
@@ -518,9 +604,11 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
                 timeout=e2e_timeout(60),
                 check=False,
             )
+            shutil.rmtree(session_store, ignore_errors=True)
     return Paced(
         events=_graph_events(tmp_path / "graph-state"),
         readings=readings,
+        let_go=_let_go(environment),
         returned=returned,
         status=status,
         printed=printed.read_text("utf-8"),
@@ -544,7 +632,7 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
 ) -> None:
     """The shipped document, launched for real, paces the monitor and stays alive for it.
 
-    Five claims, each read off the graph's own record of one launch or off the run's
+    Six claims, each read off the graph's own record of one launch or off the run's
     status while that launch was live:
 
     * the monitor opens with the wave, and its next agent turn opens no sooner than the
@@ -554,8 +642,11 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
       `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
     * the pacemaker fires inside a hold and the graph survives it, taking another monitor
       turn afterwards;
+    * reading a planner surface restarts the pacemaker's clock and no other member's,
+      because the pacemaker is the one member the launched document declares
+      `resettable`;
     * the observer ends when the run settles rather than when the hold would have: the
-      launch returns before the next turn was due.
+      driver lets go of the run before the next turn was due.
 
     Reverting the document's `schedule` fails before any of it: `--set
     members.monitor.schedule.every` on a member with no schedule is refused by the reader
@@ -648,13 +739,35 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
         f"the firing may have ended the graph:\n{paced.printed}"
     )
 
+    # The pacemaker is the graph's one resettable member, read back off this launch: the
+    # surface read during it restarted the pacemaker's clock and nobody else's.
+    assert _of(events, "cron-reset", PACEMAKER_MEMBER), (
+        f"reading a surface restarted no clock of the `{PACEMAKER_MEMBER}` member, so the "
+        f"launched document did not declare it resettable:\n{paced.printed}"
+    )
+    reset_others = [
+        event for event in _of(events, "cron-reset") if event.member != PACEMAKER_MEMBER
+    ]
+    assert not reset_others, (
+        f"reading a surface restarted the clock of {[e.member for e in reset_others]}, "
+        f"which the launched document declares resettable beside the pacemaker"
+    )
+
+    # Read at the driver's own stamp for letting go of the run rather than at the
+    # launch's return: the run-end hook fires between the two, and its recipe's runtime
+    # on a loaded host is not the hold's — see `_let_go`.
+    assert paced.let_go is not None, (
+        f"the run's detailed stream renders no `run-hook-fired`, so when the driver let go "
+        f"of the run cannot be read off it:\n{paced.printed}"
+    )
     last_close = _judge_closes(events, MONITOR_MEMBER)[-1].at
     next_turn_was_due = last_close.timestamp() + PACED_HOLD_SECONDS
-    assert paced.returned.timestamp() < next_turn_was_due, (
-        f"the launch returned at {paced.returned.isoformat()}, after the next monitor turn "
-        f"was due at {datetime.fromtimestamp(next_turn_was_due, UTC).isoformat()}: the "
-        "driver's cancel at settlement is not ending the monitor's last hold, so a run "
-        f"that settles in seconds waits the hold out:\n{paced.printed}"
+    assert paced.let_go.timestamp() < next_turn_was_due, (
+        f"the driver let go of the run at {paced.let_go.isoformat()}, after the next "
+        f"monitor turn was due at {datetime.fromtimestamp(next_turn_was_due, UTC).isoformat()}: "
+        "the driver's cancel at settlement is not ending the monitor's last hold, so a run "
+        f"that settles in seconds waits the hold out (the launch itself returned at "
+        f"{paced.returned.isoformat()}, once the run-end hook had):\n{paced.printed}"
     )
 
 

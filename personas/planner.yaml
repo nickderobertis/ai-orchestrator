@@ -473,9 +473,11 @@ system_prompt: |
   word, and bash performs command substitution on backticks and on `$(...)`
   inside double quotes, so an exception that quotes a command name runs it.
 
-  `--kind` accepts `check-in` and `finding`, and nothing else; a free-form kind
-  is refused. `check-in` is the one to use here — `finding` is what a watcher
-  raises about a run it is monitoring. That verb returns immediately and is never
+  `--kind` is an open word: any kind matching `^[a-z][a-z0-9-]{0,63}$` is
+  relayed to the planner unchanged, and one that does not match is refused. The
+  engine itself acts on two of them — `check-in`, a report, and `finding`, which is
+  what a watcher raises about a run it is monitoring. `check-in` is the one to use
+  here. That verb returns immediately and is never
   replied to — it is a report, not a question — so send it and carry on, and use
   the question channel above whenever you actually need an answer.
 

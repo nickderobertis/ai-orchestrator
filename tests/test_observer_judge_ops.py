@@ -1,4 +1,4 @@
-"""The planner channel an observer member is judged over is the bus codec, on the run's channel.
+"""The planner channel an observer member is judged over is the bus binding, on the run's channel.
 
 onejudge asks a judge side three things, and only one of them is a supervisor ruling. Two
 — `evals` and `assessment` — a persona can decline, and
@@ -7,23 +7,25 @@ declining them. The third, `user.done_when`, cannot be declined: `oneagentgraph`
 persona's bar as a second one beside the base's, so a `kind: onejudge` member always
 carries one and onejudge always asks its judge side to score it once the conversation
 ends. So that bar is closed by being **served**, and what serves it is
-`onemessagebus serve surfaces --codec onejudge`: the codec puts the criterion to the
-planner as a `monitor-completion` question and relays their ruling as the score
-(onemessagebus's `docs/codecs.md`).
+`onemessagebus serve surfaces --codec monitor`: the binding this host declares under
+`codecs.monitor` in `config/onemessagebus.yaml` puts the criterion to the planner as a
+`monitor-completion` question and relays their ruling as the score, under the grammar the
+bus states in its `docs/codecs.md`.
 
-That behaviour is the bus's, proven in its own suite. What is this repository's is the
-wiring, and the wiring has three seams each of which fails silently:
+What the binding answers each frame is proven by the journeys that drive it
+(`tests/e2e/test_monitor_quiet_turn_e2e.py`). What is proven here is the wiring, and the
+wiring has three seams each of which fails silently:
 
-- **The command is the codec, and nothing stands between it and onejudge.** The graph
-  names an argv, and a wrapper that swallowed the codec's exit status would keep a
-  monitor whose agent side lost its turn reading as alive — exit 1 is how the codec ends
-  that member.
-- **It serves the queue this host's configuration declares its codec on.** `serve`
-  refuses a queue other than `codecs.onejudge.queue`, so a graph naming another one
-  would kill the member on its first frame.
+- **The command is the binding, and nothing stands between it and onejudge.** The graph
+  names an argv, and a wrapper that swallowed the serving session's exit status would keep
+  a monitor whose agent side lost its turn reading as alive — exit 1 is how the binding
+  ends that member.
+- **It serves the queue this host's configuration declares its binding on.** `serve`
+  refuses a queue other than `codecs.monitor.queue`, so a graph naming another one would
+  kill the member on its first frame.
 - **It asks where the manager answers.** The monitor's question is answered with `just
   channel-reply --correlation`, so the configuration file and the channel directory the
-  codec is spawned with have to be the ones that recipe replies over — otherwise a
+  binding is spawned with have to be the ones that recipe replies over — otherwise a
   ruling reaches a queue nobody is asking on, and every score degrades to `false`.
 
 The launched journeys prove the three reach a real run
@@ -46,8 +48,9 @@ GRAPHS = REPO_ROOT / "graphs"
 BUS_CONFIG = "config/onemessagebus.yaml"
 JUSTFILE = REPO_ROOT / "justfile"
 
-#: The codec the monitor's judge side serves onejudge's frames with.
-CODEC = "onejudge"
+#: The binding the monitor's judge side serves onejudge's frames with, as
+#: `config/onemessagebus.yaml` names it under `codecs`.
+CODEC = "monitor"
 
 #: The variable the engine names an observer member's run with. The reply recipe names
 #: the same run as its first argument.
@@ -185,35 +188,35 @@ def test_a_shipped_graph_serves_a_member_over_the_planner_channel() -> None:
 
 
 def test_every_command_judge_side_is_the_bus_codec_execed_in_the_members_place() -> None:
-    """The codec's exit status is the member's own, so a lost turn really ends the member."""
+    """The binding's exit status is the member's own, so a lost turn really ends the member."""
     for command in _judge_commands():
         words = _served(command)
         assert words[:3] == ["exec", "onemessagebus", "serve"], (
             f"{command.graph}'s `{command.member}` judge side runs {words[:3]}, not `exec "
-            "onemessagebus serve`. Anything else either is not the planner channel's codec "
-            "or stands between the codec and onejudge, where exit 1 — the codec reporting "
+            "onemessagebus serve`. Anything else either is not the planner channel's binding "
+            "or stands between the binding and onejudge, where exit 1 — the binding reporting "
             "a turn the agent side lost — would stop ending the member"
         )
         assert _flag(words, "--codec") == CODEC, (
             f"{command.graph}'s `{command.member}` is served by codec "
-            f"{_flag(words, '--codec')!r}; only `{CODEC}` reads onejudge's frames and "
-            "serves the `judge` op every two-party member is asked"
+            f"{_flag(words, '--codec')!r}; only `{CODEC}` is the binding this host declares "
+            "for onejudge's frames, serving the `judge` op every two-party member is asked"
         )
 
 
-def test_the_codec_serves_the_queue_this_configuration_declares_for_it() -> None:
-    """`serve` refuses a queue other than the codec block's, on the member's first frame."""
+def test_the_binding_serves_the_queue_this_configuration_declares_for_it() -> None:
+    """`serve` refuses a queue other than the binding's own, on the member's first frame."""
     config = (REPO_ROOT / BUS_CONFIG).read_text(encoding="utf-8")
     declared = re.search(
-        r"^codecs:\n(?:\s*#.*\n)*  onejudge:\n(?:    .*\n)*?    queue: (\S+)$", config, re.MULTILINE
+        rf"^codecs:\n(?:\s*#.*\n)*  {CODEC}:\n(?:    .*\n)*?    queue: (\S+)$", config, re.MULTILINE
     )
-    assert declared is not None, f"{BUS_CONFIG} declares no `codecs.onejudge.queue`"
+    assert declared is not None, f"{BUS_CONFIG} declares no `codecs.{CODEC}.queue`"
     for command in _judge_commands():
         words = _served(command)
         queue = words[3]
         assert queue == declared.group(1), (
             f"{command.graph}'s `{command.member}` serves queue {queue!r} while {BUS_CONFIG} "
-            f"declares the onejudge codec on {declared.group(1)!r}"
+            f"declares the {CODEC} binding on {declared.group(1)!r}"
         )
         assert _flag(words, "--config") == BUS_CONFIG, (
             f"{command.graph}'s `{command.member}` reads {_flag(words, '--config')!r}, not "
@@ -222,11 +225,11 @@ def test_the_codec_serves_the_queue_this_configuration_declares_for_it() -> None
         )
 
 
-def test_the_codec_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
+def test_the_binding_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
     """The monitor's question and the manager's ruling meet in one directory, over one file.
 
     Held against the `channel-reply` recipe's own line rather than a restated path: the
-    two are one decision made twice, and a run whose codec asked somewhere else would read
+    two are one decision made twice, and a run whose binding asked somewhere else would read
     every manager's score as a wait that elapsed.
     """
     body = re.search(
@@ -243,7 +246,7 @@ def test_the_codec_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
     )
     replied_queue = verb.group(1)
     replied_config = channel.group(1)
-    # The recipe names its run `$run`; the codec names the same run by the variable the
+    # The recipe names its run `$run`; the binding names the same run by the variable the
     # engine exports to an observer member. `shlex` removes the quoting and a closing
     # array parenthesis the recipe's shell line carries.
     replied_dir = shlex.split(channel.group(2).rstrip(")"))[0].replace("$run", f"${RUN_ID_ENV}")

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import follow_up_variables
+import onejudge_bundle
 import onevcs_state_snapshot
 import plan_fixture_root
 import plan_root_variable
@@ -75,6 +76,14 @@ install_default_bounds()
 # every process still on the older release. `tests/onevcs_state_snapshot.py` is the
 # measurement and the rule.
 onevcs_state_snapshot.snapshot()
+
+# Every verb that loads `config/onemessagebus.yaml` resolves its schema link first, and the
+# link names a bundle onejudge publishes on GitHub. So this process and every subprocess it
+# spawns resolve it from a cache warmed here, offline, with the bundle derived from the
+# installed onejudge — at import for the reason the snapshot above is: a fixture of any
+# scope is set up after launches that already load the file. `tests/onejudge_bundle.py`
+# is how, and why nothing leaves the host.
+onejudge_bundle.seed_process_cache()
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The directories under this checkout that git ignores and Nx therefore never hashes.

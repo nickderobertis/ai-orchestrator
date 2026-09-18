@@ -32,6 +32,7 @@
       "{workspaceRoot}/tests/plan_root_variable.py",
       "{workspaceRoot}/tests/plan_sources.py",
       "{workspaceRoot}/tests/registered_checkouts.py",
+      "{workspaceRoot}/tests/onejudge_bundle.py",
       "{workspaceRoot}/tests/e2e/example_records.py",
       "{workspaceRoot}/tests/e2e/nx_workspace.py",
       "{workspaceRoot}/tests/e2e/probe_run_root.py",
@@ -173,6 +174,9 @@
       "{workspaceRoot}/tests/nx_inputs.py",
       "{workspaceRoot}/tests/published_tools.py",
       "{workspaceRoot}/tests/fixtures/timeline-runs/**/*",
+      "{workspaceRoot}/graphs/dag-scope.yaml",
+      "{workspaceRoot}/graphs/node-scope.yaml",
+      "{workspaceRoot}/graphs/pr-author.yaml",
       "{workspaceRoot}/tests/e2e/nx_workspace.py",
       "{workspaceRoot}/tests/e2e/waits.py"
     ],

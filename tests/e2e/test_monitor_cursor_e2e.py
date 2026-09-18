@@ -11,7 +11,7 @@ keeps the cursor in the conversation instead: every `onepipeline monitor` read e
 journey runs it. One real `just orchestrate` launch, whose monitor's agent side is doubled
 at the paid model and nothing below it: `fake_backend.py`'s `MONITOR_READS_ENV` branch runs
 the `sh` block of that member's own effective system prompt, where the turn runs, against
-the installed `onepipeline` and the run's real `monitor` filter, and carries each turn's
+the installed `onepipeline` and the run's real `detailed` filter, and carries each turn's
 resume line into the next.
 
 What a resumed turn rendered is read against the store itself rather than against another
@@ -72,6 +72,9 @@ HELD_SECONDS = 20
 
 #: The run's store, in the run's own directory, that a cursor's byte counts into.
 STORE = "events.jsonl"
+
+#: The profile the monitor's persona reads through: the whole merged stream.
+DETAILED_PROFILE = "detailed"
 
 #: The monitor's hold between turns for this launch. The shipped five minutes would allow
 #: one turn in a run this long; `--set members.monitor.schedule.every` is the published
@@ -195,7 +198,7 @@ def _stream_as_of(
     # a run as of a byte, so a copy of the store is cut there and the real verb renders it.
     (runs / LAUNCHED_RUN / STORE).write_bytes(recorded[: int(cursor.rsplit(":", 1)[1])])
     rendered = subprocess.run(
-        [str(PINNED_ONEPIPELINE), "monitor", LAUNCHED_RUN, "--filter", MONITOR_MEMBER],
+        [str(PINNED_ONEPIPELINE), "monitor", LAUNCHED_RUN, "--filter", DETAILED_PROFILE],
         cwd=runs,
         env={**environment, "ONEPIPELINE_RUNS_DIR": str(runs)},
         text=True,

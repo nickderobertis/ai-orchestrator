@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.34.0. The whole of that reasoning —
+onepipeline 0.37.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.34.0. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.37.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,7 +323,7 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.34.0; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.37.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
@@ -333,7 +333,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.34.0, that schedule answers only the failures a retry can change. A projection the store
+0.37.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -570,7 +570,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.34.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.37.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -698,7 +698,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.34.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.37.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -754,8 +754,8 @@ Two things about them are worth knowing before reading a surprising run:
   values, so the plan is authoritative. Nodes with no dispatch (human and
   `expects_no_diff` nodes) name no persona and still settle normally.
 - The monitor's judge side **is** the planner channel: `onemessagebus serve surfaces
-  --codec onejudge` over `config/onemessagebus.yaml`, which reads onejudge's frames
-  itself. A turn raises nothing, a lost turn and the end-of-run completion bar each
+  --codec monitor` over `config/onemessagebus.yaml`, the binding this host declares
+  there for onejudge's frames. A turn raises nothing, a lost turn and the end-of-run completion bar each
   raise a non-blocking surface of their own, and a monitor reports through the
   `finding` op; see [Serving the channel as the monitor's judge
   side](#serving-the-channel-as-the-monitors-judge-side).
@@ -789,7 +789,7 @@ contract (its `docs/contract.md`, under `version: 9`), proven in that repository
 than here: a `trigger`, the run's `stop` or the member's own `cancel`, and a **note**
 offered to the member — the turn opens and the note is delivered into it — so a
 manager's `note` to the monitor is never held for five minutes. And the judge side is
-unchanged: the bus's onejudge codec answers every
+unchanged: this host's monitor binding answers every
 supervisor frame at once, because the hold is the graph's and a judge that slept would
 only stack a second wait on the first; the next turn opens after the hold and reads the
 stream from the cursor `personas/orchestrator.yaml` keeps.
@@ -895,7 +895,7 @@ planner's queue was also what ended its watch — and why there is no sentinel a
 `personas/orchestrator.yaml` asks a quiet turn for words about what it read rather than
 for a formula, so a healthy watch no longer walks into that signature on purpose.
 onejudge declares a field for the contract that remains — `user.settle_on_noop`,
-documented in `onejudge` 0.12.0's `src/cli/config.rs` and `src/engine.rs` as the opt-out
+documented in `onejudge` 0.13.1's `src/cli/config.rs` and `src/engine.rs` as the opt-out
 for "an observer instructed to answer with one fixed short sentence while it finds
 nothing", with `max_turns` left as the bound. Nothing here sets it today; that is a
 change to `personas/orchestrator.yaml` and a decision for a manager, not something this
@@ -950,15 +950,17 @@ that quoted a command name has run it here. So both supervisory members are told
 use the byte-carrying form — see [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)
 and the `check-in` task in [`graphs/dag-scope.yaml`](../graphs/dag-scope.yaml).
 
-`--kind` accepts **`check-in` and `finding`**, and refuses anything else by naming
-both: `invalid value 'whatever' for '--kind <KIND>' [possible values: check-in,
-finding]`. `check-in` is the pacemaker's word — it also resets the pacemaker's
-clock through `oneagentgraph reset-timer RUN check-in` — and `finding` is something
-a watcher saw and decided the planner should know, raised deliberately rather than
-as the side effect of a turn having happened. That is the CLI's own restriction and
-not the queue's: `kind` on a queued surface is a free-form string, which is how
-the bus's onejudge codec raises `monitor-failed` and `monitor-completion`, and how
-the engine raises `monitor-edit` and `edit-rejected`.
+`--kind` is an **open word**: any kind matching `^[a-z][a-z0-9-]{0,63}$` is relayed
+unchanged — its message, source, blocking flag and unread accounting — and a malformed
+one is refused (the engine's contract, Contract K in onepipeline's `docs/contract.md`).
+The engine acts on two of them: `check-in` is the pacemaker's word, and `finding` is
+something a watcher saw and decided the planner should know, raised deliberately rather
+than as the side effect of a turn having happened. It raises one of its own,
+`edit-applied`, for each edit a non-planner author applied — `monitor-edit` was that
+kind's name through the engine's 0.36 releases. This host's monitor binding raises
+`monitor-failed` and `monitor-completion` the same way. Reading any surface restarts
+the clock of every observer member the run's graph declares `resettable` — here, the
+`check-in` pacemaker alone.
 
 The planner reads it with `just channel-next RUN`, which hands out each queued
 surface once, along with the events it was raised against:
@@ -1047,57 +1049,73 @@ The monitor is a two-sided onejudge member, and its judge side is the live plann
 rather than a simulated user. That is what makes a reply *supervision*: the planner's
 ruling reaches the monitor in its own conversation rather than only as graph edits.
 
-That side is `onemessagebus serve surfaces --codec onejudge` over
-`config/onemessagebus.yaml`, as `graphs/dag-scope.yaml` names it. The **onejudge codec**
-reads the frames onejudge writes to a judge command and answers each with the response
-object onejudge reads, so nothing stands between the two halves any more. Its rules are
-the bus's, in onemessagebus's `codecs.md`; what this host configures is the
-`codecs.onejudge` block — the queue it raises on, the variables its asker and session
-bound are read from, and the [reply window](#asking-the-manager).
+That side is `onemessagebus serve surfaces --codec monitor` over
+`config/onemessagebus.yaml`, as `graphs/dag-scope.yaml` names it: the bus's generic
+binding interpreter, running the **`monitor` binding** this host declares in that file's
+`codecs` block. The grammar a binding is written in is the bus's, in onemessagebus's
+`codecs.md`, and is not restated here; what is this host's is the binding itself —
+the texts a monitor is told, the two surface kinds it raises, what a lost turn is called
+— written as data beside the persona whose behaviour it describes, with the queue it
+raises on, the variables its asker and session bound are read from, and the [reply
+window](#asking-the-manager). Nothing in it derives a fact from a frame, a transcript or
+a harness identity: each frame is validated against the bundle onejudge publishes at the
+release tag `config/onejudge.version` names, linked under the file's `schemas` key and
+pinned to the protocol that release speaks, and every fact the binding names — a turn's
+outcome, its cause, the harness it ran on — is a field onejudge reports on the frame.
+The retired onejudge codec, which read the run out of a frame's task, proved a lost turn
+from the end of a harness transcript, and named its identity against
+`ORCHESTRATOR_CODEX_ALT_HOME`, is history.
 
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.34.0 in the judge command's own environment on a real launch, and re-taken
-on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`. Where a frame's task
-opens by naming the run, the codec reads the run from there.
+onepipeline 0.37.0 in the judge command's own environment on a real launch, and re-taken
+on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`.
 
-| Frame | What the codec does |
+| Frame | What the binding does |
 | --- | --- |
-| `supervisor`, the turn produced any assistant content | the monitor took its turn: nothing is raised, and the member is answered with a non-completion telling it that a report reaches the planner as a `finding` |
-| `supervisor`, no assistant content, or a machine transcript that **proves** the turn was lost | one bounded, non-blocking `monitor-failed` surface naming the cause and the harness identity, and the member ends |
-| `judge` | the completion bar is raised as a non-blocking `monitor-completion` question and the ruling is relayed as the score — see [below](#the-completion-bar-is-scored-by-the-planner-too) |
-| `assess`, a numeric `judge`, `respond`, `user` | refused by name |
+| `supervisor` whose `turn.outcome` is `taken` | the monitor took its turn: nothing is raised, and the member is answered with a non-completion telling it that prose reaches nobody, that a report reaches the planner only as a `finding` op, and that its next turn opens after the graph's hold |
+| `supervisor` whose `turn.outcome` is `lost` | one non-blocking `monitor-failed` surface naming `turn.cause` and `turn.harness`, and the serving session fails (exit 1), which ends the member |
+| `judge`, `kind: boolean` | the completion bar is asked as a non-blocking `monitor-completion` question and the ruling is relayed as the score — see [below](#the-completion-bar-is-scored-by-the-planner-too) |
+| `judge`, `kind: numeric`; `respond`; `user`; `assess` | refused, exit 2 |
 
-A lost turn is proven only by what its transcript ends in — an `error` frame, or a
-`turn/completed` whose `status` is `failed` — and its identity is read against
-`ORCHESTRATOR_CODEX_ALT_HOME`, because this host's two codex identities hold separate
-quotas and the identity is the actionable half. A transcript nothing can be proven
-inside is content like any other: the member took its turn, and the run keeps it where
-`just monitor <run> --filter monitor` reads it.
+A lost turn is onejudge's classification, not this host's: onejudge reports the turn a
+harness failed as `lost`, with the candidate's classified failure as its cause and the
+composed id of the harness identity that ran — `codex:alternate`, say — so the surface
+names the quota to look at without this host reading anything to find it. A turn whose
+reply text is empty is still `taken`; the run keeps whatever it said where `just monitor
+<run> --filter detailed` reads it.
 
-Every surface the codec raises is **non-blocking**. A blocking one would hold the run at
-`awaiting-planner` on every monitor turn — ending the attached launch's
+Every surface the binding raises is **non-blocking**. A blocking one would hold the run
+at `awaiting-planner` on every monitor turn — ending the attached launch's
 settle-and-return contract, and stopping the frontier to ask about watching rather than
 about work. A planner who never answers costs the run nothing.
 
 **A live edit never reaches the monitor.** A reply is routed by the halves it carries: a
 commands-only envelope reaches the `commands` queue alone and leaves the monitor's
-pending surface standing, and one carrying a verdict and edits reaches both. Should a
-regressed transport deliver one to the codec anyway, it is recognised, the member is
-answered with a non-completion naming the edits, and nothing is re-applied — the edit
-reached the engine when it was sent, and sending it again would apply it twice.
+pending surface standing, and one carrying a verdict and edits reaches both.
+
+**Who may speak on the channel is declared in the same file.** The planner is the bus's
+one built-in author. The monitor is this host's, under `authors.monitor`: its grants —
+`retry`, `requeue`, `cancel`, `finding` and `add` — and, for every other op, the reason
+the channel gives when it refuses one, in its own words (`'drop' is not an op the
+monitor may issue: … Surface it to the planner instead`). An author the file does not
+declare is refused before anything is appended; the engine applies what the bus admits
+and surfaces each edit a non-planner author applied as `edit-applied`.
 
 `tests/e2e/test_monitor_quiet_turn_e2e.py`, `tests/e2e/test_lost_turn_wire_contract_e2e.py`
 and `tests/e2e/test_monitor_survives_the_channel_e2e.py` are this seam's journeys on a
-real run's channel. Why each rule is what it is was measured on the filter the codec
-replaced, and is kept under [What the retired channel scripts
+real run's channel, with every frame written by a real onejudge, and
+`tests/test_onemessagebus_config.py` holds the binding, the author and the schema link
+to their sources. Why each rule is what it is was measured on the filter the retired
+codec replaced, and is kept under [What the retired channel scripts
 measured](#what-the-retired-channel-scripts-measured).
 
 #### A monitor reports through the `finding` op
 
 A monitor has exactly one way to tell the planner something, and it is the `finding` op
-in an `onepipeline reply` envelope. The prose a turn ends in raises **no** planner
+in a reply envelope it sends through the bus (`onemessagebus send replies` onto the run's
+channel, as `personas/orchestrator.yaml` spells it). The prose a turn ends in raises **no** planner
 surface, whatever it says, and there is deliberately no fixed quiet-turn string for a
 monitor to get wrong: a sentinel is a vocabulary, and a vocabulary can be got wrong.
 
@@ -1124,7 +1142,7 @@ with.
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
 boundary; `judge` comes once the conversation ends, to score `user.done_when` —
 always, whether the supervisor ruled complete or the turn cap ran out, and
-independently of `evals` and `assessment`. Measured on onejudge 0.12.0 with a
+independently of `evals` and `assessment`. Measured on onejudge 0.13.1 with a
 `kind: command` judge that logged every op it was asked.
 
 That second one has **no configuration escape**, and the attempts are worth knowing
@@ -1137,11 +1155,11 @@ always carries a bar it is always asked to score, whether or not its judge side 
 model. Editing the bar out of `config/onejudge.base.yaml` is not the answer either:
 that one is the shared dispatch bar for every worker on this host.
 
-So the codec serves that op for the same reason it serves `supervisor` — **the planner
+So the binding serves that op for the same reason it serves `supervisor` — **the planner
 is this member's judge side, so the planner scores the criterion**. It raises the
 criterion as its own non-blocking question, under kind `monitor-completion`, and relays
 the ruling that comes back: `completion` becomes the boolean score and the ruling's
-`reason` becomes the score's. Nothing is invented. The surface arrives once, at the end,
+`reason` — or, lacking one, its `message` — becomes the score's. Nothing is invented. The surface arrives once, at the end,
 and a manager meeting it for the first time must not read it as a run held up on them. A
 planner who never answers costs nothing: a wait that elapses, or a question abandoned
 before anyone ruled, is scored `unsatisfied` — the conservative direction — and never a
@@ -1155,7 +1173,7 @@ gets a scored bar it cannot answer, and neither `done_when: null` nor
 member still carries a bar at all — so the day a release lets one decline it, that
 check fails and the score path can go.
 
-`assess`, the op a top-level `assessment` produces, is refused by name, as is a `judge`
+`assess`, the op a top-level `assessment` produces, is refused, as is a `judge`
 asking for a score on a scale: a planner rules with a boolean, and a boolean is not a
 number. Neither can arrive from this repository's graphs, because
 `tests/test_observer_judge_ops.py` forbids any channel-served persona from declaring
@@ -1217,7 +1235,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.34.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.37.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1238,10 +1256,10 @@ process is *under* and never that it is a dispatch.
 **The reply window is fifty minutes — 3000 seconds — and that value is a measurement.**
 `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it for one ask, and
 `reply_window_seconds` in `config/onemessagebus.yaml` is the same decision for the
-questions the monitor's codec asks, which `tests/test_onemessagebus_config.py` holds to
+questions the monitor binding asks, which `tests/test_onemessagebus_config.py` holds to
 the shim's default. The engine's own rendezvous waited about thirty seconds when nothing
 set a window — 29.8 seconds measured — which is a supervisor's cadence and not a
-manager's, and the codec's default with no configuration is the same 30 seconds. A
+manager's, and a binding that names no window gets the same 30 seconds. A
 question worth blocking on is worth waiting past the next time somebody looks at their
 terminal: fifty minutes is long enough that a manager who stepped away still answers,
 and short enough that a wedged question is not immortal. The window used to be set
@@ -1900,24 +1918,28 @@ The accepted commands are:
 
 #### Who issued an edit, and what that bounds
 
-The envelope's optional `author` names who is asking, and takes `planner` (the
-default) or `monitor`. It is not decoration: the engine records it on the
-`edit-committed` event, and for a monitor edit it also queues a non-blocking
-`monitor-edit` surface naming the command — so a fix the
+The envelope's optional `author` names who is asking: `planner` (the default, and the
+bus's one built-in author) or an author `config/onemessagebus.yaml` declares — here
+`monitor` alone. It is not decoration: the engine records it on the `edit-committed`
+event, and for an edit by any author but the planner it also queues a non-blocking
+`edit-applied` surface, sourced to that author, naming the command — so a fix the
 [monitor](#the-agent-graphs-a-run-launches) applies is reported as the monitor's
 without the monitor also having to report it.
 
 `finding` is the exception, and deliberately so: it raises the finding's own
-surface and **no** `monitor-edit` surface beside it, because there is no edit to
+surface and **no** `edit-applied` surface beside it, because there is no edit to
 report — the surface *is* the report, and queueing a second one would double every
 observation in the one line a planner may not filter.
 
-It is also a bound. `author: monitor` may issue exactly `add`, `retry`, `cancel`,
-`requeue`, and `finding`; the engine refuses the rest by name and says
-why, and refuses a completion verdict from a monitor the same way:
+It is also a bound, and the bound is this host's declaration rather than anything the
+bus or the engine builds in. `authors.monitor` in `config/onemessagebus.yaml` grants
+exactly `add`, `retry`, `cancel`, `requeue`, and `finding`, and gives every other op the
+reason the channel refuses it with — before anything is appended, as it refuses an
+author the file does not declare at all, and a completion verdict from a monitor the same
+way:
 
 ```
-onepipeline: refused: 'drop' is not an op the monitor may issue: removing work from
+onemessagebus: replies: 'drop' is not an op the monitor may issue: removing work from
 the graph is a decomposition decision the planner owns. Surface it to the planner
 instead
 ```
@@ -1930,7 +1952,7 @@ message`, and an `id` the run does not have with `cannot raise a finding about n
 'nosuch', which this run does not have; it has: research`. Each refusal names the available action, because the
 monitor's escalation path is exactly what it is meant to reach for. That bound is
 stated to the model in [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)
-and enforced by the engine, and
+and enforced by the channel, and
 `tests/e2e/test_orchestrate_launch_e2e.py` holds both halves — that the four
 refusals are refusals, and that an in-allowlist op is judged on the graph's state
 rather than on who asked.
@@ -3353,7 +3375,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.34.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.37.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`
@@ -3462,8 +3484,9 @@ pins, and each recipe named above is a thin wrapper over one of their verbs.
   launches.
 - **`onemessagebus`** — the channel's transport and the verbs this host speaks it
   through: `ask` (the shim `ORCHESTRATOR_ASK_MANAGER` names), `reply` and `send` (`just
-  channel-reply`), `serve --codec onejudge` (the observer's judge side) and `status`,
-  with the validator, its pass cache and the codec's constants configured once in
+  channel-reply`), `serve --codec monitor` (the observer's judge side) and `status`,
+  with the validator, its pass cache, the monitor's author and binding, and the schema
+  link the binding validates frames against configured once in
   `config/onemessagebus.yaml`.
 - **`oneagentgraph`** — one dispatched agent turn and the graph of members a run
   drives, its history records, and its scratch.

@@ -29,6 +29,7 @@ import http.client
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -78,6 +79,32 @@ INSTALLED_BUNDLE = REPO_ROOT / "node_modules" / "onepipeline-ui"
 RunId = NewType("RunId", str)
 ConversationId = NewType("ConversationId", str)
 TIMELINE_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
+#: The graph runs those recorded runs' graphs made, each with the graph document it
+#: launched. The reader derives a session's `agent_role` from the members a run's recorded
+#: graph declarations name and from nothing built in, so a recorded run served without
+#: them has no lanes at all — and the runs above predate this host keeping those records
+#: beside them. So the journey writes each record `oneagentgraph` would have kept, its
+#: members read out of the document named here rather than restated: an observer graph
+#: under the id its launch record names as `graph_run`, a node graph under the stream its
+#: records were relayed on, and the derived monitor slice's observer under both, since the
+#: slice took its one turn from a run whose launch it did not keep.
+GRAPH_RUNS = {
+    "dag-scope-1787250914995-537481": "graphs/dag-scope.yaml",
+    "dag-scope-1787326722074-517521": "graphs/dag-scope.yaml",
+    "dag-scope-1787308673405-2003245": "graphs/dag-scope.yaml",
+    "node-scope-1787250915010-537481": "graphs/node-scope.yaml",
+    "node-scope-1787250915010-537481-interrupt-537481": "graphs/node-scope.yaml",
+    "node-scope-1786920912010-3261528": "graphs/node-scope.yaml",
+    "node-scope-1787237768855-569067": "graphs/node-scope.yaml",
+    "node-scope-1787318326076-2751798": "graphs/node-scope.yaml",
+    "node-scope-1787318326076-2751798-interrupt-2751798": "graphs/node-scope.yaml",
+    "node-scope-1787317190418-2313512": "graphs/node-scope.yaml",
+    "pr-author-1786923240299-3261528": "graphs/pr-author.yaml",
+    "pr-author-1787320393941-2751798": "graphs/pr-author.yaml",
+}
+#: The schema `oneagentgraph` writes a graph run's `record.json` under.
+GRAPH_RECORD_SCHEMA = 3
+GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
 #: The smallest recorded run still exhibiting the whole per-node tier — a node, its
 #: worker dispatch, and its gate run — which is what makes a 60KB fixture enough.
 RECORDED_RUN = RunId("orchestrator-gate-fix-findings-2")
@@ -151,10 +178,10 @@ TURN_USAGE_FIGURES = (
 #: here rather than read from the response, because reading it from the response is what
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
-TIMELINE_SCHEMA_VERSION = 8
+TIMELINE_SCHEMA_VERSION = 10
 #: The envelope's telemetry schema, restated for the same reason and moved with the same
 #: paragraph.
-TELEMETRY_SCHEMA_VERSION = 16
+TELEMETRY_SCHEMA_VERSION = 17
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -261,7 +288,7 @@ def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
 
 
 @contextlib.contextmanager
-def _both_recipes(runs_root: Path) -> Iterator[Served]:
+def _both_recipes(runs_root: Path, graph_records: Path | None = None) -> Iterator[Served]:
     """Both recipes, for real: `just telemetry-server` behind `just dag-ui`.
 
     This is the arrangement the documentation tells an operator to start in two
@@ -274,7 +301,8 @@ def _both_recipes(runs_root: Path) -> Iterator[Served]:
     api_port = _free_port()
     ui_port = _free_port()
     api = _serve(
-        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)]
+        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
+        {**os.environ, GRAPH_STATE_ENV: str(graph_records or runs_root.parent / "graph-records")},
     )
     recipe = _serve(
         ["just", "dag-ui"],
@@ -312,8 +340,58 @@ def served_recorded(tmp_path: Path) -> Iterator[Served]:
     """
     runs_root = tmp_path / "runs"
     shutil.copytree(TIMELINE_RUNS, runs_root)
-    with _both_recipes(runs_root) as pair:
+    graph_records = _graph_records(tmp_path / "graph-records")
+    with _both_recipes(runs_root, graph_records) as pair:
         yield pair
+
+
+def _declared_members(graph: str) -> list[str]:
+    """The members one graph document declares, in its own order.
+
+    Read with an indentation walk rather than a YAML library, as this suite's other
+    readers of these documents are: the workspace installs none, and `oneagentgraph
+    validate` over `graphs/` is what holds them well-formed.
+    """
+    lines = (REPO_ROOT / graph).read_text(encoding="utf-8").splitlines()
+    members: list[str] = []
+    for line in lines[lines.index("members:") + 1 :]:
+        if line.strip() and not line.startswith(" "):
+            break
+        if re.match(r"^  [a-z][a-z0-9_-]*:\s*$", line):
+            members.append(line.strip().rstrip(":"))
+    assert members, f"{graph} declares no members"
+    return members
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The recorded runs predate
+# this host keeping `oneagentgraph`'s run records beside them, and no producer verb writes a
+# record under a graph run id it did not mint, so this writes the record `oneagentgraph`'s
+# schema-3 `Record` type declares — the shape onepipeline-ui's own suite writes through that
+# type. A record the reader cannot parse leaves every session without an `agent_role`, which
+# fails each lane assertion below by name, so a drift in the shape fails here.
+# llmlint: ignore-block[tests_mirror_real_usage] Same site, same reason: there is no producer
+# interface that records a declaration for a graph run that already happened.
+def _graph_records(root: Path) -> Path:
+    """One `record.json` per graph run in `GRAPH_RUNS`, as `oneagentgraph` keeps them."""
+    for graph_run, graph in GRAPH_RUNS.items():
+        (root / graph_run).mkdir(parents=True)
+        record = {
+            "schema_version": GRAPH_RECORD_SCHEMA,
+            "run_id": graph_run,
+            "graph": graph,
+            "name": graph_run.rsplit("-", 2)[0],
+            "started_ms": 0,
+            "members": {},
+            "declared_members": _declared_members(graph),
+            "refs": [],
+            "events_path": str(root / graph_run / "events.jsonl"),
+        }
+        (root / graph_run / "record.json").write_text(json.dumps(record), encoding="utf-8")
+    return root
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
@@ -516,13 +594,15 @@ def test_the_supervisory_dispatch_span_is_what_the_reader_answers(
     assert rollup["parent_id"] != run_span["id"]
 
 
-def test_the_monitors_dispatch_is_labelled_orchestrator(served_recorded: Served) -> None:
-    """The other supervisory `agent_role`, and the one this release was adopted to fix.
+def test_the_monitors_dispatch_is_labelled_by_its_own_member_name(served_recorded: Served) -> None:
+    """The other supervisory `agent_role`, served as the member the graph declares.
 
-    0.5.0 served this dispatch with a null `agent_role`, so the monitor was present in
-    the timeline and unattributable in it — the defect the pin moved for. The pacemaker
-    above proves the field is populated; only this proves it is populated *per role*,
-    which a reader distinguishing the monitor from the pacemaker depends on.
+    0.5.0 served this dispatch with a null `agent_role`, and 0.5.x through 0.8.x renamed it
+    `orchestrator` out of a vocabulary the reader built in. From 0.9.0 the lane is the
+    member's own name, read off the observer graph's declaration — so this host's
+    `monitor` is served as `monitor`. The pacemaker above proves the field is populated;
+    only this proves it is populated *per member*, which a reader distinguishing the
+    monitor from the pacemaker depends on.
     """
     status, body, _ = served_recorded.get(f"/api/v2/runs/{SUPERVISING_RUN}/timeline?scope=run")
 
@@ -533,7 +613,7 @@ def test_the_monitors_dispatch_is_labelled_orchestrator(served_recorded: Served)
     run_span = next(span for span in spans if span["kind"] == "run")
 
     dispatch = next(span for span in spans if span["kind"] == "dispatch")
-    assert dispatch["agent_role"] == "orchestrator"
+    assert dispatch["agent_role"] == "monitor"
     assert dispatch["transport_role"] == "agent"
     assert dispatch["reference"] == {
         "kind": "conversation",

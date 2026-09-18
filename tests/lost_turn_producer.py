@@ -1,23 +1,15 @@
-"""A turn the real producer really lost, recorded the way a monitor loses one.
+"""A turn the real producer really loses, the way a monitor loses one, offline.
 
-The monitor's judge side — `onemessagebus serve --codec onejudge`, as `graphs/dag-scope.yaml`
-declares it — reads a harness's own machine transcript to tell a turn its agent side lost
-from one that said something. The bus proves that reading against a transcript its own suite
-recorded; `tests/e2e/test_lost_turn_wire_contract_e2e.py` proves the producer this host
-installs still writes a shape the judge side it spawns reads the same way, and producing that
-turn lives here.
+The monitor's judge side — `onemessagebus serve --codec monitor`, as `graphs/dag-scope.yaml`
+declares it — reads a lost turn off the `turn` object onejudge reports, and
+`tests/e2e/test_lost_turn_wire_contract_e2e.py` proves the producer this host installs still
+reaches it that way. Arranging the loss lives here.
 
 Nothing about the producer is stood in for. A real `oneharness` runs the real `codex`
-binary through `codex app-server` — the path a dispatch takes, selected by `--control`,
-which is why a lost monitor turn leaves app-server frames rather than `codex exec`'s —
-and the only thing arranged is that the model endpoint refuses every turn it is asked.
-A refused turn is the same terminal shape as the quota refusal that cost this host its
+binary, and the only thing arranged is that the model endpoint refuses every turn it is
+asked. A refused turn is the same terminal shape as the quota refusal that cost this host its
 monitor for a day, and it is the half a check can produce on demand: offline, in under a
 second, with no paid account and no credential of this host's in reach.
-
-The other shape lives here too — `without_the_frames_that_prove_the_loss`, which is that
-same real transcript cut back to the frames that prove nothing, which is what all 26 of this
-host's oversized surfaces were.
 
 The same arrangement answers a second question about that path, which is why the model
 the request names is recorded here rather than in a producer of its own: **which model a
@@ -38,17 +30,12 @@ import os
 import shutil
 import subprocess
 import threading
-from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, NamedTuple, TypedDict
+from typing import NamedTuple, TypedDict
 
 #: The one producer whose transcript reaches the monitor's judge side, as `oneharness list` ids it.
 PRODUCER = "codex"
-
-#: The field a lost turn's error records its classification in — the half of the named
-#: failure that says which quota to go and look at.
-CLASSIFICATION = "codexErrorInfo"
 
 #: The prompt the lost turn carries. Never answered — the provider refuses it — but it is
 #: what makes this a turn rather than a handshake.
@@ -200,15 +187,6 @@ class ControlledResult(TypedDict, total=False):
     observed_model: str | None
 
 
-class LostTurn(NamedTuple):
-    """One turn a real producer really lost, and what it wrote about losing it."""
-
-    #: The transcript verbatim, as the message a lost turn leaves in place of an answer.
-    transcript: str
-    #: Its frames, one per line, parsed.
-    frames: tuple[dict[str, Any], ...]
-
-
 def installed_producer() -> str | None:
     """The real producer binary, or `None` when this host has none installed."""
     return shutil.which(PRODUCER)
@@ -229,20 +207,6 @@ def refusing_home(directory: Path, *, base_url: str | None = None, model: str = 
         json.dumps({"OPENAI_API_KEY": "refusing-provider"}), encoding="utf-8"
     )
     return directory
-
-
-def capture(oneharness_bin: str, codex_bin: str, home: Path, root: Path) -> LostTurn:
-    """Lose one turn for real, and return the transcript the producer wrote losing it.
-
-    `--no-config` keeps this repository's own harness chains out of the selection, so the
-    one candidate is the one binary named here.
-    """
-    result = controlled_turn(oneharness_bin, codex_bin, home, root, ("--no-config",))
-    transcript = result["stdout"]
-    return LostTurn(
-        transcript=transcript,
-        frames=tuple(json.loads(line) for line in transcript.splitlines() if line.strip()),
-    )
 
 
 def controlled_turn(
@@ -300,122 +264,6 @@ def controlled_turn(
         model=result.get("model"),
         observed_model=result.get("observed_model"),
     )
-
-
-def without_the_frames_that_prove_the_loss(transcript: str) -> str:
-    """The same real transcript, minus the two frames that say the turn was lost.
-
-    The other half of what reaches this channel, and by far the commoner half: all 26 of
-    the oversized surfaces measured on this host on 2026-08-24 were `status: completed`
-    with `error: null`, so nothing in any of them proved a failure and every one was
-    republished as the monitor's own words. Capturing one directly is what this cannot
-    do offline — a turn that completes needs a reachable provider and a paid account —
-    so the shape is reached the other way, by removing from a real transcript the two
-    frames whose absence is the whole of the difference.
-
-    Every line that survives is the producer's own bytes, in its own order, so the
-    handshake this reads an identity out of and the bookkeeping that makes up the bulk
-    are exactly what the binary wrote. Line-wise rather than frame-wise for that reason:
-    re-serializing would make the size the surface reports this function's rather than
-    the producer's.
-    """
-    kept = [
-        line
-        for line in transcript.splitlines()
-        if line.strip() and not _proves_the_loss(json.loads(line))
-    ]
-    assert kept, f"nothing of the transcript survived: {transcript}"
-    return "\n".join(kept)
-
-
-class Proof(StrEnum):
-    """The two ways a lost turn's transcript proves the loss, named so a journey can keep one."""
-
-    ERROR_NOTIFICATION = "error-notification"
-    FAILED_TURN = "failed-turn"
-
-
-# `Any` because a frame is the producer's own JSON-RPC message, parsed unvalidated: the
-# shape is codex's, and the match below reads only the members it names.
-def _proof(frame: dict[str, Any]) -> Proof | None:
-    """Which proof of a lost turn this one frame is, if it is one.
-
-    The two shapes onemessagebus's `docs/codecs.md` names as proof, as the producer emits
-    them: an error notification, and a turn whose terminal status is `failed`. Stated here
-    rather than imported, since the codec is another repository's; a restatement that
-    drifted would leave a proof in a cut transcript, which the journey reading it fails on
-    as a raised surface rather than passing.
-    """
-    match frame:
-        case {"method": "error"}:
-            return Proof.ERROR_NOTIFICATION
-        case {"params": {"turn": {"status": "failed"}}}:
-            return Proof.FAILED_TURN
-        case _:
-            return None
-
-
-def _proves_the_loss(frame: dict[str, Any]) -> bool:
-    """Whether this one frame is one that proves the turn was lost."""
-    return _proof(frame) is not None
-
-
-def keeping_only_the_proof(transcript: str, proof: Proof) -> str:
-    """The same real transcript with every frame that proves the loss another way removed.
-
-    A real lost turn records both proofs, so one capture cannot show that either alone is
-    read as a loss; cutting the other one out of the producer's own bytes can. Refuses a
-    transcript that did not record both, because then the cut would prove nothing about
-    the proof it claims to keep.
-    """
-    kept: list[str] = []
-    recorded: set[Proof] = set()
-    for line in transcript.splitlines():
-        if not line.strip():
-            continue
-        found = _proof(json.loads(line))
-        if found is not None:
-            recorded.add(found)
-        if found is None or found == proof:
-            kept.append(line)
-    assert recorded == set(Proof), (
-        f"the real lost turn recorded {sorted(recorded) or 'no'} proof(s), not both"
-    )
-    return "\n".join(kept)
-
-
-# `Any` because each frame is the producer's own JSON-RPC message, parsed unvalidated; the
-# one member read here is type-checked where it is read.
-def codex_home_named_by(frames: tuple[dict[str, Any], ...]) -> str:
-    """The codex home the producer's own initialize response says this turn ran under.
-
-    Which of this host's codex identities a lost turn is named as is decided by comparing
-    this with `ORCHESTRATOR_CODEX_ALT_HOME`, so a journey about that naming reads the home
-    out of the transcript rather than out of the capture's arguments.
-    """
-    homes = {
-        result["codexHome"]
-        for frame in frames
-        if isinstance(result := frame.get("result"), dict)
-        if isinstance(result.get("codexHome"), str)
-    }
-    assert len(homes) == 1, f"the transcript names {sorted(homes) or 'no'} codex home(s)"
-    return homes.pop()
-
-
-def classification_recorded_by(frames: tuple[dict[str, Any], ...]) -> set[str]:
-    """How this turn's own frames classified the refusal that ended it.
-
-    A read of the producer's output, the way anyone opening the transcript would read it,
-    so what a surface is held to naming is what the producer actually recorded.
-    """
-    return {
-        payload["error"][CLASSIFICATION]
-        for frame in frames
-        if isinstance(payload := frame.get("params"), dict)
-        if isinstance(payload.get("error"), dict)
-        if isinstance(payload["error"].get(CLASSIFICATION), str)
-    }
 
 
 def _environment(home: Path) -> dict[str, str]:

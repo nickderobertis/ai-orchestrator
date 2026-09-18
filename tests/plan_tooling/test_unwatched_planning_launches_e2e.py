@@ -385,9 +385,9 @@ def test_each_planning_launch_records_this_checkouts_bus_configuration(
         f"{validators}"
     )
     codecs = bus.get("codecs")
-    onejudge = codecs.get("onejudge") if isinstance(codecs, dict) else None
-    assert isinstance(onejudge, dict), f"run {launched} recorded no onejudge codec: {bus}"
-    assert onejudge.get("reply_window_seconds") == BUS_REPLY_WINDOW_SECONDS, (
+    monitor = codecs.get("monitor") if isinstance(codecs, dict) else None
+    assert isinstance(monitor, dict), f"run {launched} recorded no monitor binding: {bus}"
+    assert monitor.get("reply_window_seconds") == BUS_REPLY_WINDOW_SECONDS, (
         f"run {launched} serves under a reply window of "
-        f"{onejudge.get('reply_window_seconds')!r}, not this host's {BUS_REPLY_WINDOW_SECONDS}"
+        f"{monitor.get('reply_window_seconds')!r}, not this host's {BUS_REPLY_WINDOW_SECONDS}"
     )

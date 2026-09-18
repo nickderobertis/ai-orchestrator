@@ -113,6 +113,9 @@ SECOND_FILESYSTEM = "/dev/shm"
 BUS = REPO_ROOT / ".venv" / "bin" / "onemessagebus"
 BUS_CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
 QUEUE = "surfaces"
+#: The binding the judge side serves, as `graphs/dag-scope.yaml` names it: the bus refuses
+#: a `--codec` the configuration does not declare, at exit 2, before it holds anything open.
+CODEC = "monitor"
 
 #: One blocking question, as the ask shim encodes it — the whole of `ask`'s stdin.
 QUESTION = '{"kind":"planner-question","message":"probe","source":"proposal"}\n'
@@ -254,7 +257,7 @@ def _serving(
     if verb == "ask":
         command = [str(BUS), "ask", QUEUE, "--blocking", *named, "--timeout", str(bound)]
     else:
-        command = [str(BUS), "serve", QUEUE, "--codec", "onejudge", *named]
+        command = [str(BUS), "serve", QUEUE, "--codec", CODEC, *named]
         command += ["--session-seconds", str(bound)]
     # A `timeout` in front is what somebody bounding a wait by hand types, and unlike
     # `uv run` — which execs, measured — it stays as a process of its own carrying the
