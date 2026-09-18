@@ -1057,6 +1057,23 @@ machine-wide file reads as lost. Its `GH_PROJECTS_*` names nominate the board
 **onetaskgraph's own live test lane** writes to — that lane's concern, checked by
 nothing here — while this host's board is `onetaskgraph.yaml`'s `plans` source.
 
+Every launch also names the engine's **dispatch environment hook**,
+`--dispatch-env-hook scripts/dispatch-env-hook.sh` by absolute path, once the installed
+engine carries that flag: the wrapper asks the engine's own `start --help` and names the
+hook exactly when it is listed, because an engine without the flag refuses it as an
+unknown argument. The engine runs the hook immediately before every node-scope dispatch
+— never for the observer graph — and `adopt` replays it from the launch record. It exists
+because a live driver re-reads `oneharness.*.toml` at each dispatch but keeps only the
+environment it started with, so an `env_from` indirection a routing change adds reaches
+a live run's next dispatch only through the hook. The hook re-runs the resolvers the
+launch ran at driver start — this checkout's `.env` credentials, every Claude identity's
+config directory, the alternate Codex home — through `scripts/dispatch-env.sh`, the one
+definition of that list for both, and prints them as the document the engine overlays on
+that one dispatch's environment; a source a config names that the refreshed environment
+still lacks settles the node `infrastructure-failure` naming the config, the variant and
+the key, before anything is dispatched. So adding an indirection is a change to the
+resolver that establishes it, never to a running driver.
+
 ### Supervising
 
 `just runs`, `just status`, `just host`, `just results`, and `just transcript` are how

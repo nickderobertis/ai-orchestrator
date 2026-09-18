@@ -35,6 +35,7 @@ import pytest
 from example_records import SOURCE, ExampleCopy, isolated_examples, tracked_root
 from fake_backend import (
     AGENT_DELAY_ENV,
+    ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
     PROMPT_LOG_ENV,
     RUN_TASK,
@@ -2859,6 +2860,233 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
             )
     finally:
         _just("stop", "turn-budget-e2e", environment=environment, seconds=60)
+
+
+#: The scripts the dispatch-env hook is made of: the hook itself, the one definition of
+#: which resolvers it runs, and those three resolvers. Copied into a checkout-shaped
+#: directory of the journey's own — see `_hook_checkout` — rather than named in place.
+DISPATCH_ENV_HOOK_SCRIPTS = (
+    "dispatch-env-hook.sh",
+    "dispatch-env.sh",
+    "credentials-env.sh",
+    "claude-alt-config-dir.sh",
+    "codex-alt-home.sh",
+)
+
+#: An indirection no launch establishes and no routing this repository ships names, so
+#: the driver's environment never holds it: the shape of the variable ai-orchestrator#1109
+#: was about, added to a routing while a run was live. The hook establishes it from the
+#: journey's own `.env`, and the harness config the journey writes reads it through
+#: `env_from`, the way every real indirection is read.
+ADDED_INDIRECTION = "AIO_1109_ADDED_SOURCE"
+ADDED_VALUE = "/added/by/the/dispatch-env/hook"
+#: One the hook leaves unestablished, which the engine has to refuse the dispatch over.
+MISSING_INDIRECTION = "AIO_1109_MISSING_SOURCE"
+#: A credential the hook prints in the refused case, which nothing the run keeps may carry.
+PLANTED_SECRET = "planted-by-the-dispatch-env-journey-and-never-recorded"
+
+#: The flag `scripts/onepipeline.sh` names the hook with, exactly when the installed
+#: engine's `start --help` lists it. This host's pinned engine does not yet: the release
+#: carrying it links a onemessagebus this host has not migrated to, so its adoption is a
+#: later plan's, and until then the two journeys below skip by this name rather than
+#: fail on a launch the engine refuses for an argument it never heard of.
+DISPATCH_ENV_HOOK_FLAG = "--dispatch-env-hook"
+
+
+def _skip_unless_the_installed_engine_runs_a_dispatch_env_hook() -> None:
+    """Skip, naming the flag, on an engine whose `start` does not take it.
+
+    Asked of the installed engine the way the wrapper asks it — its own `start --help`
+    — so a journey and the launch it drives read one answer.
+    """
+    asked = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "start", "--help"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert asked.returncode == 0, asked.stderr
+    flag = re.compile(rf"^\s+{re.escape(DISPATCH_ENV_HOOK_FLAG)}(\s|$)", re.MULTILINE)
+    if flag.search(asked.stdout) is None:
+        pytest.skip(
+            f"the installed onepipeline's `start --help` lists no {DISPATCH_ENV_HOOK_FLAG}, so "
+            "the wrapper names no hook and there is no dispatch-env hook to drive; adopt "
+            "an engine release carrying the flag and this journey runs"
+        )
+
+
+#: The variant of `oneharness.toml` the journey's added `env_from` member is written on:
+#: the first in the worker's chain, and the one the engine names when the source is missing.
+ADDED_ON_VARIANT = "claude-code:alternate"
+ADDED_ON_LINE = (
+    'env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", '
+    'XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }'
+)
+
+
+def _hook_checkout(tmp_path: Path, credentials: str) -> Path:
+    """The real hook and everything it sources, beside a `.env` this journey wrote.
+
+    The credentials resolver reads the `.env` beside the `scripts/` it lives in, and the
+    tree's own is not a journey's to write — so the hook runs from a copy of its checkout
+    shape whose `.env` is this journey's. Nothing in the copy is edited: what is driven is
+    the tracked script, resolving through the tracked definition and resolvers.
+    """
+    checkout = tmp_path / "hook-checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    for name in DISPATCH_ENV_HOOK_SCRIPTS:
+        copied = scripts / name
+        copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+        copied.chmod(0o755)
+    (checkout / ".env").write_text(credentials, encoding="utf-8")
+    return scripts / "dispatch-env-hook.sh"
+
+
+def _worker_config_reading(tmp_path: Path, indirection: str) -> Path:
+    """This repository's agent-side routing with one more `env_from` member on its first variant."""
+    routing = (REPO_ROOT / "oneharness.toml").read_text(encoding="utf-8")
+    assert routing.count(ADDED_ON_LINE) == 1, (
+        f"oneharness.toml no longer spells {ADDED_ON_VARIANT}'s env_from as this journey "
+        "expects; re-read the variant and update ADDED_ON_LINE"
+    )
+    added = ADDED_ON_LINE.replace(" }", f', AIO_1109_ADDED = "{indirection}" }}')
+    config = tmp_path / "oneharness.toml"
+    config.write_text(routing.replace(ADDED_ON_LINE, added), encoding="utf-8")
+    return config
+
+
+def _hook_launch(
+    tmp_path: Path,
+    oneharness_bin: str,
+    *,
+    run: str,
+    hook: Path,
+    worker_config: Path,
+) -> tuple[dict[str, str], subprocess.CompletedProcess[str]]:
+    """Launch one node through the real recipe, naming the hook and the worker's routing.
+
+    `--dag-graph off` and blank run-end hooks, because what is under test is the one
+    node-scope dispatch; the observer graph never runs the hook and a follow-up launch
+    would be a second run.
+    """
+    environment = _environment(tmp_path, oneharness_bin)
+    environment.pop(ADDED_INDIRECTION, None)
+    environment.pop(MISSING_INDIRECTION, None)
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
+    environment[ENVIRONMENT_KEYS_ENV] = f"{ADDED_INDIRECTION},{MISSING_INDIRECTION}"
+    plan = tmp_path / f"{run}.plan.json"
+    plan.write_text(
+        json.dumps({"schema_version": 2, "name": run, "tasks": [_node()]}), encoding="utf-8"
+    )
+    launch = _just(
+        "orchestrate",
+        project_from_plan(plan),
+        "--dag-graph",
+        "off",
+        "--success-hook=",
+        "--failure-hook=",
+        "--dispatch-env-hook",
+        str(hook),
+        "--node-set",
+        f"members.worker.agent.oneharness_config={worker_config}",
+        environment=environment,
+    )
+    return environment, launch
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed here by the task, beside the launches they share a recipe, stand-in model and `_environment` with; a project of their own would re-key everything the launch path reads for two journeys that skip until the adoption.  # noqa: E501
+def test_the_dispatch_env_hook_hands_a_dispatch_an_indirection_the_driver_never_held(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A routing naming a source the driver started without is dispatched with it.
+
+    This is ai-orchestrator#1109 driven the way it happened — a harness config's `env_from`
+    names a variable the driver's environment does not hold — and settled the way the
+    hook settles it: the engine runs the hook before the dispatch, the hook resolves the
+    variable from the checkout's `.env`, and the dispatched turn is handed it. Read out of
+    the turn's own environment, at the seam the stand-in model records it, because what a
+    dispatch is *given* is otherwise unobservable.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    _skip_unless_the_installed_engine_runs_a_dispatch_env_hook()
+    run = "dispatch-env-hook-e2e"
+    hook = _hook_checkout(tmp_path, f"{ADDED_INDIRECTION}={ADDED_VALUE}\n")
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment, launch = _hook_launch(
+        tmp_path,
+        oneharness_bin,
+        run=run,
+        hook=hook,
+        worker_config=_worker_config_reading(tmp_path, ADDED_INDIRECTION),
+    )
+    try:
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+        results = _just("results", run, environment=environment, seconds=60)
+        assert results.returncode == 0, results.stderr
+        assert "infrastructure-failure" not in results.stdout, results.stdout
+        # llmlint: ignore[tests_mirror_real_usage] What a dispatch is *given* reaches no operator-facing view: it is inherited through three tools that report nothing of what they passed on, so the stand-in's record of its own environment is the only place to read it.  # noqa: E501
+        dispatched = _turns_of(_recorded_turns(Path(environment[PROMPT_LOG_ENV])), "worker")
+        assert dispatched, "no worker turn was dispatched"
+        handed = {turn["environment"].get(ADDED_INDIRECTION) for turn in dispatched}
+        assert handed == {ADDED_VALUE}, (
+            f"the dispatched worker turns were handed {ADDED_INDIRECTION}={handed}, not the "
+            "value the hook resolved from its checkout's .env"
+        )
+        # The hook's diagnostics are the run's to keep, and the resolvers wrote none.
+        log = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "hooks" / "dispatch-env.log"
+        assert log.is_file(), f"the run kept no hook log at {log}"
+    finally:
+        _just("stop", run, environment=environment, seconds=60)
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] See the directive on the journey above: the same launch path, placed here by the task.  # noqa: E501
+def test_a_dispatch_whose_hook_leaves_an_indirection_missing_is_refused_naming_it(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A source the refreshed environment still lacks refuses the dispatch, by name.
+
+    The node settles `infrastructure-failure` with the config, the variant and the key in
+    its detail — before anything is dispatched, so no turn is spent on a provider startup
+    that would refuse the same thing less legibly. And the values the hook printed reach
+    nothing the run keeps: the credential the hook resolved for this launch appears
+    nowhere under the run's directory.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    _skip_unless_the_installed_engine_runs_a_dispatch_env_hook()
+    run = "dispatch-env-missing-e2e"
+    hook = _hook_checkout(tmp_path, f"AIO_1109_PLANTED_SECRET={PLANTED_SECRET}\n")
+    worker_config = _worker_config_reading(tmp_path, MISSING_INDIRECTION)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment, launch = _hook_launch(
+        tmp_path, oneharness_bin, run=run, hook=hook, worker_config=worker_config
+    )
+    try:
+        assert launch.returncode != 0, launch.stdout + launch.stderr
+        results = _just("results", run, environment=environment, seconds=60)
+        assert results.returncode == 0, results.stderr
+        assert "infrastructure-failure" in results.stdout, results.stdout
+        for named in (str(worker_config), ADDED_ON_VARIANT, MISSING_INDIRECTION):
+            assert named in results.stdout, (
+                f"the refusal's detail does not name {named!r}:\n{results.stdout}"
+            )
+        # llmlint: ignore[tests_mirror_real_usage] That nothing was dispatched is read where a dispatch would have arrived, and that no printed value was recorded is read over every byte the run kept: the contract is about the run's directory, and no view renders all of it.  # noqa: E501
+        assert not Path(environment[PROMPT_LOG_ENV]).exists(), (
+            "a dispatch the engine refused still reached the stand-in model"
+        )
+        run_root = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run
+        carrying = [
+            path
+            for path in run_root.rglob("*")
+            if path.is_file() and PLANTED_SECRET.encode() in path.read_bytes()
+        ]
+        assert not carrying, f"the run recorded a value the hook printed: {carrying}"
+    finally:
+        _just("stop", run, environment=environment, seconds=60)
 
 
 def _plans_in_the_repository(root: Path) -> list[str]:

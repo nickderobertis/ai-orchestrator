@@ -1,8 +1,10 @@
 # shellcheck shell=bash
-# The ONE source of this checkout's host credentials, sourced by scripts/onepipeline.sh
-# and scripts/plan.sh so the names in the gitignored `.env` reach every dispatch. Only
-# the launch verbs source it: a read-only view dispatches nobody, so it has no
-# environment to establish and nothing to refuse over.
+# The ONE source of this checkout's host credentials, run through scripts/dispatch-env.sh
+# by scripts/onepipeline.sh at driver start and by scripts/dispatch-env-hook.sh before
+# every node-scope dispatch, and sourced by scripts/plan.sh, so the names in the
+# gitignored `.env` reach every dispatch. Only a launch and its dispatch hook source it:
+# a read-only view dispatches nobody, so it has no environment to establish and nothing
+# to refuse over.
 #
 # It is also the ONE parser of that file's dialect. `read_env_file` takes a path and the
 # names it admits, which is how scripts/claude-alt-config-dir.sh reads the host's Claude

@@ -16,7 +16,13 @@
 #   * A launch additionally has to carry the portable indirections every
 #     oneharness config's `env_from` names. oneharness refuses to start when one
 #     is unset, and the launched graph runs the orchestrator and every worker
-#     under those configs.
+#     under those configs. They are established twice by one definition:
+#     `scripts/dispatch-env.sh` runs the resolvers here, at driver start, and
+#     `scripts/dispatch-env-hook.sh` — which every `start` names as the engine's
+#     dispatch-env hook, once the installed engine carries that flag — runs the
+#     same ones immediately before each node-scope dispatch, so an indirection a
+#     routing change adds while a run is live reaches its next dispatch rather
+#     than failing it (ai-orchestrator#1109).
 #
 # A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
 # `scripts/ask-manager.sh`, the shim a dispatched agent asks through `onemessagebus ask`
@@ -65,33 +71,25 @@ launching=false
 case "${1:-}" in
     start | adopt)
         launching=true
-        credentials_helper="$script_dir/credentials-env.sh"
-        if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
-            echo "onepipeline: required helper is not a readable regular file: $credentials_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+        # The credentials, every Claude identity's config directory and the alternate
+        # Codex home, through the one definition of which resolvers establish them —
+        # the same definition the dispatch-env hook named below re-runs before every
+        # node-scope dispatch, so a driver's environment and a dispatch's are one list.
+        dispatch_env_helper="$script_dir/dispatch-env.sh"
+        if [ ! -f "$dispatch_env_helper" ] || [ ! -r "$dispatch_env_helper" ]; then
+            echo "onepipeline: required helper is not a readable regular file: $dispatch_env_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
             exit 2
         fi
-        # shellcheck source=scripts/credentials-env.sh
-        if ! . "$credentials_helper"; then
-            echo "onepipeline: the credentials helper at $credentials_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+        # shellcheck source=scripts/dispatch-env.sh
+        if ! . "$dispatch_env_helper"; then
+            echo "onepipeline: the helper at $dispatch_env_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
             exit 2
         fi
-        export_host_credentials onepipeline || exit $?
-        alt_config_helper="$script_dir/claude-alt-config-dir.sh"
-        if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
-            echo "onepipeline: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+        if ! declare -F export_dispatch_environment >/dev/null; then
+            echo "onepipeline: the helper at $dispatch_env_helper loaded but defines no export_dispatch_environment; restore it from the repository or run 'just bootstrap', then retry" >&2
             exit 2
         fi
-        # shellcheck source=scripts/claude-alt-config-dir.sh
-        . "$alt_config_helper"
-        resolve_claude_alt_config_dir onepipeline || exit $?
-        codex_alt_helper="$script_dir/codex-alt-home.sh"
-        if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
-            echo "onepipeline: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
-            exit 2
-        fi
-        # shellcheck source=scripts/codex-alt-home.sh
-        . "$codex_alt_helper"
-        ensure_codex_alt_home onepipeline || exit $?
+        export_dispatch_environment onepipeline || exit $?
         ask_manager_helper="$script_dir/ask-manager-env.sh"
         if [ ! -f "$ask_manager_helper" ] || [ ! -r "$ask_manager_helper" ]; then
             echo "onepipeline: required helper is not a readable regular file: $ask_manager_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
@@ -134,7 +132,41 @@ if [ "$launching" = true ]; then
     export_follow_up_drafts onepipeline || exit "$?"
 fi
 
-# Every launch keeps its channel under this host's bus configuration, so the engine applies
+# Every launch names the dispatch-env hook, `scripts/dispatch-env-hook.sh` by absolute
+# path, so each node-scope dispatch is handed an environment resolved at that moment.
+# `start` alone, as `--bus-config` is, because `adopt` replays the launch record; a
+# caller who names one keeps it, a blank value included. Named exactly when the
+# installed engine's own `start --help` lists the flag — a release before the hook
+# refuses it as an unknown argument, which would refuse every launch — and asked as a
+# positive question the way scripts/watch-run.sh asks for a verb, so an engine that
+# cannot be asked is reported as that rather than read as lacking the flag. Prepended
+# before the bus configuration so the rendered line reads `start --bus-config …
+# --dispatch-env-hook …`.
+if [ "${1:-}" = start ]; then
+    named_dispatch_env_hook=false
+    for argument in "${@:2}"; do
+        case "$argument" in
+            --dispatch-env-hook | --dispatch-env-hook=*) named_dispatch_env_hook=true ;;
+        esac
+    done
+    if [ "$named_dispatch_env_hook" = false ]; then
+        if ! start_help=$(uv run onepipeline start --help 2>&1); then
+            said=$(printf '%s' "$start_help" | tr -d '\000-\010\013\014\016-\037\177' | tr '\n' ' ' | cut -c1-500)
+            echo "onepipeline: the onepipeline installed here could not be asked what 'start' takes, so this cannot tell whether it runs a dispatch-env hook. It said: ${said:-nothing at all}. Repair the installation — 'just bootstrap' reinstalls the pinned releases — and retry." >&2
+            exit 2
+        fi
+        if grep -qE -- '^[[:space:]]+--dispatch-env-hook([[:space:]]|$)' <<<"$start_help"; then
+            dispatch_env_hook="$script_dir/dispatch-env-hook.sh"
+            if [ ! -f "$dispatch_env_hook" ] || [ ! -x "$dispatch_env_hook" ]; then
+                echo "onepipeline: the dispatch-env hook is not an executable file at $dispatch_env_hook, so a run launched now would refuse every dispatch it made; restore it from the repository and 'chmod +x' it, then retry" >&2
+                exit 2
+            fi
+            set -- start --dispatch-env-hook "$dispatch_env_hook" "${@:2}"
+        fi
+    fi
+fi
+
+# And every launch keeps its channel under this host's bus configuration, so the engine applies
 # the same validators, author grants and codec constants that `just channel-reply`, the ask
 # shim and the observer's judge side read. Named here because `start` is the one verb every
 # launch shape reaches — `just orchestrate`, `just plan` and the design-document launch —

@@ -10,6 +10,9 @@ from orchestrator.root import REPO_ROOT
 
 HELPER = REPO_ROOT / "scripts" / "credentials-env.sh"
 ONEPIPELINE = REPO_ROOT / "scripts" / "onepipeline.sh"
+#: The definition of which resolvers a launch runs, through which `onepipeline.sh` loads
+#: the helper above; a launch in a checkout without it is refused before the helper.
+DISPATCH_ENV = REPO_ROOT / "scripts" / "dispatch-env.sh"
 PRESERVED_LOG = REPO_ROOT / "scripts" / "preserved-log.sh"
 
 
@@ -299,6 +302,9 @@ def test_a_helper_that_cannot_be_loaded_refuses_the_launch_attributably(tmp_path
     scripts.mkdir()
     (scripts / ONEPIPELINE.name).write_text(
         ONEPIPELINE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (scripts / DISPATCH_ENV.name).write_text(
+        DISPATCH_ENV.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (scripts / HELPER.name).write_text("this is ( not valid bash\n", encoding="utf-8")
     binaries = tmp_path / "bin"
