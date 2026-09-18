@@ -182,10 +182,10 @@ _PLACES = {
         "Board status `In Progress`", "a person, or a dispatch whose own task says to"
     ),
     Status.FINISHED: _Place(
-        "Closed as completed", "a person, or a dispatch whose own task says to"
+        "Closed as completed at Status `Done`", "a person, or a dispatch whose own task says to"
     ),
     Status.WITHDRAWN: _Place(
-        "Closed as not planned",
+        "Closed as not planned at Status `Cancelled`",
         "a follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person",
     ),
 }

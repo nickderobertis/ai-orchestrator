@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import ClassVar, Literal, NewType, TypedDict
+from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 
 import follow_up_variables
 import jsonschema
@@ -266,10 +266,10 @@ _FieldOptionId = NewType("_FieldOptionId", str)
 _RepositoryNodeId = NewType("_RepositoryNodeId", str)
 #: The board field the source owns and reads a copy's origin back out of, and the
 #: `Status` field every board carries. A category this board cannot represent refuses
-#: the write naming it, so the options below are the `plans` board's own: the three the
-#: shipped mapping reaches by name, `Done` and `Cancelled`, which a closed `done` or
-#: `cancelled` issue selects by its spelling before it is closed, and `Needs attention`,
-#: which `onetaskgraph.yaml` sends `unknown` to.
+#: the write naming it, so the options below are the `plans` board's own: the two the
+#: shipped mapping reaches by name, the four `onetaskgraph.yaml` states — `Queued`, and
+#: `Done` and `Cancelled`, which a `done` or `cancelled` write selects before it closes
+#: the issue, and `Needs attention`, which it sends `unknown` to — and `Backlog`.
 ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 
 
@@ -306,23 +306,21 @@ NEEDS_ATTENTION = _StatusOption(id=_FieldOptionId("OPT_attention"), name="Needs 
 # would take the board credential no test may use.
 QUEUED = _StatusOption(id=_FieldOptionId("OPT_queued"), name="Queued")
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The options
+# `onetaskgraph.yaml` sends `done` and `cancelled` to on both sources, answered by the
+# stand-in so the journeys can assert that each name reaches the wire beside the close it
+# pairs with: a terminal write selects its mapped option and then closes the issue, and a
+# board lacking the option refuses by name before either. Reconciling them against either
+# live board would take the board credential no test may use.
+DONE = _StatusOption(id=_FieldOptionId("OPT_done"), name="Done")
+CANCELLED = _StatusOption(id=_FieldOptionId("OPT_cancelled"), name="Cancelled")
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 STATUS_OPTIONS: tuple[_StatusOption, ...] = (
     _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
     QUEUED,
     _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
-    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live board's own
-    # option, answered so the stand-in carries the options the task names; reconciling it
-    # against that board would take the board credential no test may use.
-    _StatusOption(id=_FieldOptionId("OPT_done"), name="Done"),
-    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The option the
-    # shipped mapping sends `cancelled` to, answered so the stand-in carries what the
-    # pinned CLI refuses a `cancelled` write without: since onetaskgraph 0.2.37 a terminal
-    # write selects its mapped option and then closes the issue, and a board lacking the
-    # option refuses by name. Reconciling it against either live board would take the
-    # board credential no test may use.
-    _StatusOption(id=_FieldOptionId("OPT_cancelled"), name="Cancelled"),
-    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    DONE,
+    CANCELLED,
     _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
     NEEDS_ATTENTION,
 )
@@ -2743,6 +2741,180 @@ def test_a_queued_ticket_onto_a_followups_board_without_a_queued_option_is_refus
     assert QUEUED.name in copied.stderr, copied.stderr
     assert _status_writes(_GitHubFixture.requests) == [], (
         "a board without the option had some other Status option written instead"
+    )
+
+
+class _BoardSource(NamedTuple):
+    """One of this checkout's two board sources, as the fixture serves it.
+
+    The prefix is what an ambient override of that source would be spelled under, removed
+    so the committed `onetaskgraph.yaml` is the mapping applied; the options and the number
+    are the live board's own, which the stand-in answers under that source's configuration.
+    """
+
+    name: str
+    environment_prefix: str
+    options: tuple[_StatusOption, ...]
+    number: int
+
+
+#: Both boards, because each states its own terminal mapping and a journey over one would
+#: leave the other's to a shipped default nothing here reads.
+BOARD_SOURCES = (
+    _BoardSource("plans", STATUS_MAPPING_ENV_PREFIX, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER),
+    _BoardSource(
+        follow_up_tickets.BOARD, FOLLOWUPS_ENV_PREFIX, FOLLOWUPS_OPTIONS, FOLLOWUPS_PROJECT_NUMBER
+    ),
+)
+
+
+class _TerminalWrite(NamedTuple):
+    """What the adopted CLI sends for one terminal category: its option and its close."""
+
+    option: _StatusOption
+    close_reason: str
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The close reasons are
+# GitHub's `IssueStateReason` vocabulary, whose other party is GitHub's schema and the
+# installed CLI that sends them; neither is readable here without the board credential no
+# test may use. What this repository can gate — that the pinned CLI pairs each of its two
+# terminal categories with the reason the store reads that category back off — the journeys
+# below assert over the requests it really sent.
+#: The two terminal categories as the adopted CLI writes each: the Status option the
+#: committed mapping sends it to, and the reason GitHub records the issue closed with. Keyed
+#: on the ticket vocabulary because that is where this host says a closed ticket sits at
+#: `Done` or `Cancelled`, and the wire is what makes that sentence true. Both halves are
+#: asserted because either alone is the defect the adoption answers: a closure without the
+#: option is the card that read `Todo` while closed, and an option without the closure is an
+#: open issue the store reads back as unfinished.
+TERMINAL_WRITES: dict[follow_up_tickets.Status, _TerminalWrite] = {
+    follow_up_tickets.Status.FINISHED: _TerminalWrite(DONE, "COMPLETED"),
+    follow_up_tickets.Status.WITHDRAWN: _TerminalWrite(CANCELLED, "NOT_PLANNED"),
+}
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+@contextmanager
+def _serving_source(
+    tmp_path: Path, source: _BoardSource, options: tuple[_StatusOption, ...] | None = None
+) -> Iterator[dict[str, str]]:
+    """Serve the board as ``source``, carrying its options unless ``options`` narrows them.
+
+    Yields the environment a command addressed to that source runs under: this checkout's
+    committed configuration with only the endpoint and credential pointed at the fixture.
+    """
+    environment = _plan_environment(tmp_path)
+    for name in [name for name in environment if name.startswith(source.environment_prefix)]:
+        del environment[name]
+    with _serving_board(
+        options=source.options if options is None else options, number=source.number
+    ) as remote:
+        environment.update(remote)
+        pacing = f"ONETASKGRAPH_SOURCES__{source.name.upper()}__CONFIG__PACING"
+        environment[f"{pacing}__MIN_MUTATION_INTERVAL_MS"] = "0"
+        yield environment
+
+
+def _board_task() -> _Issue:
+    """The one task the served board holds before any write, which the writes address."""
+    (task,) = [issue for issue in BOARD.issues if issue.title == BOARD_TASK_TITLE]
+    return task
+
+
+def _state_writes(requests: list[_GraphQLRequest]) -> list[object]:
+    """The state every issue update among ``requests`` carries, which a close is."""
+    return [
+        request.input_value("stateInput")
+        for request in _sent(_Operation.UPDATE_ISSUE, requests)
+        if request.input_value("stateInput") is not None
+    ]
+
+
+def _addressed(requests: list[_GraphQLRequest]) -> set[object]:
+    """The row or issue each mutation among ``requests`` names, whichever id it takes."""
+    return {
+        request.input_value("itemId") or request.input_value("id")
+        for request in requests
+        if request.is_mutation
+    }
+
+
+@pytest.mark.parametrize("source", BOARD_SOURCES, ids=[source.name for source in BOARD_SOURCES])
+def test_a_terminal_write_to_a_board_item_selects_its_mapped_option_and_closes_the_issue(
+    tmp_path: Path, source: _BoardSource
+) -> None:
+    """`done` and `cancelled` each write the option the mapping names, then close the issue.
+
+    Driven the way a settlement write-back or a follow-up run's withdrawal reaches the board:
+    one status write addressed to an item the board already holds, through the installed
+    CLI and the committed mapping for ``source``. The requests are read for the two halves
+    a read cannot hold apart — that the option write precedes the close, and that each names
+    the addressed item and nothing else — and the store is then asked what the item reads,
+    the way a reader of the board asks.
+    """
+    sent: dict[follow_up_tickets.Status, list[_GraphQLRequest]] = {}
+    read: dict[follow_up_tickets.Status, object] = {}
+    with _serving_source(tmp_path, source) as environment:
+        task = _board_task()
+        addressed = f"{source.name}:{task.content_id}"
+        for status in TERMINAL_WRITES:
+            already = len(_GitHubFixture.requests)
+            written = _plans_json(environment, "task", "status", "set", addressed, status.value)
+            assert written.returncode == 0, written.stdout + written.stderr
+            sent[status] = _GitHubFixture.requests[already:]
+            read[status] = _read_item(environment, addressed).get("status")
+
+    for status, write in TERMINAL_WRITES.items():
+        assert _status_writes(sent[status]) == [{"singleSelectOptionId": write.option.id}], (
+            f"`{status.value}` has to select the {write.option.name!r} option `onetaskgraph.yaml` "
+            f"maps it to on `{source.name}`; the CLI wrote {_status_writes(sent[status])}"
+        )
+        assert _state_writes(sent[status]) == [
+            {"value": "CLOSED", "stateReason": write.close_reason}
+        ], f"`{status.value}` has to close the issue as {write.close_reason}: {sent[status]}"
+        assert [request.operation for request in sent[status] if request.is_mutation] == [
+            _Operation.UPDATE_FIELD,
+            _Operation.UPDATE_ISSUE,
+        ], f"`{status.value}` has to select its option and then close, and nothing else"
+        assert _addressed(sent[status]) == {task.item_id, task.content_id}, (
+            f"`{status.value}` touched a card other than the one addressed: {sent[status]}"
+        )
+        assert read[status] == {"category": status.value, "name": write.option.name}, (
+            f"the store has to read `{status.value}` back at {write.option.name!r}, and reports "
+            f"{read[status]}"
+        )
+
+
+@pytest.mark.parametrize("source", BOARD_SOURCES, ids=[source.name for source in BOARD_SOURCES])
+@pytest.mark.parametrize(
+    "status", TERMINAL_WRITES, ids=[status.value for status in TERMINAL_WRITES]
+)
+def test_a_terminal_write_onto_a_board_without_its_mapped_option_is_refused_by_name(
+    tmp_path: Path, source: _BoardSource, status: follow_up_tickets.Status
+) -> None:
+    """A board lacking the option a terminal write names refuses it before either mutation.
+
+    There is no closure-only fallback: the whole write is refused naming the absent option,
+    the issue stays open at the option it was at, and the store reads it back unchanged.
+    """
+    write = TERMINAL_WRITES[status]
+    without = tuple(option for option in source.options if option != write.option)
+    with _serving_source(tmp_path, source, without) as environment:
+        task = _board_task()
+        addressed = f"{source.name}:{task.content_id}"
+        already = len(_GitHubFixture.requests)
+        written = _plans_json(environment, "task", "status", "set", addressed, status.value)
+        sent = _GitHubFixture.requests[already:]
+        kept = _read_item(environment, addressed).get("status")
+
+    assert written.returncode != 0, written.stdout + written.stderr
+    assert write.option.name in written.stderr, written.stderr
+    assert not [request for request in sent if request.is_mutation], (
+        f"a board without {write.option.name!r} had a mutation sent for `{status.value}`: {sent}"
+    )
+    assert kept == {"category": "todo", "name": "Todo"}, (
+        f"the refused write has to leave the item where it was, and the store reports {kept}"
     )
 
 

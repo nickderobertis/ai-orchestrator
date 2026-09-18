@@ -202,10 +202,24 @@ def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli(
 #: source. The other party is the live board, which no check here may read, so what is held
 #: is the mapping the installed CLI resolves out of the committed file — a `queued` that
 #: stopped resolving to an option of its own would put a claimed item wherever `todo` or
-#: `in progress` already sits, and a manager would read work in flight as free to take.
+#: `in progress` already sits, and a manager would read work in flight as free to take; a
+#: `done` or `cancelled` left to a shipped default that moved would close a card at an
+#: option that still reads as open on its face, which is what both boards stating them
+#: prevents.
 MAPPED_OPTIONS = {
-    "plans": {"unknown": "Needs attention", "queued": "Queued"},
-    "followups": {"backlog": "Proposal", "draft": "Deferred", "queued": "Queued"},
+    "plans": {
+        "unknown": "Needs attention",
+        "queued": "Queued",
+        "done": "Done",
+        "cancelled": "Cancelled",
+    },
+    "followups": {
+        "backlog": "Proposal",
+        "draft": "Deferred",
+        "queued": "Queued",
+        "done": "Done",
+        "cancelled": "Cancelled",
+    },
 }
 #: The options the two categories `queued` must not collide with reach, which this host
 #: states no mapping for because the shipped defaults are already these. Held here so the

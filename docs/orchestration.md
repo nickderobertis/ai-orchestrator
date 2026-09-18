@@ -1779,12 +1779,12 @@ carries, and this copy of it is held to that rendering:
 - **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
   an item there: a person, or a dispatch whose own task says to. Not selected by an agent
   sent to pick up accepted tickets.
-- **Closed as completed**, written `done`: accepted and finished. Who moves an item there:
-  a person, or a dispatch whose own task says to. Not selected by an agent sent to pick up
-  accepted tickets.
-- **Closed as not planned**, written `cancelled`: withdrawn. Who moves an item there: a
-  follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person.
-  Not selected by an agent sent to pick up accepted tickets.
+- **Closed as completed at Status `Done`**, written `done`: accepted and finished. Who
+  moves an item there: a person, or a dispatch whose own task says to. Not selected by an
+  agent sent to pick up accepted tickets.
+- **Closed as not planned at Status `Cancelled`**, written `cancelled`: withdrawn. Who
+  moves an item there: a follow-up run withdrawing its own ticket that nobody accepted or
+  deferred, or a person. Not selected by an agent sent to pick up accepted tickets.
 
 A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
 else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a

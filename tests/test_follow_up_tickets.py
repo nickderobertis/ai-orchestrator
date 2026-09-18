@@ -1425,8 +1425,8 @@ def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_pi
         "Board status `Deferred`",
         "Board status `Queued`",
         "Board status `In Progress`",
-        "Closed as completed",
-        "Closed as not planned",
+        "Closed as completed at Status `Done`",
+        "Closed as not planned at Status `Cancelled`",
     ]
 
     assert len(bullets) == len(tickets.Status) == len(shown)

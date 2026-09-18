@@ -25,15 +25,22 @@ sources:
       token_env: GH_PROJECTS_TOKEN
       status_mapping:
         # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
-        # source of the options `unknown` and `queued` are written to; its other party is the
-        # live board, which no check here may read or write, since that needs the board's
-        # credential. A board without either option is refused by name at the next write-back
-        # or plan copy. `queued` is what a launched run writes every node it has not
-        # dispatched yet, so a board missing the option would refuse the launch's first
-        # projection rather than a settlement; the shipped default is `Queued` and this
-        # states it, because a default that moves upstream would move this board silently.
+        # source of the options `unknown`, `queued`, `done` and `cancelled` are written to;
+        # its other party is the live board, which no check here may read or write, since
+        # that needs the board's credential. A board without any of them is refused by name
+        # at the next write addressed to an item — a settlement write-back or a plan copy —
+        # before either the Status option or the issue's state is changed. `queued` is what
+        # a launched run writes every node it has not dispatched yet, so a board missing the
+        # option would refuse the launch's first projection rather than a settlement. `done`
+        # and `cancelled` are each a paired write: the store selects the option named here
+        # and closes the issue, as completed for `done` and as not planned for `cancelled`,
+        # with no closure-only fallback when the option is absent. `queued`, `done` and
+        # `cancelled` are the shipped defaults and this states them, because a default that
+        # moves upstream would move this board silently.
         unknown: Needs attention
         queued: Queued
+        done: Done
+        cancelled: Cancelled
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
   followups:
     plugin: github-projects
@@ -44,21 +51,28 @@ sources:
       token_env: GH_PROJECTS_TOKEN
       status_mapping:
         # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
-        # source of the options a follow-up ticket's `backlog`, `draft` and `queued` are
-        # written to; its other party is the live board, which no check here may read or
-        # write, since that needs the board's credential. The board carries the Status options
-        # `Proposal`, `Todo`, `Deferred`, `Queued`, `In Progress`, `Done` and `Cancelled`:
-        # `todo` and `in-progress` keep the shipped defaults, and `done` and `cancelled` are
-        # closed states that select the shipped `Done` and `Cancelled` before closing the
-        # issue, refused by name on a board missing either, so both are left to the shipped
-        # names the board carries. This overrides the shipped default of `backlog` to
-        # `Backlog`, an option that board does not carry, and sends `draft`, a ticket a
-        # person deferred, to `Deferred`, so a board missing either option refuses the copy
-        # by name. `queued` is a ticket a launched run claimed through a node's `delivers`,
-        # and it is stated rather than left to the shipped `Queued` for the same reason
-        # `plans` states it: a default that moved upstream would move this board without a
-        # change here saying so.
+        # source of the options a follow-up ticket's `backlog`, `draft`, `queued`, `done` and
+        # `cancelled` are written to; its other party is the live board, which no check here
+        # may read or write, since that needs the board's credential. The board carries the
+        # Status options `Proposal`, `Todo`, `Deferred`, `Queued`, `In Progress`, `Done` and
+        # `Cancelled`: `todo` and `in-progress` keep the shipped defaults. `done` and
+        # `cancelled` are each a paired write rather than a closure alone: the store selects
+        # the option named here and closes the ticket's issue, as completed for `done` — a
+        # ticket a person or a dispatch finished — and as not planned for `cancelled` — a
+        # ticket a follow-up run withdrew, or a person did. A board missing the option a
+        # write names refuses that write by name before either the Status option or the
+        # issue's state is changed; there is no closure-only fallback, so a closed card
+        # never reads `Todo` or `In Progress` on its face. This overrides the shipped
+        # default of `backlog` to `Backlog`, an option that board does not carry, and sends
+        # `draft`, a ticket a person deferred, to `Deferred`, so a board missing either
+        # option refuses the copy by name. `queued` is a ticket a launched run claimed
+        # through a node's `delivers`, and it, `done` and `cancelled` are stated rather than
+        # left to the shipped `Queued`, `Done` and `Cancelled` for the same reason `plans`
+        # states them: a default that moved upstream would move this board without a change
+        # here saying so.
         backlog: Proposal
         draft: Deferred
         queued: Queued
+        done: Done
+        cancelled: Cancelled
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
