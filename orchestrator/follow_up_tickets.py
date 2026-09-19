@@ -1026,9 +1026,10 @@ def ticket_edges(ticket: str) -> list[Edge]:
         # these are typed reads, not coercions; what each *value* may be is then held by
         # `edge_problems` on every path that reads them.
         Edge(edge.to.id.root, edge.to.kind.value, edge.kind.value)
-        for edge in plan_store.every_page(
+        for page in plan_store.every_page(
             f"the dependencies of {ticket}", plan_store.client().task_deps, id=ticket
         )
+        for edge in page.items
     ]
 
 

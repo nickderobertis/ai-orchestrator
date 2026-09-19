@@ -9,6 +9,7 @@ import venv
 from pathlib import Path
 from types import SimpleNamespace
 
+import onetaskgraph_sdk
 import pytest
 from onetaskgraph_sdk import QueryResponseOfQualifiedTask
 from project_fixtures import helper
@@ -426,6 +427,76 @@ def test_a_later_page_a_source_failed_to_answer_refuses_the_whole_listing(
         {"source": ["sdksource"], "project": "demo", "page": None},
         {"source": ["sdksource"], "project": "demo", "page": "ab"},
     ]
+
+
+def test_the_pages_a_listing_is_typed_over_are_the_sdks_own_published_models() -> None:
+    """Each generated `QueryResponse` the helper is bound to is the SDK's public one.
+
+    `plan_store` takes them from the modules that define them, because the public alias
+    is invisible to a strict type checker; what makes that safe is that each is the very
+    class the SDK publishes under its `QueryResponseOf…` name, which this holds — a release
+    that moved or re-generated them fails here rather than at a dispatch.
+    """
+    published = {
+        name: getattr(onetaskgraph_sdk, name)
+        for name in dir(onetaskgraph_sdk)
+        if name.startswith("QueryResponseOf")
+    }
+    bound = {
+        name: getattr(plan_store, name)
+        for name in dir(plan_store)
+        if name.startswith("QueryResponseOf")
+    }
+
+    assert bound == published, (set(bound) ^ set(published), bound, published)
+    assert all(bound[name] is published[name] for name in published)
+    assert {"items", "errors", "next"} <= set(
+        published["QueryResponseOfQualifiedTask"].model_fields
+    )
+
+
+def test_a_page_cursor_already_followed_is_refused_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store answering a cursor the listing already followed is refused, not re-read.
+
+    Followed again, the same page would be read as a listing twice its size — or, from a
+    cursor that never advances, never end. The pages are the SDK's generated model over a
+    real store answer, with the cursor the second page reports being the one that reached
+    it; the refusal names that cursor and nothing of either page is returned.
+    """
+    root = tmp_path / "source"
+    write_plan_project(
+        root,
+        {"name": "demo", "tasks": [PlanNode(id="task", title="Task", task="Body")]},
+    )
+    _source(monkeypatch, "sdksource", root)
+    whole = plan_store.sdk(plan_store.client().task_list(source=["sdksource"], project="demo"))
+    assert whole.next is None
+    repeating = QueryResponseOfQualifiedTask.model_validate(
+        {**whole.model_dump(mode="json", by_alias=True), "next": "ab"}
+    )
+    pages = [repeating, repeating.model_copy(deep=True), repeating.model_copy(deep=True)]
+    asked: list[object] = []
+    monkeypatch.setattr(
+        plan_store,
+        "client",
+        lambda: SimpleNamespace(task_list=lambda **keywords: asked.append(keywords)),
+    )
+    monkeypatch.setattr(plan_store, "sdk", lambda _answer: pages.pop(0))
+
+    with pytest.raises(OSError) as refused:
+        plan_store.read_tasks("sdksource:demo")
+
+    assert str(refused.value) == (
+        "listing project 'sdksource:demo' answered the page cursor 'ab' again after it was "
+        "already followed; refusing to read the same page twice"
+    )
+    assert asked == [
+        {"source": ["sdksource"], "project": "demo", "page": None},
+        {"source": ["sdksource"], "project": "demo", "page": "ab"},
+    ]
+    assert len(pages) == 1, "a third page was asked for after the cursor repeated"
 
 
 def test_typed_listings_are_still_held_to_the_requested_source(

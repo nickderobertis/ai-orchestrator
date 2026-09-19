@@ -26,6 +26,12 @@ store's default page — the shape in which `just follow-ups-handle-comments` on
 board's first fifty items as the whole board and answered "no new feedback" for a run whose
 every issue sat on the second page. The fixture records that first page as the installed
 store reports it, with no `--page`, so the premise is read rather than assumed.
+
+**The journeys that stand something in front of the store do so where the package reads
+it.** Every plan-store read here runs the `onetaskgraph` beside its interpreter and never
+one on `PATH`, so a store recording what it was handed, or answering one field of one
+listing differently, is installed as the plan store of a mirror checkout's own toolchain
+(:func:`_mirrored_toolchain`) and delegates every command to the pinned store.
 """
 
 from __future__ import annotations
@@ -65,6 +71,7 @@ from test_follow_ups_recipe_e2e import (
     _store,
     _ticket,
 )
+from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
@@ -810,3 +817,325 @@ def test_a_checkout_nobody_provisioned_is_refused_naming_bootstrap(tmp_path: Pat
     assert refused.returncode == REFUSED, refused.stdout + refused.stderr
     assert "has no Python interpreter at" in refused.stderr
     assert "provision this checkout with 'just bootstrap'" in refused.stderr
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] The finding is about which Nx project
+# owns these journeys, which is a property of the module rather than of any one of them:
+# each drives the recipe every journey of this module drives, from the `plan-tooling`
+# project whose `planToolingWorkspace` key already covers everything they read — the
+# `scripts/**` the mirror copies, the `justfile`, `orchestrator/**` — so a project of their
+# own would split one recipe's journeys across tiers behind no narrower key.
+
+#: The board credential's name, the value these journeys plant in a mirror's `.env` — never
+#: a real token — and the value a process already holding the name keeps.
+BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
+PLANTED_CREDENTIAL = "not-a-real-token-planted-by-this-journey"
+PROCESS_CREDENTIAL = "the-value-this-process-already-defines"
+
+#: Records which board credential the store was handed, installed as the mirror checkout's
+#: own plan-store CLI: every command is answered by the pinned store, and this appends one
+#: line per invocation it served, because a credential is on no command line and the store's
+#: own answer over a `local-md` board needs none.
+CREDENTIAL_RECORDING_STORE = """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "${GH_PROJECTS_TOKEN-<unset>}" >>"$CREDENTIAL_TRACE"
+exec "$REAL_PLAN_STORE" "$@"
+"""
+
+#: `scripts/follow-ups.sh`'s own line for a run with no drafts, as the mirror's run has none.
+NOTHING_TO_VERIFY = "there is nothing to verify and no follow-up run was launched"
+
+
+class Mirror(NamedTuple):
+    """A checkout of this repository's real scripts, with a toolchain and `.env` of its own."""
+
+    checkout: Path
+    trace: Path
+    bench: Bench
+    run: str
+    issue: QualifiedTaskId
+
+
+def _mirrored_toolchain(checkout: Path, store: str) -> Path:
+    """``checkout``'s `.venv`: this checkout's locked toolchain with ``store`` as its plan store.
+
+    Every plan-store read of the package runs the `onetaskgraph` beside the interpreter
+    that imported the SDK — `orchestrator.plan_store.locked_binary`, which consults no
+    search path — so a store standing in front of the pinned one is that file or nothing.
+    This checkout's own `.venv/bin/onetaskgraph` is the real install and never a journey's
+    to replace, so the mirror is given a virtual environment of its own: the same
+    `pyvenv.cfg`, the same `lib` — the SDK, and this package's editable install — and the
+    same interpreter, reached through a symlink so `sys.executable` names the mirror's
+    `bin`, with ``store`` beside it under the CLI's name. Returns that file.
+    """
+    venv = checkout / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / ".venv" / "pyvenv.cfg", venv / "pyvenv.cfg")
+    (venv / "lib").symlink_to(REPO_ROOT / ".venv" / "lib")
+    (venv / "bin" / "python3").symlink_to(REPO_ROOT / ".venv" / "bin" / "python3")
+    installed = venv / "bin" / ONETASKGRAPH_BIN.name
+    # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] The published CLI is the one boundary this suite doubles a store at, and every ``store`` installed here delegates every command to the pinned one, recording what it was handed or rewriting one field of one answer: no real store reports which credential reached it, and none answers a page cursor twice, so the journeys that need either can be driven against nothing else.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    installed.write_text(store, encoding="utf-8")
+    installed.chmod(0o755)
+    return installed
+
+
+def _mirror(
+    tmp_path: Path, credentials: str | None, store: str = CREDENTIAL_RECORDING_STORE
+) -> Mirror:
+    """The recipe's checkout, the board it reads, and the run that owns an issue there.
+
+    `scripts/credentials-env.sh` reads the `.env` at the root of the checkout it is sourced
+    from, and this checkout's is the host's — a real file, never a journey's to write. So the
+    recipe is driven from a copy of the real `scripts/` and `justfile` beside a toolchain
+    mirroring this checkout's (:func:`_mirrored_toolchain`) whose plan store is ``store``,
+    with the `.env` this journey states. The board is the same `local-md` stand-in every
+    journey here reads, holding one issue the run owns with a person's comment nobody
+    answered; the run's ticket file is not under the drafts root, so `scripts/follow-ups.sh`
+    launches nothing after the feedback is written and says so.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path)
+    checkout = tmp_path / "mirror"
+    shutil.copytree(REPO_ROOT / "scripts", checkout / "scripts")
+    shutil.copy2(REPO_ROOT / "justfile", checkout / "justfile")
+    _mirrored_toolchain(checkout, store)
+    if credentials is not None:
+        (checkout / ".env").write_text(credentials, encoding="utf-8")
+    run = tickets.RunId(f"hc-mirror-{os.getpid()}")
+    issue = _filed(bench, run, OWN_CAUSE)
+    tickets.ticket_path(bench.drafts_root, run, OWN_CAUSE).unlink()
+    _commented(bench, issue, ON_OWN, REVIEWER)
+    return Mirror(checkout, tmp_path / "credential.trace", bench, run, issue)
+
+
+def _handled_from(
+    mirror: Mirror,
+    credential: str | None,
+    *,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """`just follow-ups-handle-comments` on the mirror, holding ``credential`` or no name.
+
+    ``environment`` is what the store the mirror carries reads, over the bench's own.
+    """
+    environment = {
+        name: value
+        for name, value in (mirror.bench.environment | (environment or {})).items()
+        if name != BOARD_CREDENTIAL
+    }
+    if credential is not None:
+        environment[BOARD_CREDENTIAL] = credential
+    # llmlint: ignore[e2e_not_mocked] The pinned store answers every command; what stands in front of it, as the mirror's own locked plan store, records which credential it was handed — on no command line and in no answer over a `local-md` board — or rewrites one field of one answer, and changes nothing else the recipe reads.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    environment["CREDENTIAL_TRACE"] = str(mirror.trace)
+    return subprocess.run(  # noqa: S603 - this checkout's own recipe over the installed store
+        ["just", "follow-ups-handle-comments", mirror.run, "--to", BOARD],  # noqa: S607 - `just` from the search path, as an operator invokes it
+        cwd=mirror.checkout,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+
+
+def _handed(mirror: Mirror) -> set[str]:
+    """Every credential value the store was handed, one per command the recipe ran."""
+    assert mirror.trace.is_file(), "the recipe read the board through no store command"
+    handed = mirror.trace.read_text(encoding="utf-8").splitlines()
+    assert handed, "the recipe read the board through no store command"
+    return set(handed)
+
+
+@pytest.mark.parametrize(
+    ("held", "handed"),
+    [(None, PLANTED_CREDENTIAL), (PROCESS_CREDENTIAL, PROCESS_CREDENTIAL)],
+    ids=["from-the-file", "the-process-value-wins"],
+)
+def test_the_board_read_is_handed_the_credential_this_checkout_supplies(
+    tmp_path: Path, held: str | None, handed: str
+) -> None:
+    """The token only in the checkout's `.env` reaches the board read; a held one is kept.
+
+    Every other board-reading entry point sources `scripts/credentials-env.sh` first, and this
+    recipe did not: on a host that correctly keeps the token only in that file it was refused
+    by the store's own `missing or empty` until a person exported the file by hand.
+    """
+    mirror = _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+
+    result = _handled_from(mirror, held)
+
+    assert result.returncode == OK, result.stdout + result.stderr
+    assert _handed(mirror) == {handed}, mirror.trace.read_text(encoding="utf-8")
+    named = WROTE.search(result.stderr)
+    assert named is not None, result.stderr
+    feedback = Path(named[1]).read_text(encoding="utf-8")
+    assert f"on `{mirror.issue}`, this run's issue" in feedback, feedback
+    assert ON_OWN.rstrip() in feedback
+    assert NOTHING_TO_VERIFY in result.stdout, result.stdout
+    assert not list(mirror.bench.runs.glob(f"{mirror.run}{SUFFIX}*"))
+    assert PLANTED_CREDENTIAL not in result.stdout + result.stderr, "a credential value was printed"
+
+
+def test_a_credential_file_the_helper_refuses_refuses_the_recipe_before_the_board_is_read(
+    tmp_path: Path,
+) -> None:
+    """The helper loads and then refuses the file itself: the recipe stops there, attributably.
+
+    A malformed line is what an interrupted edit of `.env` leaves behind, and the helper
+    refuses the whole file rather than launching over half of it. That refusal reaches the
+    operator under this recipe's own name, and nothing reads the board first.
+    """
+    mirror = _mirror(tmp_path, "not-an-assignment-with-a-value-that-must-not-appear\n")
+
+    result = _handled_from(mirror, None)
+
+    assert result.returncode == REFUSED, result.stdout + result.stderr
+    assert (
+        f"follow-ups-handle-comments: malformed credential line 1 in {mirror.checkout / '.env'}; "
+        "write it as KEY=VALUE or make it a '#' comment, then retry"
+    ) in result.stderr, result.stderr
+    assert "must-not-appear" not in result.stderr, "a credential file's line reached a diagnostic"
+    assert not mirror.trace.exists(), "the board was read over a credential file the helper refused"
+    assert not (mirror.bench.drafts_root / comments.FEEDBACK_DIRECTORY / mirror.run).exists()
+    assert "wrote run" not in result.stderr
+    assert not list(mirror.bench.runs.glob(f"{mirror.run}{SUFFIX}*"))
+
+
+def _refusals(stderr: str, program: str) -> list[str]:
+    """The lines ``program`` refused in, without the name it prefixed each with.
+
+    What is around them differs by what ran the program: `just` adds a line saying the
+    recipe failed, and bash says where a helper's syntax error is before either refuses.
+    """
+    return [
+        line.removeprefix(f"{program}: ")
+        for line in stderr.splitlines()
+        if line.startswith(f"{program}: ")
+    ]
+
+
+@pytest.mark.parametrize(
+    "sabotage",
+    ["missing", "unreadable", "unloadable"],
+    ids=["helper-missing", "helper-unreadable", "helper-unloadable"],
+)
+def test_the_recipe_refuses_before_the_board_is_read_when_the_credentials_helper_cannot_be_loaded(
+    tmp_path: Path, sabotage: str
+) -> None:
+    """The one source of the credential is gone, unreadable or broken: refused naming it.
+
+    In the shape `scripts/plan-store.sh` refuses the same thing — its own refusal, driven on
+    the same checkout, differs from this recipe's only in the program each names — and
+    nothing is read first.
+    """
+    mirror = _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+    helper = mirror.checkout / "scripts" / "credentials-env.sh"
+    match sabotage:
+        case "missing":
+            helper.unlink()
+        case "unreadable":
+            helper.chmod(0)
+            if os.access(helper, os.R_OK):
+                pytest.skip("this user reads a file with no permission bits: nothing is unreadable")
+        case "unloadable":
+            # A file `.` fails on rather than one whose function then fails: a syntax error
+            # is what an interrupted edit leaves behind.
+            helper.write_text("export_host_credentials() {\n", encoding="utf-8")
+
+    result = _handled_from(mirror, None)
+    wrapper = subprocess.run(  # noqa: S603 - the wrapper whose refusal this recipe's mirrors
+        [str(mirror.checkout / "scripts" / "plan-store.sh"), "true"],
+        cwd=mirror.checkout,
+        env=mirror.bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert result.returncode == REFUSED, result.stdout + result.stderr
+    assert str(helper) in result.stderr, result.stderr
+    assert "run 'just bootstrap', then retry" in result.stderr, result.stderr
+    assert wrapper.returncode == REFUSED, wrapper.stdout + wrapper.stderr
+    assert _refusals(result.stderr, "follow-ups-handle-comments") == _refusals(
+        wrapper.stderr, "plan-store"
+    ), result.stderr + wrapper.stderr
+    assert not mirror.trace.exists(), "the board was read without the checkout's credential"
+    assert not (mirror.bench.drafts_root / comments.FEEDBACK_DIRECTORY / mirror.run).exists()
+    assert "wrote run" not in result.stderr
+    assert not list(mirror.bench.runs.glob(f"{mirror.run}{SUFFIX}*"))
+
+
+#: A cursor that never advances: what the store below answers for every page.
+REPEATING_CURSOR = "ab"
+
+#: A store whose every task listing reports :data:`REPEATING_CURSOR` as its `next`: the
+#: pinned store answers the query with the page it was *not* asked to resume, and this
+#: rewrites that page's one field. Every other command is the pinned store's own answer,
+#: which keeps the double at the one boundary this suite doubles a store at — the published
+#: CLI, where the package's locked-install rule reads it — and in the one field the
+#: pathology is. It logs each listing's command line, so which pages the recipe asked for is
+#: read off what the store was asked rather than inferred.
+REPEATING_STORE = """#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = task ] && [ "${2:-}" = list ]; then
+    printf '%s\\n' "$*" >>"$REPEATING_STORE_LOG"
+    kept=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --page) shift 2 ;;
+            *) kept+=("$1"); shift ;;
+        esac
+    done
+    "$REAL_PLAN_STORE" "${kept[@]}" | "$REPEATING_STORE_PYTHON" -c '
+import json, sys
+page = json.load(sys.stdin)
+page["next"] = sys.argv[1]
+json.dump(page, sys.stdout)
+' "$REPEATING_CURSOR"
+    exit 0
+fi
+exec "$REAL_PLAN_STORE" "$@"
+"""
+
+
+def test_a_store_answering_a_page_cursor_again_is_refused_by_name_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    """The recipe over a board whose store answers the cursor it was just handed.
+
+    Followed again, the same page would be gathered twice — or, from a cursor that never
+    advances, for ever. The recipe asks for the first page, follows the cursor once, is
+    answered the same cursor, and refuses naming it: no third page is asked for, no feedback
+    is written and nothing is launched.
+    """
+    # llmlint: ignore[e2e_not_mocked] The published CLI is the one boundary this suite doubles a store at, and no real store answers a cursor twice to drive this against: the pinned store answers every command, and one field of one listing's answer is rewritten.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    mirror = _mirror(tmp_path, None, REPEATING_STORE)
+    asked_log = tmp_path / "pages-asked.log"
+
+    refused = _handled_from(
+        mirror,
+        None,
+        environment={
+            "REPEATING_STORE_LOG": str(asked_log),
+            "REPEATING_STORE_PYTHON": str(mirror.checkout / ".venv" / "bin" / "python3"),
+            "REPEATING_CURSOR": REPEATING_CURSOR,
+        },
+    )
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert (
+        f"refused: listing the board {BOARD!r} answered the page cursor {REPEATING_CURSOR!r} "
+        "again after it was already followed; refusing to read the same page twice"
+    ) in refused.stderr, refused.stderr
+    asked = asked_log.read_text(encoding="utf-8").splitlines()
+    assert len(asked) == 2, asked
+    assert "--page" not in asked[0] and f"--page {REPEATING_CURSOR}" in asked[1], asked
+    assert "wrote run" not in refused.stderr
+    assert not (mirror.bench.drafts_root / comments.FEEDBACK_DIRECTORY / mirror.run).exists()
+    assert not list(mirror.bench.runs.glob(f"{mirror.run}{SUFFIX}*"))
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

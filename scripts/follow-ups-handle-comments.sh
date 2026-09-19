@@ -64,6 +64,24 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+# Every plan-store command below — the drafts-root resolution, then the module's board
+# read — runs with this checkout's own board credential established first, the way
+# `scripts/plan-store.sh` establishes it before every other board command: from the
+# gitignored root `.env`, never overriding a name this process already defines. Without
+# this, a host that keeps the token only in that file was refused here by the store's own
+# `GH_PROJECTS_TOKEN is missing or empty` until a person exported the file by hand.
+credentials_helper="$checkout/scripts/credentials-env.sh"
+if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
+    fail "required helper is not a readable regular file: $credentials_helper" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+# shellcheck source=scripts/credentials-env.sh
+if ! . "$credentials_helper"; then
+    fail "the credentials helper at $credentials_helper is readable but could not be loaded" \
+        "restore it from the repository or run 'just bootstrap', then retry"
+fi
+export_host_credentials follow-ups-handle-comments || exit "$?"
+
 # The drafts root is the one every follow-ups launch reads, resolved by the one helper,
 # named to ShellCheck because the path it is sourced from is built at run time.
 # shellcheck source=scripts/follow-up-env.sh
