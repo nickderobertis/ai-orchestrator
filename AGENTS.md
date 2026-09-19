@@ -225,8 +225,11 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   https://github.com/nickderobertis/onemessagebus.
 - **`llmlint`** — the judged lint tier (`llmlint.yml`; `just lint-llm`, `just
   lint-llm-diff`), the blocking pre-push check beside the deterministic `just check`.
-  No `config/` pin: `scripts/setup-llmlint.sh` installs it. `llmlint --help`;
-  https://github.com/nickderobertis/llmlint.
+  No `config/` pin: `scripts/setup-llmlint.sh` installs it, holding the release to the
+  one `config/oneharness.version` admits — the highest `llmlint-cli` whose declared
+  `oneharness-cli` requirement that pin satisfies — which
+  `tests/test_llmlint_release_pin.py` holds on the installed distribution's own
+  metadata. `llmlint --help`; https://github.com/nickderobertis/llmlint.
 
 ## Which pin governs a dispatch
 

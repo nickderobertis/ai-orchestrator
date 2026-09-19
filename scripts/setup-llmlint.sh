@@ -13,6 +13,16 @@
 # gpt-5.5 primary, claude-code + opus-4.8 secondary), so llmlint runs the primary
 # where Codex is authenticated and falls through to claude-code in a Claude Code
 # session where codex is absent — no ONEHARNESS_* override needed.
+#
+# Ceiling: the highest `llmlint-cli` at or above the floor whose declared
+# `oneharness-cli` requirement admits the release `config/oneharness.version` names.
+# That pin is the `oneharness` every judged run reaches (`scripts/llmlint-runtime-env.sh`
+# puts `.venv/bin` first), and a llmlint requiring a newer one refuses every run with
+# `oneharness <pin> is too old` — which an uncapped install did here on the next session
+# start. So the pin is handed to uv's resolver as a constraint and no ceiling version is
+# written; `tests/test_llmlint_release_pin.py` holds the installed release to the pin.
+# When nothing satisfies the rule, or the pin cannot be read, the installed llmlint is
+# left as it is.
 # llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): `set -e` is omitted so a flaky install can't abort the hook — the script owns its exit codes and always exits 0; success logs progress while failures log-and-continue rather than block startup; and the toolchain is installed from PyPI (`uv tool install llmlint-cli`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
@@ -31,20 +41,46 @@ set -uo pipefail
 # breaking: positional `FILES` are intersected with the configured file globs rather
 # than replacing them. Nothing here passes positional files — `just lint-llm-diff` scopes
 # by `--diff` — so this host is unaffected by that half.
-# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; installer behavior is unchanged.
+# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; the installer's selection is driven by tests/e2e/test_setup_llmlint_e2e.py.
 readonly LLMLINT_MIN="0.4.1"
-readonly BIN_DIR="$HOME/.local/bin"
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(dirname -- "$script_dir")
+readonly repo_root
+# The one source of the ceiling: the `oneharness` release this checkout adopts.
+readonly ONEHARNESS_PIN_FILE="$repo_root/config/oneharness.version"
+# Where `uv tool` links the executables it installs; its own override is honoured so
+# a caller pointing the install at a throwaway tool dir finds what it installed.
+readonly BIN_DIR="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }
 
+# The pinned `oneharness-cli` release, or a logged failure naming the file.
+read_oneharness_pin() {
+  local pin
+  if [ ! -r "$ONEHARNESS_PIN_FILE" ]; then
+    log "cannot read the oneharness pin at $ONEHARNESS_PIN_FILE; leaving the installed llmlint as it is"
+    return 1
+  fi
+  pin=$(tr -d '[:space:]' < "$ONEHARNESS_PIN_FILE")
+  case "$pin" in
+    '' | *[!0-9.]*)
+      log "the oneharness pin at $ONEHARNESS_PIN_FILE reads '$pin', which is not a release; leaving the installed llmlint as it is"
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$pin"
+}
+
 ensure_toolchain() {
+  local pin
   if ! command -v uv >/dev/null 2>&1; then
     log "uv not found; cannot install llmlint (install uv: https://docs.astral.sh/uv/)"
     return 0
   fi
-  log "installing llmlint-cli >= $LLMLINT_MIN via uv tool"
-  uv tool install --upgrade "llmlint-cli>=$LLMLINT_MIN" >&2 \
-    || log "llmlint-cli install failed (continuing)"
+  pin=$(read_oneharness_pin) || return 0
+  log "installing the highest llmlint-cli >= $LLMLINT_MIN that runs under oneharness-cli $pin (the release config/oneharness.version pins) via uv tool"
+  uv tool install --upgrade "llmlint-cli>=$LLMLINT_MIN" --with "oneharness-cli==$pin" >&2 \
+    || log "no llmlint-cli >= $LLMLINT_MIN resolved under oneharness-cli $pin, or the install failed (uv's report is above); leaving the installed llmlint as it is"
 }
 
 export PATH="${BIN_DIR}:${PATH}"

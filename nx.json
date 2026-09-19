@@ -46,7 +46,10 @@
       "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
       "{workspaceRoot}/tests/e2e/waits.py",
       "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py",
-      "{workspaceRoot}/tests/published_tools.py"
+      "{workspaceRoot}/tests/published_tools.py",
+      "{workspaceRoot}/tests/e2e/test_setup_llmlint_e2e.py",
+      "{workspaceRoot}/tests/llmlint_install.py",
+      "{workspaceRoot}/config/oneharness.version"
     ],
     "planToolingWorkspace": [
       "{workspaceRoot}/nx.json",

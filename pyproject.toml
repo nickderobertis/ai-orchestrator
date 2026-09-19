@@ -65,6 +65,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "jsonschema>=4.26",
+    # Evaluates the `oneharness-cli` specifier an installed `llmlint-cli` declares
+    # against `config/oneharness.version` (`tests/llmlint_install.py`).
+    "packaging>=24",
 ]
 
 [build-system]
