@@ -234,10 +234,13 @@ the run root having been deleted — and the message names only the binary while
 suggestion sends the reader to PATH and the harness install.
 
 **This repository cannot correct it.** The text belongs to `oneharness-core`:
-`crates/oneharness-core/src/io/runner.rs:490` in `fn run_job_supervised`, and again at
-`:726` in `fn stream_job`. It is present in the installed `oneharness` 0.12.1 binary on
-this host, and a dispatch reaches the same crate as a linked library rather than
-through any script here, so nothing on this side of the boundary is in a position to
-rewrite it. The fix belongs there: when the job named a `cwd` (set at `runner.rs:457`)
+`crates/oneharness-core/src/io/runner.rs` builds it in `fn run_job_supervised` and
+again in `fn stream_job` — lines 490 and 726 as
+[the `v0.14.0` tag carries them](https://github.com/nickderobertis/oneharness/blob/v0.14.0/crates/oneharness-core/src/io/runner.rs#L490),
+which is a citation of where the text was read, not a claim about the release
+`config/oneharness.version` names now; open the link against that pin before relying
+on a line number — and a dispatch reaches the same crate as a linked library rather
+than through any script here, so nothing on this side of the boundary is in a position
+to rewrite it. The fix belongs there: when the job named a `cwd` (set at `runner.rs:457`)
 and the spawn failed with `NotFound`, say which of the two was missing — the check is
 one `Path::is_dir` on a path the runner already holds.

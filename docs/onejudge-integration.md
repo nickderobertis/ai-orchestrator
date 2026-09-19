@@ -230,14 +230,27 @@ outright, naming the field to write instead. The real-CLI e2e suite checks these
 schema and CLI surfaces before it drives the same SDK-to-CLI path used in production
 dispatch.
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Per-release claims, each cited to its release, opened by the sentence `tests/test_onejudge_version.py` holds to `config/oneharness.version`: a bump fails there and re-opens this paragraph. -->
 **Getting the adopted oneharness on this box.** The prebuilt oneharness
 release binary needs a newer glibc than the host provides, and the crates.io build
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.12.1 is
-the adopted release, and what it changed is **which model a controlled codex turn runs
-under**: a `run --control` turn driven over `codex app-server` now carries the selected
+`config/oneharness.version` release and rejects a stale binary. Version 0.14.0 is
+the adopted release, and what it changed is **how a reader asks the CLI for its output
+shape**: a `--format` flag on every verb that prints a JSON document to stdout, leaving
+the stdout default and the run-mode default where they were
+([oneharness#1312](https://github.com/nickderobertis/oneharness/pull/1312)), so every
+script and module here that reads the CLI's stdout keeps reading what it read, and no
+reader names the flag yet — that is the next adoption's, alongside the release that
+flips both defaults. It is also the floor the judged lint tier holds this pin to:
+`llmlint doctor`, run the way `just lint-llm` runs it, refuses an older `oneharness` by
+version before spawning it and names the floor it wants, so until this pin reached
+0.14.0 no branch whose merge path runs `just lint-llm-diff` through this host's wrapper
+could publish from this host. What sits between it and the adoption before it is on the
+[release list](https://github.com/nickderobertis/oneharness/releases), and none of it
+touches a surface this document describes. The adoption before this one, 0.12.1, changed **which model a controlled codex turn runs
+under**: a `run --control` turn driven over `codex app-server` carries the selected
 candidate's own model — `[harness.codex].model`, a variant's `model`, or `--model` — on
 `thread/start`, `thread/resume` and `turn/start`, records the model the server says the
 thread runs under as `observed_model` beside the requested one, and refuses a thread the
@@ -251,7 +264,7 @@ The release beside it makes a stopped fallback chain say why it stopped
 ([oneharness#1286](https://github.com/nickderobertis/oneharness/pull/1286)): the summary
 names the identity, its status and its diagnostic, and tells a task failure from a
 failure with no observed work and from an unclassified failure after work. The
-adoption before this one changed a **classification**: a candidate whose turn
+adoption before that one changed a **classification**: a candidate whose turn
 completed and was billed for is no longer reported as a failure, and a failed release is
 reported as one ([oneharness#1277](https://github.com/nickderobertis/oneharness/pull/1277)).
 That is the same distinction the stopped-without-work reading below is about, applied to
@@ -262,6 +275,7 @@ same conversation, and a control mechanism whose protocol has no resume request
 refuses the continuation instead of silently opening a new conversation while the
 store, the report and the flag all read healthy. Measured on the installed binary,
 which warns at the *first* turn rather than only refusing the second:
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ```
 $ ONEHARNESS_HARNESSES=goose oneharness run --control --session probe --prompt hi
@@ -286,7 +300,7 @@ genuine task failure gets. From 0.10.3 a candidate that showed nothing for itsel
 so, with `fallback.stopped_without_work` and `results[].work` of `none` carrying the
 same reading into the report and the history record at schema 1.7. Both fields are
 additive and declared only on a record that *has* one, which is what keeps an older
-reader whole. The adopted 0.12.1 finishes the sentence side of that
+reader whole. 0.12.1 finishes the sentence side of that
 ([oneharness#1286](https://github.com/nickderobertis/oneharness/pull/1286)): a
 candidate that did the task's work and failed for a cause nothing could classify now
 gets a sentence of its own rather than the task-failure one, and every stop summary
@@ -295,12 +309,12 @@ readable without opening the report. **What is no longer true here is that there
 Through an earlier adoption the `oneagentgraph` this host's
 [smoke](#the-record-a-fallback-chain-is-judged-by) judges by linked a `oneharness-core`
 a release behind the CLI it spawns; read from both installed wheels' own SBOMs under this
-adoption, `oneagentgraph-cli` 0.4.1 is compiled against `oneharness-core` 0.13.0
-and `oneharness-cli` 0.12.1 against 0.13.1 — a release apart again, where the adoption
-before them had the pair a release apart the other way and the one before that had it
-equal. They are separate artifacts on separate cadences,
+adoption, the `oneagentgraph-cli` wheel and the `oneharness-cli` wheel each declare a
+`oneharness-core` of their own, a release apart again and in the same direction as the
+adoption before, where the one before that had the pair a release apart the other way
+and the one before that had it equal. They are separate artifacts on separate cadences,
 so read either the equality or the gap as a coincidence rather than as a rule; this pair
-has now been both, three times. Nothing
+has now been both, four times. Nothing
 about that rests on an adopter remembering to check: the pre-push hook selects
 `just smoke` for any diff touching `config/oneharness.version`, so the next bump proves
 the pairing on a real turn or does not reach the remote.
@@ -631,7 +645,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.12.1, a config's per-harness `model` **beats** the variable, while the `--model`
+0.14.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -769,7 +783,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.12.1, confirmed against the binary:
+candidate it ended up running — through oneharness 0.14.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1467,7 +1481,7 @@ selects is `codex:primary` and the pin never sees it: the stand-in reaches those
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.12.1, a harness selected
+do not collide: re-measured against the adopted oneharness 0.14.0, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the
 one that matters — the same chain without `--mock-harness` runs the pinned binary — so

@@ -9,7 +9,7 @@ classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "onetaskgraph-sdk==0.2.37",
     "oneagentgraph-cli==0.4.4",
-    "oneharness-cli==0.12.1",
+    "oneharness-cli==0.14.0",
     "onejudge==0.13.1",
     "onemessagebus-cli==0.7.0",
     "onepipeline-api-cli==0.9.0",
