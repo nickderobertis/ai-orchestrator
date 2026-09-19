@@ -11,7 +11,12 @@ seam and both outlive the agent that wrote them, so both are decided here and no
   `onetaskgraph task copy` that is the only way it reaches the board;
 * **ownership on the board** (contract C6): an issue belongs to the run its ticket's
   `created_by_run` names, a comment — evidence or a reply to a person's comment — to the run
-  its last-line marker names, and a follow-up run changes nothing that belongs to another run.
+  its last-line marker names, and a follow-up run changes nothing that belongs to another run;
+* **how a ticket depends on an accepted ticket**: a proposal written as if an accepted
+  ticket's fix were already in depends on that ticket as the store's own `depends_on` edge
+  — :data:`DEPENDENCY_FIELD`, outside the record, which the board carries natively and
+  `task deps` walks from either end — and says in its text where and how, by the accepted
+  item's URL. The edge is the one record of the dependency: no record key duplicates it.
 
 **Three readers, one shape.** `scripts/follow-ups.sh` counts a run's drafts and tickets,
 composes the agent's task — rendering both contracts into it from :func:`ticket_contract`
@@ -67,6 +72,9 @@ BOARD = "followups"
 #: schema 4 added the body's `## Impact` section; schema 5 removed `## Repository`, which the
 #: record's `repository` already says, and replaced `## Suggested fixes` with `## Suggested fix`,
 #: stating the one fix, beside an optional `## Rejected fixes` for the others considered.
+#: A dependency on an accepted ticket moved no schema: it lives in the store's own
+#: :data:`DEPENDENCY_FIELD`, outside this record, so no ticket on the board is of an older
+#: shape for it and there is nothing to bring forward.
 SCHEMA = 5
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
@@ -218,15 +226,34 @@ def status_vocabulary() -> str:
     )
 
 
+def board_option(status: Status) -> str:
+    """The board's own option for ``status``, as the vocabulary shows it."""
+    matched = re.search(r"`([^`]+)`", _PLACES[status].shown)
+    assert matched is not None, status  # noqa: S101 - every place above names its option
+    return matched[1]
+
+
+def accepted_statuses() -> str:
+    """The accepted statuses as prose, each as its board option and store word."""
+    named = [f"`{board_option(status)}` (`{status.value}`)" for status in Status if status.accepted]
+    return ", ".join(named[:-1]) + f" and {named[-1]}"
+
+
+def accepted_filter() -> str:
+    """The `task list` flags selecting the accepted statuses; the flag repeats, one per status."""
+    return " ".join(f"--status {status.value}" for status in Status if status.accepted)
+
+
 #: The identities a ticket names, each a type of its own so that one cannot be passed where
 #: another is meant: the run a ticket or comment belongs to, the root cause's slug, the
-#: normalized origin a root cause lives in, a commit, a qualified draft id, and an RFC 3339
-#: UTC time.
+#: normalized origin a root cause lives in, a commit, a qualified draft id, a qualified id of
+#: a board item, and an RFC 3339 UTC time.
 RunId = NewType("RunId", str)
 RootCause = NewType("RootCause", str)
 Origin = NewType("Origin", str)
 Commit = NewType("Commit", str)
 QualifiedDraftId = NewType("QualifiedDraftId", str)
+QualifiedBoardId = NewType("QualifiedBoardId", str)
 Timestamp = NewType("Timestamp", str)
 Host = NewType("Host", str)
 
@@ -253,6 +280,25 @@ RECORD_KEYS = (
     "verified_at",
     "host",
 )
+
+#: **How a ticket depends on an accepted ticket.** The store's own top-level front-matter
+#: field a dependency is written in — one entry per accepted ticket whose fix changed the
+#: ticket, as `{id: <board>:<native id>, item: task}` and nothing else, the `kind` left to
+#: its default. The store rewrites the entry to the board's own item on copy (on the
+#: `followups` GitHub Projects board, GitHub's native issue dependency, which consults no
+#: `kind`, so only the blocking kind is admitted here) and `task deps` walks it from either
+#: end. It is read back only through that walk — `task show` carries no `depends_on` — never
+#: by parsing the front matter, and it sits outside the `orchestrator.follow-up` record: no
+#: record key duplicates it. `tests/test_follow_up_ticket_docs.py` admits the name in the
+#: documents through this constant.
+DEPENDENCY_FIELD = "depends_on"
+#: What each end of such an edge is, and what the edge means, as the store reports them.
+DEPENDENCY_ITEM = "task"
+DEPENDENCY_KIND = "blocks"
+#: A far end as the store addresses it: a non-empty source, a colon, a non-empty native id.
+QUALIFIED_ID = re.compile(r"(?P<source>[^:\s]+):(?P<native>\S+)")
+#: The `url` the board reports for an accepted item, as a ticket's text links it: a web URL.
+ITEM_URL = re.compile(r"https?://\S+")
 
 #: The level-2 headings a ticket's body carries, in this order, each with content.
 HEADINGS = (
@@ -390,7 +436,17 @@ TICKET_SUFFIX = ".md"
 #: prose needs them, and sections it names exactly once, since a section rendered twice is
 #: two copies of a contract in one task.
 PLACEHOLDER = re.compile(r"@([A-Z][A-Z_]*)@")
-VALUES = ("RUN", "BOARD", "DRAFTS_ROOT", "VALIDATE", "BOARD_STATUS", "CHECKOUT", "PLAN_STORE")
+VALUES = (
+    "RUN",
+    "BOARD",
+    "DRAFTS_ROOT",
+    "VALIDATE",
+    "BOARD_STATUS",
+    "CHECKOUT",
+    "PLAN_STORE",
+    "ACCEPTED_STATUSES",
+    "ACCEPTED_FILTER",
+)
 SECTIONS = ("STATUS_VOCABULARY", "TICKET_CONTRACT", "COMMENT_CONTRACT", "REDISPATCH", "FEEDBACK")
 PLACEHOLDERS = (*VALUES, *SECTIONS)
 
@@ -398,16 +454,18 @@ PLACEHOLDERS = (*VALUES, *SECTIONS)
 PROG = "follow-up-tickets"
 
 #: Exit statuses: every ticket is sound; a ticket failed the shape; the command could not run.
-#: And three of `board-status`'s own, each a ticket not to copy: the board holds its item at a
+#: And four of `board-status`'s own, each a ticket not to copy: the board holds its item at a
 #: category no ticket carries; a withdrawal a person's decision on the item refuses, whether
-#: they accepted it or deferred it; and a ticket whose repository is not one of the board's
-#: owner, which nothing asks the board about.
+#: they accepted it or deferred it; a ticket whose repository is not one of the board's
+#: owner, which nothing asks the board about; and a ticket depending on an item the board
+#: does not hold as an accepted ticket of another root cause whose URL the ticket names.
 SOUND = 0
 UNSOUND = 1
 UNRUNNABLE = 2
 UNPLACED = 3
 PROTECTED = 4
 OUTSIDE_OWNER = 5
+NOT_ACCEPTED = 6
 
 #: The host every repository a ticket's issue may be filed in lives on.
 GITHUB = "github.com"
@@ -428,7 +486,11 @@ class Refused(ValueError):
 
 @dataclass(frozen=True)
 class Ticket:
-    """One verified follow-up ticket, every field validated."""
+    """One verified follow-up ticket, every field validated.
+
+    ``depends_on`` names every accepted ticket whose fix this one is written against, as
+    the board addresses each, sorted; empty when no accepted fix changed the ticket.
+    """
 
     title: str
     status: Status
@@ -441,6 +503,19 @@ class Ticket:
     verified_at: Timestamp
     host: Host
     body: str
+    depends_on: tuple[QualifiedBoardId, ...] = ()
+
+
+class Edge(NamedTuple):
+    """One dependency edge the store reports for a ticket, read from the ticket outward.
+
+    ``to`` is the far end as the store addresses it, ``item`` what that end is, and ``kind``
+    what the edge means — the three things :func:`edge_problems` holds to the contract.
+    """
+
+    to: str
+    item: str
+    kind: str
 
 
 CommentId = NewType("CommentId", str)
@@ -487,21 +562,27 @@ def record(ticket: Ticket) -> dict[str, object]:
     }
 
 
+def dependency_entries(ticket: Ticket) -> list[dict[str, str]]:
+    """The ticket's :data:`DEPENDENCY_FIELD` entries, one per accepted ticket it depends on."""
+    return [{"id": held, "item": DEPENDENCY_ITEM} for held in ticket.depends_on]
+
+
 def render(ticket: Ticket) -> str:
     """One ticket as the `local-md` record it is stored as.
 
     No `project`, and `repositories` naming exactly the record's `repository` — derived from
-    it rather than held beside it, so nothing written here can make the two differ.
+    it rather than held beside it, so nothing written here can make the two differ. The
+    store's :data:`DEPENDENCY_FIELD` is written only when the ticket depends on something.
     """
-    return frontmatter(
-        {
-            "title": ticket.title,
-            "status": ticket.status.value,
-            "repositories": [ticket.repository],
-            "metadata": {KEY: record(ticket)},
-        },
-        ticket.body,
-    )
+    fields: dict[str, object] = {
+        "title": ticket.title,
+        "status": ticket.status.value,
+        "repositories": [ticket.repository],
+    }
+    if ticket.depends_on:
+        fields[DEPENDENCY_FIELD] = dependency_entries(ticket)
+    fields["metadata"] = {KEY: record(ticket)}
+    return frontmatter(fields, ticket.body)
 
 
 def repository_name(origin: str) -> str:
@@ -796,14 +877,65 @@ def _rejected_fixes_problems(found: Sequence[tuple[str, str]]) -> list[str]:
             ]
 
 
+def edge_problems(edges: Sequence[Edge]) -> list[str]:
+    """Every way the edges the store reports for a ticket are not the dependency shape.
+
+    Shape alone, reading no board: each edge ends at a `task`, is of the blocking kind, and
+    names a far end `<source>:<native>` with both parts non-empty, where the source is not
+    the `drafts` source a ticket lives in; every edge names the one same source; and no far
+    end is named twice, since a ticket depends on an accepted ticket once. Which source
+    that is, and what the board holds there, is `board-status`'s to check.
+    """
+    where = f"the ticket's `{DEPENDENCY_FIELD}`"
+    found = []
+    sources = set()
+    for repeated in sorted({edge.to for edge in edges if [e.to for e in edges].count(edge.to) > 1}):
+        found.append(f"{where} names {repeated!r} more than once; one entry per accepted ticket")
+    for edge in edges:
+        if edge.item != DEPENDENCY_ITEM:
+            found.append(
+                f"{where} entry {edge.to!r} names a {edge.item}, where a dependency names a "
+                f"`{DEPENDENCY_ITEM}`: the accepted ticket's board item"
+            )
+        if edge.kind != DEPENDENCY_KIND:
+            found.append(
+                f"{where} entry {edge.to!r} is of kind {edge.kind!r}, where a dependency is "
+                f"of the `{DEPENDENCY_KIND}` kind, the default; write no `kind`"
+            )
+        matched = QUALIFIED_ID.fullmatch(edge.to)
+        if matched is None:
+            found.append(
+                f"{where} entry {edge.to!r} is not a qualified id like "
+                "`<board>:<native id of the accepted ticket's item>`"
+            )
+        elif matched["source"] == SOURCE:
+            found.append(
+                f"{where} entry {edge.to!r} names the `{SOURCE}` source, where a dependency "
+                "names an accepted ticket's item on the board it is copied onto"
+            )
+        else:
+            sources.add(matched["source"])
+    if len(sources) > 1:
+        found.append(
+            f"{where} entries name {len(sources)} sources ({', '.join(sorted(sources))}), "
+            "where every dependency names the one board the ticket is copied onto"
+        )
+    return found
+
+
 def problems(
-    item: Mapping[str, object], *, run: str | None = None, root_cause: str | None = None
+    item: Mapping[str, object],
+    *,
+    run: str | None = None,
+    root_cause: str | None = None,
+    edges: Sequence[Edge] = (),
 ) -> list[str]:
     """Every way a store item, as `onetaskgraph task show --json` reports it, is not a ticket.
 
-    ``run`` and ``root_cause`` are what the ticket's path says, when it was read from one.
-    The record's problems come first, so a ticket of an older schema is named for its schema
-    before anything its successor added.
+    ``run`` and ``root_cause`` are what the ticket's path says, when it was read from one,
+    and ``edges`` what the store's dependency walk reports for it — none for a board item
+    read without one. The record's problems come first, so a ticket of an older schema is
+    named for its schema before anything its successor added.
     """
     found = []
     metadata = item.get("metadata")
@@ -829,6 +961,7 @@ def problems(
         )
     found.extend(_title_problems(item.get("title"), repository))
     found.extend(_body_problems(item.get("content"), host))
+    found.extend(edge_problems(edges))
     return found
 
 
@@ -838,10 +971,18 @@ def _category(status: object) -> object:
 
 
 def from_store_item(
-    item: Mapping[str, object], *, run: str | None = None, root_cause: str | None = None
+    item: Mapping[str, object],
+    *,
+    run: str | None = None,
+    root_cause: str | None = None,
+    edges: Sequence[Edge] = (),
 ) -> Ticket:
-    """The ticket a store item holds, or :class:`Refused` naming every problem."""
-    found = problems(item, run=run, root_cause=root_cause)
+    """The ticket a store item holds, or :class:`Refused` naming every problem.
+
+    ``edges`` is what the store's dependency walk reports for the item; a board item read
+    with none reads back depending on nothing, which is what such a read is.
+    """
+    found = problems(item, run=run, root_cause=root_cause, edges=edges)
     if found:
         raise Refused(found)
     metadata = item["metadata"]
@@ -867,7 +1008,28 @@ def from_store_item(
         verified_at=Timestamp(str(held["verified_at"])),
         host=Host(str(held["host"])),
         body=str(item["content"]).strip(),
+        depends_on=tuple(sorted(QualifiedBoardId(edge.to) for edge in edges)),
     )
+
+
+def ticket_edges(ticket: str) -> list[Edge]:
+    """The dependency edges the store reports for ``ticket``, every page, from it outward.
+
+    The one read of a ticket's dependencies: `task show` carries no `depends_on`, so the
+    walk is where an entry is read back. A far end qualified to another source is reported
+    as named and never followed, which is what lets `validate` touch no board.
+    """
+    return [
+        # llmlint: ignore[boundary_inputs_validated] The store's answer is validated at
+        # the boundary by the typed SDK, which parses each edge into its own model — the
+        # far end's id a `str` root, its item and the edge's kind each a `StrEnum` — so
+        # these are typed reads, not coercions; what each *value* may be is then held by
+        # `edge_problems` on every path that reads them.
+        Edge(edge.to.id.root, edge.to.kind.value, edge.kind.value)
+        for edge in plan_store.every_page(
+            f"the dependencies of {ticket}", plan_store.client().task_deps, id=ticket
+        )
+    ]
 
 
 def located_path(path: Path) -> tuple[str, str]:
@@ -897,6 +1059,7 @@ def read_ticket(path: Path) -> Ticket:
     ticket = qualified_id(run, root_cause)
     try:
         item = plan_store.task_record(ticket)
+        edges = ticket_edges(ticket)
     except OSError as exc:
         raise Refused(
             [
@@ -913,7 +1076,7 @@ def read_ticket(path: Path) -> Ticket:
                 "a ticket under the drafts root the follow-ups launch exported"
             ]
         )
-    return from_store_item(item, run=run, root_cause=root_cause)
+    return from_store_item(item, run=run, root_cause=root_cause, edges=edges)
 
 
 class Unplaced(ValueError):
@@ -953,6 +1116,24 @@ class OutsideOwner(ValueError):
         )
 
 
+class NotAccepted(ValueError):
+    """A dependency the board does not hold as an accepted ticket of another root cause.
+
+    Says every failing entry at once: what the ticket names and what the board holds
+    there. On it the agent copies nothing for the ticket and re-derives it against the
+    board as it now is.
+    """
+
+    def __init__(self, problems: Sequence[str]) -> None:
+        super().__init__(
+            "; ".join(problems)
+            + "; copy nothing for this ticket, re-derive it against the board as it now is — "
+            "removing the entry and the assumption from the text where the item is no longer "
+            "accepted — and report what was printed"
+        )
+        self.problems = tuple(problems)
+
+
 def board_owner(board: str) -> str | None:
     """The owner ``board`` is configured with, or `None` for a source that configures none.
 
@@ -965,12 +1146,16 @@ def board_owner(board: str) -> str | None:
     return owner
 
 
-def ticket_repository(ticket: str) -> str:
-    """The normalized origin the stored ticket's record names, read through the store."""
-    item = plan_store.task_record(ticket)
+def _held_record(item: Mapping[str, object]) -> Mapping[str, object]:
+    """The `orchestrator.follow-up` record a store item carries, or an empty one."""
     metadata = item.get("metadata")
     held = metadata.get(KEY) if isinstance(metadata, Mapping) else None
-    repository = held.get("repository") if isinstance(held, Mapping) else None
+    return held if isinstance(held, Mapping) else {}
+
+
+def ticket_repository(ticket: str, item: Mapping[str, object]) -> str:
+    """The normalized origin the stored ticket's record names, off the item the store read."""
+    repository = _held_record(item).get("repository")
     if not isinstance(repository, str) or not _is_origin(repository):
         raise Refused(
             [
@@ -979,6 +1164,75 @@ def ticket_repository(ticket: str) -> str:
             ]
         )
     return repository
+
+
+def dependency_problems(ticket: str, item: Mapping[str, object], board: str) -> list[str]:
+    """Every dependency of ``ticket`` the board does not hold as the contract says.
+
+    Each edge the store reports for the ticket is resolved against ``board``: it is refused
+    when its far end names another source; when the board holds the item at a category
+    outside the accepted ones; when the item carries no `orchestrator.follow-up` record
+    naming a `root_cause` slug, which is what makes a board item a follow-up ticket at
+    all; when that `root_cause` is the ticket's own — an accepted item for the same root
+    cause takes this run's evidence as a comment, so an edge onto it is the two readings
+    merging; when the board reports no `url` for it; or when that URL is absent from the
+    ticket's body, which is where the text says what the accepted fix changed. An item
+    the store cannot show is an :class:`OSError`, as every store failure is, and edges
+    without the shape `validate` holds are :class:`Refused` before any is followed, since
+    the far end of a mis-shaped edge is nothing this asks a board about.
+    """
+    body = item.get("content")
+    text = body if isinstance(body, str) else ""
+    own_cause = _held_record(item).get("root_cause")
+    accepted = ", ".join(f"`{status}`" for status in Status if status.accepted)
+    edges = ticket_edges(ticket)
+    shaped = edge_problems(edges)
+    if edges and (not isinstance(own_cause, str) or not SLUG.fullmatch(own_cause)):
+        shaped.append(f"{ticket} names no `root_cause` slug in its `{KEY}` record")
+    if shaped:
+        raise Refused([*shaped, "validate the ticket before asking the board about it"])
+    found = []
+    for edge in edges:
+        entry = f"the `{DEPENDENCY_FIELD}` entry {edge.to!r}"
+        matched = QUALIFIED_ID.fullmatch(edge.to)
+        if matched is None or matched["source"] != board:
+            found.append(f"{entry} names a source other than the board `{board}`")
+            continue
+        try:
+            far = plan_store.task_record(edge.to)
+        except OSError as exc:
+            raise OSError(f"{entry} names an item the board cannot show: {exc}") from exc
+        held = str(_category(far.get("status")))
+        if held not in tuple(Status) or not Status(held).accepted:
+            found.append(
+                f"{entry} names an item the board holds at {held!r}, not at an accepted "
+                f"status ({accepted}), so its fix is not assumed"
+            )
+        far_cause = _held_record(far).get("root_cause")
+        if not isinstance(far_cause, str) or not SLUG.fullmatch(far_cause):
+            found.append(
+                f"{entry} names an item carrying no `{KEY}` record with a `root_cause`, so it "
+                "is no follow-up ticket; a dependency names an accepted ticket of another "
+                "root cause"
+            )
+        elif far_cause == own_cause:
+            found.append(
+                f"{entry} names an item for the ticket's own root cause {own_cause!r}; an "
+                "accepted item for the same root cause takes this run's evidence as a comment "
+                "and is never depended on"
+            )
+        url = far.get("url")
+        if not isinstance(url, str) or not ITEM_URL.fullmatch(url):
+            found.append(
+                f"{entry} names an item the board reports no `url` for that is a web URL "
+                f"({url!r}), so the ticket's text cannot link it"
+            )
+        elif url not in text:
+            found.append(
+                f"{entry} names an item whose URL {url} the ticket's body never names; say "
+                "where and how that fix changed this ticket, with that URL"
+            )
+    return found
 
 
 def under_owner(repository: str, owner: str) -> bool:
@@ -1209,9 +1463,16 @@ def ticket_contract(run: str, board: str) -> str:
         verified_at=Timestamp("<now, in RFC 3339 UTC: YYYY-MM-DDTHH:MM:SSZ>"),
         host=Host("<exactly what `hostname` prints on the machine you run on>"),
         body=_example_body(),
+        depends_on=(
+            QualifiedBoardId(
+                f"{board}:<native id of an accepted ticket whose fix changed this one; leave "
+                f"`{DEPENDENCY_FIELD}` out when none did>"
+            ),
+        ),
     )
     ticket = qualified_id(run, "<root-cause>")
     headings = ", ".join(f"`## {heading}`" for heading in HEADINGS)
+    accepted = ", ".join(f"`{status}`" for status in Status if status.accepted)
     return (
         f"A ticket is a local Markdown task in the `{SOURCE}` source, written to "
         f"`@DRAFTS_ROOT@/{TASKS_DIRECTORY}/{run}/{TICKETS}/<root-cause>{TICKET_SUFFIX}` — "
@@ -1239,9 +1500,11 @@ def ticket_contract(run: str, board: str) -> str:
         "write the word it prints as the ticket's `status`, and validate the ticket again. It "
         f"exits {SOUND} with that word; {UNPLACED} when the board holds the item at a status "
         f"no ticket carries; {PROTECTED} for a withdrawal of an item the board shows as "
-        f"accepted or deferred; and {OUTSIDE_OWNER} when the ticket's repository is not one of "
-        "the board's owner, before anything is asked of the board. On any of these refusals, "
-        "copy nothing and report what it printed.\n"
+        f"accepted or deferred; {OUTSIDE_OWNER} when the ticket's repository is not one of "
+        f"the board's owner, before anything is asked of the board; and {NOT_ACCEPTED} when "
+        f"a `{DEPENDENCY_FIELD}` entry does not resolve on the board as the dependency rule "
+        "below states, naming every such entry and what the board holds. On any of these "
+        "refusals, copy nothing and report what it printed.\n"
         "- **A refusal is reported, never worked around.** When `board-status` exits "
         f"{OUTSIDE_OWNER}, or `@PLAN_STORE@ task copy` refuses the ticket — for a repository the "
         "token cannot see, or one GitHub will not create an issue in — copy nothing for that "
@@ -1258,6 +1521,38 @@ def ticket_contract(run: str, board: str) -> str:
         "- **`host` is read, never typed.** Run `hostname` on the machine you run on and "
         f"write exactly what it prints, both as `host` and in the `## {EVIDENCE}` section, "
         "never a value you type or recall.\n"
+        f"- **A ticket written against an accepted ticket's fix depends on it, as the "
+        f"store's own top-level `{DEPENDENCY_FIELD}`** — one entry per accepted ticket whose "
+        f"fix changed this ticket, as `{{id: {board}:<native id>, item: {DEPENDENCY_ITEM}}}` "
+        "and nothing else, its `kind` left to its default; no entry, and no "
+        f"`{DEPENDENCY_FIELD}` at all, when no accepted fix changed it. `<native id>` is the "
+        f"accepted item's id as `@PLAN_STORE@ task list --source {board}` reports it, after "
+        f"the `{board}:`. The copy carries the entry onto the board as the board's own item "
+        "dependency, which `@PLAN_STORE@ task deps` walks from either end, and the edge is "
+        f"the one record of it: nothing in the `{KEY}` record repeats it.\n"
+        "- **Where the accepted fix changed the ticket, the text says so with the item's "
+        f"URL** — the `url` the board reports for the accepted item. In `## {IMPACT}` or "
+        f"`## Root cause` for a ticket the fix narrowed, in `## {SUGGESTED_FIX}` for one it "
+        f"re-fixed, and in `## {REJECTED_FIXES}` beside the fix it displaced, stating what "
+        'is assumed ("assuming the fix in <URL> lands, …"; "chosen because <URL> already '
+        '…"). A `Proposal` or `Deferred` item for a clearly related root cause may be '
+        f"named as related, by URL, with **no** `{DEPENDENCY_FIELD}` entry and no change to "
+        "the ticket's claims.\n"
+        f"- **`@VALIDATE@` holds the entries' shape and reads no board**: it refuses a ticket "
+        f"any of whose entries is not a `{DEPENDENCY_ITEM}`, is not of the `{DEPENDENCY_KIND}` "
+        "kind, is not `<source>:<native id>` with both parts non-empty, names the "
+        f"`{SOURCE}` source, names a second source beside the others', or names a far end "
+        "another entry already names. "
+        f"**`@BOARD_STATUS@` resolves every entry against the board** before every copy and "
+        f"exits {NOT_ACCEPTED} when an entry names a source other than `{board}`; names an "
+        f"item the board holds outside the accepted statuses ({accepted}); names an item "
+        "whose record carries this ticket's own `root_cause` — an accepted item for the "
+        "*same* root cause is the same-root-cause path's, which takes this run's evidence as "
+        "a comment, and never this rule's; names an item the board reports no `url` for; or "
+        "names an item whose URL the ticket's body does not carry. On that refusal copy "
+        "nothing for the ticket, re-derive it against the board as it now is — removing the "
+        "entry and the assumption from the text where the item is no longer accepted — "
+        "validate it again, and report what was printed.\n"
         f"- It reaches the board only as `@PLAN_STORE@ task copy {ticket} --to {board}`. The "
         "origin that copy records makes a later copy of the same ticket update that same "
         "issue, and that is the only way an issue is edited.\n\n"
@@ -1333,6 +1628,13 @@ comments of this run may already exist. "Ownership on the board" above binds eve
   `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's
   evidence supports; and every other option it offered moved into `## Rejected fixes`,
   with why each was not chosen; then it is validated again.
+- a ticket's dependencies on accepted tickets, and the claims written against their fixes,
+  are re-derived from the board as it now is on every pass — an accepted ticket may have
+  appeared, moved or been un-accepted since the last pass, so `depends_on` entries are
+  added and removed and the ticket's `## Impact`, `## Root cause`, `## Suggested fix` and
+  `## Rejected fixes` re-derived to match, and `@BOARD_STATUS@ --board @BOARD@ <path of
+  the ticket>` refusing an entry is the signal to re-derive that ticket before copying it;
+  nothing else about an older ticket moves.
 """
 
 #: The heading the manager's feedback goes under, above the feedback itself.
@@ -1435,6 +1737,8 @@ def compose(
         "BOARD_STATUS": board_status,
         "CHECKOUT": str(checkout),
         "PLAN_STORE": plan_store,
+        "ACCEPTED_STATUSES": accepted_statuses(),
+        "ACCEPTED_FILTER": accepted_filter(),
     }
     values = {
         **scalars,
@@ -1557,13 +1861,21 @@ def _placed(arguments: argparse.Namespace) -> int:
         run, root_cause = located_path(arguments.path.absolute())
         ticket = qualified_id(run, root_cause)
         owner = board_owner(arguments.board)
-        if owner is not None and not under_owner(repository := ticket_repository(ticket), owner):
+        item = plan_store.task_record(ticket)
+        if owner is not None and not under_owner(
+            repository := ticket_repository(ticket, item), owner
+        ):
             raise OutsideOwner(repository, owner)
+        if unheld := dependency_problems(ticket, item, arguments.board):
+            raise NotAccepted(unheld)
         held = board_category(ticket, arguments.board)
         status = status_before_copy(held, withdraw=arguments.withdraw)
     except OutsideOwner as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return OUTSIDE_OWNER
+    except NotAccepted as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return NOT_ACCEPTED
     except Unplaced as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return UNPLACED

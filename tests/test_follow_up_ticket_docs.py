@@ -15,7 +15,9 @@ classified by what they look like, and every name of each kind has to be one its
   carries;
 * a **record key** is a name written as a record's (`` record's `name` ``) or as a key
   (`` `name` key ``), or a `snake_case` name, and has to be a key of the ticket's record —
-  or, for a `snake_case` name, a setting `onetaskgraph.yaml` holds.
+  or, for a `snake_case` name, a setting `onetaskgraph.yaml` holds, or the store's own
+  front-matter field a ticket's dependency on an accepted ticket is written in, which the
+  module names once as `DEPENDENCY_FIELD` and which is deliberately no record key.
 
 That the task the recipe composes carries the module's rendered contract is
 `tests/test_follow_up_tickets.py`'s, which composes the tracked `config/follow-up-task.md`
@@ -89,6 +91,7 @@ def unheld(prose: str, categories: frozenset[str]) -> set[str]:
         elif (
             SNAKE_CASE.fullmatch(name)
             and name not in tickets.RECORD_KEYS
+            and name != tickets.DEPENDENCY_FIELD
             and not re.search(rf"^\s*{re.escape(name)}:", configuration, re.MULTILINE)
         ):
             found.add(f"`{name}` is a record key the ticket does not carry")
@@ -149,7 +152,8 @@ def test_the_check_names_every_status_option_or_key_neither_source_holds() -> No
     prose = (
         "A ticket lands in `Accepted` and then `Todo` or `Deferred`, is `unknown` rather than "
         "`draft` or `backlog`, and its record's `hostname` sits beside the `verified_on` key "
-        "and `host`; `default_sources` is a setting."
+        "and `host`; `default_sources` is a setting; it depends on an accepted ticket as "
+        "`depends_on`, never as `depended_on`."
     )
 
     assert unheld(prose, store_categories()) == {
@@ -157,6 +161,7 @@ def test_the_check_names_every_status_option_or_key_neither_source_holds() -> No
         "`unknown` is a status category no ticket carries",
         "`hostname` is a record key the ticket does not carry",
         "`verified_on` is a record key the ticket does not carry",
+        "`depended_on` is a record key the ticket does not carry",
     }
 
 
@@ -179,6 +184,34 @@ def test_each_follow_up_section_carries_the_modules_status_vocabulary(
         f"{document}'s section {heading!r} does not carry the status vocabulary "
         "`python -m orchestrator.follow_up_tickets statuses` prints"
     )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This module is the
+# documents' drift gate, and every test in it is selected by its file-wide `reads_docs`
+# marker into the tier that reads this repository's prose; a new reading of the same two
+# sections joins the module rather than founding a project for one test.
+@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+def test_each_follow_up_section_writes_every_ticket_against_the_boards_accepted_fixes(
+    document: str, heading: str
+) -> None:
+    """Each section states the manager's view of the dependency on an accepted ticket."""
+    flat = " ".join(section(document, heading).split())
+
+    for described in (
+        "written against the board's accepted fixes",
+        "`Todo`, `Queued`, `In Progress`, and `Done` where the fix has not reached the basis",
+        f"as the store's own `{tickets.DEPENDENCY_FIELD}` edge",
+        "`onetaskgraph task deps` walks it from either end",
+        "A `Proposal` or `Deferred` item's fix is never assumed",
+        "The same-root-cause path is unchanged",
+    ):
+        assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
+    assert f"record's `{tickets.DEPENDENCY_FIELD}`" not in flat, (
+        f"{document}'s section {heading!r} calls the store's edge a record key"
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -> None:

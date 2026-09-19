@@ -68,24 +68,36 @@ def _unanswered(problem: str) -> Witness:
     )
 
 
-def instruction(task: str, run: str) -> str | None:
-    """The store command the task gives for listing ``run``'s drafts, as it spells it.
+def instruction(task: str, *, run: str | None = None, board: str | None = None) -> str | None:
+    """A store listing the task spells whole, as it spells it: ``run``'s drafts, or the board's.
 
-    This one is chosen because it is the first store command the task hands the agent and
-    the only one whose whole argv the task fixes: everything after it takes an id the
-    agent works out. The program word is what differs between a pinned task and an
-    unpinned one, and it is the first word of every store instruction alike.
+    The drafts listing is chosen for the pin because it is the first store command the
+    task hands the agent and the only one whose whole argv the task fixes: everything
+    after it takes an id the agent works out. The program word is what differs between a
+    pinned task and an unpinned one, and it is the first word of every store instruction
+    alike. The accepted listing on ``board`` is the other whole argv the task fixes — the
+    one the agent reads the board's accepted tickets with, its `--status` flags rendered
+    from the module's own vocabulary — so running it as spelled is how a journey reads
+    which items that step selects.
     """
-    found = re.search(
-        rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
-    )
+    if run is not None:
+        found = re.search(
+            rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
+        )
+    else:
+        source = re.escape(board or "")
+        found = re.search(
+            rf"`([^`\n]*?task list --source {source}(?: --status [a-z-]+)+ --json)`", task
+        )
     return found[1] if found else None
 
 
 def main() -> int:
     parsed = argparse.ArgumentParser(description=__doc__)
     parsed.add_argument("--prompt-log", type=Path, required=True)
-    parsed.add_argument("--run", required=True)
+    which = parsed.add_mutually_exclusive_group(required=True)
+    which.add_argument("--run", help="run the listing of this run's drafts")
+    which.add_argument("--board", help="run the listing of this board's accepted items")
     parsed.add_argument("--checkout", type=Path, required=True)
     parsed.add_argument("--witness", type=Path, required=True)
     arguments = parsed.parse_args()
@@ -101,14 +113,18 @@ def main() -> int:
         for line in arguments.prompt_log.read_text(encoding="utf-8").splitlines()
         if line
     ]
-    spelled = instruction(prompts[-1], arguments.run) if prompts else None
+    spelled = (
+        instruction(prompts[-1], run=arguments.run, board=arguments.board) if prompts else None
+    )
     if not prompts:
         record = _unanswered(f"no prompt was recorded at {arguments.prompt_log}")
     elif spelled is None:
-        record = _unanswered(
-            "the task names no `<store> task list --source drafts --project "
-            f"{arguments.run} --json` instruction to run"
+        wanted = (
+            f"--source drafts --project {arguments.run}"
+            if arguments.run is not None
+            else f"--source {arguments.board} --status <accepted>…"
         )
+        record = _unanswered(f"the task names no `<store> task list {wanted} --json` instruction")
     else:
         command = shlex.split(spelled)
         older = os.environ["OLDER_PLAN_STORE_DIR"]

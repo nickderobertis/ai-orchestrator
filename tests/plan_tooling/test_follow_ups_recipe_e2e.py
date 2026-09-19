@@ -94,6 +94,12 @@ STORE_INSTRUCTION_WITNESS = "store-instruction.witness"
 VALIDATE_WITNESS = "validate-older-first.witness"
 #: The older plan store's own log of what it served during that validate, under the bench.
 VALIDATE_SERVED = "validate-older-first.served"
+#: What the task's own accepted-items listing answered, run as the task spells it; what the
+#: validators printed for the three refused shapes; and what `board-status` printed on the
+#: re-dispatch for the ticket whose accepted item a person had un-accepted.
+ACCEPTED_WITNESS = "accepted-items.witness"
+REFUSED_WITNESS = "refused-shapes.witness"
+REDERIVE_WITNESS = "rederive.witness"
 
 #: The launching session this journey states, and everything an enclosing dispatch would
 #: otherwise decide for these launches.
@@ -128,8 +134,11 @@ PERSONA = "../personas/follow-up.yaml"
 #: The tracked template the recipe composes the agent's task from, relative to this checkout.
 TEMPLATE = "config/follow-up-task.md"
 
-#: The repository every draft here is about, and the commit its claims were verified at.
+#: The repository every draft here is about, and the commit its claims were verified at;
+#: and a second repository of the board's owner, which the accepted fix that narrows a ticket
+#: here lives in, because the accepted reading is of the whole board and not of one repository.
 REPOSITORY = "github.com/nickderobertis/some-service"
+OTHER_REPOSITORY = "github.com/nickderobertis/other-service"
 COMMIT = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 VERIFIED_AT = "2026-01-01T00:00:00Z"
 
@@ -138,10 +147,52 @@ VERIFIED_AT = "2026-01-01T00:00:00Z"
 HOST = socket.gethostname()
 READ_FROM_HOSTNAME = "host-read-from-hostname"
 
-#: The two root causes the main run's drafts carry: one no board item names yet, and one an
-#: earlier run already filed an open issue for.
+#: The root causes the main run's drafts carry: one no board item names yet, one an earlier
+#: run already filed an open issue for, one an accepted ticket's fix removes outright, and
+#: one a proposed ticket's fix would remove — which is never assumed.
 NEW_CAUSE = "listing-cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
+EVAPORATED_CAUSE = "retry-storm-on-a-flaky-listing"
+RELATED_CAUSE = "sweep-follows-a-symlink"
+
+#: Three items of other root causes the board holds before the first pass, each with the
+#: `url` the board reports for an item, and the fix each states: an accepted one, filed in
+#: the other repository, that narrows `NEW_CAUSE`'s impact; an accepted one that removes
+#: `EVAPORATED_CAUSE`; and a proposal that would remove `RELATED_CAUSE`.
+NARROWING_CAUSE = "export-paginates-by-offset"
+REMOVING_CAUSE = "retry-loop-never-backs-off"
+PROPOSED_CAUSE = "sweep-ignores-a-symlink"
+ISSUES = "https://github.com/nickderobertis/some-service/issues/"
+OTHER_ISSUES = "https://github.com/nickderobertis/other-service/issues/"
+NARROWING_URL, REMOVING_URL, PROPOSED_URL = OTHER_ISSUES + "41", ISSUES + "42", ISSUES + "43"
+#: What the ticket says where the accepted fix narrowed it, and where a proposal is related;
+#: the severity lines the narrowed ticket carries, below the ones a ticket carries otherwise;
+#: and what the related ticket says once that proposal is accepted and removes its root cause.
+ASSUMED = f"Assuming the fix in {NARROWING_URL} lands, the export is unaffected."
+NARROWED_CAUSE = f"Once {NARROWING_URL} lands, only the listing's own cursor is affected."
+REFIXED = (
+    f"- Paging the export by cursor here too: rejected because {NARROWING_URL} already does that."
+)
+#: The fix that remains right once the narrowing one is in, in the displaced one's place.
+REPLACEMENT_FIX = (
+    f"Have the listing hand its cursor to the export: chosen because {NARROWING_URL} already "
+    "pages the export by cursor, so nothing here pages it again."
+)
+NARROWED_SEVERITY = (tickets.Severity.MEDIUM, tickets.Severity.LOW)
+FULL_SEVERITY = (tickets.Severity.HIGH, tickets.Severity.MEDIUM)
+RELATED = f"Related: {PROPOSED_URL} proposes the sweep fix, and is not assumed."
+WITHDRAWN = f"Withdrawn: the accepted fix in {PROPOSED_URL} removes this root cause too."
+#: The first pass's report, naming the draft dropped under the accepted item's URL.
+DROPPED_REPORT = (
+    f"Dropped drafts: the `{EVAPORATED_CAUSE}` draft, because the accepted fix in "
+    f"{REMOVING_URL} removes its root cause too."
+)
+
+#: The three ticket shapes the first pass's turn writes and has refused: an edge of the
+#: related kind, edges naming two sources, and a far end whose URL the body never names.
+REFUSED_RELATED_KIND = "refused-related-kind"
+REFUSED_TWO_SOURCES = "refused-two-sources"
+REFUSED_URL_ABSENT = "refused-url-absent"
 
 #: The two schema-4 tickets a run filed before a ticket stated one fix — the shape of every
 #: ticket on the live board: the one a feedback re-dispatch brings to the current shape, and
@@ -304,33 +355,51 @@ def _ticket(
     body: str,
     host: str = READ_FROM_HOSTNAME,
     rejected: str | None = None,
+    depends_on: tuple[str, ...] = (),
+    impact_note: str = "",
+    severity: tuple[tickets.Severity, tickets.Severity] = FULL_SEVERITY,
+    root_cause_note: str = "",
+    suggested_fix: str | None = None,
+    repository: str = REPOSITORY,
 ) -> tickets.Ticket:
     """A `backlog` ticket, naming ``host`` in its record and in its `## Evidence` section.
 
-    ``rejected``, when given, is its `## Rejected fixes` section, directly after the fix.
+    ``rejected``, when given, is its `## Rejected fixes` section, directly after the fix;
+    ``depends_on`` names the accepted items it is written against, ``impact_note`` is what
+    its `## Impact` prose says about them, or about a related proposal, ``severity`` is
+    that section's severity with no workaround and with it, ``root_cause_note`` is what
+    `## Root cause` says once an accepted fix narrowed where the cause bites, and
+    ``suggested_fix`` the one fix `## Suggested fix` states in place of the plain one. The
+    ticket is of ``repository``, its title and its basis alike.
     """
     return tickets.Ticket(
         title=title,
         status=tickets.Status.PROPOSED,
         root_cause=tickets.RootCause(cause),
-        repository=tickets.Origin(REPOSITORY),
+        repository=tickets.Origin(repository),
         created_by_run=tickets.RunId(run),
         owning_runs=(tickets.RunId(run),),
         drafts=tuple(tickets.QualifiedDraftId(draft) for draft in drafts),
-        basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
+        basis=(tickets.Basis(tickets.Origin(repository), tickets.Commit(COMMIT)),),
         verified_at=tickets.Timestamp(VERIFIED_AT),
         host=tickets.Host(host),
         body="\n\n".join(
             f"## {heading}\n\n"
             + (
                 tickets.impact_section(
-                    f"{body}: some-service's readers lose the last page of every listing.",
-                    tickets.Severity.HIGH,
+                    f"{body}: some-service's readers lose the last page of every listing. "
+                    f"{impact_note}".rstrip(),
+                    severity[0],
                     "readers request the last page by its number",
-                    tickets.Severity.MEDIUM,
+                    severity[1],
                 )
                 if heading == tickets.IMPACT
-                else f"{body} ({heading})."
+                else (
+                    suggested_fix
+                    if suggested_fix is not None and heading == tickets.SUGGESTED_FIX
+                    else f"{body} ({heading})."
+                )
+                + (f" {root_cause_note}" if root_cause_note and heading == "Root cause" else "")
             )
             + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
             + (
@@ -340,7 +409,73 @@ def _ticket(
             )
             for heading in tickets.HEADINGS
         ),
+        depends_on=tuple(tickets.QualifiedBoardId(held) for held in depends_on),
     )
+
+
+def _board_item(
+    bench: Bench,
+    run: str,
+    cause: str,
+    status: str,
+    url: str,
+    fix: str,
+    repository: str = REPOSITORY,
+) -> str:
+    """An item of ``run`` the stand-in board holds, put there the way a run's ticket is: its id.
+
+    The ticket, of ``repository``, is written beside ``run``'s drafts and copied onto the
+    board through the store's own `task copy`, then moved to ``status`` through its
+    `task status set` — the two verbs a follow-up run and a person use. The one thing
+    neither verb produces is the `url` a real board reports for an issue, so that key alone
+    is written into the copied `local-md` record, which is what such an item is, and the
+    store reads it back as the item's `url`, exactly as the GitHub board reports an issue's.
+    """
+    ticket = _ticket(
+        run,
+        cause,
+        (f"drafts:{run}/drafts/a-draft",),
+        f"{tickets.repository_name(repository)}: {cause}",
+        fix,
+        repository=repository,
+    )
+    path = tickets.ticket_path(bench.drafts_root, run, cause)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tickets.render(ticket).replace(READ_FROM_HOSTNAME, HOST), encoding="utf-8")
+    copied = _run(
+        [str(ONETASKGRAPH_BIN), "task", "copy", tickets.qualified_id(run, cause), "--to", BOARD],
+        bench,
+    )
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    qualified = f"{BOARD}:{run}/tickets/{cause}"
+    _moved(bench, qualified, status)
+    location = _item(bench, qualified)["location"]
+    assert isinstance(location, dict), location
+    record = Path(str(location["path"]))
+    text = record.read_text(encoding="utf-8")
+    # llmlint: ignore-block[tests_mirror_real_usage] No store verb sets a `local-md` item's
+    # `url`: a real board reports one for every issue on its own, and a stand-in can only
+    # carry one in its record, which is what `tests/test_follow_up_tickets.py` does for the
+    # one status word the store refuses to set.
+    record.write_text(
+        text.replace("\n---\n", f"\nurl: {json.dumps(url)}\n---\n", 1), encoding="utf-8"
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    assert _item(bench, qualified)["url"] == url, "the store does not report the url written"
+    return qualified
+
+
+def _deps(bench: Bench, qualified: str, *direction: str) -> list[tuple[str, str, str]]:
+    """The edges the store walks from ``qualified``: each as (from, to, kind)."""
+    edges = _store(bench, "task", "deps", qualified, *direction)["items"]
+    assert isinstance(edges, list), edges
+    walked = []
+    for edge in edges:
+        assert isinstance(edge, dict), edge
+        start, end = edge["from"], edge["to"]
+        assert isinstance(start, dict) and isinstance(end, dict), edge
+        walked.append((str(start["id"]), str(end["id"]), str(edge["kind"])))
+    return walked
 
 
 #: What a schema-4 ticket's `## Suggested fixes` offered: options, rather than one fix.
@@ -395,18 +530,77 @@ def _placed(staged: Path, ticket: Path) -> list[str]:
     ]
 
 
-def _decided_and_copied(python: str, store: str, ticket: Path, qualified: str) -> list[str]:
-    """The agent's step before copying: ask the board the status, write it, validate, copy."""
+def _decided_and_copied(
+    python: str, store: str, ticket: Path, qualified: str, *extra: str
+) -> list[str]:
+    """The agent's step before copying: ask the board the status, write it, validate, copy.
+
+    ``extra`` is `--withdraw` for a ticket this run withdraws.
+    """
     return [
         "bash",
         "-c",
         "set -euo pipefail\n"
         f"cd {shlex.quote(str(REPO_ROOT))}\n"
         f"word=$({python} -m orchestrator.follow_up_tickets board-status --board {BOARD} "
-        f"{shlex.quote(str(ticket))})\n"
+        f"{shlex.join(extra)} {shlex.quote(str(ticket))})\n"
         f'sed -i "s/^status: .*/status: \\"$word\\"/" {shlex.quote(str(ticket))}\n'
         f"{python} -m orchestrator.follow_up_tickets validate {shlex.quote(str(ticket))}\n"
         f"{store} task copy {qualified} --to {BOARD}\n",
+    ]
+
+
+def _refused_shapes(python: str, witness: Path, shaped: dict[str, Path]) -> list[str]:
+    """The agent's commands over the three shapes the tooling refuses, and their removal.
+
+    Each is validated as the task says; the one whose shape passes is then asked
+    `board-status` as the task says; what every command printed and exited with is kept
+    in ``witness``; and the three files are removed, as an agent rewrites a refused
+    ticket. Nothing copies, because nothing was let through.
+    """
+    validate = shlex.join([python, "-m", "orchestrator.follow_up_tickets", "validate"])
+    decide = shlex.join(
+        [python, "-m", "orchestrator.follow_up_tickets", "board-status", "--board", BOARD]
+    )
+    lines = [f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"]
+    for name, path in shaped.items():
+        lines.append(
+            f"echo '== validate {name}' >> {shlex.quote(str(witness))}\n"
+            f"{validate} {shlex.quote(str(path))} >> {shlex.quote(str(witness))} 2>&1\n"
+            f'echo "exit $?" >> {shlex.quote(str(witness))}\n'
+        )
+    absent = shaped[REFUSED_URL_ABSENT]
+    lines.append(
+        f"echo '== board-status {REFUSED_URL_ABSENT}' >> {shlex.quote(str(witness))}\n"
+        f"{decide} {shlex.quote(str(absent))} >> {shlex.quote(str(witness))} 2>&1\n"
+        f'echo "exit $?" >> {shlex.quote(str(witness))}\n'
+    )
+    lines.append("rm " + " ".join(shlex.quote(str(path)) for path in shaped.values()) + "\n")
+    return ["bash", "-c", "".join(lines)]
+
+
+def _refused_then_kept(
+    python: str, store: str, witness: Path, ticket: Path, qualified: str
+) -> list[str]:
+    """The re-dispatch's first step over its ticket: ask the board, and copy only if it says so.
+
+    What `board-status` printed and exited with goes to ``witness``, and the copy is chained
+    on its success, so a refusal is exactly what keeps the ticket off the board.
+    """
+    decide = shlex.join(
+        [python, "-m", "orchestrator.follow_up_tickets", "board-status", "--board", BOARD]
+    )
+    quoted = shlex.quote(str(witness))
+    return [
+        "bash",
+        "-c",
+        f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
+        f"if word=$({decide} {shlex.quote(str(ticket))} 2>> {quoted}); then\n"
+        f'  echo "decided $word" >> {quoted}\n'
+        f"  {store} task copy {qualified} --to {BOARD} && echo copied >> {quoted}\n"
+        f"else\n"
+        f'  echo "refused $?" >> {quoted}\n'
+        f"fi\n",
     ]
 
 
@@ -544,9 +738,24 @@ class Followed(NamedTuple):
     other_after_first: dict[str, object]
     comments_after_first: list[dict[str, object]]
     board_after_first: list[str]
+    narrowing_item: str
+    removing_item: str
+    proposed_item: str
+    evaporated_draft: Path
+    related_after_first: dict[str, object]
+    new_deps_after_first: list[tuple[str, str, str]]
+    narrowing_dependents_after_first: list[tuple[str, str, str]]
+    unchanged_by_after_first: list[tuple[str, str, str]]
+    refused_witness: str
+    first_transcript: subprocess.CompletedProcess[str]
     new_after_move: dict[str, object]
+    narrowing_after_move: dict[str, object]
     second: Pass
+    rederive_witness: str
+    new_deps_after_second: list[tuple[str, str, str]]
     new_after_second: dict[str, object]
+    related_after_second: dict[str, object]
+    related_deps_after_second: list[tuple[str, str, str]]
     local_after_second: dict[str, object]
     other_after_second: dict[str, object]
     comments_after_second: list[dict[str, object]]
@@ -625,9 +834,14 @@ def _prompt_log(bench: Bench, name: str) -> Path:
     return bench.tmp / f"prompts-{name}.jsonl"
 
 
-def _pass(bench: Bench, name: str, main: str, *extra: str) -> Pass:
+def _pass(bench: Bench, name: str, main: str, *extra: str, report: str | None = None) -> Pass:
     log = _prompt_log(bench, name)
     environment = bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(log)}
+    if report is not None:
+        # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted: the
+        # report is the answer text the turn ends with, which the real engine journals and
+        # `just transcript` renders, and a paid turn's answer would be nondeterministic.
+        environment["FAKE_CODEX_ANSWERS"] = json.dumps([report])
     result = _run(
         ["just", "follow-ups", main, "--to", BOARD, *extra], bench, environment=environment
     )
@@ -673,18 +887,111 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         # A person deferred the earlier run's ticket: it is still open, and takes evidence.
         _moved(bench, other_issue, tickets.Status.DEFERRED.value)
         other_before = _item(bench, other_issue)
+        # Three items of other root causes, as the board reports them: two a person
+        # accepted, whose fixes bear on this run's drafts, and one still a proposal.
+        narrowing_item = _board_item(
+            bench,
+            other,
+            NARROWING_CAUSE,
+            tickets.Status.ACCEPTED.value,
+            NARROWING_URL,
+            "Page the export by cursor, which leaves the listing's readers the last page",
+            repository=OTHER_REPOSITORY,
+        )
+        removing_item = _board_item(
+            bench,
+            other,
+            REMOVING_CAUSE,
+            tickets.Status.ACCEPTED.value,
+            REMOVING_URL,
+            "Back the retry loop off, which ends every retry storm",
+        )
+        proposed_item = _board_item(
+            bench,
+            other,
+            PROPOSED_CAUSE,
+            tickets.Status.PROPOSED.value,
+            PROPOSED_URL,
+            "Have the sweep ignore symlinks",
+        )
 
         # A run with nothing to verify.
         empty_run = f"fu-empty-{pid}"
         empty = _run(["just", "follow-ups", empty_run, "--to", BOARD], bench)
 
-        # The main run's two drafts, one per root cause.
+        # The main run's four drafts, one per root cause.
         new_draft = _draft(bench, main, "The listing cursor skips the last page")
         shared_draft = _draft(bench, main, "The sweep trailer omits a family")
+        evaporated_draft = _draft(bench, main, "A flaky listing sets off a retry storm")
+        related_draft = _draft(bench, main, "The sweep follows a symlink")
         new_ticket = tickets.ticket_path(bench.drafts_root, main, NEW_CAUSE)
         shared_ticket = tickets.ticket_path(bench.drafts_root, main, SHARED_CAUSE)
+        related_ticket = tickets.ticket_path(bench.drafts_root, main, RELATED_CAUSE)
         title = "some-service: the listing cursor skips the last page"
-        first_ticket = _ticket(main, NEW_CAUSE, (_draft_id(main, new_draft),), title, "Verified")
+        # Written against the accepted narrowing fix: it depends on that item, and its
+        # `## Impact` says what it assumes, by the item's URL.
+        first_ticket = _ticket(
+            main,
+            NEW_CAUSE,
+            (_draft_id(main, new_draft),),
+            title,
+            "Verified",
+            depends_on=(narrowing_item,),
+            impact_note=ASSUMED,
+            severity=NARROWED_SEVERITY,
+            root_cause_note=NARROWED_CAUSE,
+            suggested_fix=REPLACEMENT_FIX,
+            rejected=REFIXED,
+        )
+        # Related to a proposal, which is named as related and never assumed: no entry.
+        related = _ticket(
+            main,
+            RELATED_CAUSE,
+            (_draft_id(main, related_draft),),
+            "some-service: the sweep follows a symlink",
+            "Verified beside a proposal",
+            impact_note=RELATED,
+        )
+        # The three shapes the tooling refuses, each under a root cause of its own.
+        shaped = {
+            name: tickets.ticket_path(bench.drafts_root, main, name)
+            for name in (REFUSED_RELATED_KIND, REFUSED_TWO_SOURCES, REFUSED_URL_ABSENT)
+        }
+        refused_texts = {
+            REFUSED_RELATED_KIND: tickets.render(
+                _ticket(
+                    main,
+                    REFUSED_RELATED_KIND,
+                    (_draft_id(main, new_draft),),
+                    f"some-service: {REFUSED_RELATED_KIND}",
+                    "Refused",
+                    depends_on=(narrowing_item,),
+                    impact_note=ASSUMED,
+                )
+            ).replace('"item": "task"}', '"item": "task", "kind": "related"}'),
+            REFUSED_TWO_SOURCES: tickets.render(
+                _ticket(
+                    main,
+                    REFUSED_TWO_SOURCES,
+                    (_draft_id(main, new_draft),),
+                    f"some-service: {REFUSED_TWO_SOURCES}",
+                    "Refused",
+                    depends_on=(narrowing_item, f"elsewhere:{other}/tickets/{NARROWING_CAUSE}"),
+                    impact_note=ASSUMED,
+                )
+            ),
+            REFUSED_URL_ABSENT: tickets.render(
+                _ticket(
+                    main,
+                    REFUSED_URL_ABSENT,
+                    (_draft_id(main, new_draft),),
+                    f"some-service: {REFUSED_URL_ABSENT}",
+                    "Refused",
+                    depends_on=(narrowing_item,),
+                )
+            ),
+        }
+        refused_witness = bench.tmp / REFUSED_WITNESS
         shared = _ticket(
             main,
             SHARED_CAUSE,
@@ -717,17 +1024,42 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--witness",
                     STORE_INSTRUCTION_WITNESS,
                 ],
+                # The board's accepted items, listed as the task's own step spells it.
+                [
+                    python,
+                    str(RUN_TASK_STORE_INSTRUCTION),
+                    "--prompt-log",
+                    str(_prompt_log(bench, "first")),
+                    "--board",
+                    BOARD,
+                    "--checkout",
+                    str(REPO_ROOT),
+                    "--witness",
+                    ACCEPTED_WITNESS,
+                ],
                 ["mkdir", "-p", str(new_ticket.parent)],
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
-                [*validate, str(new_ticket), str(shared_ticket)],
+                _placed(_staged(bench, "related.md", tickets.render(related)), related_ticket),
+                [*validate, str(new_ticket), str(shared_ticket), str(related_ticket)],
+                # The draft the accepted removing fix evaporates: no ticket, the draft gone.
+                ["rm", str(evaporated_draft)],
+                # The three refused shapes, written, refused, and removed.
+                *[
+                    _placed(_staged(bench, f"{name}.md", text), shaped[name])
+                    for name, text in refused_texts.items()
+                ],
+                _refused_shapes(python, refused_witness, shaped),
                 # The same validate instruction, under the search path the incident's
                 # shell had: the older plan store first and this checkout's `.venv/bin`
                 # absent. The helper says what it records and why.
                 _validated_older_first(bench, python, shared_ticket, bench.tmp / VALIDATE_SERVED),
-                ["rm", str(new_draft), str(shared_draft)],
+                ["rm", str(new_draft), str(shared_draft), str(related_draft)],
                 _decided_and_copied(
                     python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
+                ),
+                _decided_and_copied(
+                    python, store, related_ticket, tickets.qualified_id(main, RELATED_CAUSE)
                 ),
                 _from_checkout(
                     store,
@@ -757,7 +1089,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 ],
             ],
         )
-        first = _pass(bench, "first", main)
+        first = _pass(bench, "first", main, report=DROPPED_REPORT)
         started.append(first.run)
         first_turn = _turn(bench, first.run)
         # The turn rides on the failure, because a turn that fell through says why in its report
@@ -772,10 +1104,38 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         other_after_first = _item(bench, other_issue)
         comments_after_first = _comments(bench, other_issue)
         board_after_first = _board_ids(bench)
+        related_after_first = _item(bench, f"{BOARD}:{main}/tickets/{RELATED_CAUSE}")
+        new_deps_after_first = _deps(bench, new_issue)
+        narrowing_dependents_after_first = _deps(
+            bench, narrowing_item, "--direction", "depended-on-by"
+        )
+        unchanged_by_after_first = [
+            edge
+            for item in (removing_item, proposed_item)
+            for edge in _deps(bench, item, "--direction", "depended-on-by")
+        ]
+        first_transcript = _run(["just", "transcript", first.run], bench)
 
-        # The user defers the new ticket: its board item is moved to `draft`.
+        # The user defers the new ticket: its board item is moved to `draft`. And they
+        # un-accept the narrowing ticket the new one was written against.
         _moved(bench, new_issue, tickets.Status.DEFERRED.value)
         new_after_move = _item(bench, new_issue)
+        _moved(bench, narrowing_item, tickets.Status.PROPOSED.value)
+        narrowing_after_move = _item(bench, narrowing_item)
+        # And they accept the proposal whose fix removes the related ticket's root cause.
+        _moved(bench, proposed_item, tickets.Status.ACCEPTED.value)
+        related_issue = f"{BOARD}:{main}/tickets/{RELATED_CAUSE}"
+        # The related ticket evaporates on this pass: withdrawn under the now-accepted item,
+        # depending on it, with the reason in its text naming that item.
+        withdrawn = _ticket(
+            main,
+            RELATED_CAUSE,
+            related.drafts,
+            related.title,
+            "Verified beside a proposal",
+            depends_on=(proposed_item,),
+            impact_note=WITHDRAWN,
+        )
 
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
         # by copying its ticket again, and its comment on the earlier run's issue is edited.
@@ -802,12 +1162,35 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             f"id=$({store} task comment list {other_issue} --json | {python} {pick})\n"
             f'{store} task comment edit {other_issue} "$id" --body-file {edited_file}\n'
         )
+        rederive_witness = bench.tmp / REDERIVE_WITNESS
         _script(
             bench,
             main,
             [
-                # Staged as the proposal it was first written as; the board decides.
+                # First, the ticket as the last pass left it — depending on an item a person
+                # has since un-accepted: the board refuses it, and nothing is copied.
+                _refused_then_kept(
+                    python,
+                    store,
+                    rederive_witness,
+                    new_ticket,
+                    tickets.qualified_id(main, NEW_CAUSE),
+                ),
+                # Re-derived against the board as it now is: no entry, no assumption, and
+                # staged as the proposal it was first written as; the board decides.
                 _placed(_staged(bench, "new-edited.md", tickets.render(edited)), new_ticket),
+                # The related ticket, evaporated by the newly accepted fix: withdrawn.
+                _placed(
+                    _staged(bench, "related-withdrawn.md", tickets.render(withdrawn)),
+                    related_ticket,
+                ),
+                _decided_and_copied(
+                    python,
+                    store,
+                    related_ticket,
+                    tickets.qualified_id(main, RELATED_CAUSE),
+                    "--withdraw",
+                ),
                 _decided_and_copied(
                     python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
                 ),
@@ -817,7 +1200,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         second = _pass(bench, "second", main, "--feedback", str(feedback))
         started.append(second.run)
         assert second.result.returncode == OK, second.result.stdout + second.result.stderr
+        new_deps_after_second = _deps(bench, new_issue)
         new_after_second = _item(bench, new_issue)
+        related_after_second = _item(bench, related_issue)
+        related_deps_after_second = _deps(bench, related_issue)
         local_after_second = _item(bench, tickets.qualified_id(main, NEW_CAUSE))
         other_after_second = _item(bench, other_issue)
         comments_after_second = _comments(bench, other_issue)
@@ -969,7 +1355,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             bench=bench,
             main=main,
             other=other,
-            consumed=[new_draft, shared_draft],
+            consumed=[new_draft, shared_draft, evaporated_draft, related_draft],
             other_before=other_before,
             empty=empty,
             empty_run=empty_run,
@@ -979,9 +1365,24 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             other_after_first=other_after_first,
             comments_after_first=comments_after_first,
             board_after_first=board_after_first,
+            narrowing_item=narrowing_item,
+            removing_item=removing_item,
+            proposed_item=proposed_item,
+            evaporated_draft=evaporated_draft,
+            related_after_first=related_after_first,
+            new_deps_after_first=new_deps_after_first,
+            narrowing_dependents_after_first=narrowing_dependents_after_first,
+            unchanged_by_after_first=unchanged_by_after_first,
+            refused_witness=refused_witness.read_text(encoding="utf-8"),
+            first_transcript=first_transcript,
             new_after_move=new_after_move,
+            narrowing_after_move=narrowing_after_move,
             second=second,
+            rederive_witness=rederive_witness.read_text(encoding="utf-8"),
+            new_deps_after_second=new_deps_after_second,
             new_after_second=new_after_second,
+            related_after_second=related_after_second,
+            related_deps_after_second=related_deps_after_second,
             local_after_second=local_after_second,
             other_after_second=other_after_second,
             comments_after_second=comments_after_second,
@@ -1449,9 +1850,12 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
     decided = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets board-status) --board", steps)
     assert decided is not None, steps
     assert decided.start() < steps.index("**Put each ticket on the board.**"), steps
+    validated = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets validate) <path", steps)
+    assert validated is not None, steps
     contract = (
         tickets.ticket_contract(main, BOARD)
         .replace("@DRAFTS_ROOT@", str(root))
+        .replace("@VALIDATE@", validated[1])
         .replace("@BOARD_STATUS@", decided[1])
         .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
     )
@@ -1674,3 +2078,217 @@ def test_the_exemption_holds_only_while_the_stamp_names_exactly_the_one_node(
     assert tampered.returncode == 1, tampered.stdout + tampered.stderr
     assert "1 task(s) that launch never wrote (work-somebody-added)" in tampered.stderr
     assert "nothing was dispatched" in tampered.stderr
+
+
+def test_the_task_lists_the_boards_accepted_items_and_that_listing_selects_exactly_them(
+    followed: Followed,
+) -> None:
+    """The step's own listing, run as the task spells it, answers every accepted item and no other.
+
+    Read off the witness the turn wrote: the argv is the one the composed task fixes, its
+    `--status` flags rendered from the module's vocabulary, and what it answered is the
+    two accepted items — never the proposal, never the deferred item of the other run.
+    """
+    (task,) = followed.first.prompts
+    flat = " ".join(task.split())
+    assert (
+        "**Write each ticket as if the board's accepted fixes were already in.** List the "
+        "board's accepted items — those at `Todo` (`todo`), `Queued` (`queued`), `In Progress` "
+        f"(`in-progress`) and `Done` (`done`) — with `{ONETASKGRAPH_BIN} task list --source "
+        f"{BOARD} --status todo --status queued --status in-progress --status done --json`"
+    ) in flat
+    witness = followed.first_turn.directory.resolve() / ACCEPTED_WITNESS
+    assert witness.is_file(), (
+        f"no command the turn ran wrote {ACCEPTED_WITNESS} into {followed.first_turn.directory}; "
+        f"{_ran(followed.bench)}"
+    )
+    # llmlint: ignore[boundary_inputs_validated] The witness this journey's own helper wrote,
+    # at the path this journey named; every field read here is asserted on below.
+    probe = json.loads(witness.read_text(encoding="utf-8"))
+    assert probe["problem"] is None, probe["problem"]
+    assert probe["command"] == [
+        str(ONETASKGRAPH_BIN),
+        "task",
+        "list",
+        "--source",
+        BOARD,
+        *(word for status in tickets.Status if status.accepted for word in ("--status", status)),
+        "--json",
+    ], probe["command"]
+    assert probe["returncode"] == 0, probe
+    listed = json.loads(probe["stdout"])["items"]
+    assert sorted(str(one["id"]) for one in listed) == sorted(
+        [followed.narrowing_item, followed.removing_item]
+    ), probe
+    assert followed.proposed_item not in {str(one["id"]) for one in listed}
+
+
+def test_a_ticket_narrowed_by_an_accepted_fix_lands_depending_on_it_with_the_url_in_its_impact(
+    followed: Followed,
+) -> None:
+    """The board's dependency walk reports the edge from both ends, and the body names the URL."""
+    new_issue = f"{BOARD}:{followed.main}/tickets/{NEW_CAUSE}"
+    landed = tickets.from_store_item(followed.new_after_first)
+
+    assert followed.new_deps_after_first == [(new_issue, followed.narrowing_item, "blocks")]
+    assert (new_issue, followed.narrowing_item, "blocks") in (
+        followed.narrowing_dependents_after_first
+    )
+    impact = landed.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert ASSUMED in impact, impact
+    assert NARROWING_URL in impact
+    assert _severity_lines(impact) == NARROWED_SEVERITY, "the narrowed severity did not land"
+    cause = landed.body.split("## Root cause\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert NARROWED_CAUSE in cause, "the narrowed root cause did not land"
+    fix = landed.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert fix == REPLACEMENT_FIX, "the fix that remains right once the accepted one is in"
+    assert NARROWING_URL in fix, "the replacement does not say which accepted fix it is chosen on"
+    rejected = landed.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert rejected == REFIXED, "the fix the accepted one displaced was not recorded as rejected"
+    # The accepted fix lives in another repository of the board's owner: the reading is of the
+    # whole board, and a ticket here depends on it across repositories.
+    accepted = _item(followed.bench, followed.narrowing_item)
+    assert accepted["repositories"] == [OTHER_REPOSITORY] != [landed.repository]
+    assert NARROWING_URL.startswith(OTHER_ISSUES)
+    # `task show` carries no `depends_on`: the walk above is the one read of the edge.
+    assert tickets.DEPENDENCY_FIELD not in followed.new_after_first
+    assert landed.depends_on == (), "a board item read without its edges depends on nothing"
+
+
+def test_a_draft_an_accepted_fix_removes_is_dropped_under_that_items_url_and_reaches_no_board(
+    followed: Followed,
+) -> None:
+    assert not followed.evaporated_draft.exists(), "the evaporated draft was left"
+    assert not any(EVAPORATED_CAUSE in held for held in followed.board_after_first), (
+        followed.board_after_first
+    )
+    assert not tickets.ticket_path(
+        followed.bench.drafts_root, followed.main, EVAPORATED_CAUSE
+    ).exists()
+    # The report is the turn's answer, which the run's journal keeps and `just transcript`
+    # renders — where an operator reads a settled node's report.
+    transcript = followed.first_transcript
+    assert transcript.returncode == 0, transcript.stdout + transcript.stderr
+    assert DROPPED_REPORT in " ".join(transcript.stdout.split()), transcript.stdout
+    assert REMOVING_URL in transcript.stdout
+
+
+def _severity_lines(impact: str) -> tuple[tickets.Severity, tickets.Severity]:
+    """The severity with no workaround and with it, as an `## Impact` section states them."""
+    lines = {line["label"]: line["value"].strip() for line in tickets.IMPACT_LINE.finditer(impact)}
+    return (
+        tickets.Severity(lines[tickets.SEVERITY_LINE]),
+        tickets.Severity(lines[tickets.MITIGATED_LINE]),
+    )
+
+
+def test_a_ticket_related_to_a_proposal_lands_unchanged_with_no_edge_naming_it_as_related(
+    followed: Followed,
+) -> None:
+    """The unchanged fate against both accepted fixes, and a proposal named as related only."""
+    related_issue = f"{BOARD}:{followed.main}/tickets/{RELATED_CAUSE}"
+    landed = tickets.from_store_item(followed.related_after_first)
+
+    assert related_issue in followed.board_after_first
+    assert followed.narrowing_dependents_after_first == [
+        (f"{BOARD}:{followed.main}/tickets/{NEW_CAUSE}", followed.narrowing_item, "blocks")
+    ], "an accepted fix that does not bear on the related ticket changed it"
+    assert followed.unchanged_by_after_first == [], (
+        "the accepted fix that bears on nothing, or the proposal, was depended on"
+    )
+    assert _category(followed.related_after_first) == tickets.Status.PROPOSED
+    assert RELATED in landed.body and PROPOSED_URL in landed.body
+    impact = landed.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert _severity_lines(impact) == FULL_SEVERITY
+
+
+def test_a_re_dispatch_withdraws_its_own_item_a_newly_accepted_fix_evaporates_depending_on_it(
+    followed: Followed,
+) -> None:
+    """The proposal was accepted between the passes, and its fix removes the related cause.
+
+    The re-dispatch withdrew this run's own item for it under the withdrawal rules — the
+    board held it as a proposal nobody accepted — with the reason naming the accepted item,
+    on which the withdrawn ticket now depends.
+    """
+    related_issue = f"{BOARD}:{followed.main}/tickets/{RELATED_CAUSE}"
+    withdrawn = tickets.from_store_item(followed.related_after_second)
+
+    assert _category(followed.related_after_first) == tickets.Status.PROPOSED
+    assert _category(followed.related_after_second) == tickets.Status.WITHDRAWN
+    assert followed.related_deps_after_second == [(related_issue, followed.proposed_item, "blocks")]
+    assert (related_issue, followed.proposed_item, "blocks") in _deps(
+        followed.bench, followed.proposed_item, "--direction", "depended-on-by"
+    )
+    assert WITHDRAWN in withdrawn.body and PROPOSED_URL in withdrawn.body
+    assert followed.board_after_second == followed.board_after_first, "a withdrawal added an item"
+
+
+def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no_board(
+    followed: Followed,
+) -> None:
+    """`validate` refuses the two edge shapes and `board-status` the URL the body never names."""
+    witness = followed.refused_witness
+    flat = " ".join(witness.split())
+    sections = re.split(r"== ", witness)[1:]
+    assert [section.split("\n", 1)[0] for section in sections] == [
+        f"validate {REFUSED_RELATED_KIND}",
+        f"validate {REFUSED_TWO_SOURCES}",
+        f"validate {REFUSED_URL_ABSENT}",
+        f"board-status {REFUSED_URL_ABSENT}",
+    ], witness
+    related, two, absent, decided = (" ".join(section.split()) for section in sections)
+
+    assert related.endswith(f"exit {tickets.UNSOUND}"), related
+    assert f"entry {followed.narrowing_item!r} is of kind 'related'" in related
+    assert two.endswith(f"exit {tickets.UNSOUND}"), two
+    assert f"entries name 2 sources (elsewhere, {BOARD})" in two
+    assert absent.endswith(f"exit {tickets.SOUND}"), absent
+    assert "is a sound ticket" in absent
+    assert decided.endswith(f"exit {tickets.NOT_ACCEPTED}"), decided
+    assert (
+        f"entry {followed.narrowing_item!r} names an item whose URL {NARROWING_URL} the ticket's "
+        "body never names"
+    ) in decided
+    assert "copy nothing for this ticket" in flat
+    for name in (REFUSED_RELATED_KIND, REFUSED_TWO_SOURCES, REFUSED_URL_ABSENT):
+        assert not any(name in held for held in followed.board_after_first), name
+        assert not tickets.ticket_path(followed.bench.drafts_root, followed.main, name).exists()
+
+
+def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_ticket_without_it(
+    followed: Followed,
+) -> None:
+    """A person un-accepted the narrowing ticket between the passes.
+
+    `board-status` on the unchanged ticket exits `NOT_ACCEPTED` naming the entry and what
+    the board holds, nothing is copied on it, and the re-derived ticket — no entry, no
+    assumption — updates the same board item, whose dependency walk then reports no edge.
+    """
+    witness = " ".join(followed.rederive_witness.split())
+
+    assert _category(followed.narrowing_after_move) == tickets.Status.PROPOSED
+    assert witness.endswith(f"refused {tickets.NOT_ACCEPTED}"), witness
+    assert "copied" not in witness and "decided" not in witness, witness
+    assert (
+        f"entry {followed.narrowing_item!r} names an item the board holds at 'backlog', not at "
+        "an accepted status (`todo`, `queued`, `in-progress`, `done`), so its fix is not assumed"
+    ) in witness
+    assert "re-derive it against the board as it now is" in witness
+    (task,) = followed.second.prompts
+    assert "are re-derived from the board as it now is on every pass" in " ".join(task.split())
+
+    assert followed.new_deps_after_first != []
+    assert followed.new_deps_after_second == []
+    assert _deps(followed.bench, followed.narrowing_item, "--direction", "depended-on-by") == []
+    edited = tickets.from_store_item(followed.new_after_second)
+    assert NARROWING_URL not in edited.body and ASSUMED not in edited.body
+    impact = edited.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert _severity_lines(impact) == FULL_SEVERITY, "the narrowed severity outlived the entry"
+    assert REPLACEMENT_FIX not in edited.body, "the replacement fix outlived the entry"
+    assert f"## {tickets.REJECTED_FIXES}" not in edited.body, "the displaced fix outlived the entry"
+    assert followed.new_after_second["content"] == followed.edited_body.replace(
+        READ_FROM_HOSTNAME, HOST
+    )
+    assert followed.board_after_second == followed.board_after_first
+    assert _deps(followed.bench, tickets.qualified_id(followed.main, NEW_CAUSE)) == []

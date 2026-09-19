@@ -73,20 +73,58 @@ there gets this run's evidence rather than a second issue.
    whole board, whichever repository an item's issue lives in, so narrow neither to a
    repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
    searched like any other open item and still takes this run's evidence.
-8. **Decide each ticket's status from the board, before every copy.** Run
+8. **Write each ticket as if the board's accepted fixes were already in.** List the
+   board's accepted items — those at @ACCEPTED_STATUSES@ — with
+   `@PLAN_STORE@ task list --source @BOARD@ @ACCEPTED_FILTER@ --json`, every page, the
+   whole board, whichever repository an item's issue lives in: an accepted fix in another
+   repository can change a ticket here. Read each item's `## Suggested fix`. This is **not**
+   the search of the step before: an accepted item carrying the same root cause as a
+   ticket is that step's — this run's evidence goes to it as a comment, and this step does
+   not touch that ticket. This step is for accepted tickets of *other* root causes whose
+   fixes bear on a ticket this run will copy. For each such ticket, decide against each
+   accepted fix as if it were in:
+   - **unchanged** — the fix does not bear on it: nothing changes;
+   - **evaporates** — the fix removes this root cause too: the ticket is not filed. Delete
+     its file and the drafts it consumed, and report those drafts as dropped, naming the
+     accepted item's URL. On a re-dispatch where the board already holds this run's own
+     item for it, withdraw that item instead, under the withdrawal rules of "The verified
+     ticket", with the reason in its text naming the accepted item;
+   - **shrinks** — the fix removes part of the impact or narrows where the root cause
+     bites: write `## Impact` (its prose and its severity lines) and, where the scope
+     narrows, `## Root cause` to what remains;
+   - **needs a different fix** — the fix the evidence would otherwise support conflicts
+     with, duplicates or is superseded by the accepted one: `## Suggested fix` states what
+     remains right once the accepted fix is in, and the fix it would otherwise have
+     proposed goes under `## Rejected fixes` with the accepted item as the reason.
+
+   <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether a `Done` fix has reached the basis is the agent's reading of a tree, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling holds for a `Done` item — that the accepted listing selects it and `board-status` admits it as a far end — is driven in `tests/test_follow_up_tickets.py` over every accepted status. -->
+   A `Done` item's fix is assumed only where it has not reached the basis recorded in
+   step 1 — read the tree; where it has, the verification at the basis already accounts
+   for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; a
+   clearly related one may be mentioned as related, as "The verified ticket" states.
+   <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+
+   For every fate but unchanged, add the item's `depends_on` entry, say in the text where
+   and how its fix changed the ticket with the item's URL, then validate the ticket again. On a
+   re-dispatch, re-derive all of this from the board as it now is, exactly as a first pass
+   does: an accepted ticket may have appeared, moved or been un-accepted since the last
+   pass, so entries are added and removed and the ticket's claims re-derived to match, and
+   this run's own item is edited by copying its ticket again.
+9. **Decide each ticket's status from the board, before every copy.** Run
    `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>`, adding `--withdraw` for a ticket
    this run withdraws, and write the word it prints as the ticket's `status`, then validate
    the ticket again. When it refuses, copy nothing for that ticket and keep what it printed
    for your report.
-9. **Put each ticket on the board.** Where no open item carries the root cause, or the item
-   that does is this run's own, copy the ticket as "The verified ticket" states. When the
-   store refuses that copy, copy nothing more for that ticket and keep what it printed for
-   your report. Where an
-   open item for it was created by another run, copy nothing: add this run's one comment to
-   that item, or edit the comment this run already left there, under "Ownership on the
-   board" below.
-10. **Report** every issue you created or updated with its URL (its location where the
-    board reports no URL), every dropped draft with its reason, every ticket the board
+10. **Put each ticket on the board.** Where no open item carries the root cause, or the
+    item that does is this run's own, copy the ticket as "The verified ticket" states. When
+    the store refuses that copy, copy nothing more for that ticket and keep what it printed
+    for your report. Where an
+    open item for it was created by another run, copy nothing: add this run's one comment
+    to that item, or edit the comment this run already left there, under "Ownership on the
+    board" below.
+11. **Report** every issue you created or updated with its URL (its location where the
+    board reports no URL), every dropped draft with its reason, every ticket dropped or
+    withdrawn under an accepted ticket with that ticket's URL, every ticket the board
     refused a status for with what `board-status` printed, every ticket the store refused
     to copy with the refusal it printed, and every finding that should have been surfaced
     live.

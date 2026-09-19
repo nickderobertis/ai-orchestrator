@@ -684,6 +684,18 @@ re-dispatch answer each comment with a reply under the run's marker. On the `fol
 board a run owns only the issues it created and the comments its marker names
 (`orchestrator/follow_up_tickets.py`).
 
+**Every proposal is written against the board's accepted fixes.** The follow-up agent
+reads the board's accepted tickets — `Todo`, `Queued`, `In Progress`, and `Done` where the
+fix has not reached the basis the ticket was verified at — and writes each ticket it stands
+up as if their fixes were already in: a ticket an accepted fix removes is not filed, one it
+narrows is written to what remains, and one it displaces states the fix that remains right
+with the displaced one under its rejected fixes. Such a ticket depends on the accepted one
+as the store's own `depends_on` edge — outside the ticket's record, which the board
+carries natively and `onetaskgraph task deps` walks it from either end — and its text says
+at each changed place which accepted ticket changed it, by URL. A `Proposal` or `Deferred` item's
+fix is never assumed. The same-root-cause path is unchanged: an accepted item for a
+ticket's own root cause takes the run's evidence as a comment, never a dependency.
+
 **The `followups` board is the user's decision.** A ticket's issue is created in the
 repository its root cause lives in, which must be under the board's owner, as an item of
 the one board; a ticket naming a repository outside that owner is refused and reported,

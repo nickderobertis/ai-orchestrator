@@ -663,10 +663,12 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_o
 TEMPLATE = (
     "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
     "Decide each status with @BOARD_STATUS@, and read the store with @PLAN_STORE@.\n"
+    "Assume the fixes at @ACCEPTED_STATUSES@, listed with @ACCEPTED_FILTER@.\n"
     "@STATUS_VOCABULARY@\n"
     "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
+VALIDATE = "python -m orchestrator.follow_up_tickets validate"
 
 #: The plan-store program a composed task carries, spelled in full the way the recipe
 #: resolves it. This checkout's own installed CLI rather than a path written down here,
@@ -680,6 +682,7 @@ def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-roo
     return (
         tickets.ticket_contract(run, board)
         .replace("@DRAFTS_ROOT@", root)
+        .replace("@VALIDATE@", VALIDATE)
         .replace("@BOARD_STATUS@", BOARD_STATUS)
         .replace("@PLAN_STORE@", PLAN_STORE)
     )
@@ -696,7 +699,7 @@ def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
         run=RUN,
         board="followups",
         drafts_root=Path("/drafts-root"),
-        validate="python -m orchestrator.follow_up_tickets validate",
+        validate=VALIDATE,
         board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
@@ -716,6 +719,11 @@ def test_the_composed_task_fills_every_placeholder_and_renders_both_contracts() 
     assert _contract() in task
     assert _ownership() in task
     assert f"{PLAN_STORE} task copy drafts:{RUN}/tickets/<root-cause> --to followups" in task
+    assert (
+        "Assume the fixes at `Todo` (`todo`), `Queued` (`queued`), `In Progress` "
+        "(`in-progress`) and `Done` (`done`), listed with --status todo --status queued "
+        "--status in-progress --status done."
+    ) in task
     assert "`onetaskgraph " not in task, (
         "a composed task names the plan store in full, never a bare program name a "
         "dispatch would resolve from its own search path"
@@ -755,7 +763,7 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
         run=RUN,
         board="followups",
         drafts_root=Path("/drafts-root"),
-        validate="python -m orchestrator.follow_up_tickets validate",
+        validate=VALIDATE,
         board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
@@ -776,6 +784,9 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
     steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
     decided = steps.index(f"`{BOARD_STATUS} --board followups <path of the ticket>`")
     assert decided < steps.index("**Put each ticket on the board.**"), steps
+    searched = steps.index("**Search the board for the same root cause**")
+    assumed = steps.index("**Write each ticket as if the board's accepted fixes were already in.**")
+    assert searched < assumed < decided, steps
 
     vocabulary = tickets.status_vocabulary()
     assert task.count(vocabulary) == 1, "the task does not carry the status vocabulary once"
@@ -799,7 +810,7 @@ def _tracked_task(*, feedback: str | None = None, redispatch: bool = True) -> st
         run=RUN,
         board="followups",
         drafts_root=Path("/drafts-root"),
-        validate="python -m orchestrator.follow_up_tickets validate",
+        validate=VALIDATE,
         board_status=BOARD_STATUS,
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
@@ -1661,3 +1672,568 @@ def test_a_template_the_compose_command_refuses_is_unrunnable(
 
     assert status == tickets.UNRUNNABLE
     assert "missing placeholders" in capsys.readouterr().err
+
+
+#: Two accepted tickets of other root causes, as the stand-in board addresses them, and the
+#: URL the board reports for each: what a ticket written against their fixes depends on.
+NARROWING = tickets.QualifiedBoardId(f"{BOARD}:{OTHER_RUN}/tickets/export-drops-a-column")
+REFIXING = tickets.QualifiedBoardId(f"{BOARD}:{OTHER_RUN}/tickets/retry-loop-never-backs-off")
+NARROWING_URL = "https://github.com/nickderobertis/some-service/issues/41"
+REFIXING_URL = "https://github.com/nickderobertis/some-service/issues/42"
+DEPENDENT_BODY = _body(
+    impact=_impact(
+        prose=f"{IMPACT_PROSE} Assuming the fix in {NARROWING_URL} lands, the export is unaffected."
+    ),
+    rejected=f"Retrying the page: rejected because {REFIXING_URL} already backs the loop off.",
+)
+DEPENDENT_TICKET = _ticket(depends_on=(NARROWING, REFIXING), body=DEPENDENT_BODY)
+
+
+def test_a_ticket_depending_on_nothing_renders_no_depends_on_and_reads_back_so(
+    drafts_root: Path,
+) -> None:
+    rendered = tickets.render(_ticket())
+
+    assert tickets.DEPENDENCY_FIELD not in rendered
+    assert _ticket().depends_on == ()
+    path = _write(drafts_root, _ticket(), rendered)
+    assert tickets.ticket_edges(tickets.qualified_id(RUN, CAUSE)) == []
+    assert tickets.read_ticket(path) == _ticket()
+    assert tickets.from_store_item(_item(), run=RUN, root_cause=CAUSE).depends_on == ()
+
+
+def test_a_ticket_with_two_dependencies_round_trips_through_the_stores_dependency_walk(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Written as `depends_on` entries, read back as the edges the installed store walks.
+
+    The far ends name the stand-in board, which this test never configures: `validate`
+    reads no board, and the store reports a far end of another source as named.
+    """
+    rendered = tickets.render(DEPENDENT_TICKET)
+
+    assert (
+        f'\n{tickets.DEPENDENCY_FIELD}: [{{"id": "{NARROWING}", "item": "task"}}, '
+        f'{{"id": "{REFIXING}", "item": "task"}}]\n'
+    ) in rendered
+    path = _write(drafts_root, DEPENDENT_TICKET, rendered)
+    edges = tickets.ticket_edges(tickets.qualified_id(RUN, CAUSE))
+    assert edges == [
+        tickets.Edge(NARROWING, "task", "blocks"),
+        tickets.Edge(REFIXING, "task", "blocks"),
+    ]
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND
+    assert "is a sound ticket" in capsys.readouterr().out
+    read = tickets.read_ticket(path)
+    assert read == DEPENDENT_TICKET
+    assert read.depends_on == (NARROWING, REFIXING) == tuple(sorted(read.depends_on))
+    assert tickets.render(read) == rendered
+
+
+def _dependency_lines(*entries: str) -> str:
+    """A `depends_on` block written the way an agent might, entry by entry, expanded."""
+    return f"{tickets.DEPENDENCY_FIELD}:\n" + "".join(f"- {entry}\n" for entry in entries)
+
+
+def _with_dependencies(block: str) -> str:
+    return tickets.render(_ticket(body=DEPENDENT_BODY)).replace(
+        "metadata:\n", block + "metadata:\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("block", "reasons"),
+    [
+        (
+            _dependency_lines(f"{{id: {NARROWING}, item: task, kind: related}}"),
+            [f"entry {NARROWING!r} is of kind 'related', where a dependency is of the `blocks`"],
+        ),
+        (
+            _dependency_lines(f"{{id: {BOARD}:{OTHER_RUN}, item: project}}"),
+            [f"entry '{BOARD}:{OTHER_RUN}' names a project, where a dependency names a `task`"],
+        ),
+        (
+            _dependency_lines(f"{{id: drafts:{OTHER_RUN}/tickets/x, item: task}}"),
+            [f"entry 'drafts:{OTHER_RUN}/tickets/x' names the `drafts` source"],
+        ),
+        (
+            _dependency_lines("{id: a-bare-native-id, item: task}"),
+            ["entry 'drafts:a-bare-native-id' names the `drafts` source"],
+        ),
+        (
+            _dependency_lines(
+                f"{{id: {NARROWING}, item: task}}", f"{{id: elsewhere:{OTHER_RUN}, item: task}}"
+            ),
+            [f"entries name 2 sources (elsewhere, {BOARD}), where every dependency names the one"],
+        ),
+        (
+            _dependency_lines(
+                f"{{id: {NARROWING}, item: task, kind: related}}",
+                f"{{id: elsewhere:{OTHER_RUN}, item: project}}",
+            ),
+            [
+                f"entry {NARROWING!r} is of kind 'related'",
+                f"entry 'elsewhere:{OTHER_RUN}' names a project",
+                "entries name 2 sources",
+            ],
+        ),
+        (
+            _dependency_lines(
+                f"{{id: {NARROWING}, item: task}}", f"{{id: {NARROWING}, item: task}}"
+            ),
+            [f"names {NARROWING!r} more than once; one entry per accepted ticket"],
+        ),
+        (
+            _dependency_lines("{id: ':no-source', item: task}"),
+            ["the store could not read", "source name", "is not usable"],
+        ),
+        (
+            _dependency_lines("{id: 'no-native:', item: task}"),
+            ["the store could not read", "must name a native id"],
+        ),
+    ],
+    ids=[
+        "related-kind",
+        "a-project-end",
+        "the-drafts-source",
+        "a-bare-id-the-store-qualifies-to-drafts",
+        "two-sources",
+        "every-problem-at-once",
+        "a-far-end-named-twice",
+        "an-empty-source",
+        "an-empty-native-id",
+    ],
+)
+def test_validate_refuses_each_dependency_shape_naming_every_problem_reading_no_board(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], block: str, reasons: list[str]
+) -> None:
+    """Every shape the contract refuses, through the installed store over a written ticket.
+
+    The last two are refused by the store itself, which cannot read a source holding such
+    an entry at all, so the refusal is the store's own; the rest are the module's, each
+    named beside the others. The board the entries name is configured nowhere here.
+    """
+    path = _write(drafts_root, _ticket(), _with_dependencies(block))
+
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    reported = " ".join(capsys.readouterr().err.split())
+    assert f"{path} is not a sound ticket" in reported
+    for reason in reasons:
+        assert reason in reported, reason
+
+
+def test_every_dependency_shape_problem_is_named_at_once_on_a_synthetic_item() -> None:
+    """`problems` over edges the store could never report, so each refusal is reachable."""
+    edges = [
+        tickets.Edge("not-qualified", "task", "blocks"),
+        tickets.Edge(f"drafts:{OTHER_RUN}/tickets/x", "project", "related"),
+        tickets.Edge(NARROWING, "task", "blocks"),
+        tickets.Edge(f"elsewhere:{OTHER_RUN}", "task", "blocks"),
+    ]
+
+    found = tickets.problems(_item(), run=RUN, root_cause=CAUSE, edges=edges)
+
+    assert [problem.split(" ", 4)[4][:20] for problem in found] == [
+        "'not-qualified' is n",
+        f"'drafts:{OTHER_RUN}/"[:20],
+        f"'drafts:{OTHER_RUN}/"[:20],
+        f"'drafts:{OTHER_RUN}/"[:20],
+        "name 2 sources (else",
+    ], found
+    assert tickets.edge_problems([]) == []
+    assert tickets.edge_problems([tickets.Edge(NARROWING, "task", "blocks")]) == []
+    with pytest.raises(tickets.Refused):
+        tickets.from_store_item(_item(), run=RUN, root_cause=CAUSE, edges=edges[:1])
+
+
+def _accepted_item(
+    board: Path,
+    qualified: str,
+    status: str,
+    url: str | None,
+    root_cause: str | None = "another-cause",
+) -> None:
+    """An item of an earlier run the board holds, the way the board reports one: with a `url`.
+
+    Written as the `local-md` record it is, because the one thing this stand-in cannot
+    produce through the store is the `url` a real board reports for an issue; a
+    ``root_cause`` of `None` leaves the item with no follow-up record at all, which is any
+    board item that is not a ticket.
+    """
+    _source, native = qualified.split(":", 1)
+    path = board / "tasks" / f"{native}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields: dict[str, object] = {
+        "title": f"some-service: {root_cause or 'not a ticket'}",
+        "status": status,
+        "repositories": [REPOSITORY],
+    }
+    if url is not None:
+        fields["url"] = url
+    if root_cause is not None:
+        fields["metadata"] = {tickets.KEY: tickets.record(_ticket(root_cause=root_cause))}
+    path.write_text(
+        tickets.frontmatter(fields, f"## {tickets.SUGGESTED_FIX}\n\nThe accepted fix.\n"),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("held", [status for status in tickets.Status if status.accepted])
+@pytest.mark.parametrize("extra", [(), ("--withdraw",)], ids=["copy", "withdraw"])
+def test_board_status_resolves_dependencies_the_board_holds_accepted_with_their_urls_named(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    held: tickets.Status,
+    extra: tuple[str, ...],
+) -> None:
+    _accepted_item(board, NARROWING, held.value, NARROWING_URL)
+    _accepted_item(board, REFIXING, held.value, REFIXING_URL)
+    ticket = _write(drafts_root, DEPENDENT_TICKET)
+
+    expected = tickets.Status.WITHDRAWN if extra else tickets.Status.PROPOSED
+    assert _decided(ticket, capsys, *extra) == (tickets.SOUND, f"{expected.value}\n", "")
+
+
+@pytest.mark.parametrize("extra", [(), ("--withdraw",)], ids=["copy", "withdraw"])
+@pytest.mark.parametrize(
+    ("narrowing", "refixing", "reasons"),
+    [
+        (
+            (tickets.Status.PROPOSED.value, NARROWING_URL),
+            (tickets.Status.DEFERRED.value, REFIXING_URL),
+            [
+                f"entry {NARROWING!r} names an item the board holds at 'backlog', not at an "
+                "accepted status (`todo`, `queued`, `in-progress`, `done`)",
+                f"entry {REFIXING!r} names an item the board holds at 'draft', not at an",
+            ],
+        ),
+        (
+            (tickets.Status.WITHDRAWN.value, NARROWING_URL),
+            (tickets.Status.ACCEPTED.value, REFIXING_URL),
+            [f"entry {NARROWING!r} names an item the board holds at 'cancelled'"],
+        ),
+        (
+            (tickets.Status.ACCEPTED.value, None),
+            (tickets.Status.ACCEPTED.value, REFIXING_URL),
+            [f"entry {NARROWING!r} names an item the board reports no `url` for"],
+        ),
+        (
+            (tickets.Status.ACCEPTED.value, "issues/41"),
+            (tickets.Status.ACCEPTED.value, REFIXING_URL),
+            [
+                f"entry {NARROWING!r} names an item the board reports no `url` for that is a "
+                "web URL ('issues/41')"
+            ],
+        ),
+        (
+            (tickets.Status.ACCEPTED.value, NARROWING_URL, None),
+            (tickets.Status.ACCEPTED.value, REFIXING_URL),
+            [
+                f"entry {NARROWING!r} names an item carrying no `orchestrator.follow-up` record "
+                "with a `root_cause`, so it is no follow-up ticket"
+            ],
+        ),
+        (
+            (
+                tickets.Status.ACCEPTED.value,
+                "https://github.com/nickderobertis/some-service/issues/9",
+            ),
+            (tickets.Status.ACCEPTED.value, REFIXING_URL),
+            [
+                f"entry {NARROWING!r} names an item whose URL "
+                "https://github.com/nickderobertis/some-service/issues/9 the ticket's body never "
+                "names; say where and how that fix changed this ticket, with that URL"
+            ],
+        ),
+    ],
+    ids=[
+        "proposed-and-deferred",
+        "withdrawn",
+        "no-url",
+        "a-url-that-is-none",
+        "not-a-ticket",
+        "url-absent-from-the-body",
+    ],
+)
+def test_board_status_refuses_a_dependency_the_board_does_not_hold_as_the_contract_says(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    narrowing: tuple[str, str | None] | tuple[str, str | None, None],
+    refixing: tuple[str, str | None],
+    reasons: list[str],
+    extra: tuple[str, ...],
+) -> None:
+    _accepted_item(board, NARROWING, *narrowing)
+    _accepted_item(board, REFIXING, *refixing)
+    ticket = _write(drafts_root, DEPENDENT_TICKET)
+    before = ticket.read_text(encoding="utf-8")
+
+    status, printed, reported = _decided(ticket, capsys, *extra)
+
+    assert status == tickets.NOT_ACCEPTED == 6
+    assert tickets.NOT_ACCEPTED not in (
+        tickets.SOUND,
+        tickets.UNSOUND,
+        tickets.UNRUNNABLE,
+        tickets.UNPLACED,
+        tickets.PROTECTED,
+        tickets.OUTSIDE_OWNER,
+    )
+    assert printed == ""
+    flat = " ".join(reported.split())
+    for reason in reasons:
+        assert reason in flat, reason
+    assert "copy nothing for this ticket, re-derive it against the board as it now is" in flat
+    assert ticket.read_text(encoding="utf-8") == before
+    assert not any(board.rglob(f"tasks/{RUN}/**/*.md")), "deciding a status wrote the ticket"
+
+
+def test_board_status_refuses_a_dependency_naming_another_source_or_the_tickets_own_root_cause(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one is never followed, the other is the same-root-cause path's.
+
+    Two tickets, because an entry naming another source is well-shaped only on its own:
+    beside an entry naming the board it is the two-sources shape `validate` refuses.
+    """
+    same_cause = tickets.QualifiedBoardId(f"{BOARD}:{OTHER_RUN}/tickets/{CAUSE}")
+    same_url = "https://github.com/nickderobertis/some-service/issues/43"
+    _accepted_item(board, same_cause, tickets.Status.ACCEPTED.value, same_url, root_cause=CAUSE)
+    elsewhere = tickets.QualifiedBoardId(f"elsewhere:{OTHER_RUN}/tickets/export-drops-a-column")
+    own = _write(
+        drafts_root,
+        _ticket(
+            depends_on=(same_cause,),
+            body=_body(impact=_impact(prose=f"{IMPACT_PROSE} See {same_url}.")),
+        ),
+    )
+    other_source = _write(
+        drafts_root,
+        _ticket(
+            root_cause=tickets.RootCause("another-cause"),
+            title="some-service: another cause",
+            depends_on=(elsewhere,),
+            body=_body(impact=_impact(prose=f"{IMPACT_PROSE} See {NARROWING_URL}.")),
+        ),
+    )
+
+    for extra in ((), ("--withdraw",)):
+        status, printed, reported = _decided(own, capsys, *extra)
+        assert (status, printed) == (tickets.NOT_ACCEPTED, ""), extra
+        assert (
+            f"entry {same_cause!r} names an item for the ticket's own root cause {CAUSE!r}; an "
+            "accepted item for the same root cause takes this run's evidence as a comment and "
+            "is never depended on"
+        ) in " ".join(reported.split())
+
+        status, printed, reported = _decided(other_source, capsys, *extra)
+        assert (status, printed) == (tickets.NOT_ACCEPTED, ""), extra
+        assert f"entry {elsewhere!r} names a source other than the board `{BOARD}`" in reported
+
+
+def test_board_status_refuses_edges_without_the_validated_shape_before_asking_the_board(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A mis-shaped edge is `validate`'s to name; `board-status` follows none of them."""
+    _accepted_item(board, NARROWING, tickets.Status.ACCEPTED.value, NARROWING_URL)
+    ticket = _write(
+        drafts_root,
+        _ticket(body=DEPENDENT_BODY),
+        _with_dependencies(
+            _dependency_lines(
+                f"{{id: {NARROWING}, item: task, kind: related}}",
+                f"{{id: elsewhere:{OTHER_RUN}, item: task}}",
+            )
+        ),
+    )
+
+    status, printed, reported = _decided(ticket, capsys)
+
+    assert (status, printed) == (tickets.UNRUNNABLE, "")
+    flat = " ".join(reported.split())
+    assert f"entry {NARROWING!r} is of kind 'related'" in flat
+    assert "entries name 2 sources" in flat
+    assert "validate the ticket before asking the board about it" in flat
+
+    # And a ticket whose own `root_cause` is no slug has nothing to compare the far end's to.
+    unslugged = _write(
+        drafts_root,
+        DEPENDENT_TICKET,
+        tickets.render(DEPENDENT_TICKET).replace(f'"root_cause": "{CAUSE}"', '"root_cause": ""'),
+    )
+    status, printed, reported = _decided(unslugged, capsys)
+    assert (status, printed) == (tickets.UNRUNNABLE, "")
+    assert "names no `root_cause` slug in its `orchestrator.follow-up` record" in reported
+
+
+def test_board_status_resolves_dependencies_after_the_owner_check_and_before_the_dry_run_copy(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ordering, read off which refusal answers when two apply.
+
+    A ticket outside the committed board's owner is refused before its dependencies are
+    asked of any board; and a dependency the stand-in board does not hold is refused before
+    the dry-run copy that would find the ticket's own item unplaceable.
+    """
+    _accepted_item(board, NARROWING, tickets.Status.PROPOSED.value, NARROWING_URL)
+    _accepted_item(board, REFIXING, tickets.Status.ACCEPTED.value, REFIXING_URL)
+    outside = _ticket(
+        repository=tickets.Origin(FOREIGN_REPOSITORY),
+        title="work: the listing cursor skips the last page",
+        basis=(tickets.Basis(tickets.Origin(FOREIGN_REPOSITORY), tickets.Commit(COMMIT)),),
+        depends_on=(tickets.QualifiedBoardId(f"{tickets.BOARD}:I_kwDOabc"),),
+        body=DEPENDENT_BODY,
+    )
+    ticket = _write(drafts_root, outside)
+    assert tickets.main(["board-status", "--board", tickets.BOARD, str(ticket)]) == (
+        tickets.OUTSIDE_OWNER
+    )
+    assert "is not a repository of the board's owner" in capsys.readouterr().err
+
+    ticket = _write(drafts_root, DEPENDENT_TICKET)
+    _moved(_on_board(_write(drafts_root, _ticket(body=DEPENDENT_BODY))), UNPLACEABLE)
+    ticket = _write(drafts_root, DEPENDENT_TICKET)
+
+    status, printed, reported = _decided(ticket, capsys)
+
+    assert (status, printed) == (tickets.NOT_ACCEPTED, "")
+    assert f"entry {NARROWING!r} names an item the board holds at 'backlog'" in reported
+    assert "which no ticket carries" not in reported
+
+
+def test_board_status_that_cannot_show_a_dependency_is_unrunnable(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _accepted_item(board, REFIXING, tickets.Status.ACCEPTED.value, REFIXING_URL)
+    ticket = _write(drafts_root, DEPENDENT_TICKET)
+
+    assert tickets.main(["board-status", "--board", BOARD, str(ticket)]) == tickets.UNRUNNABLE
+    reported = capsys.readouterr().err
+    assert f"{tickets.PROG}: refused:" in reported
+    assert NARROWING.split(":", 1)[1] in reported
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Every reading of the tracked
+# template in this module carries `reads_docs`, the marker `orchestrator:test` deselects and
+# the docs tier selects, because the template is this repository's prose; a new reading of
+# the same template joins its neighbours rather than founding a project for one test.
+@pytest.mark.reads_docs
+def test_the_composed_task_writes_each_ticket_against_the_boards_accepted_fixes() -> None:
+    """The new step, between the same-root-cause search and the status decision, whole."""
+    task = _tracked_task()
+    flat = " ".join(task.split())
+    steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
+    step = steps.split(
+        "**Write each ticket as if the board's accepted fixes were already in.**", 1
+    )[1].split("**Decide each ticket's status from the board", 1)[0]
+    flat_step = " ".join(step.split())
+
+    for said in (
+        "List the board's accepted items — those at `Todo` (`todo`), `Queued` (`queued`), "
+        "`In Progress` (`in-progress`) and `Done` (`done`) — with "
+        f"`{PLAN_STORE} task list --source followups --status todo --status queued "
+        "--status in-progress --status done --json`, every page, the whole board",
+        "an accepted fix in another repository can change a ticket here",
+        "This is **not** the search of the step before: an accepted item carrying the same "
+        "root cause as a ticket is that step's — this run's evidence goes to it as a comment, "
+        "and this step does not touch that ticket",
+        "accepted tickets of *other* root causes whose fixes bear on a ticket this run will copy",
+        "- **unchanged** — the fix does not bear on it: nothing changes;",
+        "- **evaporates** — the fix removes this root cause too: the ticket is not filed. "
+        "Delete its file and the drafts it consumed, and report those drafts as dropped, "
+        "naming the accepted item's URL. On a re-dispatch where the board already holds this "
+        "run's own item for it, withdraw that item instead, under the withdrawal rules",
+        "- **shrinks** — the fix removes part of the impact or narrows where the root cause "
+        "bites: write `## Impact` (its prose and its severity lines) and, where the scope "
+        "narrows, `## Root cause` to what remains;",
+        "- **needs a different fix** — the fix the evidence would otherwise support conflicts "
+        "with, duplicates or is superseded by the accepted one: `## Suggested fix` states what "
+        "remains right once the accepted fix is in, and the fix it would otherwise have "
+        "proposed goes under `## Rejected fixes` with the accepted item as the reason.",
+        "A `Done` item's fix is assumed only where it has not reached the basis recorded in "
+        "step 1 — read the tree; where it has, the verification at the basis already accounts "
+        "for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed",
+        "For every fate but unchanged, add the item's `depends_on` entry, say in the text "
+        "where and how its fix changed the ticket with the item's URL, then validate the "
+        "ticket again.",
+        "On a re-dispatch, re-derive all of this from the board as it now is, exactly as a "
+        "first pass does: an accepted ticket may have appeared, moved or been un-accepted "
+        "since the last pass, so entries are added and removed and the ticket's claims "
+        "re-derived to match, and this run's own item is edited by copying its ticket again.",
+    ):
+        assert said in flat_step, said
+    assert "every ticket dropped or withdrawn under an accepted ticket with that ticket's URL" in (
+        flat
+    )
+    same_cause = steps.split("**Search the board for the same root cause**", 1)[1].split(
+        "**Write each ticket", 1
+    )[0]
+    assert " ".join(same_cause.split()) == " ".join(
+        """among its open items: first by the
+   `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
+   text (`@PLAN_STORE@ task list --source @BOARD@ --search <text> --json`). Both read the
+   whole board, whichever repository an item's issue lives in, so narrow neither to a
+   repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
+   searched like any other open item and still takes this run's evidence.
+8. """.replace("@PLAN_STORE@", PLAN_STORE)
+        .replace("@BOARD@", "followups")
+        .split()
+    ), "the same-root-cause step's text moved"
+    redispatch = " ".join(task.split("## This is a re-dispatch", 1)[1].split())
+    assert (
+        "a ticket's dependencies on accepted tickets, and the claims written against their "
+        "fixes, are re-derived from the board as it now is on every pass — an accepted ticket "
+        "may have appeared, moved or been un-accepted since the last pass, so `depends_on` "
+        "entries are added and removed and the ticket's `## Impact`, `## Root cause`, "
+        "`## Suggested fix` and `## Rejected fixes` re-derived to match, and "
+        f"`{BOARD_STATUS} --board followups <path of the ticket>` refusing an entry is the "
+        "signal to re-derive that ticket before copying it; nothing else about an older "
+        "ticket moves."
+    ) in redispatch
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry() -> None:
+    contract = tickets.ticket_contract(RUN, "followups")
+    flat = " ".join(contract.split())
+
+    assert (
+        '\ndepends_on: [{"id": "followups:<native id of an accepted ticket whose fix changed '
+        'this one; leave `depends_on` out when none did>", "item": "task"}]\n'
+    ) in contract
+    for rule in (
+        "**A ticket written against an accepted ticket's fix depends on it, as the store's own "
+        "top-level `depends_on`** — one entry per accepted ticket whose fix changed this "
+        "ticket, as `{id: followups:<native id>, item: task}` and nothing else, its `kind` left "
+        "to its default; no entry, and no `depends_on` at all, when no accepted fix changed it.",
+        "the edge is the one record of it: nothing in the `orchestrator.follow-up` record "
+        "repeats it",
+        "**Where the accepted fix changed the ticket, the text says so with the item's URL**",
+        "In `## Impact` or `## Root cause` for a ticket the fix narrowed, in `## Suggested fix` "
+        "for one it re-fixed, and in `## Rejected fixes` beside the fix it displaced",
+        '("assuming the fix in <URL> lands, …"; "chosen because <URL> already …")',
+        "A `Proposal` or `Deferred` item for a clearly related root cause may be named as "
+        "related, by URL, with **no** `depends_on` entry and no change to the ticket's claims.",
+        "**`@VALIDATE@` holds the entries' shape and reads no board**: it refuses a ticket any "
+        "of whose entries is not a `task`, is not of the `blocks` kind, is not "
+        "`<source>:<native id>` with both parts non-empty, names the `drafts` source, names "
+        "a second source beside the others', or names a far end another entry already names.",
+        "**`@BOARD_STATUS@` resolves every entry against the board** before every copy and "
+        f"exits {tickets.NOT_ACCEPTED} when an entry names a source other than `followups`; "
+        "names an item the board holds outside the accepted statuses (`todo`, `queued`, "
+        "`in-progress`, `done`); names an item whose record carries this ticket's own "
+        "`root_cause` — an accepted item for the *same* root cause is the same-root-cause "
+        "path's, which takes this run's evidence as a comment, and never this rule's; names "
+        "an item the board reports no `url` for; or names an item whose URL the ticket's body "
+        "does not carry.",
+        f"and {tickets.NOT_ACCEPTED} when a `depends_on` entry does not resolve on the board "
+        "as the dependency rule below states, naming every such entry and what the board "
+        "holds. On any of these refusals, copy nothing and report what it printed.",
+    ):
+        assert rule in flat, rule
+    for status in (tickets.UNPLACED, tickets.PROTECTED, tickets.OUTSIDE_OWNER):
+        assert f"; {status} " in flat or f" {status} " in flat, status

@@ -1808,6 +1808,26 @@ A brief to pick up "accepted" follow-up tickets means the items at `Todo` and no
 else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
 closed one.
 
+**Every proposal is written against the board's accepted fixes.** Before it copies
+anything, the agent lists the board's accepted items — `Todo`, `Queued`, `In Progress`,
+and `Done` where the fix has not reached the basis the ticket was verified at — and reads
+each one's suggested fix as if it were already in: a ticket that fix removes is not filed
+(its drafts are reported as dropped, naming the accepted ticket), one it narrows has its
+impact and root cause written to what remains, and one it displaces states the fix that
+remains right, with the displaced one among its rejected fixes. Whenever an accepted fix
+changes a ticket that way, the ticket depends on it as the store's own `depends_on` edge,
+outside the `orchestrator.follow-up` record — the board carries it natively as the
+issue's dependency, and `onetaskgraph task deps` walks it from either end — and the
+ticket's text says, at each place the fix changed something, which accepted ticket
+changed it and how, by the item's URL. `validate` holds the edge's shape and reads no
+board; `board-status` resolves every edge against the board before the copy, refusing an
+entry the board no longer holds as an accepted ticket of another root cause whose URL the
+body names, which on a re-dispatch is the signal to re-derive the ticket from the board
+as it now is. A `Proposal` or `Deferred` item's fix is never assumed, though a clearly
+related one may be named as related by URL with no edge. The same-root-cause path is
+unchanged: an accepted item for a ticket's own root cause takes the run's evidence as a
+comment and is never depended on.
+
 **The run-end hooks are what launch it.** `just orchestrate` names
 `scripts/run-ended.sh`, by its absolute path in the launching checkout, as both the
 engine's `--success-hook` and its `--failure-hook`, unless the caller named that flag;
