@@ -213,11 +213,12 @@ def _turns(turns: Path, member: str) -> list[RecordedTurn]:
     return found
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `tests/ask_seam` is
-# already the Nx project edge this repository keeps for real-launch journeys over what a
-# launch exports into its dispatches — `test_launch_ask_seam_e2e.py` beside this launches
-# every launch shape the same way — and its target is keyed on `askSeamWorkspace`, which
-# covers every file this launch reads, so an edit outside that key does not pay for it.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This directory is
+# already the Nx project edge this repository keeps for this real-launch journey over what
+# a launch exports into its dispatches — `tests/ask_seam/launch/` beside it launches every
+# launch shape the same way behind an edge of its own — and its target is keyed on
+# `askSeamFollowUpDraftsLaunch`, which names file by file what this launch was measured
+# reading, so an edit outside that key does not pay for it.
 # The fixture is module-scoped and spends one launch, which ran in about three seconds
 # here with the stand-in model; `LAUNCH_SECONDS` bounds a wedged launch rather than
 # describing an ordinary one.
@@ -399,7 +400,7 @@ def test_the_draft_survives_the_dispatch_worktree_being_removed(launched: Launch
         limit = deadline(TEARDOWN_SECONDS)
         while True:
             closed = subprocess.run(  # noqa: S603 - the lifecycle verb that releases a session
-                ["onevcs", "session", "close", session],  # noqa: S607
+                ["onevcs", "session", "close", session],  # noqa: S607 - the onevcs the launch ran
                 cwd=REPO_ROOT,
                 env=launched.environment,
                 text=True,

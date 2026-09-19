@@ -22,7 +22,7 @@
 #       depends on the launch: `just plan` exports it, and so does an attached
 #       `just orchestrate` — a detached or adopted one does not, and an observer member
 #       carries the run's id as well as a dispatch does. Measured per shape by
-#       `tests/ask_seam/test_launch_ask_seam_e2e.py`.
+#       `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`.
 #   ONEPIPELINE_RUNS_DIR                      (optional) where the run's records live;
 #       `runs` when unset, as the engine reads it.
 #   ONEPIPELINE_CHANNEL_ASKER                 (optional) who asks. A later listener naming

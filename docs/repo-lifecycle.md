@@ -997,8 +997,8 @@ The suite waits on subprocesses rather than on compute — a serial run holds on
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
 `orchestrator:test-recipes`, `orchestrator:test-checkouts`, `plan-tooling:test`,
-`plan-tooling:test-docs`, `ask-seam:test`, and `just test-e2e` all run
-`-n 4 --dist loadgroup`.
+`plan-tooling:test-docs`, each ask-seam journey's `test` target, and `just test-e2e` all
+run `-n 4 --dist loadgroup`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its
@@ -1412,7 +1412,7 @@ loader refuses it before anything dispatches on a node whose resolved publicatio
 no change request, in the shape `consumes` is refused on a `local-direct` identity.
 Every dispatch of a lifecycle node's agent steps, and its drafting dispatch, carries
 `ONEVCS_SESSION` naming the session whose worktree it runs in, and a direct node's
-carries none; `tests/ask_seam/test_launch_ask_seam_e2e.py` reads both off real
+carries none; `tests/ask_seam/launch/test_launch_ask_seam_e2e.py` reads both off real
 dispatches.
 
 That `structured` is the contract, and this repository's graph is built around it:

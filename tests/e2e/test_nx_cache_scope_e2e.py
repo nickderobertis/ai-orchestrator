@@ -76,7 +76,7 @@ from pathlib import Path
 
 import pytest
 from nx_inputs import (
-    ASK_SEAM_PROJECT,
+    ASK_SEAM_JOURNEYS,
     ASK_SEAM_SCOPED,
     CHECKOUT_SCOPED,
     CODE_SCOPED,
@@ -639,7 +639,7 @@ def _comparison_overrides() -> frozenset[str]:
 #: fails here instead of quietly joining what a documentation push stops running.
 SKIPPABLE_TIERS = frozenset(
     {
-        (ASK_SEAM_PROJECT, ASK_SEAM_SCOPED),
+        *((journey.project, ASK_SEAM_SCOPED) for journey in ASK_SEAM_JOURNEYS),
         (DAG_UI_PROJECT, DAG_UI_SCOPED),
         (UNWATCHED_PROJECT, UNWATCHED_SCOPED),
         (WRITEBACK_BUDGET_PROJECT, WRITEBACK_BUDGET_SCOPED),

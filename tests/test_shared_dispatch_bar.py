@@ -340,7 +340,7 @@ def test_the_preamble_sends_follow_ups_to_the_drafting_command_and_blockers_to_t
     model's, which no journey here drives. That the preamble carrying this sentence reaches
     a real worker verbatim is `tests/e2e/test_orchestrate_launch_e2e.py`'s, and that the
     command it names works from inside a real dispatch is
-    `tests/ask_seam/test_follow_up_drafts_launch_e2e.py`'s.
+    `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`'s.
     """
     preamble = " ".join(shared_agent_preamble().split())
     assert FOLLOW_UP_POINTER.search(preamble), (

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from orchestrator.root import REPO_ROOT
 
@@ -29,12 +30,6 @@ RECIPE_WORKSPACE = "recipeWorkspace"
 #: repository's plan surface drive and read. Narrower than the whole workspace by the
 #: prose those journeys never open, which is what makes editing `docs/` free of them.
 PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
-#: The key `ask-seam:test` is memoized on: what the host-tool journeys over the seam a
-#: dispatched agent asks its manager through drive and read. Narrower than the whole
-#: workspace by the prose those journeys never open, and by the e2e helpers they never
-#: import — named one by one rather than as a directory, so a journey added beside them
-#: does not silently start invalidating this tier.
-ASK_SEAM_WORKSPACE = "askSeamWorkspace"
 #: The key `session-setup:test` is memoized on: what the journey over this checkout's
 #: own provisioning drives and reads. Named file by file rather than as `scripts/**/*`
 #: or `config/**/*`: the journey runs the real `scripts/session-setup.sh`, which
@@ -146,31 +141,80 @@ PLAN_TOOLING_DOCS_SCOPED = "test-docs"
 #: targets runs it is the only thing its markers decide.
 PLAN_TOOLING_ROOT = "tests/plan_tooling"
 
-#: The project whose test target owns the host-tool journeys over the ask seam — the
-#: real `scripts/ask-manager.sh`, the real `onemessagebus ask` it hands the question to,
-#: and the real launches that decide what a dispatch is given to ask with. A project of
-#: its own for the reason `plan-tooling` is one: every journey here spends a real launch,
-#: which is a cost `nx affected` can only keep off an unrelated edit where it is a
-#: separate project. It declares no Python distribution either, for the same reason.
-ASK_SEAM_PROJECT = "ask-seam"
-#: That project's one test target. One rather than two, deliberately: nothing here reads
-#: this repository's prose, and an empty tier is a partition the suite gate cannot check.
-ASK_SEAM_SCOPED = "test"
-#: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+#: The directory every host-tool journey over the ask seam lives under — the real
+#: `scripts/ask-manager.sh`, the real `onemessagebus ask` it hands the question to, and
+#: the real launches that decide what a dispatch is given to ask with — and which every
+#: other project's tiers ignore. Not a project itself: each journey below is one, in a
+#: directory of its own under this one, because each spends a real launch and a key two
+#: journeys shared made every edit one of them read pay for the other's launch too.
 ASK_SEAM_ROOT = "tests/ask_seam"
+#: Each journey project's one test target. One rather than two, deliberately: nothing
+#: here reads this repository's prose, and an empty tier is a partition the suite gate
+#: cannot check.
+ASK_SEAM_SCOPED = "test"
+
+
+class AskSeamJourney(NamedTuple):
+    """One host-tool journey over the ask seam, as the guards and the graph name it."""
+
+    #: The Nx project, which is how `nx affected` charges the launch to what selects it.
+    project: str
+    #: The directory it owns: its module and its `project.json`, and nothing else.
+    root: str
+    #: The `nx.json` named input its one target is memoized on.
+    key: str
+
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier names: the Nx project a journey is, its directory and its key are read by
+# `tests/conftest.py`'s read guard, `tests/test_nx_cache_scope.py` and the real-Nx
+# selection journeys, and resolving them from one row each is what keeps a renamed journey
+# from leaving a guard checking a project nobody runs, as the module docstring says.
+#: One memoization unit per journey, in what each is keyed on. Every key names files
+#: rather than trees — `tests/test_nx_cache_scope.py` refuses a `config/**/*` or a
+#: `scripts/**/*` in one — because a journey here spends a real launch, and a path in its
+#: key it never reads makes an unrelated edit pay for that launch. Each was measured
+#: rather than guessed: the module run under the target's own command with every open of
+#: a file under this checkout recorded through inotify, bytecode mapped to its source,
+#: the set intersected with what git tracks; the journey's own module and every suite
+#: module it imports are then required by the gate, and `tests/conftest.py` holds the
+#: in-process half to the key on every run. The subprocess half — the pins, graphs and
+#: harness configs a launch opens through the engine — is the measurement, so a launch
+#: path that starts reading a new file is a re-take of it rather than a glob to widen.
+ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
+    AskSeamJourney("ask-seam-ask-manager", f"{ASK_SEAM_ROOT}/ask_manager", "askSeamAskManager"),
+    AskSeamJourney(
+        "ask-seam-channel-reply", f"{ASK_SEAM_ROOT}/channel_reply", "askSeamChannelReply"
+    ),
+    AskSeamJourney(
+        "ask-seam-follow-up-drafts-launch",
+        f"{ASK_SEAM_ROOT}/follow_up_drafts_launch",
+        "askSeamFollowUpDraftsLaunch",
+    ),
+    AskSeamJourney("ask-seam-launch", f"{ASK_SEAM_ROOT}/launch", "askSeamLaunch"),
+    AskSeamJourney(
+        "ask-seam-planner-fallback-ask",
+        f"{ASK_SEAM_ROOT}/planner_fallback_ask",
+        "askSeamPlannerFallbackAsk",
+    ),
+    AskSeamJourney(
+        "ask-seam-structural-reply", f"{ASK_SEAM_ROOT}/structural_reply", "askSeamStructuralReply"
+    ),
+)
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #: The project whose test target owns the journeys over this repository's composition of
 #: the DAG Observatory — the two recipes, the proxy behind them, and what the published
-#: reader answers. A project of its own for the reason `plan-tooling` and `ask-seam` are:
+#: reader answers. A project of its own for the reason `plan-tooling` and each ask-seam
+#: journey are:
 #: two real servers per test is a cost `nx affected` can only keep off an unrelated edit
 #: where it is a separate project, and while these journeys sat in the orchestrator
 #: project every change in the repository paid it. It declares no Python distribution
 #: either. Asserting that the *bundle* renders is not here and must not come back: this
 #: tier is inside the merge path, and nothing in this repository provisions a browser.
 DAG_UI_PROJECT = "dag-ui"
-#: That project's one test target. One rather than two, as `ask-seam` has one: nothing
-#: here reads this repository's prose.
+#: That project's one test target. One rather than two, as each ask-seam journey has one:
+#: nothing here reads this repository's prose.
 DAG_UI_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
@@ -179,13 +223,13 @@ DAG_UI_ROOT = "tests/dag_ui"
 #: The project whose test target owns the journeys over `onepipeline unwatched` and the
 #: `Stop` hook that reads it — the real hook script, the real recipe, the installed engine
 #: they ask, and the launch shapes whose runs it has to name. A project of its own for the
-#: reason `plan-tooling`, `ask-seam` and `dag-ui` are: a watch armed for real, a process
-#: killed and left unreaped, this checkout's own project-environment lock held, and three
-#: real launches are a cost `nx affected` can only keep off an unrelated edit where it is a
-#: separate project. It declares no Python distribution either, for the same reason.
+#: reason `plan-tooling`, the ask-seam journeys and `dag-ui` are: a watch armed for real, a
+#: process killed and left unreaped, this checkout's own project-environment lock held, and
+#: three real launches are a cost `nx affected` can only keep off an unrelated edit where
+#: it is a separate project. It declares no Python distribution either, for the same reason.
 UNWATCHED_PROJECT = "unwatched"
-#: That project's one test target. One rather than two, as `ask-seam` has one: nothing here
-#: reads this repository's prose.
+#: That project's one test target. One rather than two, as each ask-seam journey has one:
+#: nothing here reads this repository's prose.
 UNWATCHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
 #: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.

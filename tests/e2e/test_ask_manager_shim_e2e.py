@@ -118,7 +118,7 @@ def bench(tmp_path: Path) -> Iterator[Bench]:
     # tests/AGENTS.md sanctions below a wrapper: what is under test is the argv and stdin the
     # shim hands it and that nothing else is spawned, which only a recording stand-in on an
     # otherwise empty PATH can observe. The real bus is driven by the last journey here and
-    # by tests/ask_seam/test_ask_manager_e2e.py.
+    # by tests/ask_seam/ask_manager/test_ask_manager_e2e.py.
     stub.write_text(STUB.format(python=sys.executable), encoding="utf-8")
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     for program in ("env", "bash"):

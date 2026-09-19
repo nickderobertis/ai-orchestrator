@@ -43,9 +43,10 @@ journeys between three targets of the *same* project, which is the mechanism
 `tests/conftest.py` documents and enforces rather than a way around a project boundary: it
 refuses a marked journey that reads anything its tier's key does not cover, and
 `tests/test_nx_cache_scope.py` holds the four selectors to a partition of the suite. A
-project of this module's own is what `plan-tooling` and `ask-seam` have, and both exist
-because a whole tier of theirs costs what a host tool costs; one module is not that, and a
-second project reading the same files would give `nx affected` two answers to one question.
+project of this module's own is what `plan-tooling` and each ask-seam journey have, and
+they exist because a whole tier of theirs costs what a host tool costs; one module is not
+that, and a second project reading the same files would give `nx affected` two answers to
+one question.
 
 llmlint: ignore-file[e2e_not_mocked] One journey — the real-launch control — points the
 launch at `tests/e2e/fake_backend.py` instead of a paid provider, which is the one double

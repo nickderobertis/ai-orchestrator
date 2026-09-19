@@ -9,9 +9,9 @@ ever dispatched; the envelope a manager sends through `just channel-reply`, whic
 judges before appending anything to the run's `commands` queue; and the real `onevcs`
 answering about a scratch registry whose `library` really declares a wheel and whose rules
 really resolve `local-direct` for both identities. Only the paid provider is doubled, as
-`tests/ask_seam/test_channel_reply_e2e.py` doubles it, and no turn of it is spent: every
-node here declares `expects_no_diff`, so no prose tier reads it, and the structural rules
-still hold it.
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` doubles it, and no turn of it is
+spent: every node here declares `expects_no_diff`, so no prose tier reads it, and the
+structural rules still hold it.
 """
 
 from __future__ import annotations
@@ -91,20 +91,15 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
     environment.pop("VIRTUAL_ENV", None)
-    environment["CLAUDE_CODE_SESSION_ID"] = "e2e-live-edit-structural"
+    environment["CLAUDE_CODE_SESSION_ID"] = "e2e-structural-reply"
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     environment["ONEVCS_HOME"] = str(tmp_path / "registry" / "onevcs")
-    # llmlint: ignore-block[live_tier_compiles_and_requires_credential] This journey must
-    # prove the deterministic structural check runs before any paid turn. Its explicit
-    # no-provider executable makes an attempted credentialed call fail, while the two
-    # published CLI seams below supply only the launch metadata needed to reach the reply.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
-    # llmlint: ignore-end[live_tier_compiles_and_requires_credential]
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "review-launches")
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
     return environment

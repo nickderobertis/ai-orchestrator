@@ -62,7 +62,7 @@
 # every step here carries because it runs from a worktree or a publication clone that may
 # not be provisioned. A missing or unloadable helper, an unprovisioned plan-store CLI, an
 # unwritable plan-authoring root, and a verb that cannot run at all are each driven one
-# command earlier against the same helper — in tests/ask_seam/test_launch_ask_seam_e2e.py
+# command earlier against the same helper — in tests/ask_seam/launch/test_launch_ask_seam_e2e.py
 # and tests/plan_tooling/test_plan_write_refusals_e2e.py, over `scripts/plan.sh`, which
 # sources the same files and writes through the same root. Reaching one of them through
 # *this* entry point means first getting a plan past a judged review and the plan check and

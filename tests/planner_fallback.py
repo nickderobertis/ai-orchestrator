@@ -1,8 +1,9 @@
 # llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This reader has two consumers in
 # two Nx projects — the offline drift gate in `orchestrator:test` and the host-tool journey in
-# `ask-seam:test` — so it cannot live inside either without one project importing across the
-# other's boundary. `tests/` is where this repository keeps every such cross-tier helper, which
-# `tests/ask_seam` already imports (`published_tools`, `follow_up_variables`, `plan_root_variable`).
+# `ask-seam-planner-fallback-ask:test` — so it cannot live inside either without one project
+# importing across the other's boundary. `tests/` is where this repository keeps every such
+# cross-tier helper, which the ask-seam journeys already import (`published_tools`,
+# `follow_up_variables`, `plan_root_variable`).
 """The ask `personas/planner.yaml` states for a dispatch whose launch exported no shim.
 
 That block is prose in a system prompt and `scripts/ask-manager.sh` is a script, so the

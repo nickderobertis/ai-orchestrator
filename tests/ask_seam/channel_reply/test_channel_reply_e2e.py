@@ -24,19 +24,19 @@ this repository's bar fingerprint. Six journeys:
   spending no second judged turn.
 
 Only the paid model is doubled, at the `oneharness` seam, exactly as
-`tests/ask_seam/test_ask_manager_e2e.py` doubles it. A channel is read through the bus's own
-`status` and `subscribe` verbs and through `just channel-next`, never through its files.
+`tests/ask_seam/ask_manager/test_ask_manager_e2e.py` doubles it. A channel is read through
+the bus's own `status` and `subscribe` verbs and through `just channel-next`, never through
+its files.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the edge: every
-journey here spends a real launch and is behind its own — `tests/ask_seam/` is an Nx
-project of its own, keyed on `askSeamWorkspace` and selected by directory, which
-`tests/AGENTS.md` states as the settled design and `tests/conftest.py` enforces. That key
-names `scripts/**/*`, `orchestrator/**/*`, `config/**/*`, `personas/**/*` and
-`graphs/**/*` because these journeys really read them: `just channel-reply` runs the
-validator script and its module under the bus configuration, the bar it holds an envelope
-to is fingerprinted over the base config and the planner persona, and a launch reads the
-graphs. Narrowing it would leave this tier replaying a green across a change one of these
-journeys exercises.
+journey here spends a real launch and is behind its own — this directory is an Nx project
+of its own, keyed on `askSeamChannelReply` and selected by directory, which
+`tests/ask_seam/AGENTS.md` states as the settled design and `tests/conftest.py` enforces.
+That key names, file by file, what these journeys were measured reading — the validator
+script and its module `just channel-reply` runs under the bus configuration, the base
+config and the planner persona the bar it holds an envelope to is fingerprinted over, and
+the graphs a launch reads — and nothing wider, so an edit outside it replays a green this
+tier already earned and an edit inside it re-runs the journey that read it.
 """
 
 from __future__ import annotations

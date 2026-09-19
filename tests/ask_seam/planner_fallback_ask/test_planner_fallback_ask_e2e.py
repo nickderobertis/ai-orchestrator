@@ -156,8 +156,8 @@ def launched(tmp_path: Path) -> Iterator[Launched]:
     plan = tmp_path / "fallback.plan.json"
     # llmlint: ignore-block[modern_domain_modeling] A plan is a JSON document handed to
     # `project_from_plan` as text, and every journey in this project writes one the same
-    # way — see `tests/ask_seam/test_ask_manager_e2e.py`. A model of the engine's plan
-    # schema declared here would be this repository's second statement of a schema the
+    # way — see `tests/ask_seam/ask_manager/test_ask_manager_e2e.py`. A model of the
+    # engine's plan schema declared here would be this repository's second statement of a schema the
     # engine owns, which is the drift these gates exist to prevent.
     plan.write_text(
         json.dumps(
@@ -191,7 +191,8 @@ def launched(tmp_path: Path) -> Iterator[Launched]:
     )
     assert (root / "launch.json").is_file(), (
         f"run {RUN} has no launch record, so the fallback has no policy of its own to read; "
-        f"tests/ask_seam/test_launch_ask_seam_e2e.py is what holds what that record carries"
+        "tests/ask_seam/launch/test_launch_ask_seam_e2e.py is what holds what that record "
+        "carries"
     )
     try:
         yield Launched(environment, RUN)

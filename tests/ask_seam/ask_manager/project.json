@@ -1,0 +1,21 @@
+{
+  "name": "ask-seam-ask-manager",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/ask_seam/ask_manager",
+  "tags": [
+    "scope:ask-seam",
+    "type:tests"
+  ],
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/ask_manager --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "askSeamAskManager"
+      ]
+    }
+  }
+}

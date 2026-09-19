@@ -30,8 +30,7 @@ import plan_fixture_root
 import plan_root_variable
 import pytest
 from nx_inputs import (
-    ASK_SEAM_ROOT,
-    ASK_SEAM_WORKSPACE,
+    ASK_SEAM_JOURNEYS,
     CODE_WORKSPACE,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
@@ -111,8 +110,11 @@ READS_RECIPES_MARKER = "reads_recipes"
 #: boundary is the tier — so the guards below ask where a test lives rather than what it
 #: declares. `docs_tier` says whether that project has a second, whole-workspace target
 #: for `reads_docs` to route a test into: `plan-tooling` does, for the journeys that copy
-#: this checkout, and `ask-seam` does not, so a prose read there is a read outside its
-#: only key rather than a routing instruction.
+#: this checkout, and no ask-seam journey does, so a prose read there is a read outside
+#: its only key rather than a routing instruction. Each ask-seam journey is its own
+#: project under `tests/ask_seam/`, held to its own key — the one `tests/nx_inputs.py`
+#: lists beside it — because a key those journeys shared made every one of them replay,
+#: or pay, for a file only one of them read.
 class OwnedProject(NamedTuple):
     """One directory-owned test project, in what the read guards need of it."""
 
@@ -122,7 +124,10 @@ class OwnedProject(NamedTuple):
 
 OWNED_PROJECTS = {
     PLAN_TOOLING_ROOT: OwnedProject(key=PLAN_TOOLING_WORKSPACE, docs_tier=True),
-    ASK_SEAM_ROOT: OwnedProject(key=ASK_SEAM_WORKSPACE, docs_tier=False),
+    **{
+        journey.root: OwnedProject(key=journey.key, docs_tier=False)
+        for journey in ASK_SEAM_JOURNEYS
+    },
     DAG_UI_ROOT: OwnedProject(key=DAG_UI_WORKSPACE, docs_tier=False),
     UNWATCHED_ROOT: OwnedProject(key=UNWATCHED_WORKSPACE, docs_tier=False),
     MERGE_POLICY_ROOT: OwnedProject(key=MERGE_POLICY_WORKSPACE, docs_tier=False),

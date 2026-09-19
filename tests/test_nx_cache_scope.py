@@ -49,6 +49,7 @@ from conftest import (
     REAL_PLAN_STORE_ROOTS_MARKER,
 )
 from nx_inputs import (
+    ASK_SEAM_JOURNEYS,
     ASK_SEAM_ROOT,
     ASK_SEAM_SCOPED,
     CHECKOUT_SCOPED,
@@ -79,6 +80,7 @@ from nx_inputs import (
     WRITEBACK_BUDGET_SCOPED,
     covers,
     named_input_globs,
+    repository_relative,
     repository_relative_globs,
     resolve_input_globs,
 )
@@ -522,10 +524,11 @@ def _modules_naming_a_launch(root: str, recipes: frozenset[str]) -> list[str]:
     """Every test module under `root` whose syntax names a launch, by file name.
 
     Per module rather than per test, because a launch is not a property of the body that
-    types it. `asked` in `tests/ask_seam/test_ask_manager_e2e.py` is function-scoped and
-    spends a real `just orchestrate` for every test that names it, refusal journeys
-    included; the launch fixtures in `tests/ask_seam/test_launch_ask_seam_e2e.py` are
-    module-scoped, so they run once per worker that receives *any* test from there. In
+    types it. `asked` in `tests/ask_seam/ask_manager/test_ask_manager_e2e.py` is
+    function-scoped and spends a real `just orchestrate` for every test that names it,
+    refusal journeys included; the launch fixtures in
+    `tests/ask_seam/launch/test_launch_ask_seam_e2e.py` are module-scoped, so they run once
+    per worker that receives *any* test from there. In
     both directions the module is what carries the cost, and a test that looks inert
     beside them is scattered by `--dist loadgroup` onto a worker where it launches a run
     anyway.
@@ -674,8 +677,8 @@ def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
 ) -> None:
     """An autouse module-scoped fixture constrains its whole module, not its callers.
 
-    `repository_credentials_file` in `tests/ask_seam/test_launch_ask_seam_e2e.py` adds a
-    name to this checkout's own `.env` and puts the original bytes back afterwards. It is
+    `repository_credentials_file` in `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`
+    adds a name to this checkout's own `.env` and puts the original bytes back afterwards. It is
     `scope="module"` and `autouse`, so it runs once per worker that receives *any* test
     from that module — and its create is `O_EXCL`, so two workers reaching it together
     means one of them raises `FileExistsError` before its test starts.
@@ -819,10 +822,10 @@ def _selection(command: str) -> list[str]:
     """The arguments that decide what one tier collects, from its real command.
 
     Taken from the command rather than from its `-m` expression alone, because a tier
-    selects by path as well: the `plan-tooling` and `ask-seam` projects each name a
-    directory and every orchestrator tier ignores both. A partition derived from
-    the markers alone would report the orchestrator tiers covering the suite while the
-    directories the host-tool projects own were collected by nobody.
+    selects by path as well: the `plan-tooling` project and each ask-seam journey's
+    project name a directory and every orchestrator tier ignores them all. A partition
+    derived from the markers alone would report the orchestrator tiers covering the
+    suite while the directories the host-tool projects own were collected by nobody.
     """
     _, _, tail = command.partition("uv run pytest ")
     assert tail, command
@@ -856,11 +859,11 @@ def _collected(selection: list[str]) -> set[str]:
 
 
 #: Every tier that runs part of this suite, as the file and target that declares it.
-#: Twelve, across eight projects, and every one of them is a target of the project whose
+#: Every one of them is a target of the project whose
 #: directory holds the tests it collects: the `plan-tooling` project owns the host-tool
 #: journeys over the plan surface in two targets — one keyed on what they read, one on
-#: the whole workspace for the journeys that copy this checkout — the `ask-seam` project
-#: owns the host-tool journeys over the ask seam in one, the `dag-ui` project owns the
+#: the whole workspace for the journeys that copy this checkout — each ask-seam journey's
+#: project owns that one journey in one target, the `dag-ui` project owns the
 #: journeys over this repository's composition of the Observatory in one, the
 #: `session-setup` project owns the journey over this checkout's own provisioning in
 #: one, the `unwatched` project owns the journeys over the verb a `Stop` hook reads
@@ -873,7 +876,7 @@ SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
     (f"{SESSION_SETUP_ROOT}/project.json", SESSION_SETUP_SCOPED),
-    (f"{ASK_SEAM_ROOT}/project.json", ASK_SEAM_SCOPED),
+    *((f"{journey.root}/project.json", ASK_SEAM_SCOPED) for journey in ASK_SEAM_JOURNEYS),
     (f"{DAG_UI_ROOT}/project.json", DAG_UI_SCOPED),
     (f"{UNWATCHED_ROOT}/project.json", UNWATCHED_SCOPED),
     (f"{MERGE_POLICY_ROOT}/project.json", MERGE_POLICY_SCOPED),
@@ -1121,6 +1124,205 @@ def test_the_recipe_key_stays_inside_the_code_key() -> None:
         if covers(named_input_globs(RECIPE_WORKSPACE), path) and not covers(code_globs, path)
     )
     assert not outside, f"the recipe key reaches outside the code key: {outside}"
+
+
+#: How a journey names one of the suite's shared stand-ins: `project_fixtures.helper`
+#: resolves the name under `tests/e2e/`, and a journey that names one executes it —
+#: the paid provider's stand-in, or the directory of refusing shims that guards the
+#: identities it cannot reach — so the key has to carry it although nothing imports it.
+STAND_IN = re.compile(r'\bhelper\(\s*"([^"]+)"\s*\)')
+#: Where those stand-ins live, as `project_fixtures.HELPERS` resolves them.
+STAND_INS = "tests/e2e"
+
+
+def _named_files(text: str, tracked: frozenset[str]) -> set[str]:
+    """Every tracked *file* ``text`` names as a complete literal path.
+
+    Narrower than :func:`_named_repository_paths` on purpose, in three ways. A literal
+    naming a directory — `REPO_ROOT / "scripts"` joined onto a name decided at run time —
+    is not a read of everything under it. A bare literal is not counted at all, because
+    in a journey it is as often the *content* of what the journey writes — a drafted
+    follow-up naming the script it is about — as a path it opens. And a journey's own
+    module is the one source read, because a shared helper's literals are a table as often
+    as a read: `tests/published_tools.py` names every pin in `config/` and opens none of
+    them for a journey that only asks it for a binary's path.
+    """
+    named: set[str] = set()
+    for match in re.finditer(r'(?:REPO_ROOT|ROOT)\s*/\s*"([^"]+)"(\s*/\s*"[^"]+")*', text):
+        rooted = "/".join(re.findall(r'"([^"]+)"', match.group(0)))
+        if rooted in tracked:
+            named.add(rooted)
+    return named
+
+
+def _ask_seam_declarations() -> dict[str, dict]:
+    """Every project declared under the ask-seam directory, by the root it sits at."""
+    return {
+        root: declaration
+        for root, declaration in _project_declarations().items()
+        if root.startswith(f"{ASK_SEAM_ROOT}/")
+    }
+
+
+def _journey_module(root: str) -> str:
+    """The one test module a journey project owns, or a failure naming what it found."""
+    modules = sorted(
+        str(module.relative_to(REPO_ROOT)) for module in REPO_ROOT.joinpath(root).glob("test_*.py")
+    )
+    assert len(modules) == 1, (
+        f"{root} is one journey's project and owns {modules}; one memoization unit is one "
+        "journey, so a second module there is a second project"
+    )
+    return modules[0]
+
+
+def _journey_sources(module: str, modules: dict[str, str]) -> set[str]:
+    """The journey's module and every `tests/` module it reaches by import.
+
+    `tests/conftest.py` and what it imports are in every journey's process, so they
+    are here too — the fixtures it installs run around every test, whatever the test
+    imports for itself.
+    """
+    return (
+        {module, "tests/conftest.py"}
+        | _imported_suite_modules(module, modules)
+        | _imported_suite_modules("tests/conftest.py", modules)
+    )
+
+
+def _stand_ins_named(sources: set[str], tracked: frozenset[str]) -> set[str]:
+    """Every tracked path under `tests/` the journey's sources name as a stand-in.
+
+    A symlink in a named tree counts as its target: `tests/e2e/no-paid-provider/` holds
+    one link per provider binary, all to `tests/e2e/no_paid_provider.py`, and what a
+    fall-through executes is that file.
+    """
+    named: set[str] = set()
+    for source in sources:
+        for match in STAND_IN.finditer((REPO_ROOT / source).read_text(encoding="utf-8")):
+            rooted = f"{STAND_INS}/{match.group(1)}"
+            found = {path for path in tracked if path == rooted or path.startswith(f"{rooted}/")}
+            named |= found
+            for path in found:
+                if (REPO_ROOT / path).is_symlink():
+                    target = repository_relative((REPO_ROOT / path).resolve())
+                    if target in tracked:
+                        named.add(target)
+    return named
+
+
+def test_the_ask_seam_registry_is_the_tree_of_journey_projects() -> None:
+    """`ASK_SEAM_JOURNEYS` restates what the tree declares, so this holds the two together.
+
+    A journey added under the directory without a row here would be a project the
+    partition check collects and the read guard holds to no key; a row here without a
+    project would be a key nothing runs under.
+    """
+    declared = _ask_seam_declarations()
+    assert declared, f"no project is declared under {ASK_SEAM_ROOT}/"
+    assert {journey.root for journey in ASK_SEAM_JOURNEYS} == set(declared), (
+        f"tests/nx_inputs.py lists {sorted(journey.root for journey in ASK_SEAM_JOURNEYS)} "
+        f"while {ASK_SEAM_ROOT}/ declares {sorted(declared)}"
+    )
+    for journey in ASK_SEAM_JOURNEYS:
+        declaration = declared[journey.root]
+        assert declaration["name"] == journey.project, (journey, declaration["name"])
+        assert set(declaration["targets"]) == {ASK_SEAM_SCOPED}, (
+            f"{journey.project} declares {sorted(declaration['targets'])}; one journey is "
+            "one memoization unit, and a second target there would be a second key"
+        )
+        assert declaration["targets"][ASK_SEAM_SCOPED]["inputs"] == [journey.key], (
+            f"{journey.project}:{ASK_SEAM_SCOPED} is keyed on "
+            f"{declaration['targets'][ASK_SEAM_SCOPED].get('inputs')}, not on its own "
+            f"named input {journey.key}"
+        )
+        assert journey.key in _nx_config()["namedInputs"], f"nx.json names no {journey.key}"
+        # And the target collects exactly the directory the project owns.
+        assert f"pytest {journey.root} " in declaration["targets"][ASK_SEAM_SCOPED]["command"]
+    assert not (REPO_ROOT / ASK_SEAM_ROOT / "project.json").exists(), (
+        f"{ASK_SEAM_ROOT}/project.json is the one shared target this layout replaced; a "
+        "project there would collect every journey under one key again"
+    )
+
+
+def test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider() -> None:
+    """One expensive journey, one key, and the key reaches only what that journey opens.
+
+    Every journey here spends a real launch, so a path in its key it never reads makes an
+    unrelated edit pay for that launch — and a key shared between journeys made every one
+    of them pay for a file only one read. Three things are held, in the direction each
+    can fail safely. The key is *no wider* than the journey: every glob names one tracked
+    file, or one fixture tree of stand-ins under `tests/e2e/`, so no `config/**/*` or
+    `scripts/**/*` can carry a whole directory for one file in it; none of it is prose;
+    and every `tests/` module it carries is one the journey imports, names as a stand-in,
+    or runs under — never a sibling journey's module, never a helper it never opens. And
+    the key is *no narrower* than what a static reading can see: the journey's own module,
+    every suite module it reaches by import, and every tracked file its own module names
+    joined onto the root, because a journey reads, copies or runs what it names. What the
+    launch reaches beyond that — the pins, graphs and harness configs the engine opens —
+    was measured, as `tests/nx_inputs.py` says, and `tests/conftest.py` holds the
+    in-process half of it to the key on every run; a file the key carries that no
+    measurement showed is the one drift this cannot see.
+    """
+    tracked = _tracked()
+    modules = _suite_modules()
+    named = _nx_config()["namedInputs"]
+    for journey in ASK_SEAM_JOURNEYS:
+        module = _journey_module(journey.root)
+        globs = repository_relative_globs(resolve_input_globs(named[journey.key], named))
+        for glob in globs:
+            assert not glob.startswith("!"), (
+                f"{journey.key} excludes {glob}; a key of named files has nothing to exclude"
+            )
+            if "*" in glob:
+                tree = glob.removesuffix("/**/*")
+                assert (
+                    glob.endswith("/**/*") and tree.startswith(f"{STAND_INS}/") and "*" not in tree
+                ), (
+                    f"{journey.key} carries {glob}: a tree in a journey's key is a fixture of "
+                    f"stand-ins under {STAND_INS}/, never a directory of this repository"
+                )
+                assert any(path.startswith(f"{tree}/") for path in tracked), (
+                    f"{glob} covers nothing"
+                )
+                assert not any(
+                    Path(path).name.startswith("test_")
+                    for path in tracked
+                    if path.startswith(f"{tree}/")
+                ), f"{glob} covers test modules, so it is not a tree of stand-ins"
+            else:
+                assert glob in tracked, f"{journey.key} names {glob}, which git does not track"
+
+        covered = {path for path in tracked if covers(globs, path)}
+        # A Markdown file under `config/` is a template a tool reads — the dispatch appendix,
+        # the design-document template — not prose about this repository.
+        prose = sorted(
+            path for path in covered if _is_documentation(path) and not path.startswith("config/")
+        )
+        assert not prose, f"{journey.key} reaches prose the journey never opens: {prose}"
+
+        sources = _journey_sources(module, modules)
+        missing = sorted(sources - covered)
+        assert not missing, (
+            f"{journey.key} does not carry {missing}, which {module} imports or runs under, "
+            "so editing one replays a verdict recorded before it moved"
+        )
+        literal = _named_files((REPO_ROOT / module).read_text(encoding="utf-8"), tracked)
+        unread = sorted(path for path in literal if not covers(globs, path))
+        assert not unread, (
+            f"{journey.key} does not carry {unread}, which {module} names by path and so "
+            "reads, copies or runs"
+        )
+
+        allowed = sources | _stand_ins_named(sources, tracked)
+        surplus = sorted(
+            path for path in covered if path.startswith("tests/") and path not in allowed
+        )
+        assert not surplus, (
+            f"{journey.key} reaches {surplus}, which {module} neither imports, names as a "
+            "stand-in, nor runs under — a sibling's module or a helper it never opens, and "
+            "an edit there would pay for this journey's launch"
+        )
 
 
 def test_the_nx_cache_check_key_covers_every_repository_path_that_check_reads() -> None:

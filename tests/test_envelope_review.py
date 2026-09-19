@@ -17,8 +17,8 @@ is held to the plan tier's structural rules over the graph the envelope's own no
 and the exit protocol the bus reads — ``0`` pass, ``1`` refuse with stderr as the reason,
 ``2`` unjudged — with ``--bar-fingerprint`` printing what the bus keys its pass cache on.
 The envelope is judged as it states itself: no run is read, so nothing here builds one.
-`tests/ask_seam/test_channel_reply_e2e.py` drives the same validator through the real
-`just channel-reply` and the real bus against a launched run, with the real `oneharness`
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives the same validator through
+the real `just channel-reply` and the real bus against a launched run, with the real `oneharness`
 spending the judged turn against a scripted provider.
 
 The judged turn is stood in at the one boundary it crosses into this module — the

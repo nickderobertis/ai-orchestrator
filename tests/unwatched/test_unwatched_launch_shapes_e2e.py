@@ -116,8 +116,8 @@ WORKING_SECONDS = 90
 
 
 #: A run id and a plan node's id, each a type of its own for the reason
-#: `tests/ask_seam/test_launch_ask_seam_e2e.py` gives its own: these journeys pass both
-#: beside file paths, session ids and project ids, and every one of them is a `str`.
+#: `tests/ask_seam/launch/test_launch_ask_seam_e2e.py` gives its own: these journeys pass
+#: both beside file paths, session ids and project ids, and every one of them is a `str`.
 RunId = NewType("RunId", str)
 NodeId = NewType("NodeId", str)
 

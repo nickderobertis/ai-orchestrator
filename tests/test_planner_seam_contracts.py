@@ -86,7 +86,7 @@ RECORDED_POLICY = {"seam-probe": "the messaging policy this run's launch record 
 #: their list of required inputs is written in. Read textually rather than imported: it
 #: is a pytest module whose import would collect fixtures, and reading a declaration is
 #: what every other gate in this file does.
-LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "ask_seam" / "test_launch_ask_seam_e2e.py"
+LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "ask_seam" / "launch" / "test_launch_ask_seam_e2e.py"
 CHECKED_INPUT = re.compile(r'Input\(\s*"([A-Z0-9_]+)"')
 
 #: How `scripts/ask-manager.sh` declares an environment variable it cannot ask without,
@@ -276,7 +276,7 @@ def test_the_personas_fallback_asks_exactly_as_the_shim_does(
     recorded for the run it is asking on, so its `--config` document must be that record —
     written here by hand, carrying a policy no real configuration would, so a fallback
     reading anything else could not pass by coincidence. That the record really is that
-    file's parse is `tests/ask_seam/test_launch_ask_seam_e2e.py`'s, per launch shape.
+    file's parse is `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`'s, per launch shape.
     Neither end may drift: a repointed `--bus-config`, a fallback that read another file,
     and a fallback that passed no configuration at all each fail here.
     """

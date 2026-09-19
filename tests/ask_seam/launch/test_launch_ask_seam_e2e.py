@@ -69,7 +69,7 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import criteria_guard, plan_store
-from orchestrator.project_store import render_plan_project
+from orchestrator.project_store import PROJECTS_DIRECTORY, TASKS_DIRECTORY, render_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, and the provider binary beneath it — the second is
@@ -304,8 +304,8 @@ ASK_WINDOW_SECONDS = int(e2e_timeout(ANSWERED_SECONDS * 2))
 #: to one xdist worker: several of these racing the rest of a full suite is what turns a
 #: round trip through real recipes into one that outlives the window it was given.
 #:
-#: `tests/ask_seam/test_ask_manager_e2e.py`'s group, deliberately, rather than one of this
-#: module's own. Two groups is two workers, and everything in both is a live planner
+#: `tests/ask_seam/ask_manager/test_ask_manager_e2e.py`'s group, deliberately, rather than
+#: one of this module's own. Two groups is two workers, and everything in both is a live planner
 #: channel with a manager thread driving real recipes at it — measured, a suite running
 #: the two beside each other left that module's wrapper waiting past its own deadline.
 #: What has to be serialized is driving a channel, not driving this file's channels.
@@ -913,12 +913,12 @@ def orchestrate_detached(tmp_path_factory: pytest.TempPathFactory, oneharness_bi
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This launch is already
-# behind its own edge: `tests/ask_seam/` is an Nx project of its own, keyed on
-# `askSeamWorkspace`, which exists precisely so an unrelated edit does not pay for these
-# launches. That key covers the configuration, graphs, personas, scripts and orchestrator
-# code a real launch reads — a lifecycle one reads more of it than a direct one, not
-# less — so narrowing it would leave the tier replaying a green across a change one of
-# these launches exercises, which is the failure the split was made to end.
+# behind its own edge: this directory is an Nx project of its own, keyed on
+# `askSeamLaunch`, which exists precisely so an unrelated edit does not pay for these
+# launches. That key names, file by file, the configuration, graphs, personas, scripts and
+# orchestrator code these launches were measured reading — a lifecycle one reads more of
+# it than a direct one, not less — so a change one of them exercises re-runs them and a
+# change none of them reads replays the green they earned.
 @pytest.fixture(scope="module")
 def orchestrate_lifecycle(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
@@ -1031,13 +1031,13 @@ def _adopt(run: RunId, environment: dict[str, str], *, seconds: float = 300) -> 
     while time.monotonic() < limit:
         # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The journey this
         # helper serves is a real orchestration launch and is already behind its own
-        # edge: `tests/ask_seam/` is an Nx project of its own, keyed on
-        # `askSeamWorkspace`, which exists precisely so an unrelated edit does not pay
-        # for these launches. That key covers the configuration, scripts, personas,
-        # graphs and orchestrator code these launches really read, so narrowing it would
-        # leave the tier replaying a green across a change one of them exercises — the
-        # failure the split was made to end. This change adds no journey and moves none;
-        # it makes an existing one wait for a precondition the adopted engine made racy.
+        # edge: this directory is an Nx project of its own, keyed on `askSeamLaunch`,
+        # which exists precisely so an unrelated edit does not pay for these launches.
+        # That key names, file by file, the configuration, scripts, personas, graphs and
+        # orchestrator code these launches were measured reading, so a change one of
+        # them exercises re-runs them and a change none of them reads replays the green
+        # they earned. This helper adds no journey and moves none; it makes an existing
+        # one wait for a precondition the adopted engine made racy.
         adopted = just("orchestrate", "--adopt", run, environment=environment, seconds=300)
         if adopted.returncode == 0:
             return
@@ -1075,6 +1075,33 @@ def _attest(
     raise AssertionError(f"run {run}'s '{reference}' never became attestable:\n{refusal}")
 
 
+def _authored_by_the_launch(root: Path, run: RunId) -> tuple[Path, Path]:
+    """The two records `just plan` writes for ``run`` under ``root``, and nothing else.
+
+    The project record and the task directory, as `scripts/plan.sh` lays them out — by
+    the run's own name, which is the one thing that makes a launch's records tellable
+    apart from every other record in that root. Named by path rather than matched by a
+    pattern, for the reason that script's own cleanup names its one task record: a sweep
+    of the directory would take records the launch never wrote.
+    """
+    return root / PROJECTS_DIRECTORY / f"{run}.md", root / TASKS_DIRECTORY / run
+
+
+def _forgotten(root: Path, run: RunId) -> None:
+    """Take back the records a launch of ``run`` wrote into ``root``, and only those.
+
+    These journeys launch into the authoring root this checkout really resolves — that
+    a launch writes where a real planner writes is the property they exist to prove — so
+    what they leave behind sits in a developer's own `.plans`, beside plans somebody
+    authored, and under stable names a later run of the suite then finds already taken.
+    Each launch takes back exactly its own two records; a project or task directory under
+    that root it did not write is somebody's, and is not touched.
+    """
+    project, tasks = _authored_by_the_launch(root, run)
+    project.unlink(missing_ok=True)
+    shutil.rmtree(tasks, ignore_errors=True)
+
+
 def _carrying_the_plan_store_configuration(identity: Identity) -> None:
     """Give the seeded checkouts this repository's store document.
 
@@ -1095,6 +1122,7 @@ def _carrying_the_plan_store_configuration(identity: Identity) -> None:
     git("push", "-q", "origin", "main", cwd=execution, env=identity.environment)
 
 
+@contextmanager
 def _planned(
     tmp_path: Path,
     oneharness_bin: str,
@@ -1103,13 +1131,19 @@ def _planned(
     resolved: Path | None = None,
     root: Path | None = None,
     authored: str | None = None,
-) -> Dispatch:
+) -> Iterator[Dispatch]:
     """Launch `just plan` on a brief, have its dispatch ask, and hand back both.
 
     Attached and detached differ by one flag and by nothing else here, so they are one
     function: what they are being compared on is the environment each leaves behind, and
     a second copy of the launch would be a second chance for the two to differ for a
     reason that is not the flag.
+
+    A context rather than a value, because a launch leaves records behind in the
+    authoring root and they are the caller's to read for as long as it holds this: the
+    project the launch wrote is taken back — with the task directory beside it, and
+    nothing else in that root — when the caller lets go, whether or not the launch got
+    as far as a dispatch.
 
     `resolved` names where the dispatch is to write the plan store's own answer about the
     `authoring` source, which is the other half of what a launch establishes: a variable
@@ -1137,12 +1171,15 @@ def _planned(
     environment.update(identity.environment)
     if root is not None:
         environment[PLAN_ROOT.name] = str(root)
+    # The root this launch writes its own project into: the one the caller chose, or
+    # else the one this checkout resolves, which is where a real planning launch writes.
+    authoring_root = root or plan_store.source_root(AUTHORING)
     # Held rather than only written, because the wait below is on these very paths: the
     # stand-in claims the instruction file before it writes them, so the instruction is
     # gone by the time there is anything to read and only the records say authoring is done.
     records: Mapping[str, str] | None = None
     if authored is not None:
-        records = _authored_records(root or plan_store.source_root(AUTHORING), authored)
+        records = _authored_records(authoring_root, authored)
         written = tmp_path / "authored-plan.json"
         written.write_text(json.dumps(records), encoding="utf-8")
         # The stand-in for the paid model performs the one action a real planner performs
@@ -1169,34 +1206,40 @@ def _planned(
     # here would copy a fixture's plan into whatever destination the flow defaults to.
     recipe = ["just", "plan", str(brief), "--name", run, "--no-design-doc", *detached]
     try:
-        with _attached(recipe, environment, tmp_path / "launch.log") as streamed:
-            dispatched = _await_dispatch(turns)
-            manager = _answering(run, environment)
-            answered = _await_answer(record, manager)
-            if records is not None:
-                _await_authored_plan(records)
-            if resolved is not None:
-                _await_store_answer(resolved)
-            _reaped(manager, answered)
-            assert (Path(environment["ONEPIPELINE_RUNS_DIR"]) / run).is_dir(), (
-                f"`just plan` printed and exported run '{run}', which is not a run this "
-                f"launch created:\n{streamed.read_text(encoding='utf-8')}"
-            )
-            return Dispatch(
-                run=run,
-                worker=dispatched,
-                asked=answered,
-                environment=environment,
-                store=resolved,
-                reported=streamed.read_text(encoding="utf-8"),
-            )
+        try:
+            with _attached(recipe, environment, tmp_path / "launch.log") as streamed:
+                dispatched = _await_dispatch(turns)
+                manager = _answering(run, environment)
+                answered = _await_answer(record, manager)
+                if records is not None:
+                    _await_authored_plan(records)
+                if resolved is not None:
+                    _await_store_answer(resolved)
+                _reaped(manager, answered)
+                assert (Path(environment["ONEPIPELINE_RUNS_DIR"]) / run).is_dir(), (
+                    f"`just plan` printed and exported run '{run}', which is not a run this "
+                    f"launch created:\n{streamed.read_text(encoding='utf-8')}"
+                )
+                launched = Dispatch(
+                    run=run,
+                    worker=dispatched,
+                    asked=answered,
+                    environment=environment,
+                    store=resolved,
+                    reported=streamed.read_text(encoding="utf-8"),
+                )
+        finally:
+            just("stop", run, environment=environment, seconds=60)
+            generated.unlink(missing_ok=True)
+        yield launched
     finally:
-        just("stop", run, environment=environment, seconds=60)
-        generated.unlink(missing_ok=True)
+        _forgotten(authoring_root, run)
 
 
 @pytest.fixture(scope="module")
-def plan_attached(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Dispatch:
+def plan_attached(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[Dispatch]:
     """Launch `just plan` attached — the one shape this host had ever proven.
 
     This is the shape that also reports what its dispatch's own plan store resolves, so
@@ -1206,12 +1249,13 @@ def plan_attached(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     """
     _requires_just()
     tmp_path = tmp_path_factory.mktemp("plan-attached")
-    return _planned(
+    with _planned(
         tmp_path,
         oneharness_bin,
         RunId("launch-seam-plan-attached"),
         resolved=tmp_path / "dispatch-config.json",
-    )
+    ) as launched:
+        yield launched
 
 
 @pytest.fixture(scope="module")
@@ -1238,7 +1282,7 @@ AUTHORED_PROJECT = "launch-seam-chosen-root-authored"
 @pytest.fixture(scope="module")
 def plan_over_a_chosen_root(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, plan_root_already_chosen: Path
-) -> Dispatch:
+) -> Iterator[Dispatch]:
     """Launch `just plan` over a root the caller chose, and read the whole path back.
 
     Its own launch rather than a flag on one above, because what is being measured is a
@@ -1255,26 +1299,30 @@ def plan_over_a_chosen_root(
     """
     _requires_just()
     tmp_path = tmp_path_factory.mktemp("plan-chosen-root")
-    return _planned(
+    with _planned(
         tmp_path,
         oneharness_bin,
         RunId("launch-seam-plan-chosen-root"),
         root=plan_root_already_chosen,
         resolved=tmp_path / "dispatch-config.json",
         authored=AUTHORED_PROJECT,
-    )
+    ) as launched:
+        yield launched
 
 
 @pytest.fixture(scope="module")
-def plan_detached(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Dispatch:
+def plan_detached(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[Dispatch]:
     """Launch `just plan --detach` — the shape this host actually launches a planner in."""
     _requires_just()
-    return _planned(
+    with _planned(
         tmp_path_factory.mktemp("plan-detached"),
         oneharness_bin,
         RunId("launch-seam-plan-detached"),
         "--detach",
-    )
+    ) as launched:
+        yield launched
 
 
 def _given(dispatch: Dispatch, required: Input) -> str:
@@ -1664,11 +1712,11 @@ def test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose(
         f"caller chose; {plan_root_already_chosen} holds "
         f"{sorted(path.name for path in plan_root_already_chosen.iterdir())}"
     )
-    # And said so, which is the half a file on disk cannot answer: these journeys reuse
-    # their run ids, so this checkout's own plan root holds a record of this name from
-    # every earlier run of the suite, and a reader that only looked there could not tell
-    # a launch that wrote to the wrong place from one that wrote to the right one beside
-    # residue. What the launch reports is about this launch alone.
+    # And said so, which is the half a file on disk cannot answer: a record of this name
+    # under the wrong root — one a launch that ignored the override wrote into this
+    # checkout's own plan root, say — is not a file this test reads, and a reader that only
+    # looked at the chosen root could not tell a launch that wrote there from one that
+    # wrote to both. What the launch reports is about this launch alone.
     assert plan_over_a_chosen_root.reported is not None, "this launch's stream was not read"
     assert f"wrote {AUTHORING}:{plan_over_a_chosen_root.run} at {written}" in (
         plan_over_a_chosen_root.reported
@@ -1676,6 +1724,90 @@ def test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose(
         "the launch did not report writing its project under the root its caller chose:\n"
         f"{plan_over_a_chosen_root.reported}"
     )
+
+
+#: A project somebody else authored into this checkout's own plan root, planted beside a
+#: launch's records to measure what that launch takes back. Its name shares the stable
+#: prefix these journeys use, so a teardown that swept by pattern would take it too.
+SOMEBODY_ELSES_PROJECT = "launch-seam-somebody-elses-plan"
+
+
+def _somebody_elses_plan(root: Path) -> tuple[Path, Path]:
+    """Write a stranger's project into ``root`` the way a real author does, and name it.
+
+    Through the store's own writer as a subprocess, because that is the one path
+    every project in that root arrives by — `scripts/plan.sh` pipes its generated plan
+    into exactly this module — and because the root is ignored by git, so no cache key
+    could carry it and this suite's read guards hold a test's own `open` off it.
+    """
+    written = subprocess.run(  # noqa: S603 - the store's own writer, on a plan this test composed
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python3"),
+            "-m",
+            "orchestrator.project_store",
+            str(root),
+        ],
+        input=json.dumps(
+            {
+                "schema_version": 3,
+                "name": SOMEBODY_ELSES_PROJECT,
+                "goal": {"text": "A plan a person authored here"},
+                "tasks": [{"id": "theirs", "persona": "engineer", "task": AUTHORED_TASK}],
+            }
+        ),
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert written.returncode == 0, f"the stranger's plan was not written:\n{written.stderr}"
+    return _authored_by_the_launch(root, RunId(SOMEBODY_ELSES_PROJECT))
+
+
+def test_a_plan_launch_takes_back_its_own_records_and_leaves_everyone_elses(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A launch here writes into the real authoring root, and leaves it as it found it.
+
+    The launches above go into the `.plans` this checkout really resolves — not a root of
+    their own — because that a launch writes where a real planner writes is the claim.
+    The cost of that was residue: every green run of this module left its stable run ids
+    under `projects/` and `tasks/` of a developer's own plan root, where a planner or a
+    manager reading the authoring source found records nothing authored, and the next
+    run of the suite found its names already taken.
+
+    Its own launch rather than a look at a module fixture's, because a fixture's teardown
+    is what is being measured and no test in the module outlives it. Both halves are
+    asserted off one launch: the records are there while the launch is held, so the ones
+    it then no longer holds are ones the launch wrote into this checkout's root — and a
+    stranger's project, planted beside them under a name that shares their prefix, is
+    still there afterwards, which is what separates taking back one's own records from
+    sweeping the directory.
+    """
+    _requires_just()
+    run = RunId("launch-seam-plan-taken-back")
+    root = plan_store.source_root(AUTHORING)
+    project, tasks = _authored_by_the_launch(root, run)
+    theirs_project, theirs_tasks = _somebody_elses_plan(root)
+    try:
+        with _planned(tmp_path, oneharness_bin, run):
+            assert project.is_file() and tasks.is_dir(), (
+                f"the launch of {run} wrote no records into this checkout's own authoring "
+                f"root {root}, so nothing below measures a teardown"
+            )
+
+        assert not project.exists() and not tasks.exists(), (
+            f"the launch of {run} left its records in {root}: "
+            f"{[str(path) for path in (project, tasks) if path.exists()]}"
+        )
+        assert theirs_project.is_file() and theirs_tasks.is_dir(), (
+            f"the launch of {run} took back records it never wrote from {root}: "
+            f"{[str(path) for path in (theirs_project, theirs_tasks) if not path.exists()]}"
+        )
+    finally:
+        theirs_project.unlink(missing_ok=True)
+        shutil.rmtree(theirs_tasks, ignore_errors=True)
 
 
 def test_a_dispatch_over_a_chosen_root_resolves_its_store_to_that_root(

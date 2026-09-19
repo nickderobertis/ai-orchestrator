@@ -12,8 +12,15 @@ given to ask with and which bus configuration its run records.
   dispatch, a real run's channel and the manager's own recipes reach that behaviour, and
   reads a channel only through the bus's verbs or `just channel-next`, never its files.
 
-- **One target, `ask-seam:test`, keyed on `askSeamWorkspace`**: what these journeys
-  drive and read, minus the prose they never open and the e2e helpers they never import —
-  named one by one rather than as a directory, so a journey added beside them does not
-  silently start invalidating this tier. Every journey here spends a real launch, which
-  is why nothing wider may key it and why there is no second, whole-workspace target.
+- **One journey, one Nx project, one key.** Every journey here spends a real launch, so
+  each is its own memoization unit: a directory of its own under this one holding its
+  module and a `project.json` whose single `test` target is keyed on a named input of
+  its own in `nx.json`. That key names, file by file, exactly what the journey reads — its
+  own module, the shared helpers it imports, and the host-tool paths its launch really
+  opens or runs — and nothing wider: no `config/**/*`, `scripts/**/*` or
+  `orchestrator/**/*`, no prose, and no helper or sibling journey it never opens, so an
+  edit pays for a launch only where that launch would read the edit. `tests/nx_inputs.py`
+  lists the journeys and `tests/test_nx_cache_scope.py` holds each key to that shape;
+  `tests/conftest.py` fails a journey the moment it opens something its own key does not
+  carry. A new journey is a new directory, a new row in that list and a new key measured
+  from what it reads, never a file added beside an existing module.

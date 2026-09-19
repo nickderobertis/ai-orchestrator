@@ -1263,7 +1263,7 @@ once](#a-planner-writes-a-reply-once).
 
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
-`tests/ask_seam/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
+`tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
 as of onepipeline 0.38.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
