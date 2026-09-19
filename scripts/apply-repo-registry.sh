@@ -34,6 +34,8 @@ set -euo pipefail
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(dirname -- "$script_dir")"
+# shellcheck source=scripts/registered-checkouts.sh
+. "$script_dir/registered-checkouts.sh"
 
 # The same `uv run` every `onevcs` recipe reaches the CLI through, pinned to this
 # repository so the version registering a checkout is the version the recipes use
@@ -164,16 +166,11 @@ skipped=0
 aliases=()
 first_path=""
 
-while IFS= read -r line || [[ -n $line ]]; do
-    # `read` without `IFS=` is the trim: it drops the leading and trailing
-    # whitespace a commented, indented list is written with.
-    read -r trimmed <<<"${line%%#*}"
-    [[ -n $trimmed ]] || continue
-    if [[ $trimmed == \~* && $trimmed != \~ && $trimmed != \~/* ]]; then
-        echo "apply-repo-registry: unsupported tilde path '$trimmed'; use ~/path" >&2
-        exit 2
-    fi
-    path=${trimmed/#\~/$HOME}
+# The list is read whole before anything is registered, so a line the reader refuses
+# refuses the run before it has changed the registry at all.
+listed=$(registered_checkout_paths "$checkouts_file") || exit 2
+while IFS= read -r path; do
+    [[ -n $path ]] || continue
     if [[ ! -d $path ]]; then
         echo "  skip       not on this host  $path"
         skipped=$((skipped + 1))
@@ -198,7 +195,7 @@ while IFS= read -r line || [[ -n $line ]]; do
     fi
     aliases+=("$alias_name")
     present=$((present + 1))
-done <"$checkouts_file"
+done <<<"$listed"
 
 # Validate the supplied rules through `onevcs` before replacing the live file.
 # A scratch registration gives `rules check` a real identity to resolve while

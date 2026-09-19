@@ -1,9 +1,25 @@
-"""E2E coverage for the worktree-local session toolchain bootstrap."""
+"""E2E coverage for the worktree-local session toolchain bootstrap.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] Which Nx project owns this module is a
+property of the module, not of the one assertion this change adds to it: it has driven
+the real `scripts/session-setup.sh`, a real `uv sync` from PyPI and the real published
+tools from the orchestrator project since it was written, while the tier that owns a
+real session-setup run of *this* checkout is `tests/session_setup`. Moving it beside
+that project is a change to `nx.json`, `orchestrator/project.json` and
+`tests/nx_inputs.py` together, and is a follow-up rather than one assertion's to make.
+llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] Same site, same
+follow-up: this module declares no marker-based tier and the project it sits in is
+pre-existing.
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Same site, same
+follow-up: the cost of these journeys predates this change and moving them behind a
+narrower edge is the project split above.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,6 +56,16 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     # sentences rather than restated, so a wording change fails there once.
     assert NOTHING_EXAMINED in installed.stderr, installed.stderr
     assert "=== just sweep — what this run looked at ===" not in installed.stderr
+    # The last step reached the registered sibling checkouts through the recipe, and
+    # under this fixture's `HOME` every listed `~/` path is absent, so each one was
+    # skipped and no sibling's bootstrap ran — which is the report a host holding none
+    # of them gets, and what keeps this journey off the real siblings.
+    assert re.search(
+        r"^repos-bootstrap: 0 ran, 0 unchanged, [1-9]\d* skipped, 0 refused, 0 failed$",
+        installed.stderr,
+        re.MULTILINE,
+    ), installed.stderr
+    assert "sibling checkout bootstrap unavailable" not in installed.stderr
     assert (
         subprocess.run(
             [repo / ".venv" / "bin" / "oneharness", "--version"],
@@ -146,6 +172,9 @@ def test_session_setup_continues_when_the_workspace_sweep_is_unavailable(tmp_pat
 
     assert result.returncode == 0, result.stderr
     assert "workspace sweep unavailable; continuing session setup" in result.stderr
+    # The sibling step is reached through the same justfile, and is the same kind of
+    # absence: reported, and never this session's exit status.
+    assert "sibling checkout bootstrap unavailable; continuing session setup" in result.stderr
 
 
 def test_session_setup_fails_when_synced_onejudge_misses_adopted_version(

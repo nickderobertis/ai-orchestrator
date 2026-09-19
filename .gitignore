@@ -61,7 +61,9 @@ dist/
 /.screenshots/
 
 # Preserved command output (scripts/preserved-log.sh). Deliberately per-worktree
-# and deliberately ignored: it is diagnostic evidence, not repository content.
+# and deliberately ignored: it is diagnostic evidence, not repository content. The
+# justfile's `set tempdir` names `.logs/just` under it, created by the justfile itself
+# on every recipe run, so the body `just` writes there in flight never dirties the tree.
 /.logs/
 
 # The fold checkpoint the engine resumes a run's state from instead of replaying its

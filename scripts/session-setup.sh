@@ -26,6 +26,11 @@
 #      without revalidating). Never fatal: each link is reported by name with the
 #      version it stored, or why it could not be warmed, and a cold link is fetched on
 #      first use instead.
+#   9. Last, `just repos-bootstrap`: every registered sibling checkout's own `just
+#      bootstrap`, memoized per checkout, so the gate a dispatch publishes through has
+#      its tools before the dispatch starts. Last because it is the one step about
+#      other repositories, and a report from it — a sibling that failed — is relayed
+#      and never changes this script's exit status.
 #
 # Before any of that it runs `scripts/hold-run-lease.sh`, which holds this
 # dispatch's run-root occupancy lease against a sibling `onevcs session open`
@@ -472,5 +477,15 @@ fi
 if ! verify_bun; then
   log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1
+fi
+# The sibling gates, after this checkout's own toolchain is verified and reported: the
+# recipe prints one line per registered checkout and exits non-zero when one of them
+# failed or was refused, and that is a report to relay rather than a reason for this
+# session to be without a toolchain. It never touches `toolchain_failed`.
+if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
+  just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" repos-bootstrap >&2 \
+    || log "a registered sibling checkout's bootstrap failed or was refused (its line above names it); continuing session setup"
+else
+  log "sibling checkout bootstrap unavailable; continuing session setup"
 fi
 exit "$toolchain_failed"

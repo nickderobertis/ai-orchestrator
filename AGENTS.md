@@ -48,10 +48,15 @@ remote open-PR publication for one run without changing stored workflow.
 throws its answer away, and where it ran less than the merge path it read as
 verification while a branch sat blocked on a required check it never ran. What verifies
 a change is the repository's own merge path — the host's required checks for a remote
-identity, the `pre-push` hook for a local one — and `onevcs` detects which. Every check
-a remote identity requires is one only its merge path runs, and `just repos
---audit-gate-coverage` names them per identity, read off that repository's own branch
-protection and rulesets by `onevcs` at the moment you ask. There is no tracked copy of
+identity, the `pre-push` hook for a local one — and `onevcs` detects which. The tools a
+local one's hook needs are put in place ahead of the dispatch by `just repos-bootstrap` —
+each registered checkout's own `just bootstrap`, run last in every session start of this
+repository, memoized on that checkout's `HEAD` and the files its recipe names, held to
+one caller per checkout, and never run on a checkout of this repository — so a sibling's
+gate is not discovered one publication attempt at a time. Every check a remote identity
+requires is one only its merge path runs, and `just repos --audit-gate-coverage` names
+them per identity, read off that repository's own branch protection and rulesets by
+`onevcs` at the moment you ask. There is no tracked copy of
 that list, so a new identity needs a rule and nothing else. Read the audit before
 relying on a merge path, and keep an identity it cannot classify visible rather than
 reading it as covered.

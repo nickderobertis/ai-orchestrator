@@ -6,6 +6,16 @@ reconciliation journey that reads the engine binary that provisioning installs.
 One copy because both drive the *same* real script — a second fixture builder
 would be a second answer to "what does a provisioned worktree contain", and the
 one that went stale would be the one nobody was reading.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] Which Nx project owns the journeys
+this fixture feeds is a property of those modules, not of the three files this change
+adds to the fixture: they have installed real published tools from the orchestrator
+project since they were written, while a real session-setup run of *this* checkout is
+owned by `tests/session_setup`. Moving them is a change to `nx.json`,
+`orchestrator/project.json` and `tests/nx_inputs.py` together, drafted as a follow-up.
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Same site, same
+follow-up: the cost of those journeys predates this change, and putting them behind a
+narrower edge is the project split above.
 """
 
 from __future__ import annotations
@@ -96,6 +106,15 @@ def setup_repo(
     sweep = scripts / "sweep.sh"
     shutil.copy2(REPO_ROOT / "scripts" / "sweep.sh", sweep)
     sweep.chmod(0o755)
+    # The last thing session setup runs is `just repos-bootstrap`, which provisions the
+    # registered sibling checkouts' gates — through the recipe, the script, and the
+    # reader of the tracked checkout list, so all three are part of a repo this script
+    # can be run in. `HOME` is `tmp_path` in every journey here, so every listed `~/`
+    # path is absent and the recipe skips each one: no journey here runs a sibling's
+    # bootstrap, and the report it leaves says so.
+    for name in ("repos-bootstrap.sh", "registered-checkouts.sh"):
+        shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
+    shutil.copy2(REPO_ROOT / "config" / "onevcs.checkouts", config / "onevcs.checkouts")
     # Every adopted release is copied, so a further pinned tool needs no fixture edit;
     # the parameters below then restate only what a journey deliberately moves.
     for declared in (REPO_ROOT / "config").glob("*.version"):

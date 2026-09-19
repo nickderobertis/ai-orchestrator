@@ -39,7 +39,10 @@ ASK_SEAM_WORKSPACE = "askSeamWorkspace"
 #: own provisioning drives and reads. Named file by file rather than as `scripts/**/*`
 #: or `config/**/*`: the journey runs the real `scripts/session-setup.sh`, which
 #: re-provisions the project environment from the lock, so every glob wider than the
-#: script, the lock and the one pin it reads makes an unrelated edit pay for that.
+#: script, the lock and the one pin it reads makes an unrelated edit pay for that. The
+#: last step that script runs — `just repos-bootstrap`, over the tracked checkout list —
+#: is in the key as its script, the list reader it sources and the list itself, because
+#: what the journey asserts about the siblings is decided by those three files.
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 
 #: The key the `unwatched` project's one tier is memoized on, and it names files rather

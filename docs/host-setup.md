@@ -50,11 +50,80 @@ idempotent. It:
   session env file, creating its parent directory when the config directory is new;
 - hands off to `scripts/setup-llmlint.sh`, which installs `llmlint-cli` with
   `uv tool` — that one install brings the llmlint judge tier and its bundled
-  oneharness.
+  oneharness;
+- last, runs `just repos-bootstrap`, which provisions the **registered sibling
+  checkouts' gates** and relays its report without letting a sibling's failure
+  change this session's exit status.
 
 What automation cannot do is authenticate an account, accept a trust dialog,
 install allowlister, or rebuild the per-machine repository registry. That is
 exactly what the rest of this document is.
+
+### The sibling gates: `just repos-bootstrap`
+
+A dispatch publishes through its target repository's own merge path, and for a local
+identity that is the target's `pre-push` gate, run on this host with whatever tools this
+host has. Provisioning this checkout says nothing about those, so a correct, committed
+change once spent three publication attempts discovering, tool by tool, what an
+onetaskgraph gate needed — `cargo-deny`, `cargo-machete`, then the pinned `release-plz`.
+A Codex dispatch never runs the target's Claude session-start hook, and the engine's
+dispatch-env hook runs before a session opens, so the one place that reaches every
+dispatch is this repository's own session setup, and its last step is:
+
+```sh
+just repos-bootstrap
+```
+
+It runs each registered checkout's **own** `just bootstrap` — every target repository
+defines one, and each is idempotent by that repository's design — reading the checkouts
+from the same tracked `config/onevcs.checkouts` that `just repos-apply` registers,
+through the same reader, and skipping a path this host does not have the same way. Two
+kinds of checkout are skipped on purpose: a checkout of this repository, because the
+session setup calling it is one of this repository's own and running
+`workspace-install.sh --force` in a checkout another manager is working in would
+discard that manager's `node_modules` under a live gate; and a call nested inside
+another `repos-bootstrap` — a sibling's bootstrap reaching this recipe through a session
+setup of its own — which provisions nothing, because the caller above it already is.
+
+What it costs is bounded two ways. It is **memoized per checkout** on that checkout's
+`HEAD` plus the bootstrap inputs it can name without executing anything — the justfile
+as `just --dump` parses it and every file the `bootstrap` recipe body names — under a
+memo root beside the Nx cache and outside every worktree, which the recipe's first line
+of output names on every run, so a session start where nothing moved is one read per
+checkout; to force one checkout's bootstrap, delete its memo directory under that root
+(each records the path of the checkout it is for) and run the recipe again. And it holds a
+**per-checkout lock**, so two session starts arriving together never run one checkout's
+bootstrap at once — the second waits, then reads the memo the first recorded.
+
+It prints one line per listed checkout, opening with what happened to it, and a summary
+counting each outcome; `tests/test_repos_bootstrap_docs.py` holds this list to exactly
+the outcomes the script reports:
+
+- `ran` — that sibling's own bootstrap ran and succeeded; the line names the log its
+  output was kept in.
+- `unchanged` — its memo matches, so nothing ran.
+- `skip` — nothing to run, with the reason: not on this host, a checkout of this
+  repository, no justfile, or no `bootstrap` recipe.
+- `refused` — it could not get as far as running: a justfile `just` could not read a
+  `bootstrap` recipe out of, a directory it could not enter, a memo it could not write,
+  or a lock another caller held too long.
+- `failed` — the bootstrap ran and exited non-zero; the line names the exit status and
+  the log.
+
+A `failed` or `refused` line makes the recipe exit non-zero when run by hand; session
+setup logs it and continues, since a sibling's gate missing a tool is a report for
+whoever runs that sibling's bootstrap by hand, never a reason for this session to be
+without a toolchain. It runs each sibling's bootstrap **exactly as that repository
+defines it**: what a bootstrap does to the host is that repository's decision, and a
+defect there is that repository's to fix.
+
+Two bounds to know. The Claude Code SessionStart hook that runs session setup carries
+the timeout `.claude/settings.json` names, and a sibling whose first bootstrap takes
+longer than what is left of it is cut off there and left without a memo, so the next
+session start runs it again; `just repos-bootstrap` by hand, or `just bootstrap`, has no
+such bound. And a journey of session setup names its own checkout list in
+`ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS`, so the real script can be driven over
+stand-ins the journey registers rather than over this host's siblings.
 
 ## 1. Prerequisites nothing here installs
 
@@ -556,4 +625,6 @@ just gate
       `hasTrustDialogAccepted` values `true`
 - [ ] allowlister installed and its codex hook wired
 - [ ] registry rebuilt with checkout **paths**; `just repos --audit-gate-coverage` reviewed
+- [ ] `just repos-bootstrap` reports every present sibling `ran` or `unchanged`, none
+      `failed` or `refused`
 - [ ] `just smoke`, the per-identity probes, and `just gate` all green

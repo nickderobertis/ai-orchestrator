@@ -7,6 +7,20 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
+# Where `just` writes a shebang recipe's body before executing it. Left unset, it is
+# the caller's `XDG_RUNTIME_DIR`, which a publication inherits: with that a `noexec`
+# mount, every shebang recipe was refused at the pre-push gate (#1087). The setting
+# takes a literal path resolved against the working directory, and `just` does not
+# create it, so the backtick below does — a top-level assignment runs before any recipe
+# body, in that same directory, so the directory exists wherever this justfile runs
+# from, a bare copy of the file included; a tracked placeholder reached only checkouts.
+# `/.logs/` is ignored, so a body in flight never dirties the tree. The
+# `XDG_RUNTIME_DIR` mappings in the `oneharness.*.toml` files protect provider turns,
+# not recipe execution, and stay. `tests/e2e/test_just_tempdir_e2e.py` drives it.
+set tempdir := ".logs/just"
+# Tolerated when it fails so a plain recipe still runs in a tree that cannot be
+# written; a shebang recipe there fails with `just`'s own message naming the path.
+_create_recipe_tempdir := `mkdir -p .logs/just 2>/dev/null || true`
 
 # The coverage floor is not restated here: `[tool.coverage.report] fail_under` in
 # pyproject.toml is its one source, enforced by the Nx `coverage` target this recipe
@@ -654,6 +668,14 @@ repo-policy *args:
 # llmlint: ignore[tool_output_is_signal] the per-checkout resolved policy and per-producer release adoption this prints are what an operator applies the configuration to read.
 repos-apply *args:
     @./scripts/apply-repo-registry.sh "$@"
+
+# Run each registered sibling checkout's own `just bootstrap` ahead of the dispatch
+# that publishes through its gate: `just repos-bootstrap [--checkouts FILE]`. Session
+# setup calls it last, which is how `just bootstrap` reaches it; docs/host-setup.md,
+# "The sibling gates", is the account of what it reads, reports, and costs.
+# llmlint: ignore[tool_output_is_signal] The per-checkout table of what happened to each sibling is what an operator runs this to read.
+repos-bootstrap *args:
+    @./scripts/repos-bootstrap.sh "$@"
 
 # List recent dispatched worker sessions across every target repo.
 # `just history [RUN]` lists one run's records; the argument is a run id rather
