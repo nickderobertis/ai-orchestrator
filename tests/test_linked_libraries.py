@@ -562,9 +562,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.4", core="0.14.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.13.1", core="0.14.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.37.0", core="0.14.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.5", core="0.14.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.13.2", core="0.14.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.38.0", core="0.14.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was

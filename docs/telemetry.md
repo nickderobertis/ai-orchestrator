@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.37.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.38.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,14 +143,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.15.0/0.13.1 upgrade (`config/oneharness.version` and
+after the 0.15.0/0.13.2 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made nine times
+one. That re-check has now been made ten times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -216,7 +216,13 @@ unchanged between the two tags; `onejudge-cli` 0.13.1 is compiled against
 `oneharness-core` 0.14.0 and the engine wheel links 0.14.1, read off each wheel's own SBOM,
 and the `Usage` those write is the same five fields as before — history schema 1.9 admits a
 `server_overloaded` failure kind beside the block rather than inside it; what 0.13.1 adds
-is the `turn` outcome on a `supervisor` frame, which writes nothing into a record's `usage`. `dispatches`,
+is the `turn` outcome on a `supervisor` frame, which writes nothing into a record's `usage`.
+It has since moved to 0.13.2 on the same terms: neither `crates/onejudge/src/report.rs`
+(schema 12) nor `crates/onejudge/src/usage.rs` changes between the two tags, `onejudge-cli`
+0.13.2 is still compiled against `oneharness-core` 0.14.0 and the engine wheel still links
+0.14.1, read off each wheel's own SBOM; what 0.13.2 changes is how it asks the spawned
+`oneharness` for its report — explicitly as JSON — which writes nothing into a record's
+`usage`. `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 

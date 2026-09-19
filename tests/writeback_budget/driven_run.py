@@ -84,6 +84,14 @@ PROJECTIONS_FILE = "writeback-projections.jsonl"
 #: The source the engine's shadow project lives in, which is what a `--member` names.
 SHADOW_SOURCE = "onepipeline-writeback"
 
+#: The engine's `engine::CANCEL_GRACE_ENV`: how long a cancelled dispatch has to stop itself
+#: before it is torn down. The shipped default is sized for a real turn to commit what it
+#: has; a journey that cancels a held turn names a shorter one, because the stand-in takes
+#: no redirection and the node settles only once the teardown has reaped it.
+CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
+#: This checkout's bus configuration, which every read of a run's channel names.
+BUS_CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
+
 
 class DrivenRun(NamedTuple):
     """A live, driven run whose plan-store calls pass through the recorder."""
@@ -180,6 +188,10 @@ class Projection(NamedTuple):
     #: meters nothing — every local Markdown one. Required present, so a record that
     #: stopped carrying it fails here instead of reading as a store that metered nothing.
     spent: dict[str, object] | None
+    #: The copy report's action counts — `created`, `updated`, `unchanged`, `orphaned` —
+    #: and the `reopened` the engine derives beside them, or `None` where no copy report
+    #: was read. Required present for the same reason `spent` is.
+    actions: dict[str, int] | None
 
     @classmethod
     def parse(cls, line: str) -> Projection:
@@ -197,6 +209,14 @@ class Projection(NamedTuple):
             and isinstance(record.get("duration_ms"), int)
             and "spent" in record
             and (record["spent"] is None or isinstance(record["spent"], dict))
+            and "actions" in record
+            and (
+                record["actions"] is None
+                or (
+                    isinstance(record["actions"], dict)
+                    and all(isinstance(count, int) for count in record["actions"].values())
+                )
+            )
         ):
             raise ValueError(f"a projection record is malformed: {line!r}")
         return cls(
@@ -209,6 +229,7 @@ class Projection(NamedTuple):
             reason=record.get("reason"),
             duration_ms=record["duration_ms"],
             spent=record["spent"],
+            actions=record["actions"],
         )
 
 
@@ -228,8 +249,13 @@ def just(
     )
 
 
-def reply(driven: DrivenRun, *commands: dict[str, object]) -> None:
-    """Send one envelope of commands to the run through the real channel recipe."""
+def reply(driven: DrivenRun, *commands: dict[str, object]) -> int:
+    """Send one envelope of commands to the run through the real channel recipe.
+
+    Answers the id the bus's receipt gave the envelope — a transport receipt, saying where
+    the envelope went and not that the graph took it — which is what `outcome` reads the
+    engine's decision by.
+    """
     replied = just(
         "channel-reply",
         driven.run,
@@ -238,6 +264,52 @@ def reply(driven: DrivenRun, *commands: dict[str, object]) -> None:
         stdin=json.dumps({"version": 2, "commands": list(commands)}),
     )
     assert replied.returncode == 0, replied.stdout + replied.stderr
+    receipt = json.loads(replied.stdout.splitlines()[-1])
+    assert isinstance(receipt, dict) and receipt.get("queue") == "commands", replied.stdout
+    identifier = receipt.get("id")
+    assert isinstance(identifier, int), replied.stdout
+    return identifier
+
+
+def outcome(driven: DrivenRun, envelope: int) -> dict[str, object]:
+    """The engine's answer to the command envelope `envelope`, read through the bus.
+
+    Correlated by the id the envelope was sent under, so a journey reading two outcomes
+    cannot read one twice; a `retry` the engine refused — one sent while the cancelled
+    dispatch it names is still in flight — is answered `applied: false` with its reason,
+    which is what a journey reads before it waits on a projection that will never come.
+    """
+
+    def look() -> dict[str, object] | None:
+        read = subprocess.run(
+            [
+                str(REPO_ROOT / ".venv" / "bin" / "onemessagebus"),
+                "status",
+                "command-outcomes",
+                "--config",
+                str(BUS_CONFIG),
+                "--transport-dir",
+                str(driven.root / "channel"),
+            ],
+            cwd=REPO_ROOT,
+            env=driven.environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert read.returncode == 0, read.stdout + read.stderr
+        (queue,) = json.loads(read.stdout)
+        settled = [record for record in queue["waiting"] if record.get("id") == envelope]
+        return settled[0] if settled else None
+
+    return waited_for(f"the engine's outcome for envelope {envelope}", look, PATIENCE_SECONDS)
+
+
+def apply(driven: DrivenRun, *commands: dict[str, object]) -> None:
+    """Send one envelope and require the engine to have applied it."""
+    decided = outcome(driven, reply(driven, *commands))
+    assert decided.get("applied") is True, decided
 
 
 def task(what: str) -> str:
@@ -296,11 +368,17 @@ def launched(
     held_node: NodeId,
     waiting_nodes: Sequence[NodeId],
     first_hold_seconds: int | None = None,
+    independent_nodes: Sequence[NodeId] = (),
+    cancel_grace_seconds: int | None = None,
 ) -> Iterator[DrivenRun]:
     """Launch a held node with `waiting_nodes` behind it, and stop the run however it ends.
 
     `first_hold_seconds`, when given, holds every `project copy` that starts before the
     journey moves the hold, which is how the first copy the driver makes is held.
+    `independent_nodes` are roots of their own, dispatched and held beside `held_node`, so
+    a journey that cancels or retries the held node keeps a driver alive through it.
+    `cancel_grace_seconds` names the run's own cancel grace, for a journey that has to wait
+    a cancelled dispatch out.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -314,6 +392,8 @@ def launched(
     calls = tmp_path / "plan-store-calls.jsonl"
     environment[HOLD_ENV] = str(hold)
     environment[LOG_ENV] = str(calls)
+    if cancel_grace_seconds is not None:
+        environment[CANCEL_GRACE_ENV] = str(cancel_grace_seconds)
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
@@ -323,6 +403,10 @@ def launched(
                 "name": run,
                 "tasks": [
                     {"id": held_node, "persona": "engineer", "task": task("Report.")},
+                    *(
+                        {"id": node, "persona": "engineer", "task": task("Report.")}
+                        for node in independent_nodes
+                    ),
                     *(
                         {
                             "id": node,

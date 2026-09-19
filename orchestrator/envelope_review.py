@@ -570,8 +570,9 @@ def stated_graph(envelope: object) -> tuple[dict[str, dict[str, object]], list[s
     compiles and applies it, `consumes` included — because the adoption rules read it: an
     `add` puts its node in; a `retry` puts its replacement in — in place of the node it
     names when an earlier command of this envelope added that node, the replacement then
-    inheriting its `deps` and `consumes` when it states no deps of its own and taking over
-    its dependents, their `consumes` rekeyed with them; a `reparent` replaces a node's
+    inheriting its `deps` and `consumes` when it states no deps of its own, its `delivers`
+    on the separate condition of stating none of those, and taking over its dependents,
+    their `consumes` rekeyed with them; a `reparent` replaces a node's
     `deps` and keeps only the `consumes` keyed on one of them; and a `drop` removes a node
     as its `dependents` disposition says. `tests/test_engine_contracts.py` holds each of
     those folds to the engine's source at the pinned release. A `requeue` states overrides
@@ -616,6 +617,28 @@ def stated_graph(envelope: object) -> tuple[dict[str, dict[str, object]], list[s
                     replacement["deps"] = list(inherited) if isinstance(inherited, list) else []
                     if "consumes" in superseded:
                         replacement["consumes"] = superseded["consumes"]
+                # Its own condition, as the engine's: a replacement restating its deps
+                # and saying nothing about tickets still delivers what the superseded
+                # node did, so the board item the lineage keeps stays their deliverer.
+                # Inherited only in the shape the engine's `Node` gives the field — a
+                # list of qualified ticket ids — as `deps` is above; anything else the
+                # envelope stated there is the engine's to refuse, and is not carried.
+                # llmlint: ignore[changed_behavior_has_e2e] No structural guard reads
+                # `delivers`, so this fold changes no verdict an envelope sent over the
+                # channel can receive; what it changes is the graph a guard reads, which
+                # `tests/test_envelope_review.py` holds to the engine's own fold and
+                # `tests/test_engine_contracts.py` holds the pinned engine to. A channel
+                # journey would drive the same code to the same verdict either way.
+                delivered = superseded.get("delivers") if superseded is not None else None
+                # "Stating none" is the engine's `is_empty()`: the field absent, or `[]`.
+                # A supplied value of any other shape is stated, and the engine's to judge.
+                states_none = "delivers" not in replacement or replacement["delivers"] == []
+                if (
+                    states_none
+                    and isinstance(delivered, list)
+                    and all(isinstance(ticket, str) for ticket in delivered)
+                ):
+                    replacement["delivers"] = list(delivered)
                 for other in graph.values():
                     deps = other.get("deps")
                     if isinstance(deps, list) and old in deps:

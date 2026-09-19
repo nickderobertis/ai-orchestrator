@@ -63,8 +63,8 @@ naming either as a plan node's `persona` fails the same way `crozier/…` does.
 request drafting under it, so a plan node's own worker may not run as it.
 
 That the shipped set is those five and no more is measured two ways — once against
-the pinned oneagentgraph 0.4.4 CLI, and once against the oneagentgraph the adopted
-`onepipeline` links, which is the one a dispatch reads and is 0.4.4 as well. `tests/e2e/test_shipped_persona_catalog_e2e.py`
+the pinned oneagentgraph 0.4.5 CLI, and once against the oneagentgraph the adopted
+`onepipeline` links, which is the one a dispatch reads and is 0.4.5 as well. `tests/e2e/test_shipped_persona_catalog_e2e.py`
 runs each:
 
 - A graph carrying its own `personas` catalog is refused when one of its files
@@ -78,8 +78,8 @@ runs each:
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.37.0 and the
-oneagentgraph 0.4.4 it links, by launching a plan whose two nodes name `engineer` and
+Three consequences, the first two re-measured against onepipeline 0.38.0 and the
+oneagentgraph 0.4.5 it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -192,15 +192,15 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.4.4` at onepipeline v0.37.0. Read that
+oneagentgraph `onepipeline` links, which is `0.4.5` at onepipeline v0.38.0. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed wheel is the source and
 `tests/test_linked_libraries.py` is what reads it: `onepipeline-cli` ships a
 CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
-numbers agree today and do not have to: the pin is 0.4.4 and the linked reader is
-0.4.4. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
+numbers agree today and do not have to: the pin is 0.4.5 and the linked reader is
+0.4.5. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
 separated them is how long a cancelled process tree is left before Windows ends its
 job, that a member whose tree cannot be found is not a member proven idle, and — in
 0.3.3 — the conversation label and the oneharness-session pointer a member's turns
@@ -237,7 +237,7 @@ does. That pair has been confused once already.
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.4.4 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.4.5 refuses the
 previous shape outright, naming the field to write instead:
 
 ```

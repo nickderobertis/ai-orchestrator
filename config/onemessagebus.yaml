@@ -35,7 +35,7 @@ profile: planner-channel
 # tests/test_onemessagebus_config.py holds the tag to the pin file and the `@` pin to the
 # protocol the installed onejudge speaks, against a bundle derived from that release.
 schemas:
-  - "https://raw.githubusercontent.com/nickderobertis/onejudge/v0.13.1/schemas/judge-seat-frames.json@8"
+  - "https://raw.githubusercontent.com/nickderobertis/onejudge/v0.13.2/schemas/judge-seat-frames.json@8"
 authors:
   # The channel's authors, as the bus's Contract A has a configuration declare them: the
   # planner is the bus's one built-in author, granted every op, and every other author is

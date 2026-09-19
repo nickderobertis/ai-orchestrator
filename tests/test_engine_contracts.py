@@ -2578,8 +2578,8 @@ def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it
 
 
 #: Which `add` and `retry` the engine refuses for their target, and how it moves a node's
-#: `deps` and `consumes` under the three edits that move edges — each at the declaration
-#: in `src/edits.rs` that `orchestrator.envelope_review.stated_graph` restates.
+#: `deps`, `consumes` and `delivers` under the three edits that move edges — each at the
+#: declaration in `src/edits.rs` that `orchestrator.envelope_review.stated_graph` restates.
 EDGE_FOLDS = {
     "an add of an id the graph already holds is refused": re.compile(
         r"fn compile_add\(graph: &mut Graph, node: &Node\) -> Result<Vec<Operation>> \{\s*"
@@ -2600,6 +2600,12 @@ EDGE_FOLDS = {
             r"replacement\.deps = target\.deps\.clone\(\);.*?"
             r"replacement\.consumes\.clone_from\(&target\.consumes\);",
             re.DOTALL,
+        )
+    ),
+    "a retry's replacement stating no delivers inherits the superseded node's delivers": (
+        re.compile(
+            r"if replacement\.delivers\.is_empty\(\) \{\s*"
+            r"replacement\.delivers\.clone_from\(&target\.delivers\);\s*\}",
         )
     ),
     "a retry redirects each dependent onto the replacement, its consumes entry rekeyed": (
@@ -2796,4 +2802,202 @@ def test_the_run_end_hook_reads_the_failure_document_the_engine_declares() -> No
     assert f"(reason {reason['kind']}: {listed})" in ran.stdout, (
         f"scripts/run-ended.sh could not read onepipeline {ONEPIPELINE_DOCS.ref}'s own failure "
         f"example:\n{ran.stdout}{ran.stderr}"
+    )
+
+
+#: The paragraph of `docs/orchestration.md` that restates the lineage item's stored shape
+#: and reuse rule, opened by its bolded lead and closed by the next blank line.
+LINEAGE_PARAGRAPH = re.compile(
+    r"\*\*One board item per lineage, reused for the life of the work\.\*\*.*?\n\n", re.DOTALL
+)
+#: The sentence in the record paragraph that lists what `actions` carries.
+RECORD_ACTIONS_SENTENCE = re.compile(r"`actions` \((.*?)\), and `spent`", re.DOTALL)
+#: The sentence of AGENTS.md that says the item is reused, and where the rule is stated —
+#: matched over `_plain` text, so the code span and emphasis around the two names are gone.
+MANAGER_REUSE_SENTENCE = re.compile(
+    r"A node's board item is reused across its retries.*?under the rule "
+    r"docs/orchestration\.md's One board item per lineage states\."
+)
+#: Entry 80's fenced block, where the engine states the lineage item as data.
+LINEAGE_CONTRACT_BLOCK = re.compile(r"```json\n(\{\s*\"lineage\".*?)\n```", re.DOTALL)
+#: Entry 73's fenced block, where the projection record's fields are stated.
+PROJECTION_RECORD_BLOCK = re.compile(r"```json\n(\{\s*\"projection\".*?)\n```", re.DOTALL)
+#: The reserved keys the write-back writes on an item, declared in `src/taskgraph.rs`.
+LINEAGE_KEY_DECLARATION = re.compile(
+    r"const (ID_KEY|NODE_KEY|SUPERSEDES_KEY): &str = \"(onepipeline\.[a-z]+)\";"
+)
+#: The action counts a projection line carries, as the record's own struct declares them.
+PROJECTION_ACTIONS_STRUCT = re.compile(r"pub struct ProjectionActions \{(.*?)\n\}", re.DOTALL)
+PROJECTION_ACTIONS_FIELD = re.compile(r"^\s{4}pub ([a-z_]+): u64,", re.MULTILINE)
+#: The stored shape this repository's readers rely on — `orchestrator/plan_store.py` reads
+#: items by `onepipeline.id`, and `orchestrator/follow_up_tickets.py` owns the board a
+#: delivered ticket sits on — as key → what the prose must say it holds.
+LINEAGE_KEYS = {
+    "onepipeline.id": "root",
+    "onepipeline.node": "head",
+    "onepipeline.supersedes": "the superseded ids in lineage order, root first",
+}
+
+
+def _lineage_contract() -> dict[str, object]:
+    block = LINEAGE_CONTRACT_BLOCK.search(_source(ONEPIPELINE_DOCS, "contract-divergences.md"))
+    assert block is not None, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref} no longer states the lineage item in a JSON block "
+        "of docs/contract-divergences.md (entry 80), so the shape docs/orchestration.md "
+        "restates cannot be reconciled; re-read the entry and correct the restatement"
+    )
+    contract: object = json.loads(block.group(1))
+    assert isinstance(contract, dict), contract
+    return contract
+
+
+def _lineage_paragraph() -> str:
+    paragraph = LINEAGE_PARAGRAPH.search(ORCHESTRATION.read_text("utf-8"))
+    assert paragraph is not None, (
+        "docs/orchestration.md no longer opens a paragraph with the lineage item's lead "
+        "sentence; the stored shape has to be stated there once"
+    )
+    return _plain(paragraph.group(0))
+
+
+def test_the_lineage_item_keys_the_prose_states_are_the_ones_the_engine_writes() -> None:
+    """Three sources, one set of keys: the engine's constants, its contract, and the prose.
+
+    Read off the crate's declarations rather than the contract alone, because the contract
+    is prose about the crate and this gate exists for the day the crate moves under it.
+    Each key is then held to what the prose says it carries — the root, the head, the
+    superseded ids root first — since a reader that agreed on the key names and disagreed
+    on which node each names would read every retried item as the wrong node.
+    """
+    declared = dict(
+        (key, name)
+        for name, key in LINEAGE_KEY_DECLARATION.findall(_source(ONEPIPELINE, "taskgraph.rs"))
+    )
+    assert set(declared) == set(LINEAGE_KEYS), (
+        f"onepipeline {ONEPIPELINE.ref} declares the reserved item keys {sorted(declared)}, "
+        f"and this repository reads {sorted(LINEAGE_KEYS)}; re-read src/taskgraph.rs and "
+        "correct orchestrator/plan_store.py's readers and docs/orchestration.md together"
+    )
+    contract = _lineage_contract()
+    lineage = contract["lineage"]
+    assert isinstance(lineage, dict), lineage
+    keys = lineage["keys"]
+    assert isinstance(keys, dict) and set(keys) == set(LINEAGE_KEYS), keys
+    assert keys["onepipeline.id"] == "root" and keys["onepipeline.node"] == "head", keys
+    supersedes = keys["onepipeline.supersedes"]
+    assert isinstance(supersedes, dict), supersedes
+    assert supersedes["is"] == LINEAGE_KEYS["onepipeline.supersedes"], supersedes
+    assert lineage["shadow_tasks_per_lineage"] == 1 and lineage["file_and_member"] == "root", (
+        lineage
+    )
+
+    paragraph = _lineage_paragraph()
+    for key, holds in LINEAGE_KEYS.items():
+        assert key in paragraph, f"docs/orchestration.md's lineage paragraph never names {key}"
+        assert holds in paragraph, (
+            f"docs/orchestration.md's lineage paragraph does not say {key} carries {holds!r}, "
+            f"which onepipeline {ONEPIPELINE_DOCS.ref}'s entry 80 states"
+        )
+    written_when = supersedes["written_when"]
+    assert isinstance(written_when, str) and written_when in paragraph, (
+        f"the paragraph does not say onepipeline.supersedes is written only where {written_when!r}"
+    )
+    assert MANAGER_REUSE_SENTENCE.search(_plain(MANAGER.read_text("utf-8"))) is not None, (
+        "AGENTS.md's board paragraph no longer says the item is reused across retries and "
+        "where the rule is stated"
+    )
+
+
+def test_the_projection_records_actions_and_items_are_the_engines_own() -> None:
+    """`actions` gains `reopened` and `items` names roots, as the struct and both entries say.
+
+    The struct is the source for the member names — a serialized record's fields are what
+    a reader keys on — and the two entries are held to it as well, because entry 73 states
+    the record and entry 80 states the derived count, and a reader of either that disagreed
+    with the struct would be reading a schema no attempt writes.
+    """
+    struct = PROJECTION_ACTIONS_STRUCT.search(_source(ONEPIPELINE, "writeback.rs"))
+    assert struct is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares ProjectionActions in src/writeback.rs"
+    )
+    members = PROJECTION_ACTIONS_FIELD.findall(struct.group(1))
+    assert "reopened" in members and "created" in members, members
+
+    record = PROJECTION_RECORD_BLOCK.search(_source(ONEPIPELINE_DOCS, "contract-divergences.md"))
+    assert record is not None, "entry 73 no longer states the projection record as a JSON block"
+    projection = json.loads(record.group(1))["projection"]
+    fields = projection["fields"]
+    assert fields["actions"]["members"] == members, (
+        f"entry 73 lists actions {fields['actions']['members']} while the struct declares {members}"
+    )
+    assert "actions.reopened" in projection["schema"]["added_at_3"], projection["schema"]
+    reopened = _lineage_contract()["reopened"]
+    assert isinstance(reopened, dict), reopened
+    assert reopened["record"] == {
+        "key": "actions.reopened",
+        "from_schema_version": 3,
+        "stated_in": "entry 73",
+    }, reopened
+
+    sentence = RECORD_ACTIONS_SENTENCE.search(ORCHESTRATION.read_text("utf-8"))
+    assert sentence is not None, (
+        "docs/orchestration.md's record paragraph no longer lists what `actions` carries"
+    )
+    quoted = re.findall(r"`([a-z]+)`", sentence.group(1))
+    assert quoted[: len(members)] == members and {"done", "cancelled"} <= set(quoted), (
+        f"the record paragraph lists {sentence.group(1)!r}; the struct declares {members}, and "
+        "the sentence names the two closed categories a reopen is counted from after them"
+    )
+    entry = _plain(_source(ONEPIPELINE_DOCS, "contract-divergences.md"))
+    assert "items names lineage roots" in entry, "entry 80 no longer says what `items` names"
+    assert "items (the lineage roots the copy carried" in _plain(
+        ORCHESTRATION.read_text("utf-8")
+    ), "docs/orchestration.md's record paragraph no longer says `items` names lineage roots"
+
+
+def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
+    """Retry edits, a closed item retried reopens, cancel parks, drop closes, siblings stay.
+
+    Each word the prose uses for what a ruling projects is read off entry 80's `unchanged`
+    and `destination` blocks — `parked` for a cancel, `cancelled` for a drop, the
+    furthest-along item over an older board — so the day the engine changes what a cancel
+    projects, the sentence telling a manager what to expect on the board fails here rather
+    than being believed.
+    """
+    contract = _lineage_contract()
+    unchanged = contract["unchanged"]
+    assert isinstance(unchanged, dict), unchanged
+    destination = contract["destination"]
+    assert isinstance(destination, dict), destination
+    retry = contract["retry"]
+    assert isinstance(retry, dict), retry
+    reopened = contract["reopened"]
+    assert isinstance(reopened, dict), reopened
+
+    paragraph = _lineage_paragraph()
+    assert unchanged["cancelled_running_node"] == "parked" and unchanged["cancel"] == "parked", (
+        unchanged
+    )
+    assert "its item reads parked" in paragraph, (
+        f"the paragraph does not say a cancelled running node's item reads {unchanged['cancel']!r}"
+    )
+    assert unchanged["drop"] == "cancelled", unchanged
+    assert "a drop projects cancelled and keeps its paired close" in paragraph, (
+        f"the paragraph does not say a drop projects {unchanged['drop']!r}"
+    )
+    several = destination["several_under_one_root"]
+    assert isinstance(several, str) and "furthest-along" in several, several
+    assert "the item at the furthest-along position" in paragraph, (
+        "the paragraph does not say an older board's siblings resolve to the furthest-along item"
+    )
+    counted = reopened["counted_when"]
+    assert isinstance(counted, list) and any("done or cancelled" in when for when in counted), (
+        counted
+    )
+    assert "reads done or cancelled writes an open word onto it" in paragraph, (
+        "the paragraph does not say which items a retry or requeue reopens"
+    )
+    assert "inherits the superseded node's" in str(retry["delivers"]), retry
+    assert "reopened: 0" in paragraph, (
+        "the paragraph does not say a retry after a plain cancel reports reopened: 0"
     )

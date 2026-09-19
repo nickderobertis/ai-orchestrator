@@ -271,6 +271,20 @@ HOST_FIXES_LANDINGS = (
     ),
 )
 
+#: The one engine-side node of the board-reuse plan: the write-back keeps one board item
+#: for the life of a node's lineage, editing it on a retry and reopening it when a
+#: cancelled node is retried or requeued, instead of minting a sibling per attempt.
+#: `tests/writeback_budget/test_lineage_item_reuse_e2e.py` drives the installed engine
+#: through it, and `tests/test_engine_contracts.py` holds the stored shape to its source.
+LINEAGE_ITEM_LANDINGS = (
+    Landing(
+        node="op-lineage-item",
+        change_request=385,
+        commit="1835e1aa2d43736b98559a461114404adaa8e698",
+        did="reuse one board item for the life of a node's lineage",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -280,6 +294,7 @@ LANDINGS = (
     *WRITEBACK_QUOTA_LANDINGS,
     *FOLLOW_UPS_LIFECYCLE_LANDINGS,
     *HOST_FIXES_LANDINGS,
+    *LINEAGE_ITEM_LANDINGS,
 )
 
 

@@ -1235,7 +1235,10 @@ def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_doe
     """The fields the adoption rules read move with the edges, as `edits.rs` moves them.
 
     A retry whose replacement states no deps inherits the superseded node's `deps` and
-    `consumes`, and a dependent redirected onto it takes its `consumes` entry along; a
+    `consumes`, and one stating no `delivers` inherits those on that condition alone — a
+    replacement restating its deps still takes the tickets over, one stating its own keeps
+    them, and one whose predecessor stated tickets in no shape the engine gives the field
+    inherits none — while a dependent redirected onto it takes its `consumes` entry along; a
     reparent keeps only the `consumes` keyed on a dependency it still names; and a node
     that leaves the graph is consumed by nothing — its detached dependents lose the edge
     and the entry, and a node that consumed it without the edge loses the entry too. The
@@ -1259,8 +1262,23 @@ def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_doe
         },
         {"op": "add", "node": {"id": "stale", "consumes": {"producer": "pypi"}}},
         {"op": "add", "node": {"id": "bare", "deps": "gate"}},
+        {
+            "op": "add",
+            "node": {"id": "ticketed", "deps": ["gate"], "delivers": ["followups:issue-7"]},
+        },
+        {"op": "add", "node": {"id": "reticketed", "delivers": ["followups:issue-8"]}},
+        {"op": "add", "node": {"id": "misticketed", "delivers": "followups:issue-10"}},
         {"op": "retry", "id": "bare", "node": {"id": "bare-2"}},
         {"op": "retry", "id": "work", "node": {"id": "work-2"}},
+        {"op": "retry", "id": "ticketed", "node": {"id": "ticketed-2", "deps": ["gate"]}},
+        {
+            "op": "retry",
+            "id": "reticketed",
+            "node": {"id": "reticketed-2", "delivers": ["followups:issue-9"]},
+        },
+        {"op": "retry", "id": "misticketed", "node": {"id": "misticketed-2"}},
+        {"op": "add", "node": {"id": "emptied", "delivers": ["followups:issue-11"]}},
+        {"op": "retry", "id": "emptied", "node": {"id": "emptied-2", "delivers": []}},
         {"op": "reparent", "id": "keep", "deps": ["gate"]},
         {"op": "drop", "id": "producer", "dependents": "detach"},
     )
@@ -1275,6 +1293,23 @@ def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_doe
         "stale": {"id": "stale", "consumes": {}},
         "bare-2": {"id": "bare-2", "deps": []},
         "work-2": {"id": "work-2", "deps": [], "consumes": {}},
+        "ticketed-2": {"id": "ticketed-2", "deps": ["gate"], "delivers": ["followups:issue-7"]},
+        "reticketed-2": {"id": "reticketed-2", "deps": [], "delivers": ["followups:issue-9"]},
+        # A `delivers` not in the engine's shape is the engine's to refuse, not to inherit.
+        "misticketed-2": {"id": "misticketed-2", "deps": []},
+        # `[]` states none, as an absent field does: the engine's `is_empty()`.
+        "emptied-2": {"id": "emptied-2", "deps": [], "delivers": ["followups:issue-11"]},
     }
-    assert resulting == ["gate", "after", "keep", "stale", "bare-2", "work-2"]
+    assert resulting == [
+        "gate",
+        "after",
+        "keep",
+        "stale",
+        "bare-2",
+        "work-2",
+        "ticketed-2",
+        "reticketed-2",
+        "misticketed-2",
+        "emptied-2",
+    ]
     assert envelope == sent, "folding the graph rewrote the envelope's own commands"

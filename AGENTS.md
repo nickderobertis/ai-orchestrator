@@ -437,6 +437,10 @@ failure is retried, spaced to a one-minute ceiling. The engine records every att
 line of `writeback-projections.jsonl` in the run's directory, and that line is what the
 attempt cost: the items it carried, its outcome and failure class, its duration, and `spent`
 where the store meters.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse, no_redundant_instruction_pointers] One sentence, required of this paragraph by the plan that adopted the engine reusing a node's board item: a manager deciding from the board whether work was retried has to know the card is reused rather than minted, and the rule itself stays in docs/orchestration.md — only that it exists, and where, is said here. -->
+A node's board item is reused across its retries, under the rule
+`docs/orchestration.md`'s *One board item per lineage* states.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse, no_redundant_instruction_pointers] -->
 A `just copy-plan` refused for a rate limit is GitHub's
 **secondary** limiter — a burst limiter over content-creating requests that `gh api
 rate_limit` does not report and every retry extends — answered by leaving the board

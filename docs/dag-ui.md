@@ -67,11 +67,11 @@ separately, and the reader links whatever its release was built against. So the
 two are expected to differ; what the field is for is being able to say which
 reader is answering rather than assuming it.
 
-**Today the two agree, and the reading to carry is still that neither number constrains
+**Today the two differ, and the reading to carry is that neither number constrains
 the other**: the adopted `onepipeline-ui` 0.9.0 statically links onepipeline 0.37.0 and
-onejudge 0.13.1, and `config/onepipeline.version` reads 0.37.0 — because the two were
-adopted together, the reader for the lanes it serves for the engine's open member names,
-not because anything requires it. The reader has been moved with the engine before
+onejudge 0.13.1, read off its own wheel's SBOM, while `config/onepipeline.version` reads
+0.38.0 — the engine moved for a write-back fix the reader has no part in, and the reader
+stayed, because nothing requires the two to agree. The reader has been moved with the engine before
 because a reader linking an older onejudge than the one writing a run's reports refuses
 a newer report schema and renders no transcript. Through an earlier adoption the reader
 linked onepipeline 0.19.0 while the CLI a dispatch ran was nine minor releases ahead.
@@ -148,7 +148,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.4**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.5**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
