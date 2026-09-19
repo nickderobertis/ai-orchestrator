@@ -123,6 +123,18 @@ BAR_FILES = (
 #: The harness side that spends the judged turn: the supervisory routing, a finite
 #: deadline, and the verdict schema, exactly as the change-request drafter is configured.
 HARNESS_CONFIG = Path("oneharness.plan-review.toml")
+#: The judged turn's argv up to the prompt, which :func:`verdict` reads as one JSON
+#: document. ``--format json`` is what asks for that document: the CLI's stdout is a
+#: human-readable view unless a reader names the JSON contract, so a spawn without it
+#: reads prose and records nothing.
+HARNESS_COMMAND: tuple[str, ...] = (
+    "oneharness",
+    "run",
+    "--config",
+    str(REPO_ROOT / HARNESS_CONFIG),
+    "--format",
+    "json",
+)
 
 #: The plan stores a planning closeout looks at: every source it may record a pass into.
 #: `authoring` is the gitignored root `just plan` writes a manager's brief into, and it
@@ -853,14 +865,7 @@ def verdict(prompt: str) -> Verdict:
     caller never records a pass from a turn that answered nothing.
     """
     completed = subprocess.run(
-        [
-            "oneharness",
-            "run",
-            "--config",
-            str(REPO_ROOT / HARNESS_CONFIG),
-            "--prompt-file",
-            "-",
-        ],
+        [*HARNESS_COMMAND, "--prompt-file", "-"],
         cwd=REPO_ROOT,
         input=prompt,
         text=True,

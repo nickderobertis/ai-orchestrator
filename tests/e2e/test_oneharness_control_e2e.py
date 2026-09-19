@@ -10,7 +10,8 @@ and this repository's own committed chain.
 
 Every run is `--print-command`: the CLI applies the same up-front validation a real
 run applies, renders the argv it would spawn, and spawns nothing — so nothing here
-bills a provider turn.
+bills a provider turn. Each names `--format json`, because the plan is read as the
+CLI's JSON report and the adopted release renders a human-readable view without it.
 """
 
 from __future__ import annotations
@@ -69,8 +70,8 @@ def _plan(oneharness_bin: str, config: Path, *arguments: str) -> Plan:
     """
     env = {key: value for key, value in os.environ.items() if not key.startswith("ONEHARNESS_")}
     rendered = subprocess.run(
-        [oneharness_bin, "run", "--config", str(config), "--print-command", "--prompt", PROMPT]
-        + list(arguments),
+        [oneharness_bin, "run", "--config", str(config), "--print-command", "--format", "json"]
+        + ["--prompt", PROMPT, *arguments],
         env=env,
         text=True,
         capture_output=True,

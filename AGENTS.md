@@ -258,12 +258,24 @@ lock against a fix its own requirement already accepted, so pick by what the loc
 resolved and confirm against the binary — and **widening a `Cargo.toml` requirement
 is a lever connected to nothing**, because the resolution is the whole of the fix.
 
+**A pin names a tag, and the drift gate reads it from a registered checkout.**
+`tests/test_engine_contracts.py` reads each engine's source at `v<pin>` from the checkout
+`config/onevcs.checkouts` registers for it, and nothing here fetches that checkout, so a
+pin bump is publishable only once its tag is there; read that tier's `invalid object
+name 'v<pin>'` as the checkout sitting behind its origin, never as a release the engine
+did not publish.
+
 Two pins sit outside that reconciliation because of what each names.
 `config/oneharness.version` is the `oneharness` **CLI**, a different artifact from the
 `oneharness-core` library the engine links on its own account; both are published from
 one repository on their own cadences, so comparing the pin's number with the linked
 core's proves nothing in either direction, and the check gates which dependent brings
-which core instead. `config/onetaskgraph.version` names a separately spawned
+which core instead. The one order between them is the CLI's flags: the `onejudge` a
+dispatch runs spawns whatever `oneharness` is on its PATH, which the CLI pin installs,
+so the engine may adopt an onejudge release that sends `--format json` only once the
+CLI pin is at or past the release that accepts `--format` — the CLI pin is past it, and
+the order holds as long as `config/onepipeline.version` is not moved first onto such an
+engine over an older CLI pin. `config/onetaskgraph.version` names a separately spawned
 executable the engine wheel's bill of materials does not contain. The read API
 (`config/onepipeline-ui.version`) statically links its own engine and governs no
 dispatch, so it may sit behind or ahead of the engine pin without meaning anything. And

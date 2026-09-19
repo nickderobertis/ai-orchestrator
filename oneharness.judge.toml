@@ -4,8 +4,11 @@
 # `onejudge init` (`oneharness init oneharness.judge.toml`) and then customized:
 # the supervisor uses a cheaper model than the agent, and the IS_SANDBOX env.
 
-# run_mode: how the selected harnesses are run.
-#   "parallel" (default) runs them all at once and reports each.
+# run_mode: how the selected harnesses are run. Set explicitly, so this file reads
+# the same under any oneharness release: since 0.15.0 an unset run_mode resolves to
+# "fallback" and "parallel" is the opt-in, where earlier releases defaulted the
+# other way.
+#   "parallel" runs them all at once and reports each.
 #   "fallback" tries them in priority order and stops at the first that can
 #   actually run, falling through only harnesses that cannot run at all (not
 #   installed, unspawnable, or an auth/quota rejection) — so one committed file

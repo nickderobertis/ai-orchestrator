@@ -249,7 +249,13 @@ def test_the_agent_wrappers_unselected_chain_drops_only_an_absent_primary_backup
     logged_in += (".claude",) if primary_logged_in else ()
     host = _existing_host(tmp_path, logged_in=logged_in)
 
-    planned = _run(["bash", str(AGENT_WRAPPER), "run", "--print-command", "--prompt", "x"], host)
+    # `--format json` because the plan is read as the CLI's JSON report, which the
+    # adopted release prints only when asked; the wrapper forwards it as it forwards
+    # onejudge's own `--compact`.
+    planned = _run(
+        ["bash", str(AGENT_WRAPPER), "run", "--print-command", "--format", "json", "--prompt", "x"],
+        host,
+    )
 
     assert planned.returncode == 0, planned.stderr
     chain = [result["harness_id"] for result in json.loads(planned.stdout)["results"]]

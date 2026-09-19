@@ -607,8 +607,17 @@ def test_bypass_sides_do_not_trip_the_approval_wait_safety_deadline(
     follow_up_effective = _effective_config(oneharness_bin, follow_up)
     assert follow_up_effective["mode"]["value"] == "bypass", follow_up_effective["mode"]
 
+    # `--format json`: the catalogue is read as the CLI's JSON contract, which the
+    # adopted release prints only when asked.
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] `oneharness list` reads
+    # the installed CLI's own catalogue — sub-second, no provider turn, no network — and
+    # which Nx project owns this module is a property it shares with every journey under
+    # `tests/e2e/`, not one this read decides.
     catalogue = subprocess.run(
-        [oneharness_bin, "list"], text=True, capture_output=True, timeout=e2e_timeout(30)
+        [oneharness_bin, "list", "--format", "json"],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     assert catalogue.returncode == 0, catalogue.stderr
     listed = json.loads(catalogue.stdout)

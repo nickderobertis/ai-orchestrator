@@ -236,20 +236,34 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.14.0 is
-the adopted release, and what it changed is **how a reader asks the CLI for its output
-shape**: a `--format` flag on every verb that prints a JSON document to stdout, leaving
-the stdout default and the run-mode default where they were
-([oneharness#1312](https://github.com/nickderobertis/oneharness/pull/1312)), so every
-script and module here that reads the CLI's stdout keeps reading what it read, and no
-reader names the flag yet — that is the next adoption's, alongside the release that
-flips both defaults. It is also the floor the judged lint tier holds this pin to:
-`llmlint doctor`, run the way `just lint-llm` runs it, refuses an older `oneharness` by
-version before spawning it and names the floor it wants, so until this pin reached
-0.14.0 no branch whose merge path runs `just lint-llm-diff` through this host's wrapper
-could publish from this host. What sits between it and the adoption before it is on the
-[release list](https://github.com/nickderobertis/oneharness/releases), and none of it
-touches a surface this document describes. The adoption before this one, 0.12.1, changed **which model a controlled codex turn runs
+`config/oneharness.version` release and rejects a stale binary. Version 0.15.0 is
+the adopted release, and what it changed is **both of the CLI's defaults**
+([oneharness#1316](https://github.com/nickderobertis/oneharness/pull/1316)): a
+`run_mode` nothing set resolves to `fallback`, with `parallel` the opt-in, and
+`oneharness run`'s stdout is a human-readable view unless the reader names the JSON
+contract — `--format json`, or `--compact`, which alone selects it. Neither moves a
+turn here: every `oneharness.*.toml` sets `run_mode = "fallback"` explicitly, and every
+reader of the CLI's stdout in this repository asks for JSON by name — the one bare parser,
+`orchestrator/plan_review.py`, spawns `--format json` since this adoption, the
+wrappers under `scripts/` forward the `--compact` or `--stream` their callers send (the
+onejudge the engine links sends `--compact` on every turn), and the suite's own
+journeys that parse a `--print-command` plan or the `list` catalogue name `--format
+json` too, because every verb that prints a JSON document flipped, not `run` alone — a
+bare reader there was what refused this adoption's first publication. A hand-run `oneharness run`
+or `oneharness config` at a shell prints the text view, which is the point; pipe it
+into `jq` only under `--format json`, as the examples below do. The linked
+`oneharness-core` reaches a dispatch through `config/onepipeline.version` alone, and the
+engine adopted here still links a core from before the flip, which changes nothing
+either, for the same reason: no config here leaves `run_mode` to the default. The
+adoption before this one, 0.14.0, added **how a reader asks the CLI for its output
+shape**: the `--format` flag on every verb that prints a JSON document to stdout, with
+both defaults left where they were
+([oneharness#1312](https://github.com/nickderobertis/oneharness/pull/1312)). It is also
+the floor the judged lint tier holds this pin to: `llmlint doctor`, run the way `just
+lint-llm` runs it, refuses an older `oneharness` by version before spawning it and names
+the floor it wants, so until this pin reached 0.14.0 no branch whose merge path runs
+`just lint-llm-diff` through this host's wrapper could publish from this host. The
+adoption before that one, 0.12.1, changed **which model a controlled codex turn runs
 under**: a `run --control` turn driven over `codex app-server` carries the selected
 candidate's own model — `[harness.codex].model`, a variant's `model`, or `--model` — on
 `thread/start`, `thread/resume` and `turn/start`, records the model the server says the
@@ -645,7 +659,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.14.0, a config's per-harness `model` **beats** the variable, while the `--model`
+0.15.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -763,11 +777,11 @@ So: never point two members at one config to save a copy, and read the differenc
 from the CLI rather than the file —
 
 ```
-$ oneharness config --config oneharness.orchestrator.toml | jq .timeout
+$ oneharness config --config oneharness.orchestrator.toml --format json | jq .timeout
   { "value": 0,   "source": "oneharness.orchestrator.toml" }
-$ oneharness config --config oneharness.check-in.toml | jq .timeout
+$ oneharness config --config oneharness.check-in.toml --format json | jq .timeout
   { "value": 240, "source": "oneharness.check-in.toml" }
-$ oneharness config --config oneharness.toml | jq .timeout
+$ oneharness config --config oneharness.toml --format json | jq .timeout
   { "value": null, "source": null }
 ```
 
@@ -783,7 +797,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.14.0, confirmed against the binary:
+candidate it ended up running — through oneharness 0.15.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1481,7 +1495,7 @@ selects is `codex:primary` and the pin never sees it: the stand-in reaches those
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.14.0, a harness selected
+do not collide: re-measured against the adopted oneharness 0.15.0, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the
 one that matters — the same chain without `--mock-harness` runs the pinned binary — so

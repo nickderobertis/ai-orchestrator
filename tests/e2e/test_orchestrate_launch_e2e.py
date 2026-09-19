@@ -2779,6 +2779,10 @@ def test_a_turn_routed_to_a_paid_identity_fails_naming_the_provider_it_reached(
         f"a launch environment here resolves `{binary}` to something other than the guard"
     )
 
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This turn reaches the
+    # paid-provider guard and is refused there in well under a second, spending nothing;
+    # which Nx project owns this module is a property it shares with every launch journey
+    # here and not one this spawn decides.
     ran = subprocess.run(
         [
             oneharness_bin,
@@ -2787,6 +2791,10 @@ def test_a_turn_routed_to_a_paid_identity_fails_naming_the_provider_it_reached(
             str(REPO_ROOT / "oneharness.check-in.toml"),
             "--prompt",
             "a turn no journey here means to spend",
+            # The report below is read as JSON, which the adopted CLI prints only when
+            # asked; a bare `run` renders a human-readable view of the same attempt.
+            "--format",
+            "json",
         ],
         cwd=tmp_path,
         env=environment,
@@ -3838,6 +3846,9 @@ def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declar
     environment[CODEX_PROMPT_LOG] = str(tmp_path / "prompts.jsonl")
     environment["FAKE_CODEX_ANSWERS"] = json.dumps(["the stand-in answered"])
 
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The provider is the
+    # scripted codex stand-in, answering in under a second and spending nothing; the
+    # project that owns this module is the module's, as at the guard journey above.
     ran = subprocess.run(
         [
             oneharness_bin,
@@ -3846,6 +3857,8 @@ def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declar
             str(REPO_ROOT / "oneharness.check-in.toml"),
             "--prompt",
             "a turn this journey scripted",
+            "--format",
+            "json",
         ],
         cwd=tmp_path,
         env=environment,

@@ -1635,14 +1635,46 @@ def test_a_local_markdown_store_is_writable_and_says_nothing(
     assert plan_review.unwritable("demo:plan") is None
 
 
-def _harness(monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str = "") -> None:
-    """Stand the `oneharness run` process in with one report and one diagnostic stream."""
+def _harness(monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str = "") -> list[list[str]]:
+    """Stand the `oneharness run` process in with one report and one diagnostic stream.
+
+    Returns the argv of every spawn, so a test can read what the turn asked for.
+    """
     completed = subprocess.CompletedProcess(["oneharness"], 0, stdout, stderr)
-    monkeypatch.setattr(
-        plan_review.subprocess,
-        "run",
-        lambda *arguments, **keywords: completed,
-    )
+    spawned: list[list[str]] = []
+
+    def run(command: Sequence[str], **_: object) -> subprocess.CompletedProcess[str]:
+        spawned.append(list(command))
+        return completed
+
+    monkeypatch.setattr(plan_review.subprocess, "run", run)
+    return spawned
+
+
+def test_the_judged_turn_asks_the_harness_for_its_json_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The spawn names `--format json`, because the CLI's stdout is prose without it.
+
+    `verdict` reads the harness's stdout as one JSON document. Since the oneharness
+    release that flipped the CLI's stdout default to text, that document is printed
+    only when a reader asks — bare `oneharness run` prints a human-readable view — so
+    an argv naming neither `--format json` nor `--compact` reads a text view and
+    refuses every review as unreadable. Held on the argv the process is spawned with,
+    immediately followed by the value, rather than on the constant it is assembled
+    from; `tests/plan_tooling/test_plan_review_e2e.py` drives the same spawn through
+    the real CLI.
+    """
+    answered = {"schema_valid": True, "structured": {"passes": True, "findings": []}}
+    spawned = _harness(monkeypatch, json.dumps({"results": [answered]}))
+    plan_review.verdict("prompt")
+    [argv] = spawned
+    assert argv[:2] == ["oneharness", "run"]
+    assert argv[-2:] == ["--prompt-file", "-"], argv
+    assert "--compact" not in argv, argv
+    formats = [index for index, word in enumerate(argv) if word == "--format"]
+    assert len(formats) == 1, argv
+    assert argv[formats[0] + 1] == "json", argv
 
 
 def test_the_judged_turn_reads_its_verdict_out_of_the_harness_report(

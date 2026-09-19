@@ -143,14 +143,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.14.0/0.13.1 upgrade (`config/oneharness.version` and
+after the 0.15.0/0.13.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made eight times
+one. That re-check has now been made nine times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -162,10 +162,10 @@ schema 1.1 the `usage` block is `input_tokens`, `output_tokens`, `cache_read_tok
 `cache_write_tokens`, `cost_usd` and nothing else, on the candidate that answered. Both
 of those turns' chains selected `claude-code:alternate` first and so wrote no
 fallen-through record to compare, which the earlier re-take of the same measurement did.
-The oneharness half of the bump two before this one is a **classification** change — a completed
+The oneharness half of the bump three before this one is a **classification** change — a completed
 billed turn is no longer reported as a failure — so what it could have moved is
 `status` and `failure_kind` on the record rather than the `usage` block, and neither
-moved on a turn that succeeded. The oneharness half of the bump before this one adds one
+moved on a turn that succeeded. The oneharness half of the bump two before this one adds one
 field beside the block rather than inside it: a record carrying `observed_model` — the
 model the harness itself reported a controlled turn would run under — or classified
 `model_mismatch` declares history schema **1.8**
@@ -174,12 +174,20 @@ untouched between the two tags. That one was re-taken without a paid turn, becau
 turn that shows the field is the one `tests/e2e/test_controlled_turn_model_e2e.py`
 drives offline: a controlled codex turn against the refusing loopback endpoint, whose
 result carries `observed_model` beside the same five-key `usage` block. The oneharness
-half of this pin's own bump, 0.12.1 to 0.14.0, was re-taken without a paid turn, off a
-record the pinned CLI wrote on this host for a candidate it skipped: at history schema
+half of the bump before this one, 0.12.1 to 0.14.0, was re-taken without a paid turn, off
+a record the pinned CLI wrote on this host for a candidate it skipped: at history schema
 1.3 the `usage` block is the same five keys and nothing else, each null because nothing
 ran. What that release adds sits on the CLI's stdout
 (https://github.com/nickderobertis/oneharness/pull/1312), which no record is written
-through. The onejudge
+through. The oneharness half of this pin's own bump, 0.14.0 to 0.15.0, was re-taken the
+same way and without a paid turn, off the two records one fallback chain wrote on this
+host under the pinned CLI with `ONEHARNESS_HISTORY_DIR` pointed at a throwaway store — a
+`skipped` candidate at history schema 1.3 and the `ok` one behind it, answered by a spy
+binary, at 1.1 — and each carries the same five keys and nothing else. What that release
+flips is the CLI's stdout default and the run-mode default
+(https://github.com/nickderobertis/oneharness/pull/1316): the first is a rendering no
+record is written through, and the second reaches no record here because every
+`oneharness.*.toml` sets `run_mode` explicitly. The onejudge
 half of the bump after that one, 0.8.1 to 0.10.0, moves no record writer at all: the
 `oneharness-core` a record is written through is 0.13.1 in the engine wheel and
 0.13.0 in the `onejudge-cli` wheel on both sides of it, read off each wheel's own

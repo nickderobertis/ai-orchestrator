@@ -29,7 +29,9 @@ These journeys drive the real
 wrapper with the real `oneharness` CLI and read the command it resolved, so what is
 asserted is the routing a real turn would run under. `--print-command` is what makes
 that free: oneharness resolves configs, identity, and model exactly as it would, then
-prints the invocation instead of spending it.
+prints the invocation instead of spending it — as the JSON report, because every turn
+here names `--format json` the way onejudge's own `--compact` does; without one the
+adopted CLI prints a human-readable view of the same plan.
 """
 
 from __future__ import annotations
@@ -69,6 +71,12 @@ SHARED_IDENTITY = "codex:primary"
 #: incompleteness rather than for whatever the journey is about.
 SHARED_IDENTITY_DECLARATION = "[harness.codex.variant.primary]\n"
 
+#: The report these journeys read is the CLI's JSON contract, which oneharness prints
+#: only when asked: from 0.15.0 a bare `run` renders a human-readable view. The wrapper
+#: forwards its caller's argv untouched, and onejudge's turns carry `--compact`, so
+#: naming the format here is what a real caller does rather than a test-only lever.
+JSON_REPORT = ("--format", "json")
+
 
 @pytest.fixture
 def member_scratch(tmp_path: Path) -> Path:
@@ -92,8 +100,13 @@ def _wrapper(*arguments: str, environment: dict[str, str]) -> subprocess.Complet
     Without `ORCHESTRATOR_AGENT_STATUS_DIR` the agent side takes its `--events` branch
     and `exec`s directly, which is the shape `just smoke` and a manual probe both use.
     """
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge,shell_test_tiers_stay_split] The
+    # finding is about which Nx project owns this module, a property it shares with every
+    # journey under `tests/e2e/` and one this call does not decide; what it spawns is a
+    # `--print-command` dry run of the wrapper — sub-second, no provider turn, no network —
+    # so no narrower edge would hold it and it is not the expense the rule is about.
     return subprocess.run(
-        ["bash", str(WRAPPER), "run", *arguments],
+        ["bash", str(WRAPPER), "run", *JSON_REPORT, *arguments],
         cwd=REPO_ROOT,
         env={
             **_base_environment(),
@@ -510,8 +523,17 @@ def _standin_wrapper(
     checkout: Path, *arguments: str, environment: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
     """Run the wrapper as the stand-in checkout's own, so it reads that root's config."""
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge,shell_test_tiers_stay_split] Same
+    # site, same reason as `_wrapper` above: a `--print-command` dry run of the stand-in
+    # checkout's copy of the wrapper, and the project that owns it is the module's.
     return subprocess.run(
-        ["bash", str(checkout / "scripts" / "oneharness-agent.sh"), "run", *arguments],
+        [
+            "bash",
+            str(checkout / "scripts" / "oneharness-agent.sh"),
+            "run",
+            *JSON_REPORT,
+            *arguments,
+        ],
         cwd=checkout,
         env={**_base_environment(), **environment},
         text=True,
