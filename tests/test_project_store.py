@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
-from orchestrator import project_store
+from orchestrator import plan_store, project_store
+from orchestrator.root import REPO_ROOT
+
+#: The `local-md` source each round trip below reads through the installed store, named
+#: into the store's own environment layer the way `tests/test_plan_store_pages.py` does.
+SOURCE = "crossdagsource"
+
+#: A wait-only reference onto another run's node, in the one spelling the documented
+#: shape admits.
+CROSS_DAG_REFERENCE = "run:r-upstream-0001#adopt"
 
 
 def test_render_plan_project_covers_supported_node_shapes(tmp_path: Path) -> None:
@@ -111,6 +121,115 @@ def test_a_qualified_id_is_a_source_and_a_native_half(
 ) -> None:
     """The one parser for the shape, which both `delivers` writers and `qualified` ask."""
     assert project_store.qualified_id(value) == parts
+
+
+def test_a_cross_dag_reference_is_stored_beside_the_plans_own_edge_and_read_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One node waiting on a task of this plan and on another run's node, round-tripped.
+
+    The two halves of `deps` are written to two places — the in-plan id as the record's
+    own `depends_on`, the cross-DAG reference as its `onepipeline.deps` metadata, which
+    is where the engine's loader reads one from — and both are read back through the
+    installed plan store rather than off the file, because a record the renderer wrote
+    and the store then refused or misread would have proven nothing. Before this the
+    reference was refused as an unknown dependency, and a plan using the documented
+    shape reached the store only by editing the record by hand after every render
+    (https://github.com/nickderobertis/ai-orchestrator/issues/1139).
+    """
+    root = tmp_path / "source"
+    project_store.write_plan_project(
+        root,
+        {
+            "name": "demo",
+            "tasks": [
+                {"id": "first", "title": "feat: first", "task": "Do first."},
+                {
+                    "id": "second",
+                    "title": "feat: second",
+                    "task": "Do second.",
+                    "deps": ["first", CROSS_DAG_REFERENCE],
+                },
+            ],
+        },
+    )
+    monkeypatch.setenv(
+        f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__PLUGIN", plan_store.WRITABLE_PLUGIN
+    )
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__CONFIG__ROOT", str(root))
+
+    records = {record.node_id: record for record in plan_store.read_tasks(f"{SOURCE}:demo")}
+
+    second = records["second"]
+    assert second.deps == ("first",)
+    assert second.metadata[project_store.CROSS_DAG_DEPS] == [CROSS_DAG_REFERENCE]
+    assert plan_store.authored_deps(second) == ["first", CROSS_DAG_REFERENCE]
+    assert project_store.CROSS_DAG_DEPS not in records["first"].metadata, (
+        "a node waiting on no other run carries no empty list"
+    )
+    plan, _ = plan_store.read_project(f"{SOURCE}:demo")
+    (loaded,) = [task for task in plan["tasks"] if task["id"] == "second"]
+    assert loaded["deps"] == ["first", CROSS_DAG_REFERENCE]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "absent",
+        "run:#adopt",
+        "run:r-upstream-0001#",
+        "run:r-upstream 0001#adopt",
+        "run:r-upstream-0001#adopt now",
+        "run:r-upstream-0001#adopt#again",
+        "run:r-upstream-0001",
+        "run:",
+    ),
+)
+def test_a_dependency_that_is_neither_a_task_nor_a_well_formed_reference_is_refused(
+    entry: str,
+) -> None:
+    """Refused naming the node and the entry, and never written.
+
+    A malformed reference — an empty run or node half, whitespace, a second `#`, no
+    `#` at all — is refused exactly as an id no task of the plan carries is, rather
+    than stored for whichever loader meets it first to refuse.
+    """
+    with pytest.raises(ValueError, match=r"'node'.*neither a task.*cross-DAG reference") as refused:
+        project_store.render_plan_project(
+            {"name": "plan", "tasks": [{"id": "node", "deps": ["node-2", entry]}, {"id": "node-2"}]}
+        )
+    assert str(refused.value).endswith(f": {entry}"), refused.value
+
+
+@pytest.mark.reads_docs
+def test_the_documented_reference_shape_is_the_one_the_renderer_reads() -> None:
+    """`docs/orchestration.md`'s node-shapes section and the renderer state one shape.
+
+    The section is the shape's one source and the renderer is the one place this
+    repository parses it, so the spelling is read back out of the prose rather than
+    restated here, and the reader is shown accepting exactly the form the prose states —
+    both placeholders filled — and refusing the same form with either half emptied.
+    """
+    text = (REPO_ROOT / "docs" / "orchestration.md").read_text(encoding="utf-8")
+    start = text.index("\n## Node shapes\n")
+    section = text[start : text.index("\n## ", start + 1)]
+    documented = re.search(
+        r"cross-DAG references of the form\s+`([^`]+)`", " ".join(section.split())
+    )
+    assert documented is not None, "the node-shapes section no longer states the reference shape"
+    assert documented.group(1) == project_store.CROSS_DAG_REFERENCE_SHAPE
+
+    placeholders = re.findall(r"<([^<>]+)>", project_store.CROSS_DAG_REFERENCE_SHAPE)
+    assert placeholders == ["run_id", "node_id"], placeholders
+    filled = project_store.CROSS_DAG_REFERENCE_SHAPE
+    for placeholder, value in zip(placeholders, ("r-upstream-0001", "adopt"), strict=True):
+        filled = filled.replace(f"<{placeholder}>", value)
+    assert project_store.cross_dag_reference(filled) == filled
+    for placeholder in placeholders:
+        emptied = project_store.CROSS_DAG_REFERENCE_SHAPE.replace(f"<{placeholder}>", "")
+        for other in placeholders:
+            emptied = emptied.replace(f"<{other}>", "x")
+        assert project_store.cross_dag_reference(emptied) is None, emptied
 
 
 def test_slug_rejects_a_value_with_no_identifier() -> None:

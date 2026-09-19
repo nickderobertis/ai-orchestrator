@@ -17,6 +17,7 @@ from onetaskgraph_sdk import (
 )
 
 from orchestrator.project_store import (
+    CROSS_DAG_DEPS,
     PROJECTS_DIRECTORY,
     TASKS_DIRECTORY,
     QualifiedId,
@@ -28,7 +29,6 @@ WRITE_BACK_SOURCE = "onepipeline-writeback"
 WRITE_BACK_REWROTE = "the dependency points into onepipeline's old write-back scratch source"
 WRITABLE_PLUGIN = "local-md"
 ORIGIN_KEY = "onetaskgraph.origin"
-CROSS_DAG_DEPS = "onepipeline.deps"
 RECORD_COMPONENT = re.compile(r"(?!\.+$)[\w.@+-]+")
 QualifiedTaskId = NewType("QualifiedTaskId", str)
 QualifiedDocumentId = NewType("QualifiedDocumentId", str)

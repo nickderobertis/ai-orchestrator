@@ -228,7 +228,16 @@ def test_project_store_reports_malformed_stdin_at_its_command_boundary(tmp_path:
         ('{"name":"p","tasks":[{"id":"a","task":7}]}', "store", "title and task"),
         ('{"name":"p","tasks":[{"id":"a","deps":[7]}]}', "store", "dependencies"),
         ('{"name":"p","tasks":[{"id":"a","repo":7}]}', "store", "repository"),
-        ('{"name":"p","tasks":[{"id":"a","deps":["missing"]}]}', "store", "unknown"),
+        (
+            '{"name":"p","tasks":[{"id":"a","deps":["missing"]}]}',
+            "store",
+            "neither a task of this plan nor a cross-DAG reference",
+        ),
+        (
+            '{"name":"p","tasks":[{"id":"a","deps":["run:r-1#"]}]}',
+            "store",
+            "neither a task of this plan nor a cross-DAG reference",
+        ),
         ('{"name":"p","tasks":[]}', "blocked", "cannot write"),
     ),
 )
@@ -1525,8 +1534,9 @@ def _task_document(project: str) -> Path:
 
     Two of the three structural errors below cannot be written as plan JSON at all —
     `orchestrator/project_store.py` renders a node's repository into exactly one of the
-    two places, and turns `deps` into store dependency edges — so the shape that
-    actually reached a launch is reached the way it arose, by editing the record.
+    two places, and partitions `deps` so that a task of this plan only ever becomes a
+    store dependency edge and never the cross-DAG key — so the shape that actually
+    reached a launch is reached the way it arose, by editing the record.
     """
     source, _ = plan_store.qualified(project)
     (task,) = [one for one in plan_store.read_tasks(project) if one.node_id == "route"]
@@ -1586,30 +1596,40 @@ def test_a_structural_error_that_reached_a_launch_is_refused_by_the_recipe(
     assert structural.reason in refused.stderr, refused.stderr
 
 
-#: A wait-only edge onto a node of another run, in the one spelling the engine reads —
-#: `run:<run-id>#<node-id>`. The store's own dependency edges cannot express it, because
-#: their targets are records of this project, so a plan states it on the reserved
-#: `onepipeline.deps` key instead. That is the whole reason it is the shape that broke
-#: the review record: it is the one dependency a plan states in a place of its own, and
-#: the two commands read it from different places.
-CROSS_DAG_EDGE = '  "onepipeline.deps": ["run:r-upstream-0001#adopt"]'
+#: A wait-only dependency onto a node of another run, in the one spelling the engine
+#: reads — `run:<run_id>#<node_id>`, as `docs/orchestration.md`'s node-shapes section
+#: states it. A plan states it in `deps` beside this plan's own ids, and the renderer
+#: writes it onto the reserved `onepipeline.deps` key, because the store's own dependency
+#: edges cannot express it: their targets are records of this project. That is the whole
+#: reason it is the shape that broke the review record: it is the one dependency a record
+#: carries in a place of its own, and the two commands read it from different places.
+CROSS_DAG_REFERENCE = "run:r-upstream-0001#adopt"
+
+#: The reference above as the stored record spells it — the line the renderer writes, and
+#: the one an edit no plan states is made against.
+CROSS_DAG_EDGE = f'  "onepipeline.deps": ["{CROSS_DAG_REFERENCE}"]'
 
 #: The same node, waiting on a different run's node. A record granted over the edge above
 #: says nothing about this one.
 MOVED_CROSS_DAG_EDGE = '  "onepipeline.deps": ["run:r-upstream-0002#adopt"]'
 
 
-def _with_own_edge(root: Path, criteria: str) -> Path:
-    """The plan above with its dispatched node also waiting on this plan's own node.
+def _with_deps(root: Path, criteria: str, deps: list[str]) -> Path:
+    """The plan above with its dispatched node stating ``deps``.
 
-    The half a store *can* express, beside the half only `onepipeline.deps` can — which
-    is the case worth driving twice over, because the engine's loader resolves the two
-    into one `deps` list and this repository's own rendering of the store composes them
-    separately. A node carrying only one kind cannot tell those two renderings apart.
+    Stated in the plan and rendered through this repository's own renderer rather than
+    edited onto the record, because that is the path a plan reaches the store by, and
+    the one that refused a cross-DAG reference outright until
+    https://github.com/nickderobertis/ai-orchestrator/issues/1139. The node carrying a
+    task of this plan beside the reference is the case worth driving twice over: the
+    half a store *can* express beside the half only `onepipeline.deps` can, which the
+    engine's loader resolves into one `deps` list and this repository's own rendering of
+    the store composes separately. A node carrying only one kind cannot tell those two
+    renderings apart.
     """
     plan = json.loads(_plan(root, criteria).read_text(encoding="utf-8"))
-    plan["tasks"][0]["deps"] = ["approve"]
-    written = root / "both-kinds.json"
+    plan["tasks"][0]["deps"] = deps
+    written = root / "with-deps.json"
     written.write_text(json.dumps(plan), encoding="utf-8")
     return written
 
@@ -1667,12 +1687,14 @@ def test_a_node_with_a_cross_dag_dependency_keeps_the_review_it_was_granted(
     repository's rendering of the store on one side and the engine's loaded plan on the
     other, and those two renderings differ only for a node that states both.
     """
-    source = (
-        _with_own_edge(tmp_path, STATES_ITS_BAR)
-        if also_its_own
-        else _plan(tmp_path, STATES_ITS_BAR)
-    )
-    project = _with_metadata(project_from_plan(source), CROSS_DAG_EDGE)
+    deps = ["approve", CROSS_DAG_REFERENCE] if also_its_own else [CROSS_DAG_REFERENCE]
+    project = project_from_plan(_with_deps(tmp_path, STATES_ITS_BAR, deps))
+    # The premise: the renderer put the reference where the loader reads one from, and
+    # the store answers it back beside the plan's own edge. The check below is then the
+    # engine's loader accepting that rendered record as a cross-DAG dependency.
+    (route,) = [one for one in plan_store.read_tasks(project) if one.node_id == "route"]
+    assert route.metadata[plan_store.CROSS_DAG_DEPS] == [CROSS_DAG_REFERENCE]
+    assert route.deps == (("approve",) if also_its_own else ())
 
     checked = _check_project(project)
 
@@ -1692,8 +1714,8 @@ def test_a_change_to_a_nodes_own_dependencies_invalidates_the_record_it_had(
     falls is a working key and a plan whose records all fall is a key over the wrong
     thing.
     """
-    project = _with_metadata(
-        project_from_plan(_with_own_edge(tmp_path, STATES_ITS_BAR)), CROSS_DAG_EDGE
+    project = project_from_plan(
+        _with_deps(tmp_path, STATES_ITS_BAR, ["approve", CROSS_DAG_REFERENCE])
     )
     assert _check_project(project).returncode == 0
 
@@ -1714,7 +1736,7 @@ def test_a_change_to_a_nodes_cross_dag_dependencies_invalidates_the_record_it_ha
     that waits on `r-upstream-0002`. Asserted separately from the edge above because a
     key reading only one of the two halves satisfies exactly one of these journeys.
     """
-    project = _with_metadata(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)), CROSS_DAG_EDGE)
+    project = project_from_plan(_with_deps(tmp_path, STATES_ITS_BAR, [CROSS_DAG_REFERENCE]))
     assert _check_project(project).returncode == 0
 
     _rewritten(project, CROSS_DAG_EDGE.strip(), MOVED_CROSS_DAG_EDGE.strip())

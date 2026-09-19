@@ -56,6 +56,24 @@ TASKS_DIRECTORY = "tasks"
 _HOSTED_ORIGIN = re.compile(r"[A-Za-z0-9.-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 _CLONE_SCHEME = re.compile(r"^https?://")
 
+#: The reserved metadata key a record's cross-DAG dependencies travel on. A store's own
+#: dependency edges can only name records of the same project, so a wait on another
+#: run's node is written here, which is where the engine's loader reads it from.
+CROSS_DAG_DEPS = f"{ENGINE_PREFIX}deps"
+
+#: The one spelling of a wait-only dependency on another run's node, as the node-shapes
+#: section of `docs/orchestration.md` states it. That section is the shape's one source
+#: and this is the one place this repository parses it — every reader of a stored
+#: reference takes the list already partitioned — so the two are held together by
+#: `tests/test_project_store.py`, which reads the spelling back out of that section and
+#: shows this reader accepting exactly the form it states.
+CROSS_DAG_REFERENCE_SHAPE = "run:<run_id>#<node_id>"
+#: Each half is anything but whitespace and the separator, and both are non-empty: a
+#: reference is promoted verbatim into a record other programs read, so an empty run or
+#: node, a space, or a second `#` is refused where it is written rather than by whichever
+#: loader cannot resolve it.
+_CROSS_DAG_REFERENCE = re.compile(r"^run:([^\s#]+)#([^\s#]+)$")
+
 
 class QualifiedId(NamedTuple):
     """One qualified `<source>:<native>` id, as its two halves.
@@ -99,6 +117,15 @@ def hosted_origin(repo: str) -> str | None:
     """
     normalized = _CLONE_SCHEME.sub("", repo).removesuffix(".git")
     return normalized if _HOSTED_ORIGIN.fullmatch(normalized) else None
+
+
+def cross_dag_reference(dependency: str) -> str | None:
+    """``dependency`` when it spells a well-formed cross-DAG reference, else ``None``.
+
+    Well-formed is the documented shape and nothing looser: `run:` then a non-empty run
+    id, one `#`, then a non-empty node id, with no whitespace in either half.
+    """
+    return dependency if _CROSS_DAG_REFERENCE.fullmatch(dependency) else None
 
 
 def _slug(value: str) -> str:
@@ -223,10 +250,24 @@ def render_plan_project(
             isinstance(dependency, str) for dependency in deps
         ):
             raise ValueError(f"generated task {node_id!r} requires a list of string dependencies")
-        unknown = [dependency for dependency in deps if dependency not in task_ids]
+        # `deps` is partitioned by what each entry names. A task of this plan is the
+        # record's own `depends_on`, the edge a store can express; a reference onto
+        # another run's node is the reserved `onepipeline.deps` metadata, which is where
+        # the engine's loader reads a cross-DAG dependency from; anything else — an id no
+        # task of this plan carries, or a reference in the documented shape's spelling
+        # but not its form — is refused naming the node and the entry.
+        own = [dependency for dependency in deps if dependency in task_ids]
+        cross_dag = [
+            dependency
+            for dependency in deps
+            if dependency not in task_ids and cross_dag_reference(dependency) is not None
+        ]
+        unknown = [dependency for dependency in deps if dependency not in {*own, *cross_dag}]
         if unknown:
             raise ValueError(
-                f"generated task {node_id!r} names unknown dependencies: {', '.join(unknown)}"
+                f"generated task {node_id!r} names dependencies that are neither a task of "
+                f"this plan nor a cross-DAG reference of the form {CROSS_DAG_REFERENCE_SHAPE}: "
+                f"{', '.join(unknown)}"
             )
         fields: dict[str, object] = {
             "title": title,
@@ -259,13 +300,16 @@ def render_plan_project(
             )
         if delivers:
             fields["delivers"] = delivers
-        if deps:
-            fields["depends_on"] = [f"{project}/{task_names[dependency]}" for dependency in deps]
+        if own:
+            fields["depends_on"] = [f"{project}/{task_names[dependency]}" for dependency in own]
         # llmlint: ignore[boundary_inputs_validated] Decoded JSON, for the reason stated
         # where the project's own metadata is built above.
-        fields["metadata"] = {"onepipeline.id": node_id} | {
+        metadata_fields: dict[str, object] = {"onepipeline.id": node_id} | {
             f"onepipeline.{key}": value for key, value in node.items()
         }
+        if cross_dag:
+            metadata_fields[CROSS_DAG_DEPS] = cross_dag
+        fields["metadata"] = metadata_fields
         rendered[Path(TASKS_DIRECTORY) / project / f"{node_slug}.md"] = frontmatter(fields, body)
     # The project document is rendered last, and `write_plan_project` writes in this
     # order, because a root is read concurrently with being written: a local Markdown
