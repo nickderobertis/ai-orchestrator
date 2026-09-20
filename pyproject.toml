@@ -13,8 +13,8 @@ dependencies = [
     "onejudge==0.13.2",
     "onemessagebus-cli==0.7.0",
     "onepipeline-api-cli==0.9.0",
-    "onepipeline-cli==0.38.0",
-    "onevcs-cli==0.24.2",
+    "onepipeline-cli==0.39.0",
+    "onevcs-cli==0.25.0",
 ]
 
 [project.scripts]

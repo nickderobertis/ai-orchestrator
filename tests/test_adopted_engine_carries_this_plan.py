@@ -285,6 +285,45 @@ LINEAGE_ITEM_LANDINGS = (
     ),
 )
 
+#: The three engine-side nodes of the accepted-follow-ups plan that release anything.
+#: Together they make a stopped-then-adopted run read by its adopting driver in
+#: `status`, `watch` and `unwatched`, label a hook record from a superseded epoch in
+#: `results`, show a release-held node as held rather than queued, keep a `published`
+#: node held when a dependency cannot be resolved this pass, and relink the `onevcs`
+#: whose `local-direct` squash keeps a branch's closing lines, whose `release status`
+#: backfills a landing its publication never saw, and whose merge path can name a host
+#: prerequisite — which the engine settles once as `infrastructure-failure` instead of
+#: re-dispatching onto the same branch. The plan's fourth engine node, `op-test-fixtures`
+#: (#389), is test and CI hygiene that releases nothing a host runs, so it earns no row.
+#: `op-views` and `op-release-hold` were delivered by their retries, `op-views-3` and
+#: `op-release-hold-4`, and are recorded under the node id for the reason
+#: `Landing.node` gives. `tests/e2e/test_adopted_cli_fixes_e2e.py` drives the two of
+#: these this host's recipes lean on hardest — the stop-then-adopt read and the closing
+#: line a `local-direct` squash keeps.
+ACCEPTED_FOLLOW_UPS_LANDINGS = (
+    Landing(
+        node="op-views",
+        change_request=390,
+        commit="dcdede84b09495244f35d2e88d461941caf66cde",
+        did="read an adopted run as live, label superseded hooks, and report release holds",
+    ),
+    Landing(
+        node="op-release-hold",
+        change_request=386,
+        commit="a537303244fa462c5ad47b59d90679624c65e85b",
+        did="hold a published node whose dependency could not be resolved this pass",
+    ),
+    Landing(
+        node="op-relink-and-route",
+        change_request=394,
+        commit="03253f06f24f88bdd068774d1ca607fe4e41ee6e",
+        did=(
+            "relink the onevcs that keeps closing lines and backfills a late landing, and "
+            "settle a host-prerequisite refusal without a re-dispatch"
+        ),
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -295,6 +334,7 @@ LANDINGS = (
     *FOLLOW_UPS_LIFECYCLE_LANDINGS,
     *HOST_FIXES_LANDINGS,
     *LINEAGE_ITEM_LANDINGS,
+    *ACCEPTED_FOLLOW_UPS_LANDINGS,
 )
 
 

@@ -105,6 +105,31 @@ NON_RELEASING_TITLE = "docs: describe the finished work"
 #: why a `--title` is what the two journeys below actually vary.
 BRANCH_SUBJECT = "feat: finish the work"
 
+#: The issue-closing lines a branch's commits carry, and the one line each survives a
+#: squash as. GitHub closes an issue from such a line only in the commit that reaches
+#: the default branch, and a `local-direct` publication composes that commit's message
+#: itself — the subject and the provenance trailers — so before
+#: https://github.com/nickderobertis/onevcs/pull/163 every issue a landing delivered
+#: stayed open until somebody closed it by hand. Written in the three shapes the host
+#: reads — a bare number, an `owner/name#N`, and a github.com issue URL — in a sentence
+#: and with a second keyword for one of them, because what is asserted is the normalised
+#: set the squash carries, each issue once, and not the prose the commits happened to say.
+CLOSING_SHAPES = ("#12", "acme-corp/tracker#7", "https://github.com/acme-corp/tracker/issues/9")
+CLOSING_COMMITS = (
+    f"{BRANCH_SUBJECT}\n\nThis fixes {CLOSING_SHAPES[0]} and Closes {CLOSING_SHAPES[1]}.\n",
+    f"feat: finish the rest of the work\n\nResolves {CLOSING_SHAPES[2]}\n"
+    f"Fixes {CLOSING_SHAPES[0]}\n",
+)
+#: What the squash's message has to carry after its subject: one line per issue, the
+#: keyword capitalised, the first spelling kept — and a github.com URL written back as
+#: the `owner/name#N` the host reads it as, which is the one shape onevcs rewrites.
+CLOSING_REFERENCES = ("#12", "acme-corp/tracker#7", "acme-corp/tracker#9")
+CLOSING_LINES = (
+    f"Fixes {CLOSING_REFERENCES[0]}",
+    f"Closes {CLOSING_REFERENCES[1]}",
+    f"Resolves {CLOSING_REFERENCES[2]}",
+)
+
 #: One pipe buffer on Linux, which is the size a verifier had to exceed on stderr to
 #: wedge the reader this host used to work around. Both streams are driven past it.
 PIPE_BUFFER = 64 * 1024
@@ -430,6 +455,20 @@ def _finished_branch(checkout: Path) -> str:
     return head
 
 
+def _closing_branch(checkout: Path) -> None:
+    """Commit finished work whose messages close issues, as a dispatch that delivered them does.
+
+    Two commits rather than one, so the squash is a real fold of several messages and
+    the issue named in both of them is a real duplicate for the landing to collapse.
+    """
+    _git("checkout", "-q", "-b", FINISHED_BRANCH, cwd=checkout)
+    for index, message in enumerate(CLOSING_COMMITS):
+        (checkout / f"{PUBLISHED_FILE}.{index}").write_text(f"the work {index}\n", encoding="utf-8")
+        _git("add", "-A", cwd=checkout)
+        _git("commit", "-q", "-m", message, cwd=checkout)
+    _git("checkout", "-q", BASE, cwd=checkout)
+
+
 def _incomplete_branch(checkout: Path) -> None:
     """Commit work a step did not finish, as a stopped dispatch leaves it.
 
@@ -619,6 +658,62 @@ def test_publish_branch_refuses_a_branch_the_repositorys_own_merge_path_rejects(
     )
     assert _git("rev-parse", BASE, cwd=publication.origin).strip() == before, (
         "the base moved even though the merge path rejected the branch"
+    )
+
+
+#: The one line a merge-path hook says a host prerequisite is missing with, as onevcs's
+#: `HOST_PREREQUISITE_MARKER` spells it (`tests/test_engine_contracts.py` holds the name
+#: to the linked crate), and what this hook names after it. A hook emits it only for a
+#: missing host tool or credential, never for a check whose outcome depends on the tree.
+HOST_PREREQUISITE_MARKER = "onevcs: host-prerequisite:"
+HOST_PREREQUISITE_REMEDY = "shellcheck is not installed; apt-get install shellcheck"
+
+
+def test_publish_branch_names_a_host_prerequisite_the_merge_path_says_it_is_missing(
+    tmp_path: Path,
+) -> None:
+    """A hook refusing for the host's sake is reported as that, not as the tree's.
+
+    The other refusal a merge path can give, told apart from the one above by the hook's
+    own line: since https://github.com/nickderobertis/onevcs/pull/163 a refused push whose
+    output carries the marker is the failure kind `host-prerequisite`, its reason the
+    remediation after the marker, and it is that kind the adopted engine settles a
+    lifecycle node on once, as `infrastructure-failure`, rather than re-dispatching a
+    worker onto a branch no edit can fix. Before it the same line was `push-rejected`
+    like any other, and read as the work's. What is read here is the verb's own report,
+    which is what an operator running `just publish-branch` meets; the base stays where
+    it was, exactly as for any refusal.
+    """
+    publication = _publication(
+        tmp_path,
+        pre_push=f'echo "{HOST_PREREQUISITE_MARKER} {HOST_PREREQUISITE_REMEDY}" >&2\nexit 1',
+    )
+    _finished_branch(publication.checkout)
+    before = _git("rev-parse", BASE, cwd=publication.origin).strip()
+
+    refused = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(publication.checkout),
+        environment=publication.environment,
+    )
+
+    reported = refused.stdout + refused.stderr
+    assert refused.returncode != 0, reported
+    # The verb's own sentence, and not the hook's echo, which the report relays on both
+    # releases: what says the kind was read is the sentence built from it.
+    assert "onevcs: host prerequisite missing:" in reported, (
+        f"the refusal is not reported as the host's:\n{reported[-2000:]}"
+    )
+    assert f"this host is missing a prerequisite: {HOST_PREREQUISITE_REMEDY}" in reported, (
+        f"the hook's own remediation did not reach the report as the reason:\n{reported[-2000:]}"
+    )
+    assert "push rejected" not in reported, (
+        f"a host prerequisite was reported as the tree being rejected:\n{reported[-2000:]}"
+    )
+    assert _git("rev-parse", BASE, cwd=publication.origin).strip() == before, (
+        "the base moved even though the merge path refused the push"
     )
 
 
@@ -867,6 +962,54 @@ def test_publish_branch_lands_a_subject_the_repositorys_own_hook_accepts(
     assert publication.subjects_seen is not None
     assert _asked_of_the_publication(publication) == {RELEASING_TITLE}, (
         publication.subjects_seen.read_text(encoding="utf-8")
+    )
+
+
+def test_a_local_direct_squash_keeps_the_closing_lines_the_branch_carried(
+    tmp_path: Path,
+) -> None:
+    """The one commit a landing leaves on the base still closes what the branch closed.
+
+    Read from the origin's base, because that commit is the only one the host reads a
+    closing line from: the branch's own commits do not survive the squash, so a landing
+    that composed its message from the subject and the trailers alone — which is what
+    every onevcs before that pull request did — left the issues open while the work was in. Each
+    issue is asserted once, under a capitalised keyword, in the order the commits first
+    named it, and the trailers still follow: what a squash keeps is the references, not
+    the sentences around them.
+    """
+    publication = _publication(tmp_path)
+    _closing_branch(publication.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(publication.checkout),
+        environment=publication.environment,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    tree = _git("ls-tree", "--name-only", BASE, cwd=publication.origin)
+    assert all(f"{PUBLISHED_FILE}.{index}" in tree for index in range(len(CLOSING_COMMITS))), (
+        f"the branch's work never reached the origin's {BASE}:\n{published.stdout}"
+    )
+    message = _git("log", "-1", "--format=%B", BASE, cwd=publication.origin)
+    lines = [line for line in message.splitlines() if line.strip()]
+    assert lines[0] == BRANCH_SUBJECT, f"the squash's subject is not the branch's:\n{message}"
+    assert lines[1 : 1 + len(CLOSING_LINES)] == list(CLOSING_LINES), (
+        f"the squash on {BASE} does not carry the branch's closing lines, each once, "
+        f"after its subject:\n{message}"
+    )
+    # Each issue exactly once: the one named by two commits under two keywords is one
+    # line, because a squash naming an issue twice reads as two deliveries.
+    for reference in CLOSING_REFERENCES:
+        assert message.count(reference) == 1, (
+            f"{reference} appears {message.count(reference)} times:\n{message}"
+        )
+    # And the provenance the landing already stamped is still there, after the lines.
+    assert "Orchestrator-Landed-Commit:" in "\n".join(lines[1 + len(CLOSING_LINES) :]), (
+        f"the landing's own trailer is missing or displaced:\n{message}"
     )
 
 

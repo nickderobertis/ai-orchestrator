@@ -749,6 +749,13 @@ PRESENT_SYMBOLS: dict[Path, tuple[tuple[Engine, str], ...]] = {
         (ONEVCS, "merge_path::preserve_log"),
         (ONEVCS, 'store_artifact("log"'),
         (ONEVCS, "preserved_log"),
+        # The one spelling of the line a merge-path hook says a host prerequisite is
+        # missing with, exported so a hook's author, the engine's router and this
+        # document cannot disagree about it. The routing the prose describes — settled
+        # once as `infrastructure-failure`, never re-dispatched — rests on the engine
+        # reading exactly this marker, so a rename would leave a documented refusal
+        # nothing produces and every such push back on the retried path.
+        (ONEVCS, "HOST_PREREQUISITE_MARKER"),
     ),
     MANAGER: (
         # How a carried `context` note reaches a worker, quoted where a manager is told
@@ -1550,7 +1557,15 @@ def test_the_run_root_lease_requires_the_state_onevcs_writes_for_an_open_session
 #: The view a manager's watch greps, as `onepipeline` composes it. `just status` is a
 #: thin wrapper over `onepipeline status`, so the boundary `AGENTS.md` tells a watch to
 #: cut at is this function's own formatting and nothing on this side of the seam.
-STATUS_VIEW = re.compile(r"pub fn status\(.*?\n\}\n", re.DOTALL)
+#:
+#: Read from `status_of`, which composes **one run's** block — its run lines, its node
+#: lines, and the health report under them — rather than from `status`, which since
+#: https://github.com/nickderobertis/onepipeline/pull/402 only concatenates that block per
+#: surveyed run and adds the
+#: skipped-runs trailer. Anchoring on the outer function is how these gates came to
+#: report the health opener as gone from a view that still prints it: the composition
+#: moved down one function while the entry point kept its name.
+STATUS_VIEW = re.compile(r"pub\(crate\) fn status_of\(.*?\n\}\n", re.DOTALL)
 
 #: The helper that view writes a run's own block through, and the call by which it does.
 #:

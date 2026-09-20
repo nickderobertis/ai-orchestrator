@@ -143,6 +143,16 @@ the push reached the remote and the merge path could not then be read, so the wo
 the origin with its verdict outstanding — read the change request on the host, never
 publish again.
 
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] The onevcs half — a hook's marker line read as the `host-prerequisite` kind, with the remediation as its reason — is driven here through `just publish-branch` in `tests/e2e/test_publish_branch_e2e.py`. The engine half — settling a lifecycle node on that kind once, as `infrastructure-failure`, with no re-dispatch — is a lifecycle publication's routing, which onepipeline drives through its real binary and a rejecting hook in its own `tests/e2e/lifecycle.rs` (PR 394); here `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains that landing and `tests/test_engine_contracts.py` holds the settlement pairing and the marker's name to the linked crates. A journey here would need a lifecycle dispatch against a registered identity whose hook prints the marker — a worker dispatch this suite does not double below the paid model — to re-prove what the producer's journey already does. -->
+**A merge path refused because this host lacks a tool or a credential one of its hooks
+needs** — said by the hook itself, on the one line beginning with `onevcs`'s
+host-prerequisite marker — is not retried onto the branch at all, since no edit to the
+tree installs anything: the engine settles it once as `infrastructure-failure`, the
+word the dispatch layer already uses for a host that could not launch, carrying the
+preserved branch, the commit it stands at and the hook's own remediation. Repair the
+host, then `retry` the node onto the branch that settlement names.
+<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+
 **How a landing is read.** A node's landing is read fresh when a view renders, and a
 landing the run recorded is never overturned. `just work-status` is where the evidence
 is read (`tests/e2e/test_work_status_and_import_e2e.py` drives it before and after a
@@ -344,19 +354,40 @@ follows — change the producer's declaration or the host's override, never the 
 
 Under `published` a held node never launches, never fails, never degrades, and has no
 timeout; it raises a non-blocking surface naming what it awaits, and the decision — keep
-waiting, flip it to `fast` by live edit, stop the run — is yours. A human-step wait is a
+waiting, flip it to `fast` by live edit, stop the run — is yours.
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] Both readings need a producer repository declaring a release target with a probe and a consumer held on it, which onepipeline's own `tests/e2e/adoption.rs` builds and drives through the real binary — `status_names_the_release_a_held_node_awaits_rather_than_calling_it_queued` for the first (PR 390), and the unreadable-, renamed- and same-pass-dependency journeys for the second (PR 386). Nothing on this host declares a release target a journey here could hold a node on without rebuilding that world; `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains both landings, and `tests/e2e/test_release_adoption_in_force_e2e.py` holds that the installed artifacts resolve the `published` rung at all. -->
+`just status` reads such a node as `held — awaiting the published release of
+<dependency>, waited <duration>`, off the `node-held` the driver journalled, and never as
+`ready — queued for dispatch`. A `published` node whose dependency the driver could not
+resolve this pass — a read that failed, a dependency renamed by a retry, a landing the
+pass had not yet seen — stays held, its recurring wait naming each unresolved
+dependency and why, rather than launching against work no release carried; a
+dependency readied mid-pass is checked before dispatch for the same reason.
+<!-- llmlint: ignore-end[changed_behavior_has_e2e] --> A human-step wait is a
 wait on a person nothing here performs, prompts for, or acknowledges, so the manager
 reading that surface is the person who has to act, or find who will. **A probe is not a
 gate**: it answers what version is out and never refuses a publication; "not answered"
 is not "not released", and a held node stays held on it; a human step awaited is a
-third answer, folded into neither. **A hold on a landing `onevcs` did not witness never
-releases on its own**: with no release baseline captured at landing — the landing was
-never probed, or its probe did not answer then — no later probe answer can say which
-release carries the work, so the hold answers "not answered" for ever. Confirm the
-release on the registry, then answer the hold with `onevcs release acknowledge
-<REFERENCE> --target <NAME> --version <VERSION>` on its automated target, which the
-hold reads as released; a landing whose probed baseline was established refuses the
-acknowledgement and names its probe. **Whether a release exists is read from the registry
+third answer, folded into neither.
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] The reconciliation is `onevcs release status`'s over a `change-auto` landing the host performed after the publishing process ended, which onevcs drives in its own `tests/e2e/releases.rs` and `lifecycle.rs` (PR 163) and onepipeline's `tests/e2e/adoption.rs` drives through to a waiting consumer's release (PR 394). A journey here would need a host double that merges after the publication has returned and a producer declaring a probed target; `tests/test_linked_libraries.py` holds the linked onevcs at the release carrying it, and the acknowledgement half is driven here in `tests/e2e/test_adopted_cli_fixes_e2e.py`. -->
+**A landing `onevcs` did not witness is reconciled where it is next read, and a hold on
+one it cannot reconcile never releases on its own.** A `change-auto` publication captures its baselines in the call that watches for
+the merge, so a merge the host performs after that process died — or a `change-open`
+change a person merges later — was never seen by it; the adopted `onevcs` has the first
+`release status` that decides such a landing from the change request's number in the
+base do what the publication would have: fast-forward the publication checkout,
+capture each automated target's baseline **at the landing commit**, and record the
+landing, after which the hold reads it as a recorded one. That reading stands only
+while nothing has been released from the landing since, so where a tag already contains
+the landing commit — or that cannot be asked — each target is recorded `unestablished`
+with that reason instead, and the hold answers "not answered": no later probe answer
+can say which release carries the work. Confirm the release on the registry, then
+answer such a hold with `onevcs release acknowledge <REFERENCE> --target <NAME>
+--version <VERSION>` on its automated target, which the hold reads as released; a
+landing whose probed baseline was established refuses the acknowledgement and names its
+probe.
+<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+**Whether a release exists is read from the registry
 and nothing else**, because a verification badge folds several jobs into one verdict and
 a tag-against-registry comparison reads every publication still in flight as a failure.
 A producer declaration is read at the publication checkout's base, so a checkout left
@@ -639,7 +670,11 @@ verdict and does not stop scheduling — `just stop` is what ends a run. A run t
 report `PARKED` is alive and not working: treat it as stopped and intervene, which is
 unrelated to a node you parked with `cancel`. A run whose driver is dead over an intact
 ledger is adopted with `just orchestrate --adopt <run-id>`, never relaunched under a new
-id. **Runs are owned**: act only on runs you launched — `just runs` shows `[mine]`, the
+id — and so is one you stopped: a recorded stop is evidence about the driver it ended,
+cleared at `driver-adopted`, so a stopped-then-adopted run is judged by the driver
+driving it now — `ACTIVE` in `just status`, a watch that stays armed, a run `just
+unwatched` names (`tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all
+three). **Runs are owned**: act only on runs you launched — `just runs` shows `[mine]`, the
 owning session, or `[unknown]`, and `unknown` is never yours — and never derive a
 process list from `ps` and signal it, which has interrupted another manager
 mid-supervision here. `just stop` refuses another manager's run and is deliberately
@@ -1314,7 +1349,13 @@ Every path that advances the base — publication, `repo-recover`, and the `inte
 train — leaves **one** commit on it. The `(incomplete step)` marker and its attestation
 are branch state, recorded on the base only as `Orchestrator-` trailers on the squash
 commit (`config/onevcs.rules.yml`'s `trailer_prefix` is their one source, and a marker
-under another prefix is refused publication rather than read). Provenance commits
+under another prefix is refused publication rather than read). A `local-direct` squash
+also keeps every issue-closing line the branch's commits carried — each issue once, as
+`<Keyword> <reference>`, between the subject and the trailers — because GitHub closes an
+issue only from the commit that reaches the default branch
+(`tests/e2e/test_publish_branch_e2e.py` lands one such branch). So a commit body here
+that merely *mentions* an issue after a closing keyword closes it: name an issue you are
+not closing without one. Provenance commits
 already on `main` stay where they are: base history is never rewritten.
 
 ## After the main task

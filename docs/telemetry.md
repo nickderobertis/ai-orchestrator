@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.38.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.39.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -294,7 +294,8 @@ served them.
    verdicts, and confusing them is the common mistake. The **driver** verdict is
    one of `ACTIVE`, `DRIVER DEAD`, `PARKED`, or `UNDRIVEN`; `just orchestrate
    --adopt` is the way back from the two that mean nothing is driving the run
-   (`DRIVER DEAD` and `PARKED`). The **observer** verdict is separate and prints
+   (`DRIVER DEAD` and `PARKED`), and a run stopped and then adopted reads `ACTIVE`
+   under its adopting driver rather than carrying the stop forward. The **observer** verdict is separate and prints
    beside it: `OBSERVER DEAD` when the launch named an observer graph whose run has
    ended, `OBSERVER NOT RESTARTED` when it named one, that graph run is over, and the
    driver has stopped starting another, `NO OBSERVER` when it named none,

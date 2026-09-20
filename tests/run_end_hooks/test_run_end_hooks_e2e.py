@@ -513,6 +513,23 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
         results = _just(bench, "results", run, seconds=60)
         assert "failure hook fired" in results.stdout, results.stdout
         assert "success hook fired" in results.stdout, results.stdout
+        # Each record against the epoch it belongs to: the failure hook's reason names a
+        # node the retry replaced and its output is instructions for a run that is not
+        # there any more, so the adopted engine labels it superseded and names the edit
+        # that reopened the run, while the success hook — the current epoch's — stands.
+        # Before that landing both rendered alike, and the stale instructions read as
+        # where the run was.
+        failure_line = next(
+            line for line in results.stdout.splitlines() if "failure hook fired" in line
+        )
+        success_line = next(
+            line for line in results.stdout.splitlines() if "success hook fired" in line
+        )
+        assert "superseded:" in failure_line and "reopened the run after it" in failure_line, (
+            failure_line
+        )
+        assert "retry" in failure_line, failure_line
+        assert "superseded" not in success_line, success_line
     finally:
         _stop(bench, run, *([follow_up] if follow_up else []))
 
