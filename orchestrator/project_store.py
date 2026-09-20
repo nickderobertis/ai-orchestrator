@@ -342,18 +342,23 @@ def publish_record(destination: Path, content: str) -> None:
     Never a partial one, and that is what separates this from `Path.write_text`: a
     truncating open leaves the record empty until the write that follows it, and a local
     Markdown root is read concurrently with being written — every task file under it,
-    not only the project a reader asked for, so a task file caught empty refuses a read
-    of some *other* project. A publication's pre-push gate failed exactly that way, on a
-    fixture project another test process was writing at that moment.
+    not only the project a reader asked for. An unscoped read parses each of them in full
+    and refuses on one caught empty; a read scoped to a project passes over a file with
+    no front matter on the adopted release, and on the release before it parsed every
+    file too, so a task file caught empty refused a read of some *other* project. A
+    publication's pre-push gate failed exactly that way, on a fixture project another
+    test process was writing at that moment.
 
     This closes the window this repository's own writers open, and only that one. The
-    store's own writes are not all staged: traced on the installed onetaskgraph 0.2.37,
-    `task metadata set` writes a hidden sibling and renames it, while `project copy` —
-    the verb the engine's settlement write-back projects a run's settlements through —
-    `task status set` and `task comment add` open the destination record truncating, in
-    place. So a record an engine run is projecting into a shared root can still be
-    caught empty by a peer's read, which is onetaskgraph's to close
-    (https://github.com/nickderobertis/onetaskgraph/issues/1836 names the status path).
+    store's own writes are not all staged: on the adopted release, `task metadata set`,
+    `task status set` and the `delivered_by:` write that keeps a delivered task in step
+    each write a hidden sibling and rename it — the last two since
+    https://github.com/nickderobertis/onetaskgraph/issues/1836, which
+    `tests/e2e/test_adopted_cli_fixes_e2e.py` drives — while `project copy`, the verb the
+    engine's settlement write-back projects a run's settlements through, and
+    `task comment add` still open the destination record truncating, in place. So a
+    record an engine run is projecting into a shared root can still be caught empty by a
+    peer's read, which is onetaskgraph's to close.
     """
     global _staged
     _staged += 1

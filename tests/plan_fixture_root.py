@@ -10,12 +10,16 @@ elsewhere.
 
 Removing a record from a tree somebody else is walking is what breaks that. The local
 Markdown source reads a project document and then opens the task directory below it,
-and a directory that vanished between the two is not a missing project to it — it is a
-hard refusal, `the source returned data this interface cannot represent: … (os error
-2)`, which reaches the caller as `just check-plan` exit 2 and fails whichever journey
-was reading. That is not hypothetical: a publication's own pre-push gate failed exactly
-that way, in `test-docs`, on a record the `test-checkouts` process was removing at its
-exit.
+and on the plan-store release this host ran then a directory that vanished between the
+two was not a missing project to it — it was a hard refusal, `the source returned data
+this interface cannot represent: … (os error 2)`, which reached the caller as `just
+check-plan` exit 2 and failed whichever journey was reading. That is not hypothetical: a
+publication's own pre-push gate failed exactly that way, in `test-docs`, on a record the
+`test-checkouts` process was removing at its exit. The adopted release skips a folder or
+a file gone by the time its walk reaches it, which turns that refusal into a read that
+answers a smaller tree than the one the journey wrote — a plan missing the tasks a peer
+was removing, with nothing to say so — and that is no better a thing for a journey to
+read.
 
 So nothing removes a record here while a peer may be reading one. Every pytest process
 takes a shared lock on this root for the whole of its session, and a sweep runs only

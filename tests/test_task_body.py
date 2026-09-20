@@ -197,15 +197,16 @@ def _plugin_source(source: Path = PLUGIN_SOURCE) -> tuple[str, str]:
 #: The lines of the plugin's `compose_body` that decide what `task_body.compose` mirrors
 #: beyond the delimiters: an empty map composes no slot, the map is a `BTreeMap` written
 #: by `serde_json::to_string` — key-sorted and compact — and content is joined to the
-#: slot by two newlines. Spelled as the source spells them, so a plugin that changed any
-#: of the three fails the gate below rather than being measured against the old shape.
+#: slot by the plugin's `METADATA_SEPARATOR`, held below beside the delimiters. Spelled as
+#: the source spells them, so a plugin that changed any of the three fails the gate below
+#: rather than being measured against the old shape.
 COMPOSITION = (
     "fn compose_body(\n    content: Option<&str>,\n    metadata: &BTreeMap<String, Value>,",
     "    if metadata.is_empty() {\n"
     "        return Ok((!visible.is_empty()).then(|| visible.to_owned()));",
     "    let encoded = serde_json::to_string(metadata)",
     '        format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")',
-    '        format!("{visible}\\n\\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")',
+    '        format!("{visible}{METADATA_SEPARATOR}{METADATA_OPEN}{encoded}{METADATA_CLOSE}")',
 )
 
 
@@ -221,7 +222,8 @@ def test_the_slot_delimiters_and_composition_are_the_ones_the_plugin_spells() ->
     The plugin restates the delimiters as two `const` strings rather than sharing them,
     and this module restates them a third time; the plugin's own `check` reconciles its
     two, and this reconciles the third against the source of the release this host pins.
-    The composition around them is held the same way, line by line, because a slot
+    The separator between prose and slot is the plugin's own `const`, held here the same
+    way, and the composition around the three is held line by line, because a slot
     placed or encoded differently measures a different body under the same delimiters.
     """
     source, read_from = _plugin_source()
@@ -233,7 +235,8 @@ def test_the_slot_delimiters_and_composition_are_the_ones_the_plugin_spells() ->
     spelled = {
         found["name"]: found["value"]
         for found in re.finditer(
-            r'const (?P<name>METADATA_(?:OPEN|CLOSE)): &str = "(?P<value>[^"]*)";', source
+            r'const (?P<name>METADATA_(?:OPEN|CLOSE|SEPARATOR)): &str = "(?P<value>[^"]*)";',
+            source,
         )
     }
     decoded = {name: value.encode().decode("unicode_escape") for name, value in spelled.items()}
@@ -241,6 +244,7 @@ def test_the_slot_delimiters_and_composition_are_the_ones_the_plugin_spells() ->
     assert decoded == {
         "METADATA_OPEN": task_body.METADATA_OPEN,
         "METADATA_CLOSE": task_body.METADATA_CLOSE,
+        "METADATA_SEPARATOR": task_body.METADATA_SEPARATOR,
     }, f"{read_from} spells the slot as {spelled}, and orchestrator/task_body.py does not"
 
 

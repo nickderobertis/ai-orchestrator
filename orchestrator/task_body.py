@@ -9,13 +9,13 @@ spent, so both of `just check-plan`'s paths read it first, the way
 
 **What is measured is the body the store sends, not the file on disk.** The
 `github-projects` plugin of `nickderobertis/onetaskgraph` composes an issue body as the
-task's content, two newlines, and a metadata slot — :data:`METADATA_OPEN`, the compact
-key-sorted JSON of the task's metadata map, :data:`METADATA_CLOSE` — with no slot when the
-map is empty. :func:`compose` is that composition, held to the plugin's source in the
-registered checkout by `tests/test_task_body.py`. The map measured is the one this
-checkout's records carry, because that is the map the copy sends; what the copy then adds
-or drops is small and is what the warning threshold covers, and :data:`UNMEASURED` states
-it so every refusal and warning says what its figure is.
+task's content, :data:`METADATA_SEPARATOR`, and a metadata slot — :data:`METADATA_OPEN`,
+the compact key-sorted JSON of the task's metadata map, :data:`METADATA_CLOSE` — with no
+slot when the map is empty. :func:`compose` is that composition, held to the plugin's
+source in the registered checkout by `tests/test_task_body.py`. The map measured is the
+one this checkout's records carry, because that is the map the copy sends; what the copy
+then adds or drops is small and is what the warning threshold covers, and
+:data:`UNMEASURED` states it so every refusal and warning says what its figure is.
 
 GitHub's refusal counts *characters*, so :func:`measure` counts Unicode code points —
 ``len()`` of the composed ``str`` — rather than bytes.
@@ -44,10 +44,12 @@ BODY_LIMIT = 65_536
 #: adds that this does not measure.
 WARN_FROM = 45_000
 
-#: The two delimiters of the metadata slot, spelled as the plugin's `METADATA_OPEN` and
-#: `METADATA_CLOSE` spell them.
+#: The two delimiters of the metadata slot and what the composer puts between a
+#: non-empty visible body and the slot, spelled as the plugin's `METADATA_OPEN`,
+#: `METADATA_CLOSE` and `METADATA_SEPARATOR` spell them.
 METADATA_OPEN = "<!-- onetaskgraph.metadata\n"
 METADATA_CLOSE = "\n-->"
+METADATA_SEPARATOR = "\n\n"
 
 #: The keys the copy itself adds to the slot or routes out of it, which this does not
 #: measure: the origin goes to a project text field, the repositories are recorded only
@@ -101,7 +103,7 @@ def compose(content: str | None, metadata: Mapping[str, object]) -> str:
         # this names a caller handing over a map no record could carry rather than a plan.
         raise BodyError(f"the metadata map is not one the store could carry: {exc}") from exc
     slot = f"{METADATA_OPEN}{encoded}{METADATA_CLOSE}"
-    return slot if not visible else f"{visible}\n\n{slot}"
+    return slot if not visible else f"{visible}{METADATA_SEPARATOR}{slot}"
 
 
 def measure(content: str | None, metadata: Mapping[str, object]) -> int:

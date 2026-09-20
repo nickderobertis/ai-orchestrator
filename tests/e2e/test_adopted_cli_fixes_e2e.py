@@ -26,7 +26,30 @@ or a recipe reaches it, and each journey fails on the release before the fix:
 * a `local-md` listing that meets a malformed record refuses, naming the record's path
   and its parse diagnostic, instead of listing everything else as if the record were
   not there — https://github.com/nickderobertis/onetaskgraph/issues/1313, first cut as
-  0.2.35.
+  0.2.35;
+* a `local-md` query scoped to one project is not failed by a record of another project,
+  however broken that record is, and a file gone by the time the walk reaches it is
+  skipped rather than reported as malformed —
+  https://github.com/nickderobertis/onetaskgraph/issues/1992 — which is what stopped a
+  follow-up run copying any of its own verified tickets to the board over one reply,
+  with no front matter, that another run had left in the drafts tree;
+* a `local-md` status write, and the `delivered_by:` write that keeps a delivered task
+  in step with its deliverer, replace the record through a staging file and a rename,
+  so a reader racing either sees the record before the write or after it and never a
+  truncated one — https://github.com/nickderobertis/onetaskgraph/issues/1836;
+* a `local-md` listing keeps working while another process replaces a record in place
+  beside it — https://github.com/nickderobertis/onetaskgraph/issues/1837 — where the
+  release before it read a stage renamed away between the folder listing and its
+  resolution as a malformed record, on the very writes `orchestrator/project_store.py`
+  makes to keep this host's own records whole.
+
+Two fixes of that same plan-store adoption are not driven here, because no dispatch of
+this host can reach them: the `github-projects` source preserving an issue body's bytes
+around the metadata slot (https://github.com/nickderobertis/onetaskgraph/issues/1835)
+needs the board credential every dispatch masks, and a subprocess-hosted plugin
+resolving a document-relative path against the document's directory
+(https://github.com/nickderobertis/onetaskgraph/issues/1427) needs a plugin host the
+installed wheel does not ship. Both stand on the producer's own suite.
 
 The status-word half of that same plan-store adoption — the canonical `in-progress`
 reading back as its own category rather than as `unknown`
@@ -50,6 +73,7 @@ host's registry is never read or migrated.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 import re
@@ -57,6 +81,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
@@ -65,6 +90,7 @@ from onejudge_sdk import OneJudge, RunConfig
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
+from orchestrator.project_store import publish_record, read_records
 from orchestrator.root import REPO_ROOT
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The project edge this
@@ -769,3 +795,254 @@ def test_a_listing_that_meets_a_malformed_record_names_it_instead_of_omitting_it
     (error,) = answer["errors"]
     assert error["error"]["kind"] == "malformed", error
     assert str(broken) in error["error"]["message"], error
+
+
+#: The drafts root a follow-up run reads its tickets back out of, as this host lays it
+#: out: one project per run under `tasks/<run>/`, with the run's own `tickets/` and
+#: `drafts/` beside a `replies/` folder of comment replies that carry no front matter.
+#: `orchestrator/follow_up_tickets.py` and `orchestrator/follow_up_comments.py` state
+#: the two layouts; this is their shape and none of their content.
+DRAFTS_SOURCE = "drafts"
+DRAFTS_DOCUMENT = (
+    f"default_sources: [{DRAFTS_SOURCE}]\n"
+    "sources:\n"
+    f"  {DRAFTS_SOURCE}:\n"
+    "    plugin: local-md\n"
+    "    config:\n"
+    "      root: .follow-ups\n"
+)
+THIS_RUN = "this-run"
+OTHER_RUN = "other-run"
+#: A record of the other run that names its project and does not parse as a task, and
+#: a reply of that run with no front matter at all.
+OTHER_RUNS_BROKEN_RECORD = (
+    f'---\ntitle: "broken"\nproject: "{OTHER_RUN}"\nnot_a_task_key: 1\n---\n\nBroken.\n'
+)
+OTHER_RUNS_REPLY = "A reply to a ticket, and no front matter.\n"
+
+
+def _drafts_root(directory: Path) -> Path:
+    """A drafts-shaped root holding this run's one ticket and the other run's two records."""
+    root = directory / ".follow-ups"
+    (root / "projects").mkdir(parents=True)
+    (directory / "onetaskgraph.yaml").write_text(DRAFTS_DOCUMENT, encoding="utf-8")
+    for run in (THIS_RUN, OTHER_RUN):
+        (root / "projects" / f"{run}.md").write_text(
+            f'---\ntitle: "{run}"\nstatus: "todo"\n---\n\nRun {run}.\n', encoding="utf-8"
+        )
+    tickets = root / "tasks" / THIS_RUN / "tickets"
+    tickets.mkdir(parents=True)
+    (tickets / "ticket.md").write_text(
+        f'---\ntitle: "a ticket"\nproject: "{THIS_RUN}"\nstatus: "todo"\n---\n\nA ticket.\n',
+        encoding="utf-8",
+    )
+    others = root / "tasks" / OTHER_RUN
+    (others / "drafts").mkdir(parents=True)
+    (others / "replies").mkdir()
+    (others / "drafts" / "broken.md").write_text(OTHER_RUNS_BROKEN_RECORD, encoding="utf-8")
+    (others / "replies" / "note.md").write_text(OTHER_RUNS_REPLY, encoding="utf-8")
+    return root
+
+
+def test_a_listing_scoped_to_one_run_is_not_failed_by_another_runs_records(
+    tmp_path: Path,
+) -> None:
+    """A follow-up run reads its own tickets whatever another run left in the drafts tree.
+
+    On the release before the fix the scoped listing parsed every record under the root
+    before applying the project filter, so the other run's broken draft — or its reply,
+    which is a file with no front matter — failed a listing that never asked about
+    either, exit 4, and the run could copy none of its tickets to the board. Here the
+    other run's records are passed over on their `project:` key alone, and the listing
+    answers with this run's ticket and no error; the unscoped listing is the control,
+    still refused naming the record that is actually malformed.
+    """
+    checkout = tmp_path / "checkout"
+    root = _drafts_root(checkout)
+    environment = _store_environment(tmp_path)
+
+    scoped = _run(
+        ONETASKGRAPH_BIN,
+        "task",
+        "list",
+        "--project",
+        f"{DRAFTS_SOURCE}:{THIS_RUN}",
+        "--json",
+        env=environment,
+        cwd=checkout,
+    )
+    assert scoped.returncode == 0, scoped.stdout + scoped.stderr
+    answer = json.loads(scoped.stdout)
+    assert answer["errors"] == [], answer
+    assert [item["id"] for item in answer["items"]] == [
+        f"{DRAFTS_SOURCE}:{THIS_RUN}/tickets/ticket"
+    ], answer
+
+    unscoped = _run(ONETASKGRAPH_BIN, "task", "list", env=environment, cwd=checkout)
+    assert unscoped.returncode == SOURCE_REFUSED, unscoped.stdout + unscoped.stderr
+    assert str(root / "tasks" / OTHER_RUN / "drafts" / "broken.md") in unscoped.stderr, (
+        unscoped.stderr
+    )
+
+
+#: A plan holding one ticket and the node that delivers it, under the root `RELATIVE_ROOT`
+#: names: the shape a launched run's `delivers` gives this host's own records.
+PLAN = "plan"
+DELIVERER = f"{PLAN}/deliverer"
+TICKET = f"{PLAN}/ticket"
+DELIVERER_RECORD = (
+    f'---\ntitle: "deliverer"\nproject: "{PLAN}"\nstatus: "todo"\ndelivers: [{TICKET}]\n---\n'
+    "\nDelivers the ticket.\n"
+)
+TICKET_RECORD = f'---\ntitle: "ticket"\nproject: "{PLAN}"\nstatus: "todo"\n---\n\nThe ticket.\n'
+#: The two categories the deliverer is moved between, and the word each is written as.
+MOVES = (("in-progress", "in progress"), ("queued", "queued"))
+#: How many times the deliverer is moved. Each move rewrites its own `status:` line, then
+#: the ticket's `delivered_by:` entry and the ticket's `status:` line, so this many moves
+#: is three times as many writes for the reader to catch; the truncating write of the
+#: release before the fix was caught within the first few.
+WRITES = 60
+
+
+def _planned(directory: Path) -> Path:
+    """A directory holding `RELATIVE_ROOT` and the deliverer and ticket under its root."""
+    records = directory / ".tasks"
+    (records / "projects").mkdir(parents=True)
+    (records / "tasks" / PLAN).mkdir(parents=True)
+    (directory / "onetaskgraph.yaml").write_text(RELATIVE_ROOT, encoding="utf-8")
+    (records / "projects" / f"{PLAN}.md").write_text(
+        f'---\ntitle: "{PLAN}"\nstatus: "todo"\n---\n\nA plan.\n', encoding="utf-8"
+    )
+    (records / "tasks" / DELIVERER).with_suffix(".md").write_text(
+        DELIVERER_RECORD, encoding="utf-8"
+    )
+    (records / "tasks" / TICKET).with_suffix(".md").write_text(TICKET_RECORD, encoding="utf-8")
+    return records
+
+
+def _whole_records() -> dict[str, frozenset[str]]:
+    """Every whole form each record can take across the moves, by root-relative path.
+
+    The deliverer's `status:` line reads its starting word or either move's; the ticket's
+    reads any of the three too, with or without the `delivered_by:` entry the first move
+    adds — the store writes that entry and the status line as two replacements, so a
+    reader between them sees a whole record carrying one and not yet the other.
+    """
+    status_words = ['"todo"', *(word for _, word in MOVES)]
+    deliverer = frozenset(
+        DELIVERER_RECORD.replace('status: "todo"', f"status: {word}") for word in status_words
+    )
+    delivered_by = f'delivered_by: ["work:{DELIVERER}"]\n'
+    ticket = frozenset(
+        TICKET_RECORD.replace('status: "todo"\n', f"status: {word}\n{entry}")
+        for word in status_words
+        for entry in ("", delivered_by)
+    )
+    return {
+        f"projects/{PLAN}.md": frozenset(
+            {f'---\ntitle: "{PLAN}"\nstatus: "todo"\n---\n\nA plan.\n'}
+        ),
+        f"tasks/{DELIVERER}.md": deliverer,
+        f"tasks/{TICKET}.md": ticket,
+    }
+
+
+def test_a_reader_racing_a_status_and_a_delivered_by_write_sees_whole_records(
+    tmp_path: Path,
+) -> None:
+    """Every read during the writes returns a record as it was or as it is, never part of one.
+
+    The reader is this repository's own `read_records`, the reader `tests/project_store_race`
+    races the store's peers with, run as fast as a thread can while `task status set` moves
+    the deliverer back and forth — each move a status write on the deliverer and a
+    delivered-by write on the ticket. The release before the fix opened both records
+    truncating, and a reader between that open and the write that followed it read an
+    empty file: a task file caught empty is what refused a read of some other project on
+    this host, and this is the same window on the store's own side.
+    """
+    checkout = tmp_path / "checkout"
+    records = _planned(checkout)
+    environment = _store_environment(tmp_path)
+    whole = _whole_records()
+    seen_apart: list[tuple[str, str]] = []
+    stop = threading.Event()
+
+    def read_until_stopped() -> None:
+        while not stop.is_set():
+            for relative, text in read_records(records).items():
+                if text not in whole.get(relative, frozenset()):
+                    seen_apart.append((relative, text))
+
+    reader = threading.Thread(target=read_until_stopped)
+    reader.start()
+    try:
+        for n in range(WRITES):
+            category = MOVES[n % len(MOVES)][0]
+            moved = _run(
+                ONETASKGRAPH_BIN,
+                "task",
+                "status",
+                "set",
+                f"work:{DELIVERER}",
+                category,
+                env=environment,
+                cwd=checkout,
+            )
+            assert moved.returncode == 0, moved.stdout + moved.stderr
+    finally:
+        stop.set()
+        reader.join()
+
+    assert seen_apart == [], (
+        f"a reader caught {len(seen_apart)} record(s) part-written; the first: {seen_apart[0]!r}"
+    )
+    delivered = (records / "tasks" / TICKET).with_suffix(".md").read_text(encoding="utf-8")
+    assert f'delivered_by: ["work:{DELIVERER}"]' in delivered, delivered
+
+
+#: How many listings are taken while the record is being replaced. On the release before
+#: the fix the walk resolved the stage `publish_record` renames away, and read the
+#: vanish as a malformed record within the first few listings.
+LISTINGS = 40
+REVISED_TICKET = TICKET_RECORD.replace("The ticket.", "The ticket, revised.")
+
+
+def test_a_listing_keeps_working_while_a_record_is_replaced_in_place_beside_it(
+    tmp_path: Path,
+) -> None:
+    """Every listing taken during the replacements answers, with every record and no error.
+
+    The writer is `publish_record`, the way this repository keeps its own records whole:
+    a stage beside the destination, renamed into place. The stage is a dotfile the store
+    never lists as a record, but the release before the fix resolved it anyway, and one
+    renamed away between the folder listing and that resolution failed the whole listing
+    as a malformed record that no longer existed. Here a file gone by the time the walk
+    reaches it is skipped, so the listing answers with both tasks every time.
+    """
+    checkout = tmp_path / "checkout"
+    records = _planned(checkout)
+    ticket = (records / "tasks" / TICKET).with_suffix(".md")
+    environment = _store_environment(tmp_path)
+    stop = threading.Event()
+
+    def replace_until_stopped() -> None:
+        for n in itertools.count():
+            if stop.is_set():
+                return
+            publish_record(ticket, (TICKET_RECORD, REVISED_TICKET)[n % 2])
+
+    writer = threading.Thread(target=replace_until_stopped)
+    writer.start()
+    try:
+        for _ in range(LISTINGS):
+            listed = _run(ONETASKGRAPH_BIN, "task", "list", "--json", env=environment, cwd=checkout)
+            assert listed.returncode == 0, listed.stdout + listed.stderr
+            answer = json.loads(listed.stdout)
+            assert answer["errors"] == [], answer
+            assert sorted(item["id"] for item in answer["items"]) == [
+                f"work:{DELIVERER}",
+                f"work:{TICKET}",
+            ], answer
+    finally:
+        stop.set()
+        writer.join()
