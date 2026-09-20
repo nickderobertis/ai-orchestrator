@@ -84,6 +84,8 @@ from nx_inputs import (
     DAG_UI_PROJECT,
     DAG_UI_SCOPED,
     DOCS_SCOPED,
+    PROJECT_STORE_RACE_PROJECT,
+    PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
     RUN_END_HOOKS_PROJECT,
     RUN_END_HOOKS_SCOPED,
@@ -122,6 +124,9 @@ CODE_EDIT = "# List the available recipes."
 #: Python the code tier reads and the recipe tier does not: editing it must re-run
 #: one and replay the other, which is the whole reason the recipe key is narrow.
 PYTHON_WITNESS = "orchestrator/labels.py"
+#: The module the replacement race is over, and the one path of `orchestrator/` its
+#: tier is keyed on; `PYTHON_WITNESS` is the control, a module the store never imports.
+STORE_WITNESS = "orchestrator/project_store.py"
 #: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
 FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
 #: The project every Python tier belongs to, and the tier the code suite runs in.
@@ -645,6 +650,7 @@ SKIPPABLE_TIERS = frozenset(
         (WRITEBACK_BUDGET_PROJECT, WRITEBACK_BUDGET_SCOPED),
         (RUN_END_HOOKS_PROJECT, RUN_END_HOOKS_SCOPED),
         (SESSION_SETUP_PROJECT, SESSION_SETUP_SCOPED),
+        (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
     }
 )
 
@@ -878,6 +884,34 @@ def test_a_code_only_diff_still_selects_the_code_tier_and_the_coverage_read(
     assert selector.selected(COVERAGE_SCOPED) == selector.owners(COVERAGE_SCOPED), (
         "the read that judges the floor must be selected by a diff of the code it measures"
     )
+
+
+def test_a_diff_of_the_record_store_alone_selects_its_race_tier(selector: Selector) -> None:
+    """The race over `orchestrator/project_store.py` is charged to that module and not to
+    every change of `orchestrator/`.
+
+    The race is bounded by the clock rather than by a count, so it costs the same two
+    seconds however little changed; a project of its own keyed on the store is what turns
+    that into a cost only a change of the store pays. Both halves are asked of the real
+    selector: a change to the store selects the tier, and a change to a module of
+    `orchestrator/` the store never imports leaves it out — while still selecting the
+    code tier, where the store's own unit tests run.
+    """
+    with selector.planted(STORE_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert PROJECT_STORE_RACE_PROJECT in selector.selected(PROJECT_STORE_RACE_SCOPED), (
+            f"a diff of {STORE_WITNESS} must select the tier that races it"
+        )
+
+    with selector.planted(PYTHON_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert PROJECT_STORE_RACE_PROJECT not in selector.selected(PROJECT_STORE_RACE_SCOPED), (
+            f"a diff of {PYTHON_WITNESS} reaches nothing the race reads, so charging the "
+            "race to it is the cost the project boundary exists to keep off"
+        )
+        assert PROJECT in selector.selected(CODE_SCOPED), (
+            f"a diff of {PYTHON_WITNESS} must still select the code tier that reads it"
+        )
 
 
 def test_a_prose_only_diff_leaves_out_only_tiers_that_would_have_replayed(

@@ -237,16 +237,94 @@ def test_slug_rejects_a_value_with_no_identifier() -> None:
         project_store.render_plan_project({"name": "!!!", "tasks": []})
 
 
-def test_write_plan_project_removes_a_stale_task(tmp_path: Path) -> None:
+def test_a_record_that_cannot_be_renamed_into_place_leaves_no_stage_behind(
+    tmp_path: Path,
+) -> None:
+    """A write that fails at the rename reports it and leaves the root as it found it.
+
+    The destination is occupied by a directory, which a rename cannot replace, so the
+    staged record can never become the record. What the caller sees is the operating
+    system's own refusal, and what the root keeps is nothing: a stage left beside its
+    destination would be a hidden file the next sweep has to know about.
+    """
+    destination = tmp_path / "tasks" / "plan" / "node.md"
+    destination.mkdir(parents=True)
+
+    with pytest.raises(OSError, match="Is a directory"):
+        project_store.publish_record(destination, "---\ntitle: T\n---\n")
+
+    assert destination.is_dir()
+    assert [path.name for path in destination.parent.iterdir()] == ["node.md"]
+
+
+def test_a_record_that_cannot_be_written_to_its_stage_leaves_no_stage_behind(
+    tmp_path: Path,
+) -> None:
+    """A write that fails while filling the stage reports it and removes the stage.
+
+    JSON admits a lone surrogate, so a generated plan can carry task text UTF-8 cannot
+    encode: the stage is created by the open and the write into it then fails, which is
+    the one moment a stage exists that will never become a record. What the root keeps
+    of it is nothing, and no record was replaced, because nothing was renamed.
+    """
+    plan = {"name": "unencodable", "tasks": [{"id": "node", "task": "lone \ud800 surrogate"}]}
+
+    with pytest.raises(UnicodeEncodeError):
+        project_store.write_plan_project(tmp_path, json.loads(json.dumps(plan)))
+
+    assert not (tmp_path / "tasks/unencodable/node.md").exists()
+    assert not (tmp_path / "projects/unencodable.md").exists()
+    assert not [path for path in tmp_path.rglob("*") if path.name.startswith(".")], (
+        "a stage whose write failed is removed"
+    )
+
+
+def test_write_plan_project_removes_a_stale_task_and_never_a_stage(tmp_path: Path) -> None:
+    """A replacement drops the records it no longer renders, and nothing else.
+
+    A hidden file in the task directory is a stage on its way to becoming a record —
+    a peer writer's, or the store's own `.<name>.<pid>-<n>.onetaskgraph-staging` — and
+    unlinking it fails that writer's rename, so the sweep leaves it where it is. And a
+    reader listing that directory never opens it as a record: what it reads back is the
+    project document and the task the replacement rendered, and nothing else.
+    """
     project_store.write_plan_project(
         tmp_path,
         {"name": "replacement", "tasks": [{"id": "kept"}, {"id": "removed"}]},
     )
+    stage = tmp_path / "tasks/replacement/.kept.md.4242-0.onetaskgraph-staging"
+    stage.write_text("---\ntitle: kept\n---\n", encoding="utf-8")
 
     project_store.write_plan_project(tmp_path, {"name": "replacement", "tasks": [{"id": "kept"}]})
 
     assert (tmp_path / "tasks/replacement/kept.md").is_file()
     assert not (tmp_path / "tasks/replacement/removed.md").exists()
+    assert stage.is_file(), "a peer's stage is not a stale record"
+    assert project_store.read_records(tmp_path) == {
+        str(relative): content
+        for relative, content in project_store.render_plan_project(
+            {"name": "replacement", "tasks": [{"id": "kept"}]}
+        ).items()
+    }, "a stage is listed by no reader, and a record is read back exactly as it was rendered"
+
+
+def test_read_records_of_a_root_nothing_was_written_to_is_empty(tmp_path: Path) -> None:
+    """A root with no records answers none, whether its directories exist or not.
+
+    Both shapes are real: a fresh root has neither directory, and a root whose only
+    project was removed keeps an empty `tasks/` beside a `projects/` holding a stage
+    that never became a record.
+    """
+    assert project_store.read_records(tmp_path) == {}
+
+    (tmp_path / "tasks" / "removed").mkdir(parents=True)
+    (tmp_path / "tasks" / "notes.txt").write_text("not a project directory", encoding="utf-8")
+    (tmp_path / "projects").mkdir()
+    (tmp_path / "projects" / ".removed.md.7-1.ai-orchestrator-staging").write_text(
+        "---\n", encoding="utf-8"
+    )
+
+    assert project_store.read_records(tmp_path) == {}
 
 
 def test_main_writes_a_project_and_reports_usage(

@@ -38,6 +38,8 @@ from nx_inputs import (
     MERGE_POLICY_WORKSPACE,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_WORKSPACE,
+    PROJECT_STORE_RACE_ROOT,
+    PROJECT_STORE_RACE_WORKSPACE,
     RECIPE_WORKSPACE,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_WORKSPACE,
@@ -134,6 +136,7 @@ OWNED_PROJECTS = {
     WRITEBACK_BUDGET_ROOT: OwnedProject(key=WRITEBACK_BUDGET_WORKSPACE, docs_tier=False),
     RUN_END_HOOKS_ROOT: OwnedProject(key=RUN_END_HOOKS_WORKSPACE, docs_tier=False),
     SESSION_SETUP_ROOT: OwnedProject(key=SESSION_SETUP_WORKSPACE, docs_tier=False),
+    PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
 }
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes

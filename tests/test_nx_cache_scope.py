@@ -66,6 +66,8 @@ from nx_inputs import (
     PLAN_TOOLING_PROJECT,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_SCOPED,
+    PROJECT_STORE_RACE_ROOT,
+    PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
     RECIPE_WORKSPACE,
     RUN_END_HOOKS_ROOT,
@@ -871,7 +873,9 @@ def _collected(selection: list[str]) -> set[str]:
 #: the restated `merge_policy` vocabulary to the launcher in one, the `writeback-budget`
 #: project owns the journey that holds the adopted engine to the copy deadline its items
 #: earn in one, the `run-end-hooks` project owns the journey that fires the run-end hooks
-#: through a real launch in one, and the orchestrator project owns the rest in four.
+#: through a real launch in one, the `project-store-race` project owns the clock-bounded
+#: replacement race over the record store in one, and the orchestrator project owns the
+#: rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
@@ -882,6 +886,7 @@ SUITE_TIERS = (
     (f"{MERGE_POLICY_ROOT}/project.json", MERGE_POLICY_SCOPED),
     (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
     (f"{RUN_END_HOOKS_ROOT}/project.json", RUN_END_HOOKS_SCOPED),
+    (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),

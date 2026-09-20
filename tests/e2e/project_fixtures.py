@@ -21,7 +21,7 @@ from typing import Any
 from plan_fixture_root import ROOT as _PROJECT_ROOT
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator.project_store import frontmatter, write_plan_project
+from orchestrator.project_store import frontmatter, publish_record, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
@@ -135,9 +135,11 @@ def _designed(native: str) -> None:
     this root is shared by every tier of this suite at once, so two documents sharing a
     title would let one project's approval land on another's document.
     """
-    documents = _PROJECT_ROOT / "documents"
-    documents.mkdir(parents=True, exist_ok=True)
-    (documents / f"{native}-design.md").write_text(
+    # Staged and renamed into place, as the plan's own records are: a document read
+    # walks every file under `documents/`, so one caught empty mid-write refuses a
+    # peer process's read of some other project's document.
+    publish_record(
+        _PROJECT_ROOT / "documents" / f"{native}-design.md",
         frontmatter(
             {"title": f"Design: {native}", "project": native},
             f"## What\n\nThe fixture plan {native}.\n\n"
@@ -150,7 +152,6 @@ def _designed(native: str) -> None:
             "| --- | --- | --- | --- |\n"
             f"| the plan's own tasks | the fixture | none | {_PROJECT_ROOT}/tasks/{native} |\n",
         ),
-        encoding="utf-8",
     )
 
 

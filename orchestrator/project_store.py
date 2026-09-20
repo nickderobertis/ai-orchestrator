@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from collections.abc import Mapping
@@ -327,6 +328,81 @@ def render_plan_project(
     return rendered
 
 
+#: How a record is staged before it is renamed into place: a hidden sibling, named for
+#: the process and the write so two writers of one destination never share a stage. The
+#: local Markdown source ignores a dotfile, as it ignores the `.<name>.<pid>-<n>.
+#: onetaskgraph-staging` files its own metadata write stages through, which this mirrors.
+_STAGING = "{name}.{pid}-{sequence}.ai-orchestrator-staging"
+_staged = 0
+
+
+def publish_record(destination: Path, content: str) -> None:
+    """Write ``content`` at ``destination`` so a reader sees the old record or the new.
+
+    Never a partial one, and that is what separates this from `Path.write_text`: a
+    truncating open leaves the record empty until the write that follows it, and a local
+    Markdown root is read concurrently with being written — every task file under it,
+    not only the project a reader asked for, so a task file caught empty refuses a read
+    of some *other* project. A publication's pre-push gate failed exactly that way, on a
+    fixture project another test process was writing at that moment.
+
+    This closes the window this repository's own writers open, and only that one. The
+    store's own writes are not all staged: traced on the installed onetaskgraph 0.2.37,
+    `task metadata set` writes a hidden sibling and renames it, while `project copy` —
+    the verb the engine's settlement write-back projects a run's settlements through —
+    `task status set` and `task comment add` open the destination record truncating, in
+    place. So a record an engine run is projecting into a shared root can still be
+    caught empty by a peer's read, which is onetaskgraph's to close
+    (https://github.com/nickderobertis/onetaskgraph/issues/1836 names the status path).
+    """
+    global _staged
+    _staged += 1
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = destination.with_name(
+        "." + _STAGING.format(name=destination.name, pid=os.getpid(), sequence=_staged)
+    )
+    try:
+        stage.write_text(content, encoding="utf-8")
+        os.replace(stage, destination)
+    finally:
+        stage.unlink(missing_ok=True)
+
+
+def is_record(path: Path) -> bool:
+    """Whether a file under a local-md root is a record, rather than a stage on its way to one.
+
+    The one rule both halves of this module answer by: a hidden file is a stage —
+    `publish_record`'s, a peer process's, or the store's own — so the sweep in
+    `write_plan_project` leaves it alone and `read_records` never opens it as a record,
+    which is what the local Markdown source does with a dotfile.
+    """
+    return not path.name.startswith(".")
+
+
+def read_records(root: Path) -> dict[str, str]:
+    """Every record under ``root`` by its root-relative path, each read whole.
+
+    The reading half of the layout `write_plan_project` writes — the project documents
+    under `projects/` and the task records under `tasks/<project>/` — listed the way
+    the store lists them, which is what decides that a stage is never a record. What
+    each record is held to is the caller's: this returns its content as the read found
+    it, so a reader racing a writer sees the record before the replacement or the one
+    after it, and `tests/project_store_race/` drives exactly that.
+    """
+    directories = [root / PROJECTS_DIRECTORY]
+    tasks = root / TASKS_DIRECTORY
+    if tasks.is_dir():
+        directories.extend(sorted(path for path in tasks.iterdir() if path.is_dir()))
+    records: dict[str, str] = {}
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and is_record(path):
+                records[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+    return records
+
+
 # llmlint: ignore[suppressions_justified] This boundary preserves open engine metadata.
 def write_plan_project(
     root: Path,
@@ -342,23 +418,22 @@ def write_plan_project(
     for relative, content in rendered.items():
         if relative == document:
             continue
-        destination = root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(content, encoding="utf-8")
+        publish_record(root / relative, content)
     task_directory = root / TASKS_DIRECTORY / project
     current_tasks = {
         root / path for path in rendered if path.parent == Path(TASKS_DIRECTORY) / project
     }
     if task_directory.is_dir():
         for existing in task_directory.iterdir():
-            if existing.is_file() and existing not in current_tasks:
+            # A stage — this writer's, a peer's, or the store's own — is on its way to
+            # becoming a record, never a stale one: unlinking it fails the peer's
+            # rename, which is how two writers of one project once broke.
+            if existing.is_file() and is_record(existing) and existing not in current_tasks:
                 existing.unlink()
     # Last, for the reason `render_plan_project` states: a project not published before
     # becomes visible only here, with its tasks already written, and a replacement that
     # never reached this line left the previously published document untouched.
-    destination = root / document
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(rendered[document], encoding="utf-8")
+    publish_record(root / document, rendered[document])
     return project
 
 

@@ -39,6 +39,10 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: is in the key as its script, the list reader it sources and the list itself, because
 #: what the journey asserts about the siblings is decided by those three files.
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
+#: The key `project-store-race:test` is memoized on: the module under race, the
+#: project's own files, and the suite modules `tests/conftest.py` imports — nothing
+#: else, because the race reads a temporary root and nothing of this checkout.
+PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
 
 #: The key the `unwatched` project's one tier is memoized on, and it names files rather
 #: than trees because these journeys arm real
@@ -283,6 +287,19 @@ SESSION_SETUP_PROJECT = "session-setup"
 SESSION_SETUP_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 SESSION_SETUP_ROOT = "tests/session_setup"
+
+#: The project whose test target owns the two-process replacement race over
+#: `orchestrator/project_store.py`: writer processes replacing one project's records
+#: for a fixed span of the clock while a reader process reads the root back through
+#: the module's own reader. A project of its own for the reason `unwatched` is, at a
+#: smaller scale: a race bounded by the clock costs the same on every host and every
+#: edit, so keeping it behind its own edge is what lets `nx affected` charge it to a
+#: change of the store rather than to every change of `orchestrator/`.
+PROJECT_STORE_RACE_PROJECT = "project-store-race"
+#: That project's one test target: nothing here reads this repository's prose.
+PROJECT_STORE_RACE_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

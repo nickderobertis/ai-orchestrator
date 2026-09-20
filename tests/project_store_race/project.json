@@ -1,0 +1,21 @@
+{
+  "name": "project-store-race",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/project_store_race",
+  "tags": [
+    "scope:project-store-race",
+    "type:tests"
+  ],
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/project_store_race --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "projectStoreRaceWorkspace"
+      ]
+    }
+  }
+}
