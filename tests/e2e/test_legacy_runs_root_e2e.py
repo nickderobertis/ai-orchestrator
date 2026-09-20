@@ -43,6 +43,7 @@ from pathlib import Path
 
 import pytest
 from example_records import isolated_examples
+from run_snapshot import snapshot_run
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -204,8 +205,14 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
         assert launched.returncode == 0, f"{launched.stdout}\n{launched.stderr}"
         recorded = [run for run in adopted.iterdir() if (run / LAUNCH_RECORD).is_file()]
         assert recorded, f"the launch recorded no run under {adopted}"
+        # The detached run is still writing: a whole-tree copy lists a writer's staging
+        # file and then finds it renamed away, so the copy is a snapshot that leaves
+        # staging names out (https://github.com/nickderobertis/ai-orchestrator/issues/1138).
         for run in recorded:
-            shutil.copytree(run, legacy_root / run.name)
+            snapshot_run(run, legacy_root / run.name)
+            assert (legacy_root / run.name / LAUNCH_RECORD).is_file(), (
+                f"the snapshot of {run.name} lost the record the listing discovers it by"
+            )
 
         listed = _just("runs", runs_root=legacy_root)
 

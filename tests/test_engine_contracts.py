@@ -2486,6 +2486,84 @@ def test_the_checkpoint_a_reader_writes_is_named_what_the_engine_names_it(
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
+#: The two staging names the engine's atomic writers create beside a record and never
+#: leave behind, each read as the format string `src/ledger.rs` composes it from:
+#: `write_atomic` swaps the record's extension for `tmp.<pid>` and renames the result
+#: over the record, and `create_exclusively_filled` appends `.tmp.<pid>.<nonce>` to the
+#: record's name and links the result to it. The captured group is the format string,
+#: whose `{}` placeholders are the integers the engine fills in.
+STAGING_DECLARATIONS = {
+    "write_atomic": re.compile(r'path\.with_extension\(format!\("(tmp\.\{\})", sys::pid\(\)\)\)'),
+    "create_exclusively_filled": re.compile(
+        r'name\.push\(format!\(\s*"(\.tmp\.\{\}\.\{\})",\s*sys::pid\(\),\s*NONCE\.fetch_add',
+        re.MULTILINE,
+    ),
+}
+
+#: Where `tests/e2e/test_run_snapshot.py` performs each shape itself, to race the
+#: snapshot against a real writer: the suffix its `rename_into_place` swaps in with
+#: `with_suffix`, which takes the dot `with_extension` adds, and the tail its
+#: `link_into_place` appends to the record's name. Each is read back to the engine's
+#: format string by replacing the Python expressions it fills in with `{}`.
+STAGING_WRITERS = {
+    "write_atomic": re.compile(r'record\.with_suffix\(f"(\.tmp\.\{os\.getpid\(\)\})"\)'),
+    "create_exclusively_filled": re.compile(
+        r'record\.with_name\(f"\{record\.name\}(\.tmp\.\{os\.getpid\(\)\}\.\{nonce\})"\)'
+    ),
+}
+RUN_SNAPSHOT_TEST = REPO_ROOT / "tests" / "e2e" / "test_run_snapshot.py"
+
+
+def test_the_staging_names_a_snapshot_leaves_out_are_the_ones_the_engine_writes() -> None:
+    """`tests/e2e/run_snapshot.py` copies a live run without its atomic writers' staging
+    files, recognising them by a name grammar restated from the engine, and
+    `tests/e2e/test_run_snapshot.py` races it against a writer performing the same two
+    shapes. Both restatements are inert if the engine changes the name: the snapshot
+    starts copying — and racing — a staging file it no longer recognises, and the test's
+    writer goes on proving the copy against a shape nothing writes. So each is held to
+    the format string the engine composes the name from, at the pinned release: the
+    grammar must match every name the engine's format produces and no stable record's,
+    and the test's writer must fill in the same format.
+    """
+    import run_snapshot
+
+    ledger = _source(ONEPIPELINE, "ledger.rs")
+    writers = RUN_SNAPSHOT_TEST.read_text(encoding="utf-8")
+    for writer, declaration in STAGING_DECLARATIONS.items():
+        declared = declaration.search(ledger)
+        assert declared is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer composes `{writer}`'s staging name "
+            "where this gate reads it, so the snapshot's grammar is reconciled against "
+            "nothing; re-read `ledger.rs` and correct `run_snapshot.STAGING_NAME`"
+        )
+        format_string = declared.group(1)
+        # `with_extension` supplies the dot the pushed tail already carries.
+        tail = format_string if format_string.startswith(".") else f".{format_string}"
+        for record in ("summary.json", "events.jsonl", "owner.lock", "launch.json"):
+            stem = record.rsplit(".", 1)[0] if writer == "write_atomic" else record
+            staged = stem + tail.replace("{}", "4242")
+            assert run_snapshot.is_staging_name(staged), (
+                f"onepipeline {ONEPIPELINE.ref}'s `{writer}` stages {record} at {staged!r}, "
+                "which `run_snapshot.STAGING_NAME` does not recognise, so a snapshot of a "
+                "live run would race it exactly as `copytree` did"
+            )
+            assert not run_snapshot.is_staging_name(record), (
+                f"`run_snapshot.STAGING_NAME` reads the stable record {record!r} as a "
+                "staging file, so a snapshot would leave a real record out"
+            )
+
+        performed = STAGING_WRITERS[writer].search(writers)
+        assert performed is not None, (
+            f"{RUN_SNAPSHOT_TEST.name} no longer performs `{writer}`'s shape where this "
+            "gate reads it, so the race it proves is against a writer this cannot vouch for"
+        )
+        filled = re.sub(r"\{[^}]+\}", "{}", performed.group(1))
+        assert filled == tail, (
+            f"{RUN_SNAPSHOT_TEST.name}'s writer stages `{writer}`'s shape as {filled!r} "
+            f"while onepipeline {ONEPIPELINE.ref} composes {tail!r}"
+        )
+
+
 #: The three strings the engine composes an amendment into a task with, and where each
 #: is declared in `src/plan.rs`: the heading it renders under, the sentence stating its
 #: authority, and the heading it is placed immediately above. Read as declarations of
