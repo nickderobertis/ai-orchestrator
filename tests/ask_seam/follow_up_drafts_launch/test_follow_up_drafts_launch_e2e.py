@@ -49,7 +49,7 @@ from onetaskgraph_sdk import TaskDetail
 from planner_channel import just
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import seeded
+from scratch_identity import pooling, seeded
 from waits import deadline
 
 from orchestrator import follow_up_drafts as drafts
@@ -234,7 +234,11 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> L
     turns, instruction = tmp_path / "turns.jsonl", tmp_path / "run-on-marker.json"
     _drafting_turn(instruction)
     environment = _environment(tmp_path, oneharness_bin, turns, instruction)
-    identity = seeded(tmp_path)
+    # Pooling off for this identity: the journey below proves the draft outlives the
+    # dispatch worktree's *removal*, and the tracked workspaces file the recipe would
+    # otherwise install pools one slot, whose close returns the directory rather than
+    # removing it.
+    identity = seeded(tmp_path, workspaces=pooling(0))
     environment["ONEVCS_HOME"] = str(identity.home)
     environment.update(identity.environment)
     plan = _plan(tmp_path, run, identity.publication, identity.execution.name)

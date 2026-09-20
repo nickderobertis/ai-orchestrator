@@ -41,6 +41,12 @@ idempotent. It:
 - sweeps the reclaimable scratch and publication workspaces (`just sweep`);
 - installs `bun` via npm, and `codex` via npm when it is absent, exposing a stable
   `~/.local/bin/codex`;
+- installs `cargo-sweep` through `cargo install` when it is absent or at another
+  release — pinned in one place in the script, `CARGO_SWEEP_VERSION` — because it is
+  the `maintain` command `config/onevcs.workspaces.yml` names for every Rust identity's
+  warm worktree slots, and a command the host lacks would fail on every idle tick the
+  engine sweeps the pool on. Optional: a host without `cargo` is told and never failed,
+  since it has no Rust slot to maintain;
 - wires allowlister's codex `repo-write` PreToolUse hook — **only if allowlister is
   already installed** (see [step 6](#6-install-allowlister-nothing-automates-this));
 - marks this checkout trusted in every Claude config directory a dispatch can run
@@ -447,7 +453,7 @@ session once the binary is on `PATH`, and the log line above stops appearing.
 The registry lives under `~/.onevcs` (override the whole state root with
 `ONEVCS_HOME`) and is **per-machine and untracked**, so a new host starts with none
 of it and no lifecycle dispatch can resolve a repository. What it should hold *is*
-tracked, in three files, and one recipe applies them:
+tracked, in four files, and one recipe applies them:
 
 ```sh
 just repos-apply
@@ -478,15 +484,39 @@ just repos-apply
   validated through `onevcs release targets` in the same scratch home
   the rules are, so a document `onevcs` cannot load — a rung it does not know, a
   `default_target` naming no target — is refused by name and replaces nothing.
+- **`config/onevcs.workspaces.yml`** — the workspaces file, installed to
+  `$ONEVCS_HOME/workspaces.yml`. It sizes each identity's pool of warm worktree slots
+  and names what maintains them: the shared default pools every identity at one slot
+  with unbounded overflow, deletes this repository's `.logs/` on every return, and
+  names `cargo sweep --time 7` as the maintenance of every registered identity whose
+  checkout carries a root `Cargo.toml` — the file's header lists them, and
+  `tests/test_workspaces_file.py` reconciles the list against this host's checkouts
+  and holds each command's first word to `PATH`. **A host sets its own pool size in
+  `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml`, never by
+  editing the tracked file**: that file — beside `claude-identities.env`, outside every
+  checkout — has the same schema and version and is partial, its `default` keys
+  replacing the tracked `default`'s key by key and each of its `rules` replacing the
+  tracked rule with an identical `match` or being appended; the recipe composes the
+  two (`orchestrator/workspaces_overlay.py` states the rule) and installs the tracked
+  file alone when the host file is absent. An identity with several execution
+  checkouts spends its pool one slot per lender, so size `pool` per lender you
+  alternate — this repository alternates two, so a host that wants both warm gives
+  it `pool: 2` there. The composed document is what is validated through `onevcs pool
+  status` in the same scratch home, so a malformed value, a `delete` climbing out of
+  the worktree, or a default admitting no session is refused by name and replaces
+  nothing, and a host file off the schema is refused by the composer before that.
+  Absent, an `onevcs` before the pool reads a byte-identical registry, so it is safe
+  beside live runs of an older engine.
 
 The recipe is re-runnable and idempotent — registration is keyed by alias and the
-rules file and the override are each replaced whole, so a second run leaves the
-registry a first one did. Run it again after editing any of the three files, and
-after cloning a repository onto the host. A path this host does not have is reported
-as skipped rather than failing, so a machine holding a subset of these checkouts
-still registers what it has. `--dry-run` reports what would change and changes
-nothing; `--rules FILE` and `--releases FILE` install a different candidate in place
-of the tracked one, which is how a journey seeds a scratch registry.
+rules file, the override and the workspaces file are each replaced whole, so a second
+run leaves the registry a first one did. Run it again after editing any of the four
+files or the host's workspaces overlay, and after cloning a repository onto the host. A path this host does not have is
+reported as skipped rather than failing, so a machine holding a subset of these
+checkouts still registers what it has. `--dry-run` reports what would change and
+changes nothing; `--rules FILE`, `--releases FILE` and `--workspaces FILE` install a
+different candidate in place of the tracked one, which is how a journey seeds a
+scratch registry — a journey about run roots installs one pooling nothing.
 
 It finishes by resolving every checkout it registered and printing the policy each
 one landed on, and it **fails** if any of them matched no rule. That is not

@@ -1,13 +1,21 @@
-"""Every SDK this repository imports ships its typing marker, in the installed package.
+"""Every SDK this repository imports is typed in the installed environment.
 
 `[tool.mypy]` runs strict over `orchestrator/`, which is only a claim about the adapter
-code while the packages it adapts are typed: a package installed without `py.typed` is
-read as `Any` at the import, and every call through it is checked against nothing. That
-is how the plan-store adapter was first adopted — behind an `import-untyped` ignore,
-with the SDK's models and signatures invisible to the checker until the marker shipped
-upstream and the ignore came off. This module is what keeps that from happening quietly
-again: the next SDK adopted without its marker fails here by name rather than arriving
-under an ignore nobody reads twice.
+code while the packages it adapts are typed: a package installed without `py.typed` and
+without a stub package is read as `Any` at the import, and every call through it is
+checked against nothing. That is how the plan-store adapter was first adopted — behind
+an `import-untyped` ignore, with the SDK's models and signatures invisible to the checker
+until the marker shipped upstream and the ignore came off. This module is what keeps
+that from happening quietly again: the next SDK adopted without its types fails here by
+name rather than arriving under an ignore nobody reads twice.
+
+PEP 561 gives a package two ways to be typed, and mypy reads both: the package's own
+annotations, announced by a `py.typed` marker in its directory, or a **stub-only
+distribution** installing a `<module>-stubs` package beside it, which mypy prefers to
+the package itself. An SDK that ships its own types is held to the marker; one typed
+through stubs — `pyyaml`, through `types-pyyaml` — is held to the stub package being
+installed, because that package is what the checker reads and a lock entry for it is
+not.
 
 Two properties, and where each is read from. Whether a package is typed is read off the
 **installed** distribution, through `importlib`, because that is the package mypy reads
@@ -26,7 +34,7 @@ import importlib.metadata
 import importlib.resources
 import re
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -36,7 +44,7 @@ from orchestrator.root import REPO_ROOT
 #: The importable SDK modules this repository adapts, each from a distribution
 #: `pyproject.toml` pins. Reconciled against what the tree imports below, so this is a
 #: statement to read rather than a list to maintain by hand.
-TYPED_SDKS = frozenset({"onejudge_sdk", "onetaskgraph_sdk"})
+TYPED_SDKS = frozenset({"onejudge_sdk", "onetaskgraph_sdk", "yaml"})
 
 #: The trees whose imports decide which distributions count as SDKs here.
 IMPORTING_TREES = ("orchestrator", "tests")
@@ -47,6 +55,10 @@ CHECKED_PACKAGE = "orchestrator"
 #: PEP 561's marker: its presence in the package directory is what tells mypy the
 #: package's own annotations are to be read.
 MARKER = "py.typed"
+
+#: PEP 561's other mechanism: a stub-only distribution installs its stubs under the
+#: module's name with this suffix, and mypy reads that package before the module's own.
+STUB_SUFFIX = "-stubs"
 
 #: A `# type: ignore` directive, with the error codes it names when it names any. mypy
 #: reads the directive off the physical line, so this is matched per line rather than
@@ -115,6 +127,20 @@ def imported_sdks(trees: Iterable[Path], pinned: frozenset[str]) -> frozenset[st
     return frozenset(found)
 
 
+def stub_distributions(
+    module: str, provided: Mapping[str, Sequence[str]] | None = None
+) -> list[str]:
+    """The installed distributions shipping a stub-only package for ``module``.
+
+    Read through `importlib.metadata.packages_distributions`, the same map the SDK set
+    is derived from, so the answer is the installed environment's: a stub distribution
+    the lock names and nothing installed types nothing.
+    """
+    if provided is None:
+        provided = importlib.metadata.packages_distributions()
+    return sorted(provided.get(f"{module}{STUB_SUFFIX}", ()))
+
+
 def untyped_import_ignores(tree: Path) -> list[str]:
     """Every `type: ignore` over an import under ``tree`` that would silence `import-untyped`.
 
@@ -155,15 +181,34 @@ def test_the_declared_sdks_are_the_ones_the_tree_imports() -> None:
 
 
 @pytest.mark.parametrize("module", sorted(TYPED_SDKS))
-def test_the_installed_sdk_ships_its_typing_marker(module: str) -> None:
-    """The package mypy reads carries `py.typed`, read off the installed distribution."""
+def test_the_installed_sdk_is_typed(module: str) -> None:
+    """The package mypy reads carries `py.typed`, or a stub package for it is installed.
+
+    Both are read off the installed environment: the marker off the package's own
+    directory, the stubs off the distribution map that attributes `<module>-stubs` to
+    whatever installed it.
+    """
     distributions = importlib.metadata.packages_distributions().get(module, [])
     package = importlib.resources.files(module)
-    assert package.joinpath(MARKER).is_file(), (
+    assert package.joinpath(MARKER).is_file() or stub_distributions(module), (
         f"the installed {module} package (from {', '.join(distributions) or 'no distribution'}) "
-        f"ships no {MARKER}, so mypy reads every import of it as Any; adopt a release that "
-        f"ships the marker, and re-sync the environment from uv.lock before reading this again"
+        f"ships no {MARKER} and no {module}{STUB_SUFFIX} package is installed, so mypy reads "
+        f"every import of it as Any; adopt a release that ships the marker or a stub "
+        f"distribution for it, and re-sync the environment from uv.lock before reading this "
+        f"again"
     )
+
+
+def test_the_stub_lookup_reads_the_stub_package_off_the_distribution_map() -> None:
+    """A `<module>-stubs` entry is a stub distribution for the module; nothing else is.
+
+    Driven over a scratch map beside the real one, so the lookup is held to the name
+    PEP 561 gives a stub package rather than to what this environment happens to hold.
+    """
+    scratch = {"example": ["example"], "example-stubs": ["types-example"], "other": ["other"]}
+    assert stub_distributions("example", scratch) == ["types-example"]
+    assert stub_distributions("other", scratch) == []
+    assert stub_distributions("missing", scratch) == []
 
 
 def test_no_untyped_import_ignore_stands_over_an_import_of_the_checked_package() -> None:

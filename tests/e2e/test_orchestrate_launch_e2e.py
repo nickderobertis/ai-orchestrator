@@ -79,6 +79,9 @@ SHIPPED_PROJECT = "examples:scheduler-research"
 
 #: The run id `onepipeline` mints from that plan's `name`.
 SHIPPED_RUN = "scheduler-research"
+#: The pool-maintenance schedule `just orchestrate` names, whose parse the engine retains
+#: in the launch record beside the bus configuration.
+MAINTENANCE_SCHEDULE = REPO_ROOT / "config" / "onepipeline.maintenance.yaml"
 
 #: The plan schema written in the shipped example projects' onepipeline metadata.
 PLAN_SCHEMA_VERSION = 3
@@ -2318,6 +2321,40 @@ def _dag_scope_document() -> tuple[int, str]:
 
 
 @pytest.mark.reads_docs
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed beside the bus-configuration read it mirrors, on the one `launched` fixture this module already spends a real launch on; a project of its own would spend a second launch to read one key off the same record.  # noqa: E501
+def test_the_launch_hands_the_engine_this_hosts_maintenance_schedule(
+    launched: Launched,
+) -> None:
+    """`just orchestrate` names `config/onepipeline.maintenance.yaml`, and the engine kept it.
+
+    The schedule is what an idle driver sweeps every registered identity's warm worktree
+    slots on, and a launch that stopped naming it would run with no schedule at all —
+    every slot's `target/` growing without bound, and nothing about the run failing. So
+    this reads the run's own launch record, where the engine retains the document it
+    parsed, and holds the default cadence to the line of the tracked file that states it.
+    `tests/e2e/test_delegated_recipes_e2e.py` holds the rendering and the capability guard.
+    """
+    launch_record = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "launch.json"
+    # No view renders the schedule the engine parsed, and the argv says only what the
+    # recipe asked for; the run's launch record is the one place the engine's own
+    # reading is kept, which is why the sibling test above reads it the same way.
+    # llmlint: ignore[tests_mirror_real_usage] no view renders the retained schedule; see above
+    recorded = json.loads(launch_record.read_text(encoding="utf-8"))
+    schedule = recorded.get("maintenance_config")
+    assert isinstance(schedule, dict), (
+        "the launch recorded no maintenance schedule, so the engine maintains no pool slot "
+        f"for this run: {sorted(recorded)}"
+    )
+    stated = re.search(
+        r"^default:\n  every: (\S+)$", MAINTENANCE_SCHEDULE.read_text(encoding="utf-8"), re.M
+    )
+    assert stated is not None, f"{MAINTENANCE_SCHEDULE.name} states no default `every`"
+    assert schedule.get("default", {}).get("every") == stated.group(1), schedule
+    # The engine omits an empty rule list when it retains the parse, so the tracked
+    # file's `rules: []` reads back as no key: the same document.
+    assert schedule.get("rules", []) == [], schedule
+
+
 def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
     """The pacemaker's own task names its run through `{task}`, and forbids editing.
 

@@ -185,6 +185,29 @@ believing the event stream. Session close refuses to reap a worktree holding com
 branch does not carry, which catches only a worker that committed, so the brief rule
 stands regardless.
 
+**Where a session is placed, and what a close returns.** A session worktree is cut on a
+**pooled slot** — a warm worktree that survives its session's close — or on a
+disposable run root, and the workspaces file `just repos-apply` installs beside the
+rules and releases files decides which per identity: the tracked
+`config/onevcs.workspaces.yml` is the shared default — one slot per identity, every
+session past it admitted — overlaid by the host's own
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml`, which is where a
+host sizes its pool and never the tracked file. A close on a slot
+[**returns**](docs/repo-lifecycle.md#where-a-session-is-placed-and-what-a-close-returns)
+it — reset and cleaned, ignored paths such as a build output left intact — rather than
+removing it, which is the whole point. A slot is bound to the execution checkout it was
+cut from, so an identity with several execution checkouts spends its pool one slot per
+lender: size `pool` per lender you alternate. Slots are outside every reclamation and
+both sweeps; `onevcs pool status <repo>` reads them and `onevcs pool prune <repo>`
+empties the idle ones. A node the engine cannot place is **held**, not failed:
+`workspace-wait` is a non-blocking surface re-read until the identity admits the node,
+never a stall and never a settlement. An idle driver maintains idle slots on the
+cadence `config/onepipeline.maintenance.yaml` names, which `scripts/onepipeline.sh`
+hands every `start`, and a sweep that ran something is the `pool-maintenance` record
+`just results` names. A dispatched session is placed by the `onevcs` the engine links,
+so `config/onepipeline.version` governs where a node works while `config/onevcs.version`
+governs the pool verbs you run.
+
 A version bump is adopted **between** runs — a live driver keeps the binary it launched
 with, so no retry inside a run picks one up. A plan is one live graph accepting edits at
 any moment; preserved stacked branches record their base, so recovery targets the stack

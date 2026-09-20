@@ -26,7 +26,12 @@
 #      without revalidating). Never fatal: each link is reported by name with the
 #      version it stored, or why it could not be warmed, and a cold link is fetched on
 #      first use instead.
-#   9. Last, `just repos-bootstrap`: every registered sibling checkout's own `just
+#   9. `cargo-sweep`, pinned below, is installed through `cargo install` when absent or
+#      at another version: it is the `maintain` command `config/onevcs.workspaces.yml`
+#      names for every Rust identity's warm worktree slots, and a command the host lacks
+#      would fail on every idle tick the engine sweeps the pool on. Optional — a host
+#      without `cargo` pools nothing Rust — so it never changes the exit status.
+#  10. Last, `just repos-bootstrap`: every registered sibling checkout's own `just
 #      bootstrap`, memoized per checkout, so the gate a dispatch publishes through has
 #      its tools before the dispatch starts. Last because it is the one step about
 #      other repositories, and a report from it — a sibling that failed — is relayed
@@ -73,6 +78,9 @@ ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
 readonly ADOPTED_ONEHARNESS_VERSION
 readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
+# The one place the `cargo-sweep` release this host maintains its pool with is pinned;
+# `tests/test_workspaces_file.py` reads it from here and holds the installed binary to it.
+readonly CARGO_SWEEP_VERSION="0.8.0"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
@@ -346,6 +354,48 @@ verify_bun() {
   return 0
 }
 
+install_cargo_sweep() {
+  if verify_cargo_sweep >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    log "cannot install optional cargo-sweep: cargo is not installed; the pool's Rust slots go unmaintained until it is"
+    return 1
+  fi
+  log "installing cargo-sweep $CARGO_SWEEP_VERSION via cargo"
+  if ! cargo install cargo-sweep --version "$CARGO_SWEEP_VERSION" >&2; then
+    log "cargo-sweep cargo install failed"
+    return 1
+  fi
+  hash -r
+  if verify_cargo_sweep; then
+    log "cargo-sweep ready ($CARGO_SWEEP_VERSION)"
+    return 0
+  fi
+  log "optional cargo-sweep is unavailable after cargo install"
+  return 1
+}
+
+# `cargo-sweep --version` answers `cargo-sweep <version>`, and the pin is what is
+# verified: a release other than the pinned one is reinstalled rather than kept, so the
+# command every Rust slot is maintained with is the one this repository adopted.
+verify_cargo_sweep() {
+  local binary actual
+  if ! binary="$(command -v cargo-sweep 2>/dev/null)"; then
+    log "cargo-sweep verification failed: no binary is on PATH"
+    return 1
+  fi
+  if ! actual="$("$binary" --version 2>&1)" || [ -z "$actual" ]; then
+    log "cargo-sweep verification failed: $binary could not report its version"
+    return 1
+  fi
+  if [ "${actual#cargo-sweep }" != "$CARGO_SWEEP_VERSION" ]; then
+    log "cargo-sweep verification failed: $binary reports '$actual', not the pinned $CARGO_SWEEP_VERSION"
+    return 1
+  fi
+  return 0
+}
+
 ensure_codex_gate() {
   # allowlister gates codex's tool calls via its PreToolUse hook, so codex can run
   # in `--oneharness-mode bypass` (needed where its OS sandbox can't initialize —
@@ -430,6 +480,9 @@ else
   log "workspace sweep unavailable; continuing session setup"
 fi
 install_bun || toolchain_failed=1
+# Optional, and reported rather than counted: the pool's maintenance command for a
+# Rust identity, which a host without cargo has no slots to run in.
+install_cargo_sweep || log "cargo-sweep unavailable; a Rust identity's idle slots are not maintained until it is (continuing)"
 ensure_codex
 ensure_codex_gate
 # Every claude-code identity is a dispatch identity, so each one needs this

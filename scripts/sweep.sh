@@ -22,10 +22,11 @@
 #    operator action stated concretely enough to take. A family named with neither is
 #    what turns `reclaimed nothing` into an all-clear.
 #
-# The three unswept families are named here rather than handed to either sweeper: both
+# The four unswept families are named here rather than handed to either sweeper: both
 # judge a candidate on proven non-reference, and neither can prove what a foreign tool's
-# directory is for or whether a branch should land. Which families, and why an owner
-# beats a wider sweeper: docs/orchestration.md, "The recorded run".
+# directory is for, whether a branch should land, or that a warm worktree slot is not
+# about to be handed to the next session. Which families, and why an owner beats a
+# wider sweeper: docs/orchestration.md, "The recorded run".
 #
 # llmlint: ignore-file[boundary_inputs_validated] Option shapes are checked below,
 # before either verb runs. `--min-age-hours`'s value is the verbs' to judge and they do
@@ -61,13 +62,15 @@ read those counts out of, prints both reports and the trailer naming what was le
 unlooked-at. `--dry-run` always prints them: it removes nothing, so those reports are
 the answer it was asked for.
 
-Three families are named there and swept by nothing, each with an owner instead: the
+Four families are named there and swept by nothing, each with an owner instead: the
 host scratch root ($TMPDIR, or /tmp), the pre-adoption ~/.ai-orchestrator/worktrees root
-— whose directories are read one by one and reported as whatever each actually is — and
-the preserved unpublished branches that hold the workspaces above from being reclaimed,
-which `just recoverable` names. Nothing here removes anything in any of them: both verbs
-this composes remove a directory only once they can prove no live process names it, and
-that proof is theirs to make rather than this wrapper's.
+— whose directories are read one by one and reported as whatever each actually is — the
+preserved unpublished branches that hold the workspaces above from being reclaimed,
+which `just recoverable` names, and the pool of warm worktree slots each identity keeps
+under its `pool/`, which `onevcs pool status <repo>` reads and `onevcs pool prune <repo>`
+empties. Nothing here removes anything in any of them: both verbs this composes remove a
+directory only once they can prove no live process names it, and that proof is theirs
+to make rather than this wrapper's.
 USAGE
 }
 
@@ -763,11 +766,25 @@ PRESERVED_BRANCHES="preserved unpublished branches — branches rather than dire
     trailer does not count them, because taking that count asks every registered
     identity and costs more than the whole sweep around it."
 
+#: The family that is kept on purpose: each identity's warm worktree slots, under its
+#: `pool/` beside the run roots `onevcs sweep` examines. A slot survives its session's
+#: close so the next session finds the build output still there, so a sweep that removed
+#: an idle one would undo the reason it exists; the verb itself names the pool as outside
+#: its sweep, and two owners answer it instead. Worded without either verb's family
+#: names, because the journey holds the two lists disjoint by name.
+POOL_SLOTS="warm worktree slots — each identity's pool/ beside the run roots above, kept
+    on purpose: a slot is returned on close rather than removed, so the next session
+    finds its build output still there, and no sweep here examines one. onevcs pool
+    status <repo> names each slot, whether it is idle or which session holds it, and
+    when it was last maintained; onevcs pool prune <repo> removes every idle slot whose
+    clone retains no branch and says why the rest were kept."
+
 # Appended after the two families this run went looking for, and outside the count that
-# decides whether the sections print: this entry is true on every host and at every
-# moment, so letting it decide would make the long form unconditional and take the
+# decides whether the sections print: these entries are true on every host and at every
+# moment, so letting either decide would make the long form unconditional and take the
 # one-line form away from every sweep that had nothing to act on.
 unexamined+=("$PRESERVED_BRANCHES")
+unexamined+=("$POOL_SLOTS")
 
 # The long form: each verb's report as it wrote it, then the trailer neither can.
 print_sections() {
@@ -831,10 +848,12 @@ if [ "$counts_readable" -ne 0 ]; then
   reclaimed_candidates=$((counted_values[1] + counted_values[3]))
 fi
 
-#: The standing family, said in the one-line forms too. The one line is what an
+#: The standing families, said in the one-line forms too. The one line is what an
 #: operator reads on almost every sweep, and a family that is never examined and never
-#: named there is one an operator never learns is holding the rest.
+#: named there is one an operator never learns is holding the rest — or, for the pool,
+#: one they never learn is kept on purpose and has an owner that empties it.
 PRESERVED_BRANCH_CLAUSE='preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one'
+POOL_CLAUSE='warm worktree slots are examined by no sweep — onevcs pool status <repo> reads them and onevcs pool prune <repo> empties the idle ones'
 
 #: The clause every verdict below ends with, because the number in front of it is the
 #: one a reader mistakes for an all-clear. A sweep takes only what it can *prove* dead,
@@ -880,18 +899,18 @@ elif [ "$examined_candidates" -eq 0 ]; then
   # because the state below says the opposite thing with the same number: a host whose
   # families are empty and a host whose every candidate is alive both reclaim nothing,
   # and only one of them is evidence that the sweep is working.
-  printf 'just sweep: nothing reclaimed — no candidate was examined; every family (%s; %s) was empty; %s; %s.\n' \
+  printf 'just sweep: nothing reclaimed — no candidate was examined; every family (%s; %s) was empty; %s; %s; %s.\n' \
     "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
-    "$PRESERVED_BRANCH_CLAUSE" "$FREE_SPACE_CLAUSE"
+    "$PRESERVED_BRANCH_CLAUSE" "$POOL_CLAUSE" "$FREE_SPACE_CLAUSE"
 elif [ "$reclaimed_candidates" -eq 0 ]; then
-  printf 'just sweep: nothing reclaimed — %d candidate(s) examined across every family (%s; %s), all live or within retention; %s; %s.\n' \
+  printf 'just sweep: nothing reclaimed — %d candidate(s) examined across every family (%s; %s), all live or within retention; %s; %s; %s.\n' \
     "$examined_candidates" "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
-    "$PRESERVED_BRANCH_CLAUSE" "$FREE_SPACE_CLAUSE"
+    "$PRESERVED_BRANCH_CLAUSE" "$POOL_CLAUSE" "$FREE_SPACE_CLAUSE"
 else
-  printf 'just sweep: reclaimed %d of %d candidate(s) examined — every family examined: %s; %s; %s; %s.\n' \
+  printf 'just sweep: reclaimed %d of %d candidate(s) examined — every family examined: %s; %s; %s; %s; %s.\n' \
     "$reclaimed_candidates" "$examined_candidates" \
     "oneagentgraph $ONEAGENTGRAPH_FAMILIES" "onevcs $ONEVCS_FAMILIES" \
-    "$PRESERVED_BRANCH_CLAUSE" "$FREE_SPACE_CLAUSE"
+    "$PRESERVED_BRANCH_CLAUSE" "$POOL_CLAUSE" "$FREE_SPACE_CLAUSE"
 fi
 
 # A sweeper that failed leaves a family unswept, and an operator watching for a full

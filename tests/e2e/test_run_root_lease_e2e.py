@@ -101,6 +101,14 @@ default:
 #: but the seed is built before any of these journeys names a session.
 GIT_IDENTITY = ("-c", "user.email=test@example.com", "-c", "user.name=ai-orchestrator-test")
 
+#: A workspaces file pooling nothing, installed in place of the tracked one — whose
+#: default pools every identity — because every journey here is about a **run root**
+#: under `runs/`: what holds one, what reclaims one, and what a hand-back keeps. A
+#: pooled slot is placed, returned and pruned by other rules and is outside the
+#: reclamation these journeys drive; `tests/e2e/test_worktree_pool_e2e.py` is where a
+#: slot's life is proven.
+UNPOOLED = "version: 1\ndefault:\n  pool: 0\n  overflow: unlimited\nrules: []\n"
+
 #: What `session-setup.sh` says when it has the lease. Quoted rather than derived, so
 #: a rewording of the line an operator reads fails here instead of passing silently.
 HOLDING = "hold-run-lease: holding the occupancy lease on"
@@ -173,11 +181,26 @@ def _identity(tmp_path: Path) -> Identity:
     manifest.write_text(f"{checkout}\n", encoding="utf-8")
     rules = tmp_path / "onevcs.rules.yml"
     rules.write_text(RULES, encoding="utf-8")
+    workspaces = tmp_path / "onevcs.workspaces.yml"
+    workspaces.write_text(UNPOOLED, encoding="utf-8")
     environment = {**os.environ, "ONEVCS_HOME": str(home)}
+    # A scratch XDG home for the apply alone, so this host's own workspaces overlay —
+    # which would pool the identity again — is not composed onto the unpooled file.
+    config_home = tmp_path / "xdg-config"
+    config_home.mkdir()
     applied = subprocess.run(
-        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
+        [
+            "just",
+            "repos-apply",
+            "--checkouts",
+            str(manifest),
+            "--rules",
+            str(rules),
+            "--workspaces",
+            str(workspaces),
+        ],
         cwd=REPO_ROOT,
-        env=environment,
+        env={**environment, "XDG_CONFIG_HOME": str(config_home)},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(120),

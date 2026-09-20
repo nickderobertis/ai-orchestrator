@@ -187,6 +187,8 @@ NODE_FIELDS = frozenset(
         "adoption",
         "consumes",
         "delivers",
+        "pool",
+        "overflow",
     }
 )
 

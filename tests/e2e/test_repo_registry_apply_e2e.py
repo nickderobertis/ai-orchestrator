@@ -54,6 +54,19 @@ TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 #: decides the rung a node of each repository adopts a dependency's release on and
 #: which of a producer's targets a consumer naming none waits for.
 TRACKED_RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
+#: The tracked workspaces file the recipe installs as the fourth, which sizes each
+#: identity's pool of warm worktree slots and names what maintains them.
+TRACKED_WORKSPACES = REPO_ROOT / "config" / "onevcs.workspaces.yml"
+#: What that file says every identity no rule names gets, which is the shared default
+#: for a pool every host starts from: one warm slot, and sessions past it admitted
+#: without bound. A host raises it in its own overlay, never in the tracked file.
+SHARED_POOL = 1
+SHARED_OVERFLOW = "unlimited"
+#: Where the recipe reads a host's overlay from under its XDG configuration home, the
+#: directory the Claude identities file lives in. Every journey here points that home
+#: at scratch, so the host this suite runs on says nothing into a registry a journey
+#: is asserting the tracked file alone reached.
+HOST_OVERLAY = Path("ai-orchestrator") / "workspaces.yml"
 #: One stand-in `release-targets.toml` per producer this host installs, carrying the
 #: target ids and names the producer's own declaration carries — read from here rather
 #: than from this host's producer checkouts, which a test may not depend on the state
@@ -212,12 +225,22 @@ def declaring_checkout(directory: Path, origin: str, declaration: Path) -> Path:
     return directory
 
 
-def apply_registry(manifest: Path, home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
-    """Run the real recipe against a scratch registry root."""
+def apply_registry(
+    manifest: Path, home: Path, *arguments: str, config_home: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the real recipe against a scratch registry root.
+
+    ``config_home`` is the XDG configuration home the recipe resolves the host's
+    workspaces overlay under; a scratch sibling of ``home`` holding nothing when a
+    journey names none, so the tracked file is installed alone whatever this host has.
+    """
+    if config_home is None:
+        config_home = home.parent / f"{home.name}-config"
+    config_home.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
         ["just", "repos-apply", "--checkouts", str(manifest), *arguments],
         cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": str(home)},
+        env={**os.environ, "ONEVCS_HOME": str(home), "XDG_CONFIG_HOME": str(config_home)},
         text=True,
         capture_output=True,
     )
@@ -342,6 +365,106 @@ def test_apply_installs_the_tracked_release_override_and_says_so(applied: Applie
     installed = applied.home / "releases.yml"
     assert installed.read_bytes() == TRACKED_RELEASES.read_bytes()
     assert f"releases   installed  {installed}" in applied.result.stdout
+
+
+def test_apply_installs_the_tracked_workspaces_file_and_the_pool_resolves_from_it(
+    applied: Applied,
+) -> None:
+    """The fourth tracked file, installed whole and read back through the verb that owns it.
+
+    Installed bytes prove the copy; `onevcs pool status` proves the install is the one
+    a session open resolves its placement out of, answering this host's default for an
+    identity the file's rules do not name.
+    """
+    installed = applied.home / "workspaces.yml"
+    assert installed.read_bytes() == TRACKED_WORKSPACES.read_bytes()
+    assert (
+        f"workspaces installed  {installed}  (from {TRACKED_WORKSPACES})" in applied.result.stdout
+    )
+    status = onevcs(applied.home, "pool", "status", "org-apps", "--json")
+    assert status.returncode == 0, status.stdout + status.stderr
+    capacity = json.loads(status.stdout)["capacity"]
+    assert capacity["pool"] == SHARED_POOL, capacity
+    assert capacity["overflow"] == SHARED_OVERFLOW, capacity
+
+
+#: A host's overlay: a bigger default pool than the shared one, and one rule that
+#: replaces the tracked rule with the same `match` — `onevcs` is a Rust identity the
+#: tracked file maintains, and the host says what its rule is instead.
+HOST_OVERLAY_TEXT = (
+    "version: 1\n"
+    "default:\n"
+    "  pool: 3\n"
+    "rules:\n"
+    "  - match: {host: github.com, owner: nickderobertis, name: onevcs}\n"
+    "    pool: 4\n"
+    "    overflow: 2\n"
+)
+
+
+def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
+    tmp_path: Path,
+) -> None:
+    """With a host file under the XDG home, the installed file is the tracked one overlaid.
+
+    Read back through `onevcs pool status`, which resolves the installed document: the
+    ruled identity answers the host's rule, an identity the host did not rule answers
+    the host's default over the tracked one, and the report says both sources. The
+    tracked file itself is untouched, which is the point of the overlay.
+    """
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    other = checkout(tmp_path / "onejudge", "https://github.com/nickderobertis/onejudge.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n{other}\n", encoding="utf-8")
+    config_home = tmp_path / "xdg"
+    (config_home / HOST_OVERLAY).parent.mkdir(parents=True)
+    (config_home / HOST_OVERLAY).write_text(HOST_OVERLAY_TEXT, encoding="utf-8")
+    home = tmp_path / "home"
+    tracked_before = TRACKED_WORKSPACES.read_bytes()
+
+    result = apply_registry(manifest, home, config_home=config_home)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    installed = home / "workspaces.yml"
+    assert (
+        f"workspaces installed  {installed}  (from {TRACKED_WORKSPACES} overlaid by "
+        f"{config_home / HOST_OVERLAY})"
+    ) in result.stdout
+    assert TRACKED_WORKSPACES.read_bytes() == tracked_before
+    assert installed.read_bytes() != tracked_before
+    ruled = json.loads(onevcs(home, "pool", "status", "onevcs", "--json").stdout)["capacity"]
+    assert (ruled["pool"], ruled["overflow"]) == (4, 2), ruled
+    unruled = json.loads(onevcs(home, "pool", "status", "onejudge", "--json").stdout)["capacity"]
+    assert (unruled["pool"], unruled["overflow"]) == (3, SHARED_OVERFLOW), unruled
+    # The rule replaced the tracked one in place rather than being appended after it,
+    # so first-match-wins still reads the file in the tracked order.
+    text = installed.read_text(encoding="utf-8")
+    assert text.count("name: onevcs}") == 1, text
+    assert text.index("name: onevcs}") < text.index("name: allowlister}"), text
+
+    again = apply_registry(manifest, home, config_home=config_home)
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "workspaces unchanged" in again.stdout
+
+
+def test_a_host_overlay_the_composer_refuses_installs_nothing(tmp_path: Path) -> None:
+    """A host file at another schema version is refused by name before validation."""
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    config_home = tmp_path / "xdg"
+    (config_home / HOST_OVERLAY).parent.mkdir(parents=True)
+    (config_home / HOST_OVERLAY).write_text("version: 2\ndefault:\n  pool: 3\n", encoding="utf-8")
+    home = tmp_path / "home"
+
+    result = apply_registry(manifest, home, config_home=config_home)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "declares version 2, and the tracked one 1" in result.stderr, result.stderr
+    assert f"{config_home / HOST_OVERLAY} cannot be overlaid on" in result.stderr, result.stderr
+    assert not (home / "workspaces.yml").exists()
+    assert not (home / "rules.yml").exists()
 
 
 class Producers(NamedTuple):
@@ -537,6 +660,65 @@ def test_a_different_release_override_is_installed_in_place_of_the_tracked_one(
 #: A release override the adopted `onevcs` loads, standing in for whatever a host
 #: already has installed when a replacement is refused or fails.
 INSTALLED_RELEASES = "version: 1\ndefault:\n  adoption: fast\nrepositories: []\n"
+#: A workspaces file the adopted `onevcs` loads, pooling nothing — the shipped default
+#: written out — standing in for whatever a host already has installed.
+INSTALLED_WORKSPACES = "version: 1\ndefault:\n  pool: 0\n  overflow: unlimited\nrules: []\n"
+
+
+def test_a_different_workspaces_file_is_installed_in_place_of_the_tracked_one(
+    tmp_path: Path,
+) -> None:
+    """`--workspaces FILE` installs FILE, observed through the pool the identity then resolves."""
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.yml"
+    candidate.write_text(
+        "version: 1\ndefault:\n  pool: 3\n  overflow: 1\nrules: []\n", encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    result = apply_registry(manifest, home, "--workspaces", str(candidate))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / "workspaces.yml").read_bytes() == candidate.read_bytes()
+    assert (home / "workspaces.yml").read_bytes() != TRACKED_WORKSPACES.read_bytes()
+    status = onevcs(home, "pool", "status", "onevcs", "--json")
+    assert status.returncode == 0, status.stdout + status.stderr
+    capacity = json.loads(status.stdout)["capacity"]
+    assert (capacity["pool"], capacity["overflow"]) == (3, 1), capacity
+
+
+def test_a_workspaces_file_onevcs_refuses_leaves_the_installed_one_intact(
+    tmp_path: Path,
+) -> None:
+    """A candidate `onevcs` cannot load is refused by name, and replaces nothing.
+
+    Validated in the scratch home the rules and the override already are, through
+    `pool status` — the one read that loads the document whole — so a default that
+    admits no session at all is refused before the live copy is touched.
+    """
+    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    manifest = tmp_path / "checkouts"
+    manifest.write_text(f"{present}\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "rules.yml").write_text(INSTALLED_RULES, encoding="utf-8")
+    (home / "releases.yml").write_text(INSTALLED_RELEASES, encoding="utf-8")
+    installed = home / "workspaces.yml"
+    installed.write_text(INSTALLED_WORKSPACES, encoding="utf-8")
+    invalid = tmp_path / "invalid.yml"
+    invalid.write_text(
+        "version: 1\ndefault:\n  pool: 0\n  overflow: 0\nrules: []\n", encoding="utf-8"
+    )
+
+    result = apply_registry(manifest, home, "--workspaces", str(invalid))
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"{invalid} is not a valid onevcs workspaces file" in result.stderr
+    assert "admits no session at all" in result.stderr, result.stderr
+    assert installed.read_text(encoding="utf-8") == INSTALLED_WORKSPACES
+    assert "workspaces installed" not in result.stdout
 
 
 def test_an_override_onevcs_refuses_leaves_the_installed_one_intact(tmp_path: Path) -> None:
@@ -796,8 +978,10 @@ def test_reapplying_the_configuration_changes_nothing(applied: Applied) -> None:
     assert document.read_bytes() == before
     assert "rules      unchanged" in again.stdout
     assert "releases   unchanged" in again.stdout
+    assert "workspaces unchanged" in again.stdout
     assert override.read_bytes() == override_before
     assert override.stat().st_mtime_ns == override_installed_at, "the override was rewritten"
+    assert (applied.home / "workspaces.yml").read_bytes() == TRACKED_WORKSPACES.read_bytes()
 
 
 def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
@@ -816,6 +1000,7 @@ def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
     assert f"would register  {present}" in result.stdout
     assert "rules      would install" in result.stdout
     assert "releases   would install" in result.stdout
+    assert "workspaces would install" in result.stdout
     assert "dry run — 1 checkout(s) would be registered, 0 skipped" in result.stdout
     assert not registry_home.exists()
 
@@ -826,6 +1011,8 @@ def test_dry_run_parses_comments_whitespace_and_tilde_without_writing(
         (("--checkouts",), "usage: apply-repo-registry.sh"),
         (("--rules",), "usage: apply-repo-registry.sh"),
         (("--releases",), "usage: apply-repo-registry.sh"),
+        (("--workspaces",), "usage: apply-repo-registry.sh"),
+        (("--workspaces", "/does/not/exist"), "does not exist"),
         (("--unknown",), "unknown argument"),
         (("--checkouts", "/does/not/exist"), "does not exist"),
         (("--releases", "/does/not/exist"), "does not exist"),

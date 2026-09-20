@@ -98,6 +98,19 @@ so a dead run's branch stays reachable; this verb does not reach into it
 during the incident, because session setup runs it; the verb that deletes run roots is
 `session open`, which every dispatch also runs and which nothing logs.
 
+**Nor is a pooled slot any of this.** Since the pool's adoption a session is placed on
+a warm slot under the identity's `pool/` when `$ONEVCS_HOME/workspaces.yml` says so —
+the tracked default pools every identity at one slot — and only overflows into a run root under
+`runs/`. A slot is structurally a run root that survives its session's close: the
+occupancy lease, the census and the hand-back work on it unchanged, but the reclamation
+this document is about walks `runs/` alone and never reaches one, `onevcs sweep` names
+the pool as a family outside its verb, and `just sweep` says the same. A slot leaves
+only by shedding against the file's `pool` at an open or by `onevcs pool prune <repo>`,
+and `onevcs pool status <repo>` names who holds each one.
+`tests/e2e/test_worktree_pool_e2e.py` drives a slot through two sessions, and the
+journeys below register their identity with pooling off, because every one of them is
+about a run root.
+
 ## What this repository did about it, and still does
 
 **This is now a second line rather than the only one.** With the upstream fix adopted,

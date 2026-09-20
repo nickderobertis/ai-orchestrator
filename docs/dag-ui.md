@@ -70,7 +70,7 @@ reader is answering rather than assuming it.
 **Today the two differ, and the reading to carry is that neither number constrains
 the other**: the adopted `onepipeline-ui` 0.9.0 statically links onepipeline 0.37.0 and
 onejudge 0.13.1, read off its own wheel's SBOM, while `config/onepipeline.version` reads
-0.39.0 — the engine moved for view, release-hold and publication fixes the reader has no part in, and the reader
+0.40.0 — the engine moved for the worktree pool's capacity hold and maintenance schedule, which the reader has no part in, and the reader
 stayed, because nothing requires the two to agree. The reader has been moved with the engine before
 because a reader linking an older onejudge than the one writing a run's reports refuses
 a newer report schema and renders no transcript. Through an earlier adoption the reader

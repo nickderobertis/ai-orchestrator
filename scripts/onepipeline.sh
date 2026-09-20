@@ -24,6 +24,12 @@
 #     routing change adds while a run is live reaches its next dispatch rather
 #     than failing it (ai-orchestrator#1109).
 #
+# A launch also names the pool-maintenance schedule, `config/onepipeline.maintenance.yaml`,
+# as `--maintenance-config` once the installed engine carries that flag, under the same
+# guard as the hook, so an idle driver maintains every registered identity's warm
+# worktree slots on this host's cadence; the file's header says what the engine does
+# with it.
+#
 # A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
 # `scripts/ask-manager.sh`, the shim a dispatched agent asks through `onemessagebus ask`
 # with. It is established here for the same reason the two above
@@ -133,29 +139,45 @@ if [ "$launching" = true ]; then
 fi
 
 # Every launch names the dispatch-env hook, `scripts/dispatch-env-hook.sh` by absolute
-# path, so each node-scope dispatch is handed an environment resolved at that moment.
-# `start` alone, as `--bus-config` is, because `adopt` replays the launch record; a
-# caller who names one keeps it, a blank value included. Named exactly when the
-# installed engine's own `start --help` lists the flag — a release before the hook
-# refuses it as an unknown argument, which would refuse every launch — and asked as a
-# positive question the way scripts/watch-run.sh asks for a verb, so an engine that
-# cannot be asked is reported as that rather than read as lacking the flag. Prepended
-# before the bus configuration so the rendered line reads `start --bus-config …
-# --dispatch-env-hook …`.
+# path, so each node-scope dispatch is handed an environment resolved at that moment —
+# and the pool-maintenance schedule, `config/onepipeline.maintenance.yaml` by absolute
+# path, so an idle driver sweeps every registered identity's warm worktree slots on
+# this host's cadence. `start` alone, as `--bus-config` is, because `adopt` replays the
+# launch record; a caller who names one keeps it, a blank value included, and each is
+# kept per flag. Named exactly when the installed engine's own `start --help` lists
+# the flag — a release before either refuses it as an unknown argument, which would
+# refuse every launch — asked once for both and as a positive question the way
+# scripts/watch-run.sh asks for a verb, so an engine that cannot be asked is reported
+# as that rather than read as lacking the flags. Prepended before the bus
+# configuration so the rendered line reads `start --bus-config … --dispatch-env-hook …
+# --maintenance-config …`.
 if [ "${1:-}" = start ]; then
     named_dispatch_env_hook=false
+    named_maintenance_config=false
     for argument in "${@:2}"; do
         case "$argument" in
             --dispatch-env-hook | --dispatch-env-hook=*) named_dispatch_env_hook=true ;;
+            --maintenance-config | --maintenance-config=*) named_maintenance_config=true ;;
         esac
     done
-    if [ "$named_dispatch_env_hook" = false ]; then
+    if [ "$named_dispatch_env_hook" = false ] || [ "$named_maintenance_config" = false ]; then
         if ! start_help=$(uv run onepipeline start --help 2>&1); then
             said=$(printf '%s' "$start_help" | tr -d '\000-\010\013\014\016-\037\177' | tr '\n' ' ' | cut -c1-500)
-            echo "onepipeline: the onepipeline installed here could not be asked what 'start' takes, so this cannot tell whether it runs a dispatch-env hook. It said: ${said:-nothing at all}. Repair the installation — 'just bootstrap' reinstalls the pinned releases — and retry." >&2
+            echo "onepipeline: the onepipeline installed here could not be asked what 'start' takes, so this cannot tell whether it runs a dispatch-env hook or a maintenance schedule. It said: ${said:-nothing at all}. Repair the installation — 'just bootstrap' reinstalls the pinned releases — and retry." >&2
             exit 2
         fi
-        if grep -qE -- '^[[:space:]]+--dispatch-env-hook([[:space:]]|$)' <<<"$start_help"; then
+        # The schedule first, so the hook prepended after it lands ahead of it.
+        if [ "$named_maintenance_config" = false ] &&
+            grep -qE -- '^[[:space:]]+--maintenance-config([[:space:]]|$)' <<<"$start_help"; then
+            maintenance_config="${script_dir%/scripts}/config/onepipeline.maintenance.yaml"
+            if [ ! -f "$maintenance_config" ] || [ ! -r "$maintenance_config" ]; then
+                echo "onepipeline: the pool-maintenance schedule is not a readable file at $maintenance_config, so a run launched now would be refused before it was minted; restore it from the repository, then retry" >&2
+                exit 2
+            fi
+            set -- start --maintenance-config "$maintenance_config" "${@:2}"
+        fi
+        if [ "$named_dispatch_env_hook" = false ] &&
+            grep -qE -- '^[[:space:]]+--dispatch-env-hook([[:space:]]|$)' <<<"$start_help"; then
             dispatch_env_hook="$script_dir/dispatch-env-hook.sh"
             if [ ! -f "$dispatch_env_hook" ] || [ ! -x "$dispatch_env_hook" ]; then
                 echo "onepipeline: the dispatch-env hook is not an executable file at $dispatch_env_hook, so a run launched now would refuse every dispatch it made; restore it from the repository and 'chmod +x' it, then retry" >&2

@@ -196,6 +196,18 @@ NO_VERDICT_ONEVCS_FLOOR = Release(0, 22, 0)
 #: 0.11.0: `SimulatedUser::artifacts` behind `user.artifacts`, and `provider::artifacts_prompt`,
 #: which names each resolved path in every judge-side prompt.
 NAMED_ARTIFACTS_ONEJUDGE_FLOOR = Release(0, 11, 0)
+
+#: The onevcs release carrying the **worktree pool** a dispatched session is placed on:
+#: https://github.com/nickderobertis/onevcs/pull/167 (`96eabf9d`), first cut as 0.26.0,
+#: reads `$ONEVCS_HOME/workspaces.yml` and places a `session open` on a warm slot,
+#: returned rather than removed on `close`; and
+#: https://github.com/nickderobertis/onevcs/pull/169 (`f52d6431`), first cut as 0.27.0,
+#: adds `pool_maintain`, the verb the engine's idle branch sweeps every registered
+#: identity through on the schedule `config/onepipeline.maintenance.yaml` names. Held on
+#: the *linked* copy because placement happens in the copy a dispatch opens its session
+#: through: `config/onevcs.version` at 0.27.0 over an engine linking 0.25.0 would read
+#: as a pool in force while every dispatch still cut and deleted a fresh worktree.
+POOL_ONEVCS_FLOOR = Release(0, 27, 0)
 #: oneagentgraph https://github.com/nickderobertis/oneagentgraph/pull/111 (`18daa25`), first
 #: cut as 0.4.1: the release linking that onejudge, which is what lets a `kind: onejudge`
 #: member's `user.artifacts` reach its judge.
@@ -424,6 +436,26 @@ def test_the_linked_onevcs_lets_a_session_open_its_own_draft() -> None:
     )
 
 
+def test_the_linked_onevcs_places_a_session_on_a_pooled_slot_it_can_maintain() -> None:
+    """Above the floor, the workspaces file this host installs governs where a dispatch works.
+
+    `config/onevcs.workspaces.yml` sizes a pool per identity and names the command that
+    maintains its idle slots, and both halves are read by the `onevcs` a session is
+    opened through — the linked copy for a dispatch, the CLI pin for the manager verbs.
+    `tests/e2e/test_worktree_pool_e2e.py` drives the CLI pin through a pooled scratch
+    identity; this holds the other half, since a dispatch is placed by the copy the
+    engine links and nothing the CLI pin says reaches it.
+    """
+    linked = Release.parse(_linked_version("onevcs"))
+
+    assert linked >= POOL_ONEVCS_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below the {POOL_ONEVCS_FLOOR} that "
+        "places a session on a pooled worktree slot and maintains idle slots; the "
+        "workspaces file this host installs governs no dispatch, and the maintenance "
+        "schedule the launch names sweeps through a verb the linked copy lacks"
+    )
+
+
 def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
     """Above the floor, a graph naming `judges:` reaches a onejudge that can run it.
 
@@ -564,7 +596,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.4.5", core="0.14.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.13.2", core="0.14.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.39.0", core="0.14.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.40.0", core="0.14.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was

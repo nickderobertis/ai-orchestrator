@@ -2642,6 +2642,45 @@ def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares
         )
 
 
+#: A struct's fields including a raw identifier — `pub r#match: RuleMatch` — spelled
+#: as the document key serde writes it, which is the identifier without the `r#`.
+RAW_STRUCT_FIELD = re.compile(r"^\s{4}pub (?:r#)?(?P<field>[a-z_]\w*): ", re.MULTILINE)
+
+
+def _struct_fields(source: str, struct: str) -> set[str]:
+    """The document keys one `pub struct` declares, read off its body."""
+    body = source.split(f"pub struct {struct} {{", 1)
+    assert len(body) == 2, f"onevcs {ONEVCS.ref} declares no `pub struct {struct}`"
+    return set(RAW_STRUCT_FIELD.findall(body[1].split("\n}\n", 1)[0]))
+
+
+def test_the_workspaces_overlay_composes_the_keys_the_linked_onevcs_declares() -> None:
+    """`orchestrator/workspaces_overlay.py` refuses a host file by the keys `onevcs` reads.
+
+    The composer restates the workspaces document's shape — the top-level keys and the
+    keys a rule may carry — so a host file off the schema is refused by name before the
+    composed document reaches `onevcs pool status`. Each restatement is held to the
+    `WorkspacesFile` and `WorkspaceRule` structs at the release a dispatch places its
+    session through, which is also the CLI pin's at this adoption: a key the release
+    gained would otherwise be refused here as unknown, and one it dropped composed into a
+    document `onevcs` refuses whole.
+    """
+    from orchestrator import workspaces_overlay
+
+    source = _source(ONEVCS, "workspaces.rs")
+    assert _struct_fields(source, "WorkspacesFile") == workspaces_overlay.TOP_LEVEL_KEYS, (
+        f"onevcs {ONEVCS.ref}'s WorkspacesFile declares "
+        f"{sorted(_struct_fields(source, 'WorkspacesFile'))}, and the composer takes "
+        f"{sorted(workspaces_overlay.TOP_LEVEL_KEYS)}"
+    )
+    assert _struct_fields(source, "WorkspaceRule") == workspaces_overlay.RULE_KEYS, (
+        f"onevcs {ONEVCS.ref}'s WorkspaceRule declares "
+        f"{sorted(_struct_fields(source, 'WorkspaceRule'))}, and the composer takes "
+        f"{sorted(workspaces_overlay.RULE_KEYS)}"
+    )
+    assert _struct_fields(source, "WorkspaceDefault") == workspaces_overlay.RULE_KEYS - {"match"}
+
+
 def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
     """A node an envelope states is judged on the task its dispatch will read, so how the
     engine renders an amendment into a task is restated in `orchestrator/envelope_review.py`,

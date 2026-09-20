@@ -111,6 +111,12 @@ FREE_SPACE_CLAUSE = _declared("FREE_SPACE_CLAUSE")
 #: the one-line verdicts as well as in the trailer, because the one line is what an
 #: operator reads on almost every sweep.
 PRESERVED_BRANCH_CLAUSE = _declared("PRESERVED_BRANCH_CLAUSE")
+#: The other family no sweep examines, named in the one line for the opposite reason:
+#: a warm worktree slot is kept on purpose, and the clause names the two verbs that own
+#: it — the read, and the prune that empties the idle ones.
+POOL_CLAUSE = _declared("POOL_CLAUSE")
+#: Both standing clauses, in the order every one-line verdict carries them.
+STANDING_CLAUSES = f"{PRESERVED_BRANCH_CLAUSE}; {POOL_CLAUSE}"
 FREE_SPACE_LINES = [
     f"    {line}" if index == 0 else line
     for index, line in enumerate(_declared_block("FREE_SPACE_NOTE"))
@@ -122,7 +128,7 @@ FREE_SPACE_LINES = [
 #: filling up looks like the first and reads like the second.
 NOTHING_EXAMINED = (
     f"just sweep: nothing reclaimed — no candidate was examined; every family ({FAMILIES}) "
-    f"was empty; {PRESERVED_BRANCH_CLAUSE}; {FREE_SPACE_CLAUSE}."
+    f"was empty; {STANDING_CLAUSES}; {FREE_SPACE_CLAUSE}."
 )
 
 
@@ -130,7 +136,7 @@ def nothing_reclaimed(examined: int) -> str:
     """The short form for a sweep that judged candidates and could take none of them."""
     return (
         f"just sweep: nothing reclaimed — {examined} candidate(s) examined across every "
-        f"family ({FAMILIES}), all live or within retention; {PRESERVED_BRANCH_CLAUSE}; "
+        f"family ({FAMILIES}), all live or within retention; {STANDING_CLAUSES}; "
         f"{FREE_SPACE_CLAUSE}."
     )
 
@@ -139,7 +145,7 @@ def reclaimed(taken: int, examined: int) -> str:
     """The short form for a sweep that took something and left nothing to act on."""
     return (
         f"just sweep: reclaimed {taken} of {examined} candidate(s) examined — every "
-        f"family examined: {FAMILIES}; {PRESERVED_BRANCH_CLAUSE}; {FREE_SPACE_CLAUSE}."
+        f"family examined: {FAMILIES}; {STANDING_CLAUSES}; {FREE_SPACE_CLAUSE}."
     )
 
 
@@ -1255,7 +1261,33 @@ def test_the_standing_family_does_not_take_the_short_form_away_from_a_quiet_swee
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
     assert PRESERVED_BRANCH_CLAUSE in result.stdout, "the one line left the family unnamed"
+    assert POOL_CLAUSE in result.stdout, "the one line left the pool unnamed"
     assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
+
+
+def test_the_pool_is_named_as_a_family_no_sweep_examines_with_its_two_owners(
+    host: Host,
+) -> None:
+    """The warm worktree slots are named where an operator reads the rest, with their owners.
+
+    A slot survives its session's close on purpose, so a sweep that removed one would
+    undo the reason the pool exists — and a family kept on purpose that no report named
+    would read as something the sweep forgot. It is named in both places a verdict is
+    read: the long form here with the verb that reads it and the verb that empties it,
+    and the one line the journey above holds.
+    """
+    host.leftover_content("nickderobertis__llmlint")
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    entry = not_examined(result.stdout)
+    assert "warm worktree slots" in entry, entry
+    assert "onevcs pool status <repo>" in " ".join(entry.split()), entry
+    assert "onevcs pool prune <repo>" in entry, entry
+    assert "warm worktree slots" not in examined(result.stdout), (
+        "a family no sweep examines was claimed as examined"
+    )
 
 
 def test_the_floor_this_recipe_passes_by_default_is_one_both_verbs_apply(
@@ -1510,7 +1542,7 @@ def test_asking_for_help_answers_and_sweeps_nothing(host: Host, flag: str) -> No
 
 
 def test_the_help_accounts_for_every_family_no_verb_here_sweeps(host: Host) -> None:
-    """`--help` describes the three unswept families, and a description is a contract.
+    """`--help` describes the four unswept families, and a description is a contract.
 
     It is what an operator reads before running this at all, so its account of the
     families neither verb reaches is the first thing they believe about them — and it
@@ -1541,15 +1573,18 @@ def test_the_help_accounts_for_every_family_no_verb_here_sweeps(host: Host) -> N
         "pre-adoption ~/.ai-orchestrator/worktrees root",
         "preserved unpublished branches",
         "just recoverable",
+        "pool of warm worktree slots",
+        "onevcs pool status <repo>",
+        "onevcs pool prune <repo>",
         "Nothing here removes anything in any of them",
     ):
         assert named in helped.stdout, f"the help does not account for {named}"
-    # Three claimed, and three is what a run that has all of them reports: an entry
+    # Four claimed, and four is what a run that has all of them reports: an entry
     # starts at two spaces and its own lines are indented further, so this counts
-    # families rather than lines. A fourth family added to the report without the help
+    # families rather than lines. A fifth family added to the report without the help
     # gaining it fails here, which is the drift this holds against.
     entries = [line for line in not_examined(ran.stdout).splitlines() if re.match(r"  \S", line)]
-    assert len(entries) == 3, entries
+    assert len(entries) == 4, entries
     assert borrowed.tree.exists(), "a root the help promises to leave alone was reclaimed"
     assert kept.exists(), "an entry the help promises to leave alone was reclaimed"
     assert not dead.exists(), "the promise came from a sweep that reclaimed nothing"

@@ -77,6 +77,21 @@ GIT_SSH_COMMAND = "GIT_SSH_COMMAND"
 #: name `onevcs` reads a host's release override under its state root by.
 DECLARATION = "release-targets.toml"
 RELEASES = "releases.yml"
+#: The name `onevcs` reads a host's workspaces file — how many warm worktree slots each
+#: identity pools — under its state root by.
+WORKSPACES = "workspaces.yml"
+
+
+def pooling(pool: int, overflow: int | str = "unlimited") -> str:
+    """A workspaces file pooling every identity of a scratch registry at ``pool`` slots.
+
+    One `default:` rather than a rule per identity, for the reason :func:`rules_for`
+    gives: a scratch registry is one policy, and what a journey wants from it is every
+    seeded identity placed on a slot. ``overflow`` is the bound past the pool, `unlimited`
+    unless a journey is about the refusal a finite one produces.
+    """
+    return f"version: 1\ndefault:\n  pool: {pool}\n  overflow: {overflow}\nrules: []\n"
+
 
 #: The fake `ssh` a hosted origin is served through. Called as `ssh <host> <command>`,
 #: where the command is `git-upload-pack 'owner/name.git'` or `git-receive-pack
@@ -119,6 +134,8 @@ def seeded(
     publication: str = "publication",
     execution: str = "execution",
     origin: str | None = None,
+    workspaces: str | None = None,
+    ignored: Sequence[str] = (),
 ) -> Identity:
     """Seed a bare origin and two clones of it, and register them in a scratch registry.
 
@@ -131,12 +148,20 @@ def seeded(
     is the one shape the reserved `onepipeline.repo` key exists for. Given one, both
     clones are made from that host's ssh remote through the fake `ssh` the module
     docstring describes, and the rules file matches the identity by host and owner.
+
+    ``workspaces`` is installed into the scratch registry as its `workspaces.yml` by the
+    same recipe, in place of the tracked `config/onevcs.workspaces.yml` that recipe
+    installs when nothing names one — :func:`pooling` writes the one-default shape a
+    journey about the pool wants. ``ignored`` are the patterns the seed's `.gitignore`
+    carries, for a journey about what a returned slot keeps.
     """
     bare = root / "origin.git"
     seed = root / "seed"
     git("init", "-q", "--bare", "-b", "main", str(bare))
     git("init", "-q", "-b", "main", str(seed))
     (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    if ignored:
+        (seed / ".gitignore").write_text("".join(f"{line}\n" for line in ignored), encoding="utf-8")
     git("add", "-A", cwd=seed)
     git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=seed)
     git("remote", "add", "origin", str(bare), cwd=seed)
@@ -179,7 +204,7 @@ def seeded(
         )
         assert cloned.returncode == 0, f"cloning {remote} failed:\n{cloned.stderr}"
     identity.home.mkdir(exist_ok=True)
-    _register(root, identity, rules)
+    _register(root, identity, rules, workspaces)
     return identity
 
 
@@ -205,7 +230,9 @@ def rules_for_hosted(host: str, owner: str) -> str:
     return RULES.replace('match: {path: "*"}', f"match: {{host: {host}, owner: {owner}}}")
 
 
-def _register(root: Path, identity: Identity, rules_text: str = RULES) -> None:
+def _register(
+    root: Path, identity: Identity, rules_text: str = RULES, workspaces: str | None = None
+) -> None:
     """Bring the scratch registry up to a scratch configuration, through the real recipe."""
     manifest = root / "onevcs.checkouts"
     manifest.write_text(
@@ -215,15 +242,44 @@ def _register(root: Path, identity: Identity, rules_text: str = RULES) -> None:
     rules = root / "onevcs.rules.yml"
     rules.write_text(rules_text, encoding="utf-8")
     applied = subprocess.run(
-        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
+        [
+            "just",
+            "repos-apply",
+            "--checkouts",
+            str(manifest),
+            "--rules",
+            str(rules),
+            *_workspaces_option(root, workspaces),
+        ],
         cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": str(identity.home)},
+        env={**os.environ, "ONEVCS_HOME": str(identity.home), **_config_home(root)},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(120),
         check=False,
     )
     assert applied.returncode == 0, f"repos-apply failed:\n{applied.stdout}\n{applied.stderr}"
+
+
+def _config_home(root: Path) -> dict[str, str]:
+    """An XDG configuration home under ``root`` holding no workspaces overlay.
+
+    The recipe composes the host's own overlay onto the workspaces file it installs, and
+    a scratch registry is a journey's to size: pointing the home at scratch is what keeps
+    this host's overlay out of it.
+    """
+    config_home = root / "xdg-config"
+    config_home.mkdir(exist_ok=True)
+    return {"XDG_CONFIG_HOME": str(config_home)}
+
+
+def _workspaces_option(root: Path, workspaces: str | None) -> list[str]:
+    """`--workspaces FILE` for the recipe, written under ``root``; nothing when none."""
+    if workspaces is None:
+        return []
+    written = root / f"onevcs.{WORKSPACES}"
+    written.write_text(workspaces, encoding="utf-8")
+    return ["--workspaces", str(written)]
 
 
 def rules_for(publication: str) -> str:
@@ -293,7 +349,7 @@ def registered(
     applied = subprocess.run(
         ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules), *override],
         cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": str(home)},
+        env={**os.environ, "ONEVCS_HOME": str(home), **_config_home(root)},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(120),

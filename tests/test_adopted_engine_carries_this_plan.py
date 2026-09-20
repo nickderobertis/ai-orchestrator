@@ -324,6 +324,33 @@ ACCEPTED_FOLLOW_UPS_LANDINGS = (
     ),
 )
 
+#: The two engine-side nodes of the worktree-pool plan. Together they let a launch
+#: name a persistent maintenance schedule — `--maintenance-config`, which
+#: `scripts/onepipeline.sh` hands every `start` as `config/onepipeline.maintenance.yaml`
+#: — and hold a queued lifecycle node for its identity's workspace capacity under the
+#: `workspace` hold reason, raising `workspace-wait` and requeueing on a `PoolExhausted`
+#: refusal rather than settling it `infrastructure-failure`. Both link the `onevcs`
+#: 0.27.0 whose pool the file `config/onevcs.workspaces.yml` sizes.
+#: `onepipeline-workspace-capacity` was delivered by its retry,
+#: `onepipeline-workspace-capacity-5`, and is recorded under the node id for the reason
+#: `Landing.node` gives.
+WORKTREE_POOL_LANDINGS = (
+    Landing(
+        node="onepipeline-workspace-capacity",
+        change_request=401,
+        commit="28fb9884a723226640f89badac1d05ed802bef2f",
+        did="hold a node for workspace capacity per identity, and requeue on a pool refusal",
+    ),
+    Landing(
+        node="onepipeline-maintenance-schedule",
+        change_request=405,
+        commit="759ed787a4cb6007cd796800d1fe253b4d81d960",
+        did=(
+            "maintain idle pool slots from the idle branch on a persistent every-duration schedule"
+        ),
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -335,6 +362,7 @@ LANDINGS = (
     *HOST_FIXES_LANDINGS,
     *LINEAGE_ITEM_LANDINGS,
     *ACCEPTED_FOLLOW_UPS_LANDINGS,
+    *WORKTREE_POOL_LANDINGS,
 )
 
 

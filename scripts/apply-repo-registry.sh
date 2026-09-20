@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # Bring this host's `onevcs` registry up to the tracked repository configuration.
 #
-# Three tracked files describe it: `config/onevcs.checkouts` lists every checkout to
+# Four tracked files describe it: `config/onevcs.checkouts` lists every checkout to
 # register, `config/onevcs.rules.yml` is the rules file that decides how each
-# resulting identity publishes and what verifies it, and `config/onevcs.releases.yml`
+# resulting identity publishes and what verifies it, `config/onevcs.releases.yml`
 # is the release override that decides which rung a node of each repository adopts a
 # dependency's release on and which of a producer's targets a consumer naming none
-# waits for. This script installs the second and third and registers the first, then
-# proves that every registered checkout resolves to a rule rather than falling
-# through to the reviewed default, and reports what each producer this host installs
-# resolves out of the override.
+# waits for, and `config/onevcs.workspaces.yml` is the workspaces file that sizes
+# each identity's pool of warm worktree slots and names what maintains them — the
+# shared default, which this script composes with the host's own overlay at
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml` when that file
+# exists, because the pool a host can afford is the host's to say and never a tracked
+# file's. This script installs the last three and registers the first, then proves
+# that every registered checkout resolves to a rule rather than falling through to
+# the reviewed default, and reports what each producer this host installs resolves
+# out of the override.
 #
 # It is the reproducible form of the migration off the pre-adoption
 # `~/.ai-orchestrator/repos.json` registry, and it is re-runnable: registration is
@@ -51,18 +56,23 @@ valid_alias() {
 checkouts_file="$repo_root/config/onevcs.checkouts"
 rules_file="$repo_root/config/onevcs.rules.yml"
 releases_file="$repo_root/config/onevcs.releases.yml"
+workspaces_file="$repo_root/config/onevcs.workspaces.yml"
 dry_run=false
 
 usage() {
     cat >&2 <<'USAGE'
-usage: apply-repo-registry.sh [--dry-run] [--checkouts FILE] [--rules FILE] [--releases FILE]
+usage: apply-repo-registry.sh [--dry-run] [--checkouts FILE] [--rules FILE] [--releases FILE] [--workspaces FILE]
 
-  --dry-run        Report what would change and change nothing.
-  --checkouts FILE Read the checkout list from FILE (default config/onevcs.checkouts).
-  --rules FILE     Install FILE as the rules file (default config/onevcs.rules.yml).
-  --releases FILE  Install FILE as the release override (default config/onevcs.releases.yml).
+  --dry-run         Report what would change and change nothing.
+  --checkouts FILE  Read the checkout list from FILE (default config/onevcs.checkouts).
+  --rules FILE      Install FILE as the rules file (default config/onevcs.rules.yml).
+  --releases FILE   Install FILE as the release override (default config/onevcs.releases.yml).
+  --workspaces FILE Install FILE as the workspaces file (default config/onevcs.workspaces.yml).
 
-The registry it writes is `$ONEVCS_HOME` (`~/.onevcs` when that is unset).
+The registry it writes is `$ONEVCS_HOME` (`~/.onevcs` when that is unset). The
+workspaces file it installs is the candidate overlaid by this host's own
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml` when that exists —
+its `default` keys and its `rules` by `match` win — and the candidate alone otherwise.
 USAGE
 }
 
@@ -72,12 +82,13 @@ while [[ $# -gt 0 ]]; do
         --checkouts) [[ $# -ge 2 ]] || { usage; exit 2; }; checkouts_file=$2; shift 2 ;;
         --rules) [[ $# -ge 2 ]] || { usage; exit 2; }; rules_file=$2; shift 2 ;;
         --releases) [[ $# -ge 2 ]] || { usage; exit 2; }; releases_file=$2; shift 2 ;;
+        --workspaces) [[ $# -ge 2 ]] || { usage; exit 2; }; workspaces_file=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "apply-repo-registry: unknown argument '$1'" >&2; usage; exit 2 ;;
     esac
 done
 
-for file in "$checkouts_file" "$rules_file" "$releases_file"; do
+for file in "$checkouts_file" "$rules_file" "$releases_file" "$workspaces_file"; do
     if [[ ! -f $file ]]; then
         echo "apply-repo-registry: $file does not exist" >&2
         exit 2
@@ -112,9 +123,21 @@ fi
 registry_document="$onevcs_home/registry.json"
 installed_rules="$onevcs_home/rules.yml"
 installed_releases="$onevcs_home/releases.yml"
+installed_workspaces="$onevcs_home/workspaces.yml"
 
-# The same `uv run` the `onevcs` recipes reach the CLI through, for the one verb no
-# recipe wraps: `release targets` is a read, and what it answers here is the product.
+# The host's own overlay on the workspaces file, resolved the way
+# `scripts/claude-alt-config-dir.sh` resolves the identities file beside it: an
+# absolute `XDG_CONFIG_HOME` first, else `$HOME/.config`, which the check above has
+# already held to an absolute existing directory.
+if [[ ${XDG_CONFIG_HOME-} == /* ]]; then
+    host_workspaces="$XDG_CONFIG_HOME/ai-orchestrator/workspaces.yml"
+else
+    host_workspaces="$HOME/.config/ai-orchestrator/workspaces.yml"
+fi
+
+# The same `uv run` the `onevcs` recipes reach the CLI through, for the two verbs no
+# recipe wraps: `release targets` and `pool status` are reads, and what each answers
+# here is the product.
 repo_onevcs() {
     uv run --project "$repo_root" onevcs "$@"
 }
@@ -158,8 +181,40 @@ fi
 
 echo "apply-repo-registry: registry $onevcs_home"
 
+# The document that is validated and installed as the workspaces file: the candidate
+# overlaid by the host file when there is one, composed into scratch by the command
+# `orchestrator/workspaces_overlay.py` states the rule of, and the candidate itself
+# byte for byte when there is none. A host file the composer refuses — another schema
+# version, a key no rule has — stops the run here, before anything is validated or
+# installed, naming the file and the key.
+composed_workspaces="$workspaces_file"
+workspaces_source="$workspaces_file"
+# Remove the composed scratch once it is installed or the run has stopped; a scratch
+# that could not be removed is reported with its path, since it is the one file of
+# this run that outlives it, and never fails a run that has already decided.
+discard_composed() {
+    if [[ $composed_workspaces != "$workspaces_file" && -e $composed_workspaces ]] &&
+        ! rm -f -- "$composed_workspaces"; then
+        echo "apply-repo-registry: could not remove the composed workspaces scratch $composed_workspaces; remove it by hand" >&2
+    fi
+}
+if [[ -f $host_workspaces ]]; then
+    composed_workspaces=$(mktemp) || {
+        echo "apply-repo-registry: could not create scratch for the composed workspaces file" >&2
+        exit 1
+    }
+    if ! uv run --project "$repo_root" orchestrator-workspaces-overlay \
+        "$workspaces_file" "$host_workspaces" >"$composed_workspaces"; then
+        echo "apply-repo-registry: $host_workspaces cannot be overlaid on $workspaces_file" >&2
+        discard_composed
+        exit 1
+    fi
+    workspaces_source="$workspaces_file overlaid by $host_workspaces"
+fi
+
 rules_unchanged=$(unchanged_install "$rules_file" "$installed_rules")
 releases_unchanged=$(unchanged_install "$releases_file" "$installed_releases")
+workspaces_unchanged=$(unchanged_install "$composed_workspaces" "$installed_workspaces")
 
 present=0
 skipped=0
@@ -208,6 +263,7 @@ cleanup_validation() {
     if [[ -d $validation_home ]] && ! rm -rf -- "$validation_home"; then
         echo "apply-repo-registry: could not remove temporary rules validation storage" >&2
     fi
+    discard_composed
 }
 trap cleanup_validation EXIT
 validation_register() {
@@ -265,11 +321,28 @@ if ! validation=$(ONEVCS_HOME=$validation_home repo_onevcs release targets "$syn
     echo "apply-repo-registry: $releases_file is not a valid onevcs release override" >&2
     exit 1
 fi
+# The workspaces file is validated in that scratch home too, through the one read that
+# loads it whole: `pool status` resolves the synthetic identity's capacity out of the
+# document, so a malformed value, a `delete` entry climbing out of the worktree, or a
+# default admitting no session at all is refused by name before the live copy moves.
+# What is validated is the composed document — the one that will be installed — so a
+# host overlay that composes into something `onevcs` refuses is refused as that.
+if ! cp -- "$composed_workspaces" "$validation_home/workspaces.yml"; then
+    echo "apply-repo-registry: could not stage $workspaces_source for validation" >&2
+    exit 1
+fi
+if ! validation=$(ONEVCS_HOME=$validation_home repo_onevcs pool status "$synthetic_alias" 2>&1); then
+    echo "$validation" >&2
+    echo "apply-repo-registry: $workspaces_source is not a valid onevcs workspaces file" >&2
+    exit 1
+fi
 if ! rm -rf -- "$validation_home"; then
     echo "apply-repo-registry: could not remove temporary rules validation storage" >&2
     exit 1
 fi
 trap - EXIT
+# The composed document outlives the validation scratch: it is what is installed below.
+trap discard_composed EXIT
 
 if [[ $dry_run == true ]]; then
     if [[ $rules_unchanged == true ]]; then
@@ -281,6 +354,11 @@ if [[ $dry_run == true ]]; then
         echo "  releases   unchanged  $installed_releases"
     else
         echo "  releases   would install  $installed_releases"
+    fi
+    if [[ $workspaces_unchanged == true ]]; then
+        echo "  workspaces unchanged  $installed_workspaces"
+    else
+        echo "  workspaces would install  $installed_workspaces  (from $workspaces_source)"
     fi
     echo "apply-repo-registry: dry run — ${present} checkout(s) would be registered, ${skipped} skipped"
     exit 0
@@ -314,6 +392,12 @@ if [[ $releases_unchanged == true ]]; then
 else
     install_whole "$releases_file" "$installed_releases"
     echo "  releases   installed  $installed_releases"
+fi
+if [[ $workspaces_unchanged == true ]]; then
+    echo "  workspaces unchanged  $installed_workspaces"
+else
+    install_whole "$composed_workspaces" "$installed_workspaces"
+    echo "  workspaces installed  $installed_workspaces  (from $workspaces_source)"
 fi
 
 # One reported field of `onevcs rules check`, without the `(from rule 1)` provenance

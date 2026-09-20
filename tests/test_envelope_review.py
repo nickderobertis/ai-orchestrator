@@ -1231,6 +1231,24 @@ def test_a_command_the_engine_refuses_for_its_target_moves_nothing() -> None:
     assert resulting == ["replacement"]
 
 
+def test_a_stated_node_sizing_its_own_workspace_placement_is_read_as_one() -> None:
+    """`pool` and `overflow` are fields the engine's `Node` accepts, so a node stating them is read.
+
+    They arrived with onepipeline 0.40.0 and are copied onto the session request a
+    lifecycle step opens with; a preflight that did not know them would pass over a
+    node the engine commits, and its task would reach a dispatch unjudged.
+    """
+    graph, resulting = stated_graph(
+        _envelope(
+            {"op": "add", "node": {"id": "placed", "pool": 0, "overflow": "unlimited"}},
+            {"op": "add", "node": {"id": "unplaced", "slot": 1}},
+        )
+    )
+
+    assert graph == {"placed": {"id": "placed", "pool": 0, "overflow": "unlimited"}}
+    assert resulting == ["placed"]
+
+
 def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_does() -> None:
     """The fields the adoption rules read move with the edges, as `edits.rs` moves them.
 

@@ -100,6 +100,13 @@ RELEASE_RULE = re.compile(
 
 #: Every installed CLI now arrives from a dependency in the project lock.
 INSTALLED_OUTSIDE_PYPROJECT = frozenset()
+#: The pinned distributions that are libraries this package imports rather than a
+#: producer's wheel: nothing on this host runs them as a tool, no `config/*.version`
+#: governs them, and no release target of a repository this host dispatches against
+#: names them — so a row would claim a producer where there is only a dependency.
+#: `pyyaml` is the one YAML reader `orchestrator/workspaces_overlay.py` composes the
+#: installed workspaces file with.
+LIBRARIES_THIS_PACKAGE_IMPORTS = frozenset({"pyyaml"})
 #: The one pinned distribution that is not itself a row's artifact: `pyproject.toml`
 #: pins the `onejudge` SDK, and the CLI wheel this host runs — the row's artifact —
 #: arrives as that SDK's own dependency at the same version. `scripts/session-setup.sh`
@@ -187,9 +194,10 @@ def test_every_pinned_distribution_is_a_rows_wheel_and_every_rows_wheel_is_pinne
 
     A pinned distribution no row names is one this host installs without saying what
     release target it is; a row whose wheel is not pinned is one this host claims to
-    install and does not — with the two stated exceptions above, each read rather than
+    install and does not — with the stated exceptions above, each read rather than
     waved through: the SDK's requirement is what carries the CLI wheel, and it has to
-    carry it at the pinned version.
+    carry it at the pinned version, and a library this package imports is pinned like
+    the wheels and named as the library it is.
     """
     pinned = _pinned_distributions()
     wheels = {_distribution(row) for row in INSTALLED}
@@ -205,10 +213,14 @@ def test_every_pinned_distribution_is_a_rows_wheel_and_every_rows_wheel_is_pinne
         )
         carried[wheel] = pinned[sdk]
 
-    unnamed = set(pinned) - wheels - set(SDK_CARRYING_A_ROWS_WHEEL)
+    unnamed = set(pinned) - wheels - set(SDK_CARRYING_A_ROWS_WHEEL) - LIBRARIES_THIS_PACKAGE_IMPORTS
     assert not unnamed, (
         f"pyproject.toml pins {sorted(unnamed)}, which no row's artifact names; add the "
         "row, or state here why it is not a producer's release target"
+    )
+    assert set(pinned) >= LIBRARIES_THIS_PACKAGE_IMPORTS, (
+        f"{sorted(LIBRARIES_THIS_PACKAGE_IMPORTS - set(pinned))} is declared a library this "
+        "package imports and pyproject.toml no longer pins it"
     )
     unpinned = wheels - set(pinned) - set(carried) - INSTALLED_OUTSIDE_PYPROJECT
     assert not unpinned, (

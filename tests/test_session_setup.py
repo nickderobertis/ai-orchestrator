@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -186,6 +187,182 @@ chmod +x "$HOME/.local/node/bin/bun"
         capture_output=True,
         env=env,
     )
+
+
+#: The one place `scripts/session-setup.sh` pins the `cargo-sweep` it installs, read off
+#: the script so these journeys drive the release the installer really asks for.
+CARGO_SWEEP_PIN = re.compile(r'^readonly CARGO_SWEEP_VERSION="(?P<version>\d+\.\d+\.\d+)"$', re.M)
+
+
+def pinned_cargo_sweep() -> str:
+    found = CARGO_SWEEP_PIN.search(
+        (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8")
+    )
+    assert found is not None, "session-setup.sh no longer pins cargo-sweep in one place"
+    return found["version"]
+
+
+def _write_cargo_sweep(path: Path, version: str) -> None:
+    _write_executable(path, f"#!/bin/sh\nprintf 'cargo-sweep {version}\\n'\n")
+
+
+def _run_cargo_sweep_install(
+    tmp_path: Path, *, with_cargo: bool = True, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
+    """Drive the script's own installer, with `cargo` — the published CLI it delegates
+    to — the one thing doubled: it records the install request it was asked for and
+    places the `cargo-sweep` the journey names into `$HOME/.cargo/bin`, where a real
+    `cargo install` puts one."""
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    tools = tmp_path / "tools"
+    if with_cargo:
+        _write_executable(
+            tools / "cargo",
+            """#!/bin/sh
+printf '%s\n' "$*" >>"$TEST_CARGO_ARGS"
+if [ "${TEST_CARGO_FAIL:-0}" = 1 ]; then
+  exit 1
+fi
+mkdir -p "$HOME/.cargo/bin"
+cp "$TEST_CARGO_SWEEP_BINARY" "$HOME/.cargo/bin/cargo-sweep"
+chmod +x "$HOME/.cargo/bin/cargo-sweep"
+""",
+        )
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "TEST_CARGO_ARGS": str(tmp_path / "cargo.args"),
+        **extra_env,
+    }
+    return subprocess.run(
+        ["bash", "-c", 'source "$1"; install_cargo_sweep', "test-install", str(script)],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def _cargo_sweep_version(tmp_path: Path) -> str:
+    """What the `cargo-sweep` on the journey's `PATH` answers, from where the installer put it."""
+    answered = subprocess.run(
+        [tmp_path / ".cargo" / "bin" / "cargo-sweep", "--version"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return answered.stdout.strip()
+
+
+def test_install_cargo_sweep_installs_the_pinned_release_from_an_absent_tool(
+    tmp_path: Path,
+) -> None:
+    """With no `cargo-sweep` on `PATH`, the installer asks cargo for the pinned release.
+
+    The request is read off what the double was asked — `install cargo-sweep --version
+    <pinned>` — and the result off the binary it placed, which is the pinned release
+    the pool's Rust slots will be maintained with.
+    """
+    replacement = tmp_path / "cargo-sweep-current"
+    _write_cargo_sweep(replacement, pinned_cargo_sweep())
+
+    proc = _run_cargo_sweep_install(tmp_path, TEST_CARGO_SWEEP_BINARY=str(replacement))
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "cargo.args").read_text(encoding="utf-8").splitlines() == [
+        f"install cargo-sweep --version {pinned_cargo_sweep()}"
+    ]
+    assert _cargo_sweep_version(tmp_path) == f"cargo-sweep {pinned_cargo_sweep()}"
+    assert f"cargo-sweep ready ({pinned_cargo_sweep()})" in proc.stderr
+
+
+def test_install_cargo_sweep_asks_nothing_over_the_installed_pinned_release(
+    tmp_path: Path,
+) -> None:
+    """A second run over the tool the first installed records no install request."""
+    replacement = tmp_path / "cargo-sweep-current"
+    _write_cargo_sweep(replacement, pinned_cargo_sweep())
+    first = _run_cargo_sweep_install(tmp_path, TEST_CARGO_SWEEP_BINARY=str(replacement))
+    assert first.returncode == 0, first.stderr
+    (tmp_path / "cargo.args").unlink()
+
+    again = _run_cargo_sweep_install(tmp_path, TEST_CARGO_SWEEP_BINARY=str(replacement))
+
+    assert again.returncode == 0, again.stderr
+    assert not (tmp_path / "cargo.args").exists(), "the installed pinned release was reinstalled"
+    assert _cargo_sweep_version(tmp_path) == f"cargo-sweep {pinned_cargo_sweep()}"
+
+
+def test_install_cargo_sweep_reinstalls_a_release_other_than_the_pinned_one(
+    tmp_path: Path,
+) -> None:
+    """A `cargo-sweep` at another release is what the pin exists to replace."""
+    _write_cargo_sweep(tmp_path / ".cargo" / "bin" / "cargo-sweep", "0.7.0")
+    replacement = tmp_path / "cargo-sweep-current"
+    _write_cargo_sweep(replacement, pinned_cargo_sweep())
+
+    proc = _run_cargo_sweep_install(tmp_path, TEST_CARGO_SWEEP_BINARY=str(replacement))
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "cargo.args").read_text(encoding="utf-8").splitlines() == [
+        f"install cargo-sweep --version {pinned_cargo_sweep()}"
+    ]
+    assert _cargo_sweep_version(tmp_path) == f"cargo-sweep {pinned_cargo_sweep()}"
+
+
+def test_install_cargo_sweep_refuses_a_release_cargo_placed_that_is_not_the_pinned_one(
+    tmp_path: Path,
+) -> None:
+    """A `cargo install` that succeeds and leaves another release is reported, not accepted.
+
+    The verification after the install is the same one that decides whether to install
+    at all, so a binary answering a release other than the pin — or nothing usable — is
+    named as unavailable rather than left as the command every Rust slot is swept with.
+    """
+    replacement = tmp_path / "cargo-sweep-other"
+    _write_cargo_sweep(replacement, "0.7.0")
+
+    proc = _run_cargo_sweep_install(tmp_path, TEST_CARGO_SWEEP_BINARY=str(replacement))
+
+    assert proc.returncode == 1
+    assert (tmp_path / "cargo.args").read_text(encoding="utf-8").splitlines() == [
+        f"install cargo-sweep --version {pinned_cargo_sweep()}"
+    ]
+    assert f"reports 'cargo-sweep 0.7.0', not the pinned {pinned_cargo_sweep()}" in proc.stderr
+    assert "optional cargo-sweep is unavailable after cargo install" in proc.stderr
+
+
+def test_install_cargo_sweep_is_optional_and_says_so_without_cargo(tmp_path: Path) -> None:
+    """A host without `cargo` has no Rust slot to maintain, and is told rather than failed."""
+    proc = _run_cargo_sweep_install(tmp_path, with_cargo=False)
+
+    assert proc.returncode == 1
+    assert "cannot install optional cargo-sweep: cargo is not installed" in proc.stderr
+    assert not (tmp_path / "cargo.args").exists()
+
+
+def test_install_cargo_sweep_reports_a_failed_cargo_install(tmp_path: Path) -> None:
+    proc = _run_cargo_sweep_install(tmp_path, TEST_CARGO_FAIL="1")
+
+    assert proc.returncode == 1
+    assert (tmp_path / "cargo.args").read_text(encoding="utf-8").splitlines() == [
+        f"install cargo-sweep --version {pinned_cargo_sweep()}"
+    ]
+    assert "cargo-sweep cargo install failed" in proc.stderr
+
+
+def test_full_setup_continues_past_an_absent_cargo_and_reports_cargo_sweep_unavailable(
+    tmp_path: Path,
+) -> None:
+    """The whole script, on a host with every tool but `cargo`, keeps its toolchain verdict.
+
+    The installer is optional: the run says the pool's Rust slots go unmaintained and
+    exits on the required tools alone, which the fixture host has.
+    """
+    result = _run_full_setup_without_bun(tmp_path)
+
+    assert "cannot install optional cargo-sweep: cargo is not installed" in result.stderr
+    assert "cargo-sweep unavailable" in result.stderr
+    assert "bun is required" in result.stderr
 
 
 def test_claude_trust_is_idempotent_and_preserves_other_config(tmp_path: Path) -> None:
