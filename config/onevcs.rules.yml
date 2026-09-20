@@ -85,7 +85,15 @@ rules:
     publication: local-direct
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: allowlister}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: allowlister-remote}
+    publication: change-auto
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: allowlister-terminal-approval-plugin}
     publication: change-auto
     approvals: none
 
@@ -102,6 +110,10 @@ rules:
     approvals: none
 
   - match: {host: github.com, owner: nickderobertis, name: github-graphql-node-count}
+    publication: change-auto
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: github-secrets}
     publication: change-auto
     approvals: none
 

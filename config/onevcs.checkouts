@@ -51,10 +51,13 @@
 ~/.ai-orchestrator/repos/nickderobertis__onevcs
 
 # Other repositories dispatched against from this host.
+~/.ai-orchestrator/repos/nickderobertis__allowlister
 ~/.ai-orchestrator/repos/nickderobertis__allowlister-remote
+~/.ai-orchestrator/repos/nickderobertis__allowlister-terminal-approval-plugin
 ~/.ai-orchestrator/repos/nickderobertis__crozier
 ~/.ai-orchestrator/repos/nickderobertis__dero-skills
 ~/.ai-orchestrator/repos/nickderobertis__ev-trip-planner
+~/.ai-orchestrator/repos/nickderobertis__github-secrets
 ~/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site
 ~/.ai-orchestrator/repos/nickderobertis__notignored
 ~/.ai-orchestrator/repos/nickderobertis__onetaskgraph
