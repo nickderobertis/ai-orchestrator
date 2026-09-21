@@ -38,6 +38,12 @@ import pytest
 from example_records import isolated_examples
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
+from test_orchestrate_launch_e2e import (
+    FORBIDDEN_OF_THE_PACEMAKER_TURN,
+    PACEMAKER_SEQUENCE,
+    UNANSWERED_IS_REPORTED,
+    out_of_sequence,
+)
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -860,6 +866,45 @@ def test_the_pacemaker_is_told_to_show_the_reading_behind_a_liveness_verdict(
     assert LIVENESS_SECOND_READ_RULE in flat, (
         "the pacemaker may escalate to a terminal verdict on one reading again, which "
         f"cannot tell a momentary gap from a state:\n{pacemaker_prompt}"
+    )
+
+
+@pytest.mark.xdist_group("supervisory-prompts")
+def test_the_pacemaker_is_given_a_bounded_sequence_and_forbidden_the_walks_that_spent_it(
+    pacemaker_prompt: str,
+) -> None:
+    """Two run-scoped reads, one surface, exit — and the three walks it may not take.
+
+    Under `oneharness.check-in.toml`'s 240-second deadline, two recorded turns of this
+    member spent the whole budget on `--help` walks, an unscoped `just runs`, and
+    recursive `rg` over the checkout and `$HOME/.local/state`, and were killed having
+    raised nothing — the one outcome a pacemaker exists to prevent. The prose it was
+    given said only to read the run "with the read-only views", which is a choice, and
+    a choice under a deadline is what was spent. So the sequence is held in the order
+    it is prescribed, the three walks are held forbidden by name, and a question the
+    two readings leave open is held to be reported rather than chased.
+
+    Read off the prompt a real run of the shipped member was given, for the reason the
+    journeys above read it there: the member's `task` is the only prose it gets, and
+    `tests/e2e/test_orchestrate_launch_e2e.py` holds the same sequence on the document.
+    """
+    flat = _flat(pacemaker_prompt)
+
+    missing = out_of_sequence(flat, PACEMAKER_SEQUENCE)
+    assert missing is None, (
+        f"the pacemaker was not given {missing} in its bounded sequence "
+        f"{PACEMAKER_SEQUENCE}, so a turn under its deadline is back to deciding what to "
+        f"read:\n{pacemaker_prompt}"
+    )
+    for named, prohibition in FORBIDDEN_OF_THE_PACEMAKER_TURN:
+        assert prohibition in flat, (
+            f"the pacemaker is no longer forbidden {named} by name in the prose it is "
+            f"given; a recorded turn spent its whole deadline on exactly that:\n"
+            f"{pacemaker_prompt}"
+        )
+    assert UNANSWERED_IS_REPORTED in flat, (
+        "the pacemaker is no longer told that a question its two readings cannot answer "
+        f"is reported as unanswered rather than investigated:\n{pacemaker_prompt}"
     )
 
 

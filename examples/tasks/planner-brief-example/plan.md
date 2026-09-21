@@ -78,6 +78,18 @@ because running them is slow or inconvenient. `git status` reporting nothing to 
 then a correct and complete outcome, not a problem to solve by writing a file nobody
 asked for.
 
+**A publication check runs downstream, so no worker can run it and none is judged on it.**
+The host's required checks and a repository's `pre-push` gate run on the change this
+work becomes, after this dispatch settles: downstream publication checks are not
+runnable by a worker, and a dispatch is never held to one having passed. That holds on a
+retry too. A `checks-failed` retry — a re-dispatch onto the same branch carrying the
+merge path's refusal and `onevcs`'s evidence — is judged on its task's stated local
+acceptance checks: the repair of what the refusal named, proven by the checks the task
+names, and never by the downstream check passing again, which can only happen once the
+retry has settled. One retry that fixed and locally verified the failing test its
+refusal named was failed for not re-running the required check, which left finished
+work unpublished and its dependents skipped until a manager published it by hand.
+
 **Never signal a process you did not identify by PID, and a PID you got from a pattern is
 still a pattern kill.** Several managers share this host, and their dispatches, drivers,
 publications and test servers run under the same few binary names — `just`, `node`,
@@ -205,10 +217,7 @@ runner; it announces itself as an unrelated test failing. One command rules it o
 
     df -h /home .
 
-**The judged lint tier is nondeterministic**, wherever a repository runs one. It has
-already returned opposite verdicts on an identical diff in this workstream. Clear the
-findings it names, then stop — do not re-run hunting a clean sheet. If a rule looks wrong
-or misapplied, say so with evidence rather than editing it.
+**If a rule looks wrong or misapplied, say so with evidence rather than editing it.**
 
 **One suppression policy, and this is the whole of it.** A site-scoped `ignore` directive
 is permitted where the rule is genuinely misapplied at that site **and** the directive
@@ -273,6 +282,19 @@ amend it unilaterally, named two options for its owner, and then stopped for thr
 lost about fifteen minutes of correct work and settled reporting `ahead of main: 0
 commit(s)`.
 
+**Draft a follow-up that can wait; never draft one that cannot.** Work you notice that
+is outside your subtask — a bug beside the code you touched, a missing test or script, a
+stale document, an improvement to this harness or to the context agents are given — is a
+follow-up, and doing it is not yours. Record each one the moment you notice it by piping
+its body into `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"`, whose `--help` names the flags and the four
+headings that body carries; the command stamps where it came from. Do not collect them into
+a list at the end of your last message instead, because nothing reads that list. A draft is
+unverified — a follow-up agent checks every one after the run — and it is not your
+completion report, which still says what you did. Drafting is only for what can wait:
+anything blocking, whether a decision fork, a constraint you cannot meet, or something your
+manager should act on now, goes over `$ORCHESTRATOR_ASK_MANAGER` immediately, as the
+paragraph above says, and is never drafted in its place.
+
 **A GitHub rate-limit refusal that `gh api rate_limit` disagrees with is the secondary
 limiter.** The primary limit is the one that endpoint reports and the one a wait answers.
 The secondary limiter is reported by nothing, polled by nothing, and not waited out by
@@ -281,10 +303,36 @@ limit while `gh api rate_limit` still shows budget, stop making that call: deliv
 result another way, name in your report what was refused and what you tried, and leave the
 retry to a person.
 
-**Publication goes through the harness.** No `git push`, no `gh pr create`, no `gh pr
-merge`. Finish the branch, commit everything, leave the tree clean, and report — the
-lifecycle publishes it after you settle. Publication is explicitly **not** yours to
-perform and **not** part of your acceptance criteria.
+**Publication goes through the harness.** The session branch reaches its remote only
+through `onevcs publish "$ONEVCS_SESSION"`, and its change request is lifted and landed
+by the lifecycle after you settle. No `git push` of the session branch, no `gh pr create`
+for it, no `gh pr ready`, no `gh pr merge`. Finish the branch, commit everything, leave
+the tree clean, and report. Landing it is explicitly **not** yours to perform and **not**
+part of your acceptance criteria. Two things are yours, and each only when this task's
+own `## Additional info` — its own words above these notes — says so:
+
+- **Only when the task's `## Additional info` says the change request may be published
+  early**: `onevcs publish "$ONEVCS_SESSION" --draft [--title T] [--body-file PATH]` opens
+  the session's change request as a draft, and a later `publish --draft` pushes new
+  commits onto that same change request and never opens a second. Commit everything
+  first — a dirty tree is committed for you, under a provenance you did not choose.
+  `onevcs change describe "$ONEVCS_SESSION" --body-file PATH` replaces its description
+  and `onevcs change show "$ONEVCS_SESSION"` reads it back. The description you leave is
+  what the drafter finishes from, so start it with what only you know — the evidence and
+  where it is. Never mark the draft ready; the lifecycle does, after the description is
+  finished. `ONEVCS_SESSION` is in every lifecycle dispatch's environment.
+- **Only when the task's `## Additional info` authorizes a throwaway demonstration change
+  request**: after the draft is open, cut a branch from the session branch, commit the
+  demonstration on it, push it with `git push -u origin <branch>`, open it with
+  `gh pr create --draft --base <session branch> --head <branch> --title "DO NOT MERGE: …"`,
+  capture the evidence — `gh pr view <n> --comments`, `gh pr checks <n>`, and `gh api`
+  **reads** of that change request's own comments, checks and reviews, never a write to
+  anything — then close it with `gh pr close <n> --delete-branch`, return to the session
+  branch, and delete the local branch — a local branch left behind makes the session's
+  close refuse. Its base is always the session branch, never the repository's base; it
+  is never marked ready; it is closed before you finish.
+
+Everything else a push or a change-request verb could do is still not yours.
 
 **Every claim you make about the finished work is true of the tree as it finally
 stands.** That is the property you are held to, and it says nothing about where your
@@ -314,6 +362,20 @@ is correct evidence — provided the citation says which it is. One node of this
 failed for exactly that: its own criteria required its assertions be observed failing, and
 the resulting-tree property above was read as forbidding the citation that requirement
 produces.
+
+**A commit that cannot affect a check leaves that check's evidence standing.** *Could have
+invalidated it* is a condition, and a commit that fails it does not reach the claim — so a
+run taken before a later commit is still evidence for the tree after it, provided the
+report names that commit and says why it is inert for that check. What decides it is what
+the check reads, never what kind of change the commit is. A comment-only or
+documentation-only commit to content a check does not read is inert for that check; the
+same comment is not inert for a check that reads comments, which a judged lint does, so
+that one is re-run or named as not re-checked. A commit touching anything a check reads is
+not inert for it, however small. Two dispatches of one node, about 45 minutes each, were
+refused over nothing but a comment-only final commit after their cited check runs, with no
+change in whether either tree was correct, and the manager had to send *re-run after every
+commit* three separate times to get past it: read as absolute, the conditional rule above
+is one no worker can meet, because every commit comes after the last run.
 
 The ordering demand this replaces — that the report come after everything else, and that
 anything found later be repaired and the whole report written again — is **withdrawn**. It

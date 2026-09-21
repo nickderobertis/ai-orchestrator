@@ -56,7 +56,12 @@ from shared_dispatch_bar import (
     shared_agent_preamble,
     shared_completion_bar,
 )
-from test_dispatch_appendix import DOWNSTREAM_CHECKS_ARE_NOT_JUDGED, WIDE_BAR
+from test_dispatch_appendix import (
+    DOWNSTREAM_CHECKS_ARE_NOT_JUDGED,
+    REPORT_RATHER_THAN_EDIT,
+    RETIRED_JUDGED_LINT_INSTRUCTION,
+    WIDE_BAR,
+)
 
 from orchestrator.criteria_guard import APPENDIX, CRITERIA_HEADING
 from orchestrator.root import REPO_ROOT
@@ -214,6 +219,11 @@ CHECK_SELECTION_POLICY = (
             re.IGNORECASE,
         ),
     ),
+    # The appendix stopped telling a worker to clear a judged lint's findings and then
+    # stop, because every implementation node's criteria demand that tier green over the
+    # finished tree; a preamble saying it instead would be the same contradiction handed
+    # to every dispatch through the other door.
+    Policy("how far to take a judged lint tier", RETIRED_JUDGED_LINT_INSTRUCTION),
 )
 
 #: Every rule about publication the preamble may not state, held **absent** the way the
@@ -485,6 +495,32 @@ def test_what_a_retry_is_judged_on_is_stated_in_the_appendix_alone() -> None:
                 f"{BASE_CONFIG}'s `{field_name}` says {what} ({found.group(0)!r}), which "
                 f"{APPENDIX} already states; dispatch policy has one source"
             )
+
+
+@pytest.mark.reads_docs
+def test_the_report_rather_than_edit_rule_is_stated_in_the_appendix_alone() -> None:
+    """The one sentence the appendix keeps about a judged lint tier, held to its one source.
+
+    It survived the removal of the behaviour beside it because it was never the conflict:
+    a rule that looks wrong or misapplied is reported with evidence rather than edited.
+    Stated here as well it would be two copies of the one judged-lint instruction left,
+    and the appendix's own test holds that instruction to being the only one.
+    """
+    appendix = " ".join(appendix_text().split())
+    assert REPORT_RATHER_THAN_EDIT.search(appendix), (
+        f"{APPENDIX} no longer says that a rule which looks wrong or misapplied is "
+        "reported with evidence rather than edited"
+    )
+    for field_name, clause in (
+        ("user.done_when", shared_completion_bar()),
+        ("system_prompt", " ".join(shared_agent_preamble().split())),
+    ):
+        found = REPORT_RATHER_THAN_EDIT.search(clause)
+        assert found is None, (
+            f"{BASE_CONFIG}'s `{field_name}` says a misapplied rule is reported rather "
+            f"than edited ({found.group(0)!r}), which {APPENDIX} already states; dispatch "
+            "policy has one source"
+        )
 
 
 #: Sentences the appendix carries, each planted into the preamble to prove the gate below

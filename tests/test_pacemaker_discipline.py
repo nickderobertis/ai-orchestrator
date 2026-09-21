@@ -107,6 +107,39 @@ RULES = (
         graph="anything the planner must act on now stays in this update, never only in a draft",
         persona="anything the planner must act on now stays in this update, never only in a draft",
     ),
+    # The bounded sequence, and the three things it forbids by name. Two recorded turns
+    # spent the member's whole finite deadline on command discovery, a host-wide run
+    # listing and recursive searches, and were killed having raised no surface.
+    Rule(
+        name="the run is read with one run-scoped status view",
+        graph="`onepipeline status <run-id>`",
+        persona="`onepipeline status <run-id>`",
+    ),
+    Rule(
+        name="the two readings are the whole of the reading",
+        graph="Those two readings are the whole of",
+        persona="Those two readings are the whole of",
+    ),
+    Rule(
+        name="command discovery is forbidden by name",
+        graph="Never discover commands: no `--help` walk, no `just --list`",
+        persona="Never discover commands: no `--help` walk, no `just --list`",
+    ),
+    Rule(
+        name="host-wide run listings are forbidden by name",
+        graph="Never list runs host-wide: no bare `just runs`, no `onepipeline runs`",
+        persona="Never list runs host-wide: no bare `just runs`, no `onepipeline runs`",
+    ),
+    Rule(
+        name="recursive filesystem searches are forbidden by name",
+        graph="Never search the filesystem recursively: no `rg`, no `grep -r`, no `find`",
+        persona="Never search the filesystem recursively: no `rg`, no `grep -r`, no `find`",
+    ),
+    Rule(
+        name="a question the readings cannot answer is reported unanswered, not investigated",
+        graph="reported in the update as unanswered",
+        persona="reported in the update as unanswered",
+    ),
 )
 
 

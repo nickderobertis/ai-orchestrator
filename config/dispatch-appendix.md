@@ -166,10 +166,7 @@ runner; it announces itself as an unrelated test failing. One command rules it o
 
     df -h /home .
 
-**The judged lint tier is nondeterministic**, wherever a repository runs one. It has
-already returned opposite verdicts on an identical diff in this workstream. Clear the
-findings it names, then stop — do not re-run hunting a clean sheet. If a rule looks wrong
-or misapplied, say so with evidence rather than editing it.
+**If a rule looks wrong or misapplied, say so with evidence rather than editing it.**
 
 **One suppression policy, and this is the whole of it.** A site-scoped `ignore` directive
 is permitted where the rule is genuinely misapplied at that site **and** the directive

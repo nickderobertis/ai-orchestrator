@@ -139,6 +139,14 @@ members:
   # stopped watching. Judgment about the running graph belongs to the `monitor`
   # member above, which stays for the run.
   #
+  # The task also prescribes the turn as a bounded sequence — one run-scoped status
+  # read, the drafts listing, one surface, exit — and forbids command discovery,
+  # host-wide run listings and recursive searches by name, because that deadline is
+  # finite and two recorded turns spent all of it on exactly those, raising nothing.
+  # `tests/e2e/test_supervisory_prompt_discipline_e2e.py` reads the sequence off a
+  # real turn's prompt and `tests/test_pacemaker_discipline.py` reconciles it against
+  # the persona's copy.
+  #
   # Never point this member at ../oneharness.orchestrator.toml: it reads its own
   # config so that it keeps a finite deadline, and re-sharing one file is what
   # would silently take that away. See
@@ -150,20 +158,36 @@ members:
     task: |
       {task}
 
-      Report current progress on that run, for the planner supervising it. Read it
-      with the read-only views, send exactly one `onepipeline surface` naming the run
-      above, and exit. Never send `onepipeline reply`: live graph edits belong to the
-      monitor member, which watches the whole run, and to the planner.
+      Report current progress on that run, for the planner supervising it. Your turn
+      is this bounded sequence, in this order:
 
-      Report how many follow-up drafts the run's draft project holds and their titles,
-      read from the draft root the launch exported with `onetaskgraph task list
-      --source drafts --project <run-id> --json` — an empty list is none, and your
-      working directory needs no configuration for it, because the launch exported the
-      source whole. A draft is an unverified, non-blocking follow-up somebody verifies
-      after the run. You may draft one yourself, with `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"
-      --as pacemaker --member check-in` (its `--help` gives the body), but anything the
-      planner must act on now stays in this update, never only in a draft: nobody reads
-      a draft until the run is over.
+      1. Run `onepipeline status <run-id>` for the run named above — that one run,
+         never the view over every run.
+      2. Run `onetaskgraph task list --source drafts --project <run-id> --json`, the
+         draft root the launch exported. Report how many follow-up drafts the run's
+         draft project holds and their titles; an empty list is none, and your working
+         directory needs no configuration for it, because the launch exported the
+         source whole.
+      3. Compose one compact update from those two readings — the run's state and what
+         is running, then the drafts — and raise it with the one `onepipeline surface
+         --kind check-in` invocation shown below, naming the run above.
+      4. Exit.
+
+      Those two readings are the whole of your reading. Never discover commands: no
+      `--help` walk, no `just --list`. Never list runs host-wide: no bare `just runs`,
+      no `onepipeline runs`. Never search the filesystem recursively: no `rg`, no
+      `grep -r`, no `find` over the checkout or a state directory. Two turns of this
+      member spent their entire deadline on exactly those and were killed having raised
+      nothing, which is the one outcome a pacemaker exists to prevent. A question the
+      two readings cannot answer is reported in the update as unanswered, with what you
+      read, rather than investigated. Never send `onepipeline reply`: live graph edits
+      belong to the monitor member, which watches the whole run, and to the planner.
+
+      A draft is an unverified, non-blocking follow-up somebody verifies after the run.
+      You may draft one yourself before you exit, with `"$ORCHESTRATOR_FOLLOW_UP_DRAFT"
+      --as pacemaker --member check-in` — its `--help` gives the body, and is the one
+      `--help` this turn may read — but anything the planner must act on now stays in
+      this update, never only in a draft: nobody reads a draft until the run is over.
 
       Hand the update to the verb as bytes, on its stdin, never as a command-line
       word:

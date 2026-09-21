@@ -185,6 +185,53 @@ MONITOR_MEMBER = "monitor"
 #: and exits, so an edit it issued would be answered after it stopped watching.
 FORBIDDEN_OF_THE_PACEMAKER = "onepipeline reply"
 
+#: The bounded sequence the pacemaker's `task` prescribes, in the order it prescribes
+#: it: the one run's status, the run's drafts, one surface raised over stdin, exit. Under
+#: `oneharness.check-in.toml`'s finite deadline two recorded turns spent the whole budget
+#: discovering commands and searching the host instead, and were killed having raised
+#: nothing — so the order is the instruction, and it is held in order.
+PACEMAKER_SEQUENCE = (
+    "`onepipeline status <run-id>`",
+    "`onetaskgraph task list --source drafts --project <run-id> --json`",
+    "`onepipeline surface --kind check-in`",
+    "4. Exit.",
+)
+
+#: What that turn forbids by name, one entry per thing a recorded turn spent its
+#: deadline on: command discovery, a host-wide run listing, a recursive search.
+FORBIDDEN_OF_THE_PACEMAKER_TURN = (
+    ("command discovery", "Never discover commands: no `--help` walk, no `just --list`"),
+    (
+        "host-wide run listings",
+        "Never list runs host-wide: no bare `just runs`, no `onepipeline runs`",
+    ),
+    (
+        "recursive filesystem searches",
+        "Never search the filesystem recursively: no `rg`, no `grep -r`, no `find`",
+    ),
+)
+
+#: What the pacemaker does with a question the two readings leave open, so the bound
+#: above cannot be read as a licence to investigate once the readings run out.
+UNANSWERED_IS_REPORTED = "reported in the update as unanswered"
+
+
+def out_of_sequence(prose: str, sequence: tuple[str, ...]) -> str | None:
+    """The first step of ``sequence`` that ``prose`` omits or states out of order.
+
+    Each step is located at its first mention, because a step may be restated later
+    — the surface verb is, in the heredoc that shows its form — and the order under
+    test is the order the steps are first prescribed in.
+    """
+    reached = -1
+    for step in sequence:
+        found = prose.find(step)
+        if found <= reached:
+            return step
+        reached = found
+    return None
+
+
 #: The monitor's role, as `personas/orchestrator.yaml` states it. The composed task says
 #: only what the run is, so this is the only thing that says what the member is for.
 WATCH_ROLE = "Actively monitor one executing tracked graph"
@@ -2393,6 +2440,23 @@ def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
     )
     assert f"Never send `{FORBIDDEN_OF_THE_PACEMAKER}`" in task, (
         f"the pacemaker's task no longer forbids the edit verb by name: {task}"
+    )
+    # The bounded sequence, held in the document beside the live-prompt read
+    # `tests/e2e/test_supervisory_prompt_discipline_e2e.py` makes of the same member.
+    missing = out_of_sequence(task, PACEMAKER_SEQUENCE)
+    assert missing is None, (
+        f"the pacemaker's task no longer prescribes {missing} in its bounded sequence "
+        f"{PACEMAKER_SEQUENCE}, so a turn under its finite deadline is back to deciding "
+        f"what to read: {task}"
+    )
+    for named, prohibition in FORBIDDEN_OF_THE_PACEMAKER_TURN:
+        assert prohibition in task, (
+            f"the pacemaker's task no longer forbids {named} by name; a recorded turn "
+            f"spent its whole deadline on exactly that and raised nothing: {task}"
+        )
+    assert UNANSWERED_IS_REPORTED in task, (
+        "the pacemaker's task no longer says a question its two readings cannot answer "
+        f"is reported as unanswered rather than investigated: {task}"
     )
 
 

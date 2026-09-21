@@ -1571,15 +1571,22 @@ edit table](#live-graph-edits).
 it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
 checking that clock independently of graph reconciliation, including while a node
 is inside a long-running agent step. When due, it claims and dispatches a dedicated
-check-in agent. That read-only actor synthesizes a concise per-workstream update
-from the run journal, status, monitor, telemetry, and labeled history, then sends
-it exactly once with `onepipeline surface` — the verb
-[`personas/check-in.yaml`](../personas/check-in.yaml) names, because that member's
-working directory is the graph member's own scratch and there is no `justfile`
-there to reach. `just channel-surface` is the operator's spelling of the same
-verb. The command queues the non-blocking
-surface without waiting for a planner reply; the reconciler neither authors nor
-relays its content.
+check-in agent. That read-only actor's turn is a bounded sequence its task
+prescribes in order: `onepipeline status <run-id>` for the one run, the run's
+follow-up drafts through `onetaskgraph task list --source drafts --project
+<run-id> --json`, one compact update composed from those two readings and sent
+exactly once with `onepipeline surface`, then exit. Those two readings are the
+whole of its reading — the task forbids command discovery (`--help` walks, `just
+--list`), host-wide run listings (a bare `just runs`, `onepipeline runs`) and
+recursive filesystem searches (`rg`, `grep -r`, `find`) by name, because two
+recorded turns spent the member's whole finite deadline on exactly those and were
+killed having raised nothing — and a question the readings cannot answer is
+reported in the update as unanswered rather than investigated. The surface verb is
+the one [`personas/check-in.yaml`](../personas/check-in.yaml) names, called
+directly because that member's working directory is the graph member's own scratch
+and there is no `justfile` there to reach. `just channel-surface` is the operator's
+spelling of the same verb. The command queues the non-blocking surface without
+waiting for a planner reply; the reconciler neither authors nor relays its content.
 
 **The pacemaker's scope is structural, not advisory.** The member carries its own
 `task` in `graphs/dag-scope.yaml`, and that task both scopes it to reporting and
@@ -1590,9 +1597,12 @@ short turn and exits, so an edit issued from it would be answered by the reconci
 after the member that issued it had stopped watching — nobody left to read the
 outcome, and nobody who saw the state that justified it. Its own task is what makes
 that impossible whatever the run-level task happens to say.
-`tests/e2e/test_orchestrate_launch_e2e.py` launches a run whose pacemaker comes due
-mid-flight and reads the prompt each member was actually given, so a task that is
-present in the file but not reaching the model fails there.
+`tests/e2e/test_supervisory_prompt_discipline_e2e.py` launches the shipped member on
+its own and reads the prompt it was actually given — the sequence, the prohibitions
+and the edit ban — so a task that is present in the file but not reaching the model
+fails there; `tests/e2e/test_orchestrate_launch_e2e.py` holds the same on the
+document, and `tests/test_pacemaker_discipline.py` reconciles the persona's copy
+against it.
 
 Sending and delivery are recorded as two different facts. Queuing the update
 appends `planner-surface-queued` to `events.jsonl` — carrying the surface kind and
@@ -3439,8 +3449,9 @@ Everything a transition used to do, the reconciler does as it goes:
   rejection and a refused publication both keep theirs. Nothing continues one on its
   own; a `retry` or `requeue` edit is what picks it up.
 
-A **cross-DAG reference is not a dependency the graph can satisfy**:
-`run:<id>#<node>` names no node of this graph, so nothing here ever removes it. It
+A **cross-DAG reference is not a dependency the graph can satisfy**: such a
+reference — its spelling is the one [`## Node shapes`](#node-shapes) defines — names
+a node of another run and none of this graph, so nothing here ever removes it. It
 stays on its node and, when a `drop` carries that consumer out, passes to whatever
 still depends on it — the same pass-through the publication anchor gets, for the
 same reason. A watch its own consumer's completion silently ended would stop

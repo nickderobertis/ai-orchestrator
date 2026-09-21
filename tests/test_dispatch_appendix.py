@@ -113,6 +113,34 @@ TARGETED_CHECKS = re.compile(r"only\s+the\s+checks\s+that\s+exercise\s+what\s+yo
 NARROWEST_SCOPE = re.compile(r"narrowest\s+scope\s+each\s+one\s+supports", re.IGNORECASE)
 RERUN_THAT_CHECK = re.compile(r"run\s+\*\*that\s+check\*\*\s+again", re.IGNORECASE)
 
+#: The one thing the file may say specifically about a judged lint tier: a rule that
+#: looks wrong or misapplied is reported with evidence rather than edited. Held on the
+#: rule's load-bearing words for the reason the rules above are.
+REPORT_RATHER_THAN_EDIT = re.compile(
+    r"looks\s+wrong\s+or\s+misapplied,\s+say\s+so\s+with\s+evidence\s+rather\s+than"
+    r"\s+editing\s+it",
+    re.IGNORECASE,
+)
+#: The instruction that stood beside it and is gone, in every form a worker acted on:
+#: clear the findings and *stop*, do not *re-run*, no hunt for a *clean sheet*. It
+#: contradicted the criterion every implementation node of this host states — the judged
+#: lint over the node's own diff green over the finished tree — so a worker that obeyed
+#: it had no green run to show and its judge failed it, twice in one run, until a manager
+#: amended each node by hand. The rerun rule above already governs the tier: fix what the
+#: check named, run that check again.
+RETIRED_JUDGED_LINT_INSTRUCTION = re.compile(
+    r"then\s+stop|do\s+not\s+re-?run|clean\s+sheet|hunting\s+(?:a|for)", re.IGNORECASE
+)
+#: A sentence about that tier, so the absence is asserted where the behaviour would sit
+#: rather than over the whole file, whose other paragraphs may say `re-run` of anything.
+NAMES_THE_JUDGED_TIER = re.compile(
+    r"\b(?:judged\s+(?:lint\s+)?tier|judged\s+lint|lint\s+tier)\b", re.IGNORECASE
+)
+#: Every emphasized rule the file leads a paragraph with. Where the retired behaviour
+#: lived was one of these opening on the judged lint tier, which a reader takes as that
+#: tier's own instruction whatever the lead rule says.
+EMPHASIZED_RULE = re.compile(r"\*\*(?P<rule>[^*]+)\*\*")
+
 #: A repository-wide bar, in the spellings a worker-facing instruction would use. The
 #: file may still name one — it has to, to say who runs it — so this locates the mention
 #: and :data:`DOWNSTREAM` decides whether it is named as somebody else's.
@@ -619,6 +647,58 @@ def test_the_appendix_scopes_each_check_and_reruns_only_the_one_that_reported(
         "run again; confirming a fix by rerunning its neighbours is the round this "
         "instruction replaced"
     )
+
+
+def test_the_appendix_states_no_behaviour_specific_to_the_judged_lint_tier(
+    appendix: str,
+) -> None:
+    """The report-rather-than-edit rule stands, and nothing else is said of that tier.
+
+    The paragraph that led *the judged lint tier is nondeterministic* told a worker to
+    clear the findings it named and then stop, never re-running for a clean sheet, while
+    every implementation node's criteria demand that tier green over the finished tree.
+    A worker cannot obey both: `docs/plan-review-refusals.json` classified the tension
+    `left-to-the-judge` for two weeks and two nodes of one run were amended live over it.
+    What governs the tier is the rerun rule the file opens with, so the file says nothing
+    of its own about stopping or re-running it, and keeps the one sentence that was
+    never the conflict.
+
+    Held on the file rather than driven through a dispatch, as every property in this
+    module is, because the file *is* what a dispatch is given: `tests/ask_seam/launch/
+    test_launch_ask_seam_e2e.py` reads `criteria_guard.appendix_text()` back out of a
+    real planning dispatch's own turn, and `check_appendix` refuses any task not carrying
+    that text verbatim — so a sentence in this file reaches every worker's task by the
+    journey already proven, and a sentence held absent here is absent from them all.
+    """
+    assert REPORT_RATHER_THAN_EDIT.search(appendix), (
+        f"{APPENDIX} no longer says that a rule which looks wrong or misapplied is "
+        "reported with evidence rather than edited; that sentence was never the conflict "
+        "and is the one thing the file says about the judged tier on purpose"
+    )
+    held = [block for block in appendix.split("\n\n") if REPORT_RATHER_THAN_EDIT.search(block)]
+    assert len(held) == 1 and EMPHASIZED_RULE.fullmatch(" ".join(held[0].split())), (
+        f"{APPENDIX} no longer states the report-rather-than-edit rule as a paragraph of "
+        f"its own, the emphasized rule and nothing else ({held!r}); a sentence beside it is "
+        "a second thing said about the judged tier"
+    )
+    led = [
+        rule["rule"]
+        for rule in EMPHASIZED_RULE.finditer(appendix)
+        if NAMES_THE_JUDGED_TIER.search(rule["rule"])
+    ]
+    assert not led, (
+        f"{APPENDIX} again opens an emphasized rule on the judged lint tier ({led!r}); a "
+        "rule led that way is read as that tier's own instruction, and the last one "
+        "contradicted every implementation node's criteria"
+    )
+    for found in NAMES_THE_JUDGED_TIER.finditer(appendix):
+        sentence = sentence_around(appendix, found.start())
+        behaviour = RETIRED_JUDGED_LINT_INSTRUCTION.search(sentence)
+        assert behaviour is None, (
+            f"{APPENDIX} again tells a worker how to behave towards the judged lint tier "
+            f"({behaviour.group(0)!r} in {sentence!r}); a worker that stops after clearing "
+            "its findings has no green run of it to show, and its judge fails it"
+        )
 
 
 def test_what_a_dispatch_claims_is_stated_as_the_property_it_must_have(appendix: str) -> None:
