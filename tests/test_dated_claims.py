@@ -257,7 +257,7 @@ def test_a_claim_that_names_its_re_taking_test_is_accepted() -> None:
     message offers is one an author can actually apply.
     """
     accompanied = (
-        SUPERSEDED_READING_CLAIM + " tests/e2e/test_run_root_lease_e2e.py is what re-takes it."
+        SUPERSEDED_READING_CLAIM + " tests/e2e/test_worktree_pool_e2e.py is what re-takes it."
     )
 
     assert not unaccompanied(accompanied), (

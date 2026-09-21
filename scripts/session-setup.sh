@@ -37,12 +37,6 @@
 #      other repositories, and a report from it — a sibling that failed — is relayed
 #      and never changes this script's exit status.
 #
-# Before any of that it runs `scripts/hold-run-lease.sh`, which holds this
-# dispatch's run-root occupancy lease against a sibling `onevcs session open`
-# reclaiming the directory the dispatch is working in. It is first because the
-# exposure starts the moment the worktree exists, and provisioning is minutes long.
-# See docs/run-root-reclamation.md.
-#
 # `set -e` is omitted so optional tool failures do not prevent the remaining
 # setup steps. Missing or unusable onejudge, oneharness, published-tool, or bun
 # binaries are different: the script finishes the other setup work, then exits
@@ -84,14 +78,6 @@ readonly CARGO_SWEEP_VERSION="0.8.0"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
-# shellcheck source=scripts/claude-alt-config-dir.sh
-source "$SCRIPT_DIR/claude-alt-config-dir.sh"
-# Session setup resolves this fixed sibling path through SCRIPT_DIR at runtime.
-# shellcheck source=scripts/claude-workspace-trust.sh
-source "$SCRIPT_DIR/claude-workspace-trust.sh"
-# The shared resolver is also used by fail-fast wrappers and enables `set -e`;
-# session setup deliberately continues after optional setup failures.
-set +e
 # llmlint forces its nested judge into oneharness read-only mode. The wrapper
 # retains that filesystem boundary while granting network capability so codex
 # does not ask bubblewrap to configure loopback in a forbidden namespace.
@@ -460,16 +446,11 @@ if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
 
-# First, and never fatal: an unheld lease costs a dispatch its working directory,
-# and a failure to take one must not cost it its toolchain as well.
-# llmlint: ignore[changed_behavior_has_e2e] The `||` guards a script that handles and
-# reports every failure of its own and always exits 0, so reaching this branch means
-# bash could not read `scripts/hold-run-lease.sh` at all — a worktree missing a
-# tracked file, which is not a state a journey builds without also breaking the
-# session setup it is driving. What the call itself does is driven end to end by
-# `tests/e2e/test_run_root_lease_e2e.py`.
-bash "$SCRIPT_DIR/hold-run-lease.sh" "$REPO_ROOT" || log "run-root lease unavailable; continuing session setup"
-
+# llmlint: ignore[changed_behavior_has_e2e] No lease is taken before setup because a
+# run root an open session names is never reclaimed: that is `onevcs session open`'s
+# own behaviour since onevcs 0.14.1 (nickderobertis/onevcs#82, widened in 0.15.6),
+# proven in onevcs's repository, and `tests/test_upstream_workaround_rule.py` keeps
+# the retired lease from returning. A journey here would re-test a published CLI.
 toolchain_failed=0
 install_project_dependencies || toolchain_failed=1
 create_plan_root || toolchain_failed=1
@@ -485,22 +466,6 @@ install_bun || toolchain_failed=1
 install_cargo_sweep || log "cargo-sweep unavailable; a Rust identity's idle slots are not maintained until it is (continuing)"
 ensure_codex
 ensure_codex_gate
-# Every claude-code identity is a dispatch identity, so each one needs this
-# checkout marked trusted; `claude_trust_config_paths` names each one and reports
-# whichever it could not, and `mark_claude_config_trust` tolerates a config that is
-# not there yet, which is the state of one nobody has logged into.
-claude_config_paths=()
-mapfile -t claude_config_paths < <(claude_trust_config_paths session-setup)
-managed_checkout_root="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-if [ -n "$managed_checkout_root" ]; then
-  managed_checkout_root="$(dirname "$managed_checkout_root")"
-else
-  managed_checkout_root="$REPO_ROOT"
-fi
-for claude_config_path in ${claude_config_paths[@]+"${claude_config_paths[@]}"}; do
-  mark_claude_config_trust "$claude_config_path" "$managed_checkout_root" "$REPO_ROOT" \
-    || log "Claude workspace trust setup failed for $claude_config_path; continuing"
-done
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).

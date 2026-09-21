@@ -885,7 +885,8 @@ launched before the adoption gets no follow-up run.
 
 The most critical rule of the arrangement: dispatched work runs for hours after the
 turn that launched it, and with nothing watching, the user is in the dark. `just watch`
-is the command, and these properties are what watching means:
+is the command — the engine's own `onepipeline watch` — and these properties are what
+watching means and what that verb is held to:
 
 1. **A watch is armed before you turn to anything else.** A launch is not finished
    until its watch is up; the `Stop` hook `.claude/settings.json` registers refuses to
@@ -901,15 +902,19 @@ is the command, and these properties are what watching means:
    them, because the properties hold by construction inside the command and by
    somebody's memory anywhere else; where a watch would have to end on something the
    verb does not return on, report the missing condition rather than writing a loop.
-   `--until` says what the wait is for: `settled` and `nothing-driving` are checked
-   before any condition a caller named, cannot be skipped, and can each be named, while
-   a waiting surface ends a wait only when `surface` — the default — was asked for, so
-   name both when you want both endings. Re-arm from the `watch-cursor <cursor>` line,
-   never from the sentence around it, and redirect a watch to a file or line-buffer the
-   filter, because a block-buffering pipe makes a healthy quiet run and a dead one read
-   alike.
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned 0.41.0 names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
+   `--until` takes `surface` (the default), `settled`, `nothing-driving`, `node-settled`
+   and `node=<ID>`; `settled` and `nothing-driving` end every wait, while a waiting
+   surface ends one only under `surface`, so name both when you want both. `--timeout
+   none` sets no bound on the wait. The watch returns `0` settled, `3` nothing-driving,
+   `4` surface-waiting, `5` elapsed and `6` node-settled. Re-arm from the `cursor
+   <cursor>` its ending line carries. Its human form is on stderr, so redirect a watch to
+   a file or line-buffer the filter: a block-buffering pipe makes a healthy quiet run and
+   a dead one read alike.
+   <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 5. **The unread-surface line is a HARD REQUIREMENT.** The `N planner update(s) waiting`
-   line the views print per run has to reach you; filtering it out as noise is
+   line the views print per run, and the `N unread planner surface(s)` every watch
+   heartbeat and ending line carries, have to reach you; filtering them out as noise is
    forbidden, because a blocking surface produces no other signal until it is read.
 6. **A grep over the whole of `just status` is watching two subjects at once**: the
    run's own lines, then `oneagentgraph health`'s report about the **host**, whose words
@@ -1063,9 +1068,9 @@ off the turn's own provider rather than off the configs. Each side's order is a
 decision:
 
 - **Agent side** — `oneharness.toml`: both alternate Claude subscriptions first, because
-  the personas are tuned against that model tier, then codex.
-  `scripts/oneharness-agent.sh` adds `--stream`, so the tool transcript reaches the
-  views as it happens rather than after a turn that runs for many minutes.
+  the personas are tuned against that model tier, then codex. The linked engine
+  carries each turn's tool events to the views as they happen, through oneagentgraph's
+  `turn-activity`, rather than after a turn that runs for many minutes.
 - **Judge / simulated-user side** — `oneharness.judge.toml`: codex first, then the
   alternate Claude subscriptions on the cheaper supervisor model.
 - **Monitor side** — `oneharness.orchestrator.toml`: both codex identities first, so
@@ -1415,12 +1420,7 @@ fast-forwards a publication checkout). Never force-push or rewrite history on th
 registered base. Keep the `.claude/settings.json` allowlist current with routine
 commands rather than re-approving them each session.
 
-`core.hooksPath` activates the whole directory. **`post-checkout`** marks whatever git
-checked out trusted for every claude-code identity a dispatch can run as: claude-code
-keys trust on the exact project path, so an untrusted dispatch discards its allowlist
-and blocks on an approval that cannot arrive, which reads from outside as an identity
-with quota left doing nothing. It never fails and never speaks, because a non-zero
-`post-checkout` would break every `git worktree add` here. **`commit-msg`** holds the
+`core.hooksPath` activates the whole directory. **`commit-msg`** holds the
 subject to a Conventional Commit of a type this repository releases from (`feat`,
 `fix`, `perf`, or a `!` breaking type) within onevcs's publication limit, because every
 commit here changes the deliverable and a `docs:` change merges green and never cuts a

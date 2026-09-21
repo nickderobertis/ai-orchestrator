@@ -47,7 +47,7 @@ from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
-from test_watch_selector_e2e import _statuses
+from test_watch_recipe_e2e import heartbeats, returned, unread_count, watch
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -291,27 +291,23 @@ def test_a_watch_over_a_stopped_then_adopted_run_stays_armed(adopted: AdoptedRun
     one would have been armed on nothing.
     """
     started = time.monotonic()
-    watched = _just(
-        "watch",
+    watched = watch(
         adopted.run,
         "--timeout",
         str(ELAPSING_SECONDS),
         "--tick-interval",
         str(TICK_SECONDS),
         environment=adopted.environment,
-        seconds=240,
     )
     waited = time.monotonic() - started
-    reported = watched.stdout + watched.stderr
 
-    statuses = _statuses()
-    assert watched.returncode == statuses["elapsed"], (
-        f"the watch ended at exit {watched.returncode} rather than elapsing "
-        f"({statuses['elapsed']}):\n{reported}"
+    ended = returned(watched)
+    assert ended.condition == "elapsed", (
+        f"the watch ended on {ended.condition!r} rather than elapsing:\n{watched.said}"
     )
-    assert "the wait elapsed with the run still live" in reported, reported
-    assert waited >= ELAPSING_SECONDS, f"the watch returned after {waited:.1f}s:\n{reported}"
-    assert "nothing is driving this run" not in reported, reported
-    assert "the run settled" not in reported, reported
-    heartbeats = [line for line in reported.splitlines() if line.startswith("heartbeat  ")]
-    assert heartbeats, f"the watch elapsed without a heartbeat:\n{reported}"
+    assert watched.status == ended.exit, watched.said
+    assert waited >= ELAPSING_SECONDS, f"the watch returned after {waited:.1f}s:\n{watched.said}"
+    beats = heartbeats(watched)
+    assert beats, f"the watch elapsed without a heartbeat:\n{watched.said}"
+    for line in beats:
+        assert unread_count(line) is not None, line

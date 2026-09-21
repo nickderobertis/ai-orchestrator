@@ -256,10 +256,9 @@ def _worktree_root() -> Path | None:
     """Where a lifecycle dispatch's worktrees and per-run clones live, or nothing.
 
     `onevcs` spells its state root `ONEVCS_HOME` when that is set to something
-    non-empty and `~/.onevcs` otherwise — the resolution `scripts/hold-run-lease.sh`
-    already keeps — and every isolated worktree a dispatch works in is cut under
-    `workspaces/` below it. That is the filesystem the incident above filled, and it is
-    not always the one the runs root is on.
+    non-empty and `~/.onevcs` otherwise, and every isolated worktree a dispatch works
+    in is cut under `workspaces/` below it. That is the filesystem the incident above
+    filled, and it is not always the one the runs root is on.
     """
     named = os.environ.get(ONEVCS_HOME_ENV) or ""
     if not named:

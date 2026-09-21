@@ -95,10 +95,6 @@ def setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
-    # The first thing session setup runs, before any provisioning: a dispatch's run
-    # root is reclaimable by a sibling from the moment it exists, so a fixture without
-    # this script would provision a tree no real session start could reproduce.
-    shutil.copy2(REPO_ROOT / "scripts" / "hold-run-lease.sh", scripts / "hold-run-lease.sh")
     # The sweep session setup runs is a composition of two published verbs rather
     # than one of them, so the wrapper that composes them is part of a repo this
     # script can be run in. `HOME` above already points every family it judges inside

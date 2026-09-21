@@ -34,7 +34,7 @@ at: a graph member's agent side is an oneharness config, because
 `command` provider never serves an agent turn.
 
 Which side an invocation is depends on how `oneagentgraph` pinned it, and it is read
-here by NAME, the same distinction `scripts/oneharness-agent.sh` reads:
+here by the config's NAME:
 
 * `--config .../oneharness.judge.toml` — a two-party member's supervisor. It
   answers the two JSON shapes onejudge asks it for: the supervisor verdict, and

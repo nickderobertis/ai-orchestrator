@@ -82,8 +82,8 @@ SUFFIX="-follow-ups"
 
 #: What `onepipeline watch --timeout 0` exits with, read once, for a run nothing drives —
 #: settled, or nothing driving it — and for one something still drives: a blocking surface
-#: waiting, or the zero-second wait elapsing on a live run. `scripts/watch-run.sh` states
-#: the whole vocabulary.
+#: waiting, or the zero-second wait elapsing on a live run. AGENTS.md's watch rule states
+#: the whole vocabulary, and `tests/test_watch_surface_drift.py` holds it to the engine.
 WATCH_SETTLED=0
 WATCH_NOTHING_DRIVING=3
 WATCH_SURFACE_WAITING=4

@@ -1,34 +1,23 @@
-"""`just watch` against the engine this checkout installed, over runs it really recorded.
+"""`just watch` over a live run: the heartbeat and the three endings only a live run reaches.
 
-`tests/e2e/test_watch_recipe_e2e.py` is the other half and doubles the verb, because no
-run can be made to produce every terminal condition on demand and because the wrapper's
-rendering has to be provable whatever the engine writes. This half gives up that control
-to buy the one thing a double cannot: the conditions a supervisor types reach a **real**
-parser, over a **real** run, and what it refuses is refused here too.
+`tests/e2e/test_watch_recipe_e2e.py` is the other half and drives the same recipe over
+the checked-in runs, which is where the two run-level endings, the ending line's cursor
+and unread count, and the parser's refusals are held. A recorded run will not change
+again, so a wait over one never runs out, no blocking surface is ever waiting, and a
+watch that returns on its first pass is never silent long enough to write a heartbeat —
+`surface-waiting`, `elapsed`, `node-settled` and the heartbeat are all out of reach of
+it, because the engine proves a run is driven from its live driver process rather than
+from anything a fixture could write. So a fixture here **starts a real run**, holds it
+live, and leaves one unanswered blocking question on it, and those four are driven over
+that through the recipe. This is where `AGENTS.md`'s requirement that every watch
+heartbeat carry the unread-surface count is asserted, since it is the only place a
+heartbeat exists.
 
-Which is the half that matters for the selector. The engine declares its `--until`
-vocabulary in its own source and renders the flag with a placeholder, so nothing in
-`--help` says which spellings are read — a double would be this repository restating its
-own guess and agreeing with it. `tests/test_watch_surface_drift.py` reconciles the table
-the wrapper prints against that parser; this module drives the same question through the
-recipe an operator actually types, and through the two refusals that make an accepted
-condition mean anything.
-
-**What a static runs root cannot produce, this module launches rather than delegates.**
-Recorded runs will not change again, so a wait over one never runs out, no blocking
-surface is ever waiting, and a watch that returns on its first pass is never silent long
-enough to write a heartbeat — `surface-waiting`, `elapsed` and the heartbeat are all out
-of reach of them. Those three used to be left to the doubled verb next door, which is a
-statement about the wrapper's rendering and not about the engine: it proves the wrapper
-branches on a status, never that the installed engine returns that status for that state.
-So a fixture here **starts a real run**, holds it live, and leaves one unanswered
-blocking question on it, and the three are driven over that.
-
-The count on those lines is driven at both ends rather than at one. A recorded run
-reports nothing unread and is asserted to say so as a zero; the live run holds exactly
-one unanswered question and is asserted to report a number. A check that accepted either
-form at both ends would pass over a wrapper that had stopped counting, and the count is
-what `AGENTS.md`'s watch rule calls a HARD REQUIREMENT.
+The count is driven at both ends rather than at one. A recorded run reports nothing
+unread and the recipe module asserts it says so as a zero; the live run here holds
+exactly one unanswered question and is asserted to report a number. A check that accepted
+either form at both ends would pass over a watch that had stopped counting, and the count
+is what the watch rule calls a HARD REQUIREMENT.
 
 `node-settled` is driven over that same run, and where it is reachable is the whole of
 why it needs one. Two endings are checked before any condition a caller named and cannot
@@ -40,8 +29,11 @@ incomplete and its driver working. The plan below is two nodes for exactly that 
 A waiting surface is **not** one of those two: that check is itself a selector, so it
 ends a wait only when `surface` was asked for. A bare `--until node-settled` does not ask
 for it, which is why the journey below returns on the node while this run's question is
-still waiting — and why its induced-failure form, which asks for `surface` beside it,
-answers `surface-waiting` instead.
+still waiting.
+
+The statuses are read from `AGENTS.md`'s watch rule through `tests/watch_rule.py` rather
+than written here: the rule is the one statement a supervisor branches on, and
+`tests/test_watch_surface_drift.py` holds it to the engine.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] This
 repository runs one Nx project and splits its test tiers by pytest marker, which is a
@@ -60,23 +52,11 @@ launch is **one**, module-scoped and shared by both, its worker is a stand-in th
 answers without doing any work, and the waits are seconds. Three readings a supervisor
 depends on have no other way to be taken against the engine that will really answer
 them, which is what that launch buys.
-
-llmlint: ignore-file[tests_mirror_real_usage] The statuses and the cursor prefix are read
-back from `scripts/watch-run.sh --print-surface` rather than written here, and that is
-this repository's settled answer to the opposite rule: the wrapper is the one source of
-which status means which condition, so a copy in this module would be a second statement
-of that contract with nothing reconciling it, and it would go on asserting the old
-meanings after the wrapper's moved. `tests/e2e/test_watch_recipe_e2e.py` reads it the
-same way for the same reason. What is driven through the operator-facing command is every
-behaviour under test; only the table the assertions are *compared against* comes from
-that mode.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import re
 import shutil
 import subprocess
 import time
@@ -98,8 +78,17 @@ from project_fixtures import project_from_plan
 # would be the same thing one layer up.
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
+from test_watch_recipe_e2e import (
+    Heartbeat,
+    ending_line,
+    heartbeats,
+    returned,
+    unread_count,
+    watch,
+)
 from waits import deadline
 from waits import timeout as e2e_timeout
+from watch_rule import rule
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -113,282 +102,6 @@ pytestmark = [
     pytest.mark.reads_checkouts,
     pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP),
 ]
-
-#: The checked-in runs this drives the recipe over, so what the engine is asked is fixed
-#: by this tree rather than by whatever this host happens to have run.
-RECORDED_RUNS = ROOT / "tests" / "fixtures" / "timeline-runs"
-#: The wrapper's own account of the surface it restates, for the vocabulary and the
-#: statuses. Read rather than copied: `scripts/watch-run.sh` is the one source of both,
-#: and a copy here would go on asserting the meanings it had before the wrapper moved.
-WRAPPER = ROOT / "scripts" / "watch-run.sh"
-
-#: A recorded run that settled complete, and the ending it answers with.
-SETTLED_RUN = "gate-parity-2"
-#: A recorded run nothing is driving, and the ending it answers with. It is also the run
-#: whose graph holds several nodes, one of them settled `failed` — which is what makes a
-#: condition naming that node answerable rather than refused.
-UNDRIVEN_RUN = "triage-by-root-cause-2"
-#: The node of that run a selector is allowed to name.
-NAMED_NODE = "basis"
-ABSENT_NODE = "no-such-node-in-this-graph"
-UNKNOWN_CONDITION = "when-the-wind-changes"
-
-#: How long the recipe is given. Every invocation here reads the store once, or is
-#: refused before it reads at all, so this is a bound on a wedge rather than on a wait.
-BOUND_SECONDS = 240
-
-
-class Row(NamedTuple):
-    """One row of the wrapper's own account of itself."""
-
-    kind: str
-    rest: str
-
-
-def _surface() -> tuple[Row, ...]:
-    reported = subprocess.run(
-        [str(WRAPPER), "--print-surface"],
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=True,
-    )
-    return tuple(
-        Row(kind=kind, rest=rest)
-        for kind, _, rest in (line.partition(" ") for line in reported.stdout.splitlines())
-    )
-
-
-def _statuses() -> dict[str, int]:
-    """Each terminal condition the wrapper branches on, and the status it gives it."""
-    found: dict[str, int] = {}
-    for row in _surface():
-        if row.kind == "status":
-            code, _, condition = row.rest.partition(" ")
-            found[condition] = int(code)
-    return found
-
-
-def _unbounded_wait() -> str:
-    for row in _surface():
-        if row.kind == "timeout-unbounded":
-            return row.rest
-    raise AssertionError("the wrapper's surface names no unbounded wait")
-
-
-def _watch(
-    run: str, *arguments: str, environment: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    """The real recipe, and nothing doubled.
-
-    Over the checked-in runs root unless a caller names its own, which the live journeys
-    below do: theirs is a run this module launched, and it lives under that launch's own
-    isolated root rather than beside the recorded ones.
-    """
-    return subprocess.run(
-        ["just", "watch", run, *arguments],
-        cwd=ROOT,
-        env=environment or {**os.environ, "ONEPIPELINE_RUNS_DIR": str(RECORDED_RUNS)},
-        text=True,
-        capture_output=True,
-        timeout=BOUND_SECONDS,
-        check=False,
-        stdin=subprocess.DEVNULL,
-    )
-
-
-#: How many planner updates a heartbeat or a terminal line says are unread, out of the
-#: clause the wrapper composes. Read back rather than matched whole, because the number
-#: is the thing: `AGENTS.md`'s watch rule calls this line a HARD REQUIREMENT and what it
-#: forbids losing is the count, not the sentence around it.
-UNREAD_COUNT = re.compile(r"(\d+) planner update\(s\) unread")
-#: The other form of the same clause, for a run with nothing waiting. Asserted beside the
-#: count above and never instead of it: a check that accepted either would pass on a
-#: watch that had stopped counting, which is the state this line exists to make visible.
-NOTHING_UNREAD = "no planner update is unread"
-
-
-def _rendered(kind: str, reported: str) -> list[str]:
-    """Every line of one rendered kind the wrapper wrote — `heartbeat`, `terminal`."""
-    return [line for line in reported.splitlines() if line.startswith(f"{kind}  ")]
-
-
-class RecordedEnding(NamedTuple):
-    """One ending a recorded run really produces, and the run that produces it."""
-
-    run: str
-    #: The engine's own word for it, which is also what the wrapper's table calls it.
-    condition: str
-
-
-#: Two of the five endings the wrapper branches on: `settled` and `nothing-driving` are
-#: what a run that will not change again can answer, and `node-settled` is asked for by
-#: name below.
-RECORDED_ENDINGS = (
-    RecordedEnding(run=SETTLED_RUN, condition="settled"),
-    RecordedEnding(run=UNDRIVEN_RUN, condition="nothing-driving"),
-)
-
-
-@pytest.mark.parametrize("ending", RECORDED_ENDINGS, ids=lambda row: row.condition)
-def test_each_ending_a_recorded_run_produces_is_reported_at_its_own_status(
-    ending: RecordedEnding,
-) -> None:
-    """The recipe hands back the status the engine chose, over a run the engine read.
-
-    This is the half `tests/e2e/test_watch_recipe_e2e.py` cannot answer: there the
-    status is whatever the double was told to exit with, so what it proves is that the
-    wrapper branches on the status rather than on prose. Here the status is the real
-    engine's own verdict on a real run, which is what says the two tables still agree.
-    """
-    result = _watch(ending.run, "--timeout", "0")
-
-    assert result.returncode == _statuses()[ending.condition], result.stdout + result.stderr
-    assert ending.run in result.stdout + result.stderr
-
-
-@pytest.mark.parametrize("ending", RECORDED_ENDINGS, ids=lambda row: row.condition)
-def test_the_unread_surface_clause_reaches_the_caller_from_the_real_stream(
-    ending: RecordedEnding,
-) -> None:
-    """The one signal the watch rule forbids filtering out, off the engine's own record.
-
-    A count of zero is the point rather than a weakness: "nothing is unread" and "this
-    watch stopped telling you" are the two states a supervisor most needs told apart, so
-    the clause has to be *there* whatever the number is.
-
-    **The zero is asserted as a zero**, which is what makes the live journeys below mean
-    something: they read a positive count off a run holding one unanswered question, and
-    a wrapper that had stopped counting altogether would satisfy a check that accepted
-    either form at both ends. Read the pair together — nothing waiting here, one thing
-    waiting there — and it is the count reaching the caller rather than the sentence.
-    """
-    result = _watch(ending.run, "--timeout", "0")
-
-    assert result.returncode == _statuses()[ending.condition], result.stdout + result.stderr
-    terminal = _rendered("terminal", result.stdout)
-    assert len(terminal) == 1, result.stdout
-    assert NOTHING_UNREAD in terminal[0], terminal[0]
-
-
-#: The two node conditions, as a caller spells them: the word and the shape.
-NODE_CONDITIONS = ("node-settled", f"node={NAMED_NODE}")
-
-
-@pytest.mark.parametrize("condition", NODE_CONDITIONS)
-def test_a_node_condition_is_accepted_and_does_not_displace_the_run_level_answer(
-    condition: str,
-) -> None:
-    """Both node conditions reach the parser, are taken, and change no ending here.
-
-    Two properties in one drive, and the second is the one worth the journey. The
-    condition is **accepted** — the verb goes on to read the run and report an ending,
-    where one it did not read is refused at the command line with nothing streamed. And
-    the ending it reports is the run-level one it would have reported anyway: this run is
-    driven by nothing, and `nothing-driving` is one of the two endings checked before any
-    condition a caller named. That is what makes a node condition safe to ask for — a
-    wait told to return on a node can never hide a run nobody is driving — and asking for
-    one here is how it is proven rather than read out of the engine's source.
-
-    It is also why `node-settled` is unreachable over a recorded run, which
-    `tests/test_watch_surface_drift.py` declares at length: every run here is undriven,
-    so one of the endings above it answers first, whatever `--until` it was given. The
-    ending itself is held against the doubled verb next door.
-    """
-    result = _watch(UNDRIVEN_RUN, "--until", condition, "--timeout", "0")
-
-    assert result.returncode == _statuses()["nothing-driving"], result.stdout + result.stderr
-    assert UNDRIVEN_RUN in result.stdout + result.stderr
-    # Accepted rather than refused: a condition the verb does not read is answered at the
-    # command line, and this one produced the rendered stream of a run that was read.
-    assert NAMED_NODE in result.stdout, result.stdout
-
-
-def test_a_condition_the_selector_does_not_offer_is_refused_and_no_ending_is_reported() -> None:
-    """What the engine refuses, this refuses — and reports no terminal condition for it.
-
-    The refusal is the engine's own and reaches the operator unchanged, naming the
-    vocabulary it does have. What the wrapper owes beside it is that its own summary
-    claims no ending: a watch refused before it watched anything must not read as a run
-    that settled, which is the silence-as-progress the whole command exists to end.
-    """
-    result = _watch(UNDRIVEN_RUN, "--until", UNKNOWN_CONDITION, "--timeout", "0")
-
-    assert result.returncode not in _statuses().values(), result.stdout + result.stderr
-    assert UNKNOWN_CONDITION in result.stderr
-    # The engine's refusal names the whole vocabulary, so the words are on that
-    # descriptor by design; what must claim no ending is the one line the wrapper
-    # writes about how the watch ended.
-    summary = [line for line in result.stderr.splitlines() if line.startswith("watch: ")]
-    assert len(summary) == 1, result.stderr
-    assert "none of the terminal conditions" in summary[0], summary[0]
-
-
-def test_a_condition_naming_a_node_the_graph_does_not_hold_is_refused() -> None:
-    """The refusal that makes an accepted condition mean something.
-
-    A parser that read any text after the shape as a node would accept everything, and
-    the two journeys above would then prove nothing about validation. So the other side
-    is driven: the refusal names the node that is not there and the ids that are, which
-    is what lets a supervisor correct the command without reading the run.
-    """
-    result = _watch(UNDRIVEN_RUN, "--until", f"node={ABSENT_NODE}", "--timeout", "0")
-
-    assert result.returncode not in _statuses().values(), result.stdout + result.stderr
-    assert ABSENT_NODE in result.stderr
-    assert NAMED_NODE in result.stderr
-
-
-def test_the_unbounded_wait_this_recipe_offers_is_one_the_verb_takes() -> None:
-    """`--timeout none` is what lets a supervisor write no loop, so it has to parse.
-
-    Driven over a run that has settled, which returns on the first pass whatever the
-    wait says — and under this module's own bound, so a build that took the value and
-    then blocked fails here rather than wedging the tier.
-    """
-    result = _watch(SETTLED_RUN, "--timeout", _unbounded_wait())
-
-    assert result.returncode == _statuses()["settled"], result.stdout + result.stderr
-
-
-def test_the_cursor_a_real_watch_prints_is_one_a_later_watch_resumes_from() -> None:
-    """The round trip, against the engine that mints the cursor rather than a double.
-
-    A caller anchors on the word the wrapper emits the cursor under, hands the token
-    straight back, and gets a watch that does not repeat what the first one showed. The
-    token's *shape* is the engine's, so a build that started minting something the
-    wrapper will not put in a command line is caught here rather than by a double
-    agreeing with this repository's own guess.
-    """
-    first = _watch(SETTLED_RUN, "--timeout", "0")
-    assert first.returncode == _statuses()["settled"], first.stdout + first.stderr
-
-    prefix = next(row.rest for row in _surface() if row.kind == "cursor-prefix")
-    cursors = [
-        line.split(" ", 1)[1] for line in first.stdout.splitlines() if line.startswith(f"{prefix} ")
-    ]
-    assert len(cursors) == 1, first.stdout
-
-    resumed = _watch(SETTLED_RUN, "--cursor", cursors[0], "--timeout", "0")
-
-    assert resumed.returncode == _statuses()["settled"], resumed.stdout + resumed.stderr
-    assert "node-settled" not in resumed.stdout
-
-
-def test_the_recorded_run_this_module_names_holds_the_node_it_drives_a_condition_with() -> None:
-    """The fixture is read rather than trusted, so a shape is driven with a real id.
-
-    A recorded run edited under this module would turn the two accepted-condition
-    journeys into assertions about a node nothing holds: the verb would refuse them for
-    naming an absent node, and the refusal journey below would pass for the wrong
-    reason.
-    """
-    plan = json.loads((RECORDED_RUNS / UNDRIVEN_RUN / "plan.json").read_text(encoding="utf-8"))
-    ids = [task.get("id") for task in plan.get("tasks", [])]
-
-    assert NAMED_NODE in ids, ids
-    assert ABSENT_NODE not in ids
-
 
 #: What the dispatched worker asks its manager, through the real
 #: `scripts/ask-manager.sh`. The text is arbitrary; that a *blocking* surface exists and
@@ -553,7 +266,7 @@ def question_waiting(live_run: LiveRun) -> LiveRun:
     seen = ""
     while time.monotonic() < limit:
         seen = _status(live_run)
-        if UNREAD_COUNT.search(seen) or "planner update(s) waiting" in seen:
+        if "planner update(s) waiting" in seen:
             return live_run
         time.sleep(1.0)
     pytest.fail(f"run {live_run.run} never raised its worker's question:\n{seen}")
@@ -616,7 +329,7 @@ def test_a_node_settling_on_a_live_run_ends_the_watch_at_its_own_status(
     `--until node-settled` rather than a named node, because which of the two nodes
     claimed the question is a race the fixture deliberately does not decide.
     """
-    result = _watch(
+    watched = watch(
         node_settled.run,
         "--until",
         "node-settled",
@@ -625,10 +338,11 @@ def test_a_node_settling_on_a_live_run_ends_the_watch_at_its_own_status(
         environment=node_settled.environment,
     )
 
-    assert result.returncode == _statuses()["node-settled"], result.stdout + result.stderr
-    terminal = _rendered("terminal", result.stdout)
-    assert len(terminal) == 1, result.stdout
-    assert "node-settled" in terminal[0], terminal[0]
+    assert returned(watched).condition == "node-settled", watched.said
+    assert watched.status == rule().statuses["node-settled"], watched.said
+    ended = ending_line(watched)
+    assert ended["condition"] == "node-settled", watched.said
+    assert ended["ending"] == f"node-settled {returned(watched).node}", watched.said
 
 
 def test_a_blocking_question_on_a_live_run_ends_the_watch_at_its_own_status(
@@ -643,24 +357,24 @@ def test_a_blocking_question_on_a_live_run_ends_the_watch_at_its_own_status(
     unread for as long as it stood, which is the silence this whole command exists
     against.
 
-    The count is read off the wrapper's own terminal line as well as the status, because
+    The count is read off the engine's own ending line as well as the status, because
     that clause is the one thing the watch rule forbids dropping and a watch that
     returned on the surface while saying nothing about it would satisfy the status alone.
     """
-    result = _watch(
+    watched = watch(
         question_waiting.run,
         "--tick-interval",
         str(TICK_SECONDS),
         environment=question_waiting.environment,
     )
 
-    assert result.returncode == _statuses()["surface-waiting"], result.stdout + result.stderr
-    terminal = _rendered("terminal", result.stdout)
-    assert len(terminal) == 1, result.stdout
-    counted = UNREAD_COUNT.search(terminal[0])
-    assert counted is not None and int(counted.group(1)) >= 1, (
-        f"the watch returned on a blocking surface and its terminal line reports no "
-        f"unread planner update: {terminal[0]!r}"
+    assert returned(watched).condition == "surface-waiting", watched.said
+    assert watched.status == rule().statuses["surface-waiting"], watched.said
+    ended = ending_line(watched)
+    counted = unread_count(ended["unread"])
+    assert counted is not None and counted >= 1, (
+        f"the watch returned on a blocking surface and its ending line reports no "
+        f"unread planner surface: {ended.group(0)!r}"
     )
 
 
@@ -682,7 +396,7 @@ def test_a_wait_that_runs_out_on_a_live_run_reports_elapsed_and_says_so_as_it_wa
     """
     tick, wait = str(TICK_SECONDS), str(ELAPSING_SECONDS)
 
-    result = _watch(
+    watched = watch(
         question_waiting.run,
         "--until",
         "settled",
@@ -693,16 +407,19 @@ def test_a_wait_that_runs_out_on_a_live_run_reports_elapsed_and_says_so_as_it_wa
         environment=question_waiting.environment,
     )
 
-    assert result.returncode == _statuses()["elapsed"], result.stdout + result.stderr
-    heartbeats = _rendered("heartbeat", result.stdout)
-    assert heartbeats, (
+    assert returned(watched).condition == "elapsed", watched.said
+    assert watched.status == rule().statuses["elapsed"], watched.said
+    beats = heartbeats(watched)
+    assert beats, (
         f"a {wait}s wait at a {tick}s tick over a live run wrote no heartbeat, so from "
-        f"outside it is indistinguishable from a watch that died:\n{result.stdout}"
+        f"outside it is indistinguishable from a watch that died:\n{watched.said}"
     )
-    for line in heartbeats:
-        counted = UNREAD_COUNT.search(line)
-        assert counted is not None and int(counted.group(1)) >= 1, (
+    recorded = [record for record in watched.records if isinstance(record, Heartbeat)]
+    assert len(recorded) == len(beats), watched.said
+    for line, record in zip(beats, recorded, strict=True):
+        counted = unread_count(line)
+        assert counted is not None and counted >= 1, (
             f"this run holds an unanswered blocking question and a heartbeat of the "
-            f"watch over it reports no unread planner update: {line!r}"
+            f"watch over it reports no unread planner surface: {line!r}"
         )
-        assert NOTHING_UNREAD not in line, line
+        assert record.unread == counted, (line, record)

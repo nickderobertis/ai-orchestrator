@@ -38,7 +38,6 @@ items were replaced by three recipe-coverage items.
 | `tests/test_redaction.py` | Keep all | Unit contract for surviving `orchestrator/redaction.py`. |
 | `tests/test_session_setup.py` | Keep all | Each case covers provisioning logic still implemented by `scripts/session-setup.sh`; size is not upstream ownership. |
 | `tests/test_smoke_selector.py` | Keep | Proves the selector in this checkout's `scripts/smoke.sh`. |
-| `tests/test_stream_filter.py` | Keep all | Proves the stream/single-report adaptation in this checkout's harness wrapper. |
 | `tests/dag_ui/test_dag_ui_serving_e2e.py` | Keep all | Drives this checkout's server/proxy recipes around the published UI bundle. UI behavior itself is not asserted. |
 | `tests/e2e/test_delegated_recipes_e2e.py` | Convert | Keeps every existing journey, adds the previously absent real `repo-policy` delegation and `lint-llm-validate` validator journey. |
 | `tests/e2e/test_gate_selection_e2e.py` | Keep all | Drives this checkout's comparison-base script and pre-push hook. |

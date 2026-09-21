@@ -20,9 +20,9 @@ The orchestrator is an agent following [`AGENTS.md`](AGENTS.md).
 
 ## Quick start
 
-On a brand-new machine, do the manual one-time steps in
-[`docs/host-setup.md`](docs/host-setup.md) first — harness logins, workspace trust,
-and the per-machine repository registry are not in this repository.
+On a brand-new machine, do the manual one-time host steps first: log in every harness
+identity and rebuild the per-machine repository registry, neither of which is in this
+repository.
 
 ```sh
 just bootstrap          # install the adopted CLIs + sync the Python env

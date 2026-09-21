@@ -3,11 +3,10 @@
 # resolves the interpreter and hands the payload on standard input to
 # `scripts/stop-unwatched-guard.py`, which is where the contract lives.
 #
-# It is two files for the reason `scripts/watch-run.sh` and `scripts/watch-render.py`
-# are two: the harness registers a command, and what that command has to do is parse
-# somebody else's JSON off standard input and compose JSON back. Doing either in shell
-# is how a session id carrying a quote becomes a broken object, and the harness reads
-# this hook's standard output as its decision.
+# It is two files because the harness registers a command, and what that command has
+# to do is parse somebody else's JSON off standard input and compose JSON back. Doing
+# either in shell is how a session id carrying a quote becomes a broken object, and the
+# harness reads this hook's standard output as its decision.
 #
 # Its own four endings — a checkout this cannot resolve itself in, a Python half that
 # is not beside it, an interpreter it cannot find, and a half that ran and answered
@@ -48,7 +47,7 @@ unguarded() {
 
 # `cd`'s own complaint is sent nowhere: standard error reaches the model, and the
 # warning below is what says this.
-# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and this line; no journey can produce that without racing the filesystem the test itself runs on. `scripts/watch-run.sh` carries the same directive for the same arm.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and this line; no journey can produce that without racing the filesystem the test itself runs on. `scripts/dispatch-env.sh` carries the same directive for the same arm.
 if ! root="$(cd -- "$here/.." 2>/dev/null && pwd -P)"; then
   # shellcheck disable=SC2016  # The backticks are text the person reads; single quotes are what keep them from running.
   unguarded '{"systemMessage": "stop-unwatched-guard: this turn ends unguarded, because the hook could not resolve the checkout it runs from. Whether a run this session owns is unwatched was not asked; ask it yourself with `just unwatched`."}'

@@ -297,9 +297,6 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         # Why an empty transcript surface is an engine-pin question and not a reader one.
         "docs/dag-ui.md": ("the adopted release that is **oneagentgraph {version}**",),
-        # The pre-extraction callout's third denial, beside the onepipeline and onevcs
-        # halves their own gates hold.
-        "docs/onejudge-integration.md": ("`oneagentgraph` {version}, nor `onevcs`",),
     },
     "onevcs": {
         # Which onevcs the lifecycle page's engine-behaviour claims were read at. Every
@@ -319,10 +316,6 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
             # otherwise have no way to tell that from the conclusion having gone too.
             "`onevcs` {version} answers `PublishOutcome::ChangeDraft`",
         ),
-        # The pre-extraction callout's denial: those symbols are absent from the engines
-        # at named releases, and a bump that left the numbers behind would be a denial
-        # about releases nothing runs.
-        "docs/onejudge-integration.md": ("nor `onevcs` {version}.",),
     },
 }
 

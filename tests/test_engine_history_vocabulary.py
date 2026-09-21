@@ -7,7 +7,7 @@ sets are `onepipeline`'s too, and the setting that turns the pointer line on has
 three spellings — a config key, a CLI flag and an environment variable — that are
 `oneharness`'s. This repository restates all of them: in
 `orchestrator/labels.py`, in every `oneharness.*.toml`'s `history_labels` comment,
-in `scripts/oneharness-agent.sh`, and in `docs/orchestration.md` and
+and in `docs/orchestration.md` and
 `docs/telemetry.md`, which tell a manager how to find the sessions one run opened.
 
 **A restated name that stops being the producer's is worse here than a missing
@@ -275,7 +275,6 @@ class RestatingSite(NamedTuple):
 #: not. Keeping this list here rather than in prose is what makes a new site an edit to
 #: this tuple rather than a paragraph nothing reads.
 RESTATING_SITES = (
-    RestatingSite("scripts/oneharness-agent.sh", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("docs/orchestration.md", labels.POINTER_FILE_NAME),
     RestatingSite("docs/orchestration.md", labels.RUN_LABEL),
     RestatingSite("docs/telemetry.md", labels.POINTER_FILE_NAME),

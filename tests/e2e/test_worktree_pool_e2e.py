@@ -17,17 +17,15 @@ sessions against this host's own checkouts: a `session open` reclaims run roots 
 way in, and the real registry's run roots are live dispatches.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] Placed
-beside `tests/e2e/test_run_root_lease_e2e.py`, the journey it is modelled on,
-which drives the same installed `onevcs` through the same recipe from this project; the
-two are one subject — where a session is placed — and a project of this journey's own
-would be a change to `nx.json`, `orchestrator/project.json` and `tests/nx_inputs.py` for
-both at once, which is the module docstring of `tests/e2e/test_repo_registry_apply_e2e.py`'s
-standing follow-up rather than this journey's to make.
+beside `tests/e2e/test_repo_registry_apply_e2e.py`, which drives the same installed
+`onevcs` through the same recipe from this project; a project of this journey's own
+would be a change to `nx.json`, `orchestrator/project.json` and `tests/nx_inputs.py`,
+which is the module docstring of `tests/e2e/test_repo_registry_apply_e2e.py`'s standing
+follow-up rather than this journey's to make.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The same edge, for the
-same reason: the cost class is the lease journey's — a seeded identity, a registry apply
-and a handful of real `onevcs` sessions — and the project both would sit behind is that
-deferred follow-up.
+same reason: the cost class is a seeded identity, a registry apply and a handful of real
+`onevcs` sessions, and the project it would sit behind is that deferred follow-up.
 """
 
 from __future__ import annotations

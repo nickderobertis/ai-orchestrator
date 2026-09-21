@@ -108,26 +108,54 @@ UPSTREAM_REFERENCE = re.compile(
 #: moves what it deletes from here to `RETIRED`.
 RETIRING: tuple[str, ...] = (
     "scripts/sweep.sh",
-    "scripts/watch-run.sh",
-    "scripts/watch-render.py",
     "scripts/stop-unwatched-guard.py",
     "scripts/stop-unwatched-guard.sh",
-    "scripts/oneharness-agent.sh",
-    "scripts/oneharness-orchestrator.sh",
-    "scripts/oneharness-stream.py",
     "scripts/draft-pr-body.sh",
     "scripts/land-branch.sh",
     "scripts/supervision-readings.py",
-    "scripts/hold-run-lease.sh",
-    "scripts/claude-workspace-trust.sh",
     "scripts/dag-ui-server.js",
     "scripts/dag-ui-screens.sh",
-    ".githooks/post-checkout",
-    "docs/run-root-reclamation.md",
 )
 #: Each fill already deleted, mapped to the library verb or configuration that replaced
 #: it, and required not to exist.
-RETIRED: dict[str, str] = {}
+RETIRED: dict[str, str] = {
+    "scripts/hold-run-lease.sh": (
+        "onevcs 0.15.6+: `session open` skips every run root a session record still "
+        "`open` names, so nothing on this side holds a lease"
+    ),
+    "docs/run-root-reclamation.md": (
+        "onevcs 0.15.6+'s own reclaim rule, stated in `docs/repo-lifecycle.md` and "
+        "`AGENTS.md`'s Supervising section"
+    ),
+    "scripts/claude-workspace-trust.sh": (
+        "claude-code's bypass mode, which every dispatch runs: it runs an untrusted "
+        "directory's turn and SessionStart hook, which `just smoke`'s trust probe re-takes"
+    ),
+    ".githooks/post-checkout": (
+        "nothing: it only marked trust, which claude-code's bypass mode does not need"
+    ),
+    "scripts/oneharness-agent.sh": (
+        "the engine starting each side as plain `oneharness run --config <member config>` "
+        "(`bin: oneharness` in config/onejudge.base.yaml), and the graph-native "
+        "`--node-set members.worker.{agent,judge}.{oneharness_config,model}` per side"
+    ),
+    "scripts/oneharness-orchestrator.sh": (
+        "graphs/dag-scope.yaml naming oneharness.orchestrator.toml for its monitor member, "
+        "with scripts/dispatch-env.sh establishing the identity indirections at launch"
+    ),
+    "scripts/oneharness-stream.py": (
+        "onejudge reading oneharness's streamed NDJSON itself (`provider.stream`) and the "
+        "linked engine journaling each tool event as oneagentgraph's `turn-activity`"
+    ),
+    "scripts/watch-run.sh": (
+        "`onepipeline watch` itself, which `just watch` reaches through "
+        "scripts/onepipeline.sh with every argument forwarded"
+    ),
+    "scripts/watch-render.py": (
+        "`onepipeline watch`'s own human form on stderr: heartbeats and the ending line "
+        "carrying the unread-surface count and the cursor, each line flushed as written"
+    ),
+}
 
 
 def _text(path: str) -> str:

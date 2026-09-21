@@ -150,19 +150,9 @@ READS_CHECKOUTS_MARKER = "reads_checkouts"
 #: rather than imported — the exporting side is a published CLI — and reconciled
 #: against those readers by `tests/test_dispatch_environment_contract.py`.
 COMPARISON_ENV_PREFIXES = ("ORCHESTRATOR_COMPARISON_", "ONEVCS_COMPARISON_")
-#: The dispatch ownership stamp `scripts/oneharness-agent.sh` branches on: with one
-#: exported it streams into that directory, without one it takes its `--events`
-#: branch. `tests/e2e/test_quota_fallthrough_e2e.py` drives the second branch.
-AGENT_STATUS_DIR_ENV = "ORCHESTRATOR_AGENT_STATUS_DIR"
-#: Every variable a per-side harness or model choice reaches a child through, as
-#: `scripts/oneharness-agent.sh` resolves them. The wrapper turns its own per-side
-#: variables into oneharness's process-wide ones, so dropping only the first pair
-#: would leave the resolved value the suite actually inherited in place.
+#: oneharness's own process-wide harness and model selections, which an enclosing
+#: turn's environment can carry into every child it runs, this suite included.
 DISPATCH_SELECTION_ENV = (
-    "ORCHESTRATOR_WORKER_HARNESSES",
-    "ORCHESTRATOR_JUDGE_HARNESSES",
-    "ORCHESTRATOR_WORKER_MODEL",
-    "ORCHESTRATOR_JUDGE_MODEL",
     "ONEHARNESS_HARNESSES",
     "ONEHARNESS_MODEL",
 )
@@ -300,12 +290,6 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in tuple(os.environ):
         if key.startswith(COMPARISON_ENV_PREFIXES):
             monkeypatch.delenv(key)
-
-
-@pytest.fixture(autouse=True)
-def _isolate_dispatch_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the enclosing dispatch's ownership stamp out of the suite's own processes."""
-    monkeypatch.delenv(AGENT_STATUS_DIR_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

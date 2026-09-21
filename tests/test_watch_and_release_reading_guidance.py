@@ -1,22 +1,35 @@
 """What `AGENTS.md` tells a supervisor about watching a run, held to what this checkout has.
 
 Three things are reconciled against something other than this repository's own prose —
-the word the wrapper emits the cursor under, the observer a planning launch attaches,
-and the per-record flush the buffering account rests on — because none of them
-announces itself when it drifts: a cursor read from under the wrong word is refused far
-from where it was read, and a buffered watch produces no error at all.
+the word the engine's ending line carries the cursor under, the observer a planning
+launch attaches, and the split between the two forms the watch writes that the
+buffering account rests on — because none of them announces itself when it drifts: a
+cursor read from under the wrong word is refused far from where it was read, and a
+buffered watch produces no error at all.
+
+The two that ask the installed engine are in the uncached `reads_checkouts` tier, because
+their subject is a producer outside this workspace.
+
+llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] The
+marker is this repository's tier mechanism rather than a shortcut around one: one Nx
+project runs four tiers keyed on four `nx.json` named inputs, and `reads_checkouts`
+selects the uncached `orchestrator:test-checkouts` target that exists because no key over
+this workspace can describe an installed engine. A project of its own would need a key
+over the same nothing; `tests/test_nx_cache_scope.py` holds the selectors to a partition
+of the suite. `tests/test_watch_surface_drift.py` carries the same directive for the
+same reason.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
-from typing import NamedTuple
 
 import pytest
+from watch_rule import ENDING_LINE, rule
 
 from orchestrator.root import REPO_ROOT
-
-pytestmark = pytest.mark.reads_docs
 
 #: The manager's own document, and the passage the watch claims live in. A passage
 #: rather than the whole file, because each claim is made where a supervisor is doing
@@ -25,12 +38,11 @@ pytestmark = pytest.mark.reads_docs
 MANAGER = "AGENTS.md"
 WATCH_SECTION = "### Never let dispatched work run unwatched"
 
-#: The wrapper the watch passage documents, and the one place it declares the word a
-#: caller anchors the cursor on.
-WRAPPER = REPO_ROOT / "scripts" / "watch-run.sh"
-#: The renderer whose per-record flush is what makes "every line is written as it
-#: happens" true of this command rather than an aspiration about it.
-RENDERER = "scripts/watch-render.py"
+#: The engine this host installed, from this checkout's own environment, and a recorded
+#: run it is driven over: one that settled, so a watch reads it once and returns.
+ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
+SETTLED_RUN = "gate-parity-2"
 #: The launcher whose observer default is why a planning run has nothing watching it.
 PLAN_LAUNCHER = "scripts/plan.sh"
 #: What that launcher names when the caller names no graph. Quoted as the assignment so
@@ -71,62 +83,40 @@ def _region(opener: str) -> str:
     return "\n".join(lines)
 
 
-class SurfaceRow(NamedTuple):
-    """One row of the wrapper's own account of itself: what kind of thing, and which."""
-
-    kind: str
-    rest: str
-
-
-def _surface_rows() -> list[SurfaceRow]:
-    """The wrapper's own account of what it emits."""
-    # llmlint: ignore[shell_test_tiers_stay_split] This asks the wrapper for one declared
-    # row of its own self-description rather than testing shell behaviour — an offline
-    # sub-second read touching no network, no installed engine and no run — and no tier
-    # here could hold it if it did: this module's subject is `AGENTS.md`, so it is
-    # `reads_docs` and keyed on the whole workspace, and `tests/conftest.py` fails a
-    # `reads_recipes` test that opens a document. The alternative to asking is a second
-    # copy of the word `AGENTS.md` documents, which is the drift this gate prevents.
-    # `tests/test_watch_surface_drift.py` reads the same declaration for the same reason.
-    reported = subprocess.run(
-        [str(WRAPPER), "--print-surface"],
+def _watched() -> subprocess.CompletedProcess[str]:
+    """The installed verb over the settled recorded run, read once."""
+    return subprocess.run(
+        [str(ENGINE), "watch", SETTLED_RUN, "--timeout", "0"],
         text=True,
         capture_output=True,
-        timeout=60,
+        timeout=120,
         check=False,
+        env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(RECORDED_RUNS)},
     )
-    assert reported.returncode == 0, (
-        f"`{WRAPPER.name} --print-surface` exited {reported.returncode}, so what the "
-        f"wrapper emits cannot be read from it:\n{reported.stderr}"
-    )
-    rows = []
-    for line in reported.stdout.splitlines():
-        kind, _, rest = line.partition(" ")
-        rows.append(SurfaceRow(kind=kind, rest=rest))
-    return rows
 
 
-def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_wrapper_emits() -> None:
+@pytest.mark.reads_checkouts
+def test_the_word_a_caller_is_told_to_anchor_on_is_the_word_the_engine_emits() -> None:
     """The documented cursor line and the emission, reconciled.
 
-    `AGENTS.md` tells a caller which line to re-arm from, anchored on one word, and
-    `scripts/watch-run.sh` is what writes that word. Two copies of it is how a caller
-    comes to read the wrong line — which reads as a watch that handed back no cursor,
-    so the caller starts over and re-reads everything the last watch already showed
-    rather than learning that it read the wrong word.
+    `AGENTS.md` tells a caller to re-arm from the cursor the engine's ending line carries,
+    anchored on one word, and says it is the same token as the return record's. Two
+    copies of that word is how a caller comes to read the wrong line — which reads as a
+    watch that handed back no cursor, so the caller starts over and re-reads everything
+    the last watch already showed rather than learning that it read the wrong word.
     """
-    emitted = [row.rest for row in _surface_rows() if row.kind == "cursor-prefix"]
-    assert len(emitted) == 1, (
-        f"`{WRAPPER.name} --print-surface` names {len(emitted)} cursor prefixes, so there "
-        "is no single word for the documented extraction to be reconciled against"
-    )
-    prefix = emitted[0]
+    word = rule().cursor_word
+    watched = _watched()
+    record = json.loads(watched.stdout.splitlines()[-1])
+    ending = ENDING_LINE.match(watched.stderr.splitlines()[-1])
 
-    passage = _flat(_region(WATCH_SECTION))
-    assert f"`{prefix} <cursor>`" in passage, (
-        f"{MANAGER} no longer documents the cursor line as `{prefix} <cursor>`, which is "
-        f"what {WRAPPER.name} emits. Reconcile the passage with the wrapper, or a caller "
-        "anchors on a word no watch writes"
+    assert ending is not None, (
+        f"the engine's last line on standard error is not an ending line:\n{watched.stderr}"
+    )
+    assert f" {word} {record['cursor']}" in ending.group(0), (
+        f"{MANAGER} tells a caller to re-arm from `{word} <cursor>` on the ending line, and "
+        f"the engine's ending line does not carry its return record's cursor that way: "
+        f"{ending.group(0)!r}"
     )
 
 
@@ -147,19 +137,22 @@ def test_the_planning_launch_really_attaches_no_monitor_of_its_own() -> None:
     )
 
 
-def test_the_buffering_account_rests_on_a_renderer_that_really_flushes() -> None:
-    """ "Every line is written as it happens" is a property of this command, not a hope.
+@pytest.mark.reads_checkouts
+def test_the_buffering_account_rests_on_the_forms_the_engine_really_splits() -> None:
+    """The human form on standard error and the machine record on standard output.
 
-    What the passage asks a supervisor to conclude from silence — that a filter is
-    holding the lines rather than that the watch has stopped producing them — is only
-    sound while this end of the pipe writes each line as it arrives. A renderer that
-    stopped flushing would make the whole account backwards: the silence would be the
-    watch's own, and the advice would send a supervisor to fix their filter.
+    What the passage asks a supervisor to redirect or line-buffer is only sound while the
+    two forms are where it says: a filter over standard output would otherwise be
+    filtering the operator's lines, and the silence it reads would be a different stream's.
     """
-    renderer = _text(RENDERER)
-
-    assert "flush=True" in renderer, (
-        f"{RENDERER} no longer flushes each rendered record, so {MANAGER}'s account of a "
-        "buffered watch is about the wrong end of the pipe: the silence would be this "
-        "command's own rather than the filter's"
+    assert "Its human form is on stderr" in " ".join(_region(WATCH_SECTION).split()), (
+        f"{MANAGER} no longer says which descriptor carries which form of a watch"
     )
+
+    watched = _watched()
+
+    assert all(json.loads(line).get("watch") for line in watched.stdout.splitlines()), (
+        f"the engine's standard output carries a line that is not a machine record:\n"
+        f"{watched.stdout}"
+    )
+    assert watched.stderr.splitlines()[-1].startswith("-- watch "), watched.stderr

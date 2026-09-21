@@ -60,9 +60,8 @@ WRAPPER_SCRIPTS = (
     "new-persona.sh",
     "telemetry-server.sh",
     "smoke.sh",
-    # `smoke.sh` names this one as the agent harness; the journeys below assert the
-    # path it hands down, so the file it names has to be the real one.
-    "oneharness-agent.sh",
+    # The trust probe's two JSON steps, which `smoke.sh` runs.
+    "smoke-probe.py",
     # Every `onepipeline` recipe goes through this one, which is where the planner's
     # identity and a launch's harness environment are established.
     "onepipeline.sh",
@@ -125,6 +124,9 @@ WRAPPER_SCRIPTS = (
     "lock-timeout.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
+    # `just smoke` runs the agent config outside any dispatch, so it makes the node
+    # scratch directory the configs map a turn's runtime directory from.
+    "node-scratch-dir.sh",
     # `just repos` goes through this one, which absorbs the flag spelling.
     "repos.sh",
     # The two landing recipes go through this one, which reads the branch and `--repo`
@@ -145,12 +147,6 @@ WRAPPER_SCRIPTS = (
     "status.sh",
     "host.sh",
     "supervision-readings.py",
-    # `just watch` goes through this one, which asks the installed engine whether it
-    # has the verb at all and pipes its machine-readable form through the renderer
-    # beside it — so a checkout without either would delegate through a wrapper that
-    # cannot run.
-    "watch-run.sh",
-    "watch-render.py",
 )
 
 
@@ -529,17 +525,14 @@ DELEGATIONS = (
     ),
     Delegation("host", (), "uv run onepipeline host"),
     Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
-    # The watch recipe reads the engine's own command list before it delegates, so an
-    # engine without the verb is refused in this repository's own words rather than by
-    # whatever the engine says to an unknown subcommand. What it forwards is the
-    # caller's arguments and nothing else: the verb writes both forms unconditionally —
-    # the operator's lines on standard error, the machine-readable one on standard
-    # output — so there is nothing to ask for.
+    # The watch recipe is the engine's own verb with every argument forwarded and
+    # nothing asked first: the verb writes both forms unconditionally — the operator's
+    # lines on standard error, the machine-readable one on standard output — so there is
+    # nothing to ask for.
     Delegation(
         "watch",
-        ("run-1", "--timeout", "600", "--tick-interval", "60"),
-        "uv run onepipeline watch run-1 --timeout 600 --tick-interval 60",
-        before=("uv run onepipeline --help",),
+        ("run-1", "--timeout", "600", "--tick-interval", "60", "--until", "node=a"),
+        "uv run onepipeline watch run-1 --timeout 600 --tick-interval 60 --until node=a",
     ),
     Delegation("results", ("run-1",), "uv run onepipeline results run-1"),
     Delegation("transcript", ("run-1",), "uv run onepipeline transcript run-1"),
@@ -557,7 +550,6 @@ DELEGATIONS = (
     ),
     Delegation("history", (), "uv run oneagentgraph history"),
     Delegation("history-show", ("oh:abc123",), "uv run oneagentgraph history show oh:abc123"),
-    Delegation("smoke", (), "uv run oneagentgraph smoke"),
     # The one recipe here that reaches two verbs. Both are named because a sweep that
     # silently dropped one would report a clean host while a family filled the disk,
     # and both carry the options, because an age floor that meant one thing to one
@@ -772,19 +764,11 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     uv = checkout / "bin/uv"
     # Records the whole command line, and the reply envelope when one is piped in:
     # a verdict recipe's product is the envelope, so a trace without it would say
-    # nothing about the recipe under test. It also answers the engine's own command
-    # list, because `just watch` reads that list before it delegates — asking whether
-    # the installed engine has the verb at all — and a double that answered nothing
-    # would make every row of this table watch a verb it had just been told is absent.
+    # nothing about the recipe under test.
     uv.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
-if [ "$*" = "run onepipeline --help" ]; then
-  echo "Commands:"
-  echo "  watch       Watch one run until something a supervisor has to act on happens"
-  exit 0
-fi
 if [ ! -t 0 ]; then
   while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
 fi
@@ -821,7 +805,6 @@ def _run(
     trace: Path,
     *args: str,
     stdin: str | None = None,
-    status_dir: Path | None = None,
     env: dict[str, str] | None = None,
     stdin_fd: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -862,7 +845,7 @@ def _run(
     # history store would otherwise reach the recipe under test. Each journey states
     # the values it wants, and the default is the operator case: none of them.
     for inherited in (
-        "ORCHESTRATOR_AGENT_STATUS_DIR",
+        "ONEHARNESS_CONFIG",
         "ONEHARNESS_HISTORY_DIR",
         "ONEHARNESS_HISTORY_LABELS",
         # The acting session, for the same reason and with sharper consequences: this
@@ -878,8 +861,6 @@ def _run(
         "CODEX_SESSION_ID",
     ):
         environment.pop(inherited, None)
-    if status_dir is not None:
-        environment["ORCHESTRATOR_AGENT_STATUS_DIR"] = str(status_dir)
     environment.update(env or {})
     return subprocess.run(
         ["just", *args],
@@ -2108,96 +2089,376 @@ def test_the_replan_recipe_says_where_its_derivation_went(tmp_path: Path) -> Non
     assert not trace.exists()
 
 
-def _live_dispatch_status_dir(tmp_path: Path) -> Path:
-    """A live dispatch's status directory, in the shape the agent wrapper validates.
+#: `uv`, as `just smoke` meets it: every command line traced, `oneagentgraph smoke` answered
+#: with the environment it was handed, `python` run for real, and `oneharness run` answered
+#: the way the real CLI reports a trust-probe turn — through `fake_probe_oneharness` below,
+#: which stands in for the paid claude-code turn and nothing above it.
+SMOKE_UV = """#!/usr/bin/env python3
+import json, os, subprocess, sys
 
-    `scripts/oneharness-agent.sh` accepts only `/*/orchestrator-watchdog-*/agent`, and
-    the two markers below are the ones its dispatcher watches to decide whether the
-    agent it launched is still alive.
-    """
-    status_dir = tmp_path / "orchestrator-watchdog-live" / "agent"
-    status_dir.mkdir(parents=True)
-    (status_dir / "agent.pid").write_text("111111\n", encoding="utf-8")
-    (status_dir / "agent.done").write_text("111111\n", encoding="utf-8")
-    return status_dir
+args = sys.argv[1:]
+with open(os.environ["TRACE_FILE"], "a", encoding="utf-8") as trace:
+    trace.write("uv " + " ".join(args) + "\\n")
+    if args[:2] == ["run", "oneagentgraph"]:
+        if os.environ.get("FAKE_SMOKE_EXIT"):
+            raise SystemExit(int(os.environ["FAKE_SMOKE_EXIT"]))
+        for key in ("ONEHARNESS_CONFIG", "ONEHARNESS_HISTORY_DIR", "ONEHARNESS_HISTORY_LABELS",
+                    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", "ONEPIPELINE_NODE_SCRATCH_DIR"):
+            trace.write(f"{key} {os.environ.get(key, '<unset>')}\\n")
+        raise SystemExit(0)
+if args[:2] == ["run", "python"]:
+    os.execv(sys.executable, [sys.executable, *args[2:]])
+if args[:2] == ["run", "oneharness"]:
+    os.execv(sys.executable, [sys.executable, os.environ["FAKE_PROBE_ONEHARNESS"], *args[2:]])
+raise SystemExit(2)
+"""
 
+#: The paid claude-code turn the trust probe spends, doubled at the provider: it reads the
+#: probe directory's `.claude/settings.json` and runs its `SessionStart` hooks unless told
+#: the start skipped them, then reports which candidate ran the way `oneharness run
+#: --format json` does. `FAKE_PROBE_RAN` names that candidate (the first one asked for by
+#: default) and `FAKE_PROBE_HOOKS=skip` is a claude-code that no longer runs the hook;
+#: `FAKE_PROBE_EXIT` is the status the turn ends with, `FAKE_PROBE_REPORT` replaces the
+#: report with text of the journey's own, and `FAKE_PROBE_LOCK` leaves the probe
+#: directory unwritable, so the smoke's cleanup cannot remove it.
+FAKE_PROBE_ONEHARNESS = """import json, os, subprocess, sys
 
-#: What `scripts/oneharness-agent.sh` does to whatever `ORCHESTRATOR_AGENT_STATUS_DIR`
-#: names, reduced to the two writes that matter here: it claims `agent.pid` for itself
-#: and clears the terminal markers. The real wrapper is doubled at this one point
-#: because it then blocks in its heartbeat loop waiting on a harness turn; the
-#: hijacking it is being held to happens before that, and this reproduces it exactly.
-STATUS_CLAIMING_UV = """#!/usr/bin/env bash
-set -euo pipefail
-printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
-printf 'bin %s\\n' "${ONEAGENTGRAPH_ONEHARNESS_BIN:-<unset>}" >>"$TRACE_FILE"
-printf 'status %s\\n' "${ORCHESTRATOR_AGENT_STATUS_DIR:-<unset>}" >>"$TRACE_FILE"
-printf 'history %s\\n' "${ONEHARNESS_HISTORY_DIR:-<unset>}" >>"$TRACE_FILE"
-printf 'labels %s\\n' "${ONEHARNESS_HISTORY_LABELS:-<unset>}" >>"$TRACE_FILE"
-if [ -n "${ORCHESTRATOR_AGENT_STATUS_DIR:-}" ]; then
-  printf '%s\\n' "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"
-  rm -f "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.done"
-fi
+args = sys.argv[1:]
+assert args[0] == "run", args
+option = {args[i]: args[i + 1] for i in range(1, len(args) - 1) if args[i].startswith("--")}
+cwd = option["--cwd"]
+ran = os.environ.get("FAKE_PROBE_RAN") or option["--harness"].split(",")[0]
+if os.environ.get("FAKE_PROBE_HOOKS") != "skip":
+    with open(os.path.join(cwd, ".claude", "settings.json"), encoding="utf-8") as handle:
+        settings = json.load(handle)
+    for matcher in settings["hooks"]["SessionStart"]:
+        for hook in matcher["hooks"]:
+            subprocess.run(hook["command"], shell=True, cwd=cwd, check=True)
+if os.environ.get("FAKE_PROBE_LOCK"):
+    os.chmod(cwd, 0o500)
+print(os.environ.get("FAKE_PROBE_REPORT") or json.dumps({"fallback": {"ran": ran}}))
+raise SystemExit(int(os.environ.get("FAKE_PROBE_EXIT", "0")))
 """
 
 
-@pytest.mark.reads_recipes
-def test_smoke_spends_its_turn_on_this_repositorys_agent_harness(tmp_path: Path) -> None:
-    """The published verb generates its own config, which declares none of these identities.
+#: The agent chain a smoke checkout's `oneharness.toml` names.
+SMOKE_CHAIN = ("claude-code:alternate2", "codex:primary", "claude-code:alternate")
 
-    `oneagentgraph smoke` writes a throwaway `oneharness.toml` naming plain
-    `claude-code` and runs plain `oneharness` against it, so a bare delegation answers
-    `no harness selected` and never exercises the launch path the smoke exists to
-    prove. `scripts/oneharness-agent.sh` is what forces this repository's agent
-    config, and the recipe owes it.
-    """
+
+def _smoke_checkout(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+    """A checkout whose `uv` is `SMOKE_UV`, and the environment that names the probe double."""
     checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(STATUS_CLAIMING_UV)
+    (checkout / "bin/uv").write_text(SMOKE_UV)
+    # The agent chain the probe reads its claude-code identities from, stated here: the
+    # order and the codex identity between them are what the probe has to read through.
+    chain = ", ".join(f'"{entry}"' for entry in SMOKE_CHAIN)
+    (checkout / "oneharness.toml").write_text(f"harnesses = [{chain}]\n", encoding="utf-8")
+    probe = tmp_path / "fake_probe_oneharness.py"
+    probe.write_text(FAKE_PROBE_ONEHARNESS)
+    return checkout, trace, {"FAKE_PROBE_ONEHARNESS": str(probe)}
 
-    result = _run(checkout, trace, "smoke")
+
+def _traced(trace: Path) -> list[str]:
+    return trace.read_text().splitlines()
+
+
+def _handed(trace: Path) -> dict[str, str]:
+    """The environment `oneagentgraph smoke` was handed, as `SMOKE_UV` traced it."""
+    return dict(line.split(" ", 1) for line in _traced(trace)[1:6])
+
+
+def _probe_line(trace: Path) -> str:
+    return next(line for line in _traced(trace) if line.startswith("uv run oneharness run"))
+
+
+@pytest.mark.reads_recipes
+def test_smoke_spends_its_turn_on_this_repositorys_agent_config(tmp_path: Path) -> None:
+    """Plain `oneharness`, under this repository's chain and with its identities resolved.
+
+    `oneagentgraph smoke` runs `oneharness run` in a throwaway directory, where no project
+    config is discovered — so the recipe names `oneharness.toml` as the user-level config
+    and establishes the identity indirections every variant's `env_from` names, exactly as
+    a launch does. Without either, the turn runs somebody else's chain or is refused.
+    """
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env=env)
 
     assert result.returncode == 0, result.stderr
-    traced = trace.read_text().splitlines()
+    traced = _traced(trace)
     assert traced[0] == "uv run oneagentgraph smoke"
-    assert traced[1] == f"bin {checkout / 'scripts/oneharness-agent.sh'}"
+    handed = _handed(trace)
+    assert handed["ONEHARNESS_CONFIG"] == str(checkout.resolve() / "oneharness.toml")
+    assert handed["ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"] != "<unset>"
+    assert "trust probe passed: claude-code:alternate2 ran the SessionStart hook" in result.stderr
 
 
 @pytest.mark.reads_recipes
-def test_smoke_does_not_hijack_the_live_dispatch_it_runs_inside(tmp_path: Path) -> None:
-    """The regression three dead dispatches paid for.
+def test_smoke_drives_claude_code_as_a_dispatch_does_in_an_untrusted_directory(
+    tmp_path: Path,
+) -> None:
+    """The probe's turn: the agent config, claude-code candidates only, bypass mode, fresh cwd."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
 
-    The pre-push hook runs `just smoke` whenever the launch path changed, and a
-    dispatched agent pushes from inside its own dispatch — so this recipe runs with
-    that dispatch's `ORCHESTRATOR_AGENT_STATUS_DIR` in its environment.
-    `scripts/oneharness-agent.sh` takes that value as-is, claims `agent.pid` for
-    itself and clears the terminal markers, so a smoke that passes its caller's value
-    down hands the nested turn the liveness protocol its own dispatcher is watching.
-    When that turn ends without writing `agent.done`, the dispatcher reads a tracked
-    pid that is gone with no exit recorded and kills the tree: "the agent harness
-    process vanished mid-turn without recording an exit".
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(STATUS_CLAIMING_UV)
-    live = _live_dispatch_status_dir(tmp_path)
-
-    result = _run(checkout, trace, "smoke", status_dir=live)
+    result = _run(checkout, trace, "smoke", env=env)
 
     assert result.returncode == 0, result.stderr
-    handed_down = next(
-        line.removeprefix("status ")
-        for line in trace.read_text().splitlines()
-        if line.startswith("status ")
+    probe = _probe_line(trace).split()
+    option = {probe[i]: probe[i + 1] for i in range(len(probe) - 1) if probe[i].startswith("--")}
+    assert option["--config"] == str(checkout.resolve() / "oneharness.toml")
+    assert option["--mode"] == "bypass"
+    # The agent chain's own claude-code identities, in its own order, and nothing else.
+    assert option["--harness"] == "claude-code:alternate2,claude-code:alternate"
+    # Fresh, and under the smoke's own scratch, which the recipe removes on the way out.
+    assert Path(option["--cwd"]).parent.parent == checkout / "scratch-root"
+    assert not Path(option["--cwd"]).exists()
+
+
+@pytest.mark.reads_recipes
+def test_smoke_fails_when_the_session_start_hook_never_ran(tmp_path: Path) -> None:
+    """The property the retired trust marking is replaced by, failing when it stops holding."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "FAKE_PROBE_HOOKS": "skip"})
+
+    assert result.returncode == 1, result.stderr
+    assert "its SessionStart hook never wrote" in result.stderr
+    assert "trust probe passed" not in result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_smoke_never_passes_on_a_probe_no_claude_code_candidate_ran(tmp_path: Path) -> None:
+    """A codex turn that ran the hook proves nothing about claude-code, so it is a failure."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "FAKE_PROBE_RAN": "codex:primary"})
+
+    assert result.returncode == 1, result.stderr
+    assert "no claude-code candidate ran" in result.stderr
+    assert "trust probe passed" not in result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_smoke_fails_when_the_claude_code_turn_itself_failed(tmp_path: Path) -> None:
+    """A claude-code candidate that ran and failed proves nothing, whatever its hook did."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "FAKE_PROBE_EXIT": "1"})
+
+    assert result.returncode == 1, result.stderr
+    assert "the claude-code:alternate2 turn exited 1" in result.stderr
+    assert "trust probe passed" not in result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_smoke_says_an_unreadable_probe_report_is_one_rather_than_a_fall_through(
+    tmp_path: Path,
+) -> None:
+    """A report the probe cannot read is not a chain that ran no claude-code candidate."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    for report in ("not json", "[]", '{"fallback": "claude-code"}'):
+        result = _run(checkout, trace, "smoke", env={**env, "FAKE_PROBE_REPORT": report})
+
+        assert result.returncode == 1, result.stderr
+        assert "is not a oneharness report naming which candidate ran" in result.stderr
+        assert "no claude-code candidate ran" not in result.stderr
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("config", "said"),
+    [
+        ('harnesses = ["codex:primary"]\n', "names no claude-code identity"),
+        ('harnesses = "claude-code:alternate"\n', "is not a list of harness ids"),
+        ("harnesses = [\n", "cannot read"),
+    ],
+    ids=["no-claude-code", "not-a-list", "not-toml"],
+)
+def test_smoke_refuses_a_chain_it_cannot_drive_claude_code_from(
+    tmp_path: Path, config: str, said: str
+) -> None:
+    """The probe's identities are the chain's own, so a chain naming none is refused."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+    (checkout / "oneharness.toml").write_text(config, encoding="utf-8")
+
+    result = _run(checkout, trace, "smoke", env=env)
+
+    assert result.returncode == 1, result.stderr
+    assert said in result.stderr
+    assert "could not prepare the trust probe" in result.stderr
+    assert not [line for line in _traced(trace) if line.startswith("uv run oneharness")]
+
+
+@pytest.mark.reads_recipes
+def test_smoke_reads_a_ran_that_is_not_a_harness_id_as_an_unreadable_report(
+    tmp_path: Path,
+) -> None:
+    """A `fallback.ran` of the wrong type names no candidate, so it is not a fall-through."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(
+        checkout, trace, "smoke", env={**env, "FAKE_PROBE_REPORT": '{"fallback": {"ran": 7}}'}
     )
-    # Isolated, and in the shape the real wrapper accepts — a smoke that picked any
-    # other shape would be refused by `scripts/oneharness-agent.sh` rather than run.
-    assert handed_down != str(live)
-    assert Path(handed_down).name == "agent"
-    assert Path(handed_down).parent.name.startswith("orchestrator-watchdog-")
-    # The live dispatch's own protocol is exactly as it was.
-    assert (live / "agent.pid").read_text(encoding="utf-8") == "111111\n"
-    assert (live / "agent.done").read_text(encoding="utf-8") == "111111\n"
-    # And the isolated directory did not outlive the run.
-    assert not Path(handed_down).exists()
+
+    assert result.returncode == 1, result.stderr
+    assert "is not a harness id" in result.stderr
+    assert "is not a oneharness report naming which candidate ran" in result.stderr
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("tmpdir", "said"),
+    [("relative-tmp", "is relative"), (None, "cannot create a scratch directory under")],
+    ids=["relative", "unwritable"],
+)
+def test_smoke_refuses_a_tmpdir_it_cannot_make_its_scratch_under(
+    tmp_path: Path, tmpdir: str | None, said: str
+) -> None:
+    """Every directory the smoke makes is under TMPDIR, so one it cannot use is refused first."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+    if tmpdir is None:
+        unwritable = tmp_path / "unwritable"
+        unwritable.mkdir(mode=0o500)
+        tmpdir = str(unwritable)
+
+    result = _run(checkout, trace, "smoke", env={**env, "TMPDIR": tmpdir})
+
+    assert result.returncode == 1, result.stderr
+    assert said in result.stderr
+    assert not trace.exists()
+
+
+@pytest.mark.reads_recipes
+def test_the_probe_helper_names_its_usage_when_asked_for_neither_step(tmp_path: Path) -> None:
+    """The helper's two steps are its whole interface, and anything else is a usage error."""
+    checkout, _, _ = _smoke_checkout(tmp_path)
+
+    result = subprocess.run(
+        ["python3", str(checkout / "scripts" / "smoke-probe.py"), "neither"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "usage: smoke-probe.py prepare" in result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_smoke_fails_when_the_agent_chains_own_turn_did_not_pass(tmp_path: Path) -> None:
+    """The first turn's verdict is the smoke's, so the probe is not spent after a failure."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "FAKE_SMOKE_EXIT": "1"})
+
+    assert result.returncode == 1, result.stderr
+    assert "the agent chain's turn did not pass" in result.stderr
+    assert not [line for line in _traced(trace) if line.startswith("uv run oneharness")]
+
+
+@pytest.mark.reads_recipes
+def test_smoke_reports_a_scratch_directory_it_could_not_remove(tmp_path: Path) -> None:
+    """Cleanup is not the verdict: a passing smoke says what it left behind and passes."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "FAKE_PROBE_LOCK": "1"})
+
+    left = list((checkout / "scratch-root").glob("orchestrator-smoke-*"))
+    for directory in left:
+        for locked in directory.rglob("*"):
+            if locked.is_dir():
+                locked.chmod(0o700)
+    assert result.returncode == 0, result.stderr
+    assert "trust probe passed" in result.stderr
+    assert "could not remove" in result.stderr and "remove it by hand" in result.stderr
+    assert left, "the smoke's scratch directory was removed despite the lock"
+
+
+@pytest.mark.reads_recipes
+def test_smoke_drives_only_well_formed_claude_code_identities(tmp_path: Path) -> None:
+    """A chain entry that would split the `--harness` value is not an identity to drive."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+    (checkout / "oneharness.toml").write_text(
+        'harnesses = ["claude-code:a,codex:primary", "claude-code:alternate"]\n',
+        encoding="utf-8",
+    )
+
+    result = _run(checkout, trace, "smoke", env=env)
+
+    assert result.returncode == 0, result.stderr
+    probe = _probe_line(trace).split()
+    assert probe[probe.index("--harness") + 1] == "claude-code:alternate"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("ran", "said"),
+    [
+        ("claude-code:someone-else", "no claude-code candidate ran"),
+        ("Claude Code!", "is not a harness id"),
+    ],
+    ids=["not-a-requested-candidate", "not-an-identity"],
+)
+def test_smoke_passes_only_on_a_candidate_it_asked_for(tmp_path: Path, ran: str, said: str) -> None:
+    """The report's word for who ran is checked against the identities the probe named."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "FAKE_PROBE_RAN": ran})
+
+    assert result.returncode == 1, result.stderr
+    assert said in result.stderr
+    assert "trust probe passed" not in result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_smoke_outside_a_dispatch_makes_the_node_scratch_its_configs_map(tmp_path: Path) -> None:
+    """Every agent-config variant maps `XDG_RUNTIME_DIR` from the engine's node scratch.
+
+    oneharness refuses a variant whose `env_from` source is unset, and outside a dispatch
+    no engine sets it — so the smoke makes one, absolute, under its own root, and removes
+    it with that root.
+    """
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(checkout, trace, "smoke", env={**env, "ONEPIPELINE_NODE_SCRATCH_DIR": ""})
+
+    assert result.returncode == 0, result.stderr
+    made = Path(_handed(trace)["ONEPIPELINE_NODE_SCRATCH_DIR"])
+    assert made.is_absolute()
+    assert made.name.startswith("orchestrator-node-scratch-")
+    assert made.parent.name.startswith("orchestrator-smoke-")
+    assert not made.exists()
+
+
+@pytest.mark.reads_recipes
+def test_smoke_inside_a_dispatch_keeps_the_engines_node_scratch(tmp_path: Path) -> None:
+    """The pre-push hook runs the smoke inside a dispatch, whose scratch is the engine's."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+    engine_scratch = tmp_path / "engine-scratch"
+    engine_scratch.mkdir()
+
+    result = _run(
+        checkout, trace, "smoke", env={**env, "ONEPIPELINE_NODE_SCRATCH_DIR": str(engine_scratch)}
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _handed(trace)["ONEPIPELINE_NODE_SCRATCH_DIR"] == str(engine_scratch)
+    assert engine_scratch.is_dir()
+
+
+@pytest.mark.reads_recipes
+def test_smoke_refuses_a_relative_node_scratch_before_spending_a_turn(tmp_path: Path) -> None:
+    """A runtime directory is read from another working directory, so relative is wrong."""
+    checkout, trace, env = _smoke_checkout(tmp_path)
+
+    result = _run(
+        checkout, trace, "smoke", env={**env, "ONEPIPELINE_NODE_SCRATCH_DIR": "relative/scratch"}
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "smoke: ONEPIPELINE_NODE_SCRATCH_DIR must be absolute" in result.stderr
+    assert not trace.exists()
 
 
 @pytest.mark.reads_recipes
@@ -2208,8 +2469,7 @@ def test_smoke_reads_back_a_history_store_nothing_else_is_writing_to(tmp_path: P
     with this tier's own labels. Left inheriting the ambient store, the smoke reads
     back whichever dispatch on this host wrote last and judges that instead.
     """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(STATUS_CLAIMING_UV)
+    checkout, trace, env = _smoke_checkout(tmp_path)
     ambient = tmp_path / "ambient-history"
     ambient.mkdir()
 
@@ -2217,14 +2477,18 @@ def test_smoke_reads_back_a_history_store_nothing_else_is_writing_to(tmp_path: P
         checkout,
         trace,
         "smoke",
-        env={"ONEHARNESS_HISTORY_DIR": str(ambient), "ONEHARNESS_HISTORY_LABELS": "role=agent"},
+        env={
+            **env,
+            "ONEHARNESS_HISTORY_DIR": str(ambient),
+            "ONEHARNESS_HISTORY_LABELS": "role=agent",
+        },
     )
 
     assert result.returncode == 0, result.stderr
-    traced = dict(line.split(" ", 1) for line in trace.read_text().splitlines() if " " in line)
-    assert traced["history"] != str(ambient)
-    assert Path(traced["history"]).name == "history"
-    assert traced["labels"].startswith("role=smoke,")
+    traced = _handed(trace)
+    assert traced["ONEHARNESS_HISTORY_DIR"] != str(ambient)
+    assert Path(traced["ONEHARNESS_HISTORY_DIR"]).name == "history"
+    assert traced["ONEHARNESS_HISTORY_LABELS"].startswith("role=smoke,")
 
 
 @pytest.mark.reads_recipes

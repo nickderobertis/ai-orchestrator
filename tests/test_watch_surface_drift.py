@@ -1,15 +1,15 @@
-"""The watch surface this repository restates is the one the installed engine offers.
+"""The watch surface `AGENTS.md` states is the one the installed engine offers.
 
-`scripts/watch-run.sh` restates two things about somebody else's interface: the options
-it passes to the engine's blocking watch verb, and the exit statuses it branches on to
-say which of the four terminal conditions happened. A copy drifts in silence, and this
-one drifts in the direction that hurts most — an option the engine no longer takes is a
-watch refused before it watches anything, and a status whose meaning moved is a watch
-reporting the wrong ending while looking healthy.
+`just watch` is the engine's own `onepipeline watch` with every argument forwarded, and
+`AGENTS.md`'s watch rule restates three things about that interface a supervisor acts
+on: the options it names, the `--until` vocabulary, and which exit status means which
+ending. A copy drifts in silence, and this one drifts in the direction that hurts most —
+an option the engine no longer takes is a watch refused before it watches anything, and
+a status whose meaning moved is a supervisor reading the wrong ending off a healthy run.
 
-Neither side of the reconciliation is a table kept here: the wrapper's own
-`--print-surface` is the one source of what this repository passes, and
-`tests/published_surface.py` resolves what the engine has by asking it.
+Neither side of the reconciliation is a table kept here: `tests/watch_rule.py` reads the
+rule's own sentences, and `tests/published_surface.py` resolves what the engine has by
+asking it.
 
 The two checks that ask the engine anything are in the uncached tier, because their
 subject is an installed producer rather than this workspace: a memo keyed on this tree
@@ -29,7 +29,7 @@ compared against this repository's table for equality.
 **The `--until` vocabulary is reconciled by handing every value to the parser**, which
 is the only place it can be: the verb declares the conditions in its own source and puts
 none of them in `--help`, so a read of the help would reconcile this repository's list
-against nothing. Each condition the wrapper offers is therefore given to the installed
+against nothing. Each condition the rule offers is therefore given to the installed
 verb over a recorded run, and the refusal an unrecognised one gets — the verb naming the
 vocabulary it does have — is what this fails on. The one value that is a *shape* rather
 than a word, `node=<ID>`, is driven with a node the recorded run's own graph holds, and
@@ -50,10 +50,8 @@ those three.
 
 What *does* drive them is a run rather than a fixture:
 `tests/e2e/test_watch_selector_e2e.py` launches one, holds it live, and takes all three
-against the installed engine — which is where they belong, since a static runs root is
-this module's subject and a launch is not. The wrapper's own branching on every ending is
-held beside that by `tests/e2e/test_watch_recipe_e2e.py`, which doubles the verb because
-no single run can be made to produce them all on demand.
+against the installed engine through the recipe — which is where they belong, since a
+static runs root is this module's subject and a launch is not.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] The
 marker is this repository's tier mechanism rather than a shortcut around one: it runs
@@ -76,12 +74,15 @@ from typing import NamedTuple
 
 import pytest
 from published_surface import surface_of
+from watch_rule import DOCUMENT, rule
 
 from orchestrator.root import REPO_ROOT
 
-#: The wrapper whose restatement is under test, and the verb it restates.
-WRAPPER = REPO_ROOT / "scripts" / "watch-run.sh"
+#: The verb the rule restates.
 WATCH = ("watch",)
+#: The pin that carries the verb, named in every failure below: it is the one thing a
+#: reader reconciling a moved surface has to move.
+ENGINE_PIN = "config/onepipeline.version"
 #: The engine this host installed, read from this checkout's own environment rather
 #: than from PATH: a sibling checkout's copy is a different release and would be
 #: reconciled against the wrong surface.
@@ -106,7 +107,7 @@ NAMED_NODE_RUN = "triage-by-root-cause-2"
 NAMED_NODE = "basis"
 #: A node no recorded run holds, for the refusal that names the ids the graph does hold.
 ABSENT_NODE = "no-such-node-in-this-graph"
-#: What the shape in the wrapper's own vocabulary stands in for. Substituted with a node
+#: What the shape in the rule's vocabulary stands in for. Substituted with a node
 #: the recorded run holds before the shape is driven, so what is reconciled stays the
 #: spelling rather than whether a particular id exists.
 NODE_ID_PLACEHOLDER = "<ID>"
@@ -161,75 +162,28 @@ class Terminal(NamedTuple):
 #: `tests/e2e/test_watch_selector_e2e.py` launches a run and drives both halves of that
 #: rather than asserting either from the source.
 #:
-#: They are declared here so the set cannot quietly grow, and the wrapper's branching on
-#: every ending is held end to end by `tests/e2e/test_watch_recipe_e2e.py`, which doubles
-#: the verb for exactly this reason.
+#: They are declared here so the set cannot quietly grow.
 UNDRIVABLE_CONDITIONS = frozenset({"surface-waiting", "elapsed", "node-settled"})
 
 
-def _engine_pin() -> str:
-    """The pin that carries the verb, read from the wrapper rather than restated here.
-
-    It is named in every failure below for the same reason the wrapper names it in its
-    own refusal — it is the one thing a reader has to move — and taken from the wrapper
-    because a second copy of a path is a second thing to keep current.
-    """
-    for kind, rest in _restatement():
-        if kind == "pin":
-            return rest
-    raise AssertionError("the wrapper's surface names no engine pin")
-
-
 def _restated_options() -> frozenset[str]:
-    """Every option `scripts/watch-run.sh` passes through to the verb."""
-    return frozenset(name for kind, name in _restatement() if kind == "option")
+    """Every option the rule names for the verb."""
+    return rule().options
 
 
 def _restated_conditions() -> tuple[str, ...]:
-    """Every `--until` condition `scripts/watch-run.sh` offers an operator."""
-    return tuple(rest for kind, rest in _restatement() if kind == "until")
+    """Every `--until` condition the rule offers a supervisor."""
+    return rule().conditions
 
 
 def _restated_unbounded_wait() -> str:
-    """The spelling the wrapper offers for a wait with no bound at all."""
-    for kind, rest in _restatement():
-        if kind == "timeout-unbounded":
-            return rest
-    raise AssertionError("the wrapper's surface names no unbounded wait")
+    """The spelling the rule offers for a wait with no bound at all."""
+    return rule().unbounded
 
 
 def _restated_statuses() -> dict[int, str]:
-    """Every exit status the wrapper branches on, and what it calls that condition."""
-    found: dict[int, str] = {}
-    for kind, rest in _restatement():
-        if kind == "status":
-            code, _, condition = rest.partition(" ")
-            found[int(code)] = condition
-    return found
-
-
-def _restatement() -> list[tuple[str, str]]:
-    """The wrapper's own account of the surface it restates, as `(kind, rest)` rows."""
-    reported = subprocess.run(
-        [str(WRAPPER), "--print-surface"],
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=False,
-    )
-    assert reported.returncode == 0, (
-        f"`{WRAPPER.name} --print-surface` exited {reported.returncode}, so the surface "
-        f"this repository restates cannot be read from it:\n{reported.stderr}"
-    )
-    rows: list[tuple[str, str]] = []
-    for line in reported.stdout.splitlines():
-        kind, _, rest = line.partition(" ")
-        rows.append((kind, rest))
-    assert ("verb", WATCH[0]) in rows, (
-        f"`{WRAPPER.name} --print-surface` named no `{WATCH[0]}` verb, so what it "
-        f"restates cannot be reconciled with what the engine offers:\n{reported.stdout}"
-    )
-    return rows
+    """Every exit status the rule names, and the ending it gives it."""
+    return {status: ending for ending, status in rule().statuses.items()}
 
 
 def _recorded_runs() -> list[str]:
@@ -345,7 +299,7 @@ def disagreements(restated: dict[int, str], observed: dict[str, Terminal]) -> li
     reproduce it.
 
     Compared for **equality** on the condition's name rather than by looking for the
-    wrapper's words inside the verb's prose. The wrapper names each condition with the
+    rule's words inside the verb's prose. The rule names each condition with the
     engine's own word, so there is nothing to interpret, and a swap — the shape that
     keeps every number and changes what two of them mean — is exactly what an equality
     catches and a prose search does not.
@@ -380,9 +334,9 @@ def test_every_option_this_repository_passes_is_one_the_engines_watch_verb_takes
     missing = sorted(option for option in _restated_options() if not surface.accepts(WATCH, option))
 
     assert not missing, (
-        f"`{WRAPPER.name}` passes options the pinned onepipeline's `{WATCH[0]}` verb does "
-        f"not accept: {', '.join(missing)}. Reconcile the wrapper's restatement with the "
-        f"engine adopted at {_engine_pin()}, or a watch is refused before it watches anything"
+        f"{DOCUMENT}'s watch rule names options the pinned onepipeline's `{WATCH[0]}` verb "
+        f"does not accept: {', '.join(missing)}. Reconcile the rule with the "
+        f"engine adopted at {ENGINE_PIN}, or a watch is refused before it watches anything"
     )
 
 
@@ -392,9 +346,9 @@ def test_every_status_the_verb_returns_is_paired_with_the_condition_this_reposit
 ):
     """A status that kept its number and changed its meaning is the dangerous drift.
 
-    The wrapper decides which of the four terminal conditions happened from the verb's
-    exit status alone — that is the point of the verb, and the alternative is matching
-    prose, which is how a watch here reported a healthy dispatch dead. So each status
+    A supervisor decides which terminal condition happened from the verb's exit status
+    alone — that is the point of the verb, and the alternative is matching prose, which
+    is how a watch here once reported a healthy dispatch dead. So each status
     the installed verb really returns is paired against the condition the verb itself
     names in the same record, and against what this repository calls that status.
     """
@@ -404,10 +358,10 @@ def test_every_status_the_verb_returns_is_paired_with_the_condition_this_reposit
     disagreed = disagreements(_restated_statuses(), observed)
 
     assert not disagreed, (
-        f"`{WRAPPER.name}`'s exit statuses and the pinned onepipeline's `{WATCH[0]}` verb "
-        "disagree:\n"
+        f"{DOCUMENT}'s watch-rule exit statuses and the pinned onepipeline's `{WATCH[0]}` "
+        "verb disagree:\n"
         + "\n".join(f"  - {entry}" for entry in disagreed)
-        + f"\nReconcile the wrapper's restatement with the engine adopted at {_engine_pin()}"
+        + f"\nReconcile the rule with the engine adopted at {ENGINE_PIN}"
     )
 
 
@@ -454,12 +408,11 @@ def test_every_until_condition_this_repository_offers_is_one_the_verb_reads(
     answered = _driven(NAMED_NODE_RUN, "--until", spelled, "--timeout", READ_ONCE)
 
     assert _took_it(answered), (
-        f"`{WRAPPER.name}` offers `--until {condition}`, and the pinned onepipeline's "
-        f"`{WATCH[0]}` verb did not read the run under it — it exited "
-        f"{answered.returncode} saying: {answered.stderr.strip()}. Reconcile the "
-        f"wrapper's vocabulary with the engine adopted at {_engine_pin()}, or an "
-        "operator following this repository's own usage line is refused by a verb they "
-        "did not think they were arguing with"
+        f"{DOCUMENT}'s watch rule offers `--until {condition}`, and the pinned "
+        f"onepipeline's `{WATCH[0]}` verb did not read the run under it — it exited "
+        f"{answered.returncode} saying: {answered.stderr.strip()}. Reconcile the rule's "
+        f"vocabulary with the engine adopted at {ENGINE_PIN}, or a supervisor following "
+        "it is refused by a verb they did not think they were arguing with"
     )
 
 
@@ -476,8 +429,8 @@ def test_a_condition_naming_a_node_the_run_does_not_hold_is_refused_by_the_verb(
 
     assert not _took_it(answered), (
         f"`onepipeline {WATCH[0]} {NAMED_NODE_RUN} --until node={ABSENT_NODE}` read the "
-        "run anyway, so the conditions this wrapper passes through are validated "
-        f"against nothing. Reconcile with the engine adopted at {_engine_pin()}"
+        "run anyway, so the conditions the rule offers are validated "
+        f"against nothing. Reconcile with the engine adopted at {ENGINE_PIN}"
     )
     assert ABSENT_NODE in answered.stderr and NAMED_NODE in answered.stderr, (
         f"the verb refused `--until node={ABSENT_NODE}` without naming both that node "
@@ -488,10 +441,10 @@ def test_a_condition_naming_a_node_the_run_does_not_hold_is_refused_by_the_verb(
 
 @pytest.mark.reads_checkouts
 def test_the_unbounded_wait_this_repository_offers_is_one_the_verb_takes() -> None:
-    """`--timeout none` is a spelling this wrapper puts in front of an operator.
+    """`--timeout none` is a spelling the rule puts in front of a supervisor.
 
     It is the value that lets a supervisor write no loop at all, and it is distinct from
-    the `0` whose published meaning is to read the run once and return — so a wrapper
+    the `0` whose published meaning is to read the run once and return — so a rule
     offering a spelling the verb dropped would compose a watch refused before it watched
     anything. Driven over a run that has settled, which returns on the first pass
     whatever the wait is, and under a bound of this module's own so a build that took the
@@ -502,10 +455,10 @@ def test_the_unbounded_wait_this_repository_offers_is_one_the_verb_takes() -> No
     answered = _driven(SETTLED_RUN, "--timeout", unbounded, timeout=120)
 
     assert _took_it(answered), (
-        f"`{WRAPPER.name}` offers `--timeout {unbounded}`, and the pinned onepipeline's "
+        f"{DOCUMENT}'s watch rule offers `--timeout {unbounded}`, and the pinned onepipeline's "
         f"`{WATCH[0]}` verb did not read the run under it — it exited "
         f"{answered.returncode} saying: {answered.stderr.strip()}. Reconcile with the "
-        f"engine adopted at {_engine_pin()}"
+        f"engine adopted at {ENGINE_PIN}"
     )
     reported = terminal_record(answered.stdout)
     assert reported is not None and reported.exit == answered.returncode, (
@@ -561,6 +514,7 @@ def test_the_terminal_record_is_read_as_the_verbs_own_pairing() -> None:
     assert terminal_record('{"watch":"return","condition":"settled"}\n') is None
 
 
+@pytest.mark.reads_docs
 def test_the_reconciliation_names_a_swapped_and_an_unknown_exit_status() -> None:
     """The comparison bites on every shape of drift, and is quiet on agreement.
 

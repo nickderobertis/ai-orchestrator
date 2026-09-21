@@ -740,17 +740,14 @@ unwatched *args:
     @./scripts/onepipeline.sh unwatched "$@"
 
 # Watch one run until something a supervisor has to act on happens: `just watch
-# <run-id> [OPTIONS]`. AGENTS.md's watch rule states what a watch owes and why this
-# exists rather than a loop over `just monitor`.
-#
-# Its options and terminal exit statuses are deliberately not restated here:
-# `scripts/watch-run.sh --print-surface` prints them, and that is what
-# `tests/test_watch_surface_drift.py` reconciles against the installed engine. A copy in
-# this comment is a copy that gate does not read.
+# <run-id> [OPTIONS]`, the engine's own `onepipeline watch` with every argument
+# forwarded. AGENTS.md's watch rule states what a watch owes, its `--until` vocabulary
+# and its exit statuses, and `tests/test_watch_surface_drift.py` reconciles those
+# against the installed engine.
 # llmlint: ignore[tool_output_is_signal] Watching a run as it happens is the whole of what this command is for; the per-event and per-heartbeat lines are its product, and the unread-surface count inside a heartbeat is the one signal AGENTS.md forbids filtering out.
-[doc('Watch one run, blocking, with heartbeats that carry the unread-surface count; see AGENTS.md and `scripts/watch-run.sh --print-surface`.')]
+[doc('Watch one run, blocking, with heartbeats that carry the unread-surface count; see AGENTS.md.')]
 watch *args:
-    @./scripts/watch-run.sh "$@"
+    @./scripts/onepipeline.sh watch "$@"
 
 # Session timing and usage, for every run or one named run.
 # `--breakdown` renders the operator timing view.
@@ -839,15 +836,15 @@ new-persona *args:
 validate-personas *args:
     @uv run oneagentgraph persona validate "${@:-personas}"
 
-# Spend one real harness turn proving prompt delivery and complete history telemetry.
-# Kept out of `gate`; pre-push selects it only for launch-path changes.
+# Spend real harness turns proving prompt delivery, complete history telemetry, and
+# that claude-code runs an untrusted directory's SessionStart hook under a dispatch's
+# bypass mode. Kept out of `gate`; pre-push selects it only for launch-path changes.
 #
-# `scripts/smoke.sh` is not ceremony around the published verb: `oneagentgraph
-# smoke` runs plain `oneharness` against a config it generates itself, and it takes
-# the caller's `ORCHESTRATOR_AGENT_STATUS_DIR` as-is. The wrapper supplies this
-# repository's agent harness and an isolated status directory, which is what stops a
-# smoke run from inside a dispatch — where the pre-push hook runs it — from
-# hijacking that dispatch's own liveness protocol. See the script's header.
+# `scripts/smoke.sh` is not ceremony around the published verb: `oneagentgraph smoke`
+# runs plain `oneharness` in a throwaway directory where no project config is found,
+# so the script names this repository's agent config and establishes the indirections
+# its variants' `env_from` needs, then runs the trust probe beside it. See its header.
+# llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] The smoke is not in an affected tier: `just gate` never runs it, and the pre-push hook selects it only through `scripts/pre-push-smoke-needed.sh`, for a pushed diff touching the harness routing files it exists to prove, which is the one change that can break them and the only time its paid turns buy anything; this node's task places the trust probe on exactly this path.
 smoke *args:
     @./scripts/smoke.sh "$@"
 

@@ -353,15 +353,12 @@ below](#where-a-session-is-placed-and-what-a-close-returns) says which and what 
 costs — and everything in this paragraph is about the run roots under `runs/`. A
 process working in a run root holds a **shared** occupancy lease on it for the
 duration of the `onevcs` command it is running: `open`, `adopt`, `close` and the
-publication paths each take one and drop it as they return. **Nothing holds one in
-between**, which is most of a dispatch's life. Abandoned run directories are
-reclaimed by the next `session open` on the same identity, and that decision reads
-exactly two things: nobody holds the shared lease *at that instant*, and the clone
-has no commit that never reached origin. It does **not** consult the session record,
-so the run root of a dispatch that is working right now is reclaimable — which
-destroyed three dispatches here on 2026-08-22. The mechanism, the mitigation this
-repository takes at every session start, and the upstream fix are
-[A dispatch's run root, and what may delete it](run-root-reclamation.md); a pooled
+publication paths each take one and drop it as they return. Abandoned run directories
+are reclaimed by the next `session open` on the same identity, which skips every run
+root a session record still `open` names — whatever became of the process that opened
+it — and reclaims any other only when nobody holds the shared lease at that instant
+and the clone has no commit that never reached origin. So a dispatch's run root is
+protected for as long as its session is open, with nothing held on this side; a pooled
 slot is outside that reclamation and outside `onevcs sweep`, which names the pool as a
 family it does not reach. The newest **3** dead runs holding unpublished work
 are kept, matching pytest's useful bounded failure history. A retry or recovery

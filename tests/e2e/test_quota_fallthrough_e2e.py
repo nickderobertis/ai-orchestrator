@@ -16,17 +16,22 @@ chain, because falling through one that already spent tokens would buy the same
 work twice.
 
 A real 429 is an external event no dispatch controls, so the proof is the record's
-shape driven through the real wrapper, the real `oneharness.toml` chain, and the
-real CLI. No status directory is exported, so the wrapper takes its `--events`
-branch: the branch a turn nobody is watching takes, and the one whose failing exit
-returns rather than parking for a dispatcher that does not exist here.
+shape driven through the real `oneharness.toml` chain and the real CLI, invoked the way
+the engine invokes it for a dispatch's turn: `oneharness run --config oneharness.toml
+--format json --compact --events`.
 """
 
 # llmlint: ignore-file[e2e_not_mocked] the repository requires faking the paid agent
 # harness and does it here at its designated seam (oneharness's own shipped mock
 # responder for the rejecting candidate, `tests/e2e/fake_codex.py` for the one that
-# takes over); the wrapper, the agent config, the fallback chain, the classifier and
-# the report are all real.
+# takes over); the agent config, the fallback chain, the classifier and the report are
+# all real.
+# llmlint: ignore-file[shell_test_tiers_stay_split] Nothing here is expensive: both
+# providers are doubled, the whole module ran in 0.64s with its slowest call at 0.19s
+# under `pytest --durations`, and the real `oneharness` CLI it drives is the one
+# tests/e2e/test_oneharness_timeout_e2e.py and tests/e2e/test_claude_identity_routing_e2e.py
+# already drive over the same configs in this tier, so a project of its own would
+# isolate no cost.
 
 from __future__ import annotations
 
@@ -274,8 +279,8 @@ def _read_turn(completed: subprocess.CompletedProcess[str], history_dir: Path) -
     )
 
 
-def _wrapper_turn(tmp_path: Path, oneharness_bin: str, selection: Mapping[str, str]) -> Turn:
-    """Run one agent-side turn through the real wrapper, chain and classifier.
+def _chain_turn(tmp_path: Path, oneharness_bin: str, selection: Mapping[str, str]) -> Turn:
+    """Run one agent-side turn through the real agent config, chain and classifier.
 
     `selection` is the only thing a journey varies, and it is an environment: which
     identities the chain names and in what order, which provider binary stands in
@@ -294,10 +299,14 @@ def _wrapper_turn(tmp_path: Path, oneharness_bin: str, selection: Mapping[str, s
     return _read_turn(
         subprocess.run(
             [
-                "bash",
-                str(REPO_ROOT / "scripts" / "oneharness-agent.sh"),
+                str(oneharness),
                 "run",
+                "--config",
+                str(REPO_ROOT / "oneharness.toml"),
+                "--format",
+                "json",
                 "--compact",
+                "--events",
                 "--prompt",
                 "answer this turn",
             ],
@@ -320,7 +329,7 @@ def _wrapper_turn(tmp_path: Path, oneharness_bin: str, selection: Mapping[str, s
 
 def _agent_turn(tmp_path: Path, oneharness_bin: str, rejection: Rejection) -> Turn:
     """Run one agent-side turn whose first candidate answers with `rejection`."""
-    return _wrapper_turn(
+    return _chain_turn(
         tmp_path,
         oneharness_bin,
         {
@@ -343,7 +352,7 @@ def _codex_first_turn(tmp_path: Path, oneharness_bin: str, provider: Mapping[str
     so "the chain never reached it" is read off a candidate that would have
     answered — see `UNREACHED_ANSWER`.
     """
-    return _wrapper_turn(
+    return _chain_turn(
         tmp_path,
         oneharness_bin,
         {

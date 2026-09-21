@@ -1,4 +1,4 @@
-# llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real wrapper boundary prove this chain without spending another paid model invocation.
+# llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real llmlint wrapper boundary (scripts/llmlint-oneharness.sh) prove this chain without spending another paid model invocation.
 # LLM lint is a third, independent side of the harness, with its own priority
 # order — it keeps that order even though the worker's discovered oneharness.toml
 # prefers Claude Code.

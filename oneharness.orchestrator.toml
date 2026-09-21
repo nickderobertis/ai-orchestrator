@@ -1,7 +1,6 @@
 # Orchestrator side of the onejudge conversation: WHICH harness + model drives a
-# tracked graph. Named by `graphs/dag-scope.yaml`'s `orchestrator` member as its
-# agent side, and forced by `scripts/oneharness-orchestrator.sh` on the manual and
-# smoke path; discovery from the repo root would otherwise hand this role the
+# tracked graph. Named by `graphs/dag-scope.yaml`'s `monitor` member as its agent
+# side, which is what keeps discovery from the repo root from handing this role the
 # worker's `oneharness.toml`. See docs/onejudge-integration.md.
 #
 # This file drives ONE member's agent side. The `check-in` pacemaker used to share

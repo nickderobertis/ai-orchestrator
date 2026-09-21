@@ -9,8 +9,7 @@ off a config:
   so a wrapper that forgot to export it fails at once instead of routing somewhere quiet;
 * a host set up before this identity existed — exporting nothing, keeping no identities
   file, never logged into the primary-backup account — resolves every indirection at
-  every entry point, and its primary-backup candidate is either filtered as absent (the
-  worker's unselected chain) or falls through as `auth` (everywhere else);
+  every entry point, and its primary-backup candidate falls through as `auth`;
 * a host identities file the helper refuses stops every entry point before the binary it
   was about to run.
 
@@ -75,18 +74,8 @@ DEFAULT_LEAVES = {
 #: Every role config this repository ships.
 ROLE_CONFIGS = tuple(sorted(path.name for path in REPO_ROOT.glob("oneharness*.toml")))
 
-AGENT_WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+DISPATCH_ENVIRONMENT = REPO_ROOT / "scripts" / "dispatch-env.sh"
 LLMLINT_WRAPPER = REPO_ROOT / "scripts" / "llmlint-oneharness.sh"
-
-#: The worker's configured chain, stated rather than read from the file under test.
-WORKER_CHAIN = (
-    "claude-code:alternate",
-    "claude-code:alternate2",
-    "codex:primary",
-    "codex:alternate",
-    "claude-code:primary-backup",
-    "claude-code:primary",
-)
 
 #: An envelope carrying a command, which is what the envelope validator judges.
 ENVELOPE = json.dumps(
@@ -230,54 +219,31 @@ def test_the_real_cli_refuses_a_run_whose_new_claude_indirection_is_unset(
     assert f"`{missing}` is not set in the parent process" in refused.stderr, refused.stderr
 
 
-@pytest.mark.parametrize(
-    ("backup_logged_in", "primary_logged_in"),
-    [(False, True), (True, True), (False, False)],
-    ids=["primary-backup-never-logged-in", "primary-backup-logged-in", "primary-directory-absent"],
-)
-def test_the_agent_wrappers_unselected_chain_drops_only_an_absent_primary_backup(
-    tmp_path: Path, backup_logged_in: bool, primary_logged_in: bool
-) -> None:
-    """The worker chain as the real CLI plans it through the real wrapper.
-
-    An absent primary-backup directory is an account nobody logged into, so it is left
-    out rather than handed a directory claude-code would create. The primary is the last
-    resort every host is expected to have and is planned whatever its directory's state.
-    """
-    logged_in: tuple[str, ...] = (".claude-alt", ".claude-alt2")
-    logged_in += (".claude-primary-backup",) if backup_logged_in else ()
-    logged_in += (".claude",) if primary_logged_in else ()
-    host = _existing_host(tmp_path, logged_in=logged_in)
-
-    # `--format json` because the plan is read as the CLI's JSON report, which the
-    # adopted release prints only when asked; the wrapper forwards it as it forwards
-    # onejudge's own `--compact`.
-    planned = _run(
-        ["bash", str(AGENT_WRAPPER), "run", "--print-command", "--format", "json", "--prompt", "x"],
-        host,
-    )
-
-    assert planned.returncode == 0, planned.stderr
-    chain = [result["harness_id"] for result in json.loads(planned.stdout)["results"]]
-    expected = [
-        identity
-        for identity in WORKER_CHAIN
-        if identity != "claude-code:primary-backup" or backup_logged_in
-    ]
-    assert chain == expected, planned.stderr
-    assert chain[-1] == "claude-code:primary"
-
-
-# Only the paid provider executables (`claude`, `codex`) are substituted; the real wrapper,
-# helper, config and `oneharness` CLI run above them, as in
+# Only the paid provider executables (`claude`, `codex`) are substituted; the real
+# dispatch-environment resolver, config and `oneharness` CLI run above them, as in
 # tests/e2e/test_dispatch_environment_e2e.py.
 # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] see the reason above
-def test_on_an_existing_host_the_agent_wrapper_starts_a_real_turn(tmp_path: Path) -> None:
-    """Nothing exported and no identities file, and the real CLI runs the first candidate."""
+def test_on_an_existing_host_the_agent_config_starts_a_real_turn(tmp_path: Path) -> None:
+    """Nothing exported and no identities file, and the real CLI runs the first candidate.
+
+    The environment is the one `scripts/dispatch-env.sh` establishes for a launch, and the
+    turn is `oneharness run` under the agent config, as the engine starts a worker's.
+    """
     front = _recorders(tmp_path / "providers", "claude", "codex")
     host = _existing_host(tmp_path, front)
 
-    turn = _run(["bash", str(AGENT_WRAPPER), "run", "--prompt", "record"], host)
+    turn = _run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; export_dispatch_environment probe; '
+            'exec oneharness run --config "$2" --prompt record',
+            "probe",
+            str(DISPATCH_ENVIRONMENT),
+            str(REPO_ROOT / "oneharness.toml"),
+        ],
+        host,
+    )
 
     assert turn.returncode == 0, turn.stderr
     assert "is not set in the parent process" not in turn.stderr
@@ -439,13 +405,12 @@ class EntryPoint(NamedTuple):
 #: Every entry point that calls `resolve_claude_alt_config_dir` and then runs `uv` or
 #: `oneharness`, with arguments that carry it to that hand-off.
 ENTRY_POINTS = (
-    EntryPoint("oneharness-agent.sh", ("run", "--prompt", "record")),
-    EntryPoint("oneharness-orchestrator.sh", ("run", "--prompt", "record")),
     EntryPoint("llmlint-oneharness.sh", ("run", "--mode", "read-only", "--prompt", "record")),
     EntryPoint("oneharness-usage.sh", ("--harness", "claude-code:primary")),
     EntryPoint("onepipeline.sh", ("start", "plans:identity-routing-probe")),
     EntryPoint("review-plan.sh", ("plans:identity-routing-probe",)),
     EntryPoint("envelope-review.sh", (), ENVELOPE),
+    EntryPoint("smoke.sh", ()),
 )
 
 

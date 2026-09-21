@@ -2869,8 +2869,8 @@ not depend on whether anything is waiting, so `--detach` decides only whether th
 command waits, and Ctrl-C ends the attachment rather than the run.
 
 Escaping the launching turn's *signals* used to be only half of it: a second
-protection re-attributed a launched run away from its launcher's
-`ORCHESTRATOR_AGENT_STATUS_DIR` stamp, because the sweep read that stamp as proof of
+protection re-attributed a launched run away from its launcher's dispatch ownership
+stamp, because the sweep read that stamp as proof of
 a leaked tree once the launching step settled. That half is no longer needed here —
 `oneagentgraph sweep` terminates nothing, so there is no reaper left for a driver to
 be mistaken by. See [Keeping a process that outlives its
@@ -3121,8 +3121,8 @@ tool — matching `ps` output by pattern — which is how six live dispatches we
 where there were two and a judge turn wedged for 1h54m was missed entirely.
 
 The dispatch ownership registry is the answer that does not guess, and its candidate set
-is the ownership registry the scratch sweep already trusts: the
-`ORCHESTRATOR_AGENT_STATUS_DIR` stamp the kernel fixes into the environment of
+is the ownership registry the scratch sweep already trusts: the dispatch's ownership
+stamp the kernel fixes into the environment of
 everything a dispatch starts, paired with the owner lock a live dispatcher holds for
 that scratch directory's whole scope. A process counts as this harness's only when
 both agree. Command lines are read only *after* that, to tell one turn from another
