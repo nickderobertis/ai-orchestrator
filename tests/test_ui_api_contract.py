@@ -68,6 +68,9 @@ CAPABILITIES = (
     Capability("landing project list", "/api/v2/projects"),
     Capability("per-project", "/api/v2/projects/{project}"),
     Capability("**Agents**", "/api/v2/runs/{run}/agents"),
+    Capability("**Shut down this run**", "/api/v2/runs/{run}/shutdown"),
+    Capability("**Shut down all my runs**", " /api/v2/shutdown "),
+    Capability("**Shut down the entire host**", " /api/v2/shutdown "),
 )
 
 
@@ -153,3 +156,31 @@ def test_the_refusal_the_page_describes_is_the_one_the_contract_promises() -> No
         "owns nothing, which is the reason docs/dag-ui.md gives for handing it a session"
     )
     assert "`409 not_owner`" in _page(), "docs/dag-ui.md no longer names the refusal"
+
+
+def test_the_shutdown_the_page_describes_is_the_one_the_contract_promises() -> None:
+    """The scopes, the grace and force defaults, and the report, as the release words them.
+
+    `docs/dag-ui.md` tells an operator what a shutdown from the browser will act on and
+    with what defaults, and every one of those is the reader's to change: a release that
+    moved the default grace, made force the default, or answered an incomplete shutdown
+    as an error would leave the page promising a dialog the view no longer shows.
+    """
+    document = " ".join(_source(UI_API, CONTRACT).split())
+    page = _page()
+
+    for promise, why in (
+        ('`{scope: "mine"|"host", grace?: seconds, force?: false}`', "the two listing scopes"),
+        ("(600, ten minutes)", "the engine's ten-minute default grace"),
+        ("`force` does not lift it", "that force never lifts the ownership refusal"),
+        ("`host` proceeds over ownership and names each run's owner", "the host scope"),
+        ("answers `200` with that report", "an incomplete shutdown still answering its report"),
+        ("**`session_key`**", "the key the confirm dialog tells this session's runs apart by"),
+    ):
+        assert promise in document, (
+            f"{UI_API.crate} {UI_API.ref} no longer states {promise!r} — {why} — and "
+            "docs/dag-ui.md describes the browser's shutdown on it"
+        )
+    for claim in ("ten minutes", "never the default", "other sessions own", "`session_key`"):
+        assert claim in page, f"docs/dag-ui.md no longer says {claim!r} about the shutdown"
+    assert "**Shutdown incomplete**" in page, "docs/dag-ui.md no longer names the incomplete report"

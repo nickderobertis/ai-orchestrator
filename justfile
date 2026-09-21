@@ -776,7 +776,8 @@ dag-ui:
 dag-ui-screens *args:
     ./scripts/dag-ui-screens.sh "$@"
 
-# Serve the read-only DAG telemetry API, loopback-bound by default.
+# Serve the DAG telemetry API — which also stops, adopts, replies to and shuts down
+# runs as this session — loopback-bound by default.
 # `--runs-dir`, `--host`, and `--port` keep working; the wrapper renders them as
 # the published `--runs-root` and `--bind`.
 # llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.

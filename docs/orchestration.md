@@ -3438,9 +3438,10 @@ versioned cross-layer contract is in [`telemetry-model.md`](telemetry-model.md).
 
 `just telemetry-server` serves the same read model continuously instead of once:
 a loopback-bound HTTP API plus an SSE invalidation stream over a runs directory,
-for the DAG UI and any other live viewer. It is read-only in the same sense the
-monitor is — no route mutates a run, executes a command, or accepts a path — so
-it is safe to leave running beside an active orchestration. Its flags, response
+for the DAG UI and any other live viewer. It is not read-only: it also wraps the
+post-launch verbs — stop, adopt, reply, shutdown — each performed as the one acting
+session the server was started under and refused by the engine's own ownership rule,
+as [`dag-ui.md`](dag-ui.md#supervising-from-the-browser) states. Its flags, response
 shapes, and event vocabulary are fixed by
 [`dag-ui/design.md`](dag-ui/design.md#running-it).
 

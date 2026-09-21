@@ -1,16 +1,18 @@
 # DAG Observatory
 
-The live and historical view of orchestrated DAG execution is
+The live and historical view of orchestrated DAG execution — which also
+**supervises** it, stopping, adopting, replying to and shutting down runs, each
+behind the engine's own authority and the acting session the server runs as — is
 [`onepipeline-ui`](https://github.com/nickderobertis/onepipeline-ui). It is not
 built in this repository: the design record, the component choices, the schema
 validation, and the browser tier that photographs it all live there, beside the
 code they describe. This page is the operational half — how the two published
 pieces are started here, and what each of the recipes around them does.
 
-**It stopped being a read-only view at the adopted release**, and that changes what
-starting it means rather than only what it shows: the API wraps every post-launch
-verb, the browser performs each one as **one acting session**, and an adoption made
-from it is driven by the engine the reader links. [Supervising from the
+It is not a read-only view, and that changes what starting it means rather than
+only what it shows: the API wraps every post-launch verb, the browser performs each
+one as **one acting session**, and an adoption made from it is driven by the engine
+the reader links. [Supervising from the
 browser](#supervising-from-the-browser) is that half; start there before acting from
 a tab, because two of those three sentences are about *whose* run and *which* engine.
 
@@ -57,10 +59,11 @@ covered below.
 ## Supervising from the browser
 
 **Every post-launch verb is a route now, and the view offers all of them.** The
-run page carries the channel and its reply composer, `attest`, `stop`, `adopt`, a
-held `watch`, the unwatched badge, and the rendered reads (`status`, `results`,
-`goals`, `transcript`, `telemetry`, `host`); a landing project list and per-project
-page replace the flat list of run ids as the view's front door; and an **Agents**
+run page carries the channel and its reply composer, `attest`, `stop`, `adopt`,
+`shutdown` ([below](#shutting-runs-down-from-the-browser)), a held `watch`, the
+unwatched badge, and the rendered reads (`status`, `results`, `goals`,
+`transcript`, `telemetry`, `host`); a landing project list and per-project page
+replace the flat list of run ids as the view's front door; and an **Agents**
 panel lists every oneharness session each of a run's dispatches opened. What the
 browser never does is launch: a plan is authored and launched from a terminal, and
 everything here is *post*-launch. Which is also why **a planning run's channel is
@@ -106,6 +109,45 @@ record like any other. So on this host `config/onepipeline-ui.version` is a pin 
 **can** govern a dispatch, which is why the suite holds the two pins to linking one
 engine — see [Which release is answering](#which-release-is-answering) for the gate and
 for the one question it leaves to `/healthz`.
+
+### Shutting runs down from the browser
+
+The view can shut down the work it shows, through **the same verb `just shutdown`
+runs and with the same authority**: the API calls the engine's own shutdown seam as
+the acting session above, and nothing about the interrupt, the wait, the kill or the
+push exists in the view or in this repository.
+<!-- llmlint: ignore[no_redundant_instruction_pointers] The task that added this section requires pointing a reader at the supervision guidance for what a soft shutdown does rather than restating it here, and this page is not auto-loaded: a reader who opened it for the browser control has not read that guidance. -->
+What a soft shutdown does to a run —
+and why it is not a stop — is `AGENTS.md`'s supervision guidance under `just
+shutdown`; `just shutdown` is the terminal form of the same three scopes.
+
+* **Shut down this run** is a control on a run's view, beside its stop and adopt,
+  and is `POST /api/v2/runs/{run}/shutdown`.
+* **Shut down all my runs** and **Shut down the entire host** are controls on the
+  runs listing, and are `POST /api/v2/shutdown` with `scope` `mine` or `host`.
+
+Each opens a **confirm dialog, and nothing is sent until it is confirmed**. Before
+anything is sent the dialog names exactly which runs it will act on, by run id, and
+who owns each — this session's runs told apart from every other by the acting
+session's key, which `GET /api/v2/unwatched` serves as `session_key`. *All my runs*
+acts on this session's runs and no other's. *The entire host* says plainly that it
+acts on runs **other sessions own**, over their owners, and lists them apart from
+this session's. A run another session owns is refused under the run scope as a stop
+is, `409 not_owner`, before anything is signalled.
+
+The dialog offers the **grace**, defaulting to the engine's ten minutes, and a
+**force** option that is never the default and says what it gives up: it skips the
+interrupt and the wait, so whatever a worker had not committed is lost.
+
+**The report it shows is the product, so read it.** A shutdown waits out its grace
+with the request open and the control showing its progress; its answer is the
+engine's own report — per run, each dispatch and how it ended, the teardown, each
+branch and where it went, and the host's other unpublished branches it did not push.
+One the engine says was not complete answers `200` with that report and reads
+**Shutdown incomplete**, never as a success; a request that lost its answer reads as
+lost, since the engine may still be carrying it out.
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds that the pair the two recipes serve
+carries the control and answers its routes, without shutting anything down.
 
 ## Which release is answering
 

@@ -277,8 +277,10 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   `onetaskgraph --help`; https://github.com/nickderobertis/onetaskgraph.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 - **`onepipeline-ui`** — the DAG API and browser view behind `just telemetry-server`
-  and `just dag-ui`, wrapping every post-launch verb as a route and carrying its own
-  copy of the engine. An adopt from the browser retains that binary as the driver, so
+  and `just dag-ui`: a live and historical view of orchestrated DAG execution that
+  also **supervises** it — stopping, adopting, replying to and shutting down runs, each
+  behind the engine's own authority and the acting session the server runs as — by
+  wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
   **this pin can govern a dispatch**, and the two pins are held to linking one engine by
   `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
   Governed by

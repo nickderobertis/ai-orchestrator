@@ -1036,6 +1036,122 @@ def test_the_recipe_hands_the_api_the_acting_session_so_an_owner_is_recognised(
     )
 
 
+#: The three shutdown controls `docs/dag-ui.md` names, in the words the adopted bundle
+#: labels them with, and the two routes they are sent to. Restated rather than read from
+#: the page, because the claim is that the page and the served view agree, and reading
+#: one to check the other would pass whenever both moved together.
+SHUTDOWN_CONTROLS = (
+    "Shut down this run",
+    "Shut down all my runs",
+    "Shut down the entire host",
+)
+RUN_SHUTDOWN_ROUTE = "/api/v2/runs/{run}/shutdown"
+SCOPED_SHUTDOWN_ROUTE = "/api/v2/shutdown"
+
+
+def _served_script(served: Served) -> str:
+    """The script the bundle's index loads, as the proxy hands it to a browser."""
+    index = served.get("/")[1].decode()
+    asset = index.split('src="', 1)[1].split('"', 1)[0]
+    status, script, _ = served.get(asset)
+    assert status == 200, asset
+    return script.decode()
+
+
+# llmlint: ignore[tests_mirror_real_usage] This tier provisions no browser by rule —
+# `test_no_browser_needed_e2e.py` enforces it and `tests/dag_ui/AGENTS.md` says why — so
+# driving the rendered dialog is `onepipeline-ui`'s own `e2e/dag-ui-shutdown.spec.ts`;
+# what this composition owns is that the bundle it serves carries the control, read off
+# the bytes the proxy hands a browser, beside the journeys that drive its routes.
+def test_the_served_view_offers_the_shutdown_control(served: Served) -> None:
+    """What `just dag-ui` hands a browser carries the three shutdown controls and their dialog.
+
+    Read off the script the proxy serves rather than off the installed package, because a
+    bundle server left running from before a bump serves what it loaded: this is the view
+    an operator actually opens. No browser renders it — that is `onepipeline-ui`'s own
+    tier — so what is asserted is that the served view *offers* the controls, the routes
+    they send to, and the dialog's two statements `docs/dag-ui.md` leans on: the host
+    scope naming the runs other sessions own, and an incomplete shutdown reading as one.
+    """
+    script = _served_script(served)
+
+    for control in SHUTDOWN_CONTROLS:
+        assert control in script, (
+            f"the view `just dag-ui` serves offers no {control!r}; docs/dag-ui.md tells an "
+            "operator it can shut runs down from the browser"
+        )
+    assert "/shutdown`" in script and f"`{SCOPED_SHUTDOWN_ROUTE}`" in script, (
+        f"the served view sends to neither {RUN_SHUTDOWN_ROUTE} nor {SCOPED_SHUTDOWN_ROUTE}"
+    )
+    assert "Runs other sessions own" in script, (
+        "the served host-scope dialog no longer lists the runs other sessions own apart"
+    )
+    assert "Shutdown incomplete" in script, (
+        "the served view has no way to say a shutdown was incomplete, so one would read "
+        "as a success"
+    )
+
+
+def test_the_shutdown_routes_answer_through_the_proxy_and_refuse_a_stranger(
+    served_grouped: Grouped,
+) -> None:
+    """The reader behind `just telemetry-server` answers both shutdown routes, as the engine.
+
+    Asked only what it refuses before anything is signalled — a run another session owns,
+    a scoped shutdown naming no scope, a run that is not there — so nothing is shut down
+    and no branch is pushed. Each is told apart from the answer an older reader gives,
+    `no_such_route`, which is what a view whose control is not served would meet.
+    """
+    served = served_grouped.served
+    run_route = RUN_SHUTDOWN_ROUTE.replace("{run}", SETTLED_RUN)
+
+    status, body, _ = served.post(run_route, {})
+    assert status == 409, (status, body)
+    refusal = json.loads(body)["error"]
+    assert refusal["code"] == "not_owner", refusal
+    owner = json.loads(served.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]["launcher"]
+    assert owner in refusal["message"], (
+        f"a stranger's shutdown of {SETTLED_RUN} was refused as {refusal['message']!r}, "
+        f"which does not name its owner {owner!r}"
+    )
+
+    # What the confirm dialog tells this session's runs apart by: the acting session's
+    # key, which for a stranger is not the recorded run's.
+    recorded_key = json.loads(served.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]["session_key"]
+    acting_key = json.loads(served.get("/api/v2/unwatched")[1]).get("session_key")
+    assert acting_key not in (None, recorded_key), (
+        f"acting as a stranger the reader serves session key {acting_key!r}; the shutdown "
+        f"dialog would name {SETTLED_RUN} (key {recorded_key!r}) as this session's own"
+    )
+
+    status, body, _ = served.post(SCOPED_SHUTDOWN_ROUTE, {})
+    assert status == 422, (status, body)
+    assert json.loads(body)["error"]["code"] == "invalid_request", body
+
+    status, body, _ = served.post(RUN_SHUTDOWN_ROUTE.replace("{run}", "no-such-run"), {})
+    assert status == 404, (status, body)
+    assert json.loads(body)["error"]["code"] == "run_not_found", (
+        f"the run shutdown route answered {body!r}: the reader does not serve it at all"
+    )
+
+
+def test_the_dialog_names_this_sessions_own_run_as_its_own(served_as_owner: Served) -> None:
+    """`GET /api/v2/unwatched` serves the acting session's key, and its own run matches it.
+
+    This is what the confirm dialog names owners by before anything is sent, so a wrong
+    answer here names the operator's own run as a colleague's. The other half — that a
+    stranger's key is not the run's — is asserted beside the stranger's refusal above.
+    """
+    recorded = json.loads(served_as_owner.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]
+
+    as_owner = json.loads(served_as_owner.get("/api/v2/unwatched")[1])
+    assert as_owner.get("session_key") == recorded["session_key"], (
+        f"acting as {SETTLED_RUN}'s own launcher the reader serves {as_owner!r}, whose key "
+        f"is not the run's {recorded['session_key']!r}; the shutdown dialog would name "
+        "this session's own run as another's"
+    )
+
+
 def _linked_onepipeline_release() -> str:
     """The `onepipeline` release the adopted read-API wheel was built against.
 
