@@ -25,6 +25,9 @@ from types import SimpleNamespace
 import follow_up_variables
 import pytest
 from onetaskgraph_sdk import CopyReport
+from onetaskgraph_sdk._generated.query_response_of_qualified_task import (
+    QueryResponse as QueryResponseOfQualifiedTask,
+)
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_tickets as tickets
@@ -227,7 +230,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 5
+    assert held["schema"] == tickets.SCHEMA == 6
     keys = list(held)
     assert keys == list(tickets.RECORD_KEYS)
     assert keys.index("host") == keys.index("verified_at") + 1
@@ -293,10 +296,10 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 5"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 5"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 5"),
-        (_set_record("schema", 4), "is schema 4, and this reads schema 5"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 6"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 6"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 6"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 6"),
         (_set_record("schema", True), "is schema True"),
         (_set_record("root_cause", "Not A Slug"), "is not a kebab-case slug"),
         (_set_record("root_cause", "another-cause"), "is not the file's root cause"),
@@ -373,7 +376,7 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 4, and this reads schema 5"), found
+    assert found[0].startswith("the record is schema 4, and this reads schema 6"), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
         "ticket to the current shape" in problem
@@ -662,12 +665,15 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_o
 
 TEMPLATE = (
     "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
-    "Decide each status with @BOARD_STATUS@, and read the store with @PLAN_STORE@.\n"
+    "Decide each status with @BOARD_STATUS@, list the board with @BOARD_ITEMS@, copy with "
+    "@COPY@, and read the store with @PLAN_STORE@.\n"
     "Assume the fixes at @ACCEPTED_STATUSES@, listed with @ACCEPTED_FILTER@.\n"
     "@STATUS_VOCABULARY@\n"
     "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
+BOARD_ITEMS = "python -m orchestrator.follow_up_tickets board-items"
+COPY = "python -m orchestrator.follow_up_tickets copy"
 VALIDATE = "python -m orchestrator.follow_up_tickets validate"
 
 #: The plan-store program a composed task carries, spelled in full the way the recipe
@@ -684,6 +690,8 @@ def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-roo
         .replace("@DRAFTS_ROOT@", root)
         .replace("@VALIDATE@", VALIDATE)
         .replace("@BOARD_STATUS@", BOARD_STATUS)
+        .replace("@BOARD_ITEMS@", BOARD_ITEMS)
+        .replace("@COPY@", COPY)
         .replace("@PLAN_STORE@", PLAN_STORE)
     )
 
@@ -701,6 +709,8 @@ def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
         drafts_root=Path("/drafts-root"),
         validate=VALIDATE,
         board_status=BOARD_STATUS,
+        board_items=BOARD_ITEMS,
+        copy=COPY,
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
         feedback=feedback,
@@ -718,7 +728,7 @@ def test_the_composed_task_fills_every_placeholder_and_renders_both_contracts() 
     assert task.rstrip().endswith("Again, listing-run.")
     assert _contract() in task
     assert _ownership() in task
-    assert f"{PLAN_STORE} task copy drafts:{RUN}/tickets/<root-cause> --to followups" in task
+    assert f"{COPY} --board followups <path of the ticket>" in task
     assert (
         "Assume the fixes at `Todo` (`todo`), `Queued` (`queued`), `In Progress` "
         "(`in-progress`) and `Done` (`done`), listed with --status todo --status queued "
@@ -741,6 +751,8 @@ def test_a_value_the_template_names_more_than_once_is_filled_everywhere() -> Non
         drafts_root=Path("/drafts-root"),
         validate="v",
         board_status="s",
+        board_items="i",
+        copy="c",
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
         feedback=None,
@@ -765,6 +777,8 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
         drafts_root=Path("/drafts-root"),
         validate=VALIDATE,
         board_status=BOARD_STATUS,
+        board_items=BOARD_ITEMS,
+        copy=COPY,
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
         feedback="Merge the two cursor tickets.\n",
@@ -812,6 +826,8 @@ def _tracked_task(*, feedback: str | None = None, redispatch: bool = True) -> st
         drafts_root=Path("/drafts-root"),
         validate=VALIDATE,
         board_status=BOARD_STATUS,
+        board_items=BOARD_ITEMS,
+        copy=COPY,
         checkout=Path("/checkout"),
         plan_store=PLAN_STORE,
         feedback=feedback,
@@ -936,8 +952,7 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     ) in flat
     assert f"{tickets.OUTSIDE_OWNER} when the ticket's repository is not one of the board's" in flat
     assert (
-        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `@PLAN_STORE@ task copy` refuses "
-        "the ticket"
+        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `@COPY@` refuses the ticket"
     ) in flat
     assert (
         "copy nothing for that ticket, never retry it with `repositories` removed or changed to "
@@ -1022,6 +1037,8 @@ def test_a_template_that_does_not_name_each_placeholder_once_is_refused(
             drafts_root=Path("/r"),
             validate="v",
             board_status="s",
+            board_items="i",
+            copy="c",
             checkout=Path("/checkout"),
             plan_store=PLAN_STORE,
             feedback=None,
@@ -1055,6 +1072,8 @@ def test_a_plan_store_the_dispatch_could_not_run_as_written_is_refused(
             drafts_root=Path("/drafts-root"),
             validate="v",
             board_status="s",
+            board_items="i",
+            copy="c",
             checkout=Path("/checkout"),
             plan_store=plan_store,
             feedback=None,
@@ -1085,6 +1104,8 @@ def test_a_plan_store_the_shell_would_not_read_as_one_word_is_refused(tmp_path: 
             drafts_root=Path("/drafts-root"),
             validate="v",
             board_status="s",
+            board_items="i",
+            copy="c",
             checkout=Path("/checkout"),
             plan_store=str(program),
             feedback=None,
@@ -1228,6 +1249,12 @@ def _on_board(ticket: Path) -> str:
     return destination.model_dump()
 
 
+def _bound(ticket: tickets.Ticket, destination: str) -> tickets.Ticket:
+    """``ticket`` bound to the board item ``destination`` names."""
+    native = destination.removeprefix(f"{BOARD}:")
+    return dataclasses.replace(ticket, board_item=tickets.BoardItemId(native))
+
+
 def _board_item(destination: str) -> dict[str, object]:
     return dict(plan_store.task_record(destination))
 
@@ -1347,9 +1374,10 @@ def test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_m
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], held: tickets.Status
 ) -> None:
     ticket = _write(drafts_root, _ticket())
-    before = ticket.read_text(encoding="utf-8")
     destination = _on_board(ticket)
     _moved(destination, held.value)
+    # The binding to the item it reached is the one thing `board-status` writes.
+    bound = tickets.render(_bound(_ticket(), destination), board=BOARD)
 
     status, printed, reported = _decided(ticket, capsys, "--withdraw")
 
@@ -1362,7 +1390,260 @@ def test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_m
     ) in " ".join(reported.split())
     assert "this run never withdraws it" in reported
     assert _board_category(destination) == held.value
-    assert ticket.read_text(encoding="utf-8") == before
+    assert ticket.read_text(encoding="utf-8") == bound
+
+
+def test_a_binding_is_written_only_once_set_and_reads_back_with_the_origin_it_derives(
+    drafts_root: Path,
+) -> None:
+    """The binding is the record's one optional key: absent until set, then read back whole."""
+    assert tickets.BINDING_FIELD not in tickets.record(_ticket())
+    assert tickets.ORIGIN_KEY not in tickets.render(_ticket(), board=BOARD)
+    bound = _bound(_ticket(), f"{BOARD}:{RUN}/tickets/{CAUSE}")
+    assert list(tickets.record(bound)) == [*tickets.RECORD_KEYS, tickets.BINDING_FIELD]
+
+    path = _write(drafts_root, bound, tickets.render(bound, board=BOARD))
+
+    assert tickets.read_ticket(path) == bound
+    metadata = _board_item(tickets.qualified_id(RUN, CAUSE))["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[tickets.ORIGIN_KEY] == f"{BOARD}:{RUN}/tickets/{CAUSE}"
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        (
+            _set_record(tickets.BINDING_FIELD, ""),
+            f"`{tickets.BINDING_FIELD}` '' is not a board item's native id",
+        ),
+        (
+            _set("metadata", {tickets.ORIGIN_KEY: "no-source", tickets.KEY: _record(_item())}),
+            f"`{tickets.ORIGIN_KEY}` 'no-source' is not a qualified id",
+        ),
+        (
+            _set(
+                "metadata",
+                {tickets.ORIGIN_KEY: f"{BOARD}:elsewhere", tickets.KEY: _record(_item())},
+            ),
+            f"`{tickets.ORIGIN_KEY}` names '{BOARD}:elsewhere', where the ticket's "
+            f"`{tickets.BINDING_FIELD}` binding is None",
+        ),
+        (
+            _set(
+                "metadata",
+                {
+                    tickets.ORIGIN_KEY: tickets.qualified_id(OTHER_RUN, CAUSE),
+                    tickets.KEY: _record(_item()),
+                },
+            ),
+            f"names {tickets.qualified_id(OTHER_RUN, CAUSE)!r}, which is not the ticket its "
+            f"record describes, {tickets.qualified_id(RUN, CAUSE)!r}",
+        ),
+    ],
+    ids=[
+        "binding-not-an-id",
+        "origin-not-qualified",
+        "origin-not-the-binding",
+        "origin-not-this-ticket",
+    ],
+)
+def test_a_binding_or_origin_the_tools_did_not_write_is_refused(
+    change: Callable[[dict[str, object]], None], reason: str
+) -> None:
+    item = copy.deepcopy(_item())
+    change(item)
+
+    assert any(reason in problem for problem in tickets.problems(item)), tickets.problems(item)
+
+
+def test_a_board_item_recording_the_ticket_it_came_from_is_a_sound_ticket() -> None:
+    """A board item's origin names the `drafts` ticket it was copied from, never a binding."""
+    item = _item()
+    metadata = item["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[tickets.ORIGIN_KEY] = tickets.qualified_id(RUN, CAUSE)
+
+    assert tickets.problems(item) == []
+
+
+def _copied(ticket: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    status = tickets.main(["copy", "--board", BOARD, str(ticket)])
+    captured = capsys.readouterr()
+    return status, captured.out, captured.err
+
+
+def _duplicated(destination: str, status: tickets.Status) -> str:
+    """A second item carrying ``destination``'s origin, which the store lists first: its id.
+
+    What a copy that timed out after writing, retried, leaves on a board. No store verb
+    makes one on purpose, so the `local-md` record is copied beside the original under a
+    name the store lists ahead of it, which is what such an item is on the stand-in; its
+    status is then set through the store's own verb.
+    """
+    location = _board_item(destination)["location"]
+    assert isinstance(location, dict)
+    original = Path(str(location["path"]))
+    original.with_name(f"a-{original.name}").write_text(
+        original.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    head, name = destination.rsplit("/", 1)
+    duplicate = f"{head}/a-{name}"
+    _moved(duplicate, status.value)
+    return duplicate
+
+
+def _comment_bodies(destination: str) -> list[str]:
+    listed = plan_store.sdk(plan_store.client().task_comment_list(destination)).comments
+    return [comment.body for comment in listed]
+
+
+def test_copy_creates_the_item_binds_the_ticket_to_it_and_updates_that_item_again(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ticket = _write(drafts_root, _ticket())
+    destination = f"{BOARD}:{RUN}/tickets/{CAUSE}"
+
+    status, printed, _ = _copied(ticket, capsys)
+
+    assert status == tickets.SOUND
+    assert json.loads(printed) == {"action": "created", "destination": destination}
+    assert tickets.read_ticket(ticket) == _bound(_ticket(), destination)
+    _write(drafts_root, _bound(_ticket(title="some-service: the cursor skips a page"), destination))
+
+    status, printed, _ = _copied(ticket, capsys)
+
+    assert (status, json.loads(printed)) == (
+        tickets.SOUND,
+        {"action": "updated", "destination": destination},
+    )
+    assert _board_item(destination)["title"] == "some-service: the cursor skips a page"
+    assert len(list(board.rglob("*.md"))) == 1
+
+
+def test_a_re_copy_past_a_withdrawn_duplicate_rebinds_to_the_open_item_and_notes_it_once(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The incident: a withdrawn duplicate the store reaches first, and a ticket bound to it.
+
+    The store's own dry-run copy reaches the duplicate, which is how a re-copy once updated
+    a closed item and left the live one stale. `board-status` rebinds the ticket to the
+    run's open item and leaves the duplicate one comment naming it; `copy` then writes
+    there alone, and a second pass leaves no second comment.
+    """
+    live = _on_board(_write(drafts_root, _ticket()))
+    duplicate = _duplicated(live, tickets.Status.WITHDRAWN)
+    staged = _bound(_ticket(title="some-service: the cursor skips its last page"), duplicate)
+    ticket = _write(drafts_root, staged, tickets.render(staged, board=BOARD))
+    planned = plan_store.sdk(
+        plan_store.client().task_copy([tickets.qualified_id(RUN, CAUSE)], to=BOARD, dry_run=True)
+    )
+    assert planned.items[0].root.destination is not None
+    assert planned.items[0].root.destination.model_dump() == duplicate, "the premise"
+
+    assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
+    assert tickets.read_ticket(ticket).board_item == live.removeprefix(f"{BOARD}:")
+    (notice,) = _comment_bodies(duplicate)
+    assert notice.strip().endswith(tickets.DUPLICATE_MARKER.format(run=RUN, survivor=live))
+    assert f"continues on {live}" in notice
+
+    status, printed, _ = _copied(ticket, capsys)
+
+    assert (status, json.loads(printed)["destination"]) == (tickets.SOUND, live)
+    assert _board_item(live)["title"] == "some-service: the cursor skips its last page"
+    assert _board_item(duplicate)["title"] == _ticket().title
+    assert _board_category(duplicate) == tickets.Status.WITHDRAWN
+    assert len(_comment_bodies(duplicate)) == 1
+    assert _comment_bodies(live) == []
+
+
+def test_board_status_and_copy_refuse_a_destination_other_than_the_binding_naming_both(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A binding naming an item that is not this ticket's: both commands refuse, naming both."""
+    live = _on_board(_write(drafts_root, _ticket()))
+    other = _on_board(
+        _write(drafts_root, _ticket(root_cause=tickets.RootCause("export-drops-a-column")))
+    )
+    before = {held: _board_item(held)["content"] for held in (live, other)}
+    # Bound to the other ticket's item, without the origin the tools write beside a binding:
+    # the store's own correspondence then reaches this ticket's item.
+    ticket = _write(drafts_root, _bound(_ticket(body=_body(rejected=REJECTED_TEXT)), other))
+
+    for status, printed, reported in (_decided(ticket, capsys), _copied(ticket, capsys)):
+        assert (status, printed) == (tickets.MISBOUND, "")
+        flat = " ".join(reported.split())
+        assert f"the store reports {live} as where this ticket is copied" in flat, flat
+        assert f"binding is {other}, an item that does not carry this ticket's origin" in flat
+
+    assert {held: _board_item(held)["content"] for held in (live, other)} == before
+    assert tickets.read_ticket(ticket).board_item == other.removeprefix(f"{BOARD}:")
+
+
+@pytest.mark.parametrize(
+    ("status", "refusal"),
+    [
+        (tickets.Status.PROPOSED, "and 2 of them is an open item of run"),
+        (tickets.Status.FINISHED, "is not withdrawn beside the open"),
+    ],
+    ids=["two-open", "one-finished"],
+)
+def test_duplicates_without_one_open_item_beside_withdrawn_ones_are_refused(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    status: tickets.Status,
+    refusal: str,
+) -> None:
+    """Which duplicate survives is a person's decision here, so nothing is copied or noted."""
+    ticket = _write(drafts_root, _ticket())
+    live = _on_board(ticket)
+    duplicate = _duplicated(live, status)
+
+    for answered, printed, reported in (_decided(ticket, capsys), _copied(ticket, capsys)):
+        assert (answered, printed) == (tickets.MISBOUND, "")
+        flat = " ".join(reported.split())
+        assert f"2 items of '{BOARD}' carry this ticket's origin ({duplicate}, {live})" in flat
+        assert refusal in flat, flat
+
+    assert _comment_bodies(duplicate) == _comment_bodies(live) == []
+    assert tickets.read_ticket(ticket).board_item is None
+
+
+def test_copy_refuses_a_ticket_it_cannot_read_and_a_report_naming_no_item(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The refusals of the write's own answer, over reports the store's schema admits.
+
+    Proven structurally rather than through the store: the dry-run before the write is held
+    to the binding (driven end to end above), and the write follows the same origin, so no
+    real store can be made to answer the dry-run and the write differently, or to name no
+    item or an item of another source. The reports here are the store's own typed model.
+    """
+    unsound = _write(drafts_root, _ticket(), "not a ticket\n")
+
+    assert _copied(unsound, capsys)[0] == tickets.UNRUNNABLE
+    with pytest.raises(OSError, match="naming no item"):
+        tickets.copied_to(CopyReport(items=[]), BOARD, None)
+    with pytest.raises(OSError, match="which is not an item of"):
+        tickets.copied_to(
+            CopyReport.model_validate(
+                {"items": [{"source": "drafts:a", "action": "created", "destination": "x:b"}]}
+            ),
+            BOARD,
+            None,
+        )
+    written = CopyReport.model_validate(
+        {"items": [{"source": "drafts:a", "action": "updated", "destination": f"{BOARD}:b"}]}
+    )
+    assert tickets.copied_to(written, BOARD, tickets.BoardItemId("b")) == ("updated", "b")
+    orphaned = CopyReport.model_validate(
+        {"items": [{"source": "drafts:a", "action": "orphaned", "destination": f"{BOARD}:b"}]}
+    )
+    with pytest.raises(OSError, match="answered 'orphaned' for this ticket, which is no copy"):
+        tickets.copied_to(orphaned, BOARD, None)
+    with pytest.raises(tickets.Misbound, match=f"onto {BOARD}:b, where .* is {BOARD}:c"):
+        tickets.copied_to(written, BOARD, tickets.BoardItemId("c"))
 
 
 def test_board_status_over_a_deferred_item_prints_draft_and_refuses_to_withdraw_it(
@@ -1617,6 +1898,10 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         "v",
         "--board-status",
         "s",
+        "--board-items",
+        "i",
+        "--copy",
+        "c",
         "--checkout",
         "/checkout",
         "--plan-store",
@@ -1636,7 +1921,9 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         (["inventory", "--root", "/r", "../escape"], "is not a run id"),
         (
             ["compose", "--template", "/no/such/template", "--root", "/r", "--run", RUN]
-            + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"]
+            + ["--board", "b", "--validate", "v", "--board-status", "s", "--board-items", "i"]
+            + ["--copy", "c"]
+            + ["--checkout", "/c"]
             + ["--plan-store", PLAN_STORE],
             "No such file",
         ),
@@ -1666,12 +1953,152 @@ def test_a_template_the_compose_command_refuses_is_unrunnable(
 
     status = tickets.main(
         ["compose", "--template", str(template), "--root", str(tmp_path), "--run", RUN]
-        + ["--board", "b", "--validate", "v", "--board-status", "s", "--checkout", "/c"]
-        + ["--plan-store", PLAN_STORE]
+        + ["--board", "b", "--validate", "v", "--board-status", "s", "--board-items", "i"]
+        + ["--copy", "c", "--checkout", "/c", "--plan-store", PLAN_STORE]
     )
 
     assert status == tickets.UNRUNNABLE
     assert "missing placeholders" in capsys.readouterr().err
+
+
+def _listed(capsys: pytest.CaptureFixture[str], *arguments: str) -> tuple[int, list[str], str]:
+    """`board-items` as the agent runs it: its status, the ids it printed, and its stderr."""
+    status = tickets.main(["board-items", "--board", BOARD, *arguments])
+    captured = capsys.readouterr()
+    if status != tickets.SOUND:
+        return status, [], captured.err
+    printed = json.loads(captured.out)
+    assert list(printed) == ["items"], printed
+    return status, [str(one["id"]) for one in printed["items"]], captured.err
+
+
+def _filed(
+    drafts_root: Path, run: str, cause: str, title: str, status: tickets.Status | None = None
+) -> str:
+    """One run's ticket for ``cause``, copied onto the board and moved to ``status``: its id."""
+    path = _write(
+        drafts_root,
+        _ticket(
+            title=f"some-service: {title}",
+            root_cause=tickets.RootCause(cause),
+            created_by_run=tickets.RunId(run),
+            owning_runs=(tickets.RunId(run),),
+            drafts=(tickets.QualifiedDraftId(f"drafts:{run}/drafts/a-draft"),),
+        ),
+    )
+    destination = _on_board(path)
+    if status is not None:
+        _moved(destination, status.value)
+    return destination
+
+
+def test_board_items_reads_every_page_the_store_answers_search_and_statuses_included(
+    board: Path,
+    drafts_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The one board listing the agent is given answers the whole board, not its first page.
+
+    Six items over the store's page of two, put there the way tickets reach the board;
+    the premise — that the store's own listing stops short and names a cursor — is read
+    off the installed store before the command is asked, so a store that stopped paging
+    would fail here rather than let the command pass for nothing. Every query the task
+    spells is driven: the whole board, the duplicate search by text, and the accepted
+    listing; the item the search finds sits on the last page, and the accepted listing
+    keeps exactly the items at an accepted status.
+    """
+    monkeypatch.setenv("ONETASKGRAPH_PAGE_SIZE", "2")
+    filed = {
+        cause: _filed(drafts_root, run, cause, title, status)
+        for run, cause, title, status in (
+            (OTHER_RUN, "a-export-drops-a-column", "the export drops a column", None),
+            (
+                OTHER_RUN,
+                "b-retry-loop-never-backs-off",
+                "the retry loop never backs off",
+                tickets.Status.ACCEPTED,
+            ),
+            (
+                OTHER_RUN,
+                "c-sweep-ignores-a-symlink",
+                "the sweep ignores a symlink",
+                tickets.Status.DEFERRED,
+            ),
+            (
+                OTHER_RUN,
+                "d-sweep-counts-a-family-twice",
+                "the sweep counts a family twice",
+                tickets.Status.WITHDRAWN,
+            ),
+            (
+                OTHER_RUN,
+                "e-cursor-skips-last-page",
+                "the cursor skips the last page",
+                tickets.Status.FINISHED,
+            ),
+            (
+                RUN,
+                "f-sweep-trailer-omits-a-family",
+                "the sweep trailer omits a family",
+                tickets.Status.UNDER_WAY,
+            ),
+        )
+    }
+    first = plan_store.sdk(plan_store.client().task_list(source=[BOARD]))
+    assert len(first.items) == 2 and first.next is not None, "the store answered no page"
+    searched = plan_store.sdk(plan_store.client().task_list(source=[BOARD], search="sweep"))
+    assert filed["f-sweep-trailer-omits-a-family"] not in {
+        held.id.model_dump() for held in searched.items
+    }, "the matching item sits on the store's first page, so this proves nothing"
+
+    assert _listed(capsys) == (tickets.SOUND, sorted(filed.values()), "")
+    assert _listed(capsys, "--search", "sweep") == (
+        tickets.SOUND,
+        [filed[cause] for cause in sorted(filed) if "sweep" in cause],
+        "",
+    )
+    assert _listed(capsys, *tickets.accepted_filter().split()) == (
+        tickets.SOUND,
+        [
+            filed["b-retry-loop-never-backs-off"],
+            filed["e-cursor-skips-last-page"],
+            filed["f-sweep-trailer-omits-a-family"],
+        ],
+        "",
+    )
+    assert _listed(capsys, "--search", "nothing carries this") == (tickets.SOUND, [], "")
+
+
+def test_board_items_refuses_a_cursor_it_already_followed_and_a_board_it_cannot_read(
+    board: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A store answering the same cursor again is refused by name, and nothing is printed.
+
+    The one monkeypatched store here, because no real store answers one cursor twice: the
+    refusal is `plan_store.every_page`'s, proven in `tests/test_plan_store_sdk.py`, and this
+    holds only that `board-items` reads through it and surfaces the refusal as its own.
+    """
+    whole = plan_store.sdk(plan_store.client().task_list(source=[BOARD]))
+    repeating = QueryResponseOfQualifiedTask.model_validate(
+        {**whole.model_dump(mode="json", by_alias=True), "next": "ab"}
+    )
+    pages = [repeating, repeating.model_copy(deep=True), repeating.model_copy(deep=True)]
+    monkeypatch.setattr(
+        plan_store, "client", lambda: SimpleNamespace(task_list=lambda **_keywords: None)
+    )
+    monkeypatch.setattr(plan_store, "sdk", lambda _answer: pages.pop(0))
+
+    status, printed, err = _listed(capsys)
+
+    assert (status, printed) == (tickets.UNRUNNABLE, [])
+    assert (
+        f"{tickets.PROG}: refused: listing the items of {BOARD!r} answered the page cursor "
+        "'ab' again after it was already followed; refusing to read the same page twice"
+    ) in err
+    monkeypatch.undo()
+    assert tickets.main(["board-items", "--board", "no-such-source"]) == tickets.UNRUNNABLE
+    assert "no-such-source" in capsys.readouterr().err
 
 
 #: Two accepted tickets of other root causes, as the stand-in board addresses them, and the
@@ -2133,8 +2560,8 @@ def test_the_composed_task_writes_each_ticket_against_the_boards_accepted_fixes(
     for said in (
         "List the board's accepted items — those at `Todo` (`todo`), `Queued` (`queued`), "
         "`In Progress` (`in-progress`) and `Done` (`done`) — with "
-        f"`{PLAN_STORE} task list --source followups --status todo --status queued "
-        "--status in-progress --status done --json`, every page, the whole board",
+        f"`{BOARD_ITEMS} --board followups --status todo --status queued "
+        "--status in-progress --status done`, which answers every page, the whole board",
         "an accepted fix in another repository can change a ticket here",
         "This is **not** the search of the step before: an accepted item carrying the same "
         "root cause as a ticket is that step's — this run's evidence goes to it as a comment, "
@@ -2173,11 +2600,11 @@ def test_the_composed_task_writes_each_ticket_against_the_boards_accepted_fixes(
     assert " ".join(same_cause.split()) == " ".join(
         """among its open items: first by the
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
-   text (`@PLAN_STORE@ task list --source @BOARD@ --search <text> --json`). Both read the
-   whole board, whichever repository an item's issue lives in, so narrow neither to a
+   text (`@BOARD_ITEMS@ --board @BOARD@ --search <text>`). Both read the whole board,
+   every page of it, whichever repository an item's issue lives in, so narrow neither to a
    repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
    searched like any other open item and still takes this run's evidence.
-8. """.replace("@PLAN_STORE@", PLAN_STORE)
+8. """.replace("@BOARD_ITEMS@", BOARD_ITEMS)
         .replace("@BOARD@", "followups")
         .split()
     ), "the same-root-cause step's text moved"
@@ -2230,9 +2657,11 @@ def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry()
         "path's, which takes this run's evidence as a comment, and never this rule's; names "
         "an item the board reports no `url` for; or names an item whose URL the ticket's body "
         "does not carry.",
-        f"and {tickets.NOT_ACCEPTED} when a `depends_on` entry does not resolve on the board "
-        "as the dependency rule below states, naming every such entry and what the board "
-        "holds. On any of these refusals, copy nothing and report what it printed.",
+        f"{tickets.NOT_ACCEPTED} when a `depends_on` entry does not resolve on the board as the "
+        "dependency rule below states, naming every such entry and what the board holds; and "
+        f"{tickets.MISBOUND} when the ticket's board item cannot be established as its "
+        "binding, as the binding rule below states. On any of these refusals, copy nothing "
+        "and report what it printed.",
     ):
         assert rule in flat, rule
     for status in (tickets.UNPLACED, tickets.PROTECTED, tickets.OUTSIDE_OWNER):

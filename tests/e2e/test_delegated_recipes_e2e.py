@@ -2675,7 +2675,8 @@ def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
 FOLLOW_UPS_TEMPLATE = "config/follow-up-task.md"
 FOLLOW_UPS_TEMPLATE_TEXT = (
     "Verify run @RUN@ onto @BOARD@ from @DRAFTS_ROOT@; validate with @VALIDATE@ in @CHECKOUT@.\n"
-    "Decide each status with @BOARD_STATUS@, and read the store with @PLAN_STORE@.\n"
+    "Decide each status with @BOARD_STATUS@, list the board with @BOARD_ITEMS@, copy with "
+    "@COPY@, and read the store with @PLAN_STORE@.\n"
     "Assume the accepted items' fixes — @ACCEPTED_STATUSES@ — listed by @ACCEPTED_FILTER@.\n"
     "@STATUS_VOCABULARY@\n@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@REDISPATCH@\n@FEEDBACK@\n"
 )

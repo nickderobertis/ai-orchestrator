@@ -17,7 +17,8 @@ classified by what they look like, and every name of each kind has to be one its
   (`` `name` key ``), or a `snake_case` name, and has to be a key of the ticket's record —
   or, for a `snake_case` name, a setting `onetaskgraph.yaml` holds, or the store's own
   front-matter field a ticket's dependency on an accepted ticket is written in, which the
-  module names once as `DEPENDENCY_FIELD` and which is deliberately no record key.
+  module names once as `DEPENDENCY_FIELD` and which is deliberately no record key. The
+  record's one optional key, its binding to a board item (`BINDING_FIELD`), is a key too.
 
 That the task the recipe composes carries the module's rendered contract is
 `tests/test_follow_up_tickets.py`'s, which composes the tracked `config/follow-up-task.md`
@@ -90,14 +91,14 @@ def unheld(prose: str, categories: frozenset[str]) -> set[str]:
             found.add(f"`{name}` is a board option the `followups` source does not name")
         elif (
             SNAKE_CASE.fullmatch(name)
-            and name not in tickets.RECORD_KEYS
+            and name not in (*tickets.RECORD_KEYS, tickets.BINDING_FIELD)
             and name != tickets.DEPENDENCY_FIELD
             and not re.search(rf"^\s*{re.escape(name)}:", configuration, re.MULTILINE)
         ):
             found.add(f"`{name}` is a record key the ticket does not carry")
     for matched in KEY.finditer(prose):
         name = matched["held"] or matched["keyed"]
-        if name not in tickets.RECORD_KEYS:
+        if name not in (*tickets.RECORD_KEYS, tickets.BINDING_FIELD):
             found.add(f"`{name}` is a record key the ticket does not carry")
     return found
 
@@ -220,5 +221,17 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
     for said in (
         "A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only",
         "`python -m orchestrator.follow_up_tickets statuses` prints",
+        "**Every listing of the board is `python -m orchestrator.follow_up_tickets "
+        "board-items`.** It takes `--board`, an optional `--search TEXT` and the accepted "
+        "filter as repeated `--status` flags, reads the pinned plan store through every `next` "
+        "page until none remains — refusing a cursor it has already followed — and prints one "
+        "combined JSON result",
+        "**A ticket is copied onto the board item it is bound to, and nowhere else.** Its "
+        f"record's `{tickets.BINDING_FIELD}` key holds that item's native id, and `python -m "
+        "orchestrator.follow_up_tickets board-status` and its `copy` are what write it",
+        f"when two items carry one ticket's `{tickets.ORIGIN_KEY}`, naming the run's own open "
+        "item and leaving each withdrawn duplicate a comment naming that item",
+        "Both refuse, naming both ids, a destination the store reports that differs from the "
+        "binding, and every copy the task prescribes goes through `copy`",
     ):
         assert said in flat, said

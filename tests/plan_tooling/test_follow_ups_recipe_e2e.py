@@ -94,10 +94,12 @@ STORE_INSTRUCTION_WITNESS = "store-instruction.witness"
 VALIDATE_WITNESS = "validate-older-first.witness"
 #: The older plan store's own log of what it served during that validate, under the bench.
 VALIDATE_SERVED = "validate-older-first.served"
-#: What the task's own accepted-items listing answered, run as the task spells it; what the
+#: What the task's own accepted-items listing answered, run as the task spells it; what its
+#: duplicate search by text answered for the shared root cause, run the same way; what the
 #: validators printed for the three refused shapes; and what `board-status` printed on the
 #: re-dispatch for the ticket whose accepted item a person had un-accepted.
 ACCEPTED_WITNESS = "accepted-items.witness"
+SEARCH_WITNESS = "duplicate-search.witness"
 REFUSED_WITNESS = "refused-shapes.witness"
 REDERIVE_WITNESS = "rederive.witness"
 
@@ -120,9 +122,17 @@ INHERITED = (
     plan_root_variable.name(),
 )
 
+#: The interpreter the recipe spells into every `-m orchestrator.follow_up_tickets` command
+#: it composes, as `scripts/follow-ups.sh` spells it: beside the script, unnormalized.
+RECIPE_PYTHON = str(REPO_ROOT / "scripts" / ".." / ".venv" / "bin" / "python3")
 #: The local store standing in for the board, spelled lowercase because it is spelled into
 #: the store's environment layer as well as onto `--to`.
 BOARD = "standin"
+#: How many items one page of the stand-in holds, set through the store's own environment
+#: layer for the setting: small enough that the board spans pages before the first pass
+#: runs, so a listing that read one page would read it as smaller than it is — the shape
+#: of the live board at 102 items answering 50.
+PAGE_SIZE = 2
 
 #: What the recipe names a follow-up run and its project after the run it follows up, the
 #: one node that project holds, and the graph and persona that node names.
@@ -162,6 +172,13 @@ RELATED_CAUSE = "sweep-follows-a-symlink"
 NARROWING_CAUSE = "export-paginates-by-offset"
 REMOVING_CAUSE = "retry-loop-never-backs-off"
 PROPOSED_CAUSE = "sweep-ignores-a-symlink"
+#: Two withdrawn items of the earlier run about the sweep trailer, which the store lists
+#: before that run's open item for `SHARED_CAUSE`: what puts the open item the duplicate
+#: search has to find on the search's second page, past every item the first page holds.
+#: The text the agent searches the board for, and the fix each withdrawn item stated.
+SEARCHED_TEXT = "sweep trailer"
+WITHDRAWN_CAUSES = ("sweep-trailer-counts-a-family-twice", "sweep-trailer-misses-a-family")
+WITHDRAWN_FIX = "Count each family the sweep trailer reports once"
 ISSUES = "https://github.com/nickderobertis/some-service/issues/"
 OTHER_ISSUES = "https://github.com/nickderobertis/other-service/issues/"
 NARROWING_URL, REMOVING_URL, PROPOSED_URL = OTHER_ISSUES + "41", ISSUES + "42", ISSUES + "43"
@@ -246,6 +263,7 @@ def _bench(tmp: Path) -> Bench:
     environment[plan_root_variable.name()] = str(plans)
     environment[f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN"] = WRITABLE_PLUGIN
     environment[f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT"] = str(board)
+    environment["ONETASKGRAPH_PAGE_SIZE"] = str(PAGE_SIZE)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     # A plan store of another release, ahead of everything the caller offers — the
@@ -314,7 +332,24 @@ def _comments(bench: Bench, qualified: str) -> list[dict[str, object]]:
 
 
 def _board_ids(bench: Bench) -> list[str]:
-    items = _store(bench, "task", "list", "--source", BOARD)["items"]
+    """Every item the board holds, read through the module's own every-page listing.
+
+    The board spans pages here by design, so a read of the store's first page would
+    answer a board smaller than it is: this reads it the way the agent's task does.
+    """
+    listed = _run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python3"),
+            "-m",
+            "orchestrator.follow_up_tickets",
+            "board-items",
+            "--board",
+            BOARD,
+        ],
+        bench,
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    items = json.loads(listed.stdout)["items"]
     assert isinstance(items, list), items
     return sorted(str(one["id"]) for one in items if isinstance(one, dict))
 
@@ -465,6 +500,39 @@ def _board_item(
     return qualified
 
 
+def _withdrawn_duplicate(bench: Bench, qualified: str) -> str:
+    """A second item carrying ``qualified``'s origin, listed ahead of it and withdrawn: its id.
+
+    What a copy that timed out after writing leaves and a retry then duplicates: two items
+    of one board, each recording the same ticket as its `onetaskgraph.origin`. No store
+    verb makes that on purpose — a copy that finds the origin updates the item — so the
+    stand-in's `local-md` record is copied beside the original under a name the store lists
+    first, which is exactly what such an item is there; the withdrawal is the store's own
+    `task status set`, as the run that withdrew it made it.
+    """
+    location = _item(bench, qualified)["location"]
+    assert isinstance(location, dict), location
+    original = Path(str(location["path"]))
+    # llmlint: ignore-block[tests_mirror_real_usage] No store verb writes a second item
+    # carrying an origin a first already carries; a stand-in can only hold one as a record
+    # beside it, which is what a timed-out copy's duplicate is there.
+    shutil.copyfile(original, original.with_name(f"a-{original.name}"))
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    native = qualified.removeprefix(f"{BOARD}:").rsplit("/", 1)
+    duplicate = f"{BOARD}:{native[0]}/a-{native[1]}"
+    _moved(bench, duplicate, tickets.Status.WITHDRAWN.value)
+    assert _origin(_item(bench, duplicate)) == _origin(_item(bench, qualified))
+    listed = _board_ids(bench)
+    assert listed.index(duplicate) < listed.index(qualified), listed
+    return duplicate
+
+
+def _origin(item: dict[str, object]) -> str:
+    metadata = item["metadata"]
+    assert isinstance(metadata, dict), item
+    return str(metadata[tickets.ORIGIN_KEY])
+
+
 def _deps(bench: Bench, qualified: str, *direction: str) -> list[tuple[str, str, str]]:
     """The edges the store walks from ``qualified``: each as (from, to, kind)."""
     edges = _store(bench, "task", "deps", qualified, *direction)["items"]
@@ -530,12 +598,11 @@ def _placed(staged: Path, ticket: Path) -> list[str]:
     ]
 
 
-def _decided_and_copied(
-    python: str, store: str, ticket: Path, qualified: str, *extra: str
-) -> list[str]:
+def _decided_and_copied(python: str, ticket: Path, *extra: str) -> list[str]:
     """The agent's step before copying: ask the board the status, write it, validate, copy.
 
-    ``extra`` is `--withdraw` for a ticket this run withdraws.
+    ``extra`` is `--withdraw` for a ticket this run withdraws. The copy is the module's own
+    `copy`, which the task prescribes: the store's copy held to the ticket's binding.
     """
     return [
         "bash",
@@ -546,7 +613,8 @@ def _decided_and_copied(
         f"{shlex.join(extra)} {shlex.quote(str(ticket))})\n"
         f'sed -i "s/^status: .*/status: \\"$word\\"/" {shlex.quote(str(ticket))}\n'
         f"{python} -m orchestrator.follow_up_tickets validate {shlex.quote(str(ticket))}\n"
-        f"{store} task copy {qualified} --to {BOARD}\n",
+        f"{python} -m orchestrator.follow_up_tickets copy --board {BOARD} "
+        f"{shlex.quote(str(ticket))}\n",
     ]
 
 
@@ -579,9 +647,7 @@ def _refused_shapes(python: str, witness: Path, shaped: dict[str, Path]) -> list
     return ["bash", "-c", "".join(lines)]
 
 
-def _refused_then_kept(
-    python: str, store: str, witness: Path, ticket: Path, qualified: str
-) -> list[str]:
+def _refused_then_kept(python: str, witness: Path, ticket: Path) -> list[str]:
     """The re-dispatch's first step over its ticket: ask the board, and copy only if it says so.
 
     What `board-status` printed and exited with goes to ``witness``, and the copy is chained
@@ -597,7 +663,8 @@ def _refused_then_kept(
         f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
         f"if word=$({decide} {shlex.quote(str(ticket))} 2>> {quoted}); then\n"
         f'  echo "decided $word" >> {quoted}\n'
-        f"  {store} task copy {qualified} --to {BOARD} && echo copied >> {quoted}\n"
+        f"  {python} -m orchestrator.follow_up_tickets copy --board {BOARD} "
+        f"{shlex.quote(str(ticket))} && echo copied >> {quoted}\n"
         f"else\n"
         f'  echo "refused $?" >> {quoted}\n'
         f"fi\n",
@@ -760,6 +827,12 @@ class Followed(NamedTuple):
     other_after_second: dict[str, object]
     comments_after_second: list[dict[str, object]]
     board_after_second: list[str]
+    duplicate_issue: str
+    duplicate_before_second: dict[str, object]
+    board_before_second: list[str]
+    duplicate_after_second: dict[str, object]
+    duplicate_comments_after_second: list[dict[str, object]]
+    new_ticket_after_second: str
     edited_body: str
     edited_comment: str
     unsound: subprocess.CompletedProcess[str]
@@ -838,10 +911,11 @@ def _pass(bench: Bench, name: str, main: str, *extra: str, report: str | None = 
     log = _prompt_log(bench, name)
     environment = bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(log)}
     if report is not None:
-        # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted: the
-        # report is the answer text the turn ends with, which the real engine journals and
+        # llmlint: ignore-block[e2e_not_mocked] Only the paid provider process is substituted:
+        # the report is the answer text the turn ends with, which the real engine journals and
         # `just transcript` renders, and a paid turn's answer would be nondeterministic.
         environment["FAKE_CODEX_ANSWERS"] = json.dumps([report])
+        # llmlint: ignore-end[e2e_not_mocked]
     result = _run(
         ["just", "follow-ups", main, "--to", BOARD, *extra], bench, environment=environment
     )
@@ -914,6 +988,17 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             PROPOSED_URL,
             "Have the sweep ignore symlinks",
         )
+        # Two withdrawn items about the sweep trailer the store lists ahead of the open one.
+        for at, cause in enumerate(WITHDRAWN_CAUSES):
+            _board_item(
+                bench,
+                other,
+                cause,
+                tickets.Status.WITHDRAWN.value,
+                ISSUES + str(50 + at),
+                WITHDRAWN_FIX,
+            )
+        assert len(_board_ids(bench)) > PAGE_SIZE, "the board does not span pages"
 
         # A run with nothing to verify.
         empty_run = f"fu-empty-{pid}"
@@ -1037,6 +1122,21 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--witness",
                     ACCEPTED_WITNESS,
                 ],
+                # The duplicate search for the shared root cause, as the task spells it.
+                [
+                    python,
+                    str(RUN_TASK_STORE_INSTRUCTION),
+                    "--prompt-log",
+                    str(_prompt_log(bench, "first")),
+                    "--board",
+                    BOARD,
+                    "--search",
+                    SEARCHED_TEXT,
+                    "--checkout",
+                    str(REPO_ROOT),
+                    "--witness",
+                    SEARCH_WITNESS,
+                ],
                 ["mkdir", "-p", str(new_ticket.parent)],
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
@@ -1055,12 +1155,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 # absent. The helper says what it records and why.
                 _validated_older_first(bench, python, shared_ticket, bench.tmp / VALIDATE_SERVED),
                 ["rm", str(new_draft), str(shared_draft), str(related_draft)],
-                _decided_and_copied(
-                    python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
-                ),
-                _decided_and_copied(
-                    python, store, related_ticket, tickets.qualified_id(main, RELATED_CAUSE)
-                ),
+                _decided_and_copied(python, new_ticket),
+                _decided_and_copied(python, related_ticket),
                 _from_checkout(
                     store,
                     "task",
@@ -1137,10 +1233,23 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             impact_note=WITHDRAWN,
         )
 
+        # A timed-out copy left a second item carrying the new ticket's origin, which the
+        # store lists ahead of the live one and which has since been withdrawn — the state
+        # in which a re-copy once updated the closed duplicate and left the live issue stale.
+        duplicate_issue = _withdrawn_duplicate(bench, new_issue)
+        duplicate_before_second = _item(bench, duplicate_issue)
+        board_before_second = _board_ids(bench)
+
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
         # by copying its ticket again, and its comment on the earlier run's issue is edited.
+        # The ticket is staged bound to the withdrawn duplicate, as the store's own
+        # correspondence names it; the copy has to rebind it to the live item.
         edited = _ticket(
             main, NEW_CAUSE, first_ticket.drafts, title, "Verified, examples tightened"
+        )
+        misbound = dataclasses.replace(
+            edited,
+            board_item=tickets.BoardItemId(duplicate_issue.removeprefix(f"{BOARD}:")),
         )
         edited_comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
@@ -1169,31 +1278,20 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             [
                 # First, the ticket as the last pass left it — depending on an item a person
                 # has since un-accepted: the board refuses it, and nothing is copied.
-                _refused_then_kept(
-                    python,
-                    store,
-                    rederive_witness,
-                    new_ticket,
-                    tickets.qualified_id(main, NEW_CAUSE),
-                ),
+                _refused_then_kept(python, rederive_witness, new_ticket),
                 # Re-derived against the board as it now is: no entry, no assumption, and
                 # staged as the proposal it was first written as; the board decides.
-                _placed(_staged(bench, "new-edited.md", tickets.render(edited)), new_ticket),
+                _placed(
+                    _staged(bench, "new-edited.md", tickets.render(misbound, board=BOARD)),
+                    new_ticket,
+                ),
                 # The related ticket, evaporated by the newly accepted fix: withdrawn.
                 _placed(
                     _staged(bench, "related-withdrawn.md", tickets.render(withdrawn)),
                     related_ticket,
                 ),
-                _decided_and_copied(
-                    python,
-                    store,
-                    related_ticket,
-                    tickets.qualified_id(main, RELATED_CAUSE),
-                    "--withdraw",
-                ),
-                _decided_and_copied(
-                    python, store, new_ticket, tickets.qualified_id(main, NEW_CAUSE)
-                ),
+                _decided_and_copied(python, related_ticket, "--withdraw"),
+                _decided_and_copied(python, new_ticket),
                 ["bash", "-c", edit],
             ],
         )
@@ -1208,6 +1306,9 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         other_after_second = _item(bench, other_issue)
         comments_after_second = _comments(bench, other_issue)
         board_after_second = _board_ids(bench)
+        duplicate_after_second = _item(bench, duplicate_issue)
+        duplicate_comments_after_second = _comments(bench, duplicate_issue)
+        new_ticket_after_second = new_ticket.read_text(encoding="utf-8")
 
         # A run whose agent leaves a ticket that fails the shape, unvalidated.
         unsound_run = f"fu-unsound-{pid}"
@@ -1282,12 +1383,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 # Rewritten as a new proposal would be, its host read from `hostname`; the
                 # board decides the status it is copied with.
                 _placed(_staged(bench, "legacy.md", tickets.render(rewritten)), rewritten_ticket),
-                _decided_and_copied(
-                    python,
-                    store,
-                    rewritten_ticket,
-                    tickets.qualified_id(legacy_run, REWRITTEN_CAUSE),
-                ),
+                _decided_and_copied(python, rewritten_ticket),
             ],
         )
         legacy_feedback = _staged(bench, "legacy-feedback.md", LEGACY_FEEDBACK)
@@ -1387,6 +1483,12 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             other_after_second=other_after_second,
             comments_after_second=comments_after_second,
             board_after_second=board_after_second,
+            duplicate_issue=duplicate_issue,
+            duplicate_before_second=duplicate_before_second,
+            board_before_second=board_before_second,
+            duplicate_after_second=duplicate_after_second,
+            duplicate_comments_after_second=duplicate_comments_after_second,
+            new_ticket_after_second=new_ticket_after_second,
             edited_body=edited.body,
             edited_comment=edited_comment,
             unsound=unsound,
@@ -1563,6 +1665,10 @@ def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
         f"{written} validate",
         "--board-status",
         f"{written} board-status",
+        "--board-items",
+        f"{written} board-items",
+        "--copy",
+        f"{written} copy",
         "--checkout",
         str(REPO_ROOT),
         "--plan-store",
@@ -1752,8 +1858,9 @@ def test_the_dispatched_agent_runs_the_pinned_plan_store_the_task_names(
         f"the older plan store served the task's own instruction: {served.read_text('utf-8')}"
     )
     assert probe["returncode"] == 0, probe
-    listed = json.loads(probe["stdout"])["items"]
-    assert sorted(str(one["id"]) for one in listed) == sorted(
+    answered = json.loads(probe["stdout"])
+    assert answered["pages"] > 1, "the drafts fit one page, so the task's paging is untested"
+    assert sorted(str(one["id"]) for one in answered["items"]) == sorted(
         _draft_id(followed.main, draft) for draft in followed.consumed
     ), probe
 
@@ -1836,7 +1943,7 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
         "-m orchestrator.follow_up_tickets validate <path of the ticket>",
         "Then delete the draft files that ticket consumed",
         "`root_cause` and `repository`, then by titles and text",
-        f"{ONETASKGRAPH_BIN} task list --source {BOARD} --search <text> --json",
+        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} --search <text>`",
         "every issue you created or updated with its URL",
         "every dropped draft with its reason",
         "every finding that should have been surfaced live",
@@ -1852,11 +1959,17 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
     assert decided.start() < steps.index("**Put each ticket on the board.**"), steps
     validated = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets validate) <path", steps)
     assert validated is not None, steps
+    listed = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets board-items) --board", task)
+    assert listed is not None, task
+    copied = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets copy) --board", task)
+    assert copied is not None, task
     contract = (
         tickets.ticket_contract(main, BOARD)
         .replace("@DRAFTS_ROOT@", str(root))
         .replace("@VALIDATE@", validated[1])
         .replace("@BOARD_STATUS@", decided[1])
+        .replace("@BOARD_ITEMS@", listed[1])
+        .replace("@COPY@", copied[1])
         .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
     )
     assert contract in task, "the ticket shape is not the one the module renders"
@@ -1925,7 +2038,9 @@ def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_add
     )
     assert "a ticket of an older schema is brought to the current shape" in flat
 
-    assert followed.board_after_second == followed.board_after_first, "a re-dispatch added an item"
+    assert followed.board_after_second == followed.board_before_second, (
+        "a re-dispatch added an item"
+    )
     assert followed.new_after_second["content"] == followed.edited_body.replace(
         READ_FROM_HOSTNAME, HOST
     )
@@ -2020,7 +2135,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 5
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 6
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -2034,7 +2149,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
 
     assert legacy.result.returncode == UNSOUND, legacy.result.stdout + legacy.result.stderr
     assert f"{followed.left_ticket} is not a sound ticket" in legacy.result.stderr
-    assert "the record is schema 4, and this reads schema 5" in legacy.result.stderr
+    assert "the record is schema 4, and this reads schema 6" in legacy.result.stderr
     assert "carries `## Repository` and `## Suggested fixes`" in " ".join(
         legacy.result.stderr.split()
     )
@@ -2085,17 +2200,20 @@ def test_the_task_lists_the_boards_accepted_items_and_that_listing_selects_exact
 ) -> None:
     """The step's own listing, run as the task spells it, answers every accepted item and no other.
 
-    Read off the witness the turn wrote: the argv is the one the composed task fixes, its
-    `--status` flags rendered from the module's vocabulary, and what it answered is the
-    two accepted items — never the proposal, never the deferred item of the other run.
+    Read off the witness the turn wrote: the argv is the one the composed task fixes — the
+    module's own every-page listing on this checkout's interpreter, its `--status` flags
+    rendered from the module's vocabulary — and what it answered is the two accepted items,
+    never the proposal, never the deferred item of the other run, never a withdrawn one.
     """
     (task,) = followed.first.prompts
     flat = " ".join(task.split())
+    python = RECIPE_PYTHON
     assert (
         "**Write each ticket as if the board's accepted fixes were already in.** List the "
         "board's accepted items — those at `Todo` (`todo`), `Queued` (`queued`), `In Progress` "
-        f"(`in-progress`) and `Done` (`done`) — with `{ONETASKGRAPH_BIN} task list --source "
-        f"{BOARD} --status todo --status queued --status in-progress --status done --json`"
+        f'(`in-progress`) and `Done` (`done`) — with `"{python}" -m '
+        f"orchestrator.follow_up_tickets board-items --board {BOARD} --status todo --status "
+        "queued --status in-progress --status done`, which answers every page, the whole board"
     ) in flat
     witness = followed.first_turn.directory.resolve() / ACCEPTED_WITNESS
     assert witness.is_file(), (
@@ -2107,13 +2225,13 @@ def test_the_task_lists_the_boards_accepted_items_and_that_listing_selects_exact
     probe = json.loads(witness.read_text(encoding="utf-8"))
     assert probe["problem"] is None, probe["problem"]
     assert probe["command"] == [
-        str(ONETASKGRAPH_BIN),
-        "task",
-        "list",
-        "--source",
+        python,
+        "-m",
+        "orchestrator.follow_up_tickets",
+        "board-items",
+        "--board",
         BOARD,
         *(word for status in tickets.Status if status.accepted for word in ("--status", status)),
-        "--json",
     ], probe["command"]
     assert probe["returncode"] == 0, probe
     listed = json.loads(probe["stdout"])["items"]
@@ -2121,6 +2239,56 @@ def test_the_task_lists_the_boards_accepted_items_and_that_listing_selects_exact
         [followed.narrowing_item, followed.removing_item]
     ), probe
     assert followed.proposed_item not in {str(one["id"]) for one in listed}
+
+
+def test_the_duplicate_search_finds_the_open_item_past_the_stores_first_page(
+    followed: Followed,
+) -> None:
+    """The task's search by text, run as spelled, answers an open item the first page lacks.
+
+    The premise is read off the store itself, under the bench's page size: its own
+    `task list --search` answers a first page of the two withdrawn sweep-trailer items and a
+    `next` cursor, without the earlier run's open item for the shared root cause. The
+    listing the task hands the agent answers that item — so the duplicate search decides
+    "another run already has an open issue for this" from the whole board, which is the
+    reading a one-page search got wrong on the live board.
+    """
+    bench = followed.bench
+    other_issue = f"{BOARD}:{followed.other}/tickets/{SHARED_CAUSE}"
+    first_page = _store(bench, "task", "list", "--source", BOARD, "--search", SEARCHED_TEXT)
+    on_first_page = [str(one["id"]) for one in first_page["items"] if isinstance(one, dict)]
+    assert first_page.get("next"), "the store's own search answered no cursor: one page held it"
+    assert other_issue not in on_first_page, "the open item sits on the first page"
+    assert on_first_page == [
+        f"{BOARD}:{followed.other}/tickets/{cause}" for cause in WITHDRAWN_CAUSES
+    ], on_first_page
+
+    witness = followed.first_turn.directory.resolve() / SEARCH_WITNESS
+    assert witness.is_file(), (
+        f"no command the turn ran wrote {SEARCH_WITNESS} into {followed.first_turn.directory}; "
+        f"{_ran(bench)}"
+    )
+    # llmlint: ignore[boundary_inputs_validated] The witness this journey's own helper wrote,
+    # at the path this journey named; every field read here is asserted on below.
+    probe = json.loads(witness.read_text(encoding="utf-8"))
+    assert probe["problem"] is None, probe["problem"]
+    assert probe["command"] == [
+        RECIPE_PYTHON,
+        "-m",
+        "orchestrator.follow_up_tickets",
+        "board-items",
+        "--board",
+        BOARD,
+        "--search",
+        SEARCHED_TEXT,
+    ], probe["command"]
+    assert probe["returncode"] == 0, probe
+    found = [str(one["id"]) for one in json.loads(probe["stdout"])["items"]]
+    assert other_issue in found, found
+    assert found == [*on_first_page, other_issue], found
+    assert _category(_item(bench, other_issue)) == tickets.Status.DEFERRED, (
+        "the found item is closed"
+    )
 
 
 def test_a_ticket_narrowed_by_an_accepted_fix_lands_depending_on_it_with_the_url_in_its_impact(
@@ -2221,7 +2389,7 @@ def test_a_re_dispatch_withdraws_its_own_item_a_newly_accepted_fix_evaporates_de
         followed.bench, followed.proposed_item, "--direction", "depended-on-by"
     )
     assert WITHDRAWN in withdrawn.body and PROPOSED_URL in withdrawn.body
-    assert followed.board_after_second == followed.board_after_first, "a withdrawal added an item"
+    assert followed.board_after_second == followed.board_before_second, "a withdrawal added an item"
 
 
 def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no_board(
@@ -2256,6 +2424,44 @@ def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no
         assert not tickets.ticket_path(followed.bench.drafts_root, followed.main, name).exists()
 
 
+def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_the_ticket_to_it(
+    followed: Followed,
+) -> None:
+    """Two items carry one ticket's origin; the re-dispatch's copy reaches the open one alone.
+
+    The duplicate the store lists first was withdrawn, and the re-dispatch's ticket was
+    staged bound to it — the correspondence the store's own copy followed when it updated a
+    closed duplicate and left the live issue stale. The task's `board-status` and `copy`,
+    run as the turn ran them, rebind the ticket to the run's open item, leave the duplicate
+    one comment naming that item, and copy the edit there: the duplicate keeps the body it
+    was withdrawn with.
+    """
+    main, duplicate = followed.main, followed.duplicate_issue
+    new_issue = f"{BOARD}:{main}/tickets/{NEW_CAUSE}"
+    before = followed.duplicate_before_second
+    after = followed.duplicate_after_second
+    assert _category(before) == _category(after) == tickets.Status.WITHDRAWN
+    assert _origin(before) == _origin(followed.new_after_first), "the premise: one origin, twice"
+    assert (after["title"], after["content"]) == (before["title"], before["content"]), (
+        "the re-copy wrote the withdrawn duplicate"
+    )
+
+    local = followed.local_after_second
+    assert followed.new_after_second["content"] == local["content"], "the live item is stale"
+    assert followed.new_after_second["content"] != after["content"]
+    metadata = local["metadata"]
+    assert isinstance(metadata, dict), local
+    assert metadata[tickets.KEY][tickets.BINDING_FIELD] == new_issue.removeprefix(f"{BOARD}:")
+    assert metadata[tickets.ORIGIN_KEY] == new_issue
+    assert tickets.ORIGIN_KEY + ": " + duplicate not in followed.new_ticket_after_second
+
+    (notice,) = followed.duplicate_comments_after_second
+    body = str(notice["body"]).strip()
+    assert body.endswith(tickets.DUPLICATE_MARKER.format(run=main, survivor=new_issue)), body
+    assert f"continues on {new_issue}" in body, body
+    assert tickets.comment_owner(body) is None, "the notice reads as a run's own comment"
+
+
 def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_ticket_without_it(
     followed: Followed,
 ) -> None:
@@ -2280,7 +2486,9 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
 
     assert followed.new_deps_after_first != []
     assert followed.new_deps_after_second == []
-    assert _deps(followed.bench, followed.narrowing_item, "--direction", "depended-on-by") == []
+    # Only the withdrawn duplicate, which no copy reaches, keeps the edge it was left with.
+    dependents = _deps(followed.bench, followed.narrowing_item, "--direction", "depended-on-by")
+    assert [edge for edge in dependents if edge[0] != followed.duplicate_issue] == [], dependents
     edited = tickets.from_store_item(followed.new_after_second)
     assert NARROWING_URL not in edited.body and ASSUMED not in edited.body
     impact = edited.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
@@ -2290,5 +2498,5 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     assert followed.new_after_second["content"] == followed.edited_body.replace(
         READ_FROM_HOSTNAME, HOST
     )
-    assert followed.board_after_second == followed.board_after_first
+    assert followed.board_after_second == followed.board_before_second
     assert _deps(followed.bench, tickets.qualified_id(followed.main, NEW_CAUSE)) == []

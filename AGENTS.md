@@ -781,6 +781,24 @@ at each changed place which accepted ticket changed it, by URL. A `Proposal` or 
 fix is never assumed. The same-root-cause path is unchanged: an accepted item for a
 ticket's own root cause takes the run's evidence as a comment, never a dependency.
 
+**Every listing of the board is `python -m orchestrator.follow_up_tickets board-items`.**
+It takes `--board`, an optional `--search TEXT` and the accepted filter as repeated
+`--status` flags, reads the pinned plan store through every `next` page until none remains
+— refusing a cursor it has already followed — and prints one combined JSON result; the
+task's board inventory, its duplicate search by text and its accepted listing all name it.
+A bare `task list` answers one page and a cursor, so a search over it reads the board as
+smaller than it is.
+
+**A ticket is copied onto the board item it is bound to, and nowhere else.** Its record's
+`board_item` key holds that item's native id, and
+`python -m orchestrator.follow_up_tickets board-status` and its `copy` are what write it —
+when the run creates its item or first reaches it, and again when two items carry one
+ticket's `onetaskgraph.origin`, naming the run's own open item and leaving each withdrawn
+duplicate a comment naming that item — with the store's origin naming the item beside it,
+so the store's copy follows the binding. Both refuse, naming both ids, a destination the
+store reports that differs from the binding, and every copy the task prescribes goes
+through `copy`: a bare `task copy` updates whichever carrier the store lists first.
+
 **The `followups` board is the user's decision.** A ticket's issue is created in the
 repository its root cause lives in, which must be under the board's owner, as an item of
 the one board; a ticket naming a repository outside that owner is refused and reported,

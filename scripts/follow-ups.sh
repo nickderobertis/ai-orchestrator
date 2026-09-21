@@ -284,7 +284,9 @@ store_cli="$checkout/.venv/bin/onetaskgraph"
     "provision this checkout with 'just bootstrap', then retry"
 compose=(compose --template "$checkout/$TEMPLATE" --root "$drafts_root" --run "$run" --board "$board"
     --validate "\"$python\" -m orchestrator.follow_up_tickets validate"
-    --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status" --checkout "$checkout"
+    --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status"
+    --board-items "\"$python\" -m orchestrator.follow_up_tickets board-items"
+    --copy "\"$python\" -m orchestrator.follow_up_tickets copy" --checkout "$checkout"
     --plan-store "$store_cli")
 [ -z "$feedback" ] || compose+=(--feedback "$feedback")
 "$python" -m orchestrator.follow_up_tickets "${compose[@]}" >"$scratch" ||

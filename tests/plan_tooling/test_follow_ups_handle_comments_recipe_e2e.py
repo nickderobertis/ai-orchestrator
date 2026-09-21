@@ -339,9 +339,7 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
                 ),
                 # The store's clock is whole seconds: the copy and replies come a second later.
                 ["sleep", "1.1"],
-                _decided_and_copied(
-                    python, str(ONETASKGRAPH_BIN), own_ticket, tickets.qualified_id(main, OWN_CAUSE)
-                ),
+                _decided_and_copied(python, own_ticket),
                 _replying(bench, python, log, main),
             ],
         )
@@ -567,7 +565,7 @@ def test_no_board_items_status_changes_including_one_a_person_moved_after_the_ru
     assert handled.statuses_after_refusal == handled.statuses_before
     assert handled.statuses_after == handled.statuses_before, ran
     assert handled.statuses_at_end == handled.statuses_before, ran
-    assert f"task copy {tickets.qualified_id(handled.main, OWN_CAUSE)}" in ran, (
+    assert f"orchestrator.follow_up_tickets copy --board {BOARD}" in ran, (
         "the answering agent never copied the ticket, so the status was never put to the test"
     )
 
@@ -612,7 +610,7 @@ def test_each_quoted_comment_gets_one_reply_on_its_issue_naming_it_and_its_autho
     assert [one["body"] for one in evidence] == [
         tickets.render_comment(handled.main, SHARED_CAUSE, "This run hit it too.")
     ], "the run's one evidence comment is not still its only one"
-    assert f"task copy {tickets.qualified_id(handled.main, OWN_CAUSE)}" in ran
+    assert f"orchestrator.follow_up_tickets copy --board {BOARD}" in ran
 
 
 def test_gathering_again_quotes_only_the_comment_written_during_the_dispatch(

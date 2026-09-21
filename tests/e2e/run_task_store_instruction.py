@@ -68,28 +68,78 @@ def _unanswered(problem: str) -> Witness:
     )
 
 
-def instruction(task: str, *, run: str | None = None, board: str | None = None) -> str | None:
-    """A store listing the task spells whole, as it spells it: ``run``'s drafts, or the board's.
+def instruction(
+    task: str, *, run: str | None = None, board: str | None = None, search: str | None = None
+) -> str | None:
+    """A listing the task spells whole, as it spells it: ``run``'s drafts, or one of the board's.
 
     The drafts listing is chosen for the pin because it is the first store command the
     task hands the agent and the only one whose whole argv the task fixes: everything
     after it takes an id the agent works out. The program word is what differs between a
     pinned task and an unpinned one, and it is the first word of every store instruction
-    alike. The accepted listing on ``board`` is the other whole argv the task fixes — the
-    one the agent reads the board's accepted tickets with, its `--status` flags rendered
-    from the module's own vocabulary — so running it as spelled is how a journey reads
-    which items that step selects.
+    alike. The two board listings are the other whole argvs the task fixes, both through
+    the module's own `board-items` command, which reads every page the store answers:
+    the accepted listing — the one the agent reads the board's accepted tickets with, its
+    `--status` flags rendered from the module's own vocabulary — and, with ``search``, the
+    duplicate search by text, whose `<text>` the task leaves to the agent and this fills
+    in. Running each as spelled is how a journey reads what that step selects.
     """
     if run is not None:
         found = re.search(
             rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
         )
-    else:
-        source = re.escape(board or "")
+    elif search is not None:
         found = re.search(
-            rf"`([^`\n]*?task list --source {source}(?: --status [a-z-]+)+ --json)`", task
+            rf"`([^`\n]*?board-items --board {re.escape(board or '')} --search) <text>`", task
+        )
+        return f"{found[1]} {shlex.quote(search)}" if found else None
+    else:
+        found = re.search(
+            rf"`([^`\n]*?board-items --board {re.escape(board or '')}(?: --status [a-z-]+)+)`",
+            task,
         )
     return found[1] if found else None
+
+
+def _paged(
+    command: list[str], checkout: Path, environment: dict[str, str], *, paged: bool
+) -> subprocess.CompletedProcess[str]:
+    """Run ``command``, and for the drafts listing every further page the task says to list.
+
+    The drafts listing is the store's own `task list`, one page, and the task tells the agent
+    to list again with `--page <cursor>` while it answers a `next` cursor; this does exactly
+    that, and answers one run whose stdout carries every page's items under `items` and
+    `pages`, the number of pages read. The board listings are the module's `board-items`,
+    which pages itself, so they run once as spelled.
+    """
+    items: list[object] = []
+    followed: set[str] = set()
+    cursor: str | None = None
+    for pages in range(1, 100):
+        ran = subprocess.run(  # noqa: S603 - the program the dispatched task itself names
+            [*command, *(["--page", cursor] if cursor is not None else [])],
+            cwd=checkout,
+            env=environment,
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+        if not paged or ran.returncode != 0:
+            return ran
+        answered = json.loads(ran.stdout)
+        items.extend(answered["items"])
+        cursor = answered.get("next")
+        if cursor is None:
+            return subprocess.CompletedProcess(
+                ran.args, 0, json.dumps({"items": items, "pages": pages}), ran.stderr
+            )
+        if cursor in followed:
+            return subprocess.CompletedProcess(
+                ran.args, 1, "", f"the store answered the cursor {cursor!r} twice"
+            )
+        followed.add(cursor)
+    return subprocess.CompletedProcess(command, 1, "", "the drafts listing never ended")
 
 
 def main() -> int:
@@ -98,6 +148,9 @@ def main() -> int:
     which = parsed.add_mutually_exclusive_group(required=True)
     which.add_argument("--run", help="run the listing of this run's drafts")
     which.add_argument("--board", help="run the listing of this board's accepted items")
+    parsed.add_argument(
+        "--search", help="with --board: run the board's duplicate search for this text instead"
+    )
     parsed.add_argument("--checkout", type=Path, required=True)
     parsed.add_argument("--witness", type=Path, required=True)
     arguments = parsed.parse_args()
@@ -114,32 +167,27 @@ def main() -> int:
         if line
     ]
     spelled = (
-        instruction(prompts[-1], run=arguments.run, board=arguments.board) if prompts else None
+        instruction(prompts[-1], run=arguments.run, board=arguments.board, search=arguments.search)
+        if prompts
+        else None
     )
     if not prompts:
         record = _unanswered(f"no prompt was recorded at {arguments.prompt_log}")
     elif spelled is None:
-        wanted = (
-            f"--source drafts --project {arguments.run}"
-            if arguments.run is not None
-            else f"--source {arguments.board} --status <accepted>…"
-        )
-        record = _unanswered(f"the task names no `<store> task list {wanted} --json` instruction")
+        if arguments.run is not None:
+            wanted = f"<store> task list --source drafts --project {arguments.run} --json"
+        elif arguments.search is not None:
+            wanted = f"<board-items> --board {arguments.board} --search <text>"
+        else:
+            wanted = f"<board-items> --board {arguments.board} --status <accepted>…"
+        record = _unanswered(f"the task names no `{wanted}` instruction")
     else:
         command = shlex.split(spelled)
         older = os.environ["OLDER_PLAN_STORE_DIR"]
         environment = dict(os.environ)
         environment["PATH"] = older + os.pathsep + environment["PATH"]
         environment["OLDER_PLAN_STORE_LOG"] = str(served)
-        ran = subprocess.run(  # noqa: S603 - the program the dispatched task itself names
-            command,
-            cwd=arguments.checkout,
-            env=environment,
-            text=True,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
+        ran = _paged(command, arguments.checkout, environment, paged=arguments.run is not None)
         record = Witness(
             problem=None,
             command=command,

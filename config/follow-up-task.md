@@ -27,8 +27,9 @@ there gets this run's evidence rather than a second issue.
   every sound ticket refused by a validator reading an older record schema.
 - **The drafts.** Run `@RUN@`'s drafts are local Markdown tasks in the `drafts` plan
   source, under `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`. From that checkout, list them with
-  `@PLAN_STORE@ task list --source drafts --project @RUN@ --json`, and read one with
-  `@PLAN_STORE@ task show <qualified draft id> --json`.
+  `@PLAN_STORE@ task list --source drafts --project @RUN@ --json` — one page, so while it
+  answers a `next` cursor, list again with `--page <cursor>` until it answers none — and
+  read one with `@PLAN_STORE@ task show <qualified draft id> --json`.
 - **Each draft's transcript.** A draft's `orchestrator.follow-up-draft` record carries a
   `transcript` command, `onepipeline transcript …` or `onepipeline monitor …`. Run it from
   that checkout to read the turns the draft was written from. A manager's draft carries
@@ -38,8 +39,10 @@ there gets this run's evidence rather than a second issue.
   `origin/<base>` with `git show origin/<base>:<path>` and
   `git grep <pattern> origin/<base>`. Never check out, commit to, or otherwise modify any
   checkout, and never clone. A repository with no registered checkout cannot be verified.
-- **The board.** `@BOARD@` is the plan source verified tickets are copied onto. Read it with
-  `@PLAN_STORE@ task list --source @BOARD@ --json` and
+- **The board.** `@BOARD@` is the plan source verified tickets are copied onto. List it with
+  `@BOARD_ITEMS@ --board @BOARD@`, which reads every page the store answers and prints the
+  whole board as one JSON result — never with a bare `@PLAN_STORE@ task list`, which
+  answers one page of it and a `next` cursor. Read one item with
   `@PLAN_STORE@ task show <id> --json`, and comment with
   `@PLAN_STORE@ task comment add|list|edit|delete`.
 
@@ -69,13 +72,13 @@ there gets this run's evidence rather than a second issue.
    `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`.
 7. **Search the board for the same root cause** among its open items: first by the
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
-   text (`@PLAN_STORE@ task list --source @BOARD@ --search <text> --json`). Both read the
-   whole board, whichever repository an item's issue lives in, so narrow neither to a
+   text (`@BOARD_ITEMS@ --board @BOARD@ --search <text>`). Both read the whole board,
+   every page of it, whichever repository an item's issue lives in, so narrow neither to a
    repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
    searched like any other open item and still takes this run's evidence.
 8. **Write each ticket as if the board's accepted fixes were already in.** List the
    board's accepted items — those at @ACCEPTED_STATUSES@ — with
-   `@PLAN_STORE@ task list --source @BOARD@ @ACCEPTED_FILTER@ --json`, every page, the
+   `@BOARD_ITEMS@ --board @BOARD@ @ACCEPTED_FILTER@`, which answers every page, the
    whole board, whichever repository an item's issue lives in: an accepted fix in another
    repository can change a ticket here. Read each item's `## Suggested fix`. This is **not**
    the search of the step before: an accepted item carrying the same root cause as a
@@ -116,9 +119,10 @@ there gets this run's evidence rather than a second issue.
    the ticket again. When it refuses, copy nothing for that ticket and keep what it printed
    for your report.
 10. **Put each ticket on the board.** Where no open item carries the root cause, or the
-    item that does is this run's own, copy the ticket as "The verified ticket" states. When
-    the store refuses that copy, copy nothing more for that ticket and keep what it printed
-    for your report. Where an
+    item that does is this run's own, copy the ticket with
+    `@COPY@ --board @BOARD@ <path of the ticket>`, as "The verified ticket" states. When
+    that copy refuses, copy nothing more for that ticket and keep what it printed for your
+    report. Where an
     open item for it was created by another run, copy nothing: add this run's one comment
     to that item, or edit the comment this run already left there, under "Ownership on the
     board" below.
