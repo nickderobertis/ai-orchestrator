@@ -206,8 +206,19 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.16.0 is
-the adopted release, and what it adds is the **per-run pointer line**
+`config/oneharness.version` release and rejects a stale binary. Version 0.16.1 is
+the adopted release. What it changes
+([oneharness#1344](https://github.com/nickderobertis/oneharness/pull/1344)) is three
+things a reader of the CLI meets: a base-id `--bin` (or `--mock-harness`) override now
+reaches every variant of that harness, as `ONEHARNESS_BIN_<ID>` and a config-file `bin`
+already did, with an override naming the exact variant winning; a one-candidate
+selection that cannot run exits `1` whether it carries a plain prompt, a batch or a
+continuation; and a verb refusing `--format text --compact` prints its own usage rather
+than the root's. `tests/e2e/test_oneharness_bin_override_e2e.py` drives all three
+through the pinned CLI over this repository's `oneharness.toml`. Nothing this host
+passes the CLI exercised the first before this adoption — no wrapper passes `--bin`, and
+the suite passed it with base ids only — so it is currency rather than a fix in force.
+What 0.16.0 before it added is the **per-run pointer line**
 ([oneharness#1326](https://github.com/nickderobertis/oneharness/pull/1326)): a run that
 is handed `ONEHARNESS_HISTORY_POINTER_FILE` appends one typed line per harness run to
 that file, naming the history session it wrote, and `oneharness history pointers <file>`
@@ -626,7 +637,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.16.0, a config's per-harness `model` **beats** the variable, while the `--model`
+0.16.1, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -763,7 +774,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.16.0, confirmed against the binary:
+candidate it ended up running — through oneharness 0.16.1, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -969,17 +980,26 @@ wrong:
 - **Drop an inherited harness selection.** This repository runs its own suite from
   inside a dispatch, and a process-wide `ONEHARNESS_HARNESSES` beats config, so a
   journey that inherits one runs on whatever identity it names.
-- **Name bare identities, never variants.** `ONEHARNESS_BIN_*` keys on a harness
-  id and there is no spelling of it that reaches a variant —
-  `ONEHARNESS_BIN_CLAUDE_CODE` leaves `claude-code:alternate` resolving to the real
-  `claude`.
+- **Know which layer reaches a variant, and keep the real binary off `PATH`.** On the
+  adopted oneharness every override layer falls back from a variant-qualified identity
+  to its base harness — the `--bin` flag (and `--mock-harness`, the same map) first,
+  then `ONEHARNESS_BIN_<ID>` (`ONEHARNESS_BIN_CLAUDE_CODE_ALTERNATE`, then
+  `ONEHARNESS_BIN_CLAUDE_CODE`), then a config-file `bin`, each exhausted before the
+  next and an entry naming the exact variant winning inside its layer — so
+  `ONEHARNESS_BIN_CLAUDE_CODE` reaches `claude-code:alternate`. The `--bin` layer
+  gained that fallback only in 0.16.1
+  ([oneharness#1329](https://github.com/nickderobertis/oneharness/issues/1329)); before
+  it a base-id flag left the variant resolving to the real `claude`, which is why
+  `tests/e2e/test_oneharness_bin_override_e2e.py` asserts no `claude` is reachable on
+  its launch `PATH` before it relies on the override.
 
 Together they are a money hazard rather than a style point: a journey that misses
-either one spawns a live subscription with its double sitting unused, and a billed
+either one can spawn a live subscription with its double sitting unused, and a billed
 run and a free one look identical from the assertions. The guard against the first
 is that `_chain_turn` builds its launch environment from nothing, so there is no
 inherited selection to apply over what the journey sets; against the second, that it
-names plain `claude-code` and `codex`. A new journey of this shape launches
+names plain `claude-code` and `codex`, which every override layer of every release
+this host has adopted reaches. A new journey of this shape launches
 through that builder rather than spelling an environment inline, which is how one
 would escape both.
 
@@ -1225,14 +1245,16 @@ member (this repository's `check-in` pacemaker) runs its turn through the onehar
 member would otherwise have gone straight to a paid subscription. What is still a
 process there is the provider itself, so the journeys also pin `ONEHARNESS_BIN_CODEX`
 at `tests/e2e/fake_codex.py` — pinning that identity's binary is what keeps a suite run
-off a subscription. That pin reaches the bare harness id and no variant of it, and every
-identity in every chain here is now a variant, so what a journey's chain actually
-selects is `codex:primary` and the pin never sees it: the stand-in reaches those
+off a subscription. Every identity in every chain here is a variant, so what a
+journey's chain actually selects is `codex:primary`, which that base-id pin reaches on
+the adopted release through the variant-to-base fallback every override layer makes; the stand-in also reaches those
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.16.0, a harness selected
-with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>`, so the
+do not collide: re-measured against the adopted oneharness 0.16.1, a harness selected
+with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>` — the flag
+layer outranks the environment layer, and on this release a base-id `--mock-harness`
+covers a variant too — so the
 two-party path is unaffected by the second pin. Held on both halves rather than on the
 one that matters — the same chain without `--mock-harness` runs the pinned binary — so
 a release that started honouring the pin under the mock is a difference this reading

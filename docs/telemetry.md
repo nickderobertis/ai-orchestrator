@@ -143,14 +143,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.16.0/0.13.3 upgrade (`config/oneharness.version` and
+after the 0.16.1/0.13.3 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made ten times
+one. That re-check has now been made eleven times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -234,6 +234,12 @@ engine wheel links 0.17.0 as well, read off each wheel's own SBOM. What 0.16.0 a
 **per-run pointer line** ([oneharness#1326](https://github.com/nickderobertis/oneharness/pull/1326)),
 which is a line in a file of its own — the run's `oneharness-sessions.jsonl` — rather than
 a field in a record, so the accounting block this section reads is untouched by it.
+The oneharness half has since moved to 0.16.1 on the same terms: nothing under
+`crates/oneharness-core/src/domain/` changes between v0.16.0 and v0.16.1. What 0.16.1
+changes ([oneharness#1344](https://github.com/nickderobertis/oneharness/pull/1344)) is the
+process exit code for a one-candidate selection that cannot run, a base-id `--bin`
+override reaching a variant, and which usage a refused `--format text --compact` prints —
+none of it written into a record's `usage`.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
