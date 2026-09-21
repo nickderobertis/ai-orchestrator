@@ -661,6 +661,58 @@ def test_publish_branch_refuses_a_branch_the_repositorys_own_merge_path_rejects(
     )
 
 
+#: A gate duration planted as this host's last recording, and the bound
+#: `scripts/lock-timeout.sh` derives from it: 120 x 8 + 300, above `onevcs`'s 900-second
+#: default, so what arrives is the derivation rather than its floor. Stated rather than
+#: read out of the helper, so the journey cannot agree with whatever the helper says.
+RECORDED_GATE_SECONDS = 120
+DERIVED_LOCK_BOUND = "1260"
+
+
+def test_publish_branch_starts_onevcs_under_the_bound_the_last_gate_derives(
+    tmp_path: Path,
+) -> None:
+    """A manager's landing queues for the merge-queue lock under the derived bound.
+
+    A `local-direct` publication runs this identity's whole gate under that lock, so a
+    landing started beside a sibling's waits as long as that gate takes; `onevcs`'s own
+    900-second default is what refused `aio-1108` behind `aio-1110`
+    (ai-orchestrator#1164). Read where the real `onevcs` this recipe starts has handed
+    its environment on: the repository's own `pre-push` hook, which that publication
+    runs, records the bound it was started under.
+    """
+    seen = tmp_path / "bound-seen"
+    publication = _publication(
+        tmp_path, pre_push=f'printf "%s\\n" "${{ONEVCS_LOCK_TIMEOUT_SECONDS:-unset}}" >{seen}'
+    )
+    # A bound the launching shell exported is kept as a caller's, which is not what is
+    # under test here.
+    publication.environment.pop("ONEVCS_LOCK_TIMEOUT_SECONDS", None)
+    recording = Path(publication.environment["XDG_STATE_HOME"]) / "ai-orchestrator"
+    recording.mkdir(parents=True, exist_ok=True)
+    # llmlint: ignore[tests_mirror_real_usage] Producing this through the pre-push interface would need a gate that takes a known, bound-moving time — two minutes for any value above the floor — and `tests/e2e/test_lock_timeout_bound_e2e.py` already drives the real recording path; what this journey adds is the landing recipe's export, read at the hook.  # noqa: E501
+    (recording / "local-direct-gate-seconds").write_text(
+        f"{RECORDED_GATE_SECONDS}\n", encoding="utf-8"
+    )
+    _finished_branch(publication.checkout)
+
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(publication.checkout),
+        environment=publication.environment,
+    )
+
+    assert published.returncode == 0, published.stderr + published.stdout
+    assert seen.is_file(), f"the publication never ran the merge path:\n{published.stdout}"
+    assert seen.read_text(encoding="utf-8").strip() == DERIVED_LOCK_BOUND, (
+        f"the onevcs a landing starts queued under "
+        f"{seen.read_text(encoding='utf-8').strip()!r} rather than the {DERIVED_LOCK_BOUND}s "
+        f"a {RECORDED_GATE_SECONDS}s gate derives"
+    )
+
+
 #: The one line a merge-path hook says a host prerequisite is missing with, as onevcs's
 #: `HOST_PREREQUISITE_MARKER` spells it (`tests/test_engine_contracts.py` holds the name
 #: to the linked crate), and what this hook names after it. A hook emits it only for a

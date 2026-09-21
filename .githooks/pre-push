@@ -38,4 +38,13 @@ if "$hook_root/scripts/pre-push-smoke-needed.sh" "$comparison" <"$updates"; then
   just smoke
 fi
 
-just gate "$remote" "$base"
+# This gate is what a `local-direct` publication runs inside the clone it holds under
+# `onevcs`'s merge-queue lock, so how long it takes is how long every sibling waiting to
+# publish this identity is queued. Nobody can keep that number current by hand, so it is
+# measured here, where the gate already runs, and every process that starts a waiter's
+# `onevcs` derives its bound from the recording (ai-orchestrator#1164). The wrapper
+# returns the gate's own status, so what this hook admits is unchanged.
+# shellcheck source=scripts/lock-timeout.sh
+. "$hook_root/scripts/lock-timeout.sh"
+# llmlint: ignore[changed_behavior_has_e2e] Driving this line would run the complete gate, which ai-orchestrator#1164 rejects as a second test; tests/e2e/test_lock_timeout_bound_e2e.py drives record_local_direct_gate itself with a stand-in gate of known duration, and every publication of this repository runs this line for real.
+record_local_direct_gate just gate "$remote" "$base"

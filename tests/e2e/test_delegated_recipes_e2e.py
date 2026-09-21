@@ -118,6 +118,11 @@ WRAPPER_SCRIPTS = (
     # without either is refused before it delegates.
     "dispatch-env.sh",
     "dispatch-env-hook.sh",
+    # The bound every waiter for the merge-queue lock queues under, derived from how long
+    # this identity's gate last took. `just integrate` sources it, and so does the launch
+    # wrapper and the landing wrapper below, so a checkout without it is one none of them
+    # can run in.
+    "lock-timeout.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
     # `just repos` goes through this one, which absorbs the flag spelling.
@@ -190,7 +195,8 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
         f"uv run orchestrator-review-plan {project}",
         f"uv run orchestrator-check-plan {project}",
         f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
-        f"uv run onepipeline start {DEFAULTS} {DESIGN_PROJECT} --dag-graph off",
+        ENGINE_VERSION,
+        f"{ENGINE} start {DEFAULTS} {DESIGN_PROJECT} --dag-graph off",
         f"uv run orchestrator-copy-plan {project} --to {destination}",
         f"uv run orchestrator-plan-locations {project} --in {destination}",
     )
@@ -227,10 +233,26 @@ class Delegation(NamedTuple):
 #: Where a row's command line names the checkout the recipe ran in. Each journey runs in a
 #: throwaway checkout of its own, so the rows spell it as this and the comparison fills it.
 CHECKOUT = "@CHECKOUT@"
+
+
+def _at(checkout: Path, line: str) -> str:
+    """One expected command line, with the checkout placeholder filled in."""
+    return line.replace(CHECKOUT, str(checkout.resolve()))
+
+
 #: The run-end hook `just orchestrate` names, as the absolute path it renders.
 RUN_ENDED = f"{CHECKOUT}/scripts/run-ended.sh"
 #: Both hooks as a launch the caller named neither of carries them, in the order added.
 HOOKS = f"--success-hook {RUN_ENDED} --failure-hook {RUN_ENDED}"
+#: How a launch reaches the engine: the installed binary in this checkout's own `.venv`,
+#: by absolute path, rather than `uv run onepipeline`. `uv run` activates the project
+#: environment for the process it starts, so it exports `VIRTUAL_ENV` naming this
+#: checkout's `.venv` into the engine — and the engine hands its environment to every
+#: dispatch, which is how a worker's own `uv pip install` came to write into the
+#: environment every concurrent node shares (ai-orchestrator#1162). A read-only view
+#: still goes through `uv run`, which is why the rows below are not all one spelling.
+ENGINE = f"{CHECKOUT}/.venv/bin/onepipeline"
+
 #: The bus configuration `scripts/onepipeline.sh` hands every launch that names none,
 #: immediately after `start`, as the copied checkout's own absolute path.
 BUS_CONFIG = f"--bus-config {CHECKOUT}/config/onemessagebus.yaml"
@@ -251,6 +273,19 @@ WRAPPER_DEFAULTS = {
     "--dispatch-env-hook": DISPATCH_ENV_HOOK,
     "--maintenance-config": MAINTENANCE_CONFIG,
 }
+#: How the wrapper asks the installed engine which release it is, before every `start`
+#: and `adopt`: the second half of the one line it prints on stderr naming the engine
+#: `config/onepipeline.version` requests and the one about to run (ai-orchestrator#1217).
+ENGINE_VERSION = f"{ENGINE} --version"
+#: Set in a journey's environment to have the traced engine report this release rather
+#: than the pin, as an engine installed by hand for a pre-landing proof does.
+ENGINE_REPORTS_ENV = "FAKE_ENGINE_REPORTS"
+#: The release this checkout's `config/onepipeline.version` pins, and what the traced
+#: engine reports unless a journey says otherwise. Written into the checkout rather than
+#: copied, so a pin bump re-keys nothing here and the pair a journey reads is one it stated.
+PINNED_ENGINE = "0.40.0"
+#: A release a proof installed by hand in place of the pin.
+HAND_INSTALLED_ENGINE = "0.37.0"
 
 
 #: The whole delegation table, as `just` invocation → the command lines it must
@@ -268,13 +303,13 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe",),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe --dag-graph graphs/dag-scope.yaml"
+        f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph graphs/dag-scope.yaml"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--detach"),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe --detach"
+        f"{ENGINE} start {DEFAULTS} authoring:probe --detach"
         " --dag-graph graphs/dag-scope.yaml"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
@@ -284,25 +319,25 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph", "off"),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe --dag-graph off"
+        f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph off"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph=graphs/other.yaml"),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe --dag-graph=graphs/other.yaml"
+        f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph=graphs/other.yaml"
         f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph", "graphs/other.yaml"),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe --pr-author-graph graphs/other.yaml"
+        f"{ENGINE} start {DEFAULTS} authoring:probe --pr-author-graph graphs/other.yaml"
         f" --dag-graph graphs/dag-scope.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe"
+        f"{ENGINE} start {DEFAULTS} authoring:probe"
         f" --pr-author-graph=graphs/other.yaml --dag-graph=off {HOOKS}",
     ),
     # Each hook is kept per flag too, in either spelling and including a blank value,
@@ -310,7 +345,7 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--success-hook", "/elsewhere/on-success"),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe"
+        f"{ENGINE} start {DEFAULTS} authoring:probe"
         " --success-hook /elsewhere/on-success"
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
         f" --failure-hook {RUN_ENDED}",
@@ -318,7 +353,7 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--failure-hook=", "--success-hook="),
-        f"uv run onepipeline start {DEFAULTS} authoring:probe --failure-hook= --success-hook="
+        f"{ENGINE} start {DEFAULTS} authoring:probe --failure-hook= --success-hook="
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml",
     ),
     # The dispatch-env hook and the maintenance schedule are `scripts/onepipeline.sh`'s
@@ -329,28 +364,28 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dispatch-env-hook", "/elsewhere/refresh-env"),
-        f"uv run onepipeline start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
+        f"{ENGINE} start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
         " --dispatch-env-hook /elsewhere/refresh-env"
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dispatch-env-hook="),
-        f"uv run onepipeline start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
+        f"{ENGINE} start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
         " --dispatch-env-hook="
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--maintenance-config", "/elsewhere/schedule.yaml"),
-        f"uv run onepipeline start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
+        f"{ENGINE} start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
         " --maintenance-config /elsewhere/schedule.yaml"
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--maintenance-config="),
-        f"uv run onepipeline start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
+        f"{ENGINE} start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
         " --maintenance-config="
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
@@ -358,13 +393,13 @@ DELEGATIONS = (
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dispatch-env-hook=", "--maintenance-config="),
-        f"uv run onepipeline start {BUS_CONFIG} authoring:probe"
+        f"{ENGINE} start {BUS_CONFIG} authoring:probe"
         " --dispatch-env-hook= --maintenance-config="
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs, hooks and dispatch-env hook its launch chose, so no default is added to it.
-    Delegation("orchestrate", ("--adopt", "run-1"), "uv run onepipeline adopt run-1"),
+    Delegation("orchestrate", ("--adopt", "run-1"), f"{ENGINE} adopt run-1"),
     # `just plan` writes the plan it launches, so the argument its published line
     # carries is a path this recipe generated rather than one the caller typed. Both
     # of its own flags are absorbed here — `--name` decides that path and `--max-turns`
@@ -382,7 +417,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF,),
-        f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off",
         then=_tail(),
     ),
     # `--detach` hands back before the planner has written anything, so there is no plan
@@ -391,7 +426,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        f"uv run onepipeline start {DEFAULTS} authoring:listing-api --detach --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off",
     ),
     # The joined spelling of both, which is a separate parsing path: `--name=` decides
     # the plan path this line names, and `--max-turns=` is absorbed rather than
@@ -399,7 +434,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        f"uv run onepipeline start {DEFAULTS} authoring:listing-api --detach --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off",
     ),
     # `--no-design-doc` stops the flow after the planner, so the tail is absent here for
     # a different reason than it is absent above: there is nothing to write a document
@@ -407,7 +442,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--no-design-doc"),
-        f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off",
     ),
     # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
     # destination decides nothing about the planner, and everything about where the plan
@@ -415,7 +450,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--to", "elsewhere"),
-        f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off",
         then=_tail(destination="elsewhere"),
     ),
     # A caller who names an observer keeps it, in either spelling and including their
@@ -425,15 +460,13 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
-        f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape"
-        " --dag-graph graphs/dag-scope.yaml",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph graphs/dag-scope.yaml",
         then=_tail(),
     ),
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape"
-        " --dag-graph=graphs/other.yaml --detach",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph=graphs/other.yaml --detach",
     ),
     # The tail on its own, which is how a plan edited after it was authored is finished:
     # the same six verbs in the same order, reached without a planner being launched at
@@ -446,7 +479,8 @@ DELEGATIONS = (
         then=(
             "uv run orchestrator-check-plan authoring:listing-cursor",
             "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
-            f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape-design --dag-graph off",
+            ENGINE_VERSION,
+            f"{ENGINE} start {DEFAULTS} authoring:cursor-shape-design --dag-graph off",
             "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
             "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
         ),
@@ -695,6 +729,8 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
         "## Additional info\n\n### Operational notes\n\nWork the branch and report.\n",
         encoding="utf-8",
     )
+    # The engine pin the launch wrapper names as the release a launch requests.
+    (checkout / "config/onepipeline.version").write_text(f"{PINNED_ENGINE}\n", encoding="utf-8")
     for name in WRAPPER_SCRIPTS:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)
@@ -756,6 +792,27 @@ exit "${FAKE_UV_EXIT:-0}"
 """
     )
     uv.chmod(0o755)
+    # The engine a **launch** reaches: the installed binary in this checkout's own
+    # `.venv`, which is what `scripts/onepipeline.sh` execs rather than `uv run
+    # onepipeline` so that the engine — and so every dispatch under it — is not handed
+    # this checkout's `VIRTUAL_ENV` (ai-orchestrator#1162). Traced the same way `uv` is,
+    # under its own name, and it answers the `--version` every launch asks for the pair
+    # it prints, answering the pin unless a journey names a hand-installed release
+    # instead.
+    engine = checkout / ".venv/bin/onepipeline"
+    engine.parent.mkdir(parents=True, exist_ok=True)
+    engine.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\\n' "$0" "$*" >>"$TRACE_FILE"
+if [ "$*" = "--version" ]; then
+  echo "onepipeline ${{{ENGINE_REPORTS_ENV}:-{PINNED_ENGINE}}}"
+  exit 0
+fi
+exit "${{FAKE_ENGINE_EXIT:-0}}"
+"""
+    )
+    engine.chmod(0o755)
     return checkout, trace
 
 
@@ -848,14 +905,18 @@ def _run(
 #: `onepipeline start` this repository makes is gated, so a row that could name it and did
 #: not would be a launch that got past.
 LAUNCH_GATE = "uv run orchestrator-launch-gate"
-STARTS = "uv run onepipeline start "
+STARTS = f"{ENGINE} start "
+ADOPTS = f"{ENGINE} adopt "
 
 
 def _gated(published: str) -> tuple[str, ...]:
     """What a launch owes before its own line, and nothing for one that launches nothing.
 
-    The gate, over the launch as typed.
+    The gate first, over the launch as typed; then the wrapper's question to the engine
+    about which release it is, which an adoption asks too, since it runs no gate.
     """
+    if published.startswith(ADOPTS):
+        return (ENGINE_VERSION,)
     if not published.startswith(STARTS):
         return ()
     typed = published.removeprefix(STARTS)
@@ -864,7 +925,7 @@ def _gated(published: str) -> tuple[str, ...]:
     # configuration and the schedule ahead of what was typed.
     for default in (BUS_CONFIG, *WRAPPER_DEFAULTS.values()):
         typed = typed.removeprefix(f"{default} ")
-    return (f"{LAUNCH_GATE} {typed}",)
+    return (f"{LAUNCH_GATE} {typed}", ENGINE_VERSION)
 
 
 #: The envelope a row naming a reply file hands the recipe: a verdict, so it is
@@ -896,6 +957,88 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     assert trace.read_text().splitlines() == [
         line.replace(CHECKOUT, str(checkout.resolve())) for line in expected
     ]
+
+
+#: The one line a launch prints on stderr naming the engine it requests and the one it is
+#: about to run: `requested` is the pin, `running` what the binary reports.
+ENGINE_PAIR = re.compile(
+    r"^onepipeline: engine requested (?P<requested>\S+) \(config/onepipeline\.version\), "
+    r"about to run (?P<running>\S+) \((?P<binary>[^)]+)\)$",
+    re.MULTILINE,
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("invocation", "reaches"),
+    [
+        (("orchestrate", "authoring:probe"), STARTS),
+        (("orchestrate", "--adopt", "run-1"), ADOPTS),
+    ],
+    ids=["start", "adopt"],
+)
+def test_a_launch_names_the_engine_it_requests_and_the_one_it_runs_and_refuses_neither(
+    tmp_path: Path, invocation: tuple[str, ...], reaches: str
+) -> None:
+    """A proof against a hand-installed engine can read which engine it really ran on.
+
+    Two nominal proofs against an older engine passed on the pinned one, because the
+    install had not survived to the launch (ai-orchestrator#1217). So a launch says which
+    release it requests and which one it is about to run, on stderr — stdout is what
+    `monitor` and an attached launch stream — and goes on: which pair is the expected one
+    is the manager's call, so a mismatch is printed and never refused.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, *invocation, env={ENGINE_REPORTS_ENV: HAND_INSTALLED_ENGINE})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    pairs = list(ENGINE_PAIR.finditer(result.stderr))
+    assert len(pairs) == 1, f"a launch owes exactly one engine line on stderr:\n{result.stderr}"
+    (pair,) = pairs
+    assert pair["requested"] == PINNED_ENGINE, pair.group(0)
+    assert pair["running"] == HAND_INSTALLED_ENGINE, pair.group(0)
+    assert pair["binary"] == _at(checkout, ENGINE), pair.group(0)
+    assert "engine requested" not in result.stdout, result.stdout
+    traced = trace.read_text().splitlines()
+    assert traced[-1].startswith(_at(checkout, reaches)), (
+        f"a launch whose engine is not the pin must still reach it:\n{traced}"
+    )
+
+
+@pytest.mark.reads_recipes
+def test_an_engine_that_cannot_be_run_is_explained_rather_than_left_to_the_shell(
+    tmp_path: Path,
+) -> None:
+    """An executable engine the kernel refuses is reported with what to do about it.
+
+    An `adopt`, because it runs no gate and asks the engine nothing that would refuse
+    first: the version it cannot report is printed as unknown, and the launch then says
+    the engine could not be run.
+    """
+    checkout, trace = _checkout(tmp_path)
+    engine = checkout / ".venv/bin/onepipeline"
+    engine.write_text("#!/nonexistent/interpreter\n", encoding="utf-8")
+    engine.chmod(0o755)
+
+    result = _run(checkout, trace, "orchestrate", "--adopt", "run-1")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "about to run unknown (it did not answer --version)" in result.stderr, result.stderr
+    assert "is executable but could not be run" in result.stderr, result.stderr
+    assert "just bootstrap" in result.stderr, result.stderr
+
+
+@pytest.mark.reads_recipes
+def test_a_read_only_view_asks_the_engine_for_no_version(tmp_path: Path) -> None:
+    """Only a launch prints the pair: a view's stderr and its delegation are unchanged."""
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "channel-next", "run-1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "engine requested" not in result.stderr + result.stdout
+    assert trace.read_text().splitlines() == ["uv run onepipeline next run-1"]
 
 
 def test_the_orchestrate_recipe_refuses_a_checkout_whose_run_end_hook_cannot_run(
@@ -1115,10 +1258,8 @@ def test_the_plan_recipe_launches_a_brief_named_after_its_plan_under_another_nam
     result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--name", run, "--detach")
 
     assert result.returncode == 0, result.stderr
-    published = (
-        f"uv run onepipeline start {DEFAULTS} authoring:{run} --detach --dag-graph off".replace(
-            CHECKOUT, str(checkout.resolve())
-        )
+    published = f"{ENGINE} start {DEFAULTS} authoring:{run} --detach --dag-graph off".replace(
+        CHECKOUT, str(checkout.resolve())
     )
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{run}.md").is_file(), result.stderr
@@ -1152,9 +1293,9 @@ def test_the_plan_recipe_launches_a_run_named_as_a_plan_in_another_source(
 
     assert result.returncode == 0, result.stderr
     assert "the native id of the brief's plan project" not in result.stderr, result.stderr
-    published = (
-        f"uv run onepipeline start {DEFAULTS} authoring:{native} --detach --dag-graph off"
-    ).replace(CHECKOUT, str(checkout.resolve()))
+    published = (f"{ENGINE} start {DEFAULTS} authoring:{native} --detach --dag-graph off").replace(
+        CHECKOUT, str(checkout.resolve())
+    )
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{native}.md").is_file(), result.stderr
 
@@ -2168,7 +2309,7 @@ def _board_checkout(tmp_path: Path, credentials: str | None) -> tuple[Path, Path
     # `just plans` reads the CLI out of this checkout's own environment rather than
     # through `uv`, so the recorder stands there too.
     store = checkout / ".venv" / "bin" / "onetaskgraph"
-    store.parent.mkdir(parents=True)
+    store.parent.mkdir(parents=True, exist_ok=True)
     store.write_text(CREDENTIAL_RECORDING_UV, encoding="utf-8")
     store.chmod(0o755)
     return checkout, trace
@@ -2531,16 +2672,18 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     # a checkout without one launches nothing at all. Linked to the installed CLI rather
     # than written, because the recipe requires an executable and the task carries its path.
     store = checkout / ".venv" / "bin" / "onetaskgraph"
-    store.parent.mkdir(parents=True)
+    store.parent.mkdir(parents=True, exist_ok=True)
     store.symlink_to(ONETASKGRAPH_BIN)
     drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
     drafts.mkdir(parents=True)
     (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
-    launched = (
-        "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
-        f"uv run onepipeline start {DEFAULTS} authoring:run-1-follow-ups --dag-graph off".replace(
-            CHECKOUT, str(checkout.resolve())
-        ),
+    launched = tuple(
+        _at(checkout, line)
+        for line in (
+            "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+            ENGINE_VERSION,
+            f"{ENGINE} start {DEFAULTS} authoring:run-1-follow-ups --dag-graph off",
+        )
     )
 
     first = _run(checkout, trace, "follow-ups", "run-1")

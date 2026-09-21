@@ -22,6 +22,25 @@
 #     dispatch-env hook — runs the same ones immediately before each node-scope
 #     dispatch, so an indirection a routing change adds while a run is live reaches
 #     its next dispatch rather than failing it (ai-orchestrator#1109).
+#   * A launch also carries ONEVCS_LOCK_TIMEOUT_SECONDS, derived by
+#     `scripts/lock-timeout.sh` from how long this identity's gate last took: the
+#     `onevcs` the engine links is what a dispatch publishes through, and a
+#     `local-direct` publication holds the merge-queue lock for the whole of that gate
+#     (ai-orchestrator#1164).
+#   * A launch says which engine it runs: one line on stderr naming the release
+#     `config/onepipeline.version` requests and the version the binary about to run
+#     reports, so a proof meant for another engine can be read against the pair it
+#     really ran on (ai-orchestrator#1217). Printed only; nothing here installs,
+#     restores, or refuses on a mismatch.
+#   * A launch's environment is **built** rather than inherited. The engine hands a
+#     dispatch whatever the driver started with, so a planner session's `VIRTUAL_ENV`
+#     — the canonical checkout's `.venv` — used to reach every worker, and an ordinary
+#     `uv pip install` in a worktree wrote into the environment every concurrent node
+#     and the manager share (ai-orchestrator#1162). `scripts/dispatch-env.sh` carries
+#     the whitelist and `construct_dispatch_environment` applies it, here, in the
+#     launch arms alone: the engine's dispatch-env hook can only *add* to a driver's
+#     environment, so this is the last place a name can be taken out of one, and a
+#     read-only view keeps the environment it was given.
 #
 # A launch also names the pool-maintenance schedule, `config/onepipeline.maintenance.yaml`,
 # as `--maintenance-config`, so an idle driver maintains every registered identity's
@@ -74,6 +93,15 @@ case "${1:-}" in
         # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
         . "$script_dir/dispatch-env.sh"
         export_dispatch_environment onepipeline || exit $?
+        # Then build the launch's environment from that helper's whitelist — after the
+        # resolvers, because what they established is kept by name.
+        construct_dispatch_environment onepipeline || exit $?
+        # And the merge-queue bound the engine's linked `onevcs` publishes under; the
+        # header says why, and `scripts/lock-timeout.sh` how it is derived.
+        # shellcheck source=scripts/lock-timeout.sh
+        # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+        . "$script_dir/lock-timeout.sh"
+        export_lock_timeout onepipeline || exit $?
         # shellcheck source=scripts/ask-manager-env.sh
         # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
         . "$script_dir/ask-manager-env.sh"
@@ -103,6 +131,50 @@ if [ "$launching" = true ]; then
     # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
     . "$script_dir/follow-up-env.sh"
     export_follow_up_drafts onepipeline || exit "$?"
+fi
+
+# Which `onepipeline` a launch runs, and it is not `uv run`'s: `uv run` exports
+# `VIRTUAL_ENV` naming this checkout's `.venv` into the process it starts, which would put
+# back, after the construction above, the name that construction exists to take out. So a
+# launch execs the installed binary itself, and `scripts/dispatch-env.sh` puts this
+# checkout's `.venv/bin` on the PATH it builds — the part of `uv run` a dispatch needs. A
+# read-only view keeps `uv run onepipeline` below, like every other recipe here.
+#
+# Resolved *after* the design-approval gate above, because that gate is itself a `uv run`
+# and so is what heals a fresh worktree's environment before this reads it; an `adopt`,
+# which runs no gate, is the one shape that can reach the refusal below.
+if [ "$launching" = true ]; then
+    engine="${script_dir%/scripts}/.venv/bin/onepipeline"
+    if [ ! -x "$engine" ]; then
+        echo "onepipeline: this checkout has no executable engine at $engine, and a launch runs the installed binary rather than 'uv run' so that a dispatch does not inherit this checkout's Python environment; run 'just bootstrap' to install the pinned releases, then retry" >&2
+        exit 2
+    fi
+    # The engine this launch requests and the one it is about to run, as one line on
+    # stderr — stdout is what `monitor` prints and where an attached launch writes its
+    # settlement record. Printed, never acted on: whether the two should differ is the
+    # manager's call (the header says why), so a mismatch refuses nothing and a binary
+    # that cannot say its version is reported as that. Both values are read from outside
+    # this script, so they are cut to one line of printable text before they reach a
+    # terminal.
+    engine_pin_file="${script_dir%/scripts}/config/onepipeline.version"
+    requested_engine=unknown
+    if [ -r "$engine_pin_file" ]; then
+        read -r requested_engine <"$engine_pin_file" || true
+        requested_engine=${requested_engine:-unknown}
+    fi
+    if reported_engine=$("$engine" --version 2>/dev/null) && [ -n "$reported_engine" ]; then
+        # `onepipeline 0.40.0` names the binary before its version; the version is the
+        # last word of its first line, and the whole line is kept if it has only one.
+        reported_engine=${reported_engine%%$'\n'*}
+        reported_engine=${reported_engine##* }
+    else
+        reported_engine="unknown (it did not answer --version)"
+    fi
+    requested_engine=${requested_engine//[[:cntrl:]]/}
+    requested_engine=${requested_engine:0:80}
+    reported_engine=${reported_engine//[[:cntrl:]]/}
+    reported_engine=${reported_engine:0:80}
+    echo "onepipeline: engine requested ${requested_engine} (config/onepipeline.version), about to run ${reported_engine} ($engine)" >&2
 fi
 
 # Every launch names the dispatch-env hook, `scripts/dispatch-env-hook.sh` by absolute
@@ -149,5 +221,18 @@ if [ "${1:-}" = start ]; then
     fi
 fi
 
+# A launch runs the binary the line above reported; a read-only view keeps `uv run`, the
+# way every other recipe here reaches a pinned CLI. The header says why the two differ.
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.
+if [ "$launching" = true ]; then
+    # `execfail` so that an engine the check above found executable and the kernel still
+    # refuses — a missing interpreter, a wrong architecture — is explained here rather
+    # than by the shell's bare error.
+    shopt -s execfail
+    exec_status=0
+    exec "$engine" "$@" || exec_status=$?
+    echo "onepipeline: $engine is executable but could not be run (status $exec_status); run 'just bootstrap' to reinstall the pinned releases, then retry" >&2
+    exit "$exec_status"
+fi
+# llmlint: ignore[tool_output_is_signal] see the note above: this process is replaced by onepipeline.
 exec uv run onepipeline "$@"

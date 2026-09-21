@@ -1,3 +1,4 @@
+<!-- llmlint: ignore-file[instruction_layer_localized] Ownership of this subtree is routed: `.github/CODEOWNERS` is `* @nickderobertis`, which matches every path here as it does every sibling tier project under `tests/`, none of which carries an entry of its own; a per-directory line would restate that match rather than route anything. -->
 # `tests/writeback_budget`
 
 - **A copy is only killed by a live driver.** A journey here keeps a node's turn in flight
@@ -21,10 +22,21 @@
   appends it, on the stand-in codex the bench already puts at the `oneharness` seam, which
   answers no verdict unless `FAKE_CODEX_ANSWERS` scripts one. A sibling's envelope may
   pass on the `.cache/envelope-passes` a previous run left; a new envelope never does.
-- **A pre-landing proof has to keep the engine it installed.** The launch wrapper runs
-  the engine under `uv run`, which re-syncs the venv to the lock — the pinned release —
-  before every launch, so an engine installed by hand is replaced silently and a journey
-  meant to fail on the older release passes on the pin instead; and a dispatch inherits a
-  `VIRTUAL_ENV` naming the canonical checkout's venv, so an install that does not name
-  this checkout's lands in somebody else's. Read the engine the run really wrote with —
-  the projection record's `schema_version` says which — before believing either verdict.
+<!-- llmlint: ignore-block[determinism_vs_judgment] ai-orchestrator#1217 rejected a recipe that installs and restores an engine, because it mutates the environment every run on this host shares; the steps stay an operator's, and the launch prints the pair they are judged by. -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] ai-orchestrator#1217's accepted fix keeps these as operator steps documented here, written in terms of the line the launch prints; naming that line and the four steps is the whole of the instruction, and a pointer elsewhere would be a second place to keep them. -->
+- **A pre-landing proof against another engine is read off the pair the launch prints.**
+  Every `start` and `adopt` through `scripts/onepipeline.sh` writes one line to stderr:
+  `onepipeline: engine requested <pin> (config/onepipeline.version), about to run
+  <reported> (<binary>)`. Nothing installs, restores, or refuses a mismatched pair — which
+  pair is expected is the manager's call. By hand, from the checkout root:
+  1. `uv pip install --python .venv/bin/python onepipeline-cli==<version>`.
+  2. Launch with `UV_NO_SYNC=1`: the design-approval gate ahead of `start` is a `uv run`,
+     which re-syncs the pin.
+  3. `about to run` differing from `requested` is the proof on the installed release; the
+     two agreeing means the install did not survive and the verdict says nothing about it.
+  4. `just bootstrap` afterwards puts the pin back.
+
+  The projection record's `schema_version` is the independent reading of which engine a
+  run wrote with.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+<!-- llmlint: ignore-end[determinism_vs_judgment] -->

@@ -2216,9 +2216,17 @@ the result.
   queue above. Locks and queue state live under `$ONEVCS_HOME/locks` (normally
   `~/.onevcs/locks`) and protect only that machine — the same root holds
   `registry.json`, `rules.yml`, `sessions/`, `streams/`, `artifacts/`, and the
-  per-run `workspaces/`. Raise `ONEVCS_LOCK_TIMEOUT_SECONDS` when a legitimate
-  turn (a gate inside a merge) can exceed the default. On timeout, inspect the
-  reported PID and host rather than deleting a live lock or worktree.
+  per-run `workspaces/`. `ONEVCS_LOCK_TIMEOUT_SECONDS` bounds a queued wait, and
+  on this host nothing has to set it by hand any more: a legitimate turn here *is*
+  a gate inside a merge — a `local-direct` publication runs the complete pre-push
+  gate under the lock — so `scripts/lock-timeout.sh` derives the bound from how
+  long that gate last took and every waiter's `onevcs` is started with it. The
+  gate records its own duration at the pre-push hook, host-locally under
+  `${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/`; the bound is that
+  duration times the queue depth this host runs a plan at, plus a fixed margin, and
+  never below `onevcs`'s own default. A positive number of seconds you export
+  yourself is kept, so raising it by hand still works. On timeout, inspect the reported PID and host
+  rather than deleting a live lock or worktree.
 - **Several machines, remote-first:** GitHub is the remote coordinator. Local
   locks and ledgers are independent; unique branches, PR state, required checks,
   and merge/auto-merge coordinate publication globally.

@@ -591,6 +591,15 @@ def dag_scope_members() -> int:
     return int(declared.group(1))
 
 
+#: The one line a launch prints on stderr naming the release `config/onepipeline.version`
+#: requests, the version the binary about to run reports, and that binary.
+ENGINE_PAIR = re.compile(
+    r"^onepipeline: engine requested (\S+) \(config/onepipeline\.version\), "
+    r"about to run (\S+) \(([^)]+)\)$",
+    re.MULTILINE,
+)
+
+
 @pytest.mark.xdist_group("orchestrate-launch")
 def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     """`just orchestrate` drives a shipped example to a complete settlement."""
@@ -605,6 +614,22 @@ def test_a_shipped_plan_launches_and_settles(launched: Launched) -> None:
     # obligation to have reached standard error first, and `node-dispatched` has been
     # observed missing from a launch that settled `complete`.
     assert "run-started" in launch.stderr, launch.stderr
+    # And before the run's own stream, the one line naming the engine this launch requests
+    # and the one it ran, so a proof against a hand-installed engine can be read against
+    # the pair it really ran on (ai-orchestrator#1217). Stderr only: stdout is the
+    # settlement record above and nothing else.
+    pairs = ENGINE_PAIR.findall(launch.stderr)
+    assert len(pairs) == 1, f"the launch printed {len(pairs)} engine lines:\n{launch.stderr}"
+    ((requested, running, binary),) = pairs
+    pin = (REPO_ROOT / "config" / "onepipeline.version").read_text(encoding="utf-8").strip()
+    assert requested == pin, f"the launch named {requested} as requested; the pin is {pin}"
+    reported = subprocess.run(
+        [binary, "--version"], text=True, capture_output=True, timeout=e2e_timeout(60), check=True
+    ).stdout.split()[-1]
+    assert running == reported, (
+        f"the launch named {running} as about to run; {binary} reports {reported}"
+    )
+    assert "engine requested" not in launch.stdout, launch.stdout
 
     # What the run actually did is read from the replayed stream, which is the whole
     # settled ledger rather than a race. Read through `--filter detailed` so the
@@ -3346,6 +3371,198 @@ def test_a_dispatch_whose_hook_leaves_an_indirection_missing_is_refused_naming_i
             if path.is_file() and PLANTED_SECRET.encode() in path.read_bytes()
         ]
         assert not carrying, f"the run recorded a value the hook printed: {carrying}"
+    finally:
+        _just("stop", run, environment=environment, seconds=60)
+
+
+#: The launching shell's Python environment, which a launch used to hand every dispatch
+#: whole: `VIRTUAL_ENV` naming this host's canonical checkout's `.venv` is what made a
+#: worker's ordinary `uv pip install` in its own worktree write into the environment
+#: every concurrent node and the manager share (ai-orchestrator#1162). Planted with the
+#: real canonical spelling, because the value is what made the defect expensive.
+LEAKED_PYTHON_ENVIRONMENT = {
+    "VIRTUAL_ENV": str(REPO_ROOT / ".venv"),
+    "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+    "PYTHONHOME": str(REPO_ROOT / ".venv"),
+    "CONDA_PREFIX": str(REPO_ROOT / ".venv"),
+}
+
+#: A name no table admits and nothing on this host sets: the arbitrary ambient variable
+#: a launching shell happens to be carrying.
+AMBIENT_NAME = "AIO_1162_AMBIENT"
+AMBIENT_VALUE = "carried-in-by-the-launching-shell"
+
+#: A forge nomination the whitelist's `GH_` family is what keeps, planted here so the
+#: "still arrives" half is read on a name an operator really sets rather than on one
+#: this journey invented.
+KEPT_NOMINATION = "GH_PROJECTS_OWNER"
+KEPT_NOMINATION_VALUE = "nickderobertis"
+
+#: The bound the `onevcs` a dispatch publishes through queues for the merge-queue lock
+#: under, and the value a planted 120-second gate recording derives: 120 x 8 + 300,
+#: above `onevcs`'s 900-second default, so the derivation rather than its floor arrives.
+LOCK_BOUND = "ONEVCS_LOCK_TIMEOUT_SECONDS"
+RECORDED_GATE_SECONDS = 120
+DERIVED_LOCK_BOUND = "1260"
+
+#: How an `oneharness.*.toml` names the variable a variant's environment rule reads a
+#: value out of: `env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }`.
+#: The sources are read off the configs rather than listed, because the configs are the
+#: declaring side: a source added to a routing is one a dispatch must be handed, and a
+#: list here would go on asserting yesterday's.
+ENV_FROM_SOURCE = re.compile(r'[A-Z_][A-Z0-9_]*\s*=\s*"([A-Z_][A-Z0-9_]*)"')
+
+
+#: One `[NAME]="reason"` member of the kept-family table in `scripts/dispatch-env.sh`.
+KEPT_FAMILY = re.compile(r'^\s*\[([A-Za-z_][A-Za-z0-9_]*)\]="[^"]*"\s*$', re.MULTILINE)
+
+
+#: Families whose tool reads every member as a setting and refuses one it does not know,
+#: so a made-up member is a refused launch rather than a probe. The plan store's
+#: configuration layer is one: the launch gate reads the store before anything dispatches.
+STRICT_FAMILIES = frozenset({"ONETASKGRAPH_"})
+
+
+def _family_probes() -> dict[str, str]:
+    """One made-up member of every family the launch's whitelist keeps.
+
+    Which families there are is the table's to say; whether a member of each one reaches
+    a dispatch is the turn's, which is what this journey reads.
+    """
+    text = (REPO_ROOT / "scripts" / "dispatch-env.sh").read_text(encoding="utf-8")
+    declared = re.search(
+        r"declare -A DISPATCH_ENVIRONMENT_KEPT_PREFIXES=\((.*?)\n\)", text, re.DOTALL
+    )
+    assert declared is not None, "scripts/dispatch-env.sh declares no kept-family table"
+    probes = {
+        f"{family}AIO_1162_PROBE": "planted"
+        for family in KEPT_FAMILY.findall(declared[1])
+        if family not in STRICT_FAMILIES
+    }
+    assert probes, "the kept-family table names no family"
+    return probes
+
+
+def _env_from_sources() -> tuple[str, ...]:
+    """Every variable this repository's harness routing reads a value out of."""
+    sources: set[str] = set()
+    for config in sorted(REPO_ROOT.glob("oneharness*.toml")):
+        for declared in re.findall(
+            r"^env_from\s*=\s*\{(.*)\}\s*$", config.read_text(encoding="utf-8"), re.MULTILINE
+        ):
+            sources.update(ENV_FROM_SOURCE.findall(declared))
+    assert sources, "no oneharness config names an env_from source, so nothing can be derived"
+    return tuple(sorted(sources))
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker, e2e_not_mocked] One more launch beside the ones above, sharing their recipe, stand-in model and `_environment`, so a project of its own would re-key the whole launch path for one journey; and only the paid model is substituted, at the oneharness seam every other launch here substitutes it at — the recipe, the wrapper, the engine and the real oneharness all run, and the stand-in's record is where the environment they handed a turn can be read.  # noqa: E501
+def test_a_launch_builds_its_dispatches_environment_rather_than_inheriting_one(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A launching shell's Python environment reaches no turn; what a turn needs does.
+
+    Read off the dispatched turn's own environment at the seam the stand-in model
+    records it, never off the table in `scripts/dispatch-env.sh`: the whole defect was
+    that what this repository wrote down and what a dispatch received were not the same
+    thing, so a journey asking the table would agree with it however wrong it was.
+
+    Both directions in one launch, because they are one property. The names the parent
+    shell exported and no table admits are gone — `VIRTUAL_ENV` first, whose value is
+    the environment ai-orchestrator#1162's worker installed into — while every
+    `env_from` source this repository's routing names, the credentials and identity
+    indirections the resolvers establish, and the families the table keeps all arrive —
+    and so does the merge-queue bound the launch derives from this host's last gate.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    run = "dispatch-environment-e2e"
+    environment = _environment(tmp_path, oneharness_bin)
+    environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
+    sources = _env_from_sources()
+    probes = _family_probes()
+    environment.update(probes)
+    recorded = (
+        *LEAKED_PYTHON_ENVIRONMENT,
+        AMBIENT_NAME,
+        KEPT_NOMINATION,
+        "PATH",
+        LOCK_BOUND,
+        *sources,
+        *probes,
+    )
+    environment[ENVIRONMENT_KEYS_ENV] = ",".join(recorded)
+    # This host's last gate, as the pre-push hook records it under the launch's own state
+    # root; the bound a dispatch publishes under is derived from it at launch.
+    environment.pop(LOCK_BOUND, None)
+    recording = Path(environment["XDG_STATE_HOME"]) / "ai-orchestrator"
+    recording.mkdir(parents=True, exist_ok=True)
+    # llmlint: ignore[tests_mirror_real_usage] Producing this through the pre-push interface would need a gate that takes a known, bound-moving time — two minutes for any value above the floor — and `tests/e2e/test_lock_timeout_bound_e2e.py` already drives the real recording path; what this journey adds is the launch's export, read off a real dispatched turn.  # noqa: E501
+    (recording / "local-direct-gate-seconds").write_text(
+        f"{RECORDED_GATE_SECONDS}\n", encoding="utf-8"
+    )
+    environment.update(LEAKED_PYTHON_ENVIRONMENT)
+    environment[AMBIENT_NAME] = AMBIENT_VALUE
+    environment[KEPT_NOMINATION] = KEPT_NOMINATION_VALUE
+    plan = tmp_path / f"{run}.plan.json"
+    plan.write_text(
+        json.dumps({"schema_version": 2, "name": run, "tasks": [_node()]}), encoding="utf-8"
+    )
+    try:
+        launch = _just(
+            "orchestrate",
+            project_from_plan(plan),
+            "--dag-graph",
+            "off",
+            "--success-hook=",
+            "--failure-hook=",
+            environment=environment,
+        )
+        assert launch.returncode == 0, launch.stdout + launch.stderr
+        # llmlint: ignore[tests_mirror_real_usage] What a dispatch is *given* reaches no operator-facing view: it is inherited through three tools that report nothing of what they passed on, so the stand-in's record of its own environment is the only place to read it.  # noqa: E501
+        dispatched = _turns_of(_recorded_turns(Path(environment[PROMPT_LOG_ENV])), "worker")
+        assert dispatched, "no worker turn was dispatched"
+        for turn in dispatched:
+            handed = turn["environment"]
+            leaked = [
+                name
+                for name in (*LEAKED_PYTHON_ENVIRONMENT, AMBIENT_NAME)
+                if handed.get(name) is not None
+            ]
+            assert not leaked, (
+                f"the dispatched turn was handed {leaked} out of the launching shell; a "
+                f"worker's own 'uv pip install' then writes into "
+                f"{LEAKED_PYTHON_ENVIRONMENT['VIRTUAL_ENV']}, which every concurrent node "
+                "and the manager share (ai-orchestrator#1162)"
+            )
+            missing = [name for name in sources if not handed.get(name)]
+            assert not missing, (
+                f"the dispatched turn was handed no {missing}, which this repository's "
+                "harness routing reads through env_from; oneharness refuses a variant "
+                "whose source is unset, so the next dispatch fails at provider startup"
+            )
+            dropped = sorted(name for name in probes if handed.get(name) != "planted")
+            assert not dropped, (
+                f"the dispatched turn was not handed {dropped}, members of families the "
+                "launch's whitelist keeps; a tool reading a name of that family inside a "
+                "dispatch finds it unset"
+            )
+            assert handed.get(KEPT_NOMINATION) == KEPT_NOMINATION_VALUE, (
+                f"the dispatched turn was handed {KEPT_NOMINATION}="
+                f"{handed.get(KEPT_NOMINATION)!r}; the forge family is what a worker's "
+                "own repository reads its nomination out of"
+            )
+            path = handed.get("PATH") or ""
+            assert path.split(os.pathsep)[0] == ".venv/bin", (
+                f"the dispatched turn's PATH begins with {path.split(os.pathsep)[:1]} "
+                "rather than its own worktree's environment, so a bare `python` inside a "
+                "dispatch is whichever one the host offers"
+            )
+            assert handed.get(LOCK_BOUND) == DERIVED_LOCK_BOUND, (
+                f"the dispatched turn was handed {LOCK_BOUND}={handed.get(LOCK_BOUND)!r} "
+                f"rather than the {DERIVED_LOCK_BOUND}s a {RECORDED_GATE_SECONDS}s gate "
+                "derives, so the onevcs it publishes through gives up on the merge queue "
+                "while a sibling's gate still holds it (ai-orchestrator#1164)"
+            )
     finally:
         _just("stop", run, environment=environment, seconds=60)
 

@@ -567,9 +567,12 @@ replan *args:
 # recoverable` is where that discovery lives now: it lists every preserved
 # unpublished branch and the command that lands each one, and its output is what
 # feeds this argument list.
+# It queues for the identity's merge-queue lock like every other publication here, so it
+# sources `scripts/lock-timeout.sh` for the bound derived from how long this identity's
+# gate last took; a caller who exported one of their own keeps it.
 # llmlint: ignore[tool_output_is_signal] the requested readable per-branch train summary is this verb's product.
 integrate *args:
-    @uv run onevcs integrate "$@"
+    @. "{{repo_root}}/scripts/lock-timeout.sh" && export_lock_timeout integrate && uv run onevcs integrate "$@"
 
 # List recorded tracked-graph runs, who launched them, and their latest status,
 # **grouped by the project each was launched from** — the engine's own default from the

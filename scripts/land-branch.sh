@@ -69,6 +69,24 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
 readonly script_dir
 readonly DRAFTER="$script_dir/draft-pr-body.sh"
 
+# How long this waiter may queue for the identity's merge-queue lock. Both verbs below
+# publish, and a `local-direct` publication runs the complete gate inside the clone it
+# holds under that lock — so a sibling publishing at the same time is queued for as long
+# as that gate takes, which is longer than `onevcs`'s own default on this host
+# (ai-orchestrator#1164). Derived from what the gate last measured, through the one
+# helper every waiter here sources; a caller who named a bound of their own keeps it.
+lock_timeout_helper="$script_dir/lock-timeout.sh"
+if [ ! -f "$lock_timeout_helper" ] || [ ! -r "$lock_timeout_helper" ]; then
+    echo "land-branch: required helper is not a readable regular file: $lock_timeout_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/lock-timeout.sh
+if ! . "$lock_timeout_helper"; then
+    echo "land-branch: the helper at $lock_timeout_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+export_lock_timeout land-branch
+
 #: The interpreter that reads `onevcs resolve`'s answer. This checkout's own where it
 #: has one, as `scripts/draft-pr-body.sh` picks it for the same read: a landing runs
 #: from a checkout whose environment is already synced, and a host python is the

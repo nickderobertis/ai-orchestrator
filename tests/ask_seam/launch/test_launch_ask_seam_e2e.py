@@ -2069,9 +2069,10 @@ def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_anothe
 
 #: The scripts a launch runs before it reaches the seam: the entry point itself and the
 #: helper it asks who is acting, the definition of which resolvers establish a
-#: dispatch's environment and the three resolvers it names, and the ask-manager helper.
-#: Copied into a checkout of their own so the wrapper they resolve is that checkout's,
-#: which is how the refusal below is driven without touching this one.
+#: dispatch's environment and the three resolvers it names, the merge-queue bound's
+#: helper, and the ask-manager helper. Copied into a checkout of their own so the wrapper
+#: they resolve is that checkout's, which is how the refusal below is driven without
+#: touching this one.
 LAUNCH_SCRIPTS = (
     "onepipeline.sh",
     "launcher-session.sh",
@@ -2080,6 +2081,7 @@ LAUNCH_SCRIPTS = (
     "ask-manager-env.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
+    "lock-timeout.sh",
 )
 
 

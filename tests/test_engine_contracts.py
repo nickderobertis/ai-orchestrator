@@ -1436,6 +1436,36 @@ PYTHON_STAT_FIELD = re.compile(r"rsplit\(\"\)\", 1\)\[1\]\.split\(\)\[(\d+)\]")
 ONEVCS_LEASE_IDENTITY = re.compile(r'format!\("run:\{\}", run_root\.display\(\)\)')
 
 
+#: How `onevcs` states the bound a queued lock wait gives up at when nothing names one.
+ONEVCS_LOCK_DEFAULT = re.compile(r"pub const DEFAULT_TIMEOUT_SECONDS: f64 = ([0-9.]+);")
+#: How `scripts/lock-timeout.sh` restates it, as the floor its derived bound never goes
+#: below.
+HELPER_LOCK_DEFAULT = re.compile(r"^ONEVCS_DEFAULT_LOCK_TIMEOUT_SECONDS=([0-9]+)$", re.MULTILINE)
+
+
+def test_the_merge_queue_bound_is_floored_at_the_default_onevcs_declares() -> None:
+    """`scripts/lock-timeout.sh`'s floor is `onevcs`'s own default, in every copy a waiter runs.
+
+    The helper can only ever lengthen a wait because it never derives a bound below the
+    one `onevcs` would use unasked (ai-orchestrator#1164). Both copies are read: the one a
+    dispatch publishes through, which the engine links, and the CLI `config/onevcs.version`
+    installs for the manager's own landings, each of which the helper exports a bound to.
+    """
+    helper = (REPO_ROOT / "scripts" / "lock-timeout.sh").read_text(encoding="utf-8")
+    floor = HELPER_LOCK_DEFAULT.search(helper)
+    assert floor is not None, (
+        "scripts/lock-timeout.sh states no ONEVCS_DEFAULT_LOCK_TIMEOUT_SECONDS"
+    )
+    for engine in (ONEVCS, Engine("onevcs", _pinned_tag("onevcs"), ONEVCS.source_root)):
+        declared = ONEVCS_LOCK_DEFAULT.search(_source(engine, "lock.rs"))
+        assert declared is not None, f"onevcs {engine.ref} declares no lock DEFAULT_TIMEOUT_SECONDS"
+        assert float(declared[1]) == float(floor[1]), (
+            f"onevcs {engine.ref} gives up a queued wait at {declared[1]}s by default and "
+            f"scripts/lock-timeout.sh floors its bound at {floor[1]}s; move the helper's "
+            "floor to the default, or it can shorten a wait it exists to lengthen"
+        )
+
+
 def test_the_run_root_lease_reads_the_process_identity_onevcs_records() -> None:
     """The lease holder's liveness test is `onevcs`'s, and this is what says so.
 
