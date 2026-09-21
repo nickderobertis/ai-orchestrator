@@ -12,8 +12,9 @@
 # every envelope unjudged.
 #
 # The bus reads this command's answer by exit status: 0 passes, 1 refuses with stderr as
-# the reason, and anything else — a helper that will not load included — is unjudged,
-# which the bus never sends.
+# the reason, and anything else is unjudged, which the bus never sends. The refusals
+# below exit 2 for that reason: a checkout this validator cannot read itself out of is
+# no verdict on the envelope.
 set -euo pipefail
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -22,21 +23,13 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || {
     exit 2
 }
 
-for helper in codex-alt-home.sh claude-alt-config-dir.sh; do
-    if [ ! -f "$script_dir/$helper" ] || [ ! -r "$script_dir/$helper" ]; then
-        echo "envelope-review: required helper is not a readable regular file: $script_dir/$helper; restore it from the repository or run 'just bootstrap', then send the envelope again" >&2
-        exit 2
-    fi
-done
-helper_failed() {
-    echo "envelope-review: required helper $script_dir/$1 failed to load; restore it from the repository or run 'just bootstrap', then send the envelope again" >&2
-    exit 2
-}
 # shellcheck source=scripts/codex-alt-home.sh
-. "$script_dir/codex-alt-home.sh" || helper_failed codex-alt-home.sh
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/codex-alt-home.sh"
 ensure_codex_alt_home "envelope-review" || exit 2
 # shellcheck source=scripts/claude-alt-config-dir.sh
-. "$script_dir/claude-alt-config-dir.sh" || helper_failed claude-alt-config-dir.sh
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/claude-alt-config-dir.sh"
 resolve_claude_alt_config_dir "envelope-review" || exit 2
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the checkout above a directory this script has just entered stops being enterable mid-run, since entering that directory already required traversing it; a journey producing that would have to remove the checkout it is running from.

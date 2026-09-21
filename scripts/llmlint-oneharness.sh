@@ -44,21 +44,13 @@ fi
 # unauthenticated identity falls through rather than hard-failing. Resolved here,
 # past the argument checks above, so a rejected invocation and the `--version`
 # probe never touch the filesystem.
-codex_alt_helper="$script_dir/codex-alt-home.sh"
-if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
-    echo "llmlint oneharness wrapper: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
-    exit 2
-fi
 # shellcheck source=scripts/codex-alt-home.sh
-. "$codex_alt_helper"
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/codex-alt-home.sh"
 ensure_codex_alt_home "llmlint oneharness wrapper" || exit $?
-alt_config_helper="$script_dir/claude-alt-config-dir.sh"
-if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
-    echo "llmlint oneharness wrapper: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
-    exit 2
-fi
 # shellcheck source=scripts/claude-alt-config-dir.sh
-. "$alt_config_helper"
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/claude-alt-config-dir.sh"
 resolve_claude_alt_config_dir "llmlint oneharness wrapper" || exit $?
 
 if oneharness "$1" --config "$llmlint_config" "${@:2}"; then

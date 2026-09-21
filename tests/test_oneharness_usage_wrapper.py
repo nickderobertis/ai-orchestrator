@@ -18,11 +18,6 @@ from pathlib import Path
 from orchestrator.root import REPO_ROOT
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-usage.sh"
-HELPERS = (
-    REPO_ROOT / "scripts" / "claude-alt-config-dir.sh",
-    REPO_ROOT / "scripts" / "codex-alt-home.sh",
-)
-
 
 #: Every Claude identity's indirection, and the directory under the test's own tree each is
 #: pinned to. The probe resolves the same four a dispatch does.
@@ -50,11 +45,11 @@ def _stub_oneharness(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _run_wrapper(
-    tmp_path: Path, argv: list[str], *, wrapper: Path | None = None
+    tmp_path: Path, argv: list[str]
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     binary, recorded = _stub_oneharness(tmp_path)
     proc = subprocess.run(
-        [str(wrapper or WRAPPER), *argv],
+        [str(WRAPPER), *argv],
         text=True,
         capture_output=True,
         check=False,
@@ -72,18 +67,6 @@ def _run_wrapper(
     return proc, delivered
 
 
-def _wrapper_without(tmp_path: Path, *present: Path) -> Path:
-    """A copy of the wrapper beside only the helpers named, mimicking a partial checkout."""
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    copied = scripts / WRAPPER.name
-    copied.write_bytes(WRAPPER.read_bytes())
-    copied.chmod(0o755)
-    for helper in present:
-        (scripts / helper.name).write_bytes(helper.read_bytes())
-    return copied
-
-
 def test_the_usage_probe_reaches_oneharness_with_every_indirection_resolved(
     tmp_path: Path,
 ) -> None:
@@ -98,63 +81,6 @@ def test_the_usage_probe_reaches_oneharness_with_every_indirection_resolved(
     # `ensure_codex_alt_home` really ran: an absent codex home hard-fails oneharness,
     # which is why that helper — unlike the Claude one — creates its directory.
     assert (tmp_path / "codex-alt").is_dir()
-
-
-def test_missing_alternate_config_helper_is_rejected_before_invoking_oneharness(
-    tmp_path: Path,
-) -> None:
-    """A wrapper without its shared helper must name the file and the way back.
-
-    The helper is a separate file on disk, so a partial checkout can leave the
-    wrapper without it. Sourcing it unguarded would fail through the shell's own
-    "No such file" line, which names neither the contract nor the recovery.
-    """
-    copied = _wrapper_without(tmp_path)
-
-    proc, delivered = _run_wrapper(tmp_path, ["--harness", "codex"], wrapper=copied)
-
-    assert proc.returncode == 2
-    assert "oneharness-usage: required helper is not a readable regular file" in proc.stderr
-    assert "claude-alt-config-dir.sh" in proc.stderr
-    assert "just bootstrap" in proc.stderr  # the concrete way back
-    assert delivered == []
-
-
-def test_missing_codex_alt_helper_is_rejected_before_invoking_oneharness(
-    tmp_path: Path,
-) -> None:
-    """The second helper needs the same guard as the first, and its own diagnostic.
-
-    The Claude helper is present here on purpose, so it is specifically the
-    codex-alt-home.sh lookup that fails — otherwise this would pass on the sibling
-    guard above and prove nothing.
-    """
-    copied = _wrapper_without(tmp_path, HELPERS[0])
-
-    proc, delivered = _run_wrapper(tmp_path, ["--harness", "codex"], wrapper=copied)
-
-    assert proc.returncode == 2
-    assert "oneharness-usage: required helper is not a readable regular file" in proc.stderr
-    assert "codex-alt-home.sh" in proc.stderr
-    assert "just bootstrap" in proc.stderr  # the concrete way back
-    assert delivered == []
-
-
-def test_an_unreadable_helper_is_rejected_like_an_absent_one(tmp_path: Path) -> None:
-    """The guard tests readability, not just presence, so a mode-0 file fails here too."""
-    copied = _wrapper_without(tmp_path, *HELPERS)
-    unreadable = copied.parent / HELPERS[0].name
-    unreadable.chmod(0o000)
-
-    proc, delivered = _run_wrapper(tmp_path, ["--harness", "codex"], wrapper=copied)
-
-    try:
-        assert proc.returncode == 2
-        assert "oneharness-usage: required helper is not a readable regular file" in proc.stderr
-        assert delivered == []
-    finally:
-        # Restored so the temporary tree can be cleaned up.
-        unreadable.chmod(0o644)
 
 
 def test_the_wrapper_passes_its_arguments_through_unmangled(tmp_path: Path) -> None:

@@ -115,50 +115,6 @@ def test_every_claude_indirection_is_exported(tmp_path: Path) -> None:
         assert not (tmp_path / leaf).exists(), name
 
 
-def test_missing_claude_alt_helper_is_rejected_before_invoking_oneharness(
-    tmp_path: Path,
-) -> None:
-    """A partial checkout must name the missing file, not fail through the shell.
-
-    The Codex helper is present here on purpose, so it is specifically the
-    claude-alt-config-dir.sh lookup that fails — otherwise this would pass on the
-    sibling guard and prove nothing.
-    """
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    copied = scripts / WRAPPER.name
-    copied.write_bytes(WRAPPER.read_bytes())
-    copied.chmod(0o755)
-    codex_helper = REPO_ROOT / "scripts" / "codex-alt-home.sh"
-    (scripts / codex_helper.name).write_bytes(codex_helper.read_bytes())
-    (tmp_path / "oneharness.llmlint.toml").write_bytes(
-        (REPO_ROOT / "oneharness.llmlint.toml").read_bytes()
-    )
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    marker = tmp_path / "invoked"
-    oneharness = bin_dir / "oneharness"
-    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
-    oneharness.chmod(0o755)
-
-    proc = subprocess.run(
-        [copied, "run", "--mode", "read-only"],
-        text=True,
-        capture_output=True,
-        env={
-            **os.environ,
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
-        },
-    )
-
-    assert proc.returncode == 2
-    assert "claude-alt-config-dir.sh" in proc.stderr
-    assert "required helper is not a readable regular file" in proc.stderr
-    assert "just bootstrap" in proc.stderr  # the concrete way back
-    assert not marker.exists()
-
-
 def test_real_oneharness_boundary_keeps_the_codex_grant_off_a_claude_candidate(
     tmp_path: Path,
 ) -> None:

@@ -342,7 +342,8 @@ def test_the_identities_file_is_parsed_by_the_credentials_parser_and_nothing_els
 
     That is the observable half of "one parser": with `scripts/credentials-env.sh` gone,
     a host whose file is absent resolves exactly as before, and a host whose file exists
-    is refused by name rather than read some second way.
+    is refused — the shell naming the parser it could not source — rather than read some
+    second way.
     """
     scripts = tmp_path / "checkout" / "scripts"
     scripts.mkdir(parents=True)
@@ -357,8 +358,9 @@ def test_the_identities_file_is_parsed_by_the_credentials_parser_and_nothing_els
     with_parser = _resolve({"HOME": str(home)}, helper=lonely)
 
     assert without_file.returncode == 0, without_file.stderr
-    assert with_file.returncode == 2
-    assert f"needs the parser at {scripts / PARSER.name}" in with_file.stderr
+    assert with_file.returncode != 0
+    assert PARSER.name in with_file.stderr, with_file.stderr
+    assert with_file.exported == {}
     assert with_parser.returncode == 0, with_parser.stderr
     assert with_parser.exported["ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"] == "/x"
 
@@ -395,27 +397,6 @@ def test_an_absent_identities_file_resolves_the_defaults_silently(
     assert resolved.returncode == 0, resolved.stderr
     assert resolved.stderr == ""
     assert resolved.exported == {name: str(home / leaf) for name, leaf in DEFAULTS.items()}
-
-
-def test_a_parser_that_is_readable_but_will_not_load_is_refused_by_name(tmp_path: Path) -> None:
-    """A parser that fails as it is sourced stops the helper before the file is read at all."""
-    scripts = tmp_path / "checkout" / "scripts"
-    scripts.mkdir(parents=True)
-    helper = scripts / HELPER.name
-    shutil.copy2(HELPER, helper)
-    broken = scripts / PARSER.name
-    broken.write_text("return 3\n", encoding="utf-8")
-    home = tmp_path / "home"
-    _write_identities(
-        home / ".config", "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR=/a-value-that-must-not-appear\n"
-    )
-
-    resolved = _resolve({"HOME": str(home)}, helper=helper)
-
-    assert resolved.returncode == 2
-    assert f"the parser at {broken} is readable but could not be loaded" in resolved.stderr
-    assert "a-value-that-must-not-appear" not in resolved.stderr
-    assert resolved.exported == {}
 
 
 def test_resolving_a_name_that_is_not_an_identity_indirection_is_refused(tmp_path: Path) -> None:

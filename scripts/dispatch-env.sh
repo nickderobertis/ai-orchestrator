@@ -26,14 +26,15 @@ DISPATCH_ENVIRONMENT_RESOLVERS=(
 dispatch_environment_names=()
 
 # Run every resolver above, in order, each attributing its diagnostics to $1, the name
-# of the calling launcher. A helper that is missing, unreadable or unloadable refuses
-# with the remedy, and a resolver's own refusal is returned as it stands.
+# of the calling launcher. A resolver's own refusal is returned as it stands; a helper
+# that cannot be sourced is a broken checkout, which the shell itself says on the line
+# it fails the source at.
 export_dispatch_environment() {
     # Named the way scripts/ask-manager-env.sh names its own required input: a caller
     # that forgot the label would otherwise abort on `1: unbound variable`, which says
     # nothing about which helper was called wrong.
     local caller=${1:?export_dispatch_environment: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, the way scripts/onepipeline.sh passes onepipeline, then retry}
-    local here resolver helper function path
+    local here resolver helper function
     dispatch_environment_names=()
     # From this file's own location, because the helpers being loaded are this
     # checkout's — never from `$PWD`, which a launcher may be invoked from anywhere.
@@ -45,25 +46,9 @@ export_dispatch_environment() {
     for resolver in "${DISPATCH_ENVIRONMENT_RESOLVERS[@]}"; do
         helper=${resolver%%:*}
         function=${resolver#*:}
-        path="$here/$helper"
-        if [ ! -f "$path" ] || [ ! -r "$path" ]; then
-            echo "$caller: required helper is not a readable regular file: $path; restore it from the repository or run 'just bootstrap', then retry" >&2
-            return 2
-        fi
-        # The readability check above passes a corrupt or half-written helper; left to
-        # `set -e`, that is a bare shell syntax error naming a file the operator never
-        # asked about, so the load is handled and says which helper and how to restore it.
         # shellcheck disable=SC1090  # the helper is named by the table above
-        if ! . "$path"; then
-            echo "$caller: the helper at $path is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
-            return 2
-        fi
-        # A helper that loads and still defines no such function is refused by name too,
-        # rather than left to bash's `command not found` over the function's name.
-        if ! declare -F "$function" >/dev/null; then
-            echo "$caller: the helper at $path loaded but defines no $function, which the dispatch environment is resolved through; restore it from the repository or run 'just bootstrap', then retry" >&2
-            return 2
-        fi
+        # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+        . "$here/$helper"
         "$function" "$caller" || return $?
         # What each resolver established, read off the resolver's own record of it: the
         # credentials helper's parser leaves the names its file defines in

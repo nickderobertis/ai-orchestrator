@@ -263,7 +263,7 @@ def test_every_caller_sources_this_one_definition() -> None:
 
     for caller in callers:
         text = caller.read_text(encoding="utf-8")
-        assert (
+        assert f'. "$script_dir/{HELPER.name}"' in text or (
             f'launcher_session_helper="$script_dir/{HELPER.name}"' in text
             and '. "$launcher_session_helper"' in text
         ), (

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# The engine's dispatch-env hook, which scripts/onepipeline.sh names on every `start`
-# once the installed engine takes the flag. The engine runs it immediately before every
-# node-scope dispatch — never for the observer graph — with the driver's environment,
-# no arguments and nothing on stdin, and overlays the one document it prints on that
-# dispatch's environment; onepipeline's `docs/contract.md` (**Dispatch-env hook**) is
-# the contract. What this host does with it: re-run the resolvers the driver ran at
-# start through scripts/dispatch-env.sh, the one definition of which, and print what
-# they established as `{"version": 1, "env": {"NAME": "value", ...}}` — so an
-# indirection a routing change adds while a run is live reaches its next dispatch
+# The engine's dispatch-env hook, which scripts/onepipeline.sh names on every `start`.
+# The engine runs it immediately before every node-scope dispatch — never for the
+# observer graph — with the driver's environment, no arguments and nothing on stdin,
+# and overlays the one document it prints on that dispatch's environment;
+# onepipeline's `docs/contract.md` (**Dispatch-env hook**) is the contract. What this
+# host does with it: re-run the resolvers the driver ran at start through
+# scripts/dispatch-env.sh, the one definition of which, and print what they
+# established as `{"version": 1, "env": {"NAME": "value", ...}}` — so an indirection
+# a routing change adds while a run is live reaches its next dispatch
 # (ai-orchestrator#1109). Stderr is the resolvers' own diagnostics, which never echo a
 # value; the engine keeps it under the run and never records a printed value.
 set -euo pipefail
@@ -29,20 +29,9 @@ fi
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook could not resolve the checkout it belongs to" \
     "name it by an absolute path in a readable checkout"
 
-helper="$script_dir/dispatch-env.sh"
-if [ ! -f "$helper" ] || [ ! -r "$helper" ]; then
-    fail "required helper is not a readable regular file: $helper" \
-        "restore it from the repository or run 'just bootstrap', then retry"
-fi
 # shellcheck source=scripts/dispatch-env.sh
-if ! . "$helper"; then
-    fail "the helper at $helper is readable but could not be loaded" \
-        "restore it from the repository or run 'just bootstrap', then retry"
-fi
-if ! declare -F export_dispatch_environment >/dev/null; then
-    fail "the helper at $helper loaded but defines no export_dispatch_environment" \
-        "restore it from the repository or run 'just bootstrap', then retry"
-fi
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/dispatch-env.sh"
 export_dispatch_environment dispatch-env-hook || exit $?
 
 # Sets `encoded` to $1 as a JSON string, escaped with builtins alone, byte-wise under

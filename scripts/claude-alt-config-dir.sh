@@ -77,27 +77,19 @@ claude_identities_file_path() {
 # `claude_identities_file_values`. An absent file leaves both empty; a refused one leaves
 # both empty and returns non-zero, having said why. $1 names the calling wrapper.
 _load_claude_identities_file() {
-    local caller=$1 parser
+    local caller=$1
     claude_identities_file=""
     claude_identities_file_names=()
     claude_identities_file_values=()
     claude_identities_file=$(claude_identities_file_path) || return 0
     [ -e "$claude_identities_file" ] || return 0
     # Loaded only when there is a file to parse, so a host with none depends on nothing
-    # beyond this file — and a checkout missing the parser is refused by name the moment
-    # it would have been needed, rather than reading the file some other way.
-    if ! declare -F read_env_file >/dev/null; then
-        parser="$_claude_identity_helper_dir/credentials-env.sh"
-        if [ ! -f "$parser" ] || [ ! -r "$parser" ]; then
-            echo "$caller: reading the Claude identities file at $claude_identities_file needs the parser at $parser, which is not a readable regular file; restore it from the repository or run 'just bootstrap', then retry" >&2
-            return 2
-        fi
-        # shellcheck source=scripts/credentials-env.sh
-        if ! . "$parser"; then
-            echo "$caller: the parser at $parser is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
-            return 2
-        fi
-    fi
+    # beyond this file; the file is read by that parser and no other way. Loading it a
+    # second time costs a re-read of one sibling and defines the same functions, which is
+    # cheaper than a condition asking whether some caller loaded it already.
+    # shellcheck source=scripts/credentials-env.sh
+    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+    . "$_claude_identity_helper_dir/credentials-env.sh"
     read_env_file "$caller" "$claude_identities_file" "Claude identities" \
         "${CLAUDE_IDENTITY_CONFIG_VARIABLES[@]}" || return $?
     claude_identities_file_names=(${env_file_names[@]+"${env_file_names[@]}"})

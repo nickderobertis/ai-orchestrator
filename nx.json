@@ -43,7 +43,6 @@
       "{workspaceRoot}/tests/e2e/test_ask_manager_shim_e2e.py",
       "{workspaceRoot}/tests/e2e/test_base_freshness_e2e.py",
       "{workspaceRoot}/tests/e2e/test_delegated_recipes_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_envelope_review_script_e2e.py",
       "{workspaceRoot}/tests/e2e/test_just_tempdir_e2e.py",
       "{workspaceRoot}/tests/e2e/test_repos_bootstrap_e2e.py",
       "{workspaceRoot}/tests/e2e/test_supervision_readings_e2e.py",

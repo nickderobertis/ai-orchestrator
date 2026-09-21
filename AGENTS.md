@@ -21,6 +21,31 @@ are onejudge processes under simulated-user supervisors. The deliverable is this
 itself — config, personas, scripts, docs — not a shipped binary; the tools it
 configures are in [the roster](#the-tools-this-harness-configures).
 
+### A canonical example of the libraries, not a workaround layer
+
+This repository is the canonical example of how the published libraries — `onepipeline`,
+`onevcs`, `oneagentgraph`, `onejudge`, `oneharness`, `onetaskgraph`, `onemessagebus`,
+`onepipeline-ui` and `llmlint` — are used together, and a tool for dogfooding them. So
+outside the planning and follow-up flows it is configuration and thin wrappers over
+their verbs, and nothing else: primarily config, and past that a very light wrapper on
+a CLI tool or no wrapper at all. Code that works around an upstream gap is an
+anti-pattern here, however small the fill — a verb, a flag or a contract a library
+lacks — and however slow that library's release cycle, because a fill made here is
+faster than a release, nothing ever promotes it upstream and deletes it, and that is
+how `scripts/` grew. A worker or manager who hits such a gap **surfaces it** and never
+papers over it with ai-orchestrator code: as a blocking question over the channel —
+`ORCHESTRATOR_ASK_MANAGER`, for a dispatch — when the current work cannot proceed
+without it, and as a follow-up — `just follow-up <run-id>`, or
+`ORCHESTRATOR_FOLLOW_UP_DRAFT` inside a dispatch — when it can. The fix lands in the
+library that owns the seam, as a general feature of that library rather than this
+host's special case, is released, and is adopted here through the governing pin ([Which
+pin governs a dispatch](#which-pin-governs-a-dispatch)); then the local code is deleted,
+with its tests, the lint ignore markers written for it, its recipes and its prose.
+`tests/test_upstream_workaround_rule.py` is the one drift gate that holds this: the
+rule stated once, a script under `scripts/` whose own header calls it a workaround
+naming the upstream issue that retires it, and the fills a plan is retiring present
+until their replacement lands and gone after.
+
 ### The change lifecycle
 
 The harness manages a change's whole life against any repository, GitHub or local
@@ -1107,6 +1132,12 @@ this host disables; the `repo-write` allowlister hook stays wired by
 
 ## Command surface
 
+<!-- llmlint: ignore-block[no_redundant_instruction_pointers] A maintainer opens this section to write a script, a thousand lines below the rule that decides whether the script should exist, and the gate `tests/test_upstream_workaround_rule.py` holds that rule to one statement — so the section that would otherwise restate it points instead, and this is that one pointer. -->
+Before writing a script here, read [A canonical example of the libraries, not a
+workaround layer](#a-canonical-example-of-the-libraries-not-a-workaround-layer): a
+script is a thin wrapper over a library verb, or it is a gap to surface.
+<!-- llmlint: ignore-end[no_redundant_instruction_pointers] -->
+
 Use the `just` recipes (`just --list` is the index) and never hand-roll equivalents.
 `just check` is the deterministic tier and `just gate` the complete pre-push bar. Every
 stage that captures its output keeps it at `.logs/<label>.log`, gitignored and with
@@ -1198,10 +1229,10 @@ machine-wide file reads as lost. Its `GH_PROJECTS_*` names nominate the board
 nothing here — while this host's board is `onetaskgraph.yaml`'s `plans` source.
 
 Every launch also names the engine's **dispatch environment hook**,
-`--dispatch-env-hook scripts/dispatch-env-hook.sh` by absolute path, once the installed
-engine carries that flag: the wrapper asks the engine's own `start --help` and names the
-hook exactly when it is listed, because an engine without the flag refuses it as an
-unknown argument. The engine runs the hook immediately before every node-scope dispatch
+`--dispatch-env-hook scripts/dispatch-env-hook.sh` by absolute path, on every `start`
+and without asking the engine first: every engine `config/onepipeline.version` admits
+carries the flag, and the wrapper adapts to no release the pin excludes. The engine runs
+the hook immediately before every node-scope dispatch
 — never for the observer graph — and `adopt` replays it from the launch record. It exists
 because a live driver re-reads `oneharness.*.toml` at each dispatch but keeps only the
 environment it started with, so an `env_from` indirection a routing change adds reaches

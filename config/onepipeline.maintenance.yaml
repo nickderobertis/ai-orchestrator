@@ -3,7 +3,7 @@
 # `scripts/onepipeline.sh` names this file as `--maintenance-config` on every
 # `onepipeline start` the caller named none for — `just orchestrate`, `just plan`, the
 # design-document launch and the follow-up run alike — exactly as it names the
-# dispatch-env hook: only when the installed engine's own `start --help` lists the flag.
+# dispatch-env hook.
 # `adopt` takes none, because an adopted run replays the schedule its launch record
 # retained. The engine reads it at launch and refuses a run before it is minted for an
 # unknown key, a `version` other than 1, a rule naming no match field or a malformed

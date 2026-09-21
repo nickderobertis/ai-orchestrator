@@ -10,9 +10,6 @@ from orchestrator.root import REPO_ROOT
 
 HELPER = REPO_ROOT / "scripts" / "credentials-env.sh"
 ONEPIPELINE = REPO_ROOT / "scripts" / "onepipeline.sh"
-#: The definition of which resolvers a launch runs, through which `onepipeline.sh` loads
-#: the helper above; a launch in a checkout without it is refused before the helper.
-DISPATCH_ENV = REPO_ROOT / "scripts" / "dispatch-env.sh"
 #: The acting-session ladder `onepipeline.sh` sources on **every** verb, a read
 #: included. A checkout without it cannot run the entry point at all, so the journeys
 #: below that drive the entry point copy it beside the helper they are about — without
@@ -294,60 +291,3 @@ def test_a_name_no_shell_could_export_is_refused_without_printing_a_value(
     assert "line 2" in diagnostic
     assert "shell environment name" in diagnostic
     assert secret not in diagnostic
-
-
-def test_a_helper_that_cannot_be_loaded_refuses_the_launch_attributably(tmp_path: Path) -> None:
-    """A helper that passes the readability check and then fails to load still names itself.
-
-    The check before it answers "is the file there and readable", which a corrupt or
-    half-written one passes. Left to `set -e`, that becomes a bare shell syntax error
-    naming a file the operator never asked about and no action to take — so the launch
-    handles it and says which helper, and how to restore it. The read-only view is driven
-    in the same state to show it is unaffected: it sources nothing, so there is nothing
-    for a broken helper to break.
-    """
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    (scripts / ONEPIPELINE.name).write_text(
-        ONEPIPELINE.read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    (scripts / LAUNCHER_SESSION.name).write_text(
-        LAUNCHER_SESSION.read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    (scripts / DISPATCH_ENV.name).write_text(
-        DISPATCH_ENV.read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    (scripts / HELPER.name).write_text("this is ( not valid bash\n", encoding="utf-8")
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    uv = binaries / "uv"
-    uv.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\"\n", encoding="utf-8")
-    uv.chmod(0o755)
-    environment = {"PATH": f"{binaries}:/usr/bin:/bin"}
-
-    refused = subprocess.run(
-        ["bash", str(scripts / ONEPIPELINE.name), "start", "a-plan.json"],
-        cwd=tmp_path,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert refused.returncode == 2, refused.stdout
-    assert "could not be loaded" in refused.stderr, refused.stderr
-    assert HELPER.name in refused.stderr, refused.stderr
-    assert "just bootstrap" in refused.stderr, refused.stderr
-
-    viewed = subprocess.run(
-        ["bash", str(scripts / ONEPIPELINE.name), "status", "a-run"],
-        cwd=tmp_path,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert viewed.returncode == 0, viewed.stderr
-    assert viewed.stdout == "run onepipeline status a-run\n"
-    assert viewed.stderr == ""

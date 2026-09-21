@@ -78,21 +78,9 @@ fi
 
 # The lock itself — preparing `.logs`, securing it, holding the descriptors — belongs
 # to `scripts/install-lock.sh`. What stays here is *which* checkout's lock to take.
-# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being readable between the resolution at the head of this file and here; no journey can produce that without racing the filesystem the test itself runs on.
-lock_helper="$script_dir/install-lock.sh"
-if [ ! -f "$lock_helper" ] || [ ! -r "$lock_helper" ]; then
-    echo "workspace-install: required helper is not a readable regular file: $lock_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
-    exit 1
-fi
 # shellcheck source=scripts/install-lock.sh
-. "$lock_helper" || {
-    echo "workspace-install: required helper $lock_helper could not be loaded; it is readable but did not load — restore it from the repository or run 'just bootstrap', then retry" >&2
-    exit 1
-}
-if ! command -v install_lock_take >/dev/null 2>&1; then
-    echo "workspace-install: helper $lock_helper loaded but defines no install_lock_take; restore it from the repository or run 'just bootstrap', then retry" >&2
-    exit 1
-fi
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/install-lock.sh"
 
 install_lock_take workspace-install "$tree_root" workspace-install.lock || exit 1
 # A forced run over a link into another checkout's tree changes which tree the

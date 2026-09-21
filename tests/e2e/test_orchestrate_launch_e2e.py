@@ -2386,7 +2386,7 @@ def test_the_launch_hands_the_engine_this_hosts_maintenance_schedule(
     every slot's `target/` growing without bound, and nothing about the run failing. So
     this reads the run's own launch record, where the engine retains the document it
     parsed, and holds the default cadence to the line of the tracked file that states it.
-    `tests/e2e/test_delegated_recipes_e2e.py` holds the rendering and the capability guard.
+    `tests/e2e/test_delegated_recipes_e2e.py` holds the rendering.
     """
     launch_record = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "launch.json"
     # No view renders the schedule the engine parsed, and the argv says only what the
@@ -2407,6 +2407,30 @@ def test_the_launch_hands_the_engine_this_hosts_maintenance_schedule(
     # The engine omits an empty rule list when it retains the parse, so the tracked
     # file's `rules: []` reads back as no key: the same document.
     assert schedule.get("rules", []) == [], schedule
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed beside the schedule read it mirrors, on the one `launched` fixture this module already spends a real launch on; a project of its own would spend a second launch to read one key off the same record.  # noqa: E501
+def test_the_launch_hands_the_engine_this_checkouts_dispatch_env_hook(
+    launched: Launched,
+) -> None:
+    """`just orchestrate` names `scripts/dispatch-env-hook.sh` absolutely, and the engine kept it.
+
+    The wrapper names the hook on every `start` without asking the engine whether it
+    takes the flag — every engine the pin admits does — so what is left to hold is that
+    the launch record carries this checkout's hook, which is what the engine runs before
+    every node-scope dispatch. `tests/e2e/test_delegated_recipes_e2e.py` holds the
+    rendering; the two hook journeys at the end of this module drive what the hook does.
+    """
+    launch_record = Path(launched.environment["ONEPIPELINE_RUNS_DIR"]) / SHIPPED_RUN / "launch.json"
+    # llmlint: ignore[tests_mirror_real_usage] no view renders the retained hook; see above
+    recorded = json.loads(launch_record.read_text(encoding="utf-8"))
+    assert recorded.get("dispatch_env_hook") == str(
+        REPO_ROOT / "scripts" / "dispatch-env-hook.sh"
+    ), (
+        f"the launch recorded no dispatch-env hook, so no dispatch of this run is handed a "
+        f"refreshed environment: {recorded.get('dispatch_env_hook')!r}"
+    )
 
 
 def test_the_pacemaker_is_told_which_run_to_report_on_and_not_to_edit() -> None:
@@ -3156,38 +3180,6 @@ MISSING_INDIRECTION = "AIO_1109_MISSING_SOURCE"
 #: A credential the hook prints in the refused case, which nothing the run keeps may carry.
 PLANTED_SECRET = "planted-by-the-dispatch-env-journey-and-never-recorded"
 
-#: The flag `scripts/onepipeline.sh` names the hook with, exactly when the installed
-#: engine's `start --help` lists it. This host's pinned engine does not yet: the release
-#: carrying it links a onemessagebus this host has not migrated to, so its adoption is a
-#: later plan's, and until then the two journeys below skip by this name rather than
-#: fail on a launch the engine refuses for an argument it never heard of.
-DISPATCH_ENV_HOOK_FLAG = "--dispatch-env-hook"
-
-
-def _skip_unless_the_installed_engine_runs_a_dispatch_env_hook() -> None:
-    """Skip, naming the flag, on an engine whose `start` does not take it.
-
-    Asked of the installed engine the way the wrapper asks it — its own `start --help`
-    — so a journey and the launch it drives read one answer.
-    """
-    asked = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "start", "--help"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-    assert asked.returncode == 0, asked.stderr
-    flag = re.compile(rf"^\s+{re.escape(DISPATCH_ENV_HOOK_FLAG)}(\s|$)", re.MULTILINE)
-    if flag.search(asked.stdout) is None:
-        pytest.skip(
-            f"the installed onepipeline's `start --help` lists no {DISPATCH_ENV_HOOK_FLAG}, so "
-            "the wrapper names no hook and there is no dispatch-env hook to drive; adopt "
-            "an engine release carrying the flag and this journey runs"
-        )
-
-
 #: The variant of `oneharness.toml` the journey's added `env_from` member is written on:
 #: the first in the worker's chain, and the one the engine names when the source is missing.
 ADDED_ON_VARIANT = "claude-code:alternate"
@@ -3268,7 +3260,7 @@ def _hook_launch(
     return environment, launch
 
 
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed here by the task, beside the launches they share a recipe, stand-in model and `_environment` with; a project of their own would re-key everything the launch path reads for two journeys that skip until the adoption.  # noqa: E501
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] Placed here by the task, beside the launches they share a recipe, stand-in model and `_environment` with; a project of their own would re-key everything the launch path reads for two journeys.  # noqa: E501
 def test_the_dispatch_env_hook_hands_a_dispatch_an_indirection_the_driver_never_held(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
@@ -3283,7 +3275,6 @@ def test_the_dispatch_env_hook_hands_a_dispatch_an_indirection_the_driver_never_
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    _skip_unless_the_installed_engine_runs_a_dispatch_env_hook()
     run = "dispatch-env-hook-e2e"
     hook = _hook_checkout(tmp_path, f"{ADDED_INDIRECTION}={ADDED_VALUE}\n")
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
@@ -3328,7 +3319,6 @@ def test_a_dispatch_whose_hook_leaves_an_indirection_missing_is_refused_naming_i
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    _skip_unless_the_installed_engine_runs_a_dispatch_env_hook()
     run = "dispatch-env-missing-e2e"
     hook = _hook_checkout(tmp_path, f"AIO_1109_PLANTED_SECRET={PLANTED_SECRET}\n")
     worker_config = _worker_config_reading(tmp_path, MISSING_INDIRECTION)

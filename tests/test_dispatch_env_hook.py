@@ -65,8 +65,7 @@ def _checkout(root: Path) -> Path:
     """A checkout-shaped directory holding the hook and everything it sources.
 
     Copied rather than run in place so that the `.env` the credentials resolver reads —
-    the file beside `scripts/` — is this test's own and never the tree's, and so that a
-    helper can be corrupted or removed to drive the refusals.
+    the file beside `scripts/` — is this test's own and never the tree's.
     """
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
@@ -250,74 +249,6 @@ def test_an_argument_is_refused_before_anything_is_resolved(tmp_path: Path) -> N
     assert not (home / ".codex-alt").exists(), "a refused run still ran a resolver"
 
 
-@pytest.mark.parametrize("state", ["absent", "unloadable"])
-def test_a_definition_the_hook_cannot_load_is_refused_by_name(tmp_path: Path, state: str) -> None:
-    checkout = _checkout(tmp_path / "checkout")
-    definition = checkout / "scripts" / "dispatch-env.sh"
-    if state == "absent":
-        definition.unlink()
-    else:
-        definition.write_text("this is ( not valid bash\n", encoding="utf-8")
-
-    ran = _run(checkout, {"HOME": str(tmp_path / "home")})
-
-    assert ran.returncode == 2
-    assert ran.stdout == ""
-    assert "dispatch-env.sh" in ran.stderr
-    assert "just bootstrap" in ran.stderr
-
-
-@pytest.mark.parametrize(
-    ("hollowed", "function"),
-    [
-        ("dispatch-env.sh", "export_dispatch_environment"),
-        ("codex-alt-home.sh", "ensure_codex_alt_home"),
-    ],
-)
-def test_a_helper_that_loads_but_defines_no_resolver_is_refused_by_both_names(
-    tmp_path: Path, hollowed: str, function: str
-) -> None:
-    """A readable, loadable helper missing its function is named, not left to bash."""
-    checkout = _checkout(tmp_path / "checkout")
-    (checkout / "scripts" / hollowed).write_text("# nothing defined here\n", encoding="utf-8")
-
-    ran = _run(checkout, {"HOME": str(tmp_path / "home")})
-
-    assert ran.returncode == 2
-    assert ran.stdout == ""
-    assert "command not found" not in ran.stderr, ran.stderr
-    assert f"defines no {function}" in ran.stderr, ran.stderr
-    assert hollowed in ran.stderr, ran.stderr
-
-
-@pytest.mark.parametrize(
-    ("state", "said"),
-    [("absent", "not a readable regular file"), ("unloadable", "could not be loaded")],
-)
-def test_a_resolver_the_definition_cannot_load_is_refused_by_name(
-    tmp_path: Path, state: str, said: str
-) -> None:
-    """A resolver the table names that is missing or corrupt is refused with its path.
-
-    Both arms of the definition's load, because a missing helper and a half-written one
-    are different remedies to an operator and the message says which it found.
-    """
-    checkout = _checkout(tmp_path / "checkout")
-    resolver = checkout / "scripts" / "codex-alt-home.sh"
-    if state == "absent":
-        resolver.unlink()
-    else:
-        resolver.write_text("this is ( not valid bash\n", encoding="utf-8")
-
-    ran = _run(checkout, {"HOME": str(tmp_path / "home")})
-
-    assert ran.returncode == 2
-    assert ran.stdout == ""
-    assert str(resolver) in ran.stderr, ran.stderr
-    assert said in ran.stderr, ran.stderr
-    assert "just bootstrap" in ran.stderr, ran.stderr
-
-
 def test_every_resolver_in_the_table_has_an_arm_recording_what_it_established() -> None:
     """The table and the `case` that reads each resolver's names cannot drift apart.
 
@@ -366,4 +297,6 @@ def test_both_sourcing_scripts_run_the_resolvers_through_the_one_definition(scri
 def test_the_hook_is_executable_and_named_by_the_wrapper() -> None:
     """The wrapper names it by absolute path, so it has to be runnable as a command."""
     assert os.access(HOOK, os.X_OK), f"{HOOK.name} is not executable"
-    assert '--dispatch-env-hook "$dispatch_env_hook"' in LAUNCH_WRAPPER.read_text("utf-8")
+    assert '--dispatch-env-hook "$script_dir/dispatch-env-hook.sh"' in LAUNCH_WRAPPER.read_text(
+        "utf-8"
+    )

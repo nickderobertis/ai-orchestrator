@@ -1120,20 +1120,6 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
         case "unopenable-log":
             logs.mkdir()
             (logs / "workspace-install.log").mkdir()
-        case "unloadable-helper":
-            # Readable, and not loadable: the installer checked the first and assumed the
-            # second, so a helper truncated mid-function died with bash's own syntax error
-            # and no repair anybody could act on.
-            (checkout / "scripts" / "install-lock.sh").write_text(
-                "install_lock_take() {\n", encoding="utf-8"
-            )
-        case "helper-without-the-entry-point":
-            # Loadable, and empty of the one thing it is sourced for. Left unguarded this
-            # surfaces as `install_lock_take: command not found`, which names a function
-            # rather than the file to restore.
-            (checkout / "scripts" / "install-lock.sh").write_text(
-                "# a helper that defines nothing\n", encoding="utf-8"
-            )
         case _:  # pragma: no cover - guards the parametrization above
             raise AssertionError(f"unknown installer sabotage {mode!r}")
 
@@ -1147,8 +1133,6 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
         ("write-only-lock", "cannot open the install lock at"),
         ("unacquirable-lock", "cannot serialize the locked install"),
         ("unopenable-log", "preserved-log: cannot open"),
-        ("unloadable-helper", "could not be loaded"),
-        ("helper-without-the-entry-point", "defines no install_lock_take"),
     ],
 )
 @pytest.mark.reads_recipes

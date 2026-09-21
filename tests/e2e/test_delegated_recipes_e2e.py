@@ -190,7 +190,6 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
         f"uv run orchestrator-review-plan {project}",
         f"uv run orchestrator-check-plan {project}",
         f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
-        START_HELP,
         f"uv run onepipeline start {DEFAULTS} {DESIGN_PROJECT} --dag-graph off",
         f"uv run orchestrator-copy-plan {project} --to {destination}",
         f"uv run orchestrator-plan-locations {project} --in {destination}",
@@ -243,27 +242,15 @@ DISPATCH_ENV_HOOK = f"--dispatch-env-hook {CHECKOUT}/scripts/dispatch-env-hook.s
 #: after the hook, as the copied checkout's own absolute path for the same reason.
 MAINTENANCE_CONFIG = f"--maintenance-config {CHECKOUT}/config/onepipeline.maintenance.yaml"
 #: All three, in the order the wrapper renders them, which every launch a caller named
-#: none of carries.
+#: none of carries. Named on every `start` without asking the engine whether it takes
+#: them: every engine `config/onepipeline.version` admits does.
 DEFAULTS = f"{BUS_CONFIG} {DISPATCH_ENV_HOOK} {MAINTENANCE_CONFIG}"
-#: The two flags the wrapper asks the engine about before naming either, and the
+#: The two flags `scripts/onepipeline.sh` adds after the bus configuration, and the
 #: default it renders for each.
-GUARDED_DEFAULTS = {
+WRAPPER_DEFAULTS = {
     "--dispatch-env-hook": DISPATCH_ENV_HOOK,
     "--maintenance-config": MAINTENANCE_CONFIG,
 }
-#: How the wrapper asks the installed engine whether `start` takes the hook flag and
-#: the schedule flag, before it names either: one read every launch a caller left one of
-#: them unnamed for owes, after the gate.
-START_HELP = "uv run onepipeline start --help"
-#: Set in a journey's environment to have the traced `uv` answer that question as the
-#: engine this host ran before the hook — with neither `--dispatch-env-hook` nor
-#: `--maintenance-config` in it.
-ENGINE_WITHOUT_HOOK_ENV = "FAKE_ENGINE_WITHOUT_DISPATCH_ENV_HOOK"
-#: Set to have it answer as the engine this host ran until the pool's adoption: the hook
-#: listed, and no `--maintenance-config`.
-ENGINE_WITHOUT_MAINTENANCE_ENV = "FAKE_ENGINE_WITHOUT_MAINTENANCE_CONFIG"
-#: Set to a status to have that question fail, as an engine that cannot start answers it.
-ENGINE_START_HELP_EXIT_ENV = "FAKE_ENGINE_START_HELP_EXIT"
 
 
 #: The whole delegation table, as `just` invocation → the command lines it must
@@ -367,7 +354,7 @@ DELEGATIONS = (
         " --maintenance-config="
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
-    # Naming both, in either spelling, is the one launch that asks the engine nothing.
+    # Naming both, in either spelling, leaves the bus configuration alone as the default.
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dispatch-env-hook=", "--maintenance-config="),
@@ -459,7 +446,6 @@ DELEGATIONS = (
         then=(
             "uv run orchestrator-check-plan authoring:listing-cursor",
             "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
-            START_HELP,
             f"uv run onepipeline start {DEFAULTS} authoring:cursor-shape-design --dag-graph off",
             "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
             "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
@@ -688,9 +674,6 @@ DESIGN_TEMPLATE = "config/design-doc-template.md"
 #: asking its subject.
 DISPATCH_APPENDIX = "config/dispatch-appendix.md"
 
-#: The pool-maintenance schedule every launch names, spelled here for the same reason.
-MAINTENANCE_SCHEDULE = "config/onepipeline.maintenance.yaml"
-
 
 def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A checkout the real recipes run in, with `uv` traced and nothing else doubled."""
@@ -711,13 +694,6 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     (checkout / DISPATCH_APPENDIX).write_text(
         "## Additional info\n\n### Operational notes\n\nWork the branch and report.\n",
         encoding="utf-8",
-    )
-    # The pool-maintenance schedule every launch names by absolute path. Written rather
-    # than copied, for the reason the appendix above is: that a launch names the file
-    # and refuses a checkout without one is this suite's subject, and what the tracked
-    # schedule *says* is the engine's to read.
-    (checkout / MAINTENANCE_SCHEDULE).write_text(
-        "version: 1\ndefault:\n  every: 7d\nrules: []\n", encoding="utf-8"
     )
     for name in WRAPPER_SCRIPTS:
         copied = checkout / "scripts" / name
@@ -764,14 +740,8 @@ def _checkout(tmp_path: Path) -> tuple[Path, Path]:
     # list, because `just watch` reads that list before it delegates — asking whether
     # the installed engine has the verb at all — and a double that answered nothing
     # would make every row of this table watch a verb it had just been told is absent.
-    # And it answers `start --help` the same way, because every launch asks it whether
-    # the engine takes `--dispatch-env-hook` and `--maintenance-config` before naming
-    # either: both listed unless the journey says the engine lacks one — the engine
-    # before the hook lacked both, the engine this host ran until the pool's adoption
-    # lacked the schedule — which the two `..._to_an_engine_without_the_flag` journeys
-    # drive.
     uv.write_text(
-        f"""#!/usr/bin/env bash
+        """#!/usr/bin/env bash
 set -euo pipefail
 printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
 if [ "$*" = "run onepipeline --help" ]; then
@@ -779,22 +749,10 @@ if [ "$*" = "run onepipeline --help" ]; then
   echo "  watch       Watch one run until something a supervisor has to act on happens"
   exit 0
 fi
-if [ "$*" = "run onepipeline start --help" ]; then
-  echo "Usage: onepipeline start [OPTIONS] <PROJECT>"
-  echo "Options:"
-  echo "      --bus-config <PATH>"
-  if [ -z "${{{ENGINE_WITHOUT_HOOK_ENV}:-}}" ]; then
-    echo "      --dispatch-env-hook <COMMAND>"
-    if [ -z "${{{ENGINE_WITHOUT_MAINTENANCE_ENV}:-}}" ]; then
-      echo "      --maintenance-config <FILE>"
-    fi
-  fi
-  exit "${{{ENGINE_START_HELP_EXIT_ENV}:-0}}"
-fi
 if [ ! -t 0 ]; then
   while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
 fi
-exit "${{FAKE_UV_EXIT:-0}}"
+exit "${FAKE_UV_EXIT:-0}"
 """
     )
     uv.chmod(0o755)
@@ -896,9 +854,7 @@ STARTS = "uv run onepipeline start "
 def _gated(published: str) -> tuple[str, ...]:
     """What a launch owes before its own line, and nothing for one that launches nothing.
 
-    The gate first, over the launch as typed; then the wrapper's one question to the
-    engine about the hook flag and the schedule flag, which a launch that named both —
-    in either spelling — never asks.
+    The gate, over the launch as typed.
     """
     if not published.startswith(STARTS):
         return ()
@@ -906,15 +862,9 @@ def _gated(published: str) -> tuple[str, ...]:
     # The wrapper adds its defaults after the gate has read the launch as typed, so each
     # one is stripped on its own: a row that named its own hook carries only the bus
     # configuration and the schedule ahead of what was typed.
-    for default in (BUS_CONFIG, *GUARDED_DEFAULTS.values()):
+    for default in (BUS_CONFIG, *WRAPPER_DEFAULTS.values()):
         typed = typed.removeprefix(f"{default} ")
-    owed = [f"{LAUNCH_GATE} {typed}"]
-    named = {
-        flag for flag in GUARDED_DEFAULTS if any(word.startswith(flag) for word in typed.split())
-    }
-    if named != set(GUARDED_DEFAULTS):
-        owed.append(START_HELP)
-    return tuple(owed)
+    return (f"{LAUNCH_GATE} {typed}",)
 
 
 #: The envelope a row naming a reply file hands the recipe: a verdict, so it is
@@ -946,119 +896,6 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     assert trace.read_text().splitlines() == [
         line.replace(CHECKOUT, str(checkout.resolve())) for line in expected
     ]
-
-
-@pytest.mark.reads_recipes
-def test_a_launch_names_no_schedule_to_an_engine_without_the_flag(tmp_path: Path) -> None:
-    """An engine whose `start --help` lists no `--maintenance-config` is handed none.
-
-    That engine is the one `config/onepipeline.version` pinned until the pool's adoption
-    — it takes the hook and refuses the schedule as an unknown argument — so a wrapper
-    that named the schedule unconditionally would refuse every launch on it. The launch
-    is rendered as it was before the schedule existed: the gate, the question, and a line
-    carrying the bus configuration and the hook.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(
-        checkout,
-        trace,
-        "orchestrate",
-        "authoring:probe",
-        env={ENGINE_WITHOUT_MAINTENANCE_ENV: "1"},
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        line.replace(CHECKOUT, str(checkout.resolve()))
-        for line in (
-            f"{LAUNCH_GATE} authoring:probe --dag-graph graphs/dag-scope.yaml"
-            f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
-            START_HELP,
-            f"uv run onepipeline start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
-            f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
-        )
-    ]
-
-
-@pytest.mark.reads_recipes
-def test_a_launch_is_refused_when_the_schedule_it_would_name_is_missing(tmp_path: Path) -> None:
-    """A checkout without the schedule is refused before the engine is reached.
-
-    The engine refuses a launch naming a file it cannot read before the run is minted,
-    so the wrapper says which file and where first, rather than handing the engine a
-    path to refuse.
-    """
-    checkout, trace = _checkout(tmp_path)
-    (checkout / MAINTENANCE_SCHEDULE).unlink()
-
-    result = _run(checkout, trace, "orchestrate", "authoring:probe")
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "the pool-maintenance schedule is not a readable file at" in result.stderr
-    assert str(checkout.resolve() / MAINTENANCE_SCHEDULE) in result.stderr, result.stderr
-    traced = trace.read_text().splitlines()
-    assert traced[-1] == START_HELP, traced
-    assert not any(line.startswith(STARTS) for line in traced[:-1]), (
-        f"a refused launch reached the engine:\n{traced}"
-    )
-
-
-@pytest.mark.reads_recipes
-def test_a_launch_names_no_hook_to_an_engine_without_the_flag(tmp_path: Path) -> None:
-    """An engine whose `start --help` lists neither flag is handed neither.
-
-    That engine is the one `config/onepipeline.version` pinned until the adoption that
-    carried the hook, and it refuses an unknown argument outright — so a wrapper that
-    named the hook unconditionally would refuse every launch here. The launch is rendered
-    exactly as it was before the hook existed: the gate, the question, and a line
-    carrying the bus configuration alone.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(
-        checkout, trace, "orchestrate", "authoring:probe", env={ENGINE_WITHOUT_HOOK_ENV: "1"}
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        line.replace(CHECKOUT, str(checkout.resolve()))
-        for line in (
-            f"{LAUNCH_GATE} authoring:probe --dag-graph graphs/dag-scope.yaml"
-            f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
-            START_HELP,
-            f"uv run onepipeline start {BUS_CONFIG} authoring:probe"
-            f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
-        )
-    ]
-
-
-@pytest.mark.reads_recipes
-def test_a_launch_is_refused_when_the_engine_cannot_say_what_start_takes(
-    tmp_path: Path,
-) -> None:
-    """An engine that cannot answer `start --help` is reported as that, not as lacking the flag.
-
-    Read as a positive question for the reason `scripts/watch-run.sh` reads its verb list
-    that way: a probe failing for any other reason — a broken install — would otherwise
-    launch without the hook and leave the next dispatch to fail on the environment the
-    hook exists to refresh.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(
-        checkout, trace, "orchestrate", "authoring:probe", env={ENGINE_START_HELP_EXIT_ENV: "3"}
-    )
-
-    assert result.returncode == 2, result.stdout
-    assert "could not be asked what 'start' takes" in result.stderr, result.stderr
-    assert "a dispatch-env hook or a maintenance schedule" in result.stderr, result.stderr
-    assert "just bootstrap" in result.stderr, result.stderr
-    traced = trace.read_text().splitlines()
-    assert traced[-1] == START_HELP, traced
-    assert not any(line.startswith(STARTS) for line in traced[:-1]), (
-        f"a refused launch reached the engine:\n{traced}"
-    )
 
 
 def test_the_orchestrate_recipe_refuses_a_checkout_whose_run_end_hook_cannot_run(
@@ -1830,11 +1667,6 @@ def test_the_telemetry_server_recipe_keeps_a_malformed_inherited_session_and_say
 
 @pytest.mark.reads_recipes
 @pytest.mark.parametrize(
-    ("invocation", "caller"),
-    [(("telemetry-server",), "telemetry-server"), (("runs",), "onepipeline")],
-    ids=("telemetry-server", "onepipeline"),
-)
-@pytest.mark.parametrize(
     ("helper_text", "refusal"),
     [
         (None, "required helper is not a readable regular file"),
@@ -1846,12 +1678,10 @@ def test_the_telemetry_server_recipe_keeps_a_malformed_inherited_session_and_say
 )
 def test_a_caller_that_cannot_load_the_session_helper_refuses_naming_it(
     tmp_path: Path,
-    invocation: tuple[str, ...],
-    caller: str,
     helper_text: str | None,
     refusal: str,
 ) -> None:
-    """Both callers of the acting-session ladder refuse, by name, when it cannot load.
+    """The read API's launcher refuses, by name, when the acting-session ladder cannot load.
 
     Bash's own diagnostic for a failed `.` names neither the recipe nor a way out, and
     an identity that could not be established must not reach the CLI as none at all —
@@ -1864,11 +1694,12 @@ def test_a_caller_that_cannot_load_the_session_helper_refuses_naming_it(
     else:
         helper.write_text(helper_text, encoding="utf-8")
 
-    result = _run(checkout, trace, *invocation)
+    result = _run(checkout, trace, "telemetry-server")
 
     assert result.returncode != 0, result.stdout
     assert any(
-        line.startswith(f"{caller}: ") and refusal in line for line in result.stderr.splitlines()
+        line.startswith("telemetry-server: ") and refusal in line
+        for line in result.stderr.splitlines()
     ), result.stderr
     assert "launcher-session.sh" in result.stderr
     assert "just bootstrap" in result.stderr
@@ -2707,7 +2538,6 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
     launched = (
         "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
-        START_HELP,
         f"uv run onepipeline start {DEFAULTS} authoring:run-1-follow-ups --dag-graph off".replace(
             CHECKOUT, str(checkout.resolve())
         ),
