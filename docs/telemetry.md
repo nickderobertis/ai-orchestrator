@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.41.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.42.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -326,10 +326,10 @@ served them.
    watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.11.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.11.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 19 on the envelope, where
-   0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10,
+   what re-opens this paragraph: `telemetry_schema_version` 20 on the envelope, where
+   0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10,
    unmoved across this bump, where 0.7.3 served
    8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
    answer); spans of kind `run`, `dispatch`, `node`,
@@ -337,7 +337,7 @@ served them.
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here; no run read served the `dispatching` this paragraph used to name.
-   On 0.11.0 this was re-read against the recorded runs under
+   On 0.11.2 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.
    **A lane is a member the run's own graphs declared**, from 0.9.0: a session's

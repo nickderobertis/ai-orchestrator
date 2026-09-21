@@ -590,6 +590,13 @@ runs *args:
 stop *args:
     @./scripts/onepipeline.sh stop "$@"
 
+# Soft-shut this host's running work down: `just shutdown <run-id> | --mine | --host
+# [--grace SECONDS] [--force]`. Asks every live dispatch to commit, stops what is left,
+# and preserves every branch on its origin; the run stays adoptable (see AGENTS.md).
+# llmlint: ignore[tool_output_is_signal] the per-run, per-dispatch and per-branch report is what an operator runs a shutdown to read.
+shutdown *args:
+    @./scripts/onepipeline.sh shutdown "$@"
+
 # llmlint: ignore[tool_output_is_signal] the requested cross-project goal inventory is this viewing command's product.
 goals *args:
     @./scripts/onepipeline.sh goals "$@"

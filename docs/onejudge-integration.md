@@ -65,7 +65,7 @@ concerns (persona defaults, session), never harness/model selection.
 
 The engine starts both sides as plain `oneharness`. `config/onejudge.base.yaml` names
 `bin: oneharness`, and a live dispatch's process tree on this host, measured against
-onepipeline 0.41.0, reads `onepipeline drive` → `oneharness run --format json --compact
+onepipeline 0.42.0, reads `onepipeline drive` → `oneharness run --format json --compact
 --events --history --config <member-scratch>/oneharness.toml` → the provider, with no
 process of this repository's between them. Which side a turn is, is which config it was
 handed: `config/onejudge.base.yaml` pins `provider.judge_config: oneharness.judge.toml`,
@@ -111,8 +111,8 @@ side, and every dispatch keeps its single simulated user; stacking one is a chan
 graph and a manager's decision. The shape is stated in [onejudge v0.13.3's
 `judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.13.3/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
-graph member, in [oneagentgraph v0.4.6's
-`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.6/docs/contract.md).
+graph member, in [oneagentgraph v0.4.8's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.8/docs/contract.md).
 `tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
 list, a single `judge:`, and a single provider, offline.
 

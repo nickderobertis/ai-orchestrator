@@ -142,17 +142,20 @@ def vanishing_at_its_open(record: Path) -> Iterator[tuple[threading.Event, Opens
         path = Path(os.fspath(file))
         if record.parent not in path.parents:
             return opener(file, *args, **kwargs)
+        unlinked = False
         if path == record and not vanished.is_set():
             with lock:
                 if not vanished.is_set():
                     record.unlink()
                     (record.parent / "late.json").write_text("{}", encoding="utf-8")
-                    vanished.set()
+                    unlinked = True
         try:
             opened = opener(file, *args, **kwargs)
         except FileNotFoundError:
             with lock:
                 opens.missed[path] += 1
+            if unlinked:
+                vanished.set()
             raise
         with lock:
             opens.read[path] += 1

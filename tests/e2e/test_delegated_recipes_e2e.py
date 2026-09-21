@@ -516,6 +516,17 @@ DELEGATIONS = (
         then=("stdin a status update",),
     ),
     Delegation("stop", ("run-1", "--force"), "uv run onepipeline stop run-1 --force"),
+    # The soft shutdown, in each of its three scopes. Forwarded untouched through the
+    # same wrapper as `stop`, because `--mine` is an ownership comparison and a caller
+    # the wrapper did not identify would match no run at all.
+    Delegation("shutdown", ("run-1",), "uv run onepipeline shutdown run-1"),
+    Delegation("shutdown", ("--mine",), "uv run onepipeline shutdown --mine"),
+    Delegation(
+        "shutdown",
+        ("--host", "--grace", "120"),
+        "uv run onepipeline shutdown --host --grace 120",
+    ),
+    Delegation("shutdown", ("--host", "--force"), "uv run onepipeline shutdown --host --force"),
     Delegation("runs", ("--mine",), "uv run onepipeline runs --mine"),
     Delegation("status", ("run-1",), "uv run onepipeline status run-1"),
     Delegation(

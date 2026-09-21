@@ -1408,21 +1408,28 @@ def test_both_of_onevcss_families_are_reclaimed_for_real(host: Host) -> None:
     assert unfinished.exists(), "a workspace whose gate recorded no verdict was reclaimed"
 
 
+#: A number of hours in the shape `scripts/sweep.sh` forwards that both adopted verbs
+#: refuse, measured on oneagentgraph 0.4.8 and onevcs 0.29.1: each holds its floor as a
+#: duration and refuses anything past 5124095576030430 hours as more than it can hold.
+#: The fractional hour this journey used to send stopped being a refusal when
+#: oneagentgraph 0.4.7 took a decimal floor, which is also why no argument makes one of
+#: the two verbs fail alone any more.
+PAST_EVERY_FLOOR = "5124095576030431"
+
+
 def test_a_sweep_whose_every_verb_failed_says_so_rather_than_listing_nothing(
     host: Host,
 ) -> None:
     """An empty `Families examined:` reads as a formatting artefact, not as an answer.
 
-    Both refusals are the verbs' own — `oneagentgraph sweep` rejects a fractional hour,
-    and `onevcs sweep` refuses a `workspaces` that is a file — so this is the real state
-    of a host where nothing got swept, and the sentence in place of the empty list is
-    what an operator watching a filling disk has to be told.
+    Both refusals are the verbs' own: :data:`PAST_EVERY_FLOOR` is a number of hours the
+    wrapper's shape admits and that each verb refuses as more than its floor can hold,
+    so this is the real state of a host where nothing got swept, and the sentence in
+    place of the empty list is what an operator watching a filling disk has to be told.
     """
-    (host.onevcs_home / "workspaces").rmdir()
-    (host.onevcs_home / "workspaces").write_text("not a directory\n")
     dead = host.scratch("dead", held=False)
 
-    result = sweep(host, "--min-age-hours", "1.5")
+    result = sweep(host, "--min-age-hours", PAST_EVERY_FLOOR)
 
     assert result.returncode == 1, result.stdout
     assert "none — every sweeper this recipe composes failed" in examined(result.stdout)
@@ -1435,28 +1442,81 @@ def test_a_sweep_whose_every_verb_failed_says_so_rather_than_listing_nothing(
     assert dead.exists(), "a sweep in which nothing ran removed something"
 
 
+# llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Deliberate fault injection
+# at the published-CLI boundary the recipe delegates to, not a substitution of the layer
+# under test: on the adopted oneagentgraph 0.4.8 and onevcs 0.29.1 the real sweep verbs
+# accept and refuse the same values and oneagentgraph's sweep succeeds on any state, so no
+# real usage reaches a oneagentgraph-only refusal. The `uv` stand-in answers only that one
+# call and forwards every other one to the real uv, so the recipe, the wrapper, the real
+# onevcs sweep and the whole report still run as an operator runs them; the manager ruled
+# this in place of deleting the journey, and the docstring below gives the evidence.
 def test_the_other_verb_still_sweeps_when_oneagentgraph_is_the_one_that_fails(
-    host: Host,
+    host: Host, tmp_path: Path
 ) -> None:
-    """The honesty property from the other side, driven by a refusal that is really theirs.
+    """The honesty property from the other side: a half-sweep must read as one.
 
-    The two verbs do not accept the same numbers: measured on the adopted releases,
-    `onevcs sweep` takes a fractional hour and `oneagentgraph sweep` refuses one. The
-    wrapper validates the option's shape and lets the verbs judge its value, so
-    `--min-age-hours 1.5` is a real half-sweep — and a half-sweep must read as one.
-    `oneagentgraph`'s families move into the not-examined list carrying the status
-    that put them there, `onevcs` still examines its own and reports what it retained,
-    and the recipe exits non-zero so the gap is in the status and not only in the
-    report. The failure a family disappears from *both* lists is the one thing this
-    whole composition exists to rule out.
+    `oneagentgraph`'s families move into the not-examined list carrying the status that
+    put them there, `onevcs` still examines its own and reports what it retained, and the
+    recipe exits non-zero so the gap is in the status and not only in the report. The
+    failure a family disappears from *both* lists is the one thing this whole composition
+    exists to rule out.
+
+    **The one refusal here that is not the verb's own, and why.** This journey used to
+    send `--min-age-hours 1.5`, which `oneagentgraph sweep` refused and `onevcs sweep`
+    took. oneagentgraph 0.4.7 took a decimal floor, and on the adopted oneagentgraph
+    0.4.8 and onevcs 0.29.1 the two verbs accept and refuse exactly the same values in
+    the shape the wrapper forwards, while `oneagentgraph sweep` answers success on any
+    state or environment once its arguments parse — so nothing real makes it fail
+    alone. The fault is therefore injected where the wrapper reaches the verb, since the
+    locked install `uv run` resolves is not on `PATH` to be shadowed: a stand-in named
+    `uv` goes ahead of the installed one, forwards every other invocation to the first
+    real uv on `PATH` past its own directory, and answers only `uv run oneagentgraph
+    sweep` as a verb refusing its arguments does, with status 2. The recipe, the
+    wrapper, the real `onevcs sweep` and every line of the reporting run end to end.
+
+    The mirror, `test_a_verb_that_fails_leaves_its_families_in_the_not_examined_list`,
+    fails `onevcs` for real and so proves the property for onevcs's families only;
+    without this journey nothing would prove the trailer names *oneagentgraph's*
+    families as not examined when that verb is the one that failed.
     """
     workspace = host.workspace("onevcs-s-aaaaaaaaaaaa", finished=False)
     dead = host.scratch("dead", held=False)
+    stand_ins = tmp_path / "path-stand-ins"
+    stand_ins.mkdir()
+    refuses = stand_ins / "uv"
+    refuses.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            # Answer exactly `uv run oneagentgraph sweep ...` as the verb refusing it would.
+            if [ "${1:-}" = run ] && [ "${2:-}" = oneagentgraph ] && [ "${3:-}" = sweep ]; then
+              echo "error: the oneagentgraph sweep this journey refuses" >&2
+              exit 2
+            fi
+            # Everything else reaches the real uv: the first one on PATH past this directory.
+            own="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            IFS=: read -r -a entries <<<"$PATH"
+            for entry in "${entries[@]}"; do
+              if [ "$entry" != "$own" ] && [ -x "$entry/uv" ]; then
+                exec "$entry/uv" "$@"
+              fi
+            done
+            echo "uv stand-in: no uv on PATH past $own" >&2
+            exit 127
+            """
+        )
+    )
+    refuses.chmod(0o755)
+    # Ahead of the installed `uv` rather than in place of it: nothing outside this
+    # journey's own `tmp_path` is modified, and the substitution lasts exactly as long as
+    # the `PATH` this one invocation is given.
+    environment = dict(host.environment)
+    environment["PATH"] = f"{stand_ins}{os.pathsep}{environment['PATH']}"
 
-    result = sweep(host, "--min-age-hours", "1.5")
+    result = sweep(host, "--min-age-hours", "1.5", environment=environment)
 
     assert result.returncode == 1, result.stdout
-    assert "invalid value '1.5' for '--min-age-hours" in result.stderr
+    assert "the oneagentgraph sweep this journey refuses" in result.stderr
     assert "oneagentgraph sweep exited 2" in not_examined(result.stdout)
     for family in ONEAGENTGRAPH_FAMILIES:
         assert family in not_examined(result.stdout)
@@ -1465,9 +1525,12 @@ def test_the_other_verb_still_sweeps_when_oneagentgraph_is_the_one_that_fails(
         assert family in examined(result.stdout)
         assert family not in not_examined(result.stdout)
     # onevcs did not merely print a header: it read this journey's own state and named
-    # what it found there.
+    # what it found there — at the fractional floor it takes, as the wrapper forwards it.
     assert str(workspace) in result.stdout
     assert dead.exists(), "the refused verb swept anyway"
+
+
+# llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
 
 
 def test_the_two_age_floors_the_composed_help_claims_are_the_ones_the_verbs_have(
@@ -1478,11 +1541,12 @@ def test_the_two_age_floors_the_composed_help_claims_are_the_ones_the_verbs_have
     `--min-age-hours` is forwarded rather than interpreted here, so the help makes two
     claims about two other repositories: that they still default to twenty-four when
     nobody passes one — the number this recipe's own default is chosen against — and
-    that each of them takes the number it passes instead. `oneagentgraph sweep` refuses
-    a fractional hour where `onevcs sweep` takes one, so a default only one of them
-    accepts is a half-sweep at every bare invocation, and it would be this recipe that
-    caused it. Neither claim is observable from the age journeys above, which read one
-    verb's echo and the other's behaviour rather than what either declares.
+    that each of them takes the number it passes instead. The two verbs have not always
+    accepted the same numbers — `oneagentgraph sweep` refused a fractional hour until
+    0.4.7 — so a default only one of them accepts would be a half-sweep at every bare
+    invocation, and it would be this recipe that caused it. Neither claim is observable
+    from the age journeys above, which read one verb's echo and the other's behaviour
+    rather than what either declares.
     """
     help_text = sweep(host, "--help").stdout
     theirs = DEFAULT_AGE_CLAIM.search(help_text)

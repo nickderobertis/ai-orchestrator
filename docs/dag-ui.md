@@ -121,7 +121,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.41.0"}
+{"status":"ok","onepipeline_version":"0.42.0"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -140,8 +140,8 @@ level, and **not by an operator remembering to check**:
 reads the engine out of the adopted read-API wheel's own bill of materials and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than at whatever a browser adoption then drives. They
-are level today: the adopted `onepipeline-ui` 0.11.0 links onepipeline 0.41.0 and
-`config/onepipeline.version` reads 0.41.0. What `/healthz` is for from here is the
+are level today: the adopted `onepipeline-ui` 0.11.2 links onepipeline 0.42.0 and
+`config/onepipeline.version` reads 0.42.0. What `/healthz` is for from here is the
 question that gate cannot answer — which release is answering **on this port right
 now**, since both pieces load once at start and a server left running from before a bump
 goes on serving what it loaded.
@@ -164,7 +164,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.11.0**, the release `config/onepipeline-ui.version` pins, is the
+**`onepipeline-ui` 0.11.2**, the release `config/onepipeline-ui.version` pins, is the
 one that made this a supervising surface: the project list and per-project page are the
 landing view, the run page carries the channel with its byte-for-byte reply composer,
 `attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its
@@ -231,7 +231,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.6**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.8**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
@@ -292,7 +292,7 @@ over this host's own root a first page of the run list answered in 17 to 40 seco
 *warm*, a run detail or a run-scoped timeline in about 20, and a browser — one page
 load, one `/api/v2/events` subscription, one run list, then the selected run's detail
 and timeline — sat on `Loading execution history…` for over a minute and a half before
-showing anything. **0.7.0 bounds that** — and the adopted 0.11.0 keeps it for the run
+showing anything. **0.7.0 bounds that** — and the adopted 0.11.2 keeps it for the run
 list, which is why the numbers below are read off that route — and it is the difference
 between a view an operator opens and one they avoid: on the same root the same request
 answers in **0.03-0.45 s** warm on the adopted release, against 76 s on the first cold

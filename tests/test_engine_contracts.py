@@ -605,6 +605,35 @@ CONSTANTS = (
         LIFECYCLE,
         "the newest {value} (merge_path::PRESERVED_LOG_ATTEMPTS)",
     ),
+    # The soft shutdown's default grace, quoted where a manager is told what `just
+    # shutdown` waits for before it stops a dispatch — in both documents that state it.
+    Constant(
+        "shutdown default grace",
+        ONEPIPELINE,
+        "cli.rs",
+        re.compile(r"pub const DEFAULT_SHUTDOWN_GRACE_SECONDS: u64 = (\d+);"),
+        MANAGER,
+        "a grace of {value} seconds",
+    ),
+    Constant(
+        "shutdown default grace",
+        ONEPIPELINE,
+        "cli.rs",
+        re.compile(r"pub const DEFAULT_SHUTDOWN_GRACE_SECONDS: u64 = (\d+);"),
+        ORCHESTRATION,
+        "has {value} seconds",
+    ),
+    # The words the shutdown report prints about every branch it pushed, which the
+    # manager's carve-out to the pre-push claim quotes so a reader meets one carve-out
+    # rather than two to reconcile.
+    Constant(
+        "shutdown's word for a preserved branch",
+        ONEPIPELINE,
+        "shutdown.rs",
+        re.compile(r'const UNPROVEN: &str = "([^"—]+?) —'),
+        MANAGER,
+        "the words just shutdown's report prints about every branch it pushes are {value}",
+    ),
     # Still `gate-logs`, and deliberately: it is an on-disk layout every run root an
     # earlier build left behind already carries, and `sweep` reads it to decide
     # whether a root may be reclaimed. The prose says why, and this holds it to the
@@ -616,6 +645,185 @@ CONSTANTS = (
         re.compile(r"pub const PRESERVED_LOG_DIRNAME: &str = \"([a-z-]+)\";"),
         LIFECYCLE,
         "{value}",
+    ),
+)
+
+
+class Semantic(NamedTuple):
+    """One behaviour the prose restates in its own words, and where the engine states it.
+
+    For a claim that is neither a number nor a name — what a verb does, what it rules
+    out, what its status means — there is no value to rebuild, so the pairing itself is
+    what is held: the engine still declares the behaviour, at the site that decides it,
+    and every document restating it still does. Either moving fails, naming which.
+    """
+
+    label: str
+    engine: Engine
+    source: str
+    #: What the engine's source has to go on declaring, as one pattern.
+    declaration: re.Pattern[str]
+    #: Each document restating it, and the words it restates it in — compared with
+    #: emphasis, code spans and line breaks stripped, as :func:`_plain` reads a document.
+    restated: tuple[tuple[Path, str], ...]
+
+
+#: A Rust doc-comment line break inside a declaration read as prose.
+_DOC_BREAK = r"\s*(?://[!/]\s*)?"
+
+#: What `just shutdown` is said to do in `AGENTS.md`, `docs/orchestration.md` and the
+#: lifecycle verb table, each against the declaration that decides it: the verb's own
+#: `--help` for its flags, `shutdown.rs` for its status, its report and what it leaves
+#: undone, and the linked onevcs for what a preservation is and is not.
+SHUTDOWN_SEMANTICS = (
+    Semantic(
+        "--host names every owner instead of refusing",
+        ONEPIPELINE,
+        "cli.rs",
+        re.compile(
+            r"this one does not refuse another session's"
+            + _DOC_BREAK
+            + r"run — the report names every run's owner instead"
+        ),
+        (
+            (MANAGER, "--host takes every run and names each owner instead"),
+            (ORCHESTRATION, "names each run's owner in the report instead of refusing"),
+        ),
+    ),
+    Semantic(
+        "--force and --grace 0 skip the ask and the wait",
+        ONEPIPELINE,
+        "cli.rs",
+        re.compile(
+            r"`0` is the same path as `--force`.*?Skip the interrupt and the wait", re.DOTALL
+        ),
+        (
+            (MANAGER, "--force or --grace 0 skips both"),
+            (ORCHESTRATION, "--force, and --grace 0, skip the ask and the wait"),
+        ),
+    ),
+    Semantic(
+        "non-zero is a kill at the deadline, a survivor, or a refused push",
+        ONEPIPELINE,
+        "shutdown.rs",
+        re.compile(
+            r"fn clean\(&self\) -> bool \{.*?"
+            r"DispatchEnding::Graceful => true,\s*"
+            r"DispatchEnding::Killed => stopped\.interrupt == Answer::NotAsked\.as_str\(\),\s*"
+            r"DispatchEnding::StillRunning => false,.*?"
+            r"branch\.outcome != Preserved::Refused",
+            re.DOTALL,
+        ),
+        (
+            (
+                MANAGER,
+                "non-zero means something was killed at the deadline, survived, or could "
+                "not be pushed",
+            ),
+            (
+                ORCHESTRATION,
+                "Non-zero means a dispatch was killed at the deadline, a process could not "
+                "be killed, or a push was refused",
+            ),
+        ),
+    ),
+    Semantic(
+        "a branch already on its origin, or with none, is reported and is not a failure",
+        ONEPIPELINE,
+        "shutdown.rs",
+        re.compile(
+            r'Self::AlreadyOnOrigin => "already-on-origin",\s*Self::NoRemote => "no-remote",'
+        ),
+        (
+            (MANAGER, "a branch already on its origin or with no origin is not a failure"),
+            (
+                ORCHESTRATION,
+                "a branch already on its origin and a branch whose identity has no origin "
+                "are reported at exit zero",
+            ),
+        ),
+    ),
+    Semantic(
+        "the report's last section names every other unpublished branch",
+        ONEPIPELINE,
+        "shutdown.rs",
+        re.compile(r'"  other unpublished branches on this host, which this shutdown did not push'),
+        (
+            (MANAGER, "its last section names every other unpublished branch here"),
+            (
+                ORCHESTRATION,
+                "Its last section names every other unpublished branch on this host that "
+                "the shutdown did not push",
+            ),
+        ),
+    ),
+    Semantic(
+        "nothing is parked or settled and no run-end hook fires",
+        ONEPIPELINE,
+        "shutdown.rs",
+        re.compile(
+            r"It journals no `run-stopped` and fires no" + _DOC_BREAK + r"run-end hook.*?"
+            r"Nothing is parked, nothing is settled",
+            re.DOTALL,
+        ),
+        (
+            (MANAGER, "Nothing is parked or settled and no run-end hook fires"),
+            (ORCHESTRATION, "No node is parked or settled"),
+            (ORCHESTRATION, "no run-end hook fires"),
+        ),
+    ),
+    Semantic(
+        "an adopt re-dispatches an in-flight node pinned to its branch",
+        ONEPIPELINE,
+        "shutdown.rs",
+        re.compile(r"`onepipeline adopt \{\}` re-dispatches the node pinned to that \\\s*branch"),
+        (
+            (
+                MANAGER,
+                "just orchestrate --adopt resumes the run, pinning an in-flight node to its branch",
+            ),
+            (
+                ORCHESTRATION,
+                "re-dispatches an in-flight node pinned to the branch it was working on",
+            ),
+        ),
+    ),
+    Semantic(
+        "a preservation opens nothing, runs no merge path, touches no base, forces nothing",
+        ONEVCS,
+        "preserve.rs",
+        re.compile(
+            r"No change request is opened, no merge path is run, no base branch is touched,"
+            + _DOC_BREAK
+            + r"nothing is force-pushed"
+        ),
+        (
+            (MANAGER, "no change request, no merge path, no base, no force-push"),
+            (
+                ORCHESTRATION,
+                "No change request is opened, no merge path runs, no base is touched, "
+                "nothing is force-pushed",
+            ),
+            (LIFECYCLE, "no change request, no merge path, no base touched, no force-push"),
+        ),
+    ),
+    Semantic(
+        "the preserving push is the one push without the hook, and pushes a branch ref",
+        ONEVCS,
+        "git.rs",
+        re.compile(
+            r"The one push in this crate that passes `--no-verify`.*?"
+            r"pub fn push_preserving\(.*?\"--no-verify\",\s*remote,\s*"
+            r'&format!\("refs/heads/\{branch\}:refs/heads/\{branch\}"\)',
+            re.DOTALL,
+        ),
+        (
+            (
+                MANAGER,
+                "onevcs preserve, the only verb that may push without the hook: it puts an "
+                "unproven branch ref, never a base, on the origin",
+            ),
+        ),
     ),
 )
 
@@ -706,6 +914,17 @@ PHASE_TABLE = re.compile(
 PHASE_ORDER = re.compile(r"blocked before working: (.*?)\.\n", re.DOTALL)
 
 
+#: The journal kinds a soft shutdown writes, the stop's kind it writes instead of, and the
+#: word `just status` reads such a run under — each quoted by both documents that describe
+#: `just shutdown`, and each the engine's to rename.
+SHUTDOWN_WORDS = (
+    (ONEPIPELINE, "host-shutdown"),
+    (ONEPIPELINE, "dispatch-stopped"),
+    (ONEPIPELINE, "run-stopped"),
+    (ONEPIPELINE, "HOST SHUTDOWN"),
+)
+
+
 #: The mirror image of `ABSENT_SYMBOLS`: a name a document states is **in force**,
 #: and the engine that has to declare it. A denial and an assertion go stale the same
 #: way, and the assertion is the more dangerous of the two — a reader who configures
@@ -749,7 +968,11 @@ PRESENT_SYMBOLS: dict[Path, tuple[tuple[Engine, str], ...]] = {
         # the whole pairing rests on that.
         (ONEPIPELINE, "## Planner context"),
         (ONEPIPELINE, "This reports observed state and adds no acceptance criteria."),
+        # What a soft shutdown journals and how `just status` reads it, which is how the
+        # manager is told to tell a host shutdown from a stop: each is the engine's word.
+        *SHUTDOWN_WORDS,
     ),
+    ORCHESTRATION: SHUTDOWN_WORDS,
 }
 
 
@@ -1358,6 +1581,29 @@ def test_every_quoted_engine_constant_is_the_engines_own(constant: Constant) -> 
         f"{constant.engine.ref} declares {constant.label} as {declared.group(1)!r}, so "
         "that is the sentence the document should carry"
     )
+
+
+@pytest.mark.parametrize("semantic", SHUTDOWN_SEMANTICS, ids=lambda semantic: semantic.label)
+def test_every_shutdown_behaviour_the_prose_restates_is_the_engines_own(
+    semantic: Semantic,
+) -> None:
+    """What a shutdown does, as the prose says it, against the site that decides it.
+
+    Both halves: the engine still declares the behaviour where this reads it, and every
+    document restating it still does. A release that changed the behaviour moves the
+    declaration, and a document that stopped saying it drops the phrase — either one is
+    a manager reading a promise nothing keeps.
+    """
+    assert semantic.declaration.search(_source(semantic.engine, semantic.source)), (
+        f"{semantic.engine.crate} {semantic.engine.ref} no longer declares "
+        f"{semantic.label!r} in {semantic.source} where this gate reads it; re-read the "
+        "behaviour and correct every document restating it"
+    )
+    for document, phrase in semantic.restated:
+        assert _plain(phrase) in _plain(document.read_text("utf-8")), (
+            f"{document.name} no longer says {phrase!r} ({semantic.label}); drop this "
+            "restatement in the same change that drops the claim, or restore it"
+        )
 
 
 @pytest.mark.parametrize(
@@ -2461,33 +2707,83 @@ def test_the_staging_names_a_snapshot_leaves_out_are_the_ones_the_engine_writes(
         )
 
 
-#: The three strings the engine composes an amendment into a task with, and where each
+#: The four strings the engine composes an amendment into a task with, and where each
 #: is declared in `src/plan.rs`: the heading it renders under, the sentence stating its
-#: authority, and the heading it is placed immediately above. Read as declarations of
-#: string constants rather than as prose, so a reworded sentence is a moved value here
-#: rather than a paragraph quietly drifting.
+#: authority, the criteria heading it renders into, and the notes heading a task stating
+#: no criteria section has one opened above. Read as declarations of string constants
+#: rather than as prose, so a reworded sentence is a moved value here rather than a
+#: paragraph quietly drifting. A Rust literal wrapped with a trailing backslash is read as
+#: the one line it compiles to.
 AMENDMENT_CONSTANTS = {
     "AMENDMENT_HEADING": re.compile(r'pub const AMENDMENT_HEADING: &str = "([^"]+)";'),
     "AMENDMENT_PRECEDENCE": re.compile(
         r'const AMENDMENT_PRECEDENCE: &str =\s*"([^"]+)";', re.MULTILINE
     ),
+    "CRITERIA_HEADING": re.compile(r'const CRITERIA_HEADING: &str = "([^"]+)";'),
     "ADDITIONAL_INFO_HEADING": re.compile(r'const ADDITIONAL_INFO_HEADING: &str = "([^"]+)";'),
 }
 
-#: The engine's `amended`, whose two arms are the whole of the placement rule: the block
-#: is one heading, one precedence sentence, a blank line and the amendment; a task that
-#: states the operational-notes heading gets the block immediately before that line,
-#: and one that states none gets it at the end.
+#: A Rust string continuation: a backslash ending a line drops that newline and the
+#: leading whitespace of the next.
+RUST_CONTINUATION = re.compile(r"\\\n\s*")
+
+#: The engine's `amended`, whose arms are the whole of the placement rule: the block is
+#: one heading, one precedence sentence, a blank line and the amendment's clauses; a task
+#: stating a criteria section gets the block at that section's end, followed by whatever
+#: comes after it; and one stating none gets a criteria section opened for it,
+#: immediately before the operational-notes heading, or at the end.
 AMENDED = re.compile(
     r"fn amended\(task: &str, amendment: &str\) -> String \{\s*"
-    r'let block = format!\("\{AMENDMENT_HEADING\}\\n\{AMENDMENT_PRECEDENCE\}'
-    r'\\n\\n\{amendment\}\\n"\);\s*'
+    r"let block = format!\(\s*"
+    r'"\{AMENDMENT_HEADING\}\\n\{AMENDMENT_PRECEDENCE\}\\n\\n\{\}",\s*'
+    r"amendment_clauses\(amendment\)\s*\);\s*"
+    r"if let Some\(end\) = criteria_section_end\(task\) \{\s*"
+    r"let \(bar, rest\) = task\.split_at\(end\);\s*"
+    r"return if rest\.trim\(\)\.is_empty\(\) \{\s*"
+    r'format!\("\{\}\\n\\n\{block\}", bar\.trim_end\(\)\)\s*'
+    r"\} else \{\s*"
+    r'format!\("\{\}\\n\\n\{block\}\\n\{rest\}", bar\.trim_end\(\)\)\s*'
+    r"\};\s*\}\s*"
+    r'let block = format!\("\{CRITERIA_HEADING\}\\n\\n\{block\}"\);\s*'
     r"match additional_info_at\(task\) \{\s*"
     r'Some\(at\) => format!\("\{\}\\n\\n\{block\}\\n\{\}", '
     r"task\[\.\.at\]\.trim_end\(\), &task\[at\.\.\]\),\s*"
     r'None => format!\("\{\}\\n\\n\{block\}", task\.trim_end\(\)\),',
     re.DOTALL,
 )
+
+#: How the engine shapes an amendment into clauses and bounds the section it lands in —
+#: each rule at the declaration `orchestrator.envelope_review.amendment_clauses` and
+#: `_criteria_section_end` restate, so a release that moved one fails here by name.
+AMENDMENT_SHAPING = {
+    "a clause is one bullet": re.compile(r'lines\.push\(format!\("- \{clause\}"\)\);'),
+    "a heading becomes a bold label between blank lines": re.compile(
+        r"lines\.push\(String::new\(\)\);\s*"
+        r'lines\.push\(format!\("\*\*\{text\}\*\*"\)\);\s*'
+        r"lines\.push\(String::new\(\)\);"
+    ),
+    "a wrapped line rejoins the clause above it with one space": re.compile(
+        r"Some\(clause\) => \{\s*clause\.push\(' '\);\s*clause\.push_str\(trimmed\);"
+    ),
+    "a heading is `#`s followed by a space or nothing": re.compile(
+        r"let text = line\.trim_start_matches\('#'\);\s*"
+        r"if text\.len\(\) == line\.len\(\) \{\s*return None;\s*\}\s*"
+        r"\(text\.is_empty\(\) \|\| text\.starts_with\(' '\)\)\.then\(\|\| text\.trim\(\)\)"
+    ),
+    "a bullet is `- `, `* ` or `+ `": re.compile(r'\["- ", "\* ", "\+ "\]'),
+    "a numbered item is digits then `. ` or `) `": re.compile(
+        r'rest\.strip_prefix\("\. "\)\s*\.or_else\(\|\| rest\.strip_prefix\("\) "\)\)'
+    ),
+    "a section is a level-two heading and not a deeper one": re.compile(
+        r'line\.starts_with\("##"\) && !line\.starts_with\("###"\)'
+    ),
+    "the criteria section ends at the next section heading, or at the end": re.compile(
+        r"if inside && is_section_heading\(trimmed\) \{\s*return Some\(at\);\s*\}\s*"
+        r"if trimmed == CRITERIA_HEADING \{\s*inside = true;\s*\}.*?"
+        r"inside\.then_some\(task\.len\(\)\)",
+        re.DOTALL,
+    ),
+}
 
 #: A `Command` variant with its fields, doc comments and attributes included, so a field a
 #: variant gained or lost is read from the declaration rather than assumed.
@@ -2566,9 +2862,9 @@ def test_the_workspaces_overlay_composes_the_keys_the_linked_onevcs_declares() -
 def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
     """A node an envelope states is judged on the task its dispatch will read, so how the
     engine renders an amendment into a task is restated in `orchestrator/envelope_review.py`,
-    and this holds the restatement to the engine's source at the pinned release: the three
-    strings and the placement rule. A release that moved either would have every stated
-    node judged on text no dispatch reads, silently.
+    and this holds the restatement to the engine's source at the pinned release: the four
+    strings, the clause shaping and the placement rule. A release that moved any of them
+    would have every stated node judged on text no dispatch reads, silently.
     """
     from orchestrator import envelope_review
 
@@ -2579,10 +2875,17 @@ def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it
             f"onepipeline {ONEPIPELINE.ref} no longer declares {name} in plan.rs where this "
             "gate reads it; re-read how it renders an amendment and correct the restatement"
         )
-        assert getattr(envelope_review, name) == declared.group(1), (
+        value = RUST_CONTINUATION.sub("", declared.group(1))
+        assert getattr(envelope_review, name) == value, (
             f"orchestrator/envelope_review.py restates {name} as "
             f"{getattr(envelope_review, name)!r} while onepipeline {ONEPIPELINE.ref} "
-            f"declares {declared.group(1)!r}"
+            f"declares {value!r}"
+        )
+    for rule, shaped in AMENDMENT_SHAPING.items():
+        assert shaped.search(plan_rs) is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer declares the amendment rule "
+            f"{rule!r} where `orchestrator.envelope_review` restates it; re-read "
+            "`amendment_clauses` and `criteria_section_end` and correct the restatement"
         )
     assert AMENDED.search(plan_rs) is not None, (
         f"onepipeline {ONEPIPELINE.ref}'s `amended` no longer places the block the way "

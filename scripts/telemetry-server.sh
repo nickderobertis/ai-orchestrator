@@ -115,11 +115,11 @@ if [ "$bound" -eq 0 ]; then
     # not merely to five digits, the same way `--port` above is: `70000` is five
     # digits, and a file holding it would reach `--bind` as an address the CLI refuses
     # for a reason that names neither this script nor the file it came from.
-    [[ "$default_address" =~ ^[^[:space:]:]+:[0-9]{1,5}$ ]] &&
-        [ "${default_address##*:}" -le 65535 ] || {
+    if ! [[ "$default_address" =~ ^[^[:space:]:]+:[0-9]{1,5}$ ]] ||
+        [ "${default_address##*:}" -gt 65535 ]; then
         echo "telemetry-server: $address_file must hold one HOST:PORT with a port in 0-65535, not '${default_address}'" >&2
         exit 2
-    }
+    fi
     args+=(--bind "${host:-${default_address%%:*}}:${port:-${default_address##*:}}")
 elif [ -n "$host" ] || [ -n "$port" ]; then
     echo "telemetry-server: --bind names the whole address; drop --host/--port or drop --bind" >&2

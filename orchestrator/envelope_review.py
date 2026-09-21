@@ -73,6 +73,8 @@ from typing import NamedTuple, Protocol
 
 from orchestrator import plan_review, structural_guard
 from orchestrator.criteria_guard import (
+    AMENDMENT_HEADING,
+    CRITERIA_HEADING,
     CriteriaError,
     check_amendment,
     check_whole_task,
@@ -99,15 +101,20 @@ NOTE_ESCAPE = (
 )
 
 #: How the engine renders a node's amendment into the task its dispatch receives —
-#: `onepipeline`'s `src/plan.rs`, whose `amended` puts this heading, this sentence and
-#: the amendment immediately above the operational notes, or at the end of a task that
-#: states none. Restated here because a node an `add` or a `retry` states may carry an
-#: amendment of its own, and that is text its judge reads;
-#: `tests/test_engine_contracts.py` holds the three strings and the placement to the
-#: engine's source at the pinned release.
-AMENDMENT_HEADING = "## Amendment"
+#: `onepipeline`'s `src/plan.rs`, whose `amended` puts the amendment's clauses at the end
+#: of the task's `## Acceptance criteria`, under :data:`AMENDMENT_HEADING` and opening with
+#: this sentence, and gives a task stating no criteria section one — immediately above the
+#: operational notes, or at the end of a task that states none. Restated here because a
+#: node an `add` or a `retry` states may carry an amendment of its own, and that is text
+#: its judge reads; `tests/test_engine_contracts.py` holds the strings, the clause shaping
+#: and the placement to the engine's source at the pinned release. The heading itself is
+#: :mod:`orchestrator.criteria_guard`'s, because that is the reader that has to find it.
 AMENDMENT_PRECEDENCE = (
-    "Where this section and the operational notes below disagree, this section wins."
+    "This node's manager amended its bar. Every clause below is an acceptance criterion "
+    "of this node and takes precedence over the whole task: where a clause here "
+    "contradicts a criterion above it, anything the task says elsewhere, or an "
+    "operational note below, the clause here wins and the contradicted one no longer "
+    "binds."
 )
 ADDITIONAL_INFO_HEADING = "## Additional info"
 
@@ -277,21 +284,112 @@ class Reviewable(NamedTuple):
 def amended(task: str, amendment: str | None) -> str:
     """``task`` with ``amendment`` rendered into it exactly as the engine renders it.
 
-    Above the operational notes, never after them: a task that states
-    :data:`ADDITIONAL_INFO_HEADING` on a line of its own gets the block immediately
-    before that line, and one that states none gets it at the end. A blank amendment
-    renders nothing, which is what the engine does with one. Matched as a whole line, so
-    prose that mentions the heading is not mistaken for the section itself.
+    One acceptance section: the amendment's clauses — :func:`amendment_clauses` — go at
+    the end of the task's :data:`CRITERIA_HEADING` section, under
+    :data:`AMENDMENT_HEADING` and opening with :data:`AMENDMENT_PRECEDENCE`. A task
+    stating no criteria section is given one, immediately before an
+    :data:`ADDITIONAL_INFO_HEADING` stated on a line of its own, or at the end of a task
+    that states none. A blank amendment renders nothing, which is what the engine does
+    with one. Headings are matched as whole lines, so prose that mentions one is not
+    mistaken for the section itself.
     """
     if amendment is None or not amendment.strip():
         return task
-    block = f"{AMENDMENT_HEADING}\n{AMENDMENT_PRECEDENCE}\n\n{amendment.strip()}\n"
+    block = f"{AMENDMENT_HEADING}\n{AMENDMENT_PRECEDENCE}\n\n{amendment_clauses(amendment.strip())}"
+    end = _criteria_section_end(task)
+    if end is not None:
+        bar, rest = task[:end], task[end:]
+        if not rest.strip():
+            return f"{bar.rstrip()}\n\n{block}"
+        return f"{bar.rstrip()}\n\n{block}\n{rest}"
+    block = f"{CRITERIA_HEADING}\n\n{block}"
     at = 0
-    for line in task.splitlines(keepends=True):
+    for line in _lines(task):
         if line.rstrip() == ADDITIONAL_INFO_HEADING:
             return f"{task[:at].rstrip()}\n\n{block}\n{task[at:]}"
         at += len(line)
     return f"{task.rstrip()}\n\n{block}"
+
+
+def amendment_clauses(amendment: str) -> str:
+    """``amendment`` as the clauses of a criteria section, one bullet each, as the engine
+    shapes it.
+
+    Every word is kept and only the shape changes: a bullet or numbered item is one
+    clause, a paragraph is one clause with its lines joined, and a heading becomes a bold
+    label, because a heading inside the criteria section would end it.
+    """
+    lines: list[str] = []
+    clause: str | None = None
+    for line in amendment.split("\n"):
+        trimmed = line.strip()
+        text = _heading_text(trimmed)
+        item = _list_item(trimmed) if text is None else None
+        if not trimmed or text is not None or item is not None:
+            if clause is not None:
+                lines.append(f"- {clause}")
+            clause = item
+            if text:
+                lines.extend(("", f"**{text}**", ""))
+        elif clause is None:
+            clause = trimmed
+        else:
+            clause = f"{clause} {trimmed}"
+    if clause is not None:
+        lines.append(f"- {clause}")
+    rendered = ""
+    blank = True
+    for line in lines:
+        if not line:
+            if not blank:
+                rendered += "\n"
+            blank = True
+            continue
+        rendered += f"{line}\n"
+        blank = False
+    return rendered
+
+
+def _heading_text(line: str) -> str | None:
+    """A heading's text, for a line that is one: its ``#``s and the space after them gone."""
+    text = line.lstrip("#")
+    if len(text) == len(line) or not (text == "" or text.startswith(" ")):
+        return None
+    return text.strip()
+
+
+def _list_item(line: str) -> str | None:
+    """A list item's text, for a line that is one: its bullet or number and a space gone."""
+    for marker in ("- ", "* ", "+ "):
+        if line.startswith(marker):
+            return line[len(marker) :].strip()
+    digits = len(line) - len(line.lstrip("0123456789"))
+    rest = line[digits:]
+    if digits and rest[:2] in (". ", ") "):
+        return rest[2:].strip()
+    return None
+
+
+def _lines(task: str) -> list[str]:
+    """``task``'s lines with their newlines kept, split on a newline alone as the engine
+    splits them, so an offset into the list is an offset into ``task``."""
+    *whole, last = task.split("\n")
+    return [f"{line}\n" for line in whole] + ([last] if last else [])
+
+
+def _criteria_section_end(task: str) -> int | None:
+    """Where ``task``'s criteria section ends — the next level-two heading, or the end —
+    or ``None`` for a task stating no :data:`CRITERIA_HEADING` as a whole line."""
+    at = 0
+    inside = False
+    for line in _lines(task):
+        trimmed = line.rstrip()
+        if inside and trimmed.startswith("##") and not trimmed.startswith("###"):
+            return at
+        if trimmed == CRITERIA_HEADING:
+            inside = True
+        at += len(line)
+    return len(task) if inside else None
 
 
 def _dispatching(stated: Mapping[str, object]) -> dict[str, object] | None:
@@ -439,7 +537,7 @@ def _refused(reviewable: Reviewable) -> str | None:
 
     A whole task is asked the whole bar over its criteria and
     :func:`~orchestrator.criteria_guard.check_amendment`'s two questions over every other
-    section it opens — the `## Amendment` block a stated node's task carries among them; a
+    section it opens — the `### Amendment` block a stated node's task carries among them; a
     correction alone is asked those two questions and nothing else. Which is which is
     :mod:`orchestrator.criteria_guard`'s decision, written down beside the questions.
     Asked before the judged turn because it is free and its refusals are the commonest —

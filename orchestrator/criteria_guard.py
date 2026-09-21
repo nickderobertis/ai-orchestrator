@@ -1188,6 +1188,17 @@ DESCRIBED_ELSEWHERE = frozenset({"## What", "## Why", CRITERIA_HEADING, "## Addi
 SECTION_HEADING = re.compile(r"^##[ \t]+(?P<heading>\S.*?)[ \t]*$", re.MULTILINE)
 
 
+#: The heading `onepipeline` renders a node's binding amendment under: a subsection *of*
+#: the task's :data:`CRITERIA_HEADING`, holding the amendment's clauses (`src/plan.rs`'s
+#: `AMENDMENT_HEADING`, which `tests/test_engine_contracts.py` holds to the pinned
+#: release through :mod:`orchestrator.envelope_review`'s restatement of that rendering).
+#: :data:`CLOSES_CRITERIA` ends the block :func:`check` reads at it and
+#: :data:`SECTION_HEADING` does not open a section at it, so without a reader of its own
+#: the one region of a stated task that is a manager's correction would be read by nobody.
+AMENDMENT_HEADING = "### Amendment"
+_OPENS_AMENDMENT = re.compile(rf"^{re.escape(AMENDMENT_HEADING)}[ \t]*$", re.MULTILINE)
+
+
 def unreviewed_sections(task: str) -> Iterator[tuple[str, str]]:
     """Each section of ``task`` no other reader examines, as its heading and its body.
 
@@ -1203,13 +1214,26 @@ def unreviewed_sections(task: str) -> Iterator[tuple[str, str]]:
     instruction produces. That is the same "written to miss rather than to over-refuse"
     trade every other reader here makes — an amendment buried inside `## Why` goes
     unread, and refusing prose that a plan was accepted with would be worse.
+
+    The one `###` block that *is* yielded is the engine's own :data:`AMENDMENT_HEADING`
+    inside the criteria section, because that is where the engine now renders an
+    amendment: its clauses run to the next heading, and they are asked what an amendment
+    is asked rather than the whole bar, exactly as when the amendment was a section of its
+    own.
     """
     opens = list(SECTION_HEADING.finditer(task))
     for position, opened in enumerate(opens):
         heading = f"## {opened['heading']}"
+        ends = opens[position + 1].start() if position + 1 < len(opens) else len(task)
+        if heading == CRITERIA_HEADING:
+            for amendment in _OPENS_AMENDMENT.finditer(task, opened.end(), ends):
+                closes = CLOSES_CRITERIA.search(task, amendment.end(), ends)
+                yield (
+                    AMENDMENT_HEADING,
+                    task[amendment.end() : ends if closes is None else closes.start()],
+                )
         if heading in DESCRIBED_ELSEWHERE:
             continue
-        ends = opens[position + 1].start() if position + 1 < len(opens) else len(task)
         yield heading, task[opened.end() : ends]
 
 

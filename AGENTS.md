@@ -88,7 +88,7 @@ reading it as covered.
 
 **Nothing that changes what a remote or a base branch sees bypasses `onevcs`.**
 Pushing, merging into a base, and opening a change request go through
-`publish-branch` / `repo-recover` / `integrate`; local commits, merges into your own
+`publish-branch` / `repo-recover` / `integrate` / `preserve`; local commits, merges into your own
 working branch, and every read are the agent's own git, because local authoring *is*
 git and a rule everyone breaks routes nothing. A lifecycle worker may do exactly two
 things to a remote on its own — open its own draft, and a throwaway demonstration change
@@ -100,7 +100,8 @@ unpublished branch no session holds, under its identity's resolved policy; `just
 repo-recover` is for a branch carrying unattested incomplete provenance and is the only
 verb that can attest that marker — never bypass it with a normal commit; `just
 integrate` is the local merge train, merging finished branches into their base and
-opening no change request. Improvising past a missing verb is what puts a change on a
+opening no change request; `onevcs preserve` keeps a branch on its origin rather than
+landing it. Improvising past a missing verb is what puts a change on a
 base without its merge path ruling on it, the failure this routing exists to prevent;
 the table is in [the lifecycle
 doc](docs/repo-lifecycle.md#which-verb-lands-which-branch-state). Three verbs answer
@@ -732,10 +733,29 @@ three). **Runs are owned**: act only on runs you launched — `just runs` shows 
 owning session, or `[unknown]`, and `unknown` is never yours — and never derive a
 process list from `ps` and signal it, which has interrupted another manager
 mid-supervision here. `just stop` refuses another manager's run and is deliberately
-outside `.claude/settings.json`'s allowlist, so each one is approved on its own.
+outside `.claude/settings.json`'s allowlist, so each one is approved on its own; `just
+shutdown` is outside it for the same reason and more so, because at `--host` it acts on
+runs this session does not own.
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state each of these points beside the stop guidance — the scopes and ownership, the default grace and `--force`, preservation rather than publication, adoptability, the journal kinds, and how to read the report and exit status — because this is the document a manager decides a host shutdown from; the paragraph was already cut to that list once, and every number and engine word in it is held to the engine by `tests/test_engine_contracts.py`, so it is a gated copy, with the walk-through left to docs/orchestration.md. -->
+**`just shutdown` is for a host going away with work on it, and it is not a stop.** A
+run id or `--mine` is held to ownership as `just stop` is; `--host` takes every run and
+names each owner instead, because shutting a host down is a decision about the host.
+Each live dispatch is asked to commit and given a grace of **600** seconds, ten minutes,
+before it is stopped as `just stop` stops one — `--force` or `--grace 0` skips both.
+Every branch the runs name is then preserved on its origin: **a preservation, not a
+publication** — no change request, no merge path, no base, no force-push — so `just
+recoverable` still names its landing verb. Nothing is parked or settled and no run-end
+hook fires: `just orchestrate --adopt` resumes the run, pinning an in-flight node to its
+branch; `just status` reads it as `HOST SHUTDOWN`; it journals `host-shutdown` and
+`dispatch-stopped`, never `run-stopped`. Read the report, not just the status: non-zero
+means something was killed at the deadline, survived, or could not be pushed — a branch
+already on its origin or with no origin is not a failure — and its last section names
+every other unpublished branch here.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 After `just orchestrate`, use **only** `just channel-next`, `just channel-reply`, `just
-stop`, `just watch`, and the read-only `just monitor` / `just runs` / `just status` /
+stop`, `just shutdown`, `just watch`, and the read-only `just monitor` / `just runs` / `just status` /
 `just unwatched` views. Nothing advances a run; the engine reconciles continuously.
 `just channel-next` and `just monitor` read through the `planner` profile — the
 pipeline's decisions and settlements, not every worker's turns; `--filter detailed`
@@ -902,7 +922,7 @@ watching means and what that verb is held to:
    them, because the properties hold by construction inside the command and by
    somebody's memory anywhere else; where a watch would have to end on something the
    verb does not return on, report the missing condition rather than writing a loop.
-   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned 0.41.0 names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned 0.42.0 names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
    `--until` takes `surface` (the default), `settled`, `nothing-driving`, `node-settled`
    and `node=<ID>`; `settled` and `nothing-driving` end every wait, while a waiting
    surface ends one only under `surface`, so name both when you want both. `--timeout
@@ -1414,7 +1434,11 @@ release did, cited to something a reader can open.
 Squash-merge via PR; PRs follow `.github/pull_request_template.md`. With no CI, the
 **pre-push hook** (`.githooks/pre-push`, activated by `just bootstrap`) runs `just
 gate`, so nothing reaches the remote unproven, and every dispatched agent clears its
-own findings before committing. Local-first is not local-only: keep the registered base
+own findings before committing. The one exception is `onevcs preserve`, the only verb
+that may push without the hook: it puts an unproven **branch ref, never a base**, on the
+origin, opens no change request, and nothing can merge that ref without a publication
+that does run the merge path — the words `just shutdown`'s report prints about every
+branch it pushes are *on its origin unproven*. Local-first is not local-only: keep the registered base
 in sync with its origin and push every change that reaches it immediately (`just sync`
 fast-forwards a publication checkout). Never force-push or rewrite history on the
 registered base. Keep the `.claude/settings.json` allowlist current with routine

@@ -47,6 +47,10 @@ REQUIRED = (
     "Bash(git -C * log*)",
     "Bash(git -C * diff*)",
 )
+#: The recipes that act on runs, each withheld so that every use is approved on its own:
+#: `stop` ends a run, and `shutdown` at `--host` acts on runs this session does not own.
+#: `AGENTS.md` says so where it names them; this holds the allowlist to it.
+WITHHELD = ("just stop", "just shutdown")
 BLANKET = {"Bash(*)", "Bash(:*)", "Bash(git:*)", "Bash(git -C:*)", "Bash(just:*)", "*"}
 
 
@@ -101,3 +105,15 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     assert all(isinstance(bound, int) and bound > 0 for bound in bounds), (
         f"the Stop hook is registered without a bound of its own: {bounds}"
     )
+
+
+def test_the_recipes_that_act_on_runs_stay_outside_the_allowlist() -> None:
+    """No rule grants a run-acting recipe, however it is spelled: a claude-code rule
+    matches by prefix, so a bare `Bash(just stop)` and a `Bash(just stop:*)` both would."""
+    granted = [
+        rule
+        for rule in _allowed()
+        for recipe in WITHHELD
+        if rule.startswith(f"Bash({recipe}") or rule.startswith(f"Bash({recipe.split()[0]}:")
+    ]
+    assert not granted, f"the allowlist grants a recipe that acts on runs: {granted}"

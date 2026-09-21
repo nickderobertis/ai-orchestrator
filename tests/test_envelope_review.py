@@ -58,6 +58,7 @@ from orchestrator.envelope_review import (
     Judge,
     ReviewUnanswered,
     amended,
+    amendment_clauses,
     bar_in_force,
     main,
     reviewables,
@@ -536,25 +537,67 @@ def test_a_notes_criterion_that_is_blank_or_not_text_is_left_to_the_engine(
     assert reviewables(_envelope(_note("x", cast(Any, criterion)))) == []
 
 
-def test_the_engine_renders_an_amendment_above_the_operational_notes() -> None:
-    """The composition is the engine's, restated: the block goes immediately above
-    `## Additional info` when the task states one on a line of its own, and at the end
-    of a task that states none; a blank amendment renders nothing.
+def test_the_engine_renders_an_amendment_into_the_acceptance_criteria() -> None:
+    """The composition is the engine's, restated, and each case below is one the engine's
+    own `src/plan.rs` tests assert at the pinned release, byte for byte: the clauses go at
+    the end of the task's `## Acceptance criteria` under `### Amendment`, a task stating no
+    criteria section is given one above `## Additional info` or at its end, prose naming a
+    heading is not the heading, and a blank amendment renders nothing.
 
-    `tests/test_engine_contracts.py` holds the three strings and the placement to the
-    engine's own source at the pinned release.
+    `tests/test_engine_contracts.py` holds the strings, the clause shaping and the
+    placement to the engine's source at the pinned release.
     """
-    block = f"{AMENDMENT_HEADING}\n{AMENDMENT_PRECEDENCE}\n\nLeave the comments.\n"
-    with_notes = "## What\n\nDo it.\n\n## Additional info\n\nRun it.\n"
-    assert amended(with_notes, "Leave the comments.") == (
-        f"## What\n\nDo it.\n\n{block}\n{ADDITIONAL_INFO_HEADING}\n\nRun it.\n"
+    with_criteria = (
+        "## What\nship it\n\n## Acceptance criteria\n\n- it ships\n\n"
+        "## Additional info\n\nRun the gate once, over the finished tree.\n"
     )
-    without = "## What\n\nDo it. Put it under `## Additional info`.\n"
-    assert amended(without, "Leave the comments.") == (
-        f"## What\n\nDo it. Put it under `## Additional info`.\n\n{block}"
+    assert amended(with_criteria, "The four comment lines are out of scope: leave them.") == (
+        "## What\nship it\n\n## Acceptance criteria\n\n- it ships\n\n"
+        f"{AMENDMENT_HEADING}\n{AMENDMENT_PRECEDENCE}\n\n"
+        "- The four comment lines are out of scope: leave them.\n\n"
+        "## Additional info\n\nRun the gate once, over the finished tree.\n"
     )
-    assert amended(with_notes, "  ") == with_notes
-    assert amended(with_notes, None) == with_notes
+    assert amended("## What\nship it", "Leave the comments.") == (
+        f"## What\nship it\n\n{CRITERIA_HEADING}\n\n{AMENDMENT_HEADING}\n"
+        f"{AMENDMENT_PRECEDENCE}\n\n- Leave the comments.\n"
+    )
+    notes_only = "## What\n\nDo it.\n\n## Additional info\n\nRun it.\n"
+    assert amended(notes_only, "Leave the comments.") == (
+        f"## What\n\nDo it.\n\n{CRITERIA_HEADING}\n\n{AMENDMENT_HEADING}\n"
+        f"{AMENDMENT_PRECEDENCE}\n\n- Leave the comments.\n\n{ADDITIONAL_INFO_HEADING}\n\n"
+        "Run it.\n"
+    )
+    mentions = "## What\nput it under ## Additional info when you write one"
+    assert amended(mentions, "Leave the comments.").rstrip().endswith("Leave the comments.")
+    assert amended(notes_only, "   \n") == notes_only
+    assert amended(notes_only, None) == notes_only
+
+
+def test_an_amendments_clauses_are_shaped_as_the_engine_shapes_them() -> None:
+    """Every word kept, only the shape changed: the engine's own case, byte for byte, and
+    the criteria section it lands in stays one section wherever that section sits."""
+    amendment = (
+        "## What\nWork.\n\n## Acceptance criteria\n\n"
+        "- the row in `notes.md`\n  is `state: done`\n* second\n+ third\n"
+        "1. fourth\n2) fifth\n\nTwo lines\nof one ruling.\n\n\n#not a heading\n"
+    )
+    assert amendment_clauses(amendment) == (
+        "**What**\n\n- Work.\n\n**Acceptance criteria**\n\n"
+        "- the row in `notes.md` is `state: done`\n- second\n- third\n- fourth\n- fifth\n"
+        "- Two lines of one ruling.\n- #not a heading\n"
+    )
+    followed = "## What\nship it\n\n## Acceptance criteria\n- it ships\n\n## Notes\nnone\n"
+    rendered = amended(followed, amendment)
+    assert (
+        rendered.index("- it ships")
+        < rendered.index(AMENDMENT_HEADING)
+        < rendered.index("**Acceptance criteria**")
+        < rendered.index("- fifth")
+        < rendered.index("## Notes\nnone")
+    ), rendered
+    assert rendered.count("## Acceptance criteria") == 1, rendered
+    last = amended("## What\nship it\n\n## Acceptance criteria\n- it ships\n", amendment)
+    assert "- it ships\n\n### Amendment\n" in last and last.endswith("- #not a heading\n")
 
 
 def test_a_node_stating_its_own_amendment_is_read_with_it_rendered_in() -> None:
@@ -562,7 +605,7 @@ def test_a_node_stating_its_own_amendment_is_read_with_it_rendered_in() -> None:
 
     The amendment renders into the node's task exactly as the engine renders it, and the
     whole resulting task is asked the bar — so a sound task carrying an amendment that
-    rests on the merge path is refused naming the `## Amendment` section, and a sound one
+    rests on the merge path is refused naming the `### Amendment` block, and a sound one
     is read as the novel whole task it is and spends its judged turn.
     """
     node = {"id": "again", "persona": "engineer", "task": _task(), "amendment": SOUND}
@@ -579,7 +622,7 @@ def test_a_node_stating_its_own_amendment_is_read_with_it_rendered_in() -> None:
     harmful = {**node, "amendment": "The required checks pass."}
     said = refusal(_envelope({"op": "add", "node": harmful}), ScriptedJudge())
     assert said is not None
-    assert "the task added as node 'again', under '## Amendment'" in said, said
+    assert "the task added as node 'again', under '### Amendment'" in said, said
 
 
 def test_a_bare_amendment_spends_no_judged_turn_and_a_novel_task_does() -> None:

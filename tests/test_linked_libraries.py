@@ -208,6 +208,15 @@ NAMED_ARTIFACTS_ONEJUDGE_FLOOR = Release(0, 11, 0)
 #: through: `config/onevcs.version` at 0.27.0 over an engine linking 0.25.0 would read
 #: as a pool in force while every dispatch still cut and deleted a fresh worktree.
 POOL_ONEVCS_FLOOR = Release(0, 27, 0)
+#: The onevcs release carrying the **preserving push** a soft shutdown ends with:
+#: https://github.com/nickderobertis/onevcs/pull/186 (`0b85fc51`), first cut as 0.29.0,
+#: adds `onevcs::preserve`, which puts an unpublished branch on its identity's origin
+#: under its own name without the merge path, the hook, a change request or a base.
+#: `onepipeline shutdown` pushes every branch its runs name through the copy the engine
+#: *links*, so `AGENTS.md`'s account of `just shutdown` — and its carve-out to the
+#: pre-push claim — is about that copy: `config/onevcs.version` past this floor over an
+#: engine linking an older onevcs would describe a push no shutdown can make.
+PRESERVE_ONEVCS_FLOOR = Release(0, 29, 0)
 #: oneagentgraph https://github.com/nickderobertis/oneagentgraph/pull/111 (`18daa25`), first
 #: cut as 0.4.1: the release linking that onejudge, which is what lets a `kind: onejudge`
 #: member's `user.artifacts` reach its judge.
@@ -449,6 +458,25 @@ def test_the_linked_onevcs_places_a_session_on_a_pooled_slot_it_can_maintain() -
     )
 
 
+def test_the_linked_onevcs_preserves_the_branches_a_shutdown_leaves() -> None:
+    """Above the floor, the branches a host shutdown names reach their origin, and nothing
+    else happens to them.
+
+    What `just shutdown` promises about a branch — pushed under its own name, no change
+    request, no merge path, no base — is `onevcs::preserve`'s, reached through the copy
+    the engine links rather than the CLI `config/onevcs.version` pins. Below this floor
+    the engine linking it has no such verb, so this holds the engine to a onevcs that can
+    keep the promise the manager's document makes.
+    """
+    linked = Release.parse(_linked_version("onevcs"))
+
+    assert linked >= PRESERVE_ONEVCS_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below the {PRESERVE_ONEVCS_FLOOR} that "
+        "preserves an unpublished branch on its origin without publishing it; a host "
+        "shutdown under it cannot push the branches its report names"
+    )
+
+
 def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
     """Above the floor, a graph naming `judges:` reaches a onejudge that can run it.
 
@@ -589,9 +617,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.6", core="0.17.0"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.8", core="0.17.0"),
     LinkedCore(dependent="onejudge", dependent_version="0.13.3", core="0.17.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.41.0", core="0.17.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.42.0", core="0.17.0"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
