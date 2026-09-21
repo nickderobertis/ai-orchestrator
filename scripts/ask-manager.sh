@@ -17,6 +17,11 @@
 # Nothing is spawned but the bus and nothing under the run root is opened: the frame is
 # encoded with bash builtins, and the run's channel directory is named, never read.
 #
+# The bus it spawns is this checkout's own `.venv/bin/onemessagebus`, resolved from this
+# script's location exactly as `config/onemessagebus.yaml` is and never from PATH: the two
+# are read against each other, so a bus of another release refuses this configuration. A
+# checkout with no bus there is refused naming that path and `just bootstrap`.
+#
 # Environment:
 #   ONEPIPELINE_RUN_ID                        (required) the run to ask. What sets it
 #       depends on the launch: `just plan` exports it, and so does an attached
@@ -26,8 +31,8 @@
 #   ONEPIPELINE_RUNS_DIR                      (optional) where the run's records live;
 #       `runs` when unset, as the engine reads it.
 #   ONEPIPELINE_CHANNEL_ASKER                 (optional) who asks. A later listener naming
-#       the same asker takes back a question an earlier one left abandoned. A blank one is
-#       refused.
+#       the same asker takes back a question an earlier one left abandoned. A blank one, and
+#       one beginning with `-`, which the bus would read as an option, are refused.
 #   ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS  (optional) the reply window, 3000 by default.
 #   ORCHESTRATOR_ASK_MANAGER_NODE             (optional) the node the question is about:
 #       at most 512 bytes with no control character and not blank, as the bus takes it.
@@ -122,8 +127,12 @@ case "$here" in
     /*) ;;
     *) here="$PWD/$here" ;;
 esac
-config="${here%/scripts}/config/onemessagebus.yaml"
-[ "${here%/scripts}" != "$here" ] || config="$here/../config/onemessagebus.yaml"
+root=${here%/scripts}
+[ "$root" != "$here" ] || root="$here/.."
+config="$root/config/onemessagebus.yaml"
+#: The one bus this shim runs: the checkout's own locked install, beside the configuration
+#: it is read against. The caller's PATH is never consulted.
+bus="$root/.venv/bin/onemessagebus"
 
 case "${1:-}" in
     --file)
@@ -167,8 +176,14 @@ window="${ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS:-$DEFAULT_TIMEOUT_SECONDS}"
     "set it to a whole number of seconds, or unset it for the ${DEFAULT_TIMEOUT_SECONDS}s default"
 
 asker="${ONEPIPELINE_CHANNEL_ASKER:-}"
-[ -z "$asker" ] || [ -n "${asker//[[:space:]]/}" ] || fail "ONEPIPELINE_CHANNEL_ASKER is blank, so it names no asker" \
-    "unset it, or set it to the word a later session of this dispatch asks as"
+if [ -n "$asker" ]; then
+    [ -n "${asker//[[:space:]]/}" ] || fail "ONEPIPELINE_CHANNEL_ASKER is blank, so it names no asker" \
+        "unset it, or set it to the word a later session of this dispatch asks as"
+    # The value is `--asker`'s own argument, and the bus parses one beginning with `-` as a
+    # flag it does not know rather than as the asker, so it could never be asked as.
+    [[ $asker != -* ]] || fail "ONEPIPELINE_CHANNEL_ASKER is '$asker', which begins with '-', so the bus would read it as an option rather than an asker; nothing was asked" \
+        "unset it, or set it to the word a later session of this dispatch asks as, not beginning with '-'"
+fi
 node="${ORCHESTRATOR_ASK_MANAGER_NODE:-}"
 [ -z "$node" ] || acceptable_about_value "$node" || fail "ORCHESTRATOR_ASK_MANAGER_NODE is not at most 512 bytes of non-blank text free of control characters, so no question can be about it" \
     "set it to the id of the node the question is about, or unset it"
@@ -184,7 +199,12 @@ arguments=(ask "$QUEUE" --blocking --config "$config"
 arguments+=(--timeout "$window")
 [ -z "$node" ] || arguments+=(--about "$node")
 
-command -v onemessagebus >/dev/null || fail "onemessagebus is not on PATH, so there is no bus to ask on; nothing was asked" \
-    "run this from inside a dispatch, whose environment carries it, or run 'just bootstrap' in this checkout"
+# Both tests, because what is run is a file: `-x` alone accepts a directory of that name.
+# A bus the caller's PATH offers is not a way back — it is the mismatch this refusal
+# exists to prevent — so the remedy is the one that installs this checkout's own.
+if [ ! -f "$bus" ] || [ ! -x "$bus" ]; then
+    fail "this checkout has no onemessagebus at $bus, so there is no bus to ask on; nothing was asked" \
+        "run 'just bootstrap' in $root to install it from the lock beside config/onemessagebus.yaml, then ask again"
+fi
 # llmlint: ignore[tool_output_is_signal] The bus's one line and exit status are this script's whole answer by contract, untouched, so an asker reads `timeout`, `abandoned` or `refused` as the bus names it; the bus's own stderr says what to do next, and anything added here would be a second answer beside it.
-exec onemessagebus "${arguments[@]}" <<<"$frame"
+exec "$bus" "${arguments[@]}" <<<"$frame"

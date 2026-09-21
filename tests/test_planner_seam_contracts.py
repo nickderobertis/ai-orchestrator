@@ -171,10 +171,34 @@ def test_every_input_the_wrapper_requires_is_one_a_launch_is_measured_for() -> N
     )
 
 
-def _asked(command: list[str], directory: Path, runs_dir: str | None) -> tuple[list[str], str]:
+def _mirrored_shim(directory: Path, recorder: Path) -> Path:
+    """The real shim in a checkout of its own, whose locked bus is ``recorder``.
+
+    The shim runs the `onemessagebus` at its own checkout's `.venv/bin`, resolved from its
+    location exactly as its configuration is and never from PATH, so a stand-in reaches
+    it only from there. The mirror holds the real script and a copy of the real
+    configuration at the same relative path, so what the shim asks under is that policy.
+    """
+    checkout = directory / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    (checkout / "config").mkdir()
+    shutil.copy2(ASK_SCRIPT, checkout / "scripts" / ASK_SCRIPT.name)
+    handed = _handed_to_every_launch()
+    shutil.copy2(handed, checkout / "config" / handed.name)
+    bus = checkout / ".venv" / "bin" / "onemessagebus"
+    bus.parent.mkdir(parents=True)
+    bus.symlink_to(recorder)
+    return checkout / "scripts" / ASK_SCRIPT.name
+
+
+def _asked(
+    command: list[str], directory: Path, runs_dir: str | None, *, shim: bool = False
+) -> tuple[list[str], str]:
     """Run one side against a recording stand-in for the bus, and read what it asked with.
 
-    The stand-in shadows any real `onemessagebus` on PATH and answers nothing, so what is
+    The stand-in shadows any real `onemessagebus` on PATH — where the persona's fallback,
+    which travels into any repository, finds its bus — and, with ``shim``, stands as the
+    locked bus of the checkout the real shim is run from; it answers nothing, so what is
     measured is the invocation each side composes rather than a reply. Each side runs in a
     working directory of its own with the run's record already written under it, so a
     `runs_dir` left unset exercises the `runs` default both sides fall back to without
@@ -185,6 +209,8 @@ def _asked(command: list[str], directory: Path, runs_dir: str | None) -> tuple[l
     recorder = directory / "onemessagebus"
     recorder.write_text(BUS_RECORDER, encoding="utf-8")
     recorder.chmod(0o755)
+    if shim:
+        command = [*command, str(_mirrored_shim(directory, recorder)), PLACEHOLDER_QUESTION]
     argv_at, frame_at = directory / "argv", directory / "frame"
     root = Path(runs_dir) if runs_dir is not None else directory / "runs"
     (root / ASK_PROBE_RUN).mkdir(parents=True, exist_ok=True)
@@ -287,9 +313,7 @@ def test_the_personas_fallback_asks_exactly_as_the_shim_does(
     persona_argv, persona_frame = _asked(
         [bash, "-c", snippet], tmp_path / "persona", runs_dir=runs_dir
     )
-    shim_argv, shim_frame = _asked(
-        [bash, str(ASK_SCRIPT), PLACEHOLDER_QUESTION], tmp_path / "shim", runs_dir=runs_dir
-    )
+    shim_argv, shim_frame = _asked([bash], tmp_path / "shim", runs_dir=runs_dir, shim=True)
 
     persona_positional, persona_options = _invocation(persona_argv)
     shim_positional, shim_options = _invocation(shim_argv)
@@ -299,10 +323,15 @@ def test_the_personas_fallback_asks_exactly_as_the_shim_does(
     )
 
     handed = _handed_to_every_launch()
-    shim_config = shim_options.pop("--config", "")
-    assert Path(shim_config) == handed, (
-        f"{ASK_SCRIPT.name} asks under {shim_config!r}, where every launch hands the engine "
+    shim_config = Path(shim_options.pop("--config", ""))
+    assert shim_config.relative_to(tmp_path / "shim" / "checkout") == handed.relative_to(
+        REPO_ROOT
+    ), (
+        f"{ASK_SCRIPT.name} asks under {shim_config}, where every launch hands the engine "
         f"{handed}; the shim and the run's own record are no longer one policy"
+    )
+    assert shim_config.read_bytes() == handed.read_bytes(), (
+        f"the mirror's {shim_config} is not a copy of {handed}, so this compares two policies"
     )
     asked_under = Path(persona_options.pop("--config", ""))
     assert asked_under.is_file(), (

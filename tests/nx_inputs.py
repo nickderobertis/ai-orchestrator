@@ -188,6 +188,9 @@ class AskSeamJourney(NamedTuple):
 ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
     AskSeamJourney("ask-seam-ask-manager", f"{ASK_SEAM_ROOT}/ask_manager", "askSeamAskManager"),
     AskSeamJourney(
+        "ask-seam-bus-resolution", f"{ASK_SEAM_ROOT}/bus_resolution", "askSeamBusResolution"
+    ),
+    AskSeamJourney(
         "ask-seam-channel-reply", f"{ASK_SEAM_ROOT}/channel_reply", "askSeamChannelReply"
     ),
     AskSeamJourney(

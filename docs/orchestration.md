@@ -1234,10 +1234,19 @@ out — and turns each into one `exec onemessagebus ask surfaces --blocking` ove
 `${ONEPIPELINE_RUNS_DIR:-runs}/<run-id>/channel` against the directory it is run in,
 with the question as a `planner-question` frame on stdin, `ONEPIPELINE_CHANNEL_ASKER` as
 its `--asker` where one is set, `ORCHESTRATOR_ASK_MANAGER_NODE` as its `--about`, and
-the reply window as its `--timeout`. It refuses before asking only what no frame could
-carry — an empty question, text that is not UTF-8, a run id that is unset or is not one
-word — and adds nothing after: the bus's answer and exit status are the shim's own.
-`tests/e2e/test_ask_manager_shim_e2e.py` drives that translation.
+the reply window as its `--timeout`. **The bus it execs is this checkout's own
+`.venv/bin/onemessagebus`**, installed from the project lock and resolved from the
+script's location exactly as `config/onemessagebus.yaml` is — never the `onemessagebus`
+the caller's `PATH` offers, the same rule `AGENTS.md` states for the plan-store CLI —
+because the two are read against each other: a worker whose worktree had adopted a newer
+bus ran the one its `PATH` reached first over the canonical checkout's older configuration
+and was refused (`select` missing), a worker unable to ask at all. It refuses before
+asking only what no frame could carry — an empty question, text that is not UTF-8, a run
+id that is unset or is not one word — and a checkout with no bus at that path, naming the
+path and `just bootstrap`, and adds nothing after: the bus's answer and exit status are
+the shim's own. `tests/e2e/test_ask_manager_shim_e2e.py` drives that translation, and
+`tests/ask_seam/bus_resolution/` the resolution, with a stand-in bus first on `PATH` that
+is never run.
 
 Everything after the question is on the queue is the bus's (onemessagebus's `ask.md`).
 The bus prints `correlation: <c>` on stderr as soon as the question is queued, and one

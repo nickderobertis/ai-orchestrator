@@ -1159,7 +1159,12 @@ Every launch hands the engine `--bus-config config/onemessagebus.yaml` and expor
 turning a question into one `onemessagebus ask` on that run's channel under this host's
 reply window, and the one supported way a dispatched agent asks its manager a blocking
 question. Its output is the bus's one-line answer, `reply` alone at exit 0, so an
-elapsed wait reads as `timeout` and never as a ruling. The same verbs load this checkout's credentials from the gitignored
+elapsed wait reads as `timeout` and never as a ruling. The bus it runs is this checkout's
+own `.venv/bin/onemessagebus`, resolved from the script's root exactly as its
+`config/onemessagebus.yaml` is and never from a caller's `PATH` — the rule the plan-store
+CLI is held to, because a bus and a configuration of different releases refuse each
+other; a checkout with no bus there is refused naming that path and `just bootstrap`.
+The same verbs load this checkout's credentials from the gitignored
 root `.env` through `scripts/credentials-env.sh`, never overriding a name the
 environment already defines; so do the board recipes — `just plans`, `just check-plan`,
 `just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names
