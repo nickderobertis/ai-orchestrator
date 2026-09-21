@@ -26,7 +26,7 @@
 # same seam, applied the same way and on the same two branches. Each is applied
 # twice, because the two mechanisms cover different ground: `--model` on this
 # branch's own `oneharness run` is the only one that beats the `model` a config pins
-# for the selected harness (oneharness 0.15.0 lets that config value beat
+# for the selected harness (oneharness 0.16.0 lets that config value beat
 # ONEHARNESS_MODEL), and the exported ONEHARNESS_MODEL is what carries the side's
 # choice to everything it subsequently runs. That precedence is a fact about one
 # release, so config/oneharness.version owns the literal above and
@@ -432,8 +432,17 @@ if [[ $caller_is_judge == true ]]; then
     # in the store was recorded as its worker's role — which is what showed an
     # operator a strict-evaluator transcript under a row labelled "worker". This
     # branch is the one place that knows which side it is, so the key is dropped here
-    # and the judge config's own label stands. Every other inherited label locates the
-    # dispatch in the graph and is kept exactly as it arrived.
+    # and the judge config's own label stands.
+    #
+    # Every other inherited label is kept exactly as it arrived, and on the adopted
+    # engine that set has a name: the six keys under the `onepipeline.` prefix —
+    # onepipeline.run_id, onepipeline.project, onepipeline.scope, onepipeline.node,
+    # onepipeline.step and onepipeline.attempt — which are what say where in the graph
+    # this session was opened. They are the engine's to compose and not this script's to
+    # touch; `orchestrator/labels.py` declares them and
+    # `tests/test_engine_history_vocabulary.py` holds each spelling to the pinned
+    # engine's own contract. The one key this drops is this host's, which is exactly why
+    # dropping it here is safe.
     drop_history_label agent_role
     # Keep every portable indirection available while oneharness resolves config: each
     # of the judge's Claude variants, the primary included, reads its CLAUDE_CONFIG_DIR

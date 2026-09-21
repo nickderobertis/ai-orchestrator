@@ -19,15 +19,32 @@ run_mode = "fallback"
 # `oneharness history`). onejudge pins this file via `--config`, which skips the
 # user-level config.toml — so history must be enabled HERE (or via ONEHARNESS_HISTORY)
 # to capture dispatched runs, not just in a user config.
+#
+# **Redundant for a dispatch and kept anyway.** The adopted onepipeline sets
+# ONEHARNESS_HISTORY=1 on every dispatch it starts, so a worker's turn would record
+# with this line gone. What it still covers is every turn this host runs *outside* a
+# dispatch — `just review-plan`, `just smoke`, the design-document pair, the judged
+# lint tier — where no engine is in the picture and this file is the only thing
+# enabling it. So the redundancy is per turn rather than per file: removing it would
+# silently stop recording exactly the turns nobody is watching a run for.
 history = true
 
 # history_labels: labels stamped on every history entry this config records. The
 # two sides of an onejudge conversation are both recorded, into the same store, by
 # the same tool — so without a stamp saying which side a session *is*, the only way
 # to tell the worker from its supervisor is `JUDGE_PREFIXES`, guessing from the
-# session name. This states it. A dispatch layers its graph labels (run/round/node)
-# over these via ONEHARNESS_HISTORY_LABELS; the role is the constant, so it belongs
-# in the config rather than at each call site.
+# session name. This states it.
+#
+# **`role` is this host's own key and the engine stamps nothing like it.** What a
+# dispatch inherits through ONEHARNESS_HISTORY_LABELS is the engine's six
+# `onepipeline.*` keys — the run, the project, the scope, the node, the step and the
+# attempt — which say *where in the graph* a session was opened and nothing about which
+# side of the conversation opened it. The engine strips only its own prefix from the
+# value it inherited, so this key stands beside them untouched;
+# `orchestrator/labels.py` is where that boundary is written down and
+# `tests/test_engine_history_vocabulary.py` holds the engine's half of it to the pinned
+# release. The role is the constant, so it belongs in the config rather than at each
+# call site.
 history_labels = { role = "agent" }
 
 # Every role's chain names the same six identities; only the order differs. The

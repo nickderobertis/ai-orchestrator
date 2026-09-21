@@ -66,6 +66,11 @@ WRAPPER_SCRIPTS = (
     # Every `onepipeline` recipe goes through this one, which is where the planner's
     # identity and a launch's harness environment are established.
     "onepipeline.sh",
+    # The acting-session ladder both that one and `telemetry-server.sh` source, so a
+    # copied checkout can run either of them at all — and so the `--session` the read
+    # API is handed is derived the way a real invocation derives it rather than by a
+    # variable this suite happened to inherit.
+    "launcher-session.sh",
     # `just orchestrate` adds this host's defaults through the first, and names the second
     # as both run-end hooks, refusing a checkout where it could not run.
     "orchestrate.sh",
@@ -845,6 +850,17 @@ def _run(
         "ORCHESTRATOR_AGENT_STATUS_DIR",
         "ONEHARNESS_HISTORY_DIR",
         "ONEHARNESS_HISTORY_LABELS",
+        # The acting session, for the same reason and with sharper consequences: this
+        # suite runs inside a dispatch that exports one, and `scripts/launcher-session.sh`
+        # honours an already-exported value — so an inherited one would put the launching
+        # manager's session into the command line every row below asserts, and every
+        # verdict about identity here would be about whoever ran the suite.
+        "ONEPIPELINE_LAUNCHER",
+        "ONEPIPELINE_LAUNCHER_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
     ):
         environment.pop(inherited, None)
     if status_dir is not None:
@@ -1658,6 +1674,208 @@ def test_the_telemetry_server_recipe_leaves_an_explicit_bind_alone(tmp_path: Pat
 
 
 @pytest.mark.reads_recipes
+def test_the_telemetry_server_recipe_hands_the_api_the_session_it_derives(
+    tmp_path: Path,
+) -> None:
+    """The acting session reaches `--session`, derived the way every recipe derives it.
+
+    This is what makes a mutation from the browser attributable: the API performs
+    `stop`, `adopt` and `unwatched` as one acting session, so a server started with
+    none owns nothing and is refused every stop it does not force. The identity is
+    given the way an operator's shell gives it — the harness variable
+    `scripts/launcher-session.sh` reads — rather than as
+    `ONEPIPELINE_LAUNCHER_SESSION` directly, so what is asserted is the ladder running
+    and not a value passed through.
+    """
+    checkout, trace = _checkout(tmp_path)
+    address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
+
+    result = _run(
+        checkout,
+        trace,
+        "telemetry-server",
+        env={"CLAUDE_CODE_SESSION_ID": "a-manager-session"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline-api serve --runs-root runs --session a-manager-session "
+        f"--bind {address}",
+    ]
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    "spelling",
+    [("--session", "an-explicit-session"), ("--session=an-explicit-session",)],
+    ids=("space", "equals"),
+)
+def test_the_telemetry_server_recipe_leaves_an_explicit_session_alone(
+    tmp_path: Path, spelling: tuple[str, ...]
+) -> None:
+    """A caller spelling `--session` owns the identity, in either spelling.
+
+    Both spellings, because the recipe decides whether to add its own by scanning the
+    caller's arguments: a scan that recognised only the separated form would hand the
+    CLI two `--session` values and leave which one acts up to the binary, which is the
+    one outcome nobody could read off the command line afterwards. The derived session
+    is set here too, so what this shows is the caller's winning rather than there
+    having been nothing to win against.
+    """
+    checkout, trace = _checkout(tmp_path)
+    address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
+
+    result = _run(
+        checkout,
+        trace,
+        "telemetry-server",
+        *spelling,
+        env={"CLAUDE_CODE_SESSION_ID": "the-derived-session"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    rendered = trace.read_text().splitlines()
+    assert rendered == [
+        f"uv run onepipeline-api serve --runs-root runs {' '.join(spelling)} --bind {address}",
+    ]
+    assert rendered[0].count("--session") == 1, (
+        f"the recipe rendered {rendered[0]!r}, which names `--session` more than once; "
+        "which of the two acts is then the CLI's to decide and unreadable from here"
+    )
+    assert "the-derived-session" not in rendered[0]
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("spelling", "reason"),
+    [
+        (("--session", "a session"), "--session must be 1-200 characters"),
+        (("--session=a;b",), "--session must be 1-200 characters"),
+        (("--session",), "--session needs a session id"),
+    ],
+    ids=("space", "metacharacter", "missing-value"),
+)
+def test_the_telemetry_server_recipe_refuses_a_caller_session_that_is_not_one(
+    tmp_path: Path, spelling: tuple[str, ...], reason: str
+) -> None:
+    """A typed `--session` is held to the shape a derived one is, before the API sees it.
+
+    It becomes the same ownership credential, so a value `scripts/launcher-session.sh`
+    would refuse to derive must not reach `onepipeline-api serve` by being typed instead.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "telemetry-server", *spelling)
+
+    assert result.returncode == 2, result.stdout
+    assert reason in result.stderr, result.stderr
+    assert not trace.exists(), "a refused session must not reach the API at all"
+
+
+@pytest.mark.reads_recipes
+def test_the_telemetry_server_recipe_names_no_session_when_it_can_resolve_none(
+    tmp_path: Path,
+) -> None:
+    """An unattributable host gets no flag rather than an invented identity.
+
+    A `--session` the engine cannot match against a run's recorded launcher owns
+    exactly as little as no session at all, so inventing one would buy nothing and
+    would make an unattributed server read as attributed — which is the reading an
+    operator would act on. `_checkout` clears every variable the ladder reads, so this
+    is the default case rather than one this row arranges.
+    """
+    checkout, trace = _checkout(tmp_path)
+    address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
+
+    assert _run(checkout, trace, "telemetry-server").returncode == 0
+    assert trace.read_text().splitlines() == [
+        f"uv run onepipeline-api serve --runs-root runs --bind {address}",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_the_telemetry_server_recipe_keeps_a_malformed_inherited_session_and_says_so(
+    tmp_path: Path,
+) -> None:
+    """An inherited identity of the wrong shape is reported, and still the one acted as.
+
+    `scripts/launcher-session.sh` keeps an exported `ONEPIPELINE_LAUNCHER_SESSION` even
+    when it fails the shape check, because the run it names was launched under it by
+    the process that exported it: dropping it would leave this server unattributed while
+    its parent is attributed. So through a real caller the value reaches `--session`
+    unchanged, the harness variable set beside it is *not* what wins, and the finding
+    reaches stderr naming who needs repairing rather than passing silently.
+    """
+    checkout, trace = _checkout(tmp_path)
+    address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
+
+    result = _run(
+        checkout,
+        trace,
+        "telemetry-server",
+        env={
+            "ONEPIPELINE_LAUNCHER_SESSION": "inherited;session",
+            "CLAUDE_CODE_SESSION_ID": "the-derived-session",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "the inherited ONEPIPELINE_LAUNCHER_SESSION is not the shape" in result.stderr
+    assert "it is kept" in result.stderr
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline-api serve --runs-root runs --session inherited;session "
+        f"--bind {address}",
+    ]
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("invocation", "caller"),
+    [(("telemetry-server",), "telemetry-server"), (("runs",), "onepipeline")],
+    ids=("telemetry-server", "onepipeline"),
+)
+@pytest.mark.parametrize(
+    ("helper_text", "refusal"),
+    [
+        (None, "required helper is not a readable regular file"),
+        # Present and readable, and failing as it is sourced — the way a truncated or
+        # hand-edited copy fails — which is the other of the two refusals.
+        ("return 1\n", "is readable but could not be loaded"),
+    ],
+    ids=("missing", "unloadable"),
+)
+def test_a_caller_that_cannot_load_the_session_helper_refuses_naming_it(
+    tmp_path: Path,
+    invocation: tuple[str, ...],
+    caller: str,
+    helper_text: str | None,
+    refusal: str,
+) -> None:
+    """Both callers of the acting-session ladder refuse, by name, when it cannot load.
+
+    Bash's own diagnostic for a failed `.` names neither the recipe nor a way out, and
+    an identity that could not be established must not reach the CLI as none at all —
+    that would be an unattributed server or view presented as an ordinary one.
+    """
+    checkout, trace = _checkout(tmp_path)
+    helper = checkout / "scripts" / "launcher-session.sh"
+    if helper_text is None:
+        helper.unlink()
+    else:
+        helper.write_text(helper_text, encoding="utf-8")
+
+    result = _run(checkout, trace, *invocation)
+
+    assert result.returncode != 0, result.stdout
+    assert any(
+        line.startswith(f"{caller}: ") and refusal in line for line in result.stderr.splitlines()
+    ), result.stderr
+    assert "launcher-session.sh" in result.stderr
+    assert "just bootstrap" in result.stderr
+    assert not trace.exists(), "nothing may reach the CLI without an identity decided"
+
+
+@pytest.mark.reads_recipes
 @pytest.mark.parametrize(
     ("invocation", "reason"),
     [
@@ -1811,10 +2029,14 @@ def test_a_surface_with_nothing_to_say_is_refused(tmp_path: Path) -> None:
     ("content", "reason"),
     [
         (None, "could not read"),
-        ("8765\n", "must hold one HOST:PORT, not '8765'"),
-        ("\n", "must hold one HOST:PORT, not ''"),
+        ("8765\n", "must hold one HOST:PORT with a port in 0-65535, not '8765'"),
+        ("\n", "must hold one HOST:PORT with a port in 0-65535, not ''"),
+        # Five digits and not a port. The shape check alone accepted this, so the
+        # published CLI was the first thing to say so — about an address neither this
+        # script nor the file it came from was named in.
+        ("127.0.0.1:70000\n", "with a port in 0-65535, not '127.0.0.1:70000'"),
     ],
-    ids=("unreadable", "no-colon", "empty"),
+    ids=("unreadable", "no-colon", "empty", "port-out-of-range"),
 )
 def test_the_telemetry_server_recipe_refuses_an_address_file_that_is_not_one(
     tmp_path: Path, content: str | None, reason: str

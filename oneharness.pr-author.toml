@@ -59,10 +59,16 @@ stream = false
 
 # Record this side's runs to disk too; a pinned `--config` skips the user-level
 # config.toml, so history must be enabled here.
+# Redundant for a dispatch — the adopted onepipeline sets ONEHARNESS_HISTORY=1 on every
+# dispatch it starts, this side included — and kept because it is also what records the
+# turns this host runs outside one; `oneharness.toml`'s note says which those are.
 history = true
 
 # `role` names the SIDE of the conversation, not the persona: the drafter is a
 # single-sided agent turn, so telemetry and `just history` treat it as one.
+# `role` is this host's key and the engine stamps nothing like it: the six
+# `onepipeline.*` keys a dispatch inherits name the run, project, scope, node, step and
+# attempt, none of which says which side of a conversation a session is.
 history_labels = { role = "agent" }
 
 # The drafter carries the supervisory order, not the worker's: both Codex identities

@@ -1,15 +1,40 @@
 #!/usr/bin/env bash
-# Serve the read-only DAG telemetry API from the published `onepipeline-api`.
+# Serve the DAG Observatory's API from the published `onepipeline-api`.
 #
-# Two differences are absorbed here. The published verb names its runs root
+# **It is not a read-only API any more, and that is why this script names a session.**
+# From the adopted release every post-launch verb is a route — the channel and its
+# reply, `attest`, `stop`, `adopt`, `watch` — and the server performs each one as **one
+# acting session**, the `--session` it was started with. So this hands it the identity
+# `scripts/onepipeline.sh` gives every `onepipeline` recipe, through the one definition
+# of that ladder, and a stop issued from the browser is then this manager's stop.
+#
+# An **unattributed server owns nothing**: started with no session it is refused every
+# stop it does not force, and `GET /api/v2/unwatched` reports no run — which reads from
+# the browser as a host with nothing to supervise rather than as a server that cannot
+# say who it is. So the session is passed whenever this host can name one, and omitted
+# rather than invented when it cannot.
+#
+# Three differences are absorbed here. The published verb names its runs root
 # `--runs-root` and requires one, where the recipe's `--runs-dir` was optional and
 # defaulted to the same runs directory every other view reads — so the default is
 # supplied from `ONEPIPELINE_RUNS_DIR`, which is what `just runs` and `just status`
-# read. And it takes one `--bind HOST:PORT` where the recipe took `--host` and
-# `--port` separately.
+# read. It takes one `--bind HOST:PORT` where the recipe took `--host` and
+# `--port` separately. And it takes `--session`, which the recipe had no spelling for
+# at all and which this supplies rather than asking an operator to.
 set -euo pipefail
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# Who this server acts as, derived exactly as every `onepipeline` recipe derives it.
+launcher_session_helper="$script_dir/launcher-session.sh"
+if [ ! -f "$launcher_session_helper" ] || [ ! -r "$launcher_session_helper" ]; then
+    echo "telemetry-server: required helper is not a readable regular file: $launcher_session_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/launcher-session.sh
+if ! . "$launcher_session_helper"; then
+    echo "telemetry-server: the helper at $launcher_session_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
 # One source for the address this API answers on: `scripts/dag-ui-server.js` proxies
 # to it, and `just dag-ui` finds `just telemetry-server` only while the two agree.
 # So this renders `--bind` from that file on every path, including the one that names
@@ -86,9 +111,13 @@ if [ "$bound" -eq 0 ]; then
     }
     # Checked rather than assumed, as `scripts/dag-ui-server.js` checks the same
     # file: split on a colon that is not there, `--bind 8765:8765` is what the
-    # published CLI would be asked to bind.
-    [[ "$default_address" =~ ^[^[:space:]:]+:[0-9]{1,5}$ ]] || {
-        echo "telemetry-server: $address_file must hold one HOST:PORT, not '${default_address}'" >&2
+    # published CLI would be asked to bind. The port half is held to a real port and
+    # not merely to five digits, the same way `--port` above is: `70000` is five
+    # digits, and a file holding it would reach `--bind` as an address the CLI refuses
+    # for a reason that names neither this script nor the file it came from.
+    [[ "$default_address" =~ ^[^[:space:]:]+:[0-9]{1,5}$ ]] &&
+        [ "${default_address##*:}" -le 65535 ] || {
+        echo "telemetry-server: $address_file must hold one HOST:PORT with a port in 0-65535, not '${default_address}'" >&2
         exit 2
     }
     args+=(--bind "${host:-${default_address%%:*}}:${port:-${default_address##*:}}")
@@ -97,4 +126,48 @@ elif [ -n "$host" ] || [ -n "$port" ]; then
     exit 2
 fi
 
-exec uv run onepipeline-api serve --runs-root "$runs_root" "${args[@]}"
+# Named only when this host could resolve one, and never invented: a `--session` the
+# engine cannot match against a run's recorded launcher owns exactly as little as no
+# session at all, and inventing one would make an unattributable server look attributed.
+# A caller who spelled `--session` itself owns the whole identity and keeps it, the way
+# a caller who spelled `--bind` keeps the whole address — but it is held to the same
+# shape the derived one is, through the same `launcher_session_is_usable`, because it
+# becomes the same ownership credential: a value the ladder would refuse must not reach
+# the API by being typed rather than derived.
+session=()
+named=0
+expect_session=0
+for argument in "${args[@]+"${args[@]}"}"; do
+    caller_session=
+    if [ "$expect_session" -eq 1 ]; then
+        # The next word is an option, not a value: a `--session` at the end of the
+        # caller's words is followed by the `--bind` this script appended above.
+        case "$argument" in
+            -*) break ;;
+        esac
+        caller_session=$argument
+        expect_session=0
+    else
+        case "$argument" in
+            --session) named=1; expect_session=1; continue ;;
+            --session=*) named=1; caller_session=${argument#--session=} ;;
+            *) continue ;;
+        esac
+    fi
+    launcher_session_is_usable "$caller_session" || {
+        echo "telemetry-server: --session must be 1-200 characters of letters, digits, dot, underscore or hyphen, not '${caller_session}'" >&2
+        exit 2
+    }
+done
+[ "$expect_session" -eq 0 ] || {
+    echo "telemetry-server: --session needs a session id" >&2
+    exit 2
+}
+# llmlint: ignore-block[boundary_inputs_validated] This value was already validated by `scripts/launcher-session.sh`, sourced above, and a malformed inherited one was reported there and deliberately kept. That helper's own directive explains why keeping it is right: it is the credential the parent launched its runs under, so leaving it off here would make this server unattributed while its parent is attributed, and split one run's ownership. Re-validating here and dropping it would reverse that decision for this one caller. It reaches the API as one argv element and is never interpreted by a shell. `tests/e2e/test_delegated_recipes_e2e.py` drives this path.
+if [ "$named" -eq 0 ] && [ -n "${ONEPIPELINE_LAUNCHER_SESSION:-}" ]; then
+    session=(--session "$ONEPIPELINE_LAUNCHER_SESSION")
+fi
+# llmlint: ignore-end[boundary_inputs_validated]
+
+exec uv run onepipeline-api serve --runs-root "$runs_root" \
+    "${session[@]+"${session[@]}"}" "${args[@]}"

@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.40.0. The whole of that reasoning —
+onepipeline 0.41.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.40.0. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.41.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,7 +323,7 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.40.0; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.41.0; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
@@ -333,7 +333,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.40.0, that schedule answers only the failures a retry can change. A projection the store
+0.41.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -599,7 +599,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.40.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.41.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -727,7 +727,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.40.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.41.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -924,7 +924,7 @@ planner's queue was also what ended its watch — and why there is no sentinel a
 `personas/orchestrator.yaml` asks a quiet turn for words about what it read rather than
 for a formula, so a healthy watch no longer walks into that signature on purpose.
 onejudge declares a field for the contract that remains — `user.settle_on_noop`,
-documented in `onejudge` 0.13.2's `src/cli/config.rs` and `src/engine.rs` as the opt-out
+documented in `onejudge` 0.13.3's `src/cli/config.rs` and `src/engine.rs` as the opt-out
 for "an observer instructed to answer with one fixed short sentence while it finds
 nothing", with `max_turns` left as the bound. Nothing here sets it today; that is a
 change to `personas/orchestrator.yaml` and a decision for a manager, not something this
@@ -1098,7 +1098,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.40.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.41.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1171,7 +1171,7 @@ with.
 onejudge asks a judge side **two** ops, not one. `supervisor` comes at each turn
 boundary; `judge` comes once the conversation ends, to score `user.done_when` —
 always, whether the supervisor ruled complete or the turn cap ran out, and
-independently of `evals` and `assessment`. Measured on onejudge 0.13.2 with a
+independently of `evals` and `assessment`. Measured on onejudge 0.13.3 with a
 `kind: command` judge that logged every op it was asked.
 
 That second one has **no configuration escape**, and the attempts are worth knowing
@@ -1264,7 +1264,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.40.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.41.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -2712,7 +2712,28 @@ runs/<run-id>/result.json        the settlement, rewritten as it moves
 runs/<run-id>/launch.json        who launched it, with what, and how often adopted
 runs/<run-id>/reports/           one report per dispatched agent-graph turn
 runs/<run-id>/channel/           queue.json, surfaces.jsonl, replies.jsonl
+runs/<run-id>/oneharness-sessions.jsonl   one line per harness run this run opened
 ```
+
+**That last file is a pointer, and the transcripts it points at do not live here.**
+Every dispatch launched from this host goes on recording its oneharness sessions in
+**this host's own default store** — `$XDG_STATE_HOME/oneharness/history/`, listed with
+`oneharness history list`, exactly as before the engine started writing this file. The
+engine sets no `ONEHARNESS_HISTORY_DIR`, so an inherited store or a repository's own
+`history_dir` is honoured untouched and nothing about a dispatch's sessions moves under
+the run root. What the pointer file adds is the one thing the store could not answer:
+*which* of its sessions belong to this run. Each line names a session and carries the
+three fields that open it in the store the line names, `just agents <run-id> [<node>]`
+is the engine reading it back grouped by session, and `oneharness history watch --label
+onepipeline.run_id=<run-id>` follows the same sessions live. `just monitor` does not
+fold any of it — see [Monitoring a live run](#monitoring-a-live-run).
+
+**A run's pointer file is whole only if both pins moved.**
+`config/oneharness.version` is what makes this host's two-party turns write a line —
+the agent and judge sides of every worker spawn that CLI from `PATH` — and
+`config/onepipeline.version` is what makes the observer's and the drafter's in-process
+turns write one. Move one and not the other and the file holds half the agents, which
+reads as a run that launched half of them.
 
 The id is derived from the plan's `name` or filename and made unique. Plan and
 result writes are atomic; a live run cannot be driven by two processes, and a run
@@ -3023,15 +3044,34 @@ fails when the engine stops answering the way this reads.
 about one thing in it. `just monitor` answers the question in between — "what is
 happening right now, across the whole run?" It is the standard first view for
 every recorded in-flight dispatch, from a wide DAG down to a one-node plan — the
-one executor means there is no dispatch it cannot see. It folds four stores that
+one executor means there is no dispatch it cannot see. It folds three stores that
 settle at different times into one ordered stream:
 
 | Source | Read from | Reported when |
 | --- | --- | --- |
 | Run journal | `runs/<run-id>/events.jsonl` | every node transition, as it is appended |
-| oneharness history | sessions whose `run_id` label names this run | a session's status or turn count moves |
 | Git | commits on each known lifecycle branch | once per commit, ever |
 | GitHub | each lifecycle-linked PR | its state or any check changes |
+
+**A fourth row used to name `oneharness history` — "sessions whose `run_id` label
+names this run" — and the installed engine has never folded it.** The claim was
+wrong when it was written and read as an argument for not looking anywhere else,
+which is the expensive half: a manager who believed `just monitor` covered the
+harness store had no reason to ask the store itself. A run's sessions are found
+three ways instead, none of them through this stream:
+
+* **`just agents <run-id> [<node>]`**, which is `onepipeline agents` — the engine
+  reading the run's own pointer file and grouping what it finds by session. `--project
+  <source:project>` is the union across every run launched from one project. This is
+  the read to reach for first, because it answers *for this run* without a filter.
+* **`oneharness history pointers <run root>/oneharness-sessions.jsonl`**, the same
+  file read with the producing library's own verb. Reach for it when the question is
+  about the file rather than about the run — a torn line, a session the engine's
+  grouping skipped.
+* **`oneharness history watch --label onepipeline.run_id=<run-id>`** on this host's
+  default store, which is live rather than a snapshot. It works for every dispatch
+  now because the engine stamps that label on all of them; below the adopted engine
+  it matched nothing, whatever the run.
 
 PR check events identify the check, state, and whether it is required, and emit
 each transition. Do not replace this aggregate view with an ad hoc `gh pr checks`
@@ -3460,7 +3500,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.40.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.41.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

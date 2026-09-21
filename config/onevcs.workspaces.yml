@@ -68,7 +68,8 @@
 # this file was written, and the rules below name: llmlint, oneagentgraph, oneharness,
 # oneharness-ui, onejudge, onemessagebus, onepipeline, onepipeline-ui, onevcs,
 # allowlister, allowlister-remote, crozier, onetaskgraph, printobserver, screencomp,
-# notignored, and petsinc's hellopatient.
+# notignored, and petsinc's hellopatient; allowlister-terminal-approval-plugin,
+# github-secrets and skilltest were added when their checkouts reached this host.
 # `cargo sweep --time 7` removes build artifacts a week unused, which is what keeps a
 # warm `target/` from turning the disk-wear fix into a disk-space problem.
 version: 1
@@ -112,6 +113,12 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: screencomp}
     maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
   - match: {host: github.com, owner: nickderobertis, name: notignored}
+    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
+  - match: {host: github.com, owner: nickderobertis, name: allowlister-terminal-approval-plugin}
+    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
+  - match: {host: github.com, owner: nickderobertis, name: github-secrets}
+    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
+  - match: {host: github.com, owner: nickderobertis, name: skilltest}
     maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
   - match: {host: github.com, owner: petsinc, name: hellopatient}
     maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}

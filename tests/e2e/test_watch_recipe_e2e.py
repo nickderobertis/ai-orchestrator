@@ -48,8 +48,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 #: The scripts a checkout needs for this recipe to run: the wrapper, the renderer it
-#: pipes through, and the one entry point every `onepipeline` verb goes through.
-WRAPPER_SCRIPTS = ("watch-run.sh", "watch-render.py", "onepipeline.sh")
+#: pipes through, the one entry point every `onepipeline` verb goes through, and the
+#: acting-session ladder that entry point sources — a missing one of which is not a
+#: watch that reports the wrong thing but a recipe that cannot start, reported as an
+#: engine whose verbs could not be listed.
+WRAPPER_SCRIPTS = (
+    "watch-run.sh",
+    "watch-render.py",
+    "onepipeline.sh",
+    "launcher-session.sh",
+)
 
 RUN = "run-1"
 

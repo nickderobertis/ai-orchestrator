@@ -27,11 +27,17 @@ timeout = 600
 
 # Record this side's runs to disk too; a pinned `--config` skips the user-level
 # config.toml, so history must be enabled here.
+# Nothing that runs this side is a dispatch, so no engine switches recording on for it:
+# this line is the only thing that does. `oneharness.toml`'s note explains why its own
+# copy is kept even though the engine makes it redundant there.
 history = true
 
 # `role` names the SIDE of the conversation: this is the side that supervises, and
 # `oneharness.judge.toml` states it the same way so telemetry and `just history` treat
 # the two as one kind of session.
+# Neither key is one the engine stamps: the six `onepipeline.*` keys a dispatch inherits
+# name the run, project, scope, node, step and attempt, and none of them says which side
+# of a conversation a session is. See `orchestrator/labels.py`.
 history_labels = { role = "judge", agent_role = "judge" }
 
 # Both alternate Claude subscriptions first, in the worker's own relative order — the

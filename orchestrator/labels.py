@@ -4,6 +4,23 @@ oneharness tags each recorded history entry with the labels named by this
 environment variable, which lets `just history` answer "which run/round/node
 produced this session?" instead of only "which session ran?".
 
+**A dispatch inherits its `onepipeline.*` labels; this module composes the rest.**
+From the release `config/onepipeline.version` adopts, the engine stamps every dispatch
+it starts — a node-scope dispatch, each step of a lifecycle node, the dag-scope observer
+graph and the `pr-author` drafting graph — with the six keys :data:`ENGINE_LABELS`
+names, and points :data:`POINTER_FILE_ENV` at the run's own pointer file. Those are the
+keys a dispatch *inherits*, and nothing here composes or overwrites one: the engine
+removes every key under :data:`ENGINE_LABEL_PREFIX` from the value it inherited before
+putting its own in, so a stale ``onepipeline.node`` cannot survive into a nested launch
+and a key outside that prefix — this host's own ``role``, the wrappers' ``agent_role`` —
+stands beside them untouched. What this module is for is that second kind: the labels
+this repository adds on its own account, validated here before they reach a subprocess.
+
+The names below are the engine's and oneharness's rather than this host's, so they are
+declared once and reconciled: ``tests/test_engine_history_vocabulary.py`` reads each one
+out of the registered `onepipeline` and `oneharness` checkouts at the tags those two pins
+name, and fails when either stops stating it.
+
 The wire contract (oneharness 0.4.0):
 
 * the value is a comma-separated list of ``key=value`` pairs;
@@ -25,8 +42,69 @@ import re
 import sys
 import unicodedata
 from collections.abc import Mapping
+from enum import StrEnum
 
 LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
+#: The variable the engine sets to turn a dispatch's history recording on.
+HISTORY_ENV = "ONEHARNESS_HISTORY"
+#: The variable the engine points at the run's pointer file, absolute.
+POINTER_FILE_ENV = "ONEHARNESS_HISTORY_POINTER_FILE"
+#: The variable the engine **never** sets, which is what leaves a dispatch's transcripts
+#: in the store the operator already reads with `oneharness history`. Named rather than
+#: merely unmentioned because the failure it guards is silent: a dispatch whose store was
+#: moved records exactly as much as one whose store was not, somewhere nobody looks.
+NEVER_SET_ENV = "ONEHARNESS_HISTORY_DIR"
+#: The pointer file's own name, under the run's directory.
+POINTER_FILE_NAME = "oneharness-sessions.jsonl"
+
+#: The prefix the engine reserves. Every key under it in an inherited value is dropped
+#: before the engine composes its own, so this is the boundary between what a dispatch
+#: inherits and what this host adds.
+ENGINE_LABEL_PREFIX = "onepipeline."
+#: The label a reader selects one run's sessions by, which is what
+#: `oneharness history watch --label <key>=<run>` takes.
+RUN_LABEL = f"{ENGINE_LABEL_PREFIX}run_id"
+#: The qualified project id the run was launched from, absent when it names none.
+PROJECT_LABEL = f"{ENGINE_LABEL_PREFIX}project"
+#: Which kind of dispatch wrote the session; its values are `SCOPES`.
+SCOPE_LABEL = f"{ENGINE_LABEL_PREFIX}scope"
+#: The plan node, absent on the observer graph.
+NODE_LABEL = f"{ENGINE_LABEL_PREFIX}node"
+#: The lifecycle step, on lifecycle steps only.
+STEP_LABEL = f"{ENGINE_LABEL_PREFIX}step"
+#: The attempt number that dispatch's `node-dispatched` records, decimal.
+ATTEMPT_LABEL = f"{ENGINE_LABEL_PREFIX}attempt"
+#: Every key the engine stamps, in the order the contract states them.
+ENGINE_LABELS = (
+    RUN_LABEL,
+    PROJECT_LABEL,
+    SCOPE_LABEL,
+    NODE_LABEL,
+    STEP_LABEL,
+    ATTEMPT_LABEL,
+)
+
+
+class Scope(StrEnum):
+    """Every value the engine stamps under `SCOPE_LABEL`, as a closed set.
+
+    An enum rather than three strings, because a scope is a filter somebody writes
+    against a store they cannot see into: a value outside this set is one no session
+    carries, and a reader filtering on it gets an empty answer rather than an error. A
+    `StrEnum` member *is* its string, so it goes straight onto a label value or a
+    `--label` argument and compares equal to what the engine wrote.
+    """
+
+    #: A node-scope dispatch, a lifecycle step included.
+    NODE = "node"
+    #: The dag-scope observer graph.
+    OBSERVER = "observer"
+    #: The change-request drafting graph.
+    PR_AUTHOR = "pr-author"
+
+
+#: Every value `SCOPE_LABEL` takes, in the order the engine's contract states them.
+SCOPES = tuple(Scope)
 
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 MAX_VALUE_CODEPOINTS = 256

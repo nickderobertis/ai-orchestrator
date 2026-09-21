@@ -250,9 +250,13 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   `ONETASKGRAPH_SDK_BINARY` names, and `orchestrator/plan_store.py` says why.
   `onetaskgraph --help`; https://github.com/nickderobertis/onetaskgraph.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
-- **`onepipeline-ui`** — the read-only DAG API and browser view behind `just
-  telemetry-server` and `just dag-ui`, carrying its own copy of the engine and
-  governing no dispatch. Governed by `config/onepipeline-ui.version`. Its CLI is
+- **`onepipeline-ui`** — the DAG API and browser view behind `just telemetry-server`
+  and `just dag-ui`, wrapping every post-launch verb as a route and carrying its own
+  copy of the engine. An adopt from the browser retains that binary as the driver, so
+  **this pin can govern a dispatch**, and the two pins are held to linking one engine by
+  `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
+  Governed by
+  `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
   https://github.com/nickderobertis/onepipeline-ui and [`docs/dag-ui.md`](docs/dag-ui.md).
 - **`onemessagebus`** — the typed message bus the stack's channel, events and notes run
@@ -315,8 +319,10 @@ CLI pin is at or past the release that accepts `--format` — the CLI pin is pas
 the order holds as long as `config/onepipeline.version` is not moved first onto such an
 engine over an older CLI pin. `config/onetaskgraph.version` names a separately spawned
 executable the engine wheel's bill of materials does not contain. The read API
-(`config/onepipeline-ui.version`) statically links its own engine and governs no
-dispatch, so it may sit behind or ahead of the engine pin without meaning anything. And
+(`config/onepipeline-ui.version`) statically links its own engine, and governs no
+dispatch **except one adopted from the browser**, which its own binary then drives — so
+`tests/test_linked_libraries.py` holds the two pins to one engine rather than letting
+this one sit either side. And
 a fix that lands as CI configuration, scripts, or a dev-only crate is in force by
 merging, in that repository's build graph, with no pin here to move: `git tag
 --contains` says the release carries the commit while the archive carries nothing of

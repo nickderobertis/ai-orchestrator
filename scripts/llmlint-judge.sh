@@ -52,27 +52,36 @@
 # checkout layout; simulating a broken filesystem is the guard's job, not a journey's.
 set -euo pipefail
 
-root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
-  echo "lint-llm-diff: could not locate the repository from this script; reinstall the checkout and retry" >&2
+# Every refusal below ends this task within milliseconds of printing it, and Nx
+# 23.1.0's run-commands, when it has no terminal to run the task in (the gate, a
+# dispatch, the suite), collects the task's output on the child's `exit` rather than
+# after its pipes drain, then exits itself: a refusal is intermittently dropped from
+# the terminal output this tier reports, leaving only Nx's "exited with non-zero
+# status". So each one is also appended to the file `just lint-llm-diff` names in
+# LLMLINT_DIFF_REFUSALS, which the recipe prints only when Nx lost it. That copy is
+# never read on success, so it plays no part in what Nx caches or replays.
+refuse() {
+  printf '%s\n' "$1" >&2
+  if [[ -n "${LLMLINT_DIFF_REFUSALS:-}" ]]; then printf '%s\n' "$1" >>"$LLMLINT_DIFF_REFUSALS" || true; fi
   exit 1
+}
+
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
+  refuse "lint-llm-diff: could not locate the repository from this script; reinstall the checkout and retry"
 }
 # shellcheck source=scripts/llmlint-runtime-env.sh
 . "$root/scripts/llmlint-runtime-env.sh" || {
-  echo "lint-llm-diff: could not load the pinned runtime environment; restore scripts/llmlint-runtime-env.sh and retry" >&2
-  exit 1
+  refuse "lint-llm-diff: could not load the pinned runtime environment; restore scripts/llmlint-runtime-env.sh and retry"
 }
 base_sha="${LLMLINT_DIFF_BASE_SHA:-}"
 [[ "$base_sha" =~ ^[0-9a-f]{40,64}$ ]] || {
-  echo "lint-llm-diff: LLMLINT_DIFF_BASE_SHA must be a resolved commit id; run 'just lint-llm-diff <base>' instead of this target directly" >&2
-  exit 1
+  refuse "lint-llm-diff: LLMLINT_DIFF_BASE_SHA must be a resolved commit id; run 'just lint-llm-diff <base>' instead of this target directly"
 }
 git -C "$root" rev-parse --verify --quiet "${base_sha}^{commit}" >/dev/null || {
-  echo "lint-llm-diff: base commit '$base_sha' is missing from this checkout; fetch it and retry" >&2
-  exit 1
+  refuse "lint-llm-diff: base commit '$base_sha' is missing from this checkout; fetch it and retry"
 }
 labels="$(uv run orchestrator-history-labels role=llmlint)" || {
-  echo "lint-llm-diff: could not derive harness history labels; run 'just bootstrap' and retry" >&2
-  exit 1
+  refuse "lint-llm-diff: could not derive harness history labels; run 'just bootstrap' and retry"
 }
 # The alphabet is orchestrator/labels.py's, which is the declared trust boundary for
 # the label contract: a narrower opinion here could only reject a label that module
@@ -84,16 +93,14 @@ labels="$(uv run orchestrator-history-labels role=llmlint)" || {
 key='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
 value='[^,[:cntrl:]]+'
 [[ "$labels" =~ ^${key}=${value}(,${key}=${value})*$ ]] || {
-  echo "lint-llm-diff: harness history labels are not comma-separated key=value pairs: '$labels'; correct or unset ONEHARNESS_HISTORY_LABELS and retry" >&2
-  exit 1
+  refuse "lint-llm-diff: harness history labels are not comma-separated key=value pairs: '$labels'; correct or unset ONEHARNESS_HISTORY_LABELS and retry"
 }
 
 llmlint_runtime_env "$root"
 export ONEHARNESS_HISTORY_LABELS="$labels"
 
 diagnostics="$(mktemp)" || {
-  echo "lint-llm-diff: could not open temporary storage for the judge's diagnostics; free disk space and retry" >&2
-  exit 1
+  refuse "lint-llm-diff: could not open temporary storage for the judge's diagnostics; free disk space and retry"
 }
 trap 'rm -f "$diagnostics"' EXIT
 
@@ -119,8 +126,7 @@ else
     }
     { print }
   ' "$diagnostics" >&2 || {
-    echo "lint-llm-diff: could not summarize the judge diagnostics; rerun 'just lint-llm-diff <base> --skip-nx-cache'" >&2
-    exit 1
+    refuse "lint-llm-diff: could not summarize the judge diagnostics; rerun 'just lint-llm-diff <base> --skip-nx-cache'"
   }
 fi
 exit "$status"

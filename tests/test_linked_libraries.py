@@ -577,11 +577,13 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Measured 2026-09-18 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.12.1 and names the `oneharness-cli`
+#: between them would mean anything. Re-measured 2026-09-20 on this host's installed
+#: wheels: `config/oneharness.version` reads 0.16.0 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.13.1, while the engine wheel now links 0.14.1. They are independently
-#: released artifacts, so the mismatch is expected and equality would assert no contract.
+#: against as 0.17.0, and the engine wheel links 0.17.0 as well. The two numbers
+#: **coincide on this adoption**, which proves nothing: they are independently
+#: released artifacts, they have differed on every adoption recorded here before this
+#: one, and an equality gate would read that coincidence as a contract.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
 #: What each dependent resolves that crate at in the adopted engine. The whole
@@ -594,9 +596,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.5", core="0.14.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.13.2", core="0.14.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.40.0", core="0.14.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.6", core="0.17.0"),
+    LinkedCore(dependent="onejudge", dependent_version="0.13.3", core="0.17.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.41.0", core="0.17.0"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -693,6 +695,70 @@ def test_the_cli_pin_names_the_release_the_engine_linked(crate: str, version_fil
         f"pinned {declared.pinned}, and this host measures {linked} / {pinned}. Re-read "
         f"whether it still holds — {declared.because} — and reconcile the pin or "
         "re-declare it against the pair that is really there"
+    )
+
+
+#: The distribution behind `just telemetry-server` — the Observatory's API, which from the
+#: adopted release mutates as well as reads — and the pin that names its release.
+#: It links `onepipeline` on its own account the way the engine wheel links its
+#: siblings, which is why it is read here rather than beside the recipes.
+UI_API_DISTRIBUTION = "onepipeline-api-cli"
+
+
+def _ui_api_linked_engine() -> str:
+    """The `onepipeline` release the adopted Observatory API wheel was built against."""
+    installed = importlib.metadata.distribution(UI_API_DISTRIBUTION)
+    sboms = [entry for entry in (installed.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
+    assert len(sboms) == 1, (
+        f"{UI_API_DISTRIBUTION} must ship exactly one SBOM for the engine it links to be "
+        f"read from; found {[str(entry) for entry in sboms]}"
+    )
+    document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
+    declared = {
+        component["version"]
+        for component in document["components"]
+        if component["name"] == "onepipeline"
+    }
+    assert len(declared) == 1, (
+        f"{UI_API_DISTRIBUTION}'s SBOM declares onepipeline at "
+        f"{sorted(declared) or 'no version'}; this gate compares one release to one release"
+    )
+    return declared.pop()
+
+
+def test_the_ui_api_links_the_engine_this_host_pins() -> None:
+    """The reader's own engine, held level with `config/onepipeline.version`.
+
+    **This is a determinism standing in for a judgment.** The reader used to be free to
+    link any engine, because a process that only read runs could not decide what a
+    dispatch ran. It can now: `POST /api/v2/runs/{run}/adopt` retains the read-API
+    binary at its own driver verb, so a run adopted from the browser is driven by the
+    engine *this* wheel links — which makes `config/onepipeline-ui.version` a pin that
+    governs a dispatch on this host, and makes "read `/healthz` before adopting from a
+    tab" a step an operator has to remember.
+
+    So the prerequisite is enforced here instead, where nobody has to remember it: the
+    two pins name releases that resolve one engine, and a bump that moves either alone
+    fails on this host rather than at whatever a browser adoption then drives. The
+    `/healthz` read stays useful and is now a check on a *running* server — which
+    release is answering on that port right now — rather than the only thing standing
+    between a bump and a mis-driven run.
+
+    Read off the wheels' own bills of materials for the reason the module docstring
+    gives, and `tests/dag_ui/test_dag_ui_serving_e2e.py` holds the served `/healthz` to
+    the same number, so this and the surface an operator reads cannot disagree.
+    """
+    linked = _ui_api_linked_engine()
+    pinned = _pinned_cli("onepipeline.version")
+
+    assert linked == pinned, (
+        f"the adopted {UI_API_DISTRIBUTION} links onepipeline {linked} while "
+        f"config/onepipeline.version adopts {pinned}. An adopt from the DAG Observatory "
+        f"would drive that run with {linked} — this reader's own engine, retained as the "
+        "driver — while every other dispatch on this host ran "
+        f"{pinned}. Move `config/onepipeline-ui.version` to a release linking {pinned}, "
+        "or hold the engine pin until one exists; see AGENTS.md's 'Which pin governs a "
+        "dispatch' and docs/dag-ui.md's 'Which release is answering'"
     )
 
 
@@ -813,8 +879,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.14.0", "0.14.1"),
-        "onejudge-cli": ("0.14.0", "0.14.1"),
+        "oneagentgraph-cli": ("0.17.0", "0.17.0"),
+        "onejudge-cli": ("0.17.0", "0.17.0"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

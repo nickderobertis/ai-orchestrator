@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.40.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.41.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.15.0/0.13.2 upgrade (`config/oneharness.version` and
+after the 0.16.0/0.13.3 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -222,7 +222,19 @@ It has since moved to 0.13.2 on the same terms: neither `crates/onejudge/src/rep
 0.13.2 is still compiled against `oneharness-core` 0.14.0 and the engine wheel still links
 0.14.1, read off each wheel's own SBOM; what 0.13.2 changes is how it asks the spawned
 `oneharness` for its report — explicitly as JSON — which writes nothing into a record's
-`usage`. `dispatches`,
+`usage`. It has since moved to 0.13.3, and the oneharness half with it to 0.16.0, on the
+same terms and this time together: neither `crates/onejudge/src/report.rs` (schema 12) nor
+`crates/onejudge/src/usage.rs` changes between v0.13.2 and v0.13.3, which is the
+`oneharness-core` relink and nothing else; `oneharness-core`'s own history
+`SCHEMA_VERSION` is `1.9` at both v0.15.0 and v0.16.0, and what changes in
+`crates/oneharness-core/src/domain/usage.rs` between them is rustdoc prose — intra-doc
+links rewritten to name the private shapes they pointed at — with no field added, removed
+or retyped. `onejudge-cli` 0.13.3 is compiled against `oneharness-core` 0.17.0 and the
+engine wheel links 0.17.0 as well, read off each wheel's own SBOM. What 0.16.0 adds is the
+**per-run pointer line** ([oneharness#1326](https://github.com/nickderobertis/oneharness/pull/1326)),
+which is a line in a file of its own — the run's `oneharness-sessions.jsonl` — rather than
+a field in a record, so the accounting block this section reads is untouched by it.
+`dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 
@@ -308,17 +320,18 @@ served them.
    watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.9.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.11.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 17 on the envelope, where
-   0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10, where 0.7.3 served
+   what re-opens this paragraph: `telemetry_schema_version` 19 on the envelope, where
+   0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10,
+   unmoved across this bump, where 0.7.3 served
    8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
    answer); spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here; no run read served the `dispatching` this paragraph used to name.
-   On 0.9.0 this was re-read against the recorded runs under
+   On 0.11.0 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.
    **A lane is a member the run's own graphs declared**, from 0.9.0: a session's
@@ -480,7 +493,33 @@ served them.
    `history-write-failed` event on the adopted stack; the bounded local capture this
    document used to describe belonged to the pre-extraction dispatch layer and went
    with it. When a supervisory turn is missing from the timeline, the oneharness
-   history store is where it is, and reading it is a manual step.
+   history store is where it is, and reading it is a manual step — but no longer a
+   search: the run's pointer file, below, is what says which sessions are its.
+
+**Where a dispatch's transcripts live, and how a run's are found.** Nothing about the
+first half changed at the adoption that added the second, and that is the point worth
+stating plainly: every dispatch launched from here goes on recording its oneharness
+sessions in **this host's own default store**, `$XDG_STATE_HOME/oneharness/history/`,
+and `oneharness history list` still lists them there. The engine sets no
+`ONEHARNESS_HISTORY_DIR` — an inherited one passes through untouched and a repository's
+own `history_dir` is honoured — so an operator's store is where it always was, and any
+claim that a dispatch's sessions move under the run root would be wrong. What the
+adoption adds is a way to ask *which of them belong to one run*: each run additionally
+holds `<run root>/oneharness-sessions.jsonl`, one typed line per harness run naming the
+session it wrote, and every one of the engine's `onepipeline.*` labels is stamped there
+beside this host's own `role`. So `just agents <run-id> [<node>]` answers a run's
+sessions from that file, `oneharness history pointers <run root>/oneharness-sessions.jsonl`
+reads the same file with the producing library's own verb, and
+`oneharness history watch --label onepipeline.run_id=<run-id>` follows them live in the
+default store.
+
+**Two pins decide whether that file is whole, and moving one alone shows half the
+agents.** `config/oneharness.version` is what makes this host's **two-party** turns
+write a pointer line — the agent and judge sides of every worker spawn that CLI from
+`PATH` — and `config/onepipeline.version` is what makes the observer's and the
+drafter's **in-process** turns write one, since those run through the core the engine
+links. A reader who moved the engine pin and left the CLI pin behind gets a pointer
+file holding the graphs and none of the workers.
 
 The upstream defect that motivated the capture is oneharness refusing a history
 write with `new history run lacks complete v1.0 telemetry` (and the `cannot write vN

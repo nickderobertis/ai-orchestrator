@@ -55,6 +55,13 @@ from test_observer_judge_ops import judge_argv
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
+from orchestrator.labels import (
+    NODE_LABEL,
+    POINTER_FILE_NAME,
+    RUN_LABEL,
+    SCOPE_LABEL,
+    Scope,
+)
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -2650,6 +2657,101 @@ def test_a_launch_names_its_run_to_the_graph_watching_it(
         f"{environment.get(RUN_ID_ENV)!r}, not {OBSERVED_RUN!r}; re-measure "
         "the export and correct every document that states it, in this change"
     )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This adds no launch to the
+# tier, for the reason the journey below it gives: the `observed_launch` fixture is
+# module-scoped and already spent, and this reads a third answer off it.
+# llmlint: ignore-block[tests_mirror_real_usage] The subject of this journey IS the environment
+# the engine handed a member it started, and no operator verb prints one: the pointer
+# file and `just agents` are what that environment *produces*, and under the suite's
+# stand-in harness they stay empty (`oneharness.orchestrator.toml` records why), so
+# reading them would assert an absence. The probe is this suite's standing in for a
+# maintainer dumping the member's environment by hand, as `observer_environment.py`
+# says, and the journey beside this one reads the same capture for the same reason.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same fact, and
+# the rule is misapplied to *this* test rather than wrong about the file: the expense
+# behind the finding is the `observed_launch` launch, which is module-scoped and was
+# already being spent by the two journeys beside this one before it existed. Adding a
+# third read off that one launch cannot make an unrelated `recipeWorkspace` change cause
+# a launch that change already caused. What the finding describes truthfully is the
+# placement of `tests/e2e` as a whole, and moving it behind an edge of its own is a
+# restructuring of the tier — the note above says why one added assertion is not the
+# change that should carry it.
+@pytest.mark.xdist_group("observer-environment")
+def test_a_launch_hands_its_observer_the_run_history_settings_the_engine_stamps(
+    observed_launch: ObservedLaunch,
+) -> None:
+    """The engine's run-history contract, measured on the one dispatch that is not a node.
+
+    `docs/orchestration.md`, `docs/telemetry.md` and the `oneharness.*.toml` comments all
+    say that a dispatch records its oneharness sessions in **this host's own default
+    store** and that the run's pointer file is how they are found again. Both halves are
+    the engine's to provide and neither is this repository's to decide, so both are
+    measured rather than restated: the engine sets `ONEHARNESS_HISTORY`, points
+    `ONEHARNESS_HISTORY_POINTER_FILE` at the run's own file, and — the half a reader
+    would never notice going wrong — sets **no** `ONEHARNESS_HISTORY_DIR`, which is what
+    leaves the store where the operator already reads it.
+
+    Taken on the **observer** graph deliberately. It is the dispatch furthest from a
+    plan node, so an engine that stamped node-scope dispatches and forgot the graphs
+    watching them would pass every node-shaped check and fail here — and it is the one
+    scope whose labels carry no `onepipeline.node`, which is the difference this asserts
+    rather than assumes.
+
+    `tests/test_engine_history_vocabulary.py` holds the spelling of every name below to
+    the pinned engine's own contract text; what this adds is that the pinned engine
+    really hands them to a member it started.
+    """
+    environment = observed_launch.environment
+
+    assert environment.get("ONEHARNESS_HISTORY") == "1", (
+        "the observer member was started with ONEHARNESS_HISTORY="
+        f"{environment.get('ONEHARNESS_HISTORY')!r}, so this dispatch records no "
+        "oneharness session at all and the run's pointer file names nothing; "
+        "re-measure the engine's run-history contract and correct every document "
+        "that states it, in this change"
+    )
+    assert "ONEHARNESS_HISTORY_DIR" not in environment, (
+        "the engine set ONEHARNESS_HISTORY_DIR="
+        f"{environment.get('ONEHARNESS_HISTORY_DIR')!r} on the observer member, which "
+        "moves this dispatch's transcripts out of the store this host reads with "
+        "`oneharness history`. Every paragraph here that says a dispatch's sessions "
+        "stay in the default store is about that, and moves in the same change"
+    )
+
+    pointer = environment.get("ONEHARNESS_HISTORY_POINTER_FILE", "")
+    expected = Path(environment["ONEPIPELINE_RUNS_DIR"]) / OBSERVED_RUN / POINTER_FILE_NAME
+    assert pointer == str(expected), (
+        f"the observer member was started with a pointer file at {pointer!r}, and this "
+        f"run's own is {str(expected)!r}; the sessions a run opened are found through "
+        "that file and nothing else, so a pointer naming another path is a run whose "
+        "agents cannot be listed"
+    )
+
+    labels = dict(
+        pair.split("=", 1) for pair in environment.get("ONEHARNESS_HISTORY_LABELS", "").split(",")
+    )
+    assert labels.get(RUN_LABEL) == OBSERVED_RUN, (
+        f"the observer member's history labels are {labels}, and {RUN_LABEL} is what "
+        f"`oneharness history watch --label {RUN_LABEL}=<run>` selects a run's sessions "
+        "by; without it every session this run opened is unfindable by run"
+    )
+    assert labels.get(SCOPE_LABEL) == Scope.OBSERVER, (
+        f"the observer member's history labels are {labels}, and this dispatch is the "
+        f"{Scope.OBSERVER.value!r} scope; a scope word that moved is one every reader "
+        "filtering by it stops matching"
+    )
+    assert NODE_LABEL not in labels, (
+        f"the observer member carries {NODE_LABEL}={labels.get(NODE_LABEL)!r}, and the "
+        "observer graph is not a node — a stale node label inherited into a graph-scope "
+        "dispatch is what attributes one node's sessions to the whole run's watcher"
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[tests_mirror_real_usage]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 # llmlint: ignore[test_tiers_split_by_project_not_by_marker] This adds no launch to the

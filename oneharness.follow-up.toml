@@ -46,6 +46,10 @@ timeout = 3600
 # turn that runs for many minutes.
 stream = true
 
+# A follow-up run is a dispatch, so the engine switches recording on for it too; this
+# is kept for the same reason `oneharness.toml`'s copy is. Both labels are this host's
+# own — the engine's six `onepipeline.*` keys name a session's place in the graph and
+# nothing about which side or which lane it is.
 history = true
 history_labels = { role = "agent", agent_role = "follow-up" }
 

@@ -13,6 +13,11 @@ ONEPIPELINE = REPO_ROOT / "scripts" / "onepipeline.sh"
 #: The definition of which resolvers a launch runs, through which `onepipeline.sh` loads
 #: the helper above; a launch in a checkout without it is refused before the helper.
 DISPATCH_ENV = REPO_ROOT / "scripts" / "dispatch-env.sh"
+#: The acting-session ladder `onepipeline.sh` sources on **every** verb, a read
+#: included. A checkout without it cannot run the entry point at all, so the journeys
+#: below that drive the entry point copy it beside the helper they are about — without
+#: it their subject is a missing file rather than the credential loading they assert on.
+LAUNCHER_SESSION = REPO_ROOT / "scripts" / "launcher-session.sh"
 PRESERVED_LOG = REPO_ROOT / "scripts" / "preserved-log.sh"
 
 
@@ -130,6 +135,9 @@ def test_read_only_onepipeline_view_does_not_load_a_malformed_file(tmp_path: Pat
     scripts.mkdir()
     (scripts / ONEPIPELINE.name).write_text(
         ONEPIPELINE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (scripts / LAUNCHER_SESSION.name).write_text(
+        LAUNCHER_SESSION.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (scripts / HELPER.name).write_text(HELPER.read_text(encoding="utf-8"), encoding="utf-8")
     (tmp_path / ".env").write_text("not-an-assignment\n", encoding="utf-8")
@@ -302,6 +310,9 @@ def test_a_helper_that_cannot_be_loaded_refuses_the_launch_attributably(tmp_path
     scripts.mkdir()
     (scripts / ONEPIPELINE.name).write_text(
         ONEPIPELINE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (scripts / LAUNCHER_SESSION.name).write_text(
+        LAUNCHER_SESSION.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (scripts / DISPATCH_ENV.name).write_text(
         DISPATCH_ENV.read_text(encoding="utf-8"), encoding="utf-8"

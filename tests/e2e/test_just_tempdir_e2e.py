@@ -58,6 +58,18 @@ TEMPDIR = Path(".logs/just")
 CREATES_TEMPDIR = "_create_recipe_tempdir := `mkdir -p .logs/just 2>/dev/null || true`"
 
 
+def _just_environment() -> dict[str, str]:
+    """The inherited environment without `JUST_TEMPDIR`, which `just` prefers to the setting.
+
+    A variable naming the temporary directory outranks `set tempdir`, so where the caller
+    exports one — Claude Code's shell exports `/tmp`, and a publication launched from such
+    a session inherits it — the body is written there whatever the justfile says, and
+    every control below runs its body for that reason alone. Dropping it is what leaves
+    the justfile's setting, and nothing else, deciding where the body is written.
+    """
+    return {name: value for name, value in os.environ.items() if name != "JUST_TEMPDIR"}
+
+
 def _requires_user_namespace() -> None:
     """Skip where this host cannot produce a `noexec` mount without root.
 
@@ -100,7 +112,7 @@ def _run_under_noexec_runtime_dir(
         ],
         text=True,
         capture_output=True,
-        env={**os.environ, "NO_COLOR": "1"},
+        env={**_just_environment(), "NO_COLOR": "1"},
     )
 
 
@@ -152,7 +164,13 @@ def test_a_bare_copy_of_the_justfile_creates_the_directory_and_runs_the_recipe(
     checkout = _justfile_copy(tmp_path / "checkout", with_setting=True)
     assert not (checkout / ".logs").exists()
 
-    ran = subprocess.run(["just", *SHEBANG_RECIPE], cwd=checkout, text=True, capture_output=True)
+    ran = subprocess.run(
+        ["just", *SHEBANG_RECIPE],
+        cwd=checkout,
+        env=_just_environment(),
+        text=True,
+        capture_output=True,
+    )
 
     assert ran.returncode == BODY_RAN_STATUS, ran.stderr
     assert BODY_RAN in ran.stderr, ran.stderr
@@ -168,7 +186,13 @@ def test_a_bare_copy_of_the_justfile_creates_the_directory_and_runs_the_recipe(
     (control / "justfile").write_text(
         setting_alone.replace(f"{CREATES_TEMPDIR}\n", "", 1), encoding="utf-8"
     )
-    refused = subprocess.run(["just", *SHEBANG_RECIPE], cwd=control, text=True, capture_output=True)
+    refused = subprocess.run(
+        ["just", *SHEBANG_RECIPE],
+        cwd=control,
+        env=_just_environment(),
+        text=True,
+        capture_output=True,
+    )
     assert refused.returncode != BODY_RAN_STATUS, refused.stderr
     assert str(control / TEMPDIR) in refused.stderr, refused.stderr
     assert BODY_RAN not in refused.stderr
@@ -196,6 +220,7 @@ def test_the_directory_follows_the_working_directory_the_setting_resolves_agains
             str(elsewhere),
             *SHEBANG_RECIPE,
         ],
+        env=_just_environment(),
         text=True,
         capture_output=True,
     )

@@ -30,9 +30,15 @@ timeout = 900
 
 # Record this side's runs to disk too; a pinned `--config` skips the user-level
 # config.toml, so history must be enabled here.
+# Nothing that runs this side is a dispatch, so no engine switches recording on for it:
+# this line is the only thing that does. `oneharness.toml`'s note explains why its own
+# copy is kept even though the engine makes it redundant there.
 history = true
 
 # `role` names the SIDE of the conversation: this is the side that does the work.
+# `role` is this host's key and the engine stamps nothing like it: the six
+# `onepipeline.*` keys a dispatch inherits name the run, project, scope, node, step and
+# attempt, none of which says which side of a conversation a session is.
 history_labels = { role = "agent" }
 
 # The writer carries the supervisory order rather than the worker's, and here that is a

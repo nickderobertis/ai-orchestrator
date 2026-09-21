@@ -44,30 +44,26 @@
 # healed before that gate, and a store that cannot be read at all is the gate's to report,
 # under its own exit status, rather than this seam's.
 #
-# Detection is from the exported environment and never from process ancestry,
-# and a session nothing identifies stays unidentified: a run misattributed to a
-# planner who did not launch it is worse than one attributed to nobody.
+# Who is acting is `scripts/launcher-session.sh`'s to answer, sourced here and by
+# `scripts/telemetry-server.sh`, which hands the same answer to the read API so a
+# mutation from the browser is performed as the session that started the server.
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
-# An already-exported identity wins: a dispatch nested inside a launch inherits
-# its planner's, and re-deriving it here from the harness the *dispatch* runs
-# under would reassign the run to the worker mid-flight.
-if [ -z "${ONEPIPELINE_LAUNCHER_SESSION:-}" ]; then
-    # Ordered, and read in order, so a session nested inside another resolves to
-    # the first harness that claims it. `CODEX_HOME` is deliberately not a marker:
-    # it is ambient configuration a developer may export in a shell profile, so a
-    # plain shell would claim to be codex.
-    claude_session=${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}
-    codex_session=${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}
-    if [ -n "$claude_session" ]; then
-        export ONEPIPELINE_LAUNCHER=claude-code
-        export ONEPIPELINE_LAUNCHER_SESSION="$claude_session"
-    elif [ -n "$codex_session" ]; then
-        export ONEPIPELINE_LAUNCHER=codex
-        export ONEPIPELINE_LAUNCHER_SESSION="$codex_session"
-    fi
+# Who is acting, through the one definition of that ladder. Sourced rather than
+# restated: `scripts/telemetry-server.sh` hands the same answer to the read API as
+# its `--session`, and two spellings of it is how a browser's stop is refused while
+# this terminal's is not.
+launcher_session_helper="$script_dir/launcher-session.sh"
+if [ ! -f "$launcher_session_helper" ] || [ ! -r "$launcher_session_helper" ]; then
+    echo "onepipeline: required helper is not a readable regular file: $launcher_session_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/launcher-session.sh
+if ! . "$launcher_session_helper"; then
+    echo "onepipeline: the helper at $launcher_session_helper is readable but could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
 fi
 
 # Only a launch starts harnesses; a read-only view must not create a directory or

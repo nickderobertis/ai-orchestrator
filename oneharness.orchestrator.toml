@@ -23,6 +23,9 @@ timeout = 0
 
 # Record this side's runs to disk too; onejudge's pinned `--config` skips the
 # user-level config.toml, so history must be enabled here.
+# Redundant for a dispatch — the adopted onepipeline sets ONEHARNESS_HISTORY=1 on every
+# dispatch it starts, this side included — and kept because it is also what records the
+# turns this host runs outside one; `oneharness.toml`'s note says which those are.
 # llmlint: ignore[changed_behavior_has_e2e] oneharness writes a history record only for a real harness session; a run driven by the suite's codex stand-in leaves the store empty (verified), so this pair cannot be asserted at the launch boundary the rest of this file's e2e uses.
 history = true
 
@@ -30,6 +33,9 @@ history = true
 # an agent-side session whose `agent_role=orchestrator` label is stamped by
 # `launch_orchestrator` (see docs/dag-ui/design.md). Keeping `role = "agent"` here
 # is what lets telemetry and `just history` treat it as one.
+# `role` is this host's key and the engine stamps nothing like it: the six
+# `onepipeline.*` keys a dispatch inherits name the run, project, scope, node, step and
+# attempt, none of which says which side of a conversation a session is.
 history_labels = { role = "agent" }
 
 # The orchestrator is a long-lived supervisory process, not a worker, so both

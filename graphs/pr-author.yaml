@@ -37,7 +37,7 @@
 #
 # Schema 4, for the one field the member below needs. Its own `task` requires 3;
 # that task interpolates `{task}`, which `oneagentgraph` expands only from 4 — under
-# 3 the token reaches the model as its six literal characters. oneagentgraph 0.4.5
+# 3 the token reaches the model as its six literal characters. oneagentgraph 0.4.6
 # reads 1 through 9.
 version: 4
 name: pr-author

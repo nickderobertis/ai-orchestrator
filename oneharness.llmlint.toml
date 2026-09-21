@@ -3,6 +3,12 @@
 # order — it keeps that order even though the worker's discovered oneharness.toml
 # prefers Claude Code.
 run_mode = "fallback"
+# The judged tier is run by a recipe rather than started by the engine, so nothing
+# else switches recording on for it and no `onepipeline.*` label is inherited unless a
+# worker's own `just lint-llm-diff` is what invoked it — in which case the dispatch's
+# keys come through the worker's environment and `role = "llmlint"` is what tells this
+# tier's sessions from that worker's own. The key is this host's; the engine stamps none
+# like it.
 history = true
 history_labels = { role = "llmlint" }
 # Codex carries this tier, and a second Codex identity absorbs an exhausted quota

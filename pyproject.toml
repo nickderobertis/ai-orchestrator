@@ -8,12 +8,12 @@ requires-python = ">=3.13"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "onetaskgraph-sdk==0.2.41",
-    "oneagentgraph-cli==0.4.5",
-    "oneharness-cli==0.15.0",
-    "onejudge==0.13.2",
+    "oneagentgraph-cli==0.4.6",
+    "oneharness-cli==0.16.0",
+    "onejudge==0.13.3",
     "onemessagebus-cli==0.7.0",
-    "onepipeline-api-cli==0.9.0",
-    "onepipeline-cli==0.40.0",
+    "onepipeline-api-cli==0.11.0",
+    "onepipeline-cli==0.41.0",
     "onevcs-cli==0.27.0",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like

@@ -78,6 +78,12 @@ INSTALLED_BUNDLE = REPO_ROOT / "node_modules" / "onepipeline-ui"
 #: apart is what stops a conversation id being handed to a route that wants a run.
 RunId = NewType("RunId", str)
 ConversationId = NewType("ConversationId", str)
+#: A launching session, which is what the API acts as and what a run's ownership is
+#: compared against. Named apart from the two above for the same reason they are named
+#: apart from each other: every ownership assertion here turns on not confusing the
+#: session a server acts as with the session a run recorded, and both are bare strings
+#: on the wire.
+LauncherSession = NewType("LauncherSession", str)
 TIMELINE_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 #: The graph runs those recorded runs' graphs made, each with the graph document it
 #: launched. The reader derives a session's `agent_role` from the members a run's recorded
@@ -181,7 +187,18 @@ TURN_USAGE_FIGURES = (
 TIMELINE_SCHEMA_VERSION = 10
 #: The envelope's telemetry schema, restated for the same reason and moved with the same
 #: paragraph.
-TELEMETRY_SCHEMA_VERSION = 17
+TELEMETRY_SCHEMA_VERSION = 19
+
+#: The variable `scripts/launcher-session.sh` resolves the acting session into, and
+#: `scripts/telemetry-server.sh` renders as the API's `--session`.
+LAUNCHER_SESSION_ENV = "ONEPIPELINE_LAUNCHER_SESSION"
+#: The session the ownership journeys act as. Not any run's recorded launcher, which
+#: is the whole point: what is asserted is the refusal a *stranger* meets.
+STRANGER_SESSION = LauncherSession("dag-ui-serving-e2e-stranger")
+#: The qualified project ids the grouping fixture stamps onto copies of the recorded
+#: runs. Two, because one group and one ungrouped remainder cannot show an ordering.
+FIRST_PROJECT = "plans:dag-ui-grouping-first"
+SECOND_PROJECT = "plans:dag-ui-grouping-second"
 
 #: How many of the read API's keepalive comments an idle stream is held for: the first
 #: proves the connection outlived one of its idle intervals, the second that it was not
@@ -259,6 +276,24 @@ class Served:
 
     def get(self, path: str) -> Answer:
         request = urllib.request.Request(f"{self.base}{path}")
+        return self._answer(request)
+
+    def post(self, path: str, payload: dict[str, object]) -> Answer:
+        """One mutation, over the proxy, as the session the API was started under.
+
+        Over the proxy for the same reason every read here is: the proxied origin is
+        the only one the bundle asks on, so a mutation asserted against the API
+        directly would prove nothing about the arrangement an operator acts through.
+        """
+        request = urllib.request.Request(
+            f"{self.base}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        return self._answer(request)
+
+    def _answer(self, request: urllib.request.Request) -> Answer:
         try:
             with urllib.request.urlopen(request, timeout=e2e_timeout(10)) as response:
                 return Answer(response.status, response.read(), response.headers.get_content_type())
@@ -288,7 +323,11 @@ def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
 
 
 @contextlib.contextmanager
-def _both_recipes(runs_root: Path, graph_records: Path | None = None) -> Iterator[Served]:
+def _both_recipes(
+    runs_root: Path,
+    graph_records: Path | None = None,
+    acting_session: LauncherSession | None = None,
+) -> Iterator[Served]:
     """Both recipes, for real: `just telemetry-server` behind `just dag-ui`.
 
     This is the arrangement the documentation tells an operator to start in two
@@ -300,9 +339,26 @@ def _both_recipes(runs_root: Path, graph_records: Path | None = None) -> Iterato
     """
     api_port = _free_port()
     ui_port = _free_port()
+    # The acting session is given the way an operator's shell gives it — through the
+    # harness variable `scripts/launcher-session.sh` reads — rather than by spelling
+    # `--session` here, because what this journey is about is the recipe deriving it.
+    # `ONEPIPELINE_LAUNCHER_SESSION` is dropped first: this suite runs inside a
+    # dispatch that exports one, and an inherited value would make every ownership
+    # assertion below a statement about whoever launched the suite.
+    serving = {
+        **os.environ,
+        GRAPH_STATE_ENV: str(graph_records or runs_root.parent / "graph-records"),
+    }
+    serving.pop(LAUNCHER_SESSION_ENV, None)
+    serving.pop("CLAUDE_CODE_SESSION_ID", None)
+    serving.pop("CLAUDE_SESSION_ID", None)
+    serving.pop("CODEX_THREAD_ID", None)
+    serving.pop("CODEX_SESSION_ID", None)
+    if acting_session is not None:
+        serving["CLAUDE_CODE_SESSION_ID"] = acting_session
     api = _serve(
         ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
-        {**os.environ, GRAPH_STATE_ENV: str(graph_records or runs_root.parent / "graph-records")},
+        serving,
     )
     recipe = _serve(
         ["just", "dag-ui"],
@@ -342,6 +398,96 @@ def served_recorded(tmp_path: Path) -> Iterator[Served]:
     shutil.copytree(TIMELINE_RUNS, runs_root)
     graph_records = _graph_records(tmp_path / "graph-records")
     with _both_recipes(runs_root, graph_records) as pair:
+        yield pair
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] The checked-in recorded runs all
+# predate this host launching from a plan-store project, so none of them carries
+# `project` in its launch record, and no producer verb stamps one onto a run that
+# already happened — a real one would cost a launch per group. What this writes is the
+# one field the engine reads to group by, in the launch record's own shape, onto a
+# *copy* under a run id of its own; everything else about each run is the recorded
+# fixture. A grouping asserted over one `(no project)` group would be satisfied by a
+# reader that had not grouped at all, which is the assertion this exists to avoid.
+def _grouped_runs_root(runs_root: Path) -> dict[str, str]:
+    """Stamp a project onto copies of the recorded runs, and say which went where.
+
+    Two projects and an ungrouped remainder, so the answer has three groups: enough
+    for the partition, the `(no project)` rule and the ordering to each mean something.
+    """
+    placed = {
+        f"{RECORDED_RUN}-first": FIRST_PROJECT,
+        f"{SUPERVISING_RUN}-first": FIRST_PROJECT,
+        f"{REPORTED_RUN}-second": SECOND_PROJECT,
+    }
+    for copied, project in placed.items():
+        source = runs_root / copied.rsplit("-", 1)[0]
+        destination = runs_root / copied
+        shutil.copytree(source, destination)
+        launch = json.loads((destination / "launch.json").read_text(encoding="utf-8"))
+        launch["run_id"] = copied
+        launch["project"] = project
+        (destination / "launch.json").write_text(json.dumps(launch), encoding="utf-8")
+    return placed
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+class Grouped(NamedTuple):
+    """The grouped pair, and which run this fixture put in which project."""
+
+    served: Served
+    placed: dict[str, str]
+
+
+@pytest.fixture
+def served_grouped(tmp_path: Path) -> Iterator[Grouped]:
+    """The recipes over recorded runs some of which name a project, as a stranger."""
+    runs_root = tmp_path / "runs"
+    shutil.copytree(TIMELINE_RUNS, runs_root)
+    placed = _grouped_runs_root(runs_root)
+    graph_records = _graph_records(tmp_path / "graph-records")
+    with _both_recipes(runs_root, graph_records, acting_session=STRANGER_SESSION) as pair:
+        yield Grouped(pair, placed)
+
+
+def _recorded_launcher_session(run: RunId) -> LauncherSession:
+    """The session a checked-in recorded run names as its own launcher.
+
+    Read off the fixture rather than restated, so the pair of journeys below stays a
+    statement about *this* run's owner: a literal would keep passing against a fixture
+    that had been replaced, with the stranger and the owner both strangers.
+    """
+    launch = json.loads((TIMELINE_RUNS / run / "launch.json").read_text(encoding="utf-8"))
+    session = launch.get("session")
+    assert isinstance(session, str) and session, (
+        f"{run}'s launch record names no session, so nothing here can act as its owner"
+    )
+    return LauncherSession(session)
+
+
+@pytest.fixture
+def served_unattributed(tmp_path: Path) -> Iterator[Served]:
+    """The recipes over a private copy, where this host can name no acting session."""
+    runs_root = tmp_path / "runs"
+    shutil.copytree(TIMELINE_RUNS, runs_root)
+    graph_records = _graph_records(tmp_path / "graph-records")
+    with _both_recipes(runs_root, graph_records, acting_session=None) as pair:
+        yield pair
+
+
+@pytest.fixture
+def served_as_owner(tmp_path: Path) -> Iterator[Served]:
+    """The recipes over a private copy, acting as the recorded run's own launcher."""
+    runs_root = tmp_path / "runs"
+    shutil.copytree(TIMELINE_RUNS, runs_root)
+    graph_records = _graph_records(tmp_path / "graph-records")
+    with _both_recipes(
+        runs_root,
+        graph_records,
+        acting_session=_recorded_launcher_session(SETTLED_RUN),
+    ) as pair:
         yield pair
 
 
@@ -724,6 +870,170 @@ def test_a_settled_run_keeps_its_timeline_but_leaves_the_listing(
     run_span = next(span for span in json.loads(body)["spans"] if span["kind"] == "run")
     assert run_span["phase"] == "finished"
     assert run_span["ended_at"] is not None
+
+
+def test_the_projects_route_groups_the_runs_it_serves(served_grouped: Grouped) -> None:
+    """`GET /api/v2/projects` is the grouped listing, served over the operator's origin.
+
+    This is the shape the manager's own views moved to and the one the browser lands
+    on, so what is held is the grouping *contract* rather than a rendering of it: every
+    run the flat listing carries appears in exactly one group, a group carries the runs
+    whose launch record names its project, the runs naming none are in **one** ordinary
+    group rather than scattered or hidden, and the groups are ordered by their own
+    newest activity. A reader that had not grouped at all satisfies none of those —
+    which is why the fixture stamps two projects on rather than relying on the recorded
+    runs, every one of which predates a project-carrying launch.
+    """
+    status, body, content_type = served_grouped.served.get("/api/v2/projects")
+
+    assert status == 200, body
+    assert content_type == "application/json"
+    answer = json.loads(body)
+    assert answer["api_version"] == 2
+    groups = answer["projects"]
+
+    # Every run the flat listing carries, in exactly one group and nowhere twice.
+    # Against `include_settled=true`, because the two routes answer different
+    # questions and this is the one worth stating rather than tripping over: the
+    # grouped listing is the **whole** store grouped, where the flat default is the
+    # live runs alone. A settled run is reachable from the project view and not from
+    # the run list, which is the opposite of what an operator would guess.
+    flat = served_grouped.served.get("/api/v2/runs?include_settled=true")
+    listed = {run["run_id"] for run in json.loads(flat[1])["runs"]}
+    grouped = [run["run_id"] for group in groups for run in group["runs"]]
+    assert sorted(grouped) == sorted(listed), (
+        f"the grouped listing carries {sorted(grouped)} and the flat one {sorted(listed)}; "
+        "a run in neither is one an operator landing on the project view cannot reach, "
+        "and a run in both groups is one they would act on twice"
+    )
+
+    by_project = {group["project"]: {run["run_id"] for run in group["runs"]} for group in groups}
+    assert len(by_project) == len(groups), f"two groups carry one project id: {groups}"
+
+    # Each stamped run is under the project its launch record names, and only there.
+    for run, project in served_grouped.placed.items():
+        if run not in listed:
+            continue
+        assert run in by_project.get(project, set()), (
+            f"{run} names project {project} in its launch record and the reader served "
+            f"it under {[p for p, runs in by_project.items() if run in runs]}"
+        )
+
+    # The runs naming no project are one ordinary group, never several and never hidden.
+    assert None in by_project, (
+        f"no group carries the runs that name no project: {sorted(by_project)}. Those "
+        "runs are most of this host's history and a listing that drops them reads as an "
+        "empty host"
+    )
+    assert by_project[None] == listed - set(served_grouped.placed), by_project
+
+    # Total order, newest activity first, so two readings of one root agree.
+    activity = [group["last_write_at"] for group in groups]
+    assert activity == sorted(activity, reverse=True), (
+        f"the groups are ordered {activity}; the contract is the group's own newest "
+        "activity first, and an unstable order is one an operator cannot navigate by"
+    )
+
+
+def test_a_stop_from_the_browser_is_refused_for_a_run_this_session_does_not_own(
+    served_grouped: Grouped,
+) -> None:
+    """The ownership rule reaches the browser, and the refusal names who to ask.
+
+    This is the half that makes the Observatory safe to act from at all. Several
+    managers share this host; the API performs every mutation as **one** acting
+    session, the `--session` `scripts/telemetry-server.sh` derives, and a run another
+    session launched has to be refused there exactly as `just stop` refuses it in a
+    terminal. Asserted as the engine's own refusal rather than as a status code alone,
+    because what an operator needs from it is the owner: a `409` naming nobody is a
+    dead end, and `not_owner` naming the launcher is the next thing to do.
+
+    The fixture runs are another session's by construction — they are checked-in
+    recordings of runs this suite did not launch — so the stranger is genuinely one.
+    Nothing is stopped here: the refusal is the whole assertion, and a run this server
+    did own would be a mutation of a fixture copy for no added evidence.
+    """
+    status, body, content_type = served_grouped.served.post(f"/api/v2/runs/{SETTLED_RUN}/stop", {})
+
+    assert status == 409, (status, body)
+    assert content_type == "application/json"
+    refusal = json.loads(body)["error"]
+    assert refusal["code"] == "not_owner", refusal
+    assert SETTLED_RUN in refusal["message"], refusal
+    owner = json.loads(served_grouped.served.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]
+    assert owner["launcher"] in refusal["message"], (
+        f"the refusal is {refusal['message']!r} and the run's recorded launcher is "
+        f"{owner['launcher']!r}; an operator refused a stop needs the refusal to name "
+        "whose run it is, or they have nowhere to go with it"
+    )
+    assert STRANGER_SESSION not in refusal["message"], (
+        f"the refusal names the acting session {STRANGER_SESSION!r} as the owner: "
+        f"{refusal['message']!r}. That is the server reporting itself as the owner of a "
+        "run it was just refused, which would read as the rule having been applied "
+        "backwards"
+    )
+
+
+def test_an_unattributed_server_owns_nothing_and_says_so_through_the_proxy(
+    served_unattributed: Served,
+) -> None:
+    """What `scripts/telemetry-server.sh`'s header promises about a server with no session.
+
+    Two observable consequences, both the reason the recipe hands the API a session at
+    all: a stop it does not force is refused — here even the stop of the run's own
+    recorded owner would be, because nobody is acting — and `GET /api/v2/unwatched`
+    reports no run. The second is the dangerous one, because from a browser it reads as
+    a host with nothing to supervise rather than as a server that cannot say who it is.
+
+    `_both_recipes` clears every variable the acting-session ladder reads, so this is a
+    real unattributed start and not one this journey merely asked for.
+    """
+    status, body, _ = served_unattributed.post(f"/api/v2/runs/{SETTLED_RUN}/stop", {})
+
+    assert status == 409, (status, body)
+    assert json.loads(body)["error"]["code"] == "not_owner", body
+
+    status, body, _ = served_unattributed.get("/api/v2/unwatched")
+
+    assert status == 200, body
+    unwatched = json.loads(body)
+    assert unwatched["reported"] == [], (
+        f"an unattributed server reported {unwatched['reported']} as unwatched; it owns no "
+        "run, so it has none to report — and a non-empty answer here would be one it could "
+        "not have compared against anything"
+    )
+
+
+def test_the_recipe_hands_the_api_the_acting_session_so_an_owner_is_recognised(
+    served_as_owner: Served,
+) -> None:
+    """The other half of the refusal above, and the one that proves the handoff.
+
+    The refusal alone cannot: an **unattributed** server owns nothing and is refused
+    every stop it does not force, so a `scripts/telemetry-server.sh` that had dropped
+    `--session` entirely would satisfy that journey exactly as well. What separates the
+    two is a stop the acting session *does* own — reached only when the session the
+    recipe derived arrived at the API and matched the run's recorded launcher.
+
+    So this asserts what the answer is **not**: not `not_owner`. What it is instead is
+    the engine's own account of a run it cannot establish the state of — these are
+    checked-in recordings with no `dispatches` directory — and that is left unasserted
+    beyond its not being the ownership refusal, because it is a fact about the fixture
+    rather than about the identity this journey is measuring.
+    """
+    status, body, _ = served_as_owner.post(f"/api/v2/runs/{SETTLED_RUN}/stop", {})
+
+    assert status != 404, (
+        f"the reader does not know {SETTLED_RUN} at all, so this measured nothing about "
+        f"ownership: {body!r}"
+    )
+    refusal = json.loads(body).get("error", {}) if status >= 400 else {}
+    assert refusal.get("code") != "not_owner", (
+        f"acting as {SETTLED_RUN}'s own recorded launcher, the API still refused the "
+        f"stop as another session's: {refusal}. The session `scripts/telemetry-server.sh` "
+        "derives is not reaching `onepipeline-api serve --session`, which leaves every "
+        "mutation from the browser unattributed and every stop refused"
+    )
 
 
 def _linked_onepipeline_release() -> str:

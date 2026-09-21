@@ -571,8 +571,12 @@ replan *args:
 integrate *args:
     @uv run onevcs integrate "$@"
 
-# List recorded tracked-graph runs, who launched them, and their latest status.
-# `just runs --mine` lists only the runs this session launched.
+# List recorded tracked-graph runs, who launched them, and their latest status,
+# **grouped by the project each was launched from** — the engine's own default from the
+# adopted release, with the runs naming no project in their own `(no project)` group.
+# `just runs --flat` is the ungrouped list by run id, which is what a reader scanning for
+# one run id wants; `just runs --mine` lists only the runs this session launched.
+# `just status` and `just goals` given no run render the same grouping.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line run ledger is this viewing command's product.
 runs *args:
     @./scripts/onepipeline.sh runs "$@"
@@ -602,6 +606,20 @@ results *args:
 # llmlint: ignore[tool_output_is_signal] the requested per-turn transcript is this viewing command's product.
 transcript *args:
     @./scripts/onepipeline.sh transcript "$@"
+
+# Every oneharness session a run's dispatches opened: `just agents <run-id> [<node>]`,
+# or `just agents --project <source:project>` for the union across a project's runs.
+#
+# The read that answers "which of the sessions in this host's store belong to this run?"
+# It is the engine reading the run's own pointer file — `<run root>/oneharness-sessions.jsonl`
+# — and grouping what it finds by session, so it covers every dispatch the engine
+# started: a node's, each step of a lifecycle node, the observer graph and the change
+# request drafter. The transcripts themselves do not move: they stay in this host's
+# default oneharness store, and each entry carries the three fields that open it there.
+# `just monitor` does NOT fold this — see docs/orchestration.md, "Monitoring a live run".
+# llmlint: ignore[tool_output_is_signal] the requested per-run agent inventory is this viewing command's product.
+agents *args:
+    @./scripts/onepipeline.sh agents "$@"
 
 # Record an unverified, non-blocking follow-up against a run, as its manager:
 # `just follow-up <run-id> --title TITLE --repository HOST/OWNER/NAME [--path PATH]... < body.md`.
@@ -924,8 +942,10 @@ lint-llm-validate *args:
 # its summary never does. `tests/e2e/test_llmlint_cache_e2e.py` asserts both the
 # judged and the replayed wording, so an Nx upgrade that renames them fails the suite
 # rather than quietly reporting every run as freshly judged. Nx's full output is
-# shown because it *is* the report now.
+# shown because it *is* the report now — except a refusal Nx dropped before relaying
+# it, which the tier also hands back through LLMLINT_DIFF_REFUSALS and this prints
+# (scripts/llmlint-judge.sh says why).
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @# llmlint: ignore[tool_output_is_signal] The judge's per-rule report and its one-line provenance are this tier's product; a quiet success here would delete the tier's result and leave a replayed run saying less than a fresh one. `@#` so the directive itself stays out of that report.
-    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; behind=$(./scripts/base-freshness.sh "{{base}}") || { echo "lint-llm-diff: whether '{{base}}' still matches its own origin ref could not be decided; run 'scripts/base-freshness.sh {{base}}' to see why" >&2; exit 1; }; if [[ -n "$behind" ]]; then echo "lint-llm-diff: $behind, so judging it would judge commits this branch does not carry; fetch and fast-forward '{{base}}', or name the origin ref as the base" >&2; exit 1; fi; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; report=$(mktemp) || { echo "lint-llm-diff: could not open temporary storage for the judge report; free disk space and retry" >&2; exit 1; }; trap 'rm -f "$report"' EXIT; status=0; LLMLINT_DIFF_BASE_SHA="$base_sha" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >"$report" 2>&1 || status=$?; cat "$report"; if grep -qE '^Nx read the output from the cache instead of running the command|^> nx run workspace:lint-llm-diff +\[(local cache|remote cache|existing outputs match the cache)' "$report"; then echo "lint-llm-diff: replayed the recorded verdict for base $base_sha (Nx cache hit)" >&2; else echo "lint-llm-diff: judged this diff against base $base_sha (Nx cache miss)" >&2; fi; exit "$status"
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; behind=$(./scripts/base-freshness.sh "{{base}}") || { echo "lint-llm-diff: whether '{{base}}' still matches its own origin ref could not be decided; run 'scripts/base-freshness.sh {{base}}' to see why" >&2; exit 1; }; if [[ -n "$behind" ]]; then echo "lint-llm-diff: $behind, so judging it would judge commits this branch does not carry; fetch and fast-forward '{{base}}', or name the origin ref as the base" >&2; exit 1; fi; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; report=$(mktemp) && refusals=$(mktemp) || { echo "lint-llm-diff: could not open temporary storage for the judge report; free disk space and retry" >&2; exit 1; }; trap 'rm -f "$report" "$refusals"' EXIT; status=0; LLMLINT_DIFF_BASE_SHA="$base_sha" LLMLINT_DIFF_REFUSALS="$refusals" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >"$report" 2>&1 || status=$?; cat "$report"; if ((status != 0)) && [[ -s "$refusals" ]] && ! grep -qF -- "$(tail -n 1 "$refusals")" "$report"; then echo "lint-llm-diff: Nx exited without relaying the tier's refusal, which was:" >&2; cat "$refusals" >&2; fi; if grep -qE '^Nx read the output from the cache instead of running the command|^> nx run workspace:lint-llm-diff +\[(local cache|remote cache|existing outputs match the cache)' "$report"; then echo "lint-llm-diff: replayed the recorded verdict for base $base_sha (Nx cache hit)" >&2; else echo "lint-llm-diff: judged this diff against base $base_sha (Nx cache miss)" >&2; fi; exit "$status"

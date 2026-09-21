@@ -612,7 +612,14 @@ def _screens_checkout(tmp_path: Path) -> tuple[Path, Path]:
     # `telemetry-server.sh` too: the screens script starts the read API through it
     # rather than re-rendering `onepipeline-api serve`, so it is part of the path
     # under test here — the traced `--runs-root` below is what that wrapper renders.
-    for name in ("dag-ui-screens.sh", "dag-ui-server.js", "telemetry-server.sh"):
+    # And the acting-session ladder that wrapper sources, which it refuses to start
+    # without.
+    for name in (
+        "dag-ui-screens.sh",
+        "dag-ui-server.js",
+        "telemetry-server.sh",
+        "launcher-session.sh",
+    ):
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)
         copied.chmod(0o755)

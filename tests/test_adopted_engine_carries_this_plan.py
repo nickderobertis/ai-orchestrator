@@ -351,6 +351,36 @@ WORKTREE_POOL_LANDINGS = (
     ),
 )
 
+#: The two engine-side nodes of the agent-visibility plan. Together they give every
+#: post-launch verb a typed library call — which is what lets `onepipeline-ui` wrap the
+#: whole CLI rather than the read surface alone — group a listing by the project its runs
+#: were launched from, and stamp every dispatch the engine starts with the
+#: `onepipeline.*` history labels and a per-run pointer file, `oneharness-sessions.jsonl`
+#: under the run root, which `onepipeline agents` reads back. Without the first, the
+#: manager's views here still print one flat list of run ids; without the second, a
+#: dispatch's oneharness sessions are in this host's store with nothing naming which run
+#: opened them. `tests/dag_ui/test_dag_ui_serving_e2e.py` drives the grouping and the
+#: ownership refusal over HTTP, and `tests/test_engine_history_vocabulary.py` holds the
+#: label vocabulary this repository's prose names to the engine's own contract text.
+AGENT_VISIBILITY_LANDINGS = (
+    Landing(
+        node="op-sdk-parity",
+        change_request=402,
+        commit="52e1427b018b50cc18966789d00689a2c449f3cb",
+        did="give every post-launch verb a typed library call and group runs by project",
+    ),
+    Landing(
+        node="op-agent-visibility",
+        change_request=414,
+        commit="0d7b7f2a9fbdcf9e61342697b5f9e009ce3e48f4",
+        did=(
+            "stamp every dispatch with history labels and a per-run pointer file, and "
+            "read the agents it launched"
+        ),
+    ),
+)
+
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -363,6 +393,7 @@ LANDINGS = (
     *LINEAGE_ITEM_LANDINGS,
     *ACCEPTED_FOLLOW_UPS_LANDINGS,
     *WORKTREE_POOL_LANDINGS,
+    *AGENT_VISIBILITY_LANDINGS,
 )
 
 

@@ -1,20 +1,27 @@
 # DAG Observatory
 
-The read-only live and historical view of orchestrated DAG execution is
+The live and historical view of orchestrated DAG execution is
 [`onepipeline-ui`](https://github.com/nickderobertis/onepipeline-ui). It is not
 built in this repository: the design record, the component choices, the schema
 validation, and the browser tier that photographs it all live there, beside the
 code they describe. This page is the operational half — how the two published
 pieces are started here, and what each of the recipes around them does.
 
+**It stopped being a read-only view at the adopted release**, and that changes what
+starting it means rather than only what it shows: the API wraps every post-launch
+verb, the browser performs each one as **one acting session**, and an adoption made
+from it is driven by the engine the reader links. [Supervising from the
+browser](#supervising-from-the-browser) is that half; start there before acting from
+a tab, because two of those three sentences are about *whose* run and *which* engine.
+
 ## The two published pieces
 
 The project publishes them separately, because they contain different things.
 
-* **The read API** — the `onepipeline-api-cli` wheel, installed by session setup
+* **The API** — the `onepipeline-api-cli` wheel, installed by session setup
   at the release `config/onepipeline-ui.version` declares, providing one command,
-  `onepipeline-api serve --runs-root DIR`. It wraps the onepipeline SDK and serves
-  the `/api/v2/...` contract plus `/healthz`.
+  `onepipeline-api serve --runs-root DIR [--session ID]`. It wraps the onepipeline
+  SDK and serves the `/api/v2/...` contract plus `/healthz`.
 * **The view** — the `onepipeline-ui` npm package, pinned to the same release in
   `package.json` and installed by `scripts/workspace-install.sh`. It installs no
   command: it is a built static bundle under `dist/`, to be served.
@@ -44,6 +51,62 @@ and the runs root defaults to the one `just runs` and `just status` read
 (`ONEPIPELINE_RUNS_DIR`, or `runs`), so the API serves the runs the planner is
 already looking at.
 
+It also hands the API **`--session`**, which is who the browser acts as and is
+covered below.
+
+## Supervising from the browser
+
+**Every post-launch verb is a route now, and the view offers all of them.** The
+run page carries the channel and its reply composer, `attest`, `stop`, `adopt`, a
+held `watch`, the unwatched badge, and the rendered reads (`status`, `results`,
+`goals`, `transcript`, `telemetry`, `host`); a landing project list and per-project
+page replace the flat list of run ids as the view's front door; and an **Agents**
+panel lists every oneharness session each of a run's dispatches opened. What the
+browser never does is launch: a plan is authored and launched from a terminal, and
+everything here is *post*-launch. Which is also why **a planning run's channel is
+answerable from the browser like any other** — `just plan`'s two launches are
+ordinary runs with ordinary channels, and a reply is the same post-launch route
+whatever the run is planning.
+
+**Who it acts as is one session, and this host names it.**
+`scripts/telemetry-server.sh` sources `scripts/launcher-session.sh` — the same
+ladder every `onepipeline` recipe uses — and passes the result as `--session`, so
+the browser's stop is the stop of the manager who started the server. Three
+consequences to hold:
+
+* **A run another session owns is refused**, `409 not_owner`, naming the owner as
+  the engine names it to a stranger (`[codex:160c290a]`, never the raw session).
+  That is the ownership doctrine in `AGENTS.md` reaching the browser rather than a
+  second rule, and a forced stop sits behind it as a deliberate second step.
+* **An unattributed server owns nothing.** Started where this host can name no
+  session it is refused *every* stop it does not force, and `GET /api/v2/unwatched`
+  reports no run — which reads from a tab as a quiet host rather than as a server
+  that cannot say who it is. The recipe passes a session whenever one resolves and
+  omits it rather than inventing one when none does.
+* **A tab is not a watch.** The Watch toggle holds `GET .../watch` for as long as
+  it is on, and the server is the run's registered watcher only while it is held — so
+  it dies with the tab, and a launch still owes an armed `just watch` that outlives the
+  turn that started it.
+
+`tests/dag_ui/test_dag_ui_serving_e2e.py` drives the grouping and both halves of
+the identity rule over the proxy — the stranger's refusal naming the owner, and the
+same stop reaching past ownership when the server acts as the run's own recorded
+launcher — because the refusal on its own is equally satisfied by a server with no
+session at all. `scripts/dag-ui-server.js` needed nothing for any of it: it already
+proxies every `/api` path and `/healthz` and forwards the method, headers and body,
+which is what carries a `POST` through — confirmed by those journeys asking over the
+bundle server's origin rather than the API's.
+
+**An adopt from the browser is the one that changes which engine runs a dispatch.**
+`POST .../adopt` retains **this API binary** at its own driver verb, so the adopted
+run is driven by the engine `onepipeline-ui` links — not by the CLI
+`config/onepipeline.version` installs. The driver runs in a process group of its
+own, survives the server being stopped or restarted, and is read back off the run
+record like any other. So on this host `config/onepipeline-ui.version` is a pin that
+**can** govern a dispatch, which is why the suite holds the two pins to linking one
+engine — see [Which release is answering](#which-release-is-answering) for the gate and
+for the one question it leaves to `/healthz`.
+
 ## Which release is answering
 
 Moving `config/onepipeline-ui.version` installs a release; it does not put one in
@@ -58,28 +121,40 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.29.0"}
+{"status":"ok","onepipeline_version":"0.41.0"}
 ```
 
-That release is the reader's own, and it is **not**
+That release is the reader's own, and it is a **different adoption** from
 `config/onepipeline.version` — this host pins the engine CLI and this reader
-separately, and the reader links whatever its release was built against. So the
-two are expected to differ; what the field is for is being able to say which
-reader is answering rather than assuming it.
+separately, and the reader links whatever its release was built against. What the
+field is for is being able to say which engine is answering rather than assuming it.
 
-**Today the two differ, and the reading to carry is that neither number constrains
-the other**: the adopted `onepipeline-ui` 0.9.0 statically links onepipeline 0.37.0 and
-onejudge 0.13.1, read off its own wheel's SBOM, while `config/onepipeline.version` reads
-0.40.0 — the engine moved for the worktree pool's capacity hold and maintenance schedule, which the reader has no part in, and the reader
-stayed, because nothing requires the two to agree. The reader has been moved with the engine before
-because a reader linking an older onejudge than the one writing a run's reports refuses
-a newer report schema and renders no transcript. Through an earlier adoption the reader
-linked onepipeline 0.19.0 while the CLI a dispatch ran was nine minor releases ahead.
-It was the reverse for two adoptions — the engine pin was held at 0.18.4 for a
-settlement write-back defect that had nothing to do with reading runs, and the
-Observatory was adopted anyway because the reader carries its own engine. That hold is
-over and this surface is still the one that says which engine is answering, measured
-here rather than argued from the manifest, which is what `/healthz` is for.
+**The two are kept level now, and the reason is an adopt.** They used to be free to
+differ in either direction, because a reader that only read runs constrained nothing
+about what a dispatch ran. An adoption made from the browser is not a read: `POST
+/api/v2/runs/{run}/adopt` retains the API binary at its own driver verb, so the run it
+revives is driven by the engine **this reader** links, and `config/onepipeline-ui.version`
+is from then on a pin that can govern a dispatch on this host. So the two are held
+level, and **not by an operator remembering to check**:
+`tests/test_linked_libraries.py::test_the_ui_api_links_the_engine_this_host_pins`
+reads the engine out of the adopted read-API wheel's own bill of materials and fails
+when it is not the release `config/onepipeline.version` names, so a bump that moves one
+alone fails on this host rather than at whatever a browser adoption then drives. They
+are level today: the adopted `onepipeline-ui` 0.11.0 links onepipeline 0.41.0 and
+`config/onepipeline.version` reads 0.41.0. What `/healthz` is for from here is the
+question that gate cannot answer — which release is answering **on this port right
+now**, since both pieces load once at start and a server left running from before a bump
+goes on serving what it loaded.
+
+The pair has been apart before, and that history is worth keeping because it says what
+the old freedom cost. The reader has been moved with the engine because a reader linking
+an older onejudge than the one writing a run's reports refuses a newer report schema and
+renders no transcript. Through an earlier adoption the reader linked onepipeline 0.19.0
+while the CLI a dispatch ran was nine minor releases ahead. It was the reverse for two
+adoptions — the engine pin was held at 0.18.4 for a settlement write-back defect that had
+nothing to do with reading runs, and the Observatory was adopted anyway because the
+reader carries its own engine. None of those readers could drive a run from a browser;
+this one can, which is what ended the freedom rather than any of them.
 
 `tests/dag_ui/test_dag_ui_serving_e2e.py` holds a freshly started pair to the
 adopted release from that same served surface: the bundle handed back is the npm
@@ -89,9 +164,17 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.9.0**, the release `config/onepipeline-ui.version` pins, carries
-what 0.6.3 added: it shows which release carried each landed node, alongside every
-release event.
+**`onepipeline-ui` 0.11.0**, the release `config/onepipeline-ui.version` pins, is the
+one that made this a supervising surface: the project list and per-project page are the
+landing view, the run page carries the channel with its byte-for-byte reply composer,
+`attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its
+unwatched badge, and the rendered reads, and an **Agents** panel lists every oneharness
+session a run's dispatches opened, per run, per node and per project. The whole of that
+is [Supervising from the browser](#supervising-from-the-browser) above; what belongs
+here is what the view has to *render* and may find nothing behind.
+
+It still carries what 0.6.3 added: it shows which release carried each landed node,
+alongside every release event.
 Opening a node whose dependency was adopted `published` shows what it waited on and
 the versions that arrived; opening one held shows what it is held on, whether that is
 an automated probe or a person's release step.
@@ -148,7 +231,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.5**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.6**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
@@ -209,14 +292,30 @@ over this host's own root a first page of the run list answered in 17 to 40 seco
 *warm*, a run detail or a run-scoped timeline in about 20, and a browser — one page
 load, one `/api/v2/events` subscription, one run list, then the selected run's detail
 and timeline — sat on `Loading execution history…` for over a minute and a half before
-showing anything. **0.7.0 bounds that** — and the adopted 0.9.0 keeps it, which is why the numbers below
-are that release's rather than this pin's — and it is the difference between a view an
-operator opens and one they avoid: on the same root the same request answers in
-**0.09-0.17 s** warm, against 41 s on the first cold one; a run detail in
-**0.01-0.32 s**; and a live run's run-scoped timeline in **0.14 s**. 0.7.0's
-`telemetry_schema_version` was 15 where 0.6.5 served 14. What has *not* changed is the
-page size: `limit` is capped at 50, so a several-hundred-run answer is still
-cursor-paged.
+showing anything. **0.7.0 bounds that** — and the adopted 0.11.0 keeps it for the run
+list, which is why the numbers below are read off that route — and it is the difference
+between a view an operator opens and one they avoid: on the same root the same request
+answers in **0.03-0.45 s** warm on the adopted release, against 76 s on the first cold
+one, measured over this host's root at 634 run roots; the figures 0.7.0 was first read
+at were **0.09-0.17 s** warm against 41 s cold, a run detail in **0.01-0.32 s**, and a
+live run's run-scoped timeline in **0.14 s**. 0.7.0's `telemetry_schema_version` was 15
+where 0.6.5 served 14. What has *not* changed is the page size: `limit` is capped at 50,
+so a several-hundred-run answer is still cursor-paged.
+
+**The grouped listing is not bounded, and it is the view's landing page.** This is the
+one reading to take away before opening a tab against this host's own root.
+`GET /api/v2/projects` answered in **21 to 45 seconds on every request** — 44.5 s, then
+21.2 s, then 36.1 s on three consecutive reads of one warm server — over the same 634
+run roots, which it grouped into 164 groups carrying 526 runs, while
+`GET /api/v2/runs` on the same server answered in 0.45 s. So the route the app now opens
+on costs what the whole view cost through 0.6.5, and for the same reason: it surveys the
+store rather than a page of it, and `limit` does not reach it. Two consequences. Serving
+**this host's own root** to a browser, expect the landing view to sit there and the flat
+run list (`?list=runs`) to be the fast way in; serving a fixture or a small root, the
+difference does not arise. And nothing here can fix it — the repair is
+`onepipeline-ui`'s, the way the flat list's was — so read a slow landing page as this
+paragraph rather than as a dead server, and read `/healthz`, which answers instantly,
+to tell the two apart.
 
 **What an idle tab costs, and this is the one that was sharp.** Through 0.6.5, with
 **one** idle `EventSource` connected — a browser tab left open, nothing clicked — the
