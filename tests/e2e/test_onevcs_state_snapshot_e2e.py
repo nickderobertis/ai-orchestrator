@@ -7,7 +7,12 @@ journey here takes that measurement again against the installed CLI, on a regist
 the older shape planted under a scratch root, so the day a release stops migrating on
 read this module's reason fails rather than going on describing a hazard nobody has.
 The second holds the isolation itself: what this process exports as `ONEVCS_HOME` is a
-copy, it carries the host's identities, and it carries none of the host's sessions.
+copy, it carries the host's identities and its pool configuration, and it carries
+neither the host's sessions nor its live pool slots. The third asks the installed CLI
+for a capacity the way an operator does, against a copy taken from a planted root: the
+workspaces file is what `onevcs pool status` resolves an identity's pool out of, so a
+copy without it answers `pool: 0` — pooling off — for a source that pools, and every
+check reading pool state under the snapshot would be reading some other host.
 
 Nothing here reads the host's root through `onevcs`. The host's registry is read as a
 file, once, to compare identities — that is the one read of it this suite makes.
@@ -33,33 +38,70 @@ import subprocess
 from pathlib import Path
 
 import onevcs_state_snapshot
+import pytest
 from waits import timeout as e2e_timeout
 
-#: A registry as onevcs 0.19.x wrote one: version 5, each identity carrying the two
-#: fields `register` inferred from whether the origin had a host. The checkout path
-#: need not exist — a listing does not stat it — and the identity is one no real host
-#: registers, so the document is legible on its own.
-OLDER_SCHEMA = {
-    "version": 5,
-    "identities": {
-        "github.com/scratchowner/older-schema": {
-            "origin": "github.com/scratchowner/older-schema",
-            "workflow": "remote",
-            "repo_type": "team",
-            "gate": "<no-op>",
-        }
-    },
-    "checkouts": {
-        "older-schema": {
-            "path": "/nonexistent/older-schema",
-            "identity": "github.com/scratchowner/older-schema",
-        }
-    },
-}
+#: The owner every identity planted here is filed under: one no real host registers, so
+#: a document naming it is legible on its own and reaches nothing of this host's.
+SCRATCH_OWNER = "scratchowner"
+
+
+def older_schema(name: str) -> dict[str, object]:
+    """A registry naming one identity, as onevcs 0.19.x wrote one.
+
+    Version 5, the identity carrying the two fields `register` inferred from whether the
+    origin had a host. The checkout path need not exist — neither a listing nor a
+    capacity read stats it — so the document is the whole of what a journey has to plant
+    to have an identity the installed CLI will answer about.
+    """
+    identity = f"github.com/{SCRATCH_OWNER}/{name}"
+    return {
+        "version": 5,
+        "identities": {
+            identity: {
+                "origin": identity,
+                "workflow": "remote",
+                "repo_type": "team",
+                "gate": "<no-op>",
+            }
+        },
+        "checkouts": {name: {"path": f"/nonexistent/{name}", "identity": identity}},
+    }
+
+
+#: The registry the migration journey plants, and the shape every other one here uses.
+OLDER_SCHEMA = older_schema("older-schema")
+
+#: A policy file, because a verb loads one before it answers anything.
+RULES = (
+    "version: 3\ntrailer_prefix: Orchestrator-\nrules: []\n"
+    "default:\n  publication: change-auto\n  approvals: none\n"
+)
 
 #: The two inferred fields the migration drops; their absence is what an older
 #: release refuses a migrated registry for (`missing field `workflow``).
 INFERRED_FIELDS = ("workflow", "repo_type")
+
+#: The identity the capacity journey plants, and the capacity its workspaces file gives
+#: it — by a *rule*, over a `default` that pools nothing, so the numbers a read answers
+#: with can only have come from the copied file. Neither is what a root carrying no
+#: workspaces file answers (`pool: 0`, `overflow: unlimited`), which is what the copy
+#: reported before it carried one.
+POOLED = "pooled"
+POOLED_IDENTITY = f"github.com/{SCRATCH_OWNER}/{POOLED}"
+POOL = 2
+OVERFLOW = 3
+POOLING = (
+    "version: 1\n"
+    "default: {pool: 0, overflow: unlimited}\n"
+    "rules:\n"
+    f"- match: {{host: github.com, owner: {SCRATCH_OWNER}, name: {POOLED}}}\n"
+    f"  pool: {POOL}\n"
+    f"  overflow: {OVERFLOW}\n"
+)
+#: What pooling off looks like, which is every capacity this suite read before the
+#: snapshot carried a workspaces file.
+POOLING_OFF = {"pool": 0, "overflow": "unlimited"}
 
 
 def _registry(root: Path) -> dict[str, object]:
@@ -75,6 +117,30 @@ def _identities(root: Path) -> set[str]:
     return set(identities)
 
 
+def _plant(root: Path, name: str) -> Path:
+    """A state root holding one identity and a policy, and nothing else."""
+    root.mkdir(parents=True)
+    (root / "registry.json").write_text(json.dumps(older_schema(name), indent=2), encoding="utf-8")
+    (root / "rules.yml").write_text(RULES, encoding="utf-8")
+    return root
+
+
+def _capacity(root: Path, identity: str) -> dict[str, object]:
+    """What the installed `onevcs` reports an identity's pool capacity to be under ``root``."""
+    read = subprocess.run(
+        ["onevcs", "pool", "status", identity, "--json"],
+        env={**os.environ, onevcs_state_snapshot.ONEVCS_HOME: str(root)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert read.returncode == 0, read.stderr
+    reported = json.loads(read.stdout)["capacity"]
+    assert isinstance(reported, dict)
+    return reported
+
+
 def test_the_installed_onevcs_rewrites_an_older_registry_on_a_read(tmp_path: Path) -> None:
     """A listing — the least a verb can do — leaves the registry at the newer schema.
 
@@ -82,14 +148,7 @@ def test_the_installed_onevcs_rewrites_an_older_registry_on_a_read(tmp_path: Pat
     which identities it holds would have moved the host's registry to a schema every
     process still on the older release cannot read.
     """
-    root = tmp_path / "older"
-    root.mkdir()
-    (root / "registry.json").write_text(json.dumps(OLDER_SCHEMA, indent=2), encoding="utf-8")
-    (root / "rules.yml").write_text(
-        "version: 3\ntrailer_prefix: Orchestrator-\nrules: []\n"
-        "default:\n  publication: change-auto\n  approvals: none\n",
-        encoding="utf-8",
-    )
+    root = _plant(tmp_path / "older", "older-schema")
 
     listed = subprocess.run(
         ["onevcs", "repos"],
@@ -149,7 +208,77 @@ def test_every_process_of_this_suite_reads_a_copy_of_the_hosts_root() -> None:
         )
     else:
         assert not (copy / "releases.yml").exists()
+    # The pool configuration is the other half of what `just repos-apply` installs, and
+    # the same argument holds: with it missing from the copy, every `pool status` read
+    # here would report pooling disabled for a host that pools, so a check asking what an
+    # identity's capacity is would be asking about a host nobody has.
+    if (host / "workspaces.yml").is_file():
+        assert (copy / "workspaces.yml").read_bytes() == (host / "workspaces.yml").read_bytes(), (
+            "the host holds a workspaces file the copy does not carry byte for byte, so "
+            "a check asking what an identity's pool capacity is would answer for a host "
+            "with pooling off"
+        )
+    else:
+        assert not (copy / "workspaces.yml").exists()
     assert not (copy / "sessions").exists(), (
         "the copy carries the host's session records, which are live claims about "
         "dispatches somebody else is driving"
+    )
+    assert not (copy / "workspaces").exists(), (
+        "the copy carries the host's pool slots, which are worktrees other dispatches "
+        "are working in; only the workspaces.yml that configures them is copied"
+    )
+
+
+def test_a_capacity_read_under_the_copy_answers_from_the_copied_workspaces_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`onevcs pool status` under a copy reports the source's pool, not pooling off.
+
+    This is what the copied `workspaces.yml` is for: a check that reads pool state under
+    the snapshot — what an identity admits, what maintains its idle slots — has to be
+    told what this host configured. The control below is the same copy with that one
+    file removed, which is what the snapshot handed every such check before it carried
+    one: `pool: 0`, an answer no host here holds.
+    """
+    source = _plant(tmp_path / "source", POOLED)
+    (source / "workspaces.yml").write_text(POOLING, encoding="utf-8")
+    # A slot of the source's own pool, which is a live worktree wherever the source is a
+    # real host's root, and must not be in the copy however the configuration is.
+    occupied = source / "workspaces" / "slot-1"
+    occupied.mkdir(parents=True)
+    (occupied / "in-use.txt").write_text("another dispatch's worktree\n", encoding="utf-8")
+
+    # `snapshot()` exports `ONEVCS_HOME` process-wide, which is the export every other
+    # test here reads; recording the suite's own copy first is what puts it back.
+    monkeypatch.setenv(
+        onevcs_state_snapshot.ONEVCS_HOME, os.environ[onevcs_state_snapshot.ONEVCS_HOME]
+    )
+    copy = onevcs_state_snapshot.snapshot(source)
+
+    assert (copy / "workspaces.yml").read_bytes() == (source / "workspaces.yml").read_bytes()
+    assert not (copy / "workspaces").exists(), (
+        "the copy carries the source's pool slots, which are live worktrees; only the "
+        "workspaces.yml that configures them is copied"
+    )
+    pooled = _capacity(copy, POOLED_IDENTITY)
+    assert (pooled["pool"], pooled["overflow"]) == (POOL, OVERFLOW), (
+        "the installed onevcs read the copy and reported a capacity the source's "
+        f"workspaces.yml does not declare: {pooled}; a check reading pool state under "
+        "the snapshot is reading some other host's configuration"
+    )
+
+    # The member's other half, taken through `snapshot()` rather than by deleting the
+    # file afterwards: a source holding no workspaces file leaves the copy holding none,
+    # which is the same answer, and that answer is the one every capacity read here got
+    # before the copy carried the file at all.
+    unconfigured = onevcs_state_snapshot.snapshot(_plant(tmp_path / "unconfigured", POOLED))
+    assert not (unconfigured / "workspaces.yml").exists(), (
+        "the copy invented a workspaces file its source does not hold, so a check would "
+        "read a capacity this host never configured"
+    )
+    unpooled = _capacity(unconfigured, POOLED_IDENTITY)
+    assert {field: unpooled[field] for field in POOLING_OFF} == POOLING_OFF, (
+        f"a root carrying no workspaces file no longer answers {POOLING_OFF}: {unpooled}; "
+        "re-read what the copy leaving that file out would cost a check reading pool state"
     )

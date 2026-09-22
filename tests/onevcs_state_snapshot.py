@@ -22,17 +22,24 @@ links 0.19.3 — and every other live dispatch on the host does too. A check may
 the thing that decides that for the host.
 
 `snapshot()` is the answer: a per-process copy of the parts of the root a read needs —
-the registry, the rules file, the release override, and the release records — under a
+the registry, the rules file, the release override, the workspaces file, and the release
+records — under a
 scratch directory, and
 `ONEVCS_HOME` exported to it for the whole process so every subprocess a test spawns
 reads the copy. A test that sets its own `ONEVCS_HOME` is untouched, since it overrides
 this one in the environment it composes; a test that redirects `HOME` to sandbox a
 program that derives the root from it names `ONEVCS_HOME` beside it, because this export
-would otherwise win over the derivation. Sessions, streams, locks, artifacts and
-workspaces are deliberately **not** copied: nothing a check reads needs them, they are
-large, and a copy of a live session record is a stale claim about a dispatch somebody
-else is driving. `tests/e2e/test_onevcs_state_snapshot_e2e.py` drives the migration for
-real against a copy and holds the copy to being what the suite reads.
+would otherwise win over the derivation. Sessions, streams, locks, artifacts and the
+`workspaces` directory of live pool slots are deliberately **not** copied: nothing a
+check reads needs them, they are large, and a copy of a live session record — or of a
+slot another dispatch is working in — is a stale claim about work somebody else is
+driving. The `workspaces.yml` beside that directory is the opposite and **is** copied:
+it is the host's configuration rather than its live state, and with it left out every
+pool read here answered `pool: 0` — pooling off — for a host `just repos-apply` had
+configured, so a check asking what an identity's capacity is would be asking about some
+other host. `tests/e2e/test_onevcs_state_snapshot_e2e.py` drives the migration for
+real against a copy, drives a capacity read against a copied workspaces file, and holds
+the copy to being what the suite reads.
 """
 
 from __future__ import annotations
@@ -48,12 +55,16 @@ from pathlib import Path
 ONEVCS_HOME = "ONEVCS_HOME"
 
 #: What a read of the root needs, and all that is copied. `releases` is a directory
-#: of per-identity release records; the other three are files, and `releases.yml` is
-#: the override `just repos-apply` installs from `config/onevcs.releases.yml` — left
-#: out, every `release targets` read here would answer the global rung and no default
-#: target for a host that had configured both. A member absent on the host is absent
-#: in the copy, which is the same answer.
-COPIED = ("registry.json", "rules.yml", "releases.yml", "releases")
+#: of per-identity release records; the other four are files, and two of them are what
+#: `just repos-apply` installs beside the rules: `releases.yml` from
+#: `config/onevcs.releases.yml` — left out, every `release targets` read here would
+#: answer the global rung and no default target for a host that had configured both —
+#: and `workspaces.yml` from `config/onevcs.workspaces.yml` overlaid by the host's own,
+#: which is where an identity's pool capacity and maintenance are declared and the only
+#: thing a `pool status` read answers them from. The `workspaces` directory those slots
+#: live in is **not** here: it is live state, not configuration. A member absent on the
+#: host is absent in the copy, which is the same answer.
+COPIED = ("registry.json", "rules.yml", "releases.yml", "workspaces.yml", "releases")
 
 #: The root this process was started under, recorded by the first `snapshot()` so a
 #: check can compare the copy against it without asking `onevcs` — which would be the
