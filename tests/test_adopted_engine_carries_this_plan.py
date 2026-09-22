@@ -381,6 +381,56 @@ AGENT_VISIBILITY_LANDINGS = (
 )
 
 
+#: The four engine-side nodes of the second accepted-follow-ups plan. Together they make
+#: the engine own the planner-channel layout and publish it as the document
+#: `config/onemessagebus.yaml` links, read an older launch record's bus configuration
+#: best-effort, fire the success hook when a settle carries an ended run to a different
+#: terminal outcome, count a reused board item once, discard a release-wait surface its
+#: hold has outlived, render an amendment as the criteria it replaces, and relink the
+#: onevcs, oneagentgraph and onejudge that link the generic bus 0.8.0. `op-run-records`
+#: and `op-node-surfaces` were delivered by their retries, `op-run-records-r3` and
+#: `op-node-surfaces-r4`, and are recorded under the node id for the reason `Landing.node`
+#: gives. `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives the settle that fires the
+#: success hook through `just orchestrate`, and
+#: `tests/e2e/test_onemessagebus_cli_e2e.py` drives `just channel-reply` over the linked
+#: layout.
+CHANNEL_AND_RECORDS_LANDINGS = (
+    Landing(
+        node="op-own-channel",
+        change_request=439,
+        commit="f4f4f6f2178d08960e6035f2097876ce4ca9bea6",
+        did=(
+            "own the planner-channel layout and publish it, and read an older record's bus "
+            "configuration best-effort"
+        ),
+    ),
+    Landing(
+        node="op-run-records",
+        change_request=433,
+        commit="17248bea967efb5d41176d0a490693a9ef1f4870",
+        did=(
+            "fire the success hook after a settle completes an ended run, and count a reused "
+            "board item once"
+        ),
+    ),
+    Landing(
+        node="op-node-surfaces",
+        change_request=434,
+        commit="6e46fa8d845434afba23ce580afa95b04db63db8",
+        did=(
+            "discard a release-wait surface its hold has outlived, and render an amendment "
+            "as the criteria it replaces"
+        ),
+    ),
+    Landing(
+        node="op-relink",
+        change_request=445,
+        commit="a265bfebebfc386d0c23591710018318668c7c74",
+        did="relink onevcs, oneagentgraph, onejudge and the bus onto the bus 0.8.0",
+    ),
+)
+
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -394,6 +444,7 @@ LANDINGS = (
     *ACCEPTED_FOLLOW_UPS_LANDINGS,
     *WORKTREE_POOL_LANDINGS,
     *AGENT_VISIBILITY_LANDINGS,
+    *CHANNEL_AND_RECORDS_LANDINGS,
 )
 
 

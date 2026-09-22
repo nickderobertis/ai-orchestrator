@@ -10,8 +10,9 @@ to the pin, the way `tests/e2e/test_linked_engine_reconciliation_e2e.py` drives
 
 Nothing is doubled: the binary is the installed release, the transport is a local
 directory under `tmp_path`, and every reading is the verb's own output. The queue is
-`surfaces` under the `planner-channel` layout the binary declares when no
-configuration names another, because that is the queue the judge side will raise on.
+`surfaces` under the `planner-channel` layout `config/onemessagebus.yaml` links — the
+document the adopted engine publishes, which the adopted bus compiles no copy of — because
+that is the configuration and the queue the judge side and the recipes raise and read on.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] This repository runs one Nx project and
 splits its tiers by pytest marker over `nx.json` keys, and the binary this drives is the
@@ -31,6 +32,8 @@ from typing import TypedDict, cast
 from orchestrator.root import REPO_ROOT
 
 BUS = REPO_ROOT / ".venv" / "bin" / "onemessagebus"
+#: This host's bus configuration, whose linked layout declares the queue below.
+CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
 QUEUE = "surfaces"
 
 
@@ -80,7 +83,7 @@ FINDING = Finding(kind="finding", message="the base moved", source="proposal", b
 def _bus(transport: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     """Run one verb of the installed binary against ``transport``."""
     return subprocess.run(
-        [BUS, *args, "--transport-dir", str(transport)],
+        [BUS, *args, "--config", str(CONFIG), "--transport-dir", str(transport)],
         input=stdin,
         text=True,
         capture_output=True,

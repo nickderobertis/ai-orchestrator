@@ -1465,7 +1465,15 @@ def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launch
     entirely — taking the verdict and any graph edits in it with it, which is why this
     costs a round boundary rather than being a harmless no-op. Held against the run this
     journey already launched, through the same recipe a planner answers a surface with.
+
+    The refusal is the bus's, in its words: the host's bus prepares a reply by the
+    planner-channel layout document it links, which onepipeline's contract declares
+    refuses a malformed envelope in the bus's words rather than the engine's, so it names
+    the field it refused and no longer lists the ones the envelope takes
+    (docs/orchestration.md states that divergence). What it still guarantees is held here:
+    a nonzero exit, the field named, and nothing appended to the run's replies.
     """
+    before = _queue_state(launched.environment, SHIPPED_RUN, "replies")["records"]
     reply = subprocess.run(
         ["just", "channel-reply", SHIPPED_RUN],
         cwd=REPO_ROOT,
@@ -1481,12 +1489,13 @@ def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launch
 
     assert reply.returncode != 0, reply.stdout
     reported = reply.stderr + reply.stdout
-    assert "heartbeat_interval" in reported, reported
-    for accepted in ("version", "author", "completion", "message", "reason", "commands"):
-        assert accepted in reported, (
-            f"the refusal must name {accepted!r} as an accepted field so a planner can "
-            f"see what the envelope does take:\n{reported}"
-        )
+    assert (
+        "the reply is malformed: Additional properties are not allowed "
+        "('heartbeat_interval' was unexpected)"
+    ) in reported, reported
+    assert _queue_state(launched.environment, SHIPPED_RUN, "replies")["records"] == before, (
+        f"a refused reply was appended to the run's replies anyway:\n{reported}"
+    )
 
 
 #: How many reads it takes to drain a settled run's queue before giving up. A bound

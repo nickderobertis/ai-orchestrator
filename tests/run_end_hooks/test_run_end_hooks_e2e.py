@@ -197,12 +197,17 @@ def _bench(tmp: Path, oneharness_bin: str) -> Bench:
 
 
 def _just(
-    bench: Bench, *arguments: str, seconds: float = 600, environment: dict[str, str] | None = None
+    bench: Bench,
+    *arguments: str,
+    seconds: float = 600,
+    environment: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - this checkout's own recipes
         ["just", *arguments],  # noqa: S607
         cwd=REPO_ROOT,
         env=environment or bench.environment,
+        input=input_text,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(seconds),
@@ -530,6 +535,101 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
         )
         assert "retry" in failure_line, failure_line
         assert "superseded" not in success_line, success_line
+    finally:
+        _stop(bench, run, *([follow_up] if follow_up else []))
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] A typed view of the
+# public wire input this journey sends through `just channel-reply`; the installed
+# engine's reply validator and reconciler are the drift gate, so a field the authority
+# removed or renamed refuses the journey rather than a local copy accepting it.
+class SettleCommand(TypedDict):
+    """One settle command: a node's recorded state moved from evidence the run never saw."""
+
+    op: str
+    id: str
+    outcome: str
+    evidence: str
+
+
+class SettleEnvelope(TypedDict):
+    """A commands-only envelope, which `just channel-reply` sends to the run's replies."""
+
+    version: int
+    commands: list[SettleCommand]
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+def test_a_failed_run_whose_failed_node_is_settled_done_fires_its_success_hook_once(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A settle that carries an ended run to a different ending is an epoch of its own.
+
+    The rescue this host's manager performs when a node's work landed another way: the
+    run ended failed and its failure hook fired, the manager settles the failed node
+    `done` through `just channel-reply`, and the adopting driver applies it. Nothing is
+    made live again — the settle moves a recorded state and dispatches nothing — so an
+    engine that opened an epoch only on an edit that reopened work left the run complete
+    with its follow-up run never launched. On the adopted engine the success hook fires
+    for the complete ending the settle carried the run to, exactly once, and the failure
+    hook's record is labelled superseded by the settle.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin)
+    run = f"hooks-settled-{os.getpid()}"
+    follow_up = ""
+    try:
+        _draft(bench, run)
+        failed = _launch(bench, run, persona=UNCLAIMED_PERSONA)
+        assert _settlement(failed)["settlement"] != "complete", failed.result.stdout
+        assert (bench.runs / run / "hooks" / "failure.log").is_file()
+        assert not (bench.runs / run / "hooks" / "success.log").exists()
+
+        envelope: SettleEnvelope = {
+            "version": 3,
+            "commands": [
+                {
+                    "op": "settle",
+                    "id": NODE,
+                    "outcome": "done",
+                    "evidence": "The report this node owed was delivered by hand.",
+                }
+            ],
+        }
+        replied = _just(bench, "channel-reply", run, seconds=120, input_text=json.dumps(envelope))
+        assert replied.returncode == 0, replied.stdout + replied.stderr
+        adopted = _just(bench, "orchestrate", "--adopt", run)
+        assert adopted.returncode == 0, adopted.stdout + adopted.stderr
+        assert _settlement(Launch(adopted, run)) == {"run_id": run, "settlement": "complete"}
+        assert _statuses(bench, run)[NODE][0] == "done", _statuses(bench, run)
+
+        success_log = (bench.runs / run / "hooks" / "success.log").read_text(encoding="utf-8")
+        matched = LAUNCHED.search(success_log)
+        assert matched is not None, success_log
+        follow_up = matched["follow_up"]
+        assert follow_up == f"{run}{FOLLOW_UPS_SUFFIX}"
+        assert _launch_record(bench, follow_up)["project"] == f"authoring:{follow_up}"
+
+        # Once: a second adoption of the ended run finds the success hook already fired
+        # for this ending and fires nothing, so `results` still carries one record of it.
+        again = _just(bench, "orchestrate", "--adopt", run)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert _settlement(Launch(again, run)) == {"run_id": run, "settlement": "complete"}
+        results = _just(bench, "results", run, seconds=60)
+        assert results.returncode == 0, results.stderr
+        fired = [line for line in results.stdout.splitlines() if "success hook fired" in line]
+        assert len(fired) == 1, (again.stdout + again.stderr, results.stdout)
+        assert "superseded" not in fired[0], fired[0]
+        failure_line = next(
+            line for line in results.stdout.splitlines() if "failure hook fired" in line
+        )
+        assert "superseded:" in failure_line and "settle" in failure_line, failure_line
+        assert sorted(path.name for path in bench.runs.glob(f"{run}{FOLLOW_UPS_SUFFIX}*")) == [
+            follow_up
+        ]
     finally:
         _stop(bench, run, *([follow_up] if follow_up else []))
 

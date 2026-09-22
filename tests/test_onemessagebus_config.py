@@ -7,14 +7,19 @@ unknown key that the same load refuses by name — without that control, a verb 
 ignored `--config` would pass too. Then each value is held to the statement it comes from:
 the monitor's author to `AGENTS.md` and to the reasons the bus gave before it stopped
 naming the monitor, the reply window to the shim's default, the validator to the one
-in-repo entry point, and the schema link to the onejudge this host adopts.
+in-repo entry point, the frames link to the onejudge this host adopts, and the layout link
+to the engine this host adopts — whose published planner-channel layout is where the
+channel's queues now come from, since the adopted bus compiles no layout in.
 
 The link is proven with no request leaving the host. Every copy here differs from the
 committed file only in where its link points — at a bundle on disk, or at a loopback
-server this module starts — and the bundle is derived from the installed onejudge
-(`tests/onejudge_bundle.py`), never a copy somebody maintains. The later comparison of the
-committed URL against what GitHub actually serves is session setup's warm step on a real
-host, which reports each link with the version it stored.
+server this module starts — and the frames bundle is derived from the installed onejudge
+(`tests/onejudge_bundle.py`), never a copy somebody maintains. The layout document is the
+one exception, because no installed artifact carries it: the suite reads the fixture
+`tests/onejudge_bundle.py` names, and `tests/test_engine_contracts.py` holds it byte for
+byte to the engine's own source at the adopted tag. The later comparison of the committed URLs
+against what GitHub actually serves is session setup's warm step on a real host, which
+reports each link with the version it stored.
 
 The workspace installs no YAML library, so each value is read off the file's own lines,
 with comments removed, the way this suite's other readers of YAML documents read them; the
@@ -39,6 +44,12 @@ from orchestrator.root import REPO_ROOT
 
 CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
 ONEJUDGE_VERSION = REPO_ROOT / "config" / "onejudge.version"
+ONEPIPELINE_VERSION = REPO_ROOT / "config" / "onepipeline.version"
+
+#: The four queues the engine's planner-channel layout declares and writes a run's channel
+#: directory in (onepipeline's `docs/contract.md`, "The planner channel runs on
+#: `onemessagebus`"), in the order the bus's `status` reports them.
+ENGINE_QUEUES = ["command-outcomes", "commands", "replies", "surfaces"]
 
 #: The bus this checkout pins, never one the ambient PATH offers first.
 BUS = str(REPO_ROOT / ".venv" / "bin" / "onemessagebus")
@@ -223,10 +234,19 @@ def test_the_pass_cache_the_configuration_names_is_the_one_git_ignores() -> None
 
 
 def _link() -> tuple[str, str]:
-    """The committed link's location and its `@` pin."""
-    (link,) = onejudge_bundle.configured_links()
-    location, pin = link.rsplit("@", 1)
+    """The committed frames link's location and its `@` pin."""
+    location, pin = onejudge_bundle.frames_link().rsplit("@", 1)
     return location, pin
+
+
+def _fetched_frames(report: str) -> dict[str, str]:
+    """The one link of a `schemas fetch` report that is not the layout's."""
+    (link,) = [
+        link
+        for link in json.loads(report)["links"]
+        if not link["link"].rsplit("@", 1)[0].endswith(f"/{onejudge_bundle.LAYOUT_DOCUMENT}")
+    ]
+    return dict(link)
 
 
 def test_the_link_names_the_adopted_onejudge_release_and_the_protocol_it_speaks() -> None:
@@ -324,7 +344,7 @@ def test_a_file_link_with_this_hosts_pin_reads_the_derived_bundle(tmp_path: Path
     read = _fetch(config, cache)
 
     assert read.returncode == 0, read.stderr
-    (link,) = json.loads(read.stdout)["links"]
+    link = _fetched_frames(read.stdout)
     assert (link["outcome"], link["version"]) == ("read", onejudge_bundle.protocol()), link
 
 
@@ -338,7 +358,7 @@ def test_this_hosts_pin_fetches_into_an_empty_cache_and_revalidates_the_entry(
 
     first = _fetch(config, cache)
     assert first.returncode == 0, first.stderr
-    (fetched,) = json.loads(first.stdout)["links"]
+    fetched = _fetched_frames(first.stdout)
     assert (fetched["outcome"], fetched["version"]) == ("fetched", onejudge_bundle.protocol())
     listed = subprocess.run(
         [BUS, "schemas", "--format", "json"],
@@ -354,7 +374,7 @@ def test_this_hosts_pin_fetches_into_an_empty_cache_and_revalidates_the_entry(
 
     second = _fetch(config, cache)
     assert second.returncode == 0, second.stderr
-    (confirmed,) = json.loads(second.stdout)["links"]
+    confirmed = _fetched_frames(second.stdout)
     assert (confirmed["outcome"], confirmed["version"]) == ("confirmed", onejudge_bundle.protocol())
     assert origin.requests == [None, LoopbackOrigin.ETAG], (
         f"the second fetch was not a conditional request against the stored entry: "
@@ -379,3 +399,63 @@ def test_a_bundle_declaring_a_version_this_hosts_pin_does_not_admit_is_refused(
     assert f"the bundle declares version {later}, which the pin @{pin} does not admit" in (
         refused.stderr + refused.stdout
     )
+
+
+def test_the_layout_link_names_the_adopted_engine_release_and_the_version_it_declares() -> None:
+    """The tag is `config/onepipeline.version`'s and the pin admits what the document declares.
+
+    The URL form is the one onepipeline's `docs/contract.md` states for a host's bus. The
+    engine keeps running the layout it compiles in, so a tag behind the engine pin would
+    leave this host's channel verbs reading and writing the channel directory under an
+    older engine's layout while every dispatch ran the newer one.
+    """
+    location, pin = onejudge_bundle.layout_link().rsplit("@", 1)
+    adopted = ONEPIPELINE_VERSION.read_text(encoding="utf-8").strip()
+    assert location == (
+        "https://raw.githubusercontent.com/nickderobertis/onepipeline/"
+        f"v{adopted}/schemas/planner-channel.json"
+    ), location
+    declared = json.loads(onejudge_bundle.ENGINE_LAYOUT.read_text(encoding="utf-8"))["version"]
+    assert declared.split(".")[0] == pin, (
+        f"the layout link pins @{pin}, and the document the engine publishes declares {declared}"
+    )
+
+
+def test_the_adopted_bus_resolves_the_configuration_to_the_four_queues_the_engine_writes(
+    tmp_path: Path,
+) -> None:
+    """Through the linked layout, and through nothing else: without the link there is none.
+
+    `status` over an empty channel directory reports every queue the resolved layout
+    declares. The control is the same file with its layout link removed, which the adopted
+    bus refuses by naming the profile — so the queues above come from the engine's document
+    rather than from a layout the bus still compiled in.
+    """
+    resolved = subprocess.run(
+        [BUS, "status", "--config", str(CONFIG), "--transport-dir", str(tmp_path / "channel")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        cwd=REPO_ROOT,
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    assert [queue["queue"] for queue in json.loads(resolved.stdout)] == ENGINE_QUEUES
+
+    unlinked = tmp_path / "onemessagebus.yaml"
+    layout = onejudge_bundle.layout_link()
+    text = CONFIG.read_text(encoding="utf-8")
+    assert text.count(f'  - "{layout}"\n') == 1
+    unlinked.write_text(text.replace(f'  - "{layout}"\n', ""), encoding="utf-8")
+    refused = subprocess.run(
+        [BUS, "status", "--config", str(unlinked), "--transport-dir", str(tmp_path / "other")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        cwd=REPO_ROOT,
+    )
+    assert "`planner-channel` is not a layout this build links" in refused.stderr, (
+        refused.stdout + refused.stderr
+    )
+    assert refused.stdout.strip() == "", refused.stdout

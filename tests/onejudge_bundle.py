@@ -1,4 +1,5 @@
-"""onejudge's published frame bundle, derived from the installed release, and served offline.
+"""The bundles this host's bus configuration links, served offline: onejudge's frames,
+derived from the installed release, and the engine's planner-channel layout.
 
 `config/onemessagebus.yaml` links the bundle onejudge publishes at its release tag, and
 every verb that loads that file resolves the link before it does anything else — the
@@ -12,6 +13,14 @@ schemas the release was generated from (`_generated/schemas.json`, keyed
 out of exactly those entries, declaring the protocol their ids name. What that proves is
 held by `tests/test_onemessagebus_config.py`; this module only makes the bundle and
 reaches the bus with it.
+
+The configuration's other link is the planner-channel layout the adopted engine publishes
+(onepipeline's `docs/contract.md`, "The planner-channel layout is published as a
+document"). The installed engine wheel carries the binary and no copy of that document,
+so the suite reads it from `tests/fixtures/planner-channel.json`, which is the document
+byte for byte as it stands at the tag `config/onepipeline.version` names;
+`tests/test_engine_contracts.py` holds the two equal against the registered engine
+checkout, so the fixture cannot be edited by hand without that gate failing.
 
 `seed_process_cache()` is how every process of the suite resolves the committed link
 with no request leaving the host: a loopback CONNECT proxy, named by the `HTTPS_PROXY`
@@ -47,8 +56,16 @@ from orchestrator.root import REPO_ROOT
 #: This host's bus configuration, whose `schemas` links the suite has to resolve offline.
 CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
 
-#: The adopted onejudge release, whose tag the committed link names.
+#: The adopted onejudge release, whose tag the committed frames link names.
 ONEJUDGE_VERSION_FILE = REPO_ROOT / "config" / "onejudge.version"
+
+#: The document each committed link names, by the last segment of its path.
+FRAMES_DOCUMENT = "judge-seat-frames.json"
+LAYOUT_DOCUMENT = "planner-channel.json"
+
+#: The planner-channel layout the adopted engine publishes, as it stands at the engine
+#: pin's tag. Read as bytes and served whole: the bus reads it, and nothing here does.
+ENGINE_LAYOUT = REPO_ROOT / "tests" / "fixtures" / "planner-channel.json"
 
 #: How the SDK keys a frame schema: `agent.onejudge-frame.<op>@<protocol>`.
 FRAME_ID = re.compile(r"^agent\.onejudge-frame\.(?P<op>[a-z]+)@(?P<protocol>\d+)$")
@@ -118,17 +135,41 @@ def configured_links(config: Path = CONFIG) -> list[str]:
     return links
 
 
-def relinked_copy(destination: Path, link: str, *, replacing: dict[str, str] | None = None) -> Path:
-    """A copy of this host's configuration differing only in where its one link points.
+def _named_link(document: str, config: Path = CONFIG) -> str:
+    """The one committed link whose location ends in `document`."""
+    named = [
+        link for link in configured_links(config) if link.rsplit("@", 1)[0].endswith(f"/{document}")
+    ]
+    assert len(named) == 1, f"{config} links {document} {len(named)} times, not once: {named}"
+    return named[0]
 
-    `replacing` changes further lines verbatim — the one use is shortening the reply
-    window, which each caller names — so a copy never drifts from the committed file in
-    anything it did not say.
+
+def frames_link(config: Path = CONFIG) -> str:
+    """The committed link to onejudge's command-provider frames."""
+    return _named_link(FRAMES_DOCUMENT, config)
+
+
+def layout_link(config: Path = CONFIG) -> str:
+    """The committed link to the planner-channel layout the engine publishes."""
+    return _named_link(LAYOUT_DOCUMENT, config)
+
+
+def relinked_copy(destination: Path, link: str, *, replacing: dict[str, str] | None = None) -> Path:
+    """A copy of this host's configuration whose frames link points at `link`.
+
+    Its layout link points at `ENGINE_LAYOUT` through a `file://` link under the committed
+    pin, which the bus reads on every resolution and caches nothing for, so a copy resolves
+    the same layout offline whatever cache it runs over. `replacing` changes further lines
+    verbatim — the one use is shortening the reply window, which each caller names — so a
+    copy never drifts from the committed file in anything it did not say.
     """
-    committed = configured_links()
-    assert len(committed) == 1, committed
+    frames, layout = frames_link(), layout_link()
+    assert len(configured_links()) == 2, configured_links()
     text = CONFIG.read_text(encoding="utf-8")
-    text = text.replace(f'"{committed[0]}"', json.dumps(link))
+    text = text.replace(f'"{frames}"', json.dumps(link))
+    text = text.replace(
+        f'"{layout}"', json.dumps(f"file://{ENGINE_LAYOUT}@{layout.rsplit('@', 1)[1]}")
+    )
     for old, new in (replacing or {}).items():
         assert text.count(old) == 1, f"{old!r} is not one line of {CONFIG.name}"
         text = text.replace(old, new)
@@ -174,8 +215,11 @@ def _authority(directory: Path, hosts: set[str]) -> tuple[Path, ssl.SSLContext]:
     return authority, context
 
 
-def _serve_through_a_tunnel(context: ssl.SSLContext, body: bytes) -> tuple[socket.socket, str]:
-    """A loopback proxy answering every CONNECT with TLS and every GET with `body`."""
+def _serve_through_a_tunnel(
+    context: ssl.SSLContext, bodies: dict[str, bytes]
+) -> tuple[socket.socket, str]:
+    """A loopback proxy answering every CONNECT with TLS and every GET with the body its
+    path's last segment names in `bodies`, or `404` for a document it does not hold."""
     listener = socket.create_server(("127.0.0.1", 0))
 
     def read_head(connection: socket.socket | ssl.SSLSocket) -> bytes:
@@ -193,9 +237,15 @@ def _serve_through_a_tunnel(context: ssl.SSLContext, body: bytes) -> tuple[socke
                 return
             connection.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
             with context.wrap_socket(connection, server_side=True) as tunnel:
-                read_head(tunnel)
+                request = read_head(tunnel).split(b" ", 2)
+                path = request[1].decode() if len(request) > 1 else ""
+                body = bodies.get(path.rsplit("/", 1)[-1])
+                status = b"200 OK" if body is not None else b"404 Not Found"
+                body = body if body is not None else b""
                 tunnel.sendall(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    b"HTTP/1.1 "
+                    + status
+                    + b"\r\nContent-Type: application/json\r\n"
                     + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
                     + body
                 )
@@ -223,7 +273,13 @@ def seed_process_cache() -> Path:
     directory = Path(tempfile.mkdtemp(prefix="onemessagebus-schemas-"))
     cache_dir = directory / "cache"
     authority, context = _authority(directory, hosts)
-    listener, proxy = _serve_through_a_tunnel(context, json.dumps(bundle()).encode())
+    listener, proxy = _serve_through_a_tunnel(
+        context,
+        {
+            FRAMES_DOCUMENT: json.dumps(bundle()).encode(),
+            LAYOUT_DOCUMENT: ENGINE_LAYOUT.read_bytes(),
+        },
+    )
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -244,7 +300,8 @@ def seed_process_cache() -> Path:
         listener.close()
     assert fetched.returncode == 0, (
         f"the suite could not warm its schema cache from {CONFIG.name}'s links, offline, "
-        f"with the bundle derived from the installed onejudge:\n{fetched.stdout}{fetched.stderr}"
+        f"with the bundle derived from the installed onejudge and {ENGINE_LAYOUT.name}:\n"
+        f"{fetched.stdout}{fetched.stderr}"
     )
     os.environ[CACHE_DIR_ENV] = str(cache_dir)
     os.environ[TTL_ENV] = SUITE_TTL_SECONDS

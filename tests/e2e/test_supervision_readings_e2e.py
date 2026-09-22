@@ -126,6 +126,14 @@ QUESTION = '{"kind":"planner-question","message":"probe","source":"proposal"}\n'
 #: to prove nothing of the first was lost. Normalising them is what makes that
 #: comparison about the *lines* rather than about how long the second one took.
 DURATION = re.compile(r"\b\d+(?:h\d+m|m\d+s|[hms])\b")
+#: And so does free space, which the adopted engine's own views report from onepipeline
+#: 0.43.0 on — a size and a share of it, measured afresh by each of the two invocations.
+FREE_SPACE = re.compile(r"\b\d+(?:\.\d+)? [KMGTP]iB\b|\b\d+(?:\.\d+)?% free\b")
+
+
+def _stable(line: str) -> str:
+    """``line`` with every reading that moves between two invocations normalised."""
+    return FREE_SPACE.sub("<size>", DURATION.sub("<age>", line))
 
 
 def _environment(runs_root: Path) -> dict[str, str]:
@@ -211,7 +219,8 @@ def _bus_processes(session: int, verb: str) -> list[int]:
 def _question_waiting(channel: Path) -> bool:
     """Whether the channel's queue holds the question, read through the bus's own `status`."""
     looked = subprocess.run(
-        [str(BUS), "status", QUEUE, "--transport-dir", str(channel), "--format", "json"],
+        [str(BUS), "status", QUEUE, "--config", str(BUS_CONFIG), "--transport-dir", str(channel)]
+        + ["--format", "json"],
         capture_output=True,
         text=True,
         timeout=e2e_timeout(30),
@@ -374,12 +383,8 @@ def test_the_status_view_still_gives_every_reading_the_engine_gave(probe: Probe)
     assert engine.returncode == 0, engine.stderr
     assert recipe.returncode == 0, recipe.stderr
 
-    published = [DURATION.sub("<age>", line) for line in _above_providers(engine.stdout)]
-    kept = [
-        DURATION.sub("<age>", line)
-        for line in _above_providers(recipe.stdout)
-        if not line.startswith(DISK)
-    ]
+    published = [_stable(line) for line in _above_providers(engine.stdout)]
+    kept = [_stable(line) for line in _above_providers(recipe.stdout) if not line.startswith(DISK)]
     assert kept == published, (
         "the recipe must write back everything the published view printed, in order, and "
         f"add its own reading beside it; it printed {recipe.stdout!r}"
@@ -1004,9 +1009,9 @@ def test_the_host_view_still_gives_every_reading_the_engine_gave(probe: Probe) -
     assert engine.returncode == 0, engine.stderr
     assert recipe.returncode == 0, recipe.stderr
 
-    published = [DURATION.sub("<age>", line) for line in engine.stdout.splitlines()]
+    published = [_stable(line) for line in engine.stdout.splitlines()]
     kept = [
-        DURATION.sub("<age>", line)
+        _stable(line)
         for line in recipe.stdout.splitlines()
         if not line.startswith((DISK, RENDEZVOUS))
     ]

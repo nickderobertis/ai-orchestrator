@@ -61,6 +61,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
+import onejudge_bundle
 import probe_run_root
 import pytest
 from published_surface import surface_of
@@ -264,6 +265,9 @@ ONEPIPELINE = Engine("onepipeline", _pinned_tag("onepipeline"), "src")
 #: The same release's published contract document, where the declarations a caller of the
 #: engine — rather than a reader of its source — is held to are stated.
 ONEPIPELINE_DOCS = Engine("onepipeline", _pinned_tag("onepipeline"), "docs")
+#: The same release's published schema documents, among them the planner-channel layout
+#: `config/onemessagebus.yaml` links at that release's tag.
+ONEPIPELINE_SCHEMAS = Engine("onepipeline", _pinned_tag("onepipeline"), "schemas")
 #: The engine a dispatch *publishes through*, at the version onepipeline links —
 #: deliberately not `config/onevcs.version`, which is the CLI the manager verbs run.
 ONEVCS = Engine("onevcs", f"v{_linked_version('onevcs')}", "crates/onevcs/src")
@@ -522,13 +526,13 @@ CONSTANTS = (
     # manager-note op, and a document still telling a manager to send version 1 is
     # describing the envelope before that break. Held against the crate constant so the
     # next bump comes due here rather than after somebody sends the old shape. Since
-    # onepipeline 0.33.0 the channel runs on `onemessagebus-agent`, whose `channel.rs`
-    # declares the number and whose re-export in onepipeline's own `channel.rs` names no
-    # literal, so it is read where it is declared.
+    # onepipeline 0.42.1 the engine owns the planner-channel layout again (onemessagebus#126),
+    # so its own `channel/layout.rs` declares the number, re-exported from `channel.rs` with
+    # no literal there, and it is read where it is declared.
     Constant(
         "reply envelope version",
-        ONEMESSAGEBUS,
-        "onemessagebus-agent/src/channel.rs",
+        ONEPIPELINE,
+        "channel/layout.rs",
         re.compile(r"pub const REPLY_ENVELOPE_VERSION: u32 = (\d+);"),
         ORCHESTRATION,
         '"version":{value}',
@@ -3317,4 +3321,21 @@ def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
     assert "inherits the superseded node's" in str(retry["delivers"]), retry
     assert "reopened: 0" in paragraph, (
         "the paragraph does not say a retry after a plain cancel reports reopened: 0"
+    )
+
+
+def test_the_suites_layout_fixture_is_the_document_the_engine_publishes_at_its_tag() -> None:
+    """Byte for byte, read from the registered engine checkout at the adopted tag.
+
+    The installed engine wheel carries no copy of `schemas/planner-channel.json`, so the
+    suite resolves the layout link `config/onemessagebus.yaml` names from the fixture
+    `tests/onejudge_bundle.py` serves. A copy that drifted from the published document
+    would prove every channel verb against a layout no engine writes; one left at an older
+    tag after the engine pin moved fails here too.
+    """
+    published = _source(ONEPIPELINE_SCHEMAS, onejudge_bundle.LAYOUT_DOCUMENT)
+
+    assert onejudge_bundle.ENGINE_LAYOUT.read_text(encoding="utf-8") == published, (
+        f"{onejudge_bundle.ENGINE_LAYOUT} differs from the planner-channel layout onepipeline "
+        f"publishes at {ONEPIPELINE_SCHEMAS.ref}; replace it with that document, byte for byte"
     )

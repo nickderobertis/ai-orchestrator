@@ -598,10 +598,13 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Re-measured 2026-09-20 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.16.0 and names the `oneharness-cli`
+#: between them would mean anything. Re-measured 2026-09-21 on this host's installed
+#: wheels: `config/oneharness.version` reads 0.16.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.17.0, and the engine wheel links 0.17.0 as well. The two numbers
+#: against as 0.17.1, and the engine wheel links 0.17.1 as well — while the sibling
+#: `oneagentgraph-cli` and `onejudge-cli` wheels are still compiled against 0.17.0, which
+#: is the pairing `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
+#: holds and a different artifact from the `oneharness-cli` this pin names. The two numbers
 #: **coincide on this adoption**, which proves nothing: they are independently
 #: released artifacts, they have differed on every adoption recorded here before this
 #: one, and an equality gate would read that coincidence as a contract.
@@ -617,9 +620,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.8", core="0.17.0"),
-    LinkedCore(dependent="onejudge", dependent_version="0.13.3", core="0.17.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.42.0", core="0.17.0"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.9", core="0.17.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.13.4", core="0.17.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.43.1", core="0.17.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -747,6 +750,22 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
+#: The one declared exception to the gate below, measured when the engine pin moved to
+#: onepipeline 0.43.1: the newest `onepipeline-api-cli` on PyPI, 0.11.2, links onepipeline
+#: 0.42.0, and no release linking 0.43.1 exists. The manager ruled that the engine pin
+#: moves regardless, because holding it would keep every dispatch on an engine without the
+#: channel and routing fixes 0.43.1 carries; until a UI release links it, a browser adopt
+#: drives 0.42.0 and is not used for a run launched under this pin (AGENTS.md's
+#: onepipeline-ui roster entry, docs/dag-ui.md's "Which release is answering"). Satisfied
+#: only while both measured versions are exactly these, so it fails, naming itself, the
+#: moment either pin or the UI's linked engine moves — and is then deleted, not re-dated.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
+    linked="0.42.0",
+    pinned="0.43.1",
+    because="no onepipeline-ui release links onepipeline 0.43.1 yet",
+)
+
+
 def test_the_ui_api_links_the_engine_this_host_pins() -> None:
     """The reader's own engine, held level with `config/onepipeline.version`.
 
@@ -771,7 +790,17 @@ def test_the_ui_api_links_the_engine_this_host_pins() -> None:
     """
     linked = _ui_api_linked_engine()
     pinned = _pinned_cli("onepipeline.version")
+    declared = DECLARED_UI_ENGINE_DIVERGENCE
 
+    if declared is not None:
+        assert (declared.linked, declared.pinned) == (linked, pinned), (
+            f"the declared UI-engine divergence was written against the UI linking "
+            f"{declared.linked} / the engine pin at {declared.pinned}, and this host measures "
+            f"{linked} / {pinned}. It held only while {declared.because}: delete "
+            "DECLARED_UI_ENGINE_DIVERGENCE and its caveats in AGENTS.md and docs/dag-ui.md "
+            "if the two now agree, or re-read why they do not"
+        )
+        return
     assert linked == pinned, (
         f"the adopted {UI_API_DISTRIBUTION} links onepipeline {linked} while "
         f"config/onepipeline.version adopts {pinned}. An adopt from the DAG Observatory "
@@ -900,8 +929,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.17.0", "0.17.0"),
-        "onejudge-cli": ("0.17.0", "0.17.0"),
+        "oneagentgraph-cli": ("0.17.0", "0.17.1"),
+        "onejudge-cli": ("0.17.0", "0.17.1"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

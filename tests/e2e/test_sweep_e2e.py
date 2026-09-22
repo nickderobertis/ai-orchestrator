@@ -1409,7 +1409,7 @@ def test_both_of_onevcss_families_are_reclaimed_for_real(host: Host) -> None:
 
 
 #: A number of hours in the shape `scripts/sweep.sh` forwards that both adopted verbs
-#: refuse, measured on oneagentgraph 0.4.8 and onevcs 0.29.1: each holds its floor as a
+#: refuse, measured on oneagentgraph 0.4.9 and onevcs 0.30.1: each holds its floor as a
 #: duration and refuses anything past 5124095576030430 hours as more than it can hold.
 #: The fractional hour this journey used to send stopped being a refusal when
 #: oneagentgraph 0.4.7 took a decimal floor, which is also why no argument makes one of
@@ -1444,7 +1444,7 @@ def test_a_sweep_whose_every_verb_failed_says_so_rather_than_listing_nothing(
 
 # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Deliberate fault injection
 # at the published-CLI boundary the recipe delegates to, not a substitution of the layer
-# under test: on the adopted oneagentgraph 0.4.8 and onevcs 0.29.1 the real sweep verbs
+# under test: on the adopted oneagentgraph 0.4.9 and onevcs 0.30.1 the real sweep verbs
 # accept and refuse the same values and oneagentgraph's sweep succeeds on any state, so no
 # real usage reaches a oneagentgraph-only refusal. The `uv` stand-in answers only that one
 # call and forwards every other one to the real uv, so the recipe, the wrapper, the real
@@ -1464,7 +1464,7 @@ def test_the_other_verb_still_sweeps_when_oneagentgraph_is_the_one_that_fails(
     **The one refusal here that is not the verb's own, and why.** This journey used to
     send `--min-age-hours 1.5`, which `oneagentgraph sweep` refused and `onevcs sweep`
     took. oneagentgraph 0.4.7 took a decimal floor, and on the adopted oneagentgraph
-    0.4.8 and onevcs 0.29.1 the two verbs accept and refuse exactly the same values in
+    0.4.9 and onevcs 0.30.1 the two verbs accept and refuse exactly the same values in
     the shape the wrapper forwards, while `oneagentgraph sweep` answers success on any
     state or environment once its arguments parse — so nothing real makes it fail
     alone. The fault is therefore injected where the wrapper reaches the verb, since the

@@ -10,6 +10,12 @@ files:
   # List committed files that shouldn't be judged (lock files, generated output).
   exclude:
     - "**/.git/**"
+    # Upstream-generated output this repository cannot edit: onepipeline's published
+    # `schemas/planner-channel.json`, byte for byte at the tag config/onepipeline.version
+    # names, which tests/test_engine_contracts.py holds equal to the registered engine
+    # checkout. JSON carries no inline directive, so this one path is the narrowest
+    # suppression the tool offers.
+    - "tests/fixtures/planner-channel.json"
 rationales: true
 # Findings and broken judge runs are not cached by the `lint-llm-diff` tier — Nx
 # caches successful tasks only — so a branch working through a red re-rolls the

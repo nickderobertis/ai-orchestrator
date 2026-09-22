@@ -1319,7 +1319,17 @@ def test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider() -> 
             "reads, copies or runs"
         )
 
-        allowed = sources | _stand_ins_named(sources, tracked)
+        # A data file one of those sources opens by its path is read in the journey's own
+        # process — the layout document `tests/onejudge_bundle.py` seeds every schema cache
+        # from, through `tests/conftest.py` — and is no sibling's module, so the key may
+        # carry it. Test modules are still admitted only by import, as above.
+        opened = {
+            path
+            for source in sources
+            for path in _named_files((REPO_ROOT / source).read_text(encoding="utf-8"), tracked)
+            if not path.endswith(".py")
+        }
+        allowed = sources | _stand_ins_named(sources, tracked) | opened
         surplus = sorted(
             path for path in covered if path.startswith("tests/") and path not in allowed
         )

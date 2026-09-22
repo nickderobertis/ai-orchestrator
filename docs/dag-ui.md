@@ -181,9 +181,19 @@ level, and **not by an operator remembering to check**:
 `tests/test_linked_libraries.py::test_the_ui_api_links_the_engine_this_host_pins`
 reads the engine out of the adopted read-API wheel's own bill of materials and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
-alone fails on this host rather than at whatever a browser adoption then drives. They
-are level today: the adopted `onepipeline-ui` 0.11.2 links onepipeline 0.42.0 and
-`config/onepipeline.version` reads 0.42.0. What `/healthz` is for from here is the
+alone fails on this host rather than at whatever a browser adoption then drives.
+
+**They are not level today, by one declared exception.** `config/onepipeline.version`
+reads 0.43.1, and the adopted `onepipeline-ui` 0.11.2 — the newest release there is —
+links onepipeline 0.42.0. The engine pin moved anyway, on the manager's ruling, because
+holding it would have kept every dispatch on an engine without the planner-channel and
+routing fixes 0.43.1 carries; the gate reads the pair through
+`DECLARED_UI_ENGINE_DIVERGENCE` in the same module, which is satisfied only while the two
+are exactly 0.42.0 and 0.43.1 and fails, naming itself, the moment either moves. **Until
+an `onepipeline-ui` release links onepipeline 0.43.1, do not adopt a run from the
+browser**: the adopt would drive that run with the reader's own 0.42.0 while every other
+dispatch on this host runs 0.43.1. Adopt with `just orchestrate --adopt <run-id>`
+instead. What `/healthz` is for from here is the
 question that gate cannot answer — which release is answering **on this port right
 now**, since both pieces load once at start and a server left running from before a bump
 goes on serving what it loaded.
@@ -273,7 +283,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.8**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.9**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

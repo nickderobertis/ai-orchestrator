@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.42.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.43.1 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,14 +143,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.16.1/0.13.3 upgrade (`config/oneharness.version` and
+after the 0.16.1/0.13.4 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made eleven times
+one. That re-check has now been made twelve times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -239,7 +239,12 @@ The oneharness half has since moved to 0.16.1 on the same terms: nothing under
 changes ([oneharness#1344](https://github.com/nickderobertis/oneharness/pull/1344)) is the
 process exit code for a one-candidate selection that cannot run, a base-id `--bin`
 override reaching a variant, and which usage a refused `--format text --compact` prints —
-none of it written into a record's `usage`.
+none of it written into a record's `usage`. The onejudge half has since moved to 0.13.4 on
+the same terms: nothing under `crates/onejudge/src/` changes between v0.13.3 and v0.13.4,
+which relinks the generic `onemessagebus` 0.8.0 and nothing else. `onejudge-cli` 0.13.4 is
+still compiled against `oneharness-core` 0.17.0 while the engine wheel now links 0.17.1,
+read off each wheel's own SBOM, and nothing under `crates/oneharness-core/src/domain/`
+changes between `oneharness-core-v0.17.0` and `oneharness-core-v0.17.1`.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.

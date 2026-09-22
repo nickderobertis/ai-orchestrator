@@ -160,14 +160,23 @@ engine having re-dispatched onto the *same* branch with the reason and `onevcs`'
 evidence until its budget was spent. Read a refusal among them as a branch that exists,
 carries a tree the merge path would not pass, and has been worked several times — never
 as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
-committed work with the refusal still standing. `checks-unsettled` is not a verdict on
-the tree: a required check with no verdict ends there, whether it was still pending when
-the watch's bound elapsed or completed `cancelled` or `stale`, which the linked `onevcs`
-reads as no verdict rather than as red — so re-run that check on the host before reading
-the branch as refused. `pushed-unverified` is the one that is not a refusal:
-the push reached the remote and the merge path could not then be read, so the work is on
-the origin with its verdict outstanding — read the change request on the host, never
-publish again.
+committed work with the refusal still standing. A `push-rejected` whose merge path
+wrote nothing says so and names how the push itself ended — its exit status, or the
+signal that terminated it — so read that line before re-running any gate to learn what
+failed. `checks-unsettled` is not a verdict on the tree: a required check with no
+verdict ends there, whether it was still pending when the watch's bound elapsed or
+completed `cancelled` or `stale`, which the linked `onevcs` reads as no verdict rather
+than as red. A change request the host merged after that watch stopped is reconciled on
+the next `status`, `release status` or publication that meets it — `onevcs` asks the
+host once and records the merge as the landing — so read `just work-status` before
+anything else; only a change still open or closed unmerged there is one whose check to
+re-run on the host before reading the branch as refused. `pushed-unverified` is the one
+that is not a refusal: the push reached the remote and the merge path could not then be
+read, so the work is on the origin with its verdict outstanding — read the change
+request on the host, never publish again. A run clone git will not read no longer
+answers for its whole identity: an identity-wide read reports it as a finding naming the
+clone and goes on across the rest, a release answer it leaves undecided reads *not
+answered* naming it, and a landed session over it closes from its landing record.
 
 <!-- llmlint: ignore-block[changed_behavior_has_e2e] The onevcs half — a hook's marker line read as the `host-prerequisite` kind, with the remediation as its reason — is driven here through `just publish-branch` in `tests/e2e/test_publish_branch_e2e.py`. The engine half — settling a lifecycle node on that kind once, as `infrastructure-failure`, with no re-dispatch — is a lifecycle publication's routing, which onepipeline drives through its real binary and a rejecting hook in its own `tests/e2e/lifecycle.rs` (PR 394); here `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains that landing and `tests/test_engine_contracts.py` holds the settlement pairing and the marker's name to the linked crates. A journey here would need a lifecycle dispatch against a registered identity whose hook prints the marker — a worker dispatch this suite does not double below the paid model — to re-prove what the producer's journey already does. -->
 **A merge path refused because this host lacks a tool or a credential one of its hooks
@@ -283,6 +292,9 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
   **this pin can govern a dispatch**, and the two pins are held to linking one engine by
   `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
+  Where that gate declares the two apart, a browser adopt drives an engine this host
+  did not pin, so adopt with `just orchestrate --adopt` until the declaration retires
+  ([`docs/dag-ui.md`](docs/dag-ui.md#which-release-is-answering) names the releases).
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
@@ -411,7 +423,10 @@ follows — change the producer's declaration or the host's override, never the 
 
 Under `published` a held node never launches, never fails, never degrades, and has no
 timeout; it raises a non-blocking surface naming what it awaits, and the decision — keep
-waiting, flip it to `fast` by live edit, stop the run — is yours.
+waiting, flip it to `fast` by live edit, stop the run — is yours. A wait surface whose
+hold has since ended — the node unheld, adopted or dispatched at or after the surface was
+queued — is withheld when the queue is read, and stderr names the record that ended it,
+so a wait you are handed is about a hold still on.
 <!-- llmlint: ignore-block[changed_behavior_has_e2e] Both readings need a producer repository declaring a release target with a probe and a consumer held on it, which onepipeline's own `tests/e2e/adoption.rs` builds and drives through the real binary — `status_names_the_release_a_held_node_awaits_rather_than_calling_it_queued` for the first (PR 390), and the unreadable-, renamed- and same-pass-dependency journeys for the second (PR 386). Nothing on this host declares a release target a journey here could hold a node on without rebuilding that world; `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains both landings, and `tests/e2e/test_release_adoption_in_force_e2e.py` holds that the installed artifacts resolve the `published` rung at all. -->
 `just status` reads such a node as `held — awaiting the published release of
 <dependency>, waited <duration>`, off the `node-held` the driver journalled, and never as
@@ -698,9 +713,14 @@ turn; `cancel` or `retry` with an amended task when the running worker must be j
 against the new bar. A ruling that reaches the worker alone leaves its judge reviewing
 against a task that never heard it. **An amendment is criteria** and is held to what
 criteria are held to — a property the finished tree must have, never the mechanism you
-prefer, since a judge cannot tell the two apart. Put it above the operational notes the
-task carries (they open at `## Additional info`) and say that where the two disagree
-the amendment wins.
+prefer, since a judge cannot tell the two apart. Write only the clauses: the engine
+renders an amendment into the task's own `## Acceptance criteria`, at its end under
+`### Amendment`, one bullet per clause, opening with the sentence that each clause
+takes precedence over the **whole task** — the criteria above it, the task elsewhere and
+the operational notes below (onepipeline's `docs/contract-divergences.md` states it) —
+so a heading or a precedence sentence of your own adds nothing. A task you rewrite for
+a `retry` or `requeue` is not rendered that way: put the correction in its own
+`## Acceptance criteria`, above the operational notes (they open at `## Additional info`).
 
 **A supervisory finding earns a check, never an action**, and being grounded is what
 makes one worth checking rather than what makes it right: a finding that quotes a diff
@@ -805,8 +825,10 @@ dropped with why, and anything it found that should have been surfaced during th
 **When a run ends any other way**, the failure hook launches nothing. Decide with the user
 whether to verify its drafts by hand with `just follow-ups <run-id>`. A pause on a
 decision is not an ending. A run fires at most one hook for each ending it reaches; an
-accepted edit that makes the run live again starts a new epoch, so a recovered run fires
-the hook for its later ending too.
+accepted edit that makes the run live again, or that carries it from one ending to a
+different one, starts a new epoch, so a recovered run fires the hook for its later ending
+too — and a failed node you `settle` `done` because its work landed another way fires the
+success hook, launching the follow-up run.
 
 **Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
 comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
@@ -924,7 +946,7 @@ watching means and what that verb is held to:
    them, because the properties hold by construction inside the command and by
    somebody's memory anywhere else; where a watch would have to end on something the
    verb does not return on, report the missing condition rather than writing a loop.
-   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned 0.42.0 names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned 0.43.1 names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
    `--until` takes `surface` (the default), `settled`, `nothing-driving`, `node-settled`
    and `node=<ID>`; `settled` and `nothing-driving` end every wait, while a waiting
    surface ends one only under `surface`, so name both when you want both. `--timeout
@@ -964,7 +986,8 @@ was.
   surfaces --codec monitor` runs `codecs.monitor` — what a taken turn is told, the
   `monitor-failed` and `monitor-completion` kinds it raises, what a lost turn is called
   — as data, under the grammar onemessagebus's `codecs.md` states. **Who may speak is
-  declared there too**: the planner is the bus's one built-in author, and the monitor's
+  declared there too**: the planner is the one author the engine's planner-channel layout
+  — linked from that file as the document the engine publishes — grants every op, and the monitor's
   author — its grants and the reason each other op is refused, in the channel's words —
   is this host's `authors.monitor`, so an author the file does not declare is refused
   before anything is appended.
