@@ -89,6 +89,18 @@ WRITEBACK_BUDGET_WORKSPACE = "writebackBudgetWorkspace"
 #: `scripts/ask-manager.sh`, which a launch only tests with `-x` and refuses without, and
 #: the test modules and `tests/conftest.py`, which pytest opens as rewritten bytecode.
 RUN_END_HOOKS_WORKSPACE = "runEndHooksWorkspace"
+#: The key the `host-views` project's one tier is memoized on. Files rather than trees,
+#: for the reason `unwatchedWorkspace` names: its real-launch control spends a whole
+#: `just orchestrate`, so every path in the key nothing here reads makes an unrelated
+#: edit pay for that launch. Measured rather than guessed — the tier traced under
+#: `strace -f -e trace=openat,execve`, each opened path resolved against this checkout
+#: and a bytecode file mapped to its source, then intersected with what git tracks — so
+#: the key is the two recipes and the launch machinery they reach through
+#: `scripts/onepipeline.sh`, every pin in `config/`, the graphs, personas and harness
+#: configs the engine opens at launch, the example records the control copies and
+#: launches from, and the modules the test imports. A launch path that starts reading a
+#: new file is a re-take of that measurement rather than a glob to widen.
+HOST_VIEWS_WORKSPACE = "hostViewsWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
 #: `just telemetry-server` drive and read — those two recipes and the scripts they
 #: reach, the address both resolve each other through, the pins that decide which
@@ -146,7 +158,7 @@ PLAN_TOOLING_DOCS_SCOPED = "test-docs"
 PLAN_TOOLING_ROOT = "tests/plan_tooling"
 
 #: The directory every host-tool journey over the ask seam lives under — the real
-#: `scripts/ask-manager.sh`, the real `onemessagebus ask` it hands the question to, and
+#: `scripts/ask-manager.sh`, the installed engine's `onepipeline ask` it execs, and
 #: the real launches that decide what a dispatch is given to ask with — and which every
 #: other project's tiers ignore. Not a project itself: each journey below is one, in a
 #: directory of its own under this one, because each spends a real launch and a key two
@@ -290,6 +302,23 @@ SESSION_SETUP_PROJECT = "session-setup"
 SESSION_SETUP_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 SESSION_SETUP_ROOT = "tests/session_setup"
+
+#: The project whose test target owns the journeys over `just status` and `just host` —
+#: the two views a supervisor reads a run and this host through, driven as real recipes
+#: over the installed engine, one of them over a run root a real launch wrote. A project
+#: of its own for the reason `unwatched` is: driving this repository's recipes and the
+#: engine's command surface for real, a launch among them, is a cost `nx affected` can
+#: only keep off an unrelated edit where it is a separate project. While these sat in the
+#: orchestrator project, `reads_recipes` and `reads_docs` split them across two of that
+#: project's targets and every prose edit in the repository paid for the launch.
+HOST_VIEWS_PROJECT = "host-views"
+#: That project's one test target. One rather than two: the only prose its key carries is
+#: the example records the launch copies, which are data the journey reads rather than
+#: this repository's prose about itself.
+HOST_VIEWS_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore. Path-selected, as
+#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+HOST_VIEWS_ROOT = "tests/host_views"
 
 #: The project whose test target owns the two-process replacement race over
 #: `orchestrator/project_store.py`: writer processes replacing one project's records

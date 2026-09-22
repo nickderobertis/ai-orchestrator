@@ -125,7 +125,7 @@ DRAFTING_TASK = "Draft the body for `probe-branch`, which added a health endpoin
 #: change request as a draft: the node's task, then the engine's two sections — the
 #: change request the session holds with the description as the worker left it, and
 #: the command that renders the worker's transcript. Both headings are read out of
-#: `graphs/pr-author.yaml` by `tests/drafting_task_contract.py` and held to the pinned
+#: `graphs/pr-author.yaml` by `tests/test_engine_contracts.py` and held to the pinned
 #: engine there; what is driven here is that a turn is prompted with both.
 DRAFTING_TASK_WITH_A_WORKER_START = (
     f"{DRAFTING_TASK}\n\n"

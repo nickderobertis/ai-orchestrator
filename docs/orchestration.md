@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.43.1. The whole of that reasoning —
+onepipeline 0.44.1. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.43.1. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.44.1. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -323,7 +323,7 @@ is what says the rest: the launch's plan read went through, the write-back's rea
 refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
 what it was. Both halves are asserted because either alone passes for the wrong
 reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.43.1; below the 0.16.3 that added that
+behind. Re-read on the adopted onepipeline 0.44.1; below the 0.16.3 that added that
 read, all three fail at once — the release beneath it performs no destination read at
 all, copies three times, and leaves the record with an empty body.
 
@@ -333,7 +333,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.43.1, that schedule answers only the failures a retry can change. A projection the store
+0.44.1, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -599,7 +599,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.43.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.44.1 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -727,7 +727,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.43.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.44.1 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -1107,7 +1107,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.43.1 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.44.1 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1237,26 +1237,22 @@ instruction to run that command, found the empty string, and had nothing to fall
 back on and nothing to report it to. The persona's own fallback is for a dispatch
 some *other* launch made, which is why it is stated there rather than here.
 
-**The command is a shim, and the bus does the asking.** It takes the question as one
-argument, as `--file <path>`, or on stdin — the three forms every dispatched task spells
-out — and turns each into one `exec onemessagebus ask surfaces --blocking` over
-`config/onemessagebus.yaml` and the run's channel directory,
-`${ONEPIPELINE_RUNS_DIR:-runs}/<run-id>/channel` against the directory it is run in,
-with the question as a `planner-question` frame on stdin, `ONEPIPELINE_CHANNEL_ASKER` as
-its `--asker` where one is set, `ORCHESTRATOR_ASK_MANAGER_NODE` as its `--about`, and
-the reply window as its `--timeout`. **The bus it execs is this checkout's own
-`.venv/bin/onemessagebus`**, installed from the project lock and resolved from the
-script's location exactly as `config/onemessagebus.yaml` is — never the `onemessagebus`
-the caller's `PATH` offers, the same rule `AGENTS.md` states for the plan-store CLI —
-because the two are read against each other: a worker whose worktree had adopted a newer
-bus ran the one its `PATH` reached first over the canonical checkout's older configuration
-and was refused (`select` missing), a worker unable to ask at all. It refuses before
-asking only what no frame could carry — an empty question, text that is not UTF-8, a run
-id that is unset or is not one word — and a checkout with no bus at that path, naming the
-path and `just bootstrap`, and adds nothing after: the bus's answer and exit status are
-the shim's own. `tests/e2e/test_ask_manager_shim_e2e.py` drives that translation, and
-`tests/ask_seam/bus_resolution/` the resolution, with a stand-in bus first on `PATH` that
-is never run.
+**The command is the engine's `onepipeline ask`.** `scripts/ask-manager.sh` exists only
+so `ORCHESTRATOR_ASK_MANAGER` stays one executable path: it execs the `onepipeline` this
+checkout's lock installed beside its interpreter, falling back to the one on `PATH` only
+where the checkout has none, and decides nothing itself — every argument reaches the verb
+in order, stdin reaches it unread, and the verb's stdout and exit status are the
+adapter's own. The verb takes the question as words, as `--file <path>`, or on stdin —
+the three forms every dispatched task spells out — and raises one `planner-question`
+frame on the run's `surfaces` queue at `${ONEPIPELINE_RUNS_DIR:-runs}/<run-id>/channel`,
+under the bus policy the run's launch record carries, which is the same policy a
+manager's reply verbs read; `ONEPIPELINE_CHANNEL_ASKER` names the asker where one is set,
+`--about <node>` names the node the question is about, and `--timeout <seconds>` moves
+the reply window for one ask. It refuses at exit 2, raising nothing, a blank question, a
+NUL byte, an unset run id, and a run whose launch record cannot be read.
+`tests/e2e/test_ask_manager_shim_e2e.py` holds the adapter to that transparency and reads
+a `--file` and a stdin question back off a real channel unaltered, and `tests/ask_seam/`
+drives it over runs `just orchestrate` really launched.
 
 Everything after the question is on the queue is the bus's (onemessagebus's `ask.md`).
 The bus prints `correlation: <c>` on stderr as soon as the question is queued, and one
@@ -1283,7 +1279,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.43.1**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.44.1**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1302,18 +1298,17 @@ An observer member carries the run's id too, so finding the variable says which 
 process is *under* and never that it is a dispatch.
 
 **The reply window is fifty minutes — 3000 seconds — and that value is a measurement.**
-`ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS` moves it for one ask, and
-`reply_window_seconds` in `config/onemessagebus.yaml` is the same decision for the
-questions the monitor binding asks, which `tests/test_onemessagebus_config.py` holds to
-the shim's default. The engine's own rendezvous waited about thirty seconds when nothing
-set a window — 29.8 seconds measured — which is a supervisor's cadence and not a
-manager's, and a binding that names no window gets the same 30 seconds. A
+It is `reply_window_seconds` in `config/onemessagebus.yaml`'s binding for the `surfaces`
+queue, which the engine records with the run and `onepipeline ask` waits by when no
+`--timeout` moves it for one ask. The engine's old rendezvous waited about thirty seconds
+when nothing set a window — 29.8 seconds measured — which is a supervisor's cadence and
+not a manager's, and a binding that names no window gets the same 30 seconds. A
 question worth blocking on is worth waiting past the next time somebody looks at their
 terminal: fifty minutes is long enough that a manager who stepped away still answers,
 and short enough that a wedged question is not immortal. The window used to be set
 through `ONEPIPELINE_REPLY_TIMEOUT_SECONDS`, which governed the engine's wait exactly —
 measured 5 seconds as 5.03, and 12 as 11.89 — and appeared in no `--help` output, found
-in the pinned binary instead; it is now the bus's `--timeout` and a configuration key,
+in the pinned binary instead; it is now the verb's `--timeout` and a configuration key,
 stated where it is set, so a caller that forgets to export something can no longer
 return a manager's window to a supervisor's.
 
@@ -2539,13 +2534,13 @@ reported as retained rather than removed, and a directory that is only stale is
 eligible after the conservative age threshold alone. Use `just sweep --dry-run` to
 inspect candidates without removing any of them.
 
-It is a **composition of two published verbs**, not one: `oneagentgraph sweep` for
-the scratch a dispatch leaves behind, and `onevcs sweep` for the publication and
-recovery workspaces a lifecycle leaves behind. `--dry-run` and `--min-age-hours`
-reach both and mean one thing across every family. Neither verb's report is
-rewritten — reformatting another repository's report here would make this listing
-drift from the one that repository prints everywhere else — so what the recipe adds
-is the trailer below.
+It is **two published verbs, and the recipe is nothing more than running both**:
+`onevcs sweep` for the publication and recovery workspaces a lifecycle leaves behind,
+then `oneagentgraph sweep` for the scratch a dispatch leaves behind. `--dry-run` and
+`--min-age-hours` reach both and mean one thing across every family. Each verb prints
+its own report, which the recipe neither parses nor rewrites; the second runs whatever
+the first exits, and the recipe exits non-zero when either did, so a verb that failed
+is in the status as well as in its own report.
 
 Scratch a dispatch itself produces cannot wait for quiescence, so what replaces
 quiescence is proven non-reference: a candidate a live process names — in its argv,
@@ -2558,191 +2553,44 @@ first instant a process names it, and `--min-age-hours` governs the scratch that
 no such proof behind it.
 
 **The recipe passes four hours when you name none, rather than the twenty-four both
-verbs default to.** That is a choice this composition makes and states in its own
-`--help`, and the reasoning is in `scripts/sweep.sh` beside the number so that moving
-it is an argument with the measurement rather than with taste. In short: at
-twenty-four the composed sweep reclaimed 0 B on this host while `--min-age-hours 4`
-reclaimed 23.9 GB, because a host running several dispatches churns publication
-workspaces and dispatch scratch hourly and almost nothing provably dead is ever a day
-old. A floor that never fires is how a device reaches 100% with 2 MB free while every
-sweep reports success. Lowering it weakens no proof — neither verb removes anything
-on age alone, and `onevcs` still keeps its bounded recovery history — and the value
-has to be a whole number of hours, because `oneagentgraph sweep` refuses a fractional
-one where `onevcs sweep` takes it. It is *not* GNU `find`'s `-mtime` truncation,
-which is the obvious suspicion and is ruled out by measurement: `-mtime +1` means "at
-least two days" and skips the whole 24-48h band, but a directory 30 hours old is
-reclaimed by each verb at `--min-age-hours 24`, and `oneagentgraph` quotes the floor
-it applied in seconds. The floor was long, not truncated.
+verbs default to.** The recipe's own comment says so beside the number, so that moving
+it is an argument with the measurement rather than with taste. At twenty-four the two
+verbs reclaimed 0 B on this host while `--min-age-hours 4` reclaimed 23.9 GB, because a
+host running several dispatches churns publication workspaces and dispatch scratch
+hourly and almost nothing provably dead is ever a day old. A floor that never fires is
+how a device reaches 100% with 2 MB free while every sweep reports success. Lowering it
+weakens no proof — neither verb removes anything on age alone, and `onevcs` still keeps
+its bounded recovery history. It is *not* GNU `find`'s `-mtime` truncation, which is
+the obvious suspicion and is ruled out by measurement: a directory 30 hours old is
+reclaimed by each verb at `--min-age-hours 24`. The floor was long, not truncated.
 
-What that covers is narrower than it once was, and the difference is operational.
-`oneagentgraph sweep` examines the two families it owns, `runs` and `temp`. The
-families it does not — a private `nx` install per `bunx nx` invocation, a run directory
-per pytest session, and onejudge's own scratch — are the *volume* ones, appearing
-because dispatches are running, and nothing reclaims them now. One producer has since
-left that list rather than been reclaimed from it: Nx copied its native binary once per
-workspace root, which on a host where every dispatch works in a fresh worktree meant
-another 22 MB directory per dispatch, and `scripts/nx.sh` now keys that copy on the
-repository identity so there is one per origin instead of one per root. They share one root, `$TMPDIR` or `/tmp`, and
-the trailer measures and names it for exactly that reason. Neither does anything reclaim the
-**processes** a finished dispatch left running, which reparenting to init puts
-outside every tree walk; the engines that start them own keeping them alive and
-reaping them. `just sweep` says the same at the seam an operator touches.
+**Read each verb's "Families not examined" section before reading its reclaimed
+figure.** Each verb names the families it examined and, separately, every family it
+knows of and deliberately leaves alone, each with its owner — the verb or the operator
+action that reaches it — so a sweep that reclaimed nothing means "nothing in the
+examined families was reclaimable", never "a family was never looked at". `onevcs`
+names three it owns and does not sweep, per identity: the per-run lifecycle clone root,
+kept as a bounded recovery history and reached through `onevcs recoverable`; the pool
+of warm worktree slots, which survive their session's close *on purpose* and which
+`onevcs pool status <repo>` reads and `onevcs pool prune <repo>` empties (the placement
+and the return are [the lifecycle
+document's](repo-lifecycle.md#where-a-session-is-placed-and-what-a-close-returns)); and
+the preserved unpublished branches that hold run roots from reclamation, which
+`onevcs recoverable` names with the verb that lands each one. None is handed to a
+sweeper because none is provably dead: a warm slot is waiting, and whether a preserved
+branch should land is a judgement about work rather than about liveness. That
+provable-or-nothing property is what makes both verbs safe to run unattended, so the
+answer is an owner rather than a wider sweeper. `tests/e2e/test_sweep_e2e.py` holds
+both installed verbs' `--format json` to that swept-or-owned invariant over a state
+root holding a pool slot and a preserved branch.
 
-Every sweep names the families it examined and, separately, the families it could
-not. Each family appears in exactly one of the two lists, so a sweep that reclaimed
-nothing always means "nothing was reclaimable", never "a family was never looked
-at". A cleanup run that silently skips the family filling the disk reads as a clean
-bill of health, which is worse than no cleanup at all.
-
-**That is why the sections are rationed.** A sweep that examined every family and
-left nothing to act on prints a short form naming the families it judged, how many
-candidates it looked at, and how many it took, and prints no sections at all:
-
-```text
-just sweep: reclaimed 1 of 2 candidate(s) examined — every family examined: oneagentgraph runs, temp; onevcs publications, recoveries; preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one; warm worktree slots are examined by no sweep — onevcs pool status <repo> reads them and onevcs pool prune <repo> empties the idle ones; free space (df -h) is what says this host has room, not this line.
-```
-
-**Two of its readings look alike and are opposite pieces of news, so they are two
-different sentences.** A sweep that reclaimed nothing because every candidate it judged
-was live or within retention is the sweep working; a sweep that reclaimed nothing
-because there was nothing to judge has said almost nothing about this host. Read as one
-`Reclaimed: none` they are indistinguishable, which is how a full disk comes to read as
-a clean bill of health:
-
-```text
-just sweep: nothing reclaimed — 3 candidate(s) examined across every family (oneagentgraph runs, temp; onevcs publications, recoveries), all live or within retention; preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one; warm worktree slots are examined by no sweep — onevcs pool status <repo> reads them and onevcs pool prune <repo> empties the idle ones; free space (df -h) is what says this host has room, not this line.
-just sweep: nothing reclaimed — no candidate was examined; every family (oneagentgraph runs, temp; onevcs publications, recoveries) was empty; preserved unpublished branches are examined by no sweep — just recoverable names them and the verb that lands each one; warm worktree slots are examined by no sweep — onevcs pool status <repo> reads them and onevcs pool prune <repo> empties the idle ones; free space (df -h) is what says this host has room, not this line.
-```
-
-**And no figure any of them prints is what says this host has room** — which is why
-every verdict ends by saying so, as part of the one line rather than as a paragraph
-under it. A sweep takes only what it can *prove* dead, in the families named beside the
-number and in no others. The long form says the same at length, where a reader arrived
-because something is wrong and the `Reclaimed:` line is in front of them.
-`tests/e2e/test_sweep_e2e.py` drives both of the readings above against the real recipe
-and asserts they differ.
-
-A report this recipe cannot read those counts out of — a release that reworded one of
-the lines they come from — prints the sections rather than guessing between the two
-sentences, which is the conflation they exist to end. Both verbs' reports and the
-trailer otherwise appear when — and only when — a verb failed or a family went
-unexamined, which are the two states an operator has to do something about. Four sections of retentions on a host where everything was judged teach a
-reader to skim, and what they learn to skim past is the trailer that names the family
-nothing looked at. Rationing them is what keeps that trailer worth reading.
-`--dry-run` is the exception and always prints them: it removes nothing and is asked
-in order to be answered, so those reports are its return value rather than narration
-of work it did. Neither verb's report is edited either way — being held back is not
-being rewritten.
-
-`just sweep`'s trailer is that invariant held across the two verbs rather than
-inside one, and three cases are worth reading rather than inferring:
-
-- **A verb that fails takes only its own families with it.** They move into the
-  not-examined list with the exit status that produced them, the other verb still
-  sweeps and still reclaims, and the recipe exits non-zero so the gap is in the
-  status as well as in the report. Silently absent from both lists is the one
-  outcome the trailer exists to rule out.
-- **The pre-adoption `~/.ai-orchestrator/worktrees` root is reported, never
-  reclaimed — and what each directory under it *is* is read rather than asserted.**
-  The trailer used to retain the whole root on one sentence: that every directory
-  under it was a registered git worktree, still listed by the checkout that lent it,
-  still able to hold a branch nothing had published. On this host that was false —
-  the lenders register no worktrees and the directories below it are not git
-  repositories at all — and a retention reason nothing checks is worse than no
-  reason, because it reads as evidence. So the reading is now asked of git, per
-  directory, and each one is reported as whatever it turns out to be: **a registered
-  worktree of its lender**, on the branch it holds and naming that lender — land or
-  discard the branch first (`just recoverable` names the verb for it), then remove
-  the tree with `git worktree remove` there; **a git repository of its own**, whose
-  commits are its own to publish or copy out; **a submodule of another repository**,
-  naming the superproject whose object store holds it and whose `git submodule deinit`
-  owns it rather than an `rm` here; **a working tree carrying a `.git` git
-  cannot read**, which reaches no history and so can be published from by nothing —
-  deliberately not called stranded from a lender, because a deleted lender and a corrupt
-  repository leave that alike and the read cannot tell them apart; **not a git working
-  tree at all**, which is leftover content rather than work; or **unreadable**, which is
-  unclassified rather than empty. The owner of each class present is printed under the listing, so
-  no directory is named without one. The listing is ordered by what the reading found
-  rather than by name — a directory that can still hold unpublished work first,
-  leftover content last — because past eight directories the tail is folded into a
-  tally by class, and the tail is where the fold should fall. A root that cannot be
-  walked or measured is still named, without the number it could not get and with
-  every directory under it left unclassified rather than guessed at, and a root
-  holding nothing at all is not a family and says nothing.
-- **The host scratch root is reported, never reclaimed, and it is the one that
-  filled this disk.** `$TMPDIR` — `/tmp` unless something set it — is where
-  `oneagentgraph` writes the family it owns and reaches nothing else, and where
-  `onevcs` writes nothing at all, so every other directory under it is neither
-  verb's. It reached 139 GB of a 169 GB device, taking `/` to 2 MB free and stopping
-  every dispatch on this host, while every sweep that day reported success. The
-  trailer names it with its size, its entry count, and its largest three name groups
-  with each trailing id folded into the name in front of it — because the producer
-  that filled it was 3,646 directories of one `nx` cache, which reads as a long tail
-  of unrelated small ones in any per-directory listing. **Each group also says how
-  recently anything in it was written**, which is the one thing a size cannot say and
-  the thing that decides whether an operator should care: the residue of a leak that
-  was fixed weeks ago and the cache filling this root right now are the same number of
-  bytes, and only one of them is news. It is the newest top-level entry in the group,
-  read from a second walk under the same exclusions the count applies; a group the
-  size walk listed that the timestamp walk did not reach says its recency is
-  unreadable rather than reading as never written, which would make it the oldest
-  thing on the root and the first thing somebody cleared. The count is of entries
-  rather than of directories because that is what fills a device and what the
-  reclamation was accounted in — 11,127 of 60,208 entries, for 48 GB. Exactly two
-  things are left out of it, and both are named: what `oneagentgraph` prefixed, since
-  a verb above examined it and nothing may be counted in two families at once, and
-  the lock `uv` takes in this root on the way to each verb, which is the recipe's own
-  and would otherwise make this family non-empty on every host that has ever swept —
-  taking the one-line form with it. A loose file is in both numbers, though `du`
-  lists no file for it to be a name group. Nothing here removes any of it:
-  promoting the root to a *reclaimed* family means implementing the proof both verbs
-  already have, which is their work and not this wrapper's. A root that cannot be
-  walked is still named, without the number it could not get, and a root only partly
-  readable reports its size as a floor rather than as a total.
-- **The preserved unpublished branches are named as a family of their own**, with
-  `just recoverable` as the verb that answers them. They are not directories, so no
-  sweep examines them and none can: judging one means deciding whether its work should
-  land, which is not a proof either verb can make. They are named because they are
-  what *holds* the workspaces above from being reclaimed — a sweep's retentions are
-  this family's shadow, and until it was named an operator read the shadow with no way
-  to see what cast it. It is named in the one-line verdicts as well as in the trailer,
-  since the one line is what a sweep usually prints; it is deliberately **not**
-  counted, because `onevcs recoverable` is the only thing that can take that count and
-  it asks every registered identity, costing more than the whole sweep around it. And
-  it deliberately does **not** decide whether the sections print: it is unexamined on
-  every host and at every moment, so letting it decide would make the long form
-  unconditional and take the short form away from every sweep there was nothing to act
-  on.
-- **The pool of warm worktree slots is named as a family of its own**, with
-  `onevcs pool status <repo>` as the verb that reads it and `onevcs pool prune <repo>`
-  as the one that empties it. Each identity's `pool/` sits beside the run roots the
-  verbs examine, and a slot survives its session's close *on purpose* — returned rather
-  than removed, so the next session finds its build output still there — so no sweep
-  here examines one and none may: removing an idle slot would undo the reason the pool
-  exists. It is named in the one-line verdicts as well as in the trailer for the same
-  reason the preserved branches are, and for the opposite worry: a family kept on
-  purpose that no report named would read as something the sweep forgot. It does not
-  decide whether the sections print either, being present on every host at every
-  moment. The placement, the return and what prunes a slot are
-  [the lifecycle document's](repo-lifecycle.md#where-a-session-is-placed-and-what-a-close-returns).
-- **Why those four are the composition's and not either sweeper's.** The obvious
-  alternative is to teach `oneagentgraph sweep` or `onevcs sweep` to reclaim them.
-  Both verbs judge a candidate on proven non-reference and each owns the directories
-  it wrote; the first three are accumulations of tools neither of them wrote — a build
-  cache and a package store under the host scratch root, the leftovers of a layout
-  this host used before either verb existed, and branches, which are not directories
-  at all; the fourth is one `onevcs` wrote and keeps on purpose. Handing one to a
-  sweeper means giving it a proof it cannot make: nothing tells it what a foreign
-  tool's directory is for, whether a preserved branch should land is a judgement about
-  work rather than about liveness, and a warm slot is not dead — it is waiting. That
-  provable-or-nothing property is what makes those verbs safe to run unattended, so
-  the answer is to name the owner rather than to widen the sweeper — and the owner is
-  named in the composing report, which is `scripts/sweep.sh`.
-- **The trailer restates each verb's family names** rather than pointing back at a
-  report an operator has to scroll through. That restatement is held against what
-  the installed verbs report examining, in `tests/e2e/test_sweep_e2e.py`, so a
-  release that renames a family or adds one fails there rather than leaving the
-  trailer quietly describing the previous release.
+**And no figure either verb prints is what says this host has room.** A sweep takes
+only what it can *prove* dead, in the families it names and in no others; the scratch
+other tools write under the host's `$TMPDIR` is neither verb's. The engine's `free
+space:` line on `just status` and `just host` is what says whether the disk has room.
+Neither does anything reclaim the **processes** a finished dispatch left running, which
+reparenting to init puts outside every tree walk; the engines that start them own
+keeping them alive and reaping them.
 
 The ledger is **flat**, because a run has no phases to number:
 
@@ -3116,8 +2964,9 @@ that stopped is a different question.
 cheapest of them is the disk.** A full disk kills a driver and the run then reports a
 dead driver, which is the same verdict a crash gives and reads as a crash to diagnose:
 that cost twenty minutes on a host whose filesystem had 1.3 GiB of 197 left with three
-dispatches building on it. The `disk` line `just status` prints above its provider block,
-and the same line on `just host`, is what parts the two before anything is diagnosed. It
+dispatches building on it. The engine's `free space:` line `just status` prints above its
+provider block, and the same line on `just host`, is what parts the two before anything is
+diagnosed. It
 is a host-wide reading on a host several managers share, so read it and leave clearing
 space to whoever owns what is filling it.
 
@@ -3216,38 +3065,16 @@ What that buys each view:
 * **`just host`** is the whole-host view, across every planner sharing it: per live
   dispatch, its owning session, run/node, role, turn age, and load contribution.
 
-Two readings beside those are this host's own rather than the engine's, added by
-`scripts/status.sh` and `scripts/host.sh` out of `scripts/supervision-readings.py`,
-because each is a fact about the machine a run happens to be on rather than about the
-run:
-
-* **Free space**, on both views, for each filesystem the run's working directories are
-  on — the runs root, and the `workspaces/` under `onevcs`'s state root where every
-  lifecycle worktree and per-run clone is cut. On `just status` it sits **above** the
-  provider block, which is where a supervisor's watch is told to cut this view, so a
-  reading below it would be one no watch following that guidance could see. It is
-  host-wide on a shared host: read it, and leave acting on it to whoever owns what is
-  filling the disk. What it answers is in
-  [Adopting a run whose driver died](#adopting-a-run-whose-driver-died).
-* **Every live rendezvous**, on `just host`: one line per process holding a question
-  open for a reply, naming the run the question is bound to and the dispatch it sits
-  under. A rendezvous is a live `onemessagebus ask` or `onemessagebus serve`, bound to
-  its run by the channel its `--transport-dir` names — argv rather than the
-  environment, because argv is what told the bus which channel to hold open. A blocking
-  surface produces no other signal until somebody reads it, so a live one with nothing
-  pending on the queue reads as a question stuck below the queue — a stall a manager is
-  supposed to break — when it is as likely to be a passing journey of this repository's
-  own suite, which stands up a real rendezvous on a fixture run whose id expires by
-  itself. Answering that one by hand puts a manager's verdict into a test. A rendezvous
-  whose argv names no run's channel is reported as unattributable, and one bound to a
-  run this runs root does not hold as exactly that, rather than either being left out,
-  because it is the one a manager most needs to see.
-
-Both additions are written beside what the published verb printed rather than into it:
-every line the engine gave is written back in order, for the reason
-`scripts/recoverable.sh` gives about rewriting another repository's report.
-`tests/e2e/test_supervision_readings_e2e.py` drives both recipes for real, against a
-real live rendezvous, and holds each of those properties.
+**Free space** is on both views too, and is the engine's: one `free space:` line per
+distinct filesystem among the runs root and the `workspaces/` under `onevcs`'s state root
+where every lifecycle worktree and per-run clone is cut, one line naming both when they
+share a device. On `just status` it sits **above** the provider block, which is where a
+supervisor's watch is told to cut this view. It is host-wide on a shared host: read it,
+and leave acting on it to whoever owns what is filling the disk. What it answers is in
+[Adopting a run whose driver died](#adopting-a-run-whose-driver-died). Both recipes
+pass the engine's view through untouched, and
+`tests/host_views/test_status_and_host_views_e2e.py` drives them over a built run root and one a
+real launch wrote, holding the line above the cut and the output to the engine's own.
 
 Both flags are *positive* claims and are made only where they can be proven. The
 node-level `UNDRIVEN` needs two things beyond "the registry saw nothing for this node":
@@ -3296,36 +3123,24 @@ watch. The record is written by the `watch` verb itself and removed on a clean e
 nothing stands between a watcher dying and its run reading unwatched — no heartbeat, no
 expiry, no cleanup step, because the deaths that matter have no clean exit.
 
-**The hook is the consuming half and reads that one number.** It takes the session off
-the Stop payload the harness hands it and never out of its own environment: this
-repository's settings file is tracked, so every dispatched claude-code worker inherits
-the hook and every dispatch inherits its manager's launcher session, and a hook that
-read the environment would block every worker's turn on its manager's unwatched runs.
-On `6` it records what it is about to block on and writes one JSON object —
-`{"decision": "block", "reason": …}`, the reason being the verb's own standard-output
-lines — and exits 0. On `0` it writes nothing on either stream and exits 0. On every
-other outcome — no binary, a verb it could not run, one past its bound, a status that is
-neither `0` nor `6`, a `6` naming no run, or a hook that never reached the verb because
-its own Python half or an interpreter to run it was missing, or because that half ran
-and ended on a status it never chooses without answering — it writes
-`{"systemMessage": …}` saying the turn ends unguarded and why, names `just unwatched` as
-the read to make by hand, and exits 0: nothing there is evidence that a run is unwatched,
-so nothing there blocks, and nothing there is evidence that every run is watched, so
-nothing there is silent. The last two of those are the shell wrapper's own and are
-constant strings rather than composed ones, which is why the wrapper may write them at
-all: the two-file split keeps untrusted data out of hand-composed JSON, and a fixed
-diagnostic carries none. A
-continuation of a block it already made is answered against what that block said:
-the same runs end the turn silently, and different ones block again, so the condition
-rather than a count is what ends it. **A block it cannot record is a block it does not
-make**: a continuation could then never tell an unchanged condition from a moved one and
-would block again for ever. Where its own record cannot be written, or cannot be read
-back on a continuation, it writes `{"systemMessage": …}` instead — a warning the harness
-shows the person, naming the unwatched runs and why the hook stood aside — and the turn
-ends. Only a positively reported run blocks; nothing the hook could not obtain does. It
-reaches the binary through this checkout's `.venv/bin` and then the search path rather
-than through `uv run`, because `uv` takes an exclusive lock on the project environment
-and this runs at the end of every turn.
+**The hook is the engine's stop guard, wired as the engine's own page gives.**
+`onepipeline stop-guard` is one harness-neutral verb, and [its own
+page](https://github.com/nickderobertis/onepipeline/blob/main/docs/stop-guard.md) states its contract and then its wiring for Claude Code and for
+Codex; the `Stop` entry `.claude/settings.json` registers is that page's Claude Code
+wiring — `onepipeline stop-guard --format claude-code`, named by path out of this
+checkout's `.venv/bin` through `$CLAUDE_PROJECT_DIR`, with its timeout kept — and nothing
+of this repository's sits between the harness and the verb. A manager launched from Codex
+reads the same page for its own wiring. What the guard answers is the page's: the session
+comes off the Stop payload and never out of the environment, so a dispatched worker — who
+inherits both this tracked settings file and its manager's launcher session, while its
+own session owns no run — is silent; a session owning a run proven unwatched is blocked
+with `unwatched`'s own lines as the reason, once per condition, the continuation over an
+unchanged report ending the turn and a changed one blocking again; anything that is not
+evidence is a warning shown to the person, never a block; and every ending exits 0. The
+block-once memory is the engine's, under its own state root, and
+`tests/unwatched/test_unwatched_and_stop_hook_e2e.py` drives the registered command over
+runs roots holding an unwatched run, a watched one, a continuation and a worker-shaped
+environment.
 
 ### Preserved work that has not been published
 
@@ -3590,7 +3405,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.43.1 rather than restating it independently.
+declaration as it stands in onepipeline 0.44.1 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

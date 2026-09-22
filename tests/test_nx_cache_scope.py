@@ -59,6 +59,8 @@ from nx_inputs import (
     DAG_UI_ROOT,
     DAG_UI_SCOPED,
     DOCS_SCOPED,
+    HOST_VIEWS_ROOT,
+    HOST_VIEWS_SCOPED,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_SCOPED,
     NX_CACHE_CHECK,
@@ -874,8 +876,9 @@ def _collected(selection: list[str]) -> set[str]:
 #: project owns the journey that holds the adopted engine to the copy deadline its items
 #: earn in one, the `run-end-hooks` project owns the journey that fires the run-end hooks
 #: through a real launch in one, the `project-store-race` project owns the clock-bounded
-#: replacement race over the record store in one, and the orchestrator project owns the
-#: rest in four.
+#: replacement race over the record store in one, the `host-views` project owns the
+#: journeys over `just status` and `just host` in one, and the orchestrator project owns
+#: the rest in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
@@ -887,6 +890,7 @@ SUITE_TIERS = (
     (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
     (f"{RUN_END_HOOKS_ROOT}/project.json", RUN_END_HOOKS_SCOPED),
     (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
+    (f"{HOST_VIEWS_ROOT}/project.json", HOST_VIEWS_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),

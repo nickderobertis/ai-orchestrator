@@ -107,12 +107,6 @@ UPSTREAM_REFERENCE = re.compile(
 #: the vocabulary check while it exists and required to exist while listed. A later node
 #: moves what it deletes from here to `RETIRED`.
 RETIRING: tuple[str, ...] = (
-    "scripts/sweep.sh",
-    "scripts/stop-unwatched-guard.py",
-    "scripts/stop-unwatched-guard.sh",
-    "scripts/draft-pr-body.sh",
-    "scripts/land-branch.sh",
-    "scripts/supervision-readings.py",
     "scripts/dag-ui-server.js",
     "scripts/dag-ui-screens.sh",
 )
@@ -154,6 +148,30 @@ RETIRED: dict[str, str] = {
     "scripts/watch-render.py": (
         "`onepipeline watch`'s own human form on stderr: heartbeats and the ending line "
         "carrying the unread-surface count and the cursor, each line flushed as written"
+    ),
+    "scripts/stop-unwatched-guard.py": (
+        "`onepipeline stop-guard --format claude-code`, registered as the `Stop` hook in "
+        ".claude/settings.json exactly as onepipeline's own stop-guard page wires it"
+    ),
+    "scripts/stop-unwatched-guard.sh": (
+        "`onepipeline stop-guard --format claude-code`, run from .venv/bin by the `Stop` "
+        "hook with nothing of this repository's between the harness and the verb"
+    ),
+    "scripts/supervision-readings.py": (
+        "`onepipeline status` and `onepipeline host`'s own `free space:` lines, printed "
+        "above the `providers:` block; `just status` and `just host` pass the views through"
+    ),
+    "scripts/sweep.sh": (
+        "`onevcs sweep` then `oneagentgraph sweep`, run by the `just sweep` recipe with the "
+        "caller's options; each verb's own report names every family it left and its owner"
+    ),
+    "scripts/draft-pr-body.sh": (
+        "the engine's `onepipeline publish-branch` / `repo-recover`, drafting the body through "
+        "`--pr-author-graph graphs/pr-author.yaml` as the run path does"
+    ),
+    "scripts/land-branch.sh": (
+        "`onepipeline publish-branch` / `repo-recover`, which the two landing recipes run "
+        "through scripts/onepipeline.sh with every caller argument forwarded"
     ),
 }
 

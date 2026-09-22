@@ -2,8 +2,9 @@
 # `just recoverable` — every preserved branch, and the command that lands it *here*.
 #
 # `onevcs recoverable` renders its own argv in the `Resume:` line it prints to be
-# pasted, and the drafting `scripts/land-branch.sh` adds is reached through the `just`
-# recipes and nowhere else — so each resume command is re-rendered in its `just` form.
+# pasted, and the drafting the engine's landing verbs add is reached through the `just`
+# recipes, which name the drafter — so each resume command is re-rendered in its `just`
+# form.
 # Nothing else on the line moves: `onevcs`'s own quoting of a path a shell would split
 # is what still reaches the terminal, and every other line is passed through untouched,
 # because reformatting another repository's report here would make this listing drift

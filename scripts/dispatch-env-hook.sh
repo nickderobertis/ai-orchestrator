@@ -35,9 +35,8 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) || fail "this hook 
 export_dispatch_environment dispatch-env-hook || exit $?
 
 # Sets `encoded` to $1 as a JSON string, escaped with builtins alone, byte-wise under
-# the C locale so a value in any encoding passes through as it was written. The same
-# escaping scripts/ask-manager.sh gives a question, for the same reason: nothing else
-# this hook may depend on is guaranteed to be on a dispatch's PATH.
+# the C locale so a value in any encoding passes through as it was written, because
+# nothing else this hook may depend on is guaranteed to be on a dispatch's PATH.
 store_json_string_in_encoded() {
     local LC_ALL=C text=$1 code hex control
     text=${text//\\/\\\\}
@@ -54,9 +53,8 @@ store_json_string_in_encoded() {
 }
 
 # Whether a value is text the document can carry: well-formed UTF-8, which is what JSON
-# is. The same byte-wise builtin match scripts/ask-manager.sh gives a question — one
-# alternative per well-formed sequence, so an overlong form, a surrogate and a truncated
-# sequence all fail — because the engine reads a malformed document as a hook that
+# is. A byte-wise builtin match — one alternative per well-formed sequence, so an
+# overlong form, a surrogate and a truncated sequence all fail — because the engine reads a malformed document as a hook that
 # failed, naming nothing about which value was the trouble.
 well_formed_utf8() {
     local LC_ALL=C tail pattern

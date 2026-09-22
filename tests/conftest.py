@@ -34,6 +34,8 @@ from nx_inputs import (
     CODE_WORKSPACE,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
+    HOST_VIEWS_ROOT,
+    HOST_VIEWS_WORKSPACE,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_WORKSPACE,
     PLAN_TOOLING_ROOT,
@@ -135,6 +137,7 @@ OWNED_PROJECTS = {
     MERGE_POLICY_ROOT: OwnedProject(key=MERGE_POLICY_WORKSPACE, docs_tier=False),
     WRITEBACK_BUDGET_ROOT: OwnedProject(key=WRITEBACK_BUDGET_WORKSPACE, docs_tier=False),
     RUN_END_HOOKS_ROOT: OwnedProject(key=RUN_END_HOOKS_WORKSPACE, docs_tier=False),
+    HOST_VIEWS_ROOT: OwnedProject(key=HOST_VIEWS_WORKSPACE, docs_tier=False),
     SESSION_SETUP_ROOT: OwnedProject(key=SESSION_SETUP_WORKSPACE, docs_tier=False),
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
 }

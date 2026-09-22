@@ -26,9 +26,8 @@ the node, the process, and the kernel's start time for that process — so the d
 process walks up its parents until one is a recorded dispatch. A pid match is accepted only
 when the recorded start time is the live process's own: a host that has been up for weeks
 has reused every pid a stale entry names, and naming the wrong node is worse than naming
-none. When nothing matches, the draft says `unresolved` and is still written. The same
-registry is read by `scripts/supervision-readings.py`, which cannot import this package;
-`tests/test_follow_up_drafts.py` reconciles the two readers' names and their answers.
+none. When nothing matches, the draft says `unresolved` and is still written.
+`tests/test_engine_contracts.py` holds every registry name read here to the engine's own.
 
 **The transcript pointer is a command a reader runs**, taken against onepipeline 0.29.0:
 
@@ -115,16 +114,13 @@ RUN_ID_ENV = "ONEPIPELINE_RUN_ID"
 NODE_SCRATCH_ENV = "ONEPIPELINE_NODE_SCRATCH_DIR"
 SESSION_ENV = "ONEVCS_SESSION"
 
-#: How `onepipeline` is told where its runs live, and where they are when nothing says —
-#: the resolution `scripts/supervision-readings.py` makes, so both readers of the dispatch
-#: registry are reading one store.
+#: How `onepipeline` is told where its runs live, and where they are when nothing says.
 RUNS_ROOT_ENV = "ONEPIPELINE_RUNS_DIR"
 DEFAULT_RUNS_ROOT = "runs"
 
 #: The dispatch registry: where under a run it is, the three fields of an entry this reads,
-#: and how an entry spells the kernel start time it recorded. Each is reconciled against
-#: `scripts/supervision-readings.py`, which `tests/test_engine_contracts.py` holds to the
-#: installed engine.
+#: and how an entry spells the kernel start time it recorded. Each, and the two runs-root
+#: names above, is held to the installed engine by `tests/test_engine_contracts.py`.
 DISPATCH_REGISTRY = "dispatches"
 DISPATCH_NODE = "node"
 DISPATCH_PID = "pid"

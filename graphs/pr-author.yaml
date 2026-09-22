@@ -20,10 +20,10 @@
 # and lands under the policy. So this drafter finishes a description the worker
 # started and may read what the worker did, where it used to see the task and the
 # diff and nothing else. Those two section headings are the engine's literals:
-# tests/test_drafting_task_contract.py reads them out of this file and holds each to
-# the pinned `onepipeline`, beside the opening sentence scripts/draft-pr-body.sh
-# composes with — and that script composes neither section, because an out-of-band
-# landing has no run to read a transcript from and no change request to read.
+# tests/test_engine_contracts.py reads them out of this file and holds each to the
+# pinned `onepipeline`. The engine's `publish-branch` and `repo-recover` verbs, which
+# `just publish-branch` and `just repo-recover` run, draft through this same graph for a
+# branch no run is publishing.
 #
 # Nothing scaffolds this file: the published crate ships the *flag*, not the
 # document, because the document names the operator's own oneharness config and

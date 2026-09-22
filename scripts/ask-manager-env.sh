@@ -2,8 +2,8 @@
 # The ONE source of the ask-manager seam every launch puts in its dispatches'
 # environment, sourced by scripts/onepipeline.sh and scripts/plan.sh.
 #
-# `ORCHESTRATOR_ASK_MANAGER` holds the path of `scripts/ask-manager.sh`, the shim that
-# hands one blocking question to `onemessagebus ask` on the run's channel, which is how
+# `ORCHESTRATOR_ASK_MANAGER` holds the path of `scripts/ask-manager.sh`, which execs the
+# engine's `onepipeline ask` to raise one blocking question on the run's channel — how
 # a dispatched agent asks its manager instead of guessing at a decision fork.
 # `personas/planner.yaml` tells an agent to run the command that
 # variable names, so a launch that exports nothing leaves that instruction expanding to

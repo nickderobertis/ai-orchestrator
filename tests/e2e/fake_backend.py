@@ -164,6 +164,9 @@ ASK_MANAGER_ENV = "ORCHESTRATOR_ASK_MANAGER"
 #: reports that it did.
 ASK_QUESTION_ENV = "FAKE_BACKEND_ASK_QUESTION"
 ASK_RECORD_ENV = "FAKE_BACKEND_ASK_RECORD"
+#: The reply window that ask waits, passed as the verb's own `--timeout` when a journey
+#: names one; unset, the ask waits the window the run's launch record carries.
+ASK_TIMEOUT_ENV = "FAKE_BACKEND_ASK_TIMEOUT"
 
 #: The `graphs/node-scope.yaml` member a dispatched plan node runs as, which is what
 #: makes the branch below about a *dispatch*: `oneagentgraph` names every member's
@@ -488,8 +491,9 @@ def _ask_manager(config: str | None) -> None:
             json.dumps({"wrapper": None, "status": None, "out": "", "err": ""}), encoding="utf-8"
         )
         return
+    window = os.environ.get(ASK_TIMEOUT_ENV)
     asked = subprocess.run(  # noqa: S603 - the real wrapper, as a dispatched agent runs it
-        [wrapper, question],
+        [wrapper, *(["--timeout", window] if window else []), question],
         text=True,
         capture_output=True,
         stdin=subprocess.DEVNULL,

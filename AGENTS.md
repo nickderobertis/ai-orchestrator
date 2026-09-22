@@ -118,21 +118,22 @@ of work. `just import-branch <branch> --repo <checkout>` makes a branch finished
 session worktree or a run clone reachable from an identity's registered checkouts,
 which is where the landing verbs read a branch from and nowhere else.
 
-A remote lifecycle change request's body is drafted by an agent graph the launch names,
-the way its observer is: `just orchestrate` adds `--pr-author-graph
-graphs/pr-author.yaml`. The drafter runs after verification and **finishes the
-description the worker left**, reading the worker's transcript for evidence — so a
-worker starts that description with what only it knows — and a node whose task
-metadata carries `onepipeline.draft: true` is left as a draft for a person to lift,
-settling `done` as `change-draft` with its dependents proceeding. `just publish-branch`
-and `just repo-recover` draft through the same graph, so the turn is spent before the
-push; a
-caller's own `--body` / `--body-file` is forwarded untouched and `--no-draft` skips it.
-Drafting never blocks publication: a draft that cannot run opens the change request with
-no body, or keeps the description the worker left. The raw
-`onevcs publish-branch …` line `onevcs recoverable` prints reaches the verb below the
-wrapper and opens an empty description, which is why `just recoverable` re-renders it in
-`just` form.
+A remote lifecycle change request's body is drafted by an agent graph,
+`graphs/pr-author.yaml`, one drafter the engine runs on both roads a branch takes to a
+change request: a run's publication closeout, because `just orchestrate` adds
+`--pr-author-graph graphs/pr-author.yaml`, and the engine's own `onepipeline publish-branch` and `repo-recover`, which `just
+publish-branch` and `just repo-recover` run naming the same graph. The drafter runs
+after verification and **finishes the description the worker left**, reading the
+worker's transcript for evidence — so a worker starts that description with what only it
+knows — and a node whose task metadata carries `onepipeline.draft: true` is left as a
+draft for a person to lift, settling `done` as `change-draft` with its dependents
+proceeding. A landing verb spends its turn before the push; a caller's own `--body` /
+`--body-file` is forwarded untouched, `--no-draft` skips the turn, and a `local-direct`
+identity is never drafted for. Drafting never blocks publication: a draft that cannot
+run opens the change request with no body, or keeps the description the worker left.
+The raw `onevcs publish-branch …` line `onevcs recoverable` prints reaches the verb
+below the drafter and opens an empty description, which is why `just recoverable`
+re-renders it in `just` form.
 
 **The body is re-derived at every publication and the subject is derived once, which
 is backwards, because the subject is the one that becomes permanent.** A plan node's
@@ -933,9 +934,10 @@ is the command — the engine's own `onepipeline watch` — and these properties
 watching means and what that verb is held to:
 
 1. **A watch is armed before you turn to anything else.** A launch is not finished
-   until its watch is up; the `Stop` hook `.claude/settings.json` registers refuses to
-   end a turn while a run this session owns has nothing watching it, and the answer is
-   to arm `just watch` on each run it names, never to answer the hook twice.
+   until its watch is up; the `Stop` hook `.claude/settings.json` registers — the
+   engine's own `onepipeline stop-guard` — refuses to end a turn while a run this
+   session owns has nothing watching it, and the answer is to arm `just watch` on each
+   run it names, never to answer the hook twice.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.
@@ -946,7 +948,7 @@ watching means and what that verb is held to:
    them, because the properties hold by construction inside the command and by
    somebody's memory anywhere else; where a watch would have to end on something the
    verb does not return on, report the missing condition rather than writing a loop.
-   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned 0.43.1 names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned release names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
    `--until` takes `surface` (the default), `settled`, `nothing-driving`, `node-settled`
    and `node=<ID>`; `settled` and `nothing-driving` end every wait, while a waiting
    surface ends one only under `surface`, so name both when you want both. `--timeout
@@ -980,8 +982,8 @@ was.
 
 - **The channel is `onemessagebus` over `config/onemessagebus.yaml`**, the one place
   this host's messaging policy lives: change the policy there, never in a wrapper.
-  `just channel-reply`, the ask `ORCHESTRATOR_ASK_MANAGER` names and the observer's
-  judge side are that bus's verbs, so the rules below are the bus's.
+  `just channel-reply`, the engine's `onepipeline ask` `ORCHESTRATOR_ASK_MANAGER` names
+  and the observer's judge side all run on that bus, so the rules below are the bus's.
 - **The observer's judge side is a binding this host declares**: `onemessagebus serve
   surfaces --codec monitor` runs `codecs.monitor` — what a taken turn is told, the
   `monitor-failed` and `monitor-completion` kinds it raises, what a lost turn is called
@@ -1254,16 +1256,13 @@ every launch is refused without it save the bounded planning exemption above.
 ### What every launch exports
 
 Every launch hands the engine `--bus-config config/onemessagebus.yaml` and exports
-`ORCHESTRATOR_ASK_MANAGER`, with the run id it asks on: `scripts/ask-manager.sh`, a shim
-turning a question into one `onemessagebus ask` on that run's channel under this host's
-reply window, and the one supported way a dispatched agent asks its manager a blocking
-question. Its output is the bus's one-line answer, `reply` alone at exit 0, so an
-elapsed wait reads as `timeout` and never as a ruling. The bus it runs is this checkout's
-own `.venv/bin/onemessagebus`, resolved from the script's root exactly as its
-`config/onemessagebus.yaml` is and never from a caller's `PATH` — the rule the plan-store
-CLI is held to, because a bus and a configuration of different releases refuse each
-other; a checkout with no bus there is refused naming that path and `just bootstrap`.
-The same verbs load this checkout's credentials from the gitignored
+`ORCHESTRATOR_ASK_MANAGER`, with the run id it asks on: `scripts/ask-manager.sh`, the
+one supported way a dispatched agent asks its manager a blocking question. The verb is
+the engine's `onepipeline ask`, which raises the question on that run's channel under
+the bus policy the run was launched with; the script only execs it from this checkout's
+locked install, so every argument, stdin, stdout and exit status are the verb's. Its
+output is the bus's one-line answer, `reply` alone at exit 0, so an elapsed wait reads as
+`timeout` and never as a ruling. The same verbs load this checkout's credentials from the gitignored
 root `.env` through `scripts/credentials-env.sh`, never overriding a name the
 environment already defines; so do the board recipes — `just plans`, `just check-plan`,
 `just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names
@@ -1301,24 +1300,23 @@ resolver that establishes it, never to a running driver.
 a run is read; never rebuild run state from `events.jsonl`, `ps`, or a clone's `git
 log`. Read the **side** a failed node died on before its identity, because the chains
 prefer different identities, and a `journal:` line as the one that makes the rest
-unprovable. Two readings are this host's own (`scripts/supervision-readings.py`): free
-space on every filesystem a run writes to, above the `providers:` cut so a watch still
+unprovable. Both `just status` and `just host` print the engine's own `free space:`
+line for every filesystem a run writes to, above the `providers:` cut so a watch still
 sees it — read it, and leave acting on a filling disk to whoever owns what is filling
-it — and every live `onemessagebus ask` and `onemessagebus serve`, bound to its run by
-the channel its `--transport-dir` names, because a passing journey of this
-repository's own suite stands up a real rendezvous, and answering that one by hand
-puts a manager's verdict into a test. A run's journal holds a dispatch's own evidence —
+it. Answer a run's questions through `just channel-next` on that run, and read a
+blocking surface the bus marks `abandoned` as one nobody is waiting on now. A run's journal holds a dispatch's own evidence —
 every tool call and its output — beside the run and outliving the worktree, and `just
 transcript` renders it: reach for it when a settled node's evidence seems missing from
 its report. These views change no record the run keeps of itself; a reader writes only
 the run's derived checkpoint cache.
 
-`just sweep` removes only what no live process references, and passes a four-hour age
-floor when you name none, because a host running several dispatches churns
-workspaces hourly and almost nothing provably dead is ever a day old; lowering it
-weakens no proof. Its trailer names every family neither verb it composes examined,
-because `0 B reclaimed` beside an unexamined family reads as an all-clear. Session
-setup runs it. The processes meant to outlive their launcher — the driver and the
+`just sweep` runs `onevcs sweep` then `oneagentgraph sweep`, which remove only what no
+live process references and own their reports and their families; the recipe passes a
+four-hour age floor when you name none, because a host running several dispatches
+churns workspaces hourly and almost nothing provably dead is ever a day old, and
+lowering it weakens no proof. Read each verb's "Families not examined" section before
+its reclaimed figure, because `0 B reclaimed` beside an unexamined family reads as an
+all-clear. Session setup runs it. The processes meant to outlive their launcher — the driver and the
 dispatches and publications it forks — are the engines' to keep alive and reap: never
 work around a kill with `nohup` or `setsid` by hand. A run root is pruned by the next
 `onevcs session open`, which skips an open session's root and keeps a closed one only

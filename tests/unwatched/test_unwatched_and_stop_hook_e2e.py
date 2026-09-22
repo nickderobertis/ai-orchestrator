@@ -4,37 +4,22 @@ AGENTS.md's watch rule is what this pair enforces. Property 1 of it — *a watch
 before you turn to anything else* — was the one property with nothing behind it but the
 model's memory, and the measured cost of that is dispatched work sitting for hours with
 nothing looking at it. The verb answers which of a session's runs nothing is watching;
-the hook asks it at the end of every turn and refuses the stop while the answer is not
-empty.
+the hook asks the engine's stop guard at the end of every turn, and the guard refuses
+the stop while that answer is not empty.
 
-**Two kinds of journey, held to two different bars.** Every journey whose subject is
-*what the verb says* — which runs it names, which it excludes, which it leaves undecided,
-what the recipe carries back, what a real watch does to its answer — obtains that answer
-from the `onepipeline` this checkout installs from `config/onepipeline.version`, driven
-over runs roots it assembles. Nothing stands in for it there: the evidence behind a
-verb-shaped answer is the engine's, and a double would be this repository asserting its
-own guess at what a watcher record means. That is what makes this an adoption rather than
-a pin edit, and `test_the_installed_engine_is_the_release_the_pin_names_and_offers_the_verb`
-is what says the binary those journeys ask is the pinned one.
-
-The other kind is about *the hook's own branching* — that it treats `6` as a block and
-`0` as clear, that it says so and ends the turn on a verb that cannot be executed or
-answers a status of its own, that it does not hang on one that never returns, that it
-resolves the engine where it says it does — and those are states the real verb has no way
-to produce without inventing run state to provoke them. Each of those plants a sibling
-beside a copy of the hook, and says so at the site:
-`test_the_hook_says_the_turn_is_unguarded_when_the_engine_does_not_answer`,
-`test_the_hook_says_the_turn_is_unguarded_when_the_engine_runs_past_its_bound`,
-`test_the_wrapper_says_the_turn_is_unguarded_when_it_cannot_reach_its_own_half` and
-`test_the_hook_falls_through_to_the_engine_on_the_search_path`. Nothing in them is a
-claim about the verb.
-
-llmlint: ignore-file[e2e_not_mocked] The engine is real in every journey that obtains an
-answer here; what is planted is a *sibling* of a copy of this hook, in the four journeys
-about an engine that does not answer. Those are host conditions the real verb has no way to
-produce — a binary that cannot be executed, one that answers a status of its own, one that
-never returns, and none at all — and what the hook says on each is precisely what has to be
-shown. The hook itself is the tracked file, copied byte for byte.
+**Nothing of this repository's stands between the harness and the verb.** The `Stop`
+entry `.claude/settings.json` registers is the Claude Code wiring onepipeline's own
+stop-guard page gives — `onepipeline stop-guard --format claude-code`, named by path
+out of this checkout's `.venv/bin` — so every hook journey below reads that entry out of
+the tracked settings file and runs its command as the harness does: through a shell, with
+`CLAUDE_PROJECT_DIR` naming this checkout and the Stop payload on standard input. What the
+guard decides is the engine's contract and is proven in its own repository; what these
+journeys hold is that the wiring reaches it and that its answers are the ones a manager's
+turn and a dispatched worker's turn need here. Every answer comes from the `onepipeline`
+this checkout installs from `config/onepipeline.version`, driven over runs roots each
+journey assembles, and nothing stands in for it:
+`test_the_installed_engine_is_the_release_the_pin_names_and_offers_the_verb` is what says
+the binary those journeys ask is the pinned one.
 
 llmlint: ignore-file[tests_mirror_real_usage] A run root in a state the verb decides
 differently about is the subject here, and three of those states no interface produces: a
@@ -43,7 +28,7 @@ a writer did not finish. Everything an interface *can* produce is produced throu
 the run roots are the engine's own records through `tests/e2e/probe_run_root.py`, which
 `tests/test_engine_contracts.py` reconciles field by field against the installed engine;
 `onepipeline runs` is what folds and stores each summary document; and `onepipeline stop`
-is what settles a run. What the hook remembers is read directly in exactly one journey,
+is what settles a run. What the guard remembers is read directly in exactly one journey,
 which is the journey about *where* it is kept: there is no interface that answers that,
 and the alternative is a claim about a location nothing checks.
 
@@ -51,7 +36,6 @@ and the alternative is a claim about a location nothing checks.
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 import shutil
@@ -72,13 +56,10 @@ from orchestrator.root import REPO_ROOT
 #: This module is its own Nx project's, `unwatched`; see `tests/unwatched/project.json` and
 #: the guard in `tests/conftest.py`. No marker routes it: the directory decides.
 #:
-#: Every journey here reaches a tool through `uv run` — `just unwatched` and `just watch`
-#: both do — and one of them takes this checkout's project-environment lock outright to
-#: show the hook does not wait on it. `uv` holds that lock exclusively, so both halves
+#: Journeys here reach a tool through `uv run` — `just unwatched` and `just watch` both
+#: do — and `uv` holds this checkout's project-environment lock exclusively, so they
 #: belong in the group AGENTS.md's four-worker invariant names: `--dist loadgroup`
-#: co-locates the tests sharing a group *name* and says nothing about two different ones,
-#: so a holder in one group and a waiter in another are as concurrent as if neither
-#: declared anything.
+#: co-locates the tests sharing a group *name* and says nothing about two different ones.
 pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 
 #: The engine this checkout installs from its own pin. Named as a path rather than
@@ -86,8 +67,8 @@ pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 #: checkout left on the search path would be a journey about that checkout.
 ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 
-#: The hook `.claude/settings.json` registers, driven here exactly as the harness runs it.
-HOOK = REPO_ROOT / "scripts" / "stop-unwatched-guard.sh"
+#: The settings file whose `Stop` entry every hook journey below runs.
+SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 
 #: The status the verb answers when a run the asked-about session owns has nothing
 #: watching it, and the one number the hook acts on. Spelled here so that the journeys
@@ -217,32 +198,59 @@ def _unreadable_watcher_record(owned: Owned, run: str) -> Path:
     return record
 
 
+class Registered(NamedTuple):
+    """The one `Stop` command `.claude/settings.json` registers, and its bound."""
+
+    command: str
+    timeout: int
+
+
+def _registered() -> Registered:
+    """The `Stop` entry out of the tracked settings file, which is what the harness runs."""
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    commands = [
+        Registered(str(hook["command"]), int(hook["timeout"]))
+        for matcher in settings["hooks"]["Stop"]
+        for hook in matcher["hooks"]
+        if hook["type"] == "command"
+    ]
+    assert len(commands) == 1, f"{SETTINGS} registers {len(commands)} Stop commands: {commands}"
+    return commands[0]
+
+
 def _hook(
     payload: object,
     environment: dict[str, str],
     *,
     cwd: Path | None = None,
-    seconds: float = 60,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the real hook the way the harness runs it: payload on standard input."""
-    return subprocess.run(  # noqa: S603 - the checked-in hook, run as the harness runs it
-        ["bash", str(HOOK)],
+    """Run the registered hook the way the harness runs it: a shell, payload on standard input.
+
+    `CLAUDE_PROJECT_DIR` is the harness's own name for the project a session opened, and
+    is what the registered command resolves `.venv/bin` against; it is this checkout,
+    wherever the hook's working directory is. The bound is the registered one, so a guard
+    that ran past it fails here as it would be killed there.
+    """
+    registered = _registered()
+    return subprocess.run(  # noqa: S603 - the tracked hook command, run as the harness runs it
+        ["/bin/sh", "-c", registered.command],
         input=payload if isinstance(payload, str) else json.dumps(payload),
         capture_output=True,
         text=True,
         check=False,
-        env=environment,
+        env={**environment, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)},
         cwd=str(cwd if cwd is not None else REPO_ROOT),
-        timeout=e2e_timeout(seconds),
+        timeout=e2e_timeout(registered.timeout),
     )
 
 
 # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The producer of this shape is
 # the harness, whose Stop payload exists on this host only as a process handing one to a
 # hook: no schema verb, no installed document, nothing a gate could read it off. So the one
-# source here is the consumer's — the two field names the hook declares — and
-# `test_these_journeys_key_their_payloads_as_the_hook_reads_them` below reconciles these
-# keys against it; the other two are what the harness sends and the hook ignores, and no
+# source here is the consumer's — the two field names the installed guard's `--help` says
+# its `claude-code` format reads — and
+# `test_these_journeys_key_their_payloads_as_the_guard_reads_them` below reconciles these
+# keys against it; the other two are what the harness sends and the guard ignores, and no
 # drift in them can change what a journey here measures.
 class StopPayload(TypedDict):
     """The Stop payload the harness hands a hook, in the fields this one is driven with.
@@ -268,29 +276,48 @@ def _stop_payload(session: Session, *, again: bool = False) -> StopPayload:
     }
 
 
-def test_these_journeys_key_their_payloads_as_the_hook_reads_them() -> None:
-    """The two field names above are the two the hook declares, reconciled rather than trusted.
+def test_these_journeys_key_their_payloads_as_the_guard_reads_them() -> None:
+    """The two field names the guard reads are keys of the payload these journeys compose.
 
-    They are a copy: the hook is the one thing here that reads the harness's payload, and
-    these journeys have to *compose* one. A copy that drifted would not fail loudly — it
-    would drive the unreadable-payload path, which is a real ending with a real journey of
-    its own, so every other journey in this module would go on passing while measuring
-    that instead of what it says it measures.
+    Reconciled against the installed guard's own help rather than trusted: a copy that
+    drifted would not fail loudly — it would drive the unreadable-payload path, which is a
+    real ending with a real journey of its own, so every other journey in this module would
+    go on passing while measuring that instead of what it says it measures.
     """
+    _installed()
+    described = subprocess.run(  # noqa: S603 - the installed engine, named by absolute path
+        [str(ONEPIPELINE), "stop-guard", "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=e2e_timeout(60),
+    ).stdout
+    rendering = next(
+        (line for line in described.splitlines() if line.strip().startswith("- claude-code:")),
+        "",
+    )
     keyed = set(StopPayload.__annotations__)
-    for field in ("SESSION_FIELD", "CONTINUATION_FIELD"):
-        declared = _declared(field)
-        assert declared in keyed, (
-            f"{GUARD.name} reads {declared!r} off the Stop payload and this module composes "
-            f"payloads keyed {sorted(keyed)}; every journey here would drive the "
-            "unreadable-payload ending instead of its own"
+    for field in ("session_id", "stop_hook_active"):
+        assert f"`{field}`" in rendering, (
+            f"the installed guard's claude-code format no longer says it reads {field!r}:\n"
+            f"{described}"
+        )
+        assert field in keyed, (
+            f"the guard reads {field!r} off the Stop payload and this module composes payloads "
+            f"keyed {sorted(keyed)}; every journey here would drive the unreadable-payload "
+            "ending instead of its own"
         )
 
 
-def _blocked(answered: subprocess.CompletedProcess[str]) -> str:
-    """The reason a blocking answer carries, having held it to the whole shape first."""
+def _blocked(answered: subprocess.CompletedProcess[str], *, aside: str = "") -> str:
+    """The reason a blocking answer carries, having held it to the whole shape first.
+
+    `aside` is what `onepipeline unwatched` writes on standard error for the same question
+    — the runs it could not decide about — which the guard's contract says is the whole
+    of what it writes there.
+    """
     assert answered.returncode == 0, f"the hook exited {answered.returncode}, not 0"
-    assert answered.stderr == "", f"the hook wrote to standard error: {answered.stderr!r}"
+    assert answered.stderr == aside, f"the hook wrote to standard error: {answered.stderr!r}"
     assert answered.stdout.strip(), "the hook wrote nothing on standard output, so it did not block"
     decision = json.loads(answered.stdout)
     assert decision["decision"] == "block", f"the hook did not block: {answered.stdout!r}"
@@ -316,16 +343,16 @@ def _warned(answered: subprocess.CompletedProcess[str], why: str) -> str:
     return message
 
 
-def _silent(answered: subprocess.CompletedProcess[str], why: str) -> None:
+def _silent(answered: subprocess.CompletedProcess[str], why: str, *, aside: str = "") -> None:
     """Hold an answer to the silent ending: nothing unwatched, or nothing the hook could ask about.
 
     The first is the real verb answering `0`, and the second is a payload naming no
-    session — which are the only two outcomes that end a turn with nothing said, now that
-    every way the verb can fail to answer says so.
+    session — the outcomes that end a turn with nothing said. `aside` is as `_blocked`
+    takes it.
     """
     assert answered.returncode == 0, f"{why}: the hook exited {answered.returncode}, not 0"
     assert answered.stdout == "", f"{why}: the hook wrote {answered.stdout!r} to standard output"
-    assert answered.stderr == "", f"{why}: the hook wrote {answered.stderr!r} to standard error"
+    assert answered.stderr == aside, f"{why}: the hook wrote {answered.stderr!r} to standard error"
 
 
 def _working_tree() -> tuple[str, ...]:
@@ -359,61 +386,6 @@ def _state_home(tmp_path: Path) -> Iterator[Path]:
 
 def _at_home(environment: dict[str, str], home: Path) -> dict[str, str]:
     return {**environment, "HOME": str(home), "XDG_STATE_HOME": str(home / ".local" / "state")}
-
-
-def _hook_tree(
-    tmp_path: Path,
-    engine: str | None,
-    *,
-    executable: bool = True,
-    without: str = "",
-) -> Path:
-    """A directory the checked-in hook runs in, with the engine beside it planted.
-
-    The hook resolves the engine as this checkout's own `.venv/bin/onepipeline` before
-    anything on the search path, which is what stops it measuring whichever copy some
-    other checkout left there — and it is also why the four host conditions below cannot
-    be reached by planting on `PATH`. A copy of the tracked hook, at a root whose
-    `.venv/bin` this journey owns, is the only way to ask what it does when the engine it
-    resolves cannot be executed or answers a status of its own. Both scripts are copied
-    byte for byte, so the file under test is the tracked one and only its *sibling* is
-    this journey's.
-
-    `engine` is the script planted at that path, or `None` for a root that has none —
-    which, with the search path scrubbed, is the missing-binary condition. `without` names
-    a script to leave out, which is how the wrapper's own prerequisites are driven: it
-    resolves its Python half beside itself, so a root missing that half is the only way to
-    ask what it does about one.
-    """
-    root = tmp_path / "hook-tree"
-    (root / "scripts").mkdir(parents=True)
-    for script in ("stop-unwatched-guard.sh", "stop-unwatched-guard.py"):
-        if script == without:
-            continue
-        shutil.copy2(REPO_ROOT / "scripts" / script, root / "scripts" / script)
-    if engine is not None:
-        binaries = root / ".venv" / "bin"
-        binaries.mkdir(parents=True)
-        planted = binaries / "onepipeline"
-        planted.write_text(engine, encoding="utf-8")
-        planted.chmod(0o755 if executable else 0o644)
-    return root
-
-
-def _planted_hook(
-    root: Path, payload: object, environment: dict[str, str], *, seconds: float = 60
-) -> subprocess.CompletedProcess[str]:
-    """Run the copied hook out of `root`, so the engine it resolves is the planted one."""
-    return subprocess.run(  # noqa: S603 - the tracked hook script, copied, run as the harness does
-        ["bash", str(root / "scripts" / "stop-unwatched-guard.sh")],
-        input=payload if isinstance(payload, str) else json.dumps(payload),
-        capture_output=True,
-        text=True,
-        check=False,
-        env=environment,
-        cwd=str(root),
-        timeout=e2e_timeout(seconds),
-    )
 
 
 def test_the_installed_engine_is_the_release_the_pin_names_and_offers_the_verb() -> None:
@@ -687,7 +659,8 @@ def test_a_mixed_root_blocks_on_what_was_proven_and_not_on_what_could_not_be_dec
     )
 
     reason = _blocked(
-        _hook(_stop_payload(owned.session), _at_home(_environment(owned), state_home))
+        _hook(_stop_payload(owned.session), _at_home(_environment(owned), state_home)),
+        aside=verb.stderr,
     )
     assert "plainly-unwatched" in reason, (
         f"the proven-unwatched run is not in the reason:\n{reason}"
@@ -725,6 +698,7 @@ def test_a_root_holding_only_an_undecidable_run_leaves_the_turn_alone(
     _silent(
         _hook(_stop_payload(owned.session), _at_home(_environment(owned), state_home)),
         "a session owning one run whose settlement cannot be decided",
+        aside=verb.stderr,
     )
 
 
@@ -829,33 +803,6 @@ def test_a_run_still_recording_under_an_earlier_build_is_refreshed_and_reported(
     _refreshed(owned, "started-before", to=current)
 
 
-#: A search path holding a shell and no `onepipeline`. The journeys that plant an engine
-#: need the planted one to be the only one reachable, and one of them needs *none* to be.
-SYSTEM_PATH = "/usr/bin:/bin"
-
-#: An engine that cannot be executed at all. The interpreter it names is not there, so the
-#: kernel refuses the exec — which is what a broken install, a half-written wheel, or a
-#: binary built for another platform looks like from the calling process.
-CANNOT_RUN = "#!/nonexistent/interpreter\n"
-
-#: An engine answering a status that is neither of the verb's two answers. `2` is this
-#: binary's own refusal — no session to ask about, a runs root it may not read — and a
-#: refusal is not evidence that a run is unwatched.
-REFUSES = "#!/usr/bin/env bash\necho 'refused' >&2\nexit 2\n"
-
-#: An engine answering the blocking status and naming no run on standard output. The
-#: status says runs are unwatched and the output says which, and an answer carrying only
-#: the first is one the hook cannot put in front of a manager: there is nothing to watch.
-NAMES_NOTHING = "#!/usr/bin/env bash\nexit 6\n"
-
-#: An engine the hook must pass over rather than ask: planted at the checkout's own
-#: `.venv/bin` without an execute bit, it would block if it were ever run — so the line it
-#: would print is what a fall-through journey asserts is *absent* from the block's reason.
-NOT_EXECUTABLE = (
-    "#!/usr/bin/env bash\nprintf 'asked-the-unexecutable  ACTIVE  unwatched\\n'\nexit 6\n"
-)
-
-
 def test_the_hook_ends_the_turn_silently_on_a_working_directory_with_no_runs_root(
     tmp_path: Path, state_home: Path
 ) -> None:
@@ -899,8 +846,7 @@ def test_the_hook_ends_the_turn_silently_on_a_payload_it_cannot_read(
 
     environment = _at_home(_environment(owned), state_home)
     # The last is a session no launcher could have minted and no argument vector can
-    # carry: handed on to the verb it would end the Python half before it asked, which is
-    # the wrapper's loud ending rather than this silent one.
+    # carry, which the guard reads as a payload naming no session.
     for payload in (
         "",
         "not json at all",
@@ -909,255 +855,6 @@ def test_the_hook_ends_the_turn_silently_on_a_payload_it_cannot_read(
         json.dumps({"session_id": "a-session\u0000with-a-nul"}),
     ):
         _silent(_hook(payload, environment), f"the payload {payload!r}")
-
-
-@pytest.mark.parametrize(
-    ("condition", "engine", "executable", "named"),
-    [
-        ("an engine that cannot be executed at all", CANNOT_RUN, True, ("could not run",)),
-        ("an engine answering a status of its own", REFUSES, True, ("status 2", "refused")),
-        (
-            "an engine answering the blocking status and naming no run",
-            NAMES_NOTHING,
-            True,
-            ("status 6", "naming no run"),
-        ),
-        ("no engine to ask", None, True, ("found no `onepipeline`",)),
-    ],
-    ids=["cannot-run", "another-status", "names-nothing", "missing"],
-)
-def test_the_hook_says_the_turn_is_unguarded_when_the_engine_does_not_answer(
-    condition: str,
-    engine: str | None,
-    executable: bool,
-    named: tuple[str, ...],
-    tmp_path: Path,
-    state_home: Path,
-) -> None:
-    """Every way the engine can fail to answer ends the turn, refuses nothing, and says so.
-
-    **The subject is the hook's branching and not the verb's behaviour**, which is why
-    the engine here is planted: these are states the real verb has no way to produce.
-    The hook itself is the tracked file, copied whole, and what is planted is the sibling
-    it resolves.
-
-    None of these is evidence that a run is unwatched, which is the only thing this hook
-    ever blocks on, so none of them blocks. But none is evidence that every run is watched
-    either, and a guard that fell silent here would go on being believed: the operator
-    reads a turn that ended as a turn the hook cleared. So each says so — and says *which*
-    condition, which is what `named` holds the warning to, since a warning that could not
-    tell a missing engine from a refusing one would send the person to look in the wrong
-    place.
-    """
-    root = _hook_tree(tmp_path, engine, executable=executable)
-    environment = _at_home(dict(os.environ), state_home)
-    # A search path with a shell on it and no engine, so the planted root is the only
-    # place an engine could be found — which is what makes "no engine to ask" reachable
-    # at all. Kept as real system directories rather than emptied: `subprocess` resolves
-    # the command against the environment it is handed, so an empty one finds no `bash`
-    # either and the journey would be about that instead.
-    environment["PATH"] = SYSTEM_PATH
-    if shutil.which("onepipeline", path=SYSTEM_PATH) is not None:
-        pytest.skip(f"an engine is on {SYSTEM_PATH}, so a root without one is not reachable")
-    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "engine-that-does-not-answer"
-    answered = _planted_hook(
-        root, _stop_payload(Session("engine-that-does-not-answer")), environment
-    )
-    _unguarded(_warned(answered, condition), condition, named)
-
-
-def _unguarded(said: str, condition: str, named: tuple[str, ...]) -> None:
-    """Hold a warning to being the *unguarded* one, about `condition` and not about runs.
-
-    The hook has two warnings and they mean opposite things to the person reading them:
-    one names runs that *are* unwatched and asks for a watch on each, the other says the
-    question was never asked. A journey about the second that accepted the first would
-    pass on a hook that had invented unwatched runs out of a verb that did not answer.
-    """
-    assert "unguarded" in said, (
-        f"{condition}: the warning does not say the turn is unguarded: {said!r}"
-    )
-    assert "just unwatched" in said, (
-        f"{condition}: the warning does not say how to ask by hand: {said!r}"
-    )
-    assert "are unwatched" not in said, (
-        f"{condition}: the warning claims runs are unwatched: {said!r}"
-    )
-    for phrase in named:
-        assert phrase in said, f"{condition}: the warning does not name it ({phrase!r}): {said!r}"
-
-
-def test_the_wrapper_says_the_turn_is_unguarded_when_it_cannot_reach_its_own_half(
-    tmp_path: Path, state_home: Path
-) -> None:
-    """The three prerequisites the shell half has of its own, and each says so.
-
-    **The subject is the wrapper's branching and not the verb's behaviour**: the engine
-    planted beside it would block if it were ever asked, so an unguarded warning is the
-    wrapper stopping short of its Python half rather than the verb reporting nothing.
-
-    All three are what a half-restored checkout looks like from a hook's seat — the
-    Python half missing, no interpreter to run it with, and an interpreter that ran it
-    and got no answer out of it — and none says anything about whether a run is watched.
-    The wrapper cannot compose an answer, which is what its Python half is for, but it
-    can write a constant one: so each ending is the same `systemMessage` object the
-    Python half's unanswered endings write, naming which of the three it was, and none
-    blocks. A wrapper that fell silent here would end a turn nobody asked about as though
-    the hook had cleared it, which is the ending the person is least able to notice.
-    """
-    blocks = "#!/usr/bin/env bash\nprintf 'a-run  ACTIVE  unwatched\\n'\nexit 6\n"
-
-    missing_half = _hook_tree(tmp_path / "no-half", blocks, without="stop-unwatched-guard.py")
-    environment = _at_home(dict(os.environ), state_home)
-    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "cannot-reach-its-own-half"
-    condition = "a checkout whose Python half is not there"
-    _unguarded(
-        _warned(
-            _planted_hook(
-                missing_half, _stop_payload(Session("cannot-reach-its-own-half")), environment
-            ),
-            condition,
-        ),
-        condition,
-        ("no scripts/stop-unwatched-guard.py",),
-    )
-
-    # And with the half present but nothing to run it with. The tree carries no
-    # `.venv/bin/python3` of its own, so a search path holding a shell and nothing else is
-    # the whole of what makes an interpreter unreachable — a shell, because `subprocess`
-    # resolves the command against the environment it is handed and an empty path would
-    # find no `bash` to run the hook with either.
-    no_interpreter = _hook_tree(tmp_path / "no-python", blocks)
-    shell_only = tmp_path / "a-shell-and-nothing-else"
-    shell_only.mkdir()
-    bash = shutil.which("bash")
-    assert bash is not None, "this host has no bash, so the hook cannot be run at all"
-    (shell_only / "bash").symlink_to(bash)
-    without_python = dict(environment)
-    without_python["PATH"] = str(shell_only)
-    assert shutil.which("python3", path=without_python["PATH"]) is None
-    condition = "a checkout with no interpreter to run that half with"
-    _unguarded(
-        _warned(
-            _planted_hook(
-                no_interpreter, _stop_payload(Session("cannot-reach-its-own-half")), without_python
-            ),
-            condition,
-        ),
-        condition,
-        ("no python3",),
-    )
-
-    # And with an interpreter that runs the half and gets nothing out of it. The Python
-    # half exits 0 on every path it controls, so the only way to a status it did not
-    # choose is an interpreter that cannot run it — a `python3` too old for its syntax is
-    # the live form — and that is provoked with a stand-in at the path the wrapper
-    # prefers, `.venv/bin/python3`, which answers nothing and exits 1 as such an
-    # interpreter would. A stand-in rather than the real thing because no interpreter on
-    # this host fails to run the half, and the subject is the wrapper's own arm.
-    half_ran_silent = _hook_tree(tmp_path / "half-answers-nothing", blocks)
-    interpreter = half_ran_silent / ".venv" / "bin" / "python3"
-    interpreter.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    interpreter.chmod(0o755)
-    condition = "a checkout whose Python half ran and answered nothing"
-    _unguarded(
-        _warned(
-            _planted_hook(
-                half_ran_silent, _stop_payload(Session("cannot-reach-its-own-half")), environment
-            ),
-            condition,
-        ),
-        condition,
-        ("status other than 0",),
-    )
-
-    # And with an interpreter whose own launch fails, which is the form of that ending
-    # that comes with a complaint: a `.venv/bin/python3` whose shebang names a program
-    # that is not there is executable, is chosen, and is refused by the kernel — bash
-    # reports `bad interpreter` on standard error and exits 126. The contract gives the
-    # harness nothing on that stream, so the wrapper owns the complaint as well as the
-    # status: the same constant warning, and standard error still empty, which
-    # `_warned` holds. A stand-in interpreter for the reason the one above is.
-    interpreter_gone = _hook_tree(tmp_path / "interpreter-gone", blocks)
-    launcher = interpreter_gone / ".venv" / "bin" / "python3"
-    launcher.write_text("#!/nonexistent/interpreter\n", encoding="utf-8")
-    launcher.chmod(0o755)
-    condition = "a checkout whose interpreter cannot be launched"
-    _unguarded(
-        _warned(
-            _planted_hook(
-                interpreter_gone, _stop_payload(Session("cannot-reach-its-own-half")), environment
-            ),
-            condition,
-        ),
-        condition,
-        ("status other than 0",),
-    )
-
-
-def test_a_memory_this_hook_cannot_read_stands_aside_rather_than_blocking_again(
-    tmp_path: Path, state_home: Path
-) -> None:
-    """A continuation whose record cannot be read is a question this hook cannot answer.
-
-    Whether the condition moved is exactly what the record is for, and without it the
-    hook has an unwatched run in hand and no way to say whether the manager was already
-    told. Blocking there would be blocking on an answer it could not obtain — and that
-    block is the irreversible act, since it holds the operator's own session. So it says
-    so and steps out of the way: the runs, the reason, and no refusal.
-    """
-    _installed()
-    owned = Owned(tmp_path / "runs", Session("memory-that-cannot-be-read"))
-    owned.root.mkdir(parents=True)
-    _assembled(owned, "still-unwatched")
-    _make_current(owned, "still-unwatched")
-    environment = _at_home(_environment(owned), state_home)
-
-    _blocked(_hook(_stop_payload(owned.session), environment))
-    remembered = [path for path in state_home.rglob("*") if path.is_file()]
-    assert len(remembered) == 1, f"the block remembered {remembered}"
-    remembered[0].chmod(0o000)
-    try:
-        said = _warned(
-            _hook(_stop_payload(owned.session, again=True), environment),
-            "a continuation whose record cannot be read",
-        )
-        assert "still-unwatched" in said, f"the runs were not named:\n{said}"
-        assert "could not read" in said, f"the reason was not named:\n{said}"
-    finally:
-        remembered[0].chmod(0o644)
-
-
-def test_a_memory_this_hook_cannot_decode_stands_aside_rather_than_crashing(
-    tmp_path: Path, state_home: Path
-) -> None:
-    """A record the hook can open but cannot decode is the same unanswerable question.
-
-    Whether the condition moved is read out of that record, and a file holding bytes that
-    are not UTF-8 answers that no better than one this user may not open — the hook is
-    left with an unwatched run in hand and no way to say whether the manager was already
-    told. Decoding is a different failure from opening, and a hook that caught only the
-    second crashed on the first: a traceback on standard error, a non-zero exit, and a
-    harness reading neither as the warning it owes. So it steps aside here exactly as
-    it does for a record it may not read: the runs, the reason, and no refusal.
-    """
-    _installed()
-    owned = Owned(tmp_path / "runs", Session("memory-that-cannot-be-decoded"))
-    owned.root.mkdir(parents=True)
-    _assembled(owned, "still-unwatched")
-    _make_current(owned, "still-unwatched")
-    environment = _at_home(_environment(owned), state_home)
-
-    _blocked(_hook(_stop_payload(owned.session), environment))
-    remembered = [path for path in state_home.rglob("*") if path.is_file()]
-    assert len(remembered) == 1, f"the block remembered {remembered}"
-    remembered[0].write_bytes(b"\xff\xfe not a digest, and not UTF-8\n")
-    said = _warned(
-        _hook(_stop_payload(owned.session, again=True), environment),
-        "a continuation whose record cannot be decoded",
-    )
-    assert "still-unwatched" in said, f"the runs were not named:\n{said}"
-    assert "could not read" in said, f"the reason was not named:\n{said}"
 
 
 def test_a_memory_this_hook_cannot_write_stands_aside_rather_than_blocking_for_ever(
@@ -1205,259 +902,6 @@ def test_a_memory_this_hook_cannot_write_stands_aside_rather_than_blocking_for_e
         )
     finally:
         read_only.chmod(0o700)
-
-
-def test_a_memory_this_hook_cannot_drop_neither_makes_a_clear_turn_loud_nor_silences_the_next_block(
-    tmp_path: Path, state_home: Path
-) -> None:
-    """A record the hook may not remove after a clear turn, and nothing changes.
-
-    A block leaves a record; a later stop with nothing to block on drops it, and the drop
-    can be refused — the directory the record sits in is one the hook may not write. That
-    is the same refusal the journey above steps aside on, at the opposite end of a block,
-    and it costs nothing: the record is *for* telling a continuation whether the condition
-    moved, and a turn that ended clear leaves no block for the next one to continue. So
-    the clear turn stays exactly as clear — nothing on either stream — and the stale record
-    silences nothing afterwards, because an ordinary stop never consults it.
-
-    **The second half is only evidence if the stale record matches what the next block
-    reports byte for byte.** The defect it excludes is a hook that consults the record on
-    an ordinary stop and goes quiet when the digest matches; a second block reported
-    under different lines would be blocked by that hook too, and the journey would pass
-    over the very defect it names. So the run is never settled: the clear turn comes from
-    asking about a runs root that holds nothing, and the block that follows is over the
-    same run, reported under the same lines the record was written from.
-    """
-    _installed()
-    owned = Owned(tmp_path / "runs", Session("memory-that-cannot-be-dropped"))
-    owned.root.mkdir(parents=True)
-    _assembled(owned, "cleared-later")
-    _make_current(owned, "cleared-later")
-    environment = _at_home(_environment(owned), state_home)
-    first = _blocked(_hook(_stop_payload(owned.session), environment))
-    remembered = [path for path in state_home.rglob("*") if path.is_file()]
-    assert len(remembered) == 1, f"the block remembered {remembered}"
-    record = remembered[0].read_bytes()
-
-    # A clear turn: the same session asked about a runs root holding no run of anybody's,
-    # which the real verb answers `0`. The run itself is left exactly as it is.
-    nothing_here = tmp_path / "runs-holding-nothing"
-    nothing_here.mkdir()
-    elsewhere = dict(environment)
-    elsewhere["ONEPIPELINE_RUNS_DIR"] = str(nothing_here)
-    read_only = remembered[0].parent
-    read_only.chmod(0o500)
-    try:
-        _silent(
-            _hook(_stop_payload(owned.session), elsewhere),
-            "a clear turn whose stale record the hook may not remove",
-        )
-        assert remembered[0].read_bytes() == record, (
-            "the record was changed in a directory the hook may not write, so this "
-            "journey is not the one it says it is"
-        )
-    finally:
-        read_only.chmod(0o700)
-
-    # The stale record is still standing, and the next stop is an ordinary one over the
-    # same run — reported under the very bytes the record was written from, so a hook
-    # that consulted the record here would find a match and go quiet. It must block.
-    again = _blocked(_hook(_stop_payload(owned.session), environment))
-    assert again == first, (
-        "the second block was reported under different lines from the first, so a hook "
-        f"wrongly consulting the record would not have matched:\n{first}\n---\n{again}"
-    )
-    assert "cleared-later" in again, f"the run was not named:\n{again}"
-
-
-@pytest.mark.parametrize(
-    ("condition", "own"),
-    [
-        ("no engine of its own", None),
-        ("an engine of its own it cannot execute", NOT_EXECUTABLE),
-    ],
-    ids=["absent", "not-executable"],
-)
-def test_the_hook_falls_through_to_the_engine_on_the_search_path(
-    condition: str, own: str | None, tmp_path: Path, state_home: Path
-) -> None:
-    """A checkout whose own engine cannot be asked asks whichever one is on the search path.
-
-    **The subject is the hook's resolution and not the verb's behaviour**: what is read
-    is *which* engine the hook asked, which only a planted one can say.
-
-    The fallback that makes this hook work in a checkout provisioned some other way, and
-    the half of `_binary` no other journey reaches: every one of them runs in a tree whose
-    own `.venv/bin` answers first, so without this the fall-through is a production path
-    nothing has ever taken. It has two entrances and both are driven — a `.venv/bin` with
-    no engine in it, and one holding a file the hook may not execute, which is what a
-    half-provisioned checkout leaves and which must be passed over rather than asked and
-    refused by the kernel.
-    """
-    root = _hook_tree(tmp_path, own, executable=own is None)
-    on_the_path = tmp_path / "somewhere-else"
-    on_the_path.mkdir()
-    planted = on_the_path / "onepipeline"
-    planted.write_text(
-        "#!/usr/bin/env bash\nprintf 'found-on-the-path  ACTIVE  unwatched\\n'\nexit 6\n",
-        encoding="utf-8",
-    )
-    planted.chmod(0o755)
-    environment = _at_home(dict(os.environ), state_home)
-    environment["PATH"] = f"{on_the_path}{os.pathsep}{SYSTEM_PATH}"
-    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "engine-on-the-path"
-    reason = _blocked(
-        _planted_hook(root, _stop_payload(Session("engine-on-the-path")), environment)
-    )
-    assert "found-on-the-path" in reason, (
-        f"{condition}: the hook did not ask the engine on the search path:\n{reason}"
-    )
-    assert "asked-the-unexecutable" not in reason, (
-        f"{condition}: the hook asked the engine it may not execute:\n{reason}"
-    )
-
-
-@pytest.mark.parametrize("named", ["", "a/relative/state/root"], ids=["absent", "relative"])
-def test_a_state_root_that_is_not_an_absolute_path_falls_back_to_the_home(
-    named: str, tmp_path: Path, state_home: Path
-) -> None:
-    """What the hook remembers lands under the home when the environment names no root.
-
-    Both halves of the same rule, and the relative one is the half that matters: this hook
-    runs in whatever working directory the harness gives it, and a relative state root
-    would put its memory under that — which is the shape the *runs root* itself defaults
-    to, so the memory would land beside the runs of whichever checkout the turn ended in.
-    """
-    _installed()
-    owned = Owned(tmp_path / "runs", Session("state-root-that-is-not-absolute"))
-    owned.root.mkdir(parents=True)
-    _assembled(owned, "unwatched-run")
-    _make_current(owned, "unwatched-run")
-    environment = _at_home(_environment(owned), state_home)
-    if named:
-        environment["XDG_STATE_HOME"] = named
-    else:
-        environment.pop("XDG_STATE_HOME")
-
-    _blocked(_hook(_stop_payload(owned.session), environment, cwd=tmp_path))
-
-    under_the_home = [
-        path for path in (state_home / ".local" / "state").rglob("*") if path.is_file()
-    ]
-    assert under_the_home, (
-        f"the hook remembered nothing under {state_home}, so a state root it was given no "
-        f"absolute path for did not fall back to the home. It left "
-        f"{sorted(str(path) for path in tmp_path.rglob('*') if path.is_file())[:20]}"
-    )
-    if named:
-        assert not (tmp_path / named).exists(), (
-            f"the hook resolved the relative {named!r} against its working directory, "
-            "which is where a run's own records live when nothing names a runs root"
-        )
-
-
-def test_the_hook_says_the_turn_is_unguarded_when_the_engine_runs_past_its_bound(
-    tmp_path: Path, state_home: Path
-) -> None:
-    """A verb that never answers must not hold the turn open, and does not — and says so.
-
-    **The subject is the hook's branching and not the verb's behaviour**: no state the
-    real verb can be put in makes it run past this bound, so what is planted is one that
-    does, and what is read is what the hook does about it.
-
-    The bound is why this hook may be registered at all: it runs at the end of every
-    manager turn, so a wedged read would make ending a turn a thing that could simply
-    stop happening. What it costs when it fires is one turn's worth of not knowing,
-    which is the same thing every other unanswered condition above costs — and, as with
-    each of those, the person is told rather than left to assume the turn was guarded.
-    """
-    bound = _bound()
-    root = _hook_tree(tmp_path, f"#!/usr/bin/env bash\nsleep {bound * 10}\n")
-    environment = _at_home(dict(os.environ), state_home)
-    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "past-the-bound"
-    began = time.monotonic()
-    answered = _planted_hook(
-        root, _stop_payload(Session("past-the-bound")), environment, seconds=bound * 8
-    )
-    took = time.monotonic() - began
-    condition = "an engine that runs past the hook's bound"
-    _unguarded(_warned(answered, condition), condition, (f"{bound:g}s bound",))
-    assert took < bound * 4, (
-        f"the hook took {took:.1f}s against its own {bound}s bound, so it is not the "
-        "bound that ended it"
-    )
-
-
-#: The hook whose own declarations these journeys are driven by, so that no value it
-#: owns is spelled twice.
-GUARD = REPO_ROOT / "scripts" / "stop-unwatched-guard.py"
-
-
-def _declared(name: str) -> str:
-    """One constant the hook declares, as it declares it.
-
-    Read out of its source rather than imported, because the hook is a script the harness
-    runs by path and not a module this suite installs — and a copy of any value it owns is
-    the one thing a journey about that value must not have.
-    """
-    for line in GUARD.read_text(encoding="utf-8").splitlines():
-        if line.startswith(f"{name} ="):
-            return str(ast.literal_eval(line.split("=", 1)[1].strip()))
-    raise AssertionError(f"{GUARD} declares no {name} for this journey to read")
-
-
-def _bound() -> float:
-    """The bound the hook gives the verb, read out of the hook rather than restated.
-
-    A second copy of that number here would be a second statement of it, and the journey
-    above would go on passing against a bound that had moved.
-    """
-    return float(_declared("VERB_TIMEOUT_SECONDS"))
-
-
-def test_the_hook_does_not_wait_on_this_checkouts_project_environment_lock(
-    tmp_path: Path, state_home: Path
-) -> None:
-    """The lock every `just` view here waits on is held, and the hook answers anyway.
-
-    `uv` takes an **exclusive** lock on this checkout's project environment, and every
-    `just` recipe in this suite reaches its tool through `uv run`. AGENTS.md's four-worker
-    invariant carries the measurement: with that lock held twelve seconds, `uv run
-    onepipeline --version` took 10.87s against 0.001s for the installed binary run
-    directly. A hook at the end of every turn that waited on it would make the length of
-    a turn a property of what else the host is doing, so it reaches the binary the way
-    `just plans` reaches its own CLI instead.
-    """
-    _installed()
-    if shutil.which("flock") is None:
-        pytest.skip("flock is not installed, so this checkout's uv lock cannot be held")
-    owned = Owned(tmp_path / "runs", Session("under-the-lock"))
-    owned.root.mkdir(parents=True)
-    _assembled(owned, "held-open")
-    _make_current(owned, "held-open")
-    environment = _at_home(_environment(owned), state_home)
-    bound = _bound()
-
-    lock = REPO_ROOT / ".venv" / ".lock"
-    lock.touch(exist_ok=True)
-    holder = subprocess.Popen(  # noqa: S603 - flock over this checkout's own project environment
-        ["flock", "-x", str(lock), "sleep", str(bound * 3)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        began = time.monotonic()
-        answered = _hook(_stop_payload(owned.session), environment, seconds=bound * 2)
-        took = time.monotonic() - began
-        assert "held-open" in _blocked(answered)
-        assert took < bound, (
-            f"the hook took {took:.1f}s with this checkout's project-environment lock "
-            f"held, against its own {bound}s bound: it is waiting on that lock"
-        )
-    finally:
-        holder.kill()
-        holder.wait(timeout=e2e_timeout(30))
 
 
 def test_the_guard_ends_a_continuation_the_condition_has_not_moved_under(

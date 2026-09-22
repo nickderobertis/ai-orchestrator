@@ -47,11 +47,9 @@ ONEVCS_LOCK_TIMEOUT_VARIABLE="ONEVCS_LOCK_TIMEOUT_SECONDS"
 
 # Where the last gate duration is kept: host-local, outside every checkout, because it is
 # a fact about this machine's hardware and load rather than about any branch — a worktree
-# that is reaped, or a clone a publication makes, must not lose it. The same root
-# `scripts/stop-unwatched-guard.py` keeps its own memory under, and the same rule about
-# reading `XDG_STATE_HOME`: honoured only when it is absolute, which is that variable's
-# own specification and keeps a relative one from putting this under whatever directory a
-# hook happened to run in.
+# that is reaped, or a clone a publication makes, must not lose it. `XDG_STATE_HOME` is
+# honoured only when it is absolute, which is that variable's own specification and keeps
+# a relative one from putting this under whatever directory a hook happened to run in.
 #
 # Fails, printing nothing, when neither that nor HOME is an absolute path: there is then
 # no host-local place to keep it, and a relative one would be whatever directory a hook
@@ -143,7 +141,7 @@ resolve_lock_timeout_seconds() {
 # statement as an unset one here, because `onevcs` refuses an empty one outright and a
 # waiter refused before it queues is worse than one bounded by the default.
 export_lock_timeout() {
-    local caller=${1:?export_lock_timeout: the name of the calling command is required, so its diagnostics stay attributable; pass it as the first argument, the way scripts/land-branch.sh passes land-branch, then retry}
+    local caller=${1:?export_lock_timeout: the name of the calling command is required, so its diagnostics stay attributable; pass it as the first argument, the way scripts/onepipeline.sh passes onepipeline, then retry}
     local named=${!ONEVCS_LOCK_TIMEOUT_VARIABLE:-}
     if [ -n "$named" ]; then
         # Kept only if it is a bound at all: `onevcs` refuses anything but a positive

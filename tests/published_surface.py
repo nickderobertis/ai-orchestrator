@@ -42,6 +42,14 @@ OPTION_ENTRY = re.compile(r"^ {2,6}(?P<spec>-.*)$")
 #: flag, so the name stops at the `=`.
 LONG_FLAG = re.compile(r"--[a-z][a-z0-9-]*")
 
+#: The first line of a verb that hands its arguments on to a sibling CLI's verb, e.g.
+#: `onepipeline publish-branch`'s "Land a completed branch through the linked onevcs
+#: `publish-branch`, …". Such a verb takes its own few flags on its `Usage:` line and
+#: forwards every other one, so what it accepts is its own plus the named verb's —
+#: read from the binary rather than declared, so a release that stops forwarding
+#: stops widening the surface.
+FORWARDS_TO = re.compile(r"\bthe linked (?P<tool>[a-z]+) `(?P<verb>[a-z][a-z0-9 -]*)`")
+
 
 class Surface(NamedTuple):
     """One pinned CLI's whole command tree, as its own `--help` reports it.
@@ -59,6 +67,9 @@ class Surface(NamedTuple):
     paths: frozenset[tuple[str, ...]]
     #: The long flags each path accepts, by path.
     flags: dict[tuple[str, ...], frozenset[str]]
+    #: The sibling CLI verb, as `(tool, path)`, each forwarding path hands the rest of
+    #: its arguments to.
+    forwards: dict[tuple[str, ...], tuple[str, tuple[str, ...]]]
 
     def subcommands(self, path: tuple[str, ...]) -> frozenset[str]:
         """The names that continue `path` by one level."""
@@ -74,7 +85,16 @@ class Surface(NamedTuple):
         The root's flags count at every level: `--help` is inherited, and a tool whose
         root declares a global flag accepts it on its verbs too.
         """
-        return flag in self.flags.get(path, frozenset()) or flag in self.flags[()]
+        return flag in self.accepted(path)
+
+    def accepted(self, path: tuple[str, ...]) -> frozenset[str]:
+        """Every long flag `path` takes: its own, the root's, and any it forwards."""
+        own = self.flags.get(path, frozenset()) | self.flags[()]
+        forwarded = self.forwards.get(path)
+        if forwarded is None:
+            return own
+        tool, target = forwarded
+        return own | surface_of(tool).accepted(target)
 
 
 def _help(binary: str, path: tuple[str, ...]) -> str:
@@ -95,11 +115,18 @@ def _help(binary: str, path: tuple[str, ...]) -> str:
 
 
 def _sections(help_text: str) -> tuple[frozenset[str], frozenset[str]]:
-    """The subcommands and long flags one help page declares."""
+    """The subcommands and long flags one help page declares.
+
+    A verb that takes its arguments as one trailing list declares its flags on its
+    `Usage:` line alone, so that line's flags count as well as the `Options:` entries.
+    """
     commands: set[str] = set()
     flags: set[str] = set()
     section = ""
     for line in help_text.splitlines():
+        if line.startswith("Usage: "):
+            flags.update(LONG_FLAG.findall(line))
+            continue
         heading = SECTION.match(line)
         if heading is not None:
             section = heading.group("name")
@@ -127,16 +154,21 @@ def _walk(binary: str, tool: str) -> Surface:
     """Read the whole command tree by recursing through `--help`."""
     paths: set[tuple[str, ...]] = set()
     flags: dict[tuple[str, ...], frozenset[str]] = {}
+    forwards: dict[tuple[str, ...], tuple[str, tuple[str, ...]]] = {}
     pending: list[tuple[str, ...]] = [()]
     while pending:
         path = pending.pop()
         if path in paths:
             continue
         paths.add(path)
-        commands, declared = _sections(_help(binary, path))
+        page = _help(binary, path)
+        commands, declared = _sections(page)
         flags[path] = declared
+        about = FORWARDS_TO.search(page.split("\n", 1)[0])
+        if path and about is not None and about.group("tool") != tool:
+            forwards[path] = (about.group("tool"), tuple(about.group("verb").split()))
         pending.extend((*path, command) for command in commands)
-    return Surface(tool, frozenset(paths), flags)
+    return Surface(tool, frozenset(paths), flags, forwards)
 
 
 @cache

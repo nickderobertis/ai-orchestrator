@@ -27,7 +27,7 @@
       ]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/project_store_race -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
       "options": {
         "cwd": "."
       },
@@ -48,7 +48,7 @@
       ]
     },
     "test-docs": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/project_store_race -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race -m reads_docs --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -57,7 +57,7 @@
       ]
     },
     "test-recipes": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/project_store_race -m reads_recipes --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race -m reads_recipes --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -66,7 +66,7 @@
       ]
     },
     "test-checkouts": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/project_store_race -m reads_checkouts --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race -m reads_checkouts --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       }

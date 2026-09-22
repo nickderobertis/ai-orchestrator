@@ -33,7 +33,7 @@ llmlint: ignore-file[tests_mirror_real_usage] No real launch can be asked for th
 under test: its driver is alive by construction, and a recorded one has no live dispatch
 left. The recipes, the engine and the live process are all real; only the record they read
 is composed, and that it resembles what a launch writes is held by
-`tests/e2e/test_supervision_readings_e2e.py`'s real-launch journey over the same builder.
+`tests/host_views/test_status_and_host_views_e2e.py`'s real-launch journey over the same builder.
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ def test_the_disk_reading_that_parts_a_crash_from_a_full_disk_is_on_both_views(
     host = _view("host", runs_root=undriven.root)
 
     for view, rendered in (("status", status.stdout), ("host", host.stdout)):
-        assert [line for line in rendered.splitlines() if line.startswith("  disk")], (
-            f"'{SECTION}' sends a supervisor to the disk line before diagnosing a dead "
+        assert [line for line in rendered.splitlines() if line.startswith("  free space: ")], (
+            f"'{SECTION}' sends a supervisor to the free-space line before diagnosing a dead "
             f"driver, and `just {view}` printed none: {rendered!r}"
         )

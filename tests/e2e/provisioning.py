@@ -95,13 +95,9 @@ def setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
-    # The sweep session setup runs is a composition of two published verbs rather
-    # than one of them, so the wrapper that composes them is part of a repo this
-    # script can be run in. `HOME` above already points every family it judges inside
-    # `tmp_path`, so the sweep it performs here is real and reaches nothing.
-    sweep = scripts / "sweep.sh"
-    shutil.copy2(REPO_ROOT / "scripts" / "sweep.sh", sweep)
-    sweep.chmod(0o755)
+    # The sweep session setup runs is the justfile's own recipe over two published
+    # verbs. `HOME` above already points every family it judges inside `tmp_path`, so
+    # the sweep it performs here is real and reaches nothing.
     # The last thing session setup runs is `just repos-bootstrap`, which provisions the
     # registered sibling checkouts' gates — through the recipe, the script, and the
     # reader of the tracked checkout list, so all three are part of a repo this script

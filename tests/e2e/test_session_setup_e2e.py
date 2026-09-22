@@ -34,7 +34,6 @@ from provisioning import (
     setup_repo,
 )
 from published_tools import PUBLISHED_TOOLS
-from test_sweep_e2e import NOTHING_EXAMINED
 
 
 def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Path) -> None:
@@ -47,15 +46,12 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     # This checkout carries no `config/onemessagebus.yaml`, so the warm step's fetch fails
     # whole and reports no link at all — which setup says, and survives.
     assert "schema cache: no link warmed:" in installed.stderr, installed.stderr
-    # Both halves of the composed sweep reach a session, and this fixture's `HOME` and
-    # `TMPDIR` put every family it judges inside `tmp_path` — where nothing has written
-    # one yet. So the answer is the short form for a sweep with *nothing to judge*,
-    # which is deliberately not the sentence a sweep that judged live candidates gives:
-    # read as one `Reclaimed: none` those two are indistinguishable, and only one of
-    # them is evidence the sweep is working. Imported from the module that owns both
-    # sentences rather than restated, so a wording change fails there once.
-    assert NOTHING_EXAMINED in installed.stderr, installed.stderr
-    assert "=== just sweep — what this run looked at ===" not in installed.stderr
+    # Both sweep verbs reach a session, each printing its own report, and this fixture's
+    # `HOME` and `TMPDIR` put every family they judge inside `tmp_path`.
+    assert 'sweep: examined family "runs"' in installed.stderr, installed.stderr
+    assert "This answers for the publication and recovery workspaces onevcs owns" in (
+        installed.stderr
+    ), installed.stderr
     # The last step reached the registered sibling checkouts through the recipe, and
     # under this fixture's `HOME` every listed `~/` path is absent, so each one was
     # skipped and no sibling's bootstrap ran — which is the report a host holding none
@@ -142,10 +138,10 @@ def test_session_setup_continues_when_the_workspace_sweep_fails(tmp_path: Path) 
 
     Substituting `false` for the recipe body proved only that session setup survives a
     non-zero exit; it proved nothing about the artifact that produces one, and it would
-    have gone on passing if the wrapper had stopped exiting non-zero at all. A
+    have gone on passing if the recipe had stopped exiting non-zero at all. A
     `workspaces` that is a file is what a half-provisioned or hand-edited onevcs state
-    root looks like, and the real verb refuses it — so this drives the real recipe, the
-    real wrapper, and both real verbs, and reads the failure they actually produce.
+    root looks like, and the real verb refuses it — so this drives the real recipe and
+    both real verbs, and reads the failure they actually produce.
     """
     repo = setup_repo(tmp_path)
     # `HOME` is `tmp_path`, so this is the state root the real `onevcs sweep` reads.
@@ -156,11 +152,9 @@ def test_session_setup_continues_when_the_workspace_sweep_fails(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert "cannot read the workspaces under" in result.stderr
-    # One verb down never costs the other its reclamation, and never leaves its own
-    # families out of both lists — the property session setup's sweep is worth running
-    # for at all.
+    # One verb down never costs the other its reclamation — the property session
+    # setup's sweep is worth running for at all.
     assert "sweep: examined family" in result.stderr
-    assert "onevcs publications, recoveries — onevcs sweep exited 2" in result.stderr
     assert "workspace sweep failed; continuing session setup" in result.stderr
 
 

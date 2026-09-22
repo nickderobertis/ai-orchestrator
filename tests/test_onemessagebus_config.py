@@ -191,20 +191,24 @@ def test_the_monitor_is_refused_every_other_op_for_the_reason_the_bus_once_gave(
     assert "the envelope's author `pacemaker` is not declared" in unknown.stderr, unknown.stderr
 
 
-def test_the_binding_opens_on_the_shims_reply_window_and_the_engines_asker() -> None:
-    """The binding's window and the shim's `--timeout` default are one decision."""
-    shim = (REPO_ROOT / "scripts" / "ask-manager.sh").read_text(encoding="utf-8")
-    default = re.search(r"^DEFAULT_TIMEOUT_SECONDS=(\d+)$", shim, re.MULTILINE)
-    assert default is not None
+def test_the_binding_opens_on_the_reply_window_and_the_engines_asker() -> None:
+    """The binding's window is the one every question on `surfaces` waits.
+
+    `onepipeline ask` — which `scripts/ask-manager.sh` runs — waits the
+    `reply_window_seconds` the run's launch record carries for this queue when no
+    `--timeout` names one, so this key is the one statement of the window a dispatched
+    agent's question and the monitor binding's both wait.
+    """
     binding = _value(rf"^codecs:\n  {BINDING}:\n((?:    .+\n)+)")
-    assert binding.splitlines()[:6] == [
+    lines = binding.splitlines()
+    assert lines[:3] == [
         "    queue: surfaces",
         "    asker_env: ONEPIPELINE_CHANNEL_ASKER",
         "    session_env: ORCHESTRATOR_MONITOR_SESSION_SECONDS",
-        f"    reply_window_seconds: {default.group(1)}",
-        "    select: op",
-        "    frames:",
     ]
+    window = re.fullmatch(r"    reply_window_seconds: (\d+)", lines[3])
+    assert window is not None and int(window.group(1)) > 0, lines[3]
+    assert lines[4:6] == ["    select: op", "    frames:"]
 
 
 def test_every_reply_carrying_commands_is_judged_by_the_envelope_review_with_a_cache() -> None:

@@ -29,8 +29,8 @@ FALLBACK_BLOCK = re.compile(r"```sh\n(?P<snippet>.*?)```", re.DOTALL)
 PLACEHOLDER_QUESTION = "1) ...  2) ..."
 
 #: How the block states the reply window, so a journey can shorten it rather than wait
-#: this host's window out. The shim takes the same shortening through
-#: `ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS`, which is what that variable exists for.
+#: this host's window out. The shim takes the same shortening as the verb's own
+#: `--timeout`.
 TIMEOUT_OPTION = re.compile(r"--timeout \d+")
 
 

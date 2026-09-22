@@ -13,7 +13,7 @@ dependencies = [
     "onejudge==0.13.4",
     "onemessagebus-cli==0.8.0",
     "onepipeline-api-cli==0.11.2",
-    "onepipeline-cli==0.43.1",
+    "onepipeline-cli==0.44.1",
     "onevcs-cli==0.30.1",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like

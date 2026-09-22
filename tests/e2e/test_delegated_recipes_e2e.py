@@ -119,8 +119,8 @@ WRAPPER_SCRIPTS = (
     "dispatch-env-hook.sh",
     # The bound every waiter for the merge-queue lock queues under, derived from how long
     # this identity's gate last took. `just integrate` sources it, and so does the launch
-    # wrapper and the landing wrapper below, so a checkout without it is one none of them
-    # can run in.
+    # wrapper for a launch and for both landing verbs, so a checkout without it is one
+    # none of them can run in.
     "lock-timeout.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
@@ -129,24 +129,9 @@ WRAPPER_SCRIPTS = (
     "node-scratch-dir.sh",
     # `just repos` goes through this one, which absorbs the flag spelling.
     "repos.sh",
-    # The two landing recipes go through this one, which reads the branch and `--repo`
-    # for the drafter and forwards everything else; the drafter itself is what it
-    # names, and a checkout without it would delegate through a wrapper that cannot
-    # run. `just recoverable` goes through the third, which re-renders the resume
-    # commands `onevcs` prints in their `just` form.
-    "land-branch.sh",
-    "draft-pr-body.sh",
+    # `just recoverable` goes through this one, which re-renders the resume commands
+    # `onevcs` prints in their `just` form.
     "recoverable.sh",
-    # `just sweep` goes through this one, which composes the two published sweep
-    # verbs and writes the trailer neither of them can.
-    "sweep.sh",
-    # The two supervisory views go through these two, which pass the published view
-    # through untouched and add this host's own readings — free space, and every live
-    # rendezvous — beside it out of the filter below. A checkout without all three
-    # would delegate through a wrapper that cannot run.
-    "status.sh",
-    "host.sh",
-    "supervision-readings.py",
 )
 
 
@@ -561,30 +546,30 @@ DELEGATIONS = (
     ),
     Delegation("history", (), "uv run oneagentgraph history"),
     Delegation("history-show", ("oh:abc123",), "uv run oneagentgraph history show oh:abc123"),
-    # The one recipe here that reaches two verbs. Both are named because a sweep that
-    # silently dropped one would report a clean host while a family filled the disk,
-    # and both carry the options, because an age floor that meant one thing to one
-    # family and another to the next would be worse than no floor. The floor is on
-    # every row, the bare one included: both verbs default to 24 hours, which on this
-    # host reclaimed nothing at all, so the recipe passes its own 4 and each verb has
+    # The one recipe here that reaches two verbs, `onevcs sweep` first. Both are named
+    # because a sweep that silently dropped one would report a clean host while a family
+    # filled the disk, and both carry the options, because an age floor that meant one
+    # thing to one family and another to the next would be worse than no floor. The floor
+    # is on every row the caller names none on: both verbs default to 24 hours, which on
+    # this host reclaimed nothing at all, so the recipe passes its own 4 and each verb has
     # to be told. Moving that default is a deliberate edit to these rows.
     Delegation(
         "sweep",
         ("--dry-run",),
-        "uv run oneagentgraph sweep --dry-run --min-age-hours 4",
-        then=("uv run onevcs sweep --dry-run --min-age-hours 4",),
+        "uv run onevcs sweep --dry-run --min-age-hours 4",
+        then=("uv run oneagentgraph sweep --dry-run --min-age-hours 4",),
     ),
     Delegation(
         "sweep",
         ("--min-age-hours", "0"),
-        "uv run oneagentgraph sweep --min-age-hours 0",
-        then=("uv run onevcs sweep --min-age-hours 0",),
+        "uv run onevcs sweep --min-age-hours 0",
+        then=("uv run oneagentgraph sweep --min-age-hours 0",),
     ),
     Delegation(
         "sweep",
         (),
-        "uv run oneagentgraph sweep --min-age-hours 4",
-        then=("uv run onevcs sweep --min-age-hours 4",),
+        "uv run onevcs sweep --min-age-hours 4",
+        then=("uv run oneagentgraph sweep --min-age-hours 4",),
     ),
     Delegation("validate-personas", (), "uv run oneagentgraph persona validate personas"),
     Delegation("register-repo", ("/checkout",), "uv run onevcs register /checkout"),
@@ -597,20 +582,16 @@ DELEGATIONS = (
     # The published flag is spelled differently; the recipe keeps the spelling the
     # planner doctrine names and the wrapper absorbs the difference.
     Delegation("repos", ("--audit-gate-coverage",), "uv run onevcs repos --audit-gates"),
-    # The two lookups in front of both landing rows are the drafter's, not the verb's.
-    # The first asks which publication policy the identity resolves, because
-    # `local-direct` opens no change request and so is never drafted for; the second
-    # turns a `--repo` that is not a directory into one, since it may be a registered
-    # alias. Both answer nothing here — the traced `uv` prints none — so drafting
-    # proceeds, which is the fallthrough each of those reads is written to take.
+    # Both landing recipes reach the engine's own landing verbs, which draft the body
+    # through the graph the recipe names first — ahead of the caller's arguments, so a
+    # caller ending its options with `--` does not push it behind the marker — and hand
+    # every other argument to the linked onevcs verb unchanged, so every caller argument,
+    # the two drafting escapes included, reaches the engine whole and in order.
     Delegation(
         "repo-recover",
         ("claude/work", "--repo", "/checkout"),
-        "uv run onevcs recover claude/work --repo /checkout",
-        before=(
-            "uv run onevcs rules check /checkout",
-            "uv run onevcs resolve /checkout",
-        ),
+        "uv run onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml "
+        "claude/work --repo /checkout",
     ),
     # The third landing verb, and the one that closes the gap the other two left: a
     # complete branch no session holds had neither an incomplete marker for `recover`
@@ -618,11 +599,8 @@ DELEGATIONS = (
     Delegation(
         "publish-branch",
         ("claude/work", "--repo", "/checkout"),
-        "uv run onevcs publish-branch claude/work --repo /checkout",
-        before=(
-            "uv run onevcs rules check /checkout",
-            "uv run onevcs resolve /checkout",
-        ),
+        "uv run onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml "
+        "claude/work --repo /checkout",
     ),
     # Both optional flags reach the verb. That they arrive as the *words* they were
     # typed as is a separate claim this trace cannot make — it joins argv with spaces —
@@ -638,28 +616,21 @@ DELEGATIONS = (
             "--policy",
             "change-open",
         ),
-        "uv run onevcs publish-branch claude/work --repo /checkout "
-        "--title Add the thing --policy change-open",
-        before=(
-            "uv run onevcs rules check /checkout",
-            "uv run onevcs resolve /checkout",
-        ),
+        "uv run onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml "
+        "claude/work --repo /checkout --title Add the thing --policy change-open",
     ),
-    # The two escapes from drafting, which are the recipe's own additions to the verb's
-    # argument list rather than `onevcs` options. `--no-draft` is consumed here — the
-    # verb has no such option and would refuse the whole invocation — and a caller's own
-    # body is forwarded untouched. That no turn is spent for either is a claim this
-    # trace cannot make; `tests/e2e/test_publish_branch_e2e.py` makes it against a real
-    # drafting seam. What it does say is that neither spends the checkout lookup either.
+    # The two escapes from drafting reach the engine verb that honours them.
     Delegation(
         "publish-branch",
         ("claude/work", "--repo", "/checkout", "--no-draft"),
-        "uv run onevcs publish-branch claude/work --repo /checkout",
+        "uv run onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml "
+        "claude/work --repo /checkout --no-draft",
     ),
     Delegation(
         "repo-recover",
         ("claude/work", "--repo", "/checkout", "--body-file", "/tmp/body.md"),
-        "uv run onevcs recover claude/work --repo /checkout --body-file /tmp/body.md",
+        "uv run onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml "
+        "claude/work --repo /checkout --body-file /tmp/body.md",
     ),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
     # Scoped to one identity from wherever it runs. The wrapper reads its arguments only
@@ -822,12 +793,8 @@ def _run(
     environment = os.environ.copy()
     environment["PATH"] = f"{checkout / 'bin'}{os.pathsep}{environment['PATH']}"
     environment["TRACE_FILE"] = str(trace)
-    # `just sweep` reports on the pre-adoption worktree root, and this host's
-    # own is 41 GB: pointing it at a path inside the throwaway checkout keeps these
-    # journeys off it.
-    environment["AI_ORCHESTRATOR_HOME"] = str(checkout / "ai-orchestrator-home")
-    # The same, for the other root it reports on. This host's `/tmp` is 83 GiB across
-    # 26,624 entries and walking it costs ~30s, which every row here would pay.
+    # A scratch root inside the throwaway checkout, so nothing a row runs writes into
+    # the host's own `/tmp`.
     scratch = checkout / "scratch-root"
     scratch.mkdir(exist_ok=True)
     environment["TMPDIR"] = str(scratch)
@@ -1472,20 +1439,11 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        # The drafter's policy read and its checkout lookup. A word of either reaching
-        # the invocation below would be a wrapper rewriting what the caller typed.
         "run",
-        "onevcs",
-        "rules",
-        "check",
-        "/checkout",
-        "run",
-        "onevcs",
-        "resolve",
-        "/checkout",
-        "run",
-        "onevcs",
+        "onepipeline",
         "publish-branch",
+        "--pr-author-graph",
+        "graphs/pr-author.yaml",
         "claude/work",
         "--repo",
         "/checkout",
