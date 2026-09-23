@@ -69,7 +69,7 @@ HOME_MODEL = "gpt-5-codex"
 #: controlled turn ran under while the control path carried no model at all — roughly ten
 #: times the weekly quota per token, recorded as the first. Which is which is the whole
 #: of what the journey reads off the wire, so both are named here rather than in it.
-CONFIGURED_MODEL = "gpt-6-sol"
+CONFIGURED_MODEL = "gpt-5.6-sol"
 SERVER_DEFAULT_MODEL = "gpt-6-astra"
 
 #: What the endpoint refuses with. A provider that will not serve a turn answers it — 401

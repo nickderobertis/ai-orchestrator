@@ -251,7 +251,7 @@
         "value": null
       },
       "model": {
-        "value": "gpt-6-sol"
+        "value": "gpt-5.6-sol"
       },
       "reasoning": {
         "value": null
@@ -289,7 +289,7 @@
             "value": null
           },
           "model": {
-            "value": "gpt-6-sol"
+            "value": "gpt-5.6-sol"
           },
           "reasoning": {
             "value": null
@@ -329,7 +329,7 @@
             "value": null
           },
           "model": {
-            "value": "gpt-6-sol"
+            "value": "gpt-5.6-sol"
           },
           "reasoning": {
             "value": null

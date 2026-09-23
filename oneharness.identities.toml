@@ -41,7 +41,7 @@ history = true
 # provider picks and so drift under us. The three roles that run on the GPT-6 Astra
 # tier restate it, and say why.
 [harness.codex]
-model = "gpt-6-sol"
+model = "gpt-5.6-sol"
 
 # **Every variant states its own `model`, even where it equals the harness-level value
 # directly above.** This is deliberate and must stay. A variant that named no `model`
@@ -58,7 +58,7 @@ model = "gpt-6-sol"
 # configuration a developer may export and this is the identity that honours it.
 # AGENTS.md says why.
 [harness.codex.variant.primary]
-model = "gpt-6-sol"
+model = "gpt-5.6-sol"
 # **This variant deliberately declares no `unset_env`, and it is the one variant that
 # cannot.** Its only mask anywhere on this host is `GH_PROJECTS_TOKEN`, and that is a
 # per-ROLE policy rather than a property of the identity: seven roles never reach the
@@ -84,7 +84,7 @@ model = "gpt-6-sol"
 # leaves that directory empty, which oneharness classifies as `auth` and falls
 # through, so this candidate costs nothing until it is logged in.
 [harness.codex.variant.alternate]
-model = "gpt-6-sol"
+model = "gpt-5.6-sol"
 env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
 # Subscription auth must not be shadowed by an ambient API key: `codex login`
 # writes ChatGPT tokens into the alternate home, and OPENAI_API_KEY would outrank
