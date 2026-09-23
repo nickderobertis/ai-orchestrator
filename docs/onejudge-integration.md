@@ -600,9 +600,10 @@ nothing exported by hand.
 The **judge** leads with Codex for the same reason and, past both Codex
 identities, now reaches the workers' alternate subscriptions before
 `claude-code:primary`. It keeps its cheaper-supervisor intent through `model`
-rather than through isolation: all four of its Claude variants are
-`claude-sonnet-5`, where every other role uses `claude-opus-5`. The
-`claude-code:primary` variant is env-driven like the others: it reads its
+rather than through isolation: all four of its Claude variants name the cheaper
+supervisor tier that config states, below the one every other role inherits
+from `oneharness.identities.toml`. The `claude-code:primary` variant is
+env-driven like the others: it reads its
 `CLAUDE_CONFIG_DIR` from `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (by default
 `$HOME/.claude`) and removes higher-precedence Anthropic credentials, so it runs as the
 account that directory holds and never as an ambient key.
@@ -611,10 +612,11 @@ The **design-doc role reverses the reversal**, and is the one place on this host
 the identity order is chosen for what a side is good at rather than for what it must not
 queue in front of. `oneharness.design-doc.toml` writes the document and leads with both
 Codex identities; `oneharness.design-doc-judge.toml` reviews it and leads with both
-alternate Claude subscriptions, on `claude-opus-5` rather than the judge config's
-`claude-sonnet-5`. What that reviewer decides is whether the prose reads plainly to a
-non-specialist, which is the document's whole purpose, so the cheaper-supervisor trade
-every other judged tier makes is the wrong one here. Past their leading pair each reaches
+alternate Claude subscriptions, on the tier `oneharness.identities.toml` states rather
+than the judge config's cheaper supervisor one. What that reviewer decides is whether
+the prose reads plainly to a non-specialist, which is the document's whole purpose, so
+the cheaper-supervisor trade every other judged tier makes is the wrong one here. Past
+their leading pair each reaches
 the other provider's two identities and then `claude-code:primary-backup` and
 `claude-code:primary`, so both name all six and neither loses a quota once everything ahead of it is exhausted.
 `tests/e2e/test_design_doc_graph_e2e.py` reads both orders back through the graph that

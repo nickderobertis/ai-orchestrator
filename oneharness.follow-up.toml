@@ -68,10 +68,10 @@ harnesses = [
 # board credential travelling. An empty list would not help — it inherits rather than
 # clears.
 [harness.codex.variant.primary]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 
 [harness.codex.variant.alternate]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 unset_env = ["OPENAI_API_KEY"]
 
 [harness.claude-code.variant.alternate]

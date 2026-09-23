@@ -36,11 +36,12 @@ run_mode = "fallback"
 history = true
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so each
-# harness names its own. Sol is the flagship tier of the GPT-5.6 family (Sol > Terra >
-# Luna); `gpt-5.6` aliases to it, but name it explicitly so the tier can't drift under
-# us. The three roles that run on the GPT-6 Astra tier restate it, and say why.
+# harness names its own. Sol is the tier these identities run on; name the tier
+# explicitly rather than a bare family name, which can alias to whichever tier the
+# provider picks and so drift under us. The three roles that run on the GPT-6 Astra
+# tier restate it, and say why.
 [harness.codex]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 
 # **Every variant states its own `model`, even where it equals the harness-level value
 # directly above.** This is deliberate and must stay. A variant that named no `model`
@@ -57,7 +58,7 @@ model = "gpt-5.6-sol"
 # configuration a developer may export and this is the identity that honours it.
 # AGENTS.md says why.
 [harness.codex.variant.primary]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 # **This variant deliberately declares no `unset_env`, and it is the one variant that
 # cannot.** Its only mask anywhere on this host is `GH_PROJECTS_TOKEN`, and that is a
 # per-ROLE policy rather than a property of the identity: seven roles never reach the
@@ -83,7 +84,7 @@ model = "gpt-5.6-sol"
 # leaves that directory empty, which oneharness classifies as `auth` and falls
 # through, so this candidate costs nothing until it is logged in.
 [harness.codex.variant.alternate]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
 # Subscription auth must not be shadowed by an ambient API key: `codex login`
 # writes ChatGPT tokens into the alternate home, and OPENAI_API_KEY would outrank
@@ -105,7 +106,7 @@ env = { IS_SANDBOX = "1" }
 # `oneharness config` reporting the tier from the variant. The two roles that run
 # their Claude identities on the cheaper supervisor tier restate it, and say why.
 [harness.claude-code.variant.alternate]
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
 # Subscription auth must not be shadowed by ambient API or OAuth credentials.
 unset_env = [
@@ -123,7 +124,7 @@ unset_env = [
 # that directory. tests/e2e/test_oneharness_timeout_e2e.py holds every role's chain
 # as the real CLI resolves it.
 [harness.claude-code.variant.alternate2]
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
 unset_env = [
     "ANTHROPIC_API_KEY",
@@ -139,7 +140,7 @@ unset_env = [
 # host that never logged it in reports `failure_kind: "auth"` and falls through, so the
 # candidate costs nothing until then.
 [harness.claude-code.variant.primary-backup]
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR" }
 unset_env = [
     "ANTHROPIC_API_KEY",
@@ -155,7 +156,7 @@ unset_env = [
 # higher-precedence credential selector is masked, so this identity can never run as
 # another account.
 [harness.claude-code.variant.primary]
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR" }
 unset_env = [
     "ANTHROPIC_API_KEY",

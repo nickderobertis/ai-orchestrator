@@ -73,7 +73,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -116,7 +116,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -159,7 +159,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -202,7 +202,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -239,7 +239,7 @@
         "value": null
       },
       "model": {
-        "value": "gpt-5.6-sol"
+        "value": "gpt-6-sol"
       },
       "reasoning": {
         "value": null
@@ -274,7 +274,7 @@
             "value": null
           },
           "model": {
-            "value": "gpt-5.6-sol"
+            "value": "gpt-6-sol"
           },
           "reasoning": {
             "value": null
@@ -310,7 +310,7 @@
             "value": null
           },
           "model": {
-            "value": "gpt-5.6-sol"
+            "value": "gpt-6-sol"
           },
           "reasoning": {
             "value": null

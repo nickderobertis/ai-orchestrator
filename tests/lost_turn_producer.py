@@ -63,13 +63,13 @@ stream_max_retries = 0
 #: that names none gets.
 HOME_MODEL = "gpt-5-codex"
 
-#: The two models the misrouting was told in, spelled as codex knows them. One is what a
-#: side's `[harness.codex].model` names and the record reports; the other is what
+#: The two models the journey tells the misrouting in, spelled as codex knows them. One
+#: is what the journey's own side config names and the record reports; the other is what
 #: `~/.codex/config.toml` named as the server's default on this host, which is what a
 #: controlled turn ran under while the control path carried no model at all — roughly ten
 #: times the weekly quota per token, recorded as the first. Which is which is the whole
 #: of what the journey reads off the wire, so both are named here rather than in it.
-CONFIGURED_MODEL = "gpt-5.6-sol"
+CONFIGURED_MODEL = "gpt-6-sol"
 SERVER_DEFAULT_MODEL = "gpt-6-astra"
 
 #: What the endpoint refuses with. A provider that will not serve a turn answers it — 401

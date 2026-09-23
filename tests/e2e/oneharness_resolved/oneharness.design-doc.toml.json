@@ -73,7 +73,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -116,7 +116,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -159,7 +159,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
@@ -202,7 +202,7 @@
             "value": null
           },
           "model": {
-            "value": "claude-opus-5"
+            "value": "claude-opus-5-5"
           },
           "reasoning": {
             "value": null
