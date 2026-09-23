@@ -826,6 +826,12 @@ def test_every_controlled_turn_of_the_launched_run_was_taken_under_its_socket(
     the caller ask again. A turn appearing twice, once with a name and once without, is
     that refusal.
     """
+    # llmlint: ignore[tests_mirror_real_usage] No public surface answers this. oneharness
+    # carries the control socket in the report onejudge consumes and in nothing it
+    # persists — its history `run` record has no control field — and neither the run's
+    # journal nor any `just` view carries a harness invocation. What is read here is the
+    # argv the real oneharness CLI was invoked with, recorded at the one seam this suite
+    # substitutes: the paid provider. It is the turn's own record, and the only one.
     turns = _recorded_turns(launched.prompt_log)
     controlled = [turn for turn in turns if turn["control"]]
     assert controlled, (

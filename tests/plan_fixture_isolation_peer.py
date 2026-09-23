@@ -22,6 +22,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import TypedDict
 
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
@@ -43,8 +44,24 @@ REMOVER = "remover"
 #: two different ids would prove that of two unrelated records instead.
 SHARED_NATIVE = "test-shared-native-id"
 
-#: The plan each peer stores: one record, complete enough for `write_plan_project`.
-PLAN: dict[str, object] = {
+
+class FixtureTask(TypedDict):
+    """The one task the stored plan carries, at the fields a plan document needs."""
+
+    id: str
+    task: str
+
+
+class FixturePlan(TypedDict):
+    """The plan each peer stores: one project, one task, and nothing either peer reads."""
+
+    name: str
+    tasks: list[FixtureTask]
+
+
+#: That plan, complete enough for `write_plan_project` and no larger: what either peer
+#: asks of it is that the store answers for it, never what it says.
+PLAN: FixturePlan = {
     "name": SHARED_NATIVE,
     "tasks": [{"id": "only", "task": "Be readable."}],
 }
