@@ -1099,6 +1099,17 @@ the exact release session setup installs and verifies, and dispatch drives the r
 through its typed SDK. Discovery: `onejudge --help`, `oneharness --help`, and
 [`docs/onejudge-integration.md`](docs/onejudge-integration.md).
 
+**A role file may name a parent, and every reader here resolves it.** `extends =
+"<path>"` resolves against the directory the declaring file sits in: the CLI pin reads it
+in the four configs it loads, the engine pin links the core that resolves a dispatched
+member's config, and the read API's own copy of that engine does the same for a run
+adopted from the browser. A parent that cannot be read settles the node
+`infrastructure-failure` naming both files, before anything is dispatched. The identity
+block is nonetheless restated per file rather than shared through a parent, so read a
+`oneharness*.toml` as self-contained.
+`tests/e2e/test_extends_chain_dispatch_e2e.py` drives a chain down both dispatch roads
+and the CLI's own, and holds that refusal down each dispatch road.
+
 **Every role names the same six identities**, differing only in order, because a role
 that omitted one would lose that quota once everything ahead of it was exhausted; the
 primary Claude identity is last everywhere with `claude-code:primary-backup` immediately

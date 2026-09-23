@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.44.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.44.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,14 +143,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.16.1/0.13.4 upgrade (`config/oneharness.version` and
+after the 0.16.2/0.13.5 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made twelve times
+one. That re-check has now been made thirteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -234,17 +234,28 @@ engine wheel links 0.17.0 as well, read off each wheel's own SBOM. What 0.16.0 a
 **per-run pointer line** ([oneharness#1326](https://github.com/nickderobertis/oneharness/pull/1326)),
 which is a line in a file of its own — the run's `oneharness-sessions.jsonl` — rather than
 a field in a record, so the accounting block this section reads is untouched by it.
-The oneharness half has since moved to 0.16.1 on the same terms: nothing under
+The oneharness half then moved to 0.16.1 on the same terms: nothing under
 `crates/oneharness-core/src/domain/` changes between v0.16.0 and v0.16.1. What 0.16.1
 changes ([oneharness#1344](https://github.com/nickderobertis/oneharness/pull/1344)) is the
 process exit code for a one-candidate selection that cannot run, a base-id `--bin`
 override reaching a variant, and which usage a refused `--format text --compact` prints —
-none of it written into a record's `usage`. The onejudge half has since moved to 0.13.4 on
+none of it written into a record's `usage`. The onejudge half then moved to 0.13.4 on
 the same terms: nothing under `crates/onejudge/src/` changes between v0.13.3 and v0.13.4,
 which relinks the generic `onemessagebus` 0.8.0 and nothing else. `onejudge-cli` 0.13.4 is
-still compiled against `oneharness-core` 0.17.0 while the engine wheel now links 0.17.1,
+still compiled against `oneharness-core` 0.17.0 while the engine wheel then linked 0.17.1,
 read off each wheel's own SBOM, and nothing under `crates/oneharness-core/src/domain/`
 changes between `oneharness-core-v0.17.0` and `oneharness-core-v0.17.1`.
+The pair has since moved again, to 0.16.2/0.13.5, for the `extends` chain a config file
+may now name — and the accounting block is untouched by it on the same terms. Nothing
+under `crates/onejudge/src/` changes between v0.13.4 and v0.13.5
+([onejudge#110](https://github.com/nickderobertis/onejudge/pull/110)), which relinks the
+`oneharness-core` and nothing else. What that core adds
+([oneharness#1349](https://github.com/nickderobertis/oneharness/pull/1349)) is confined
+to `domain/config.rs`, `io/config.rs` and `io/init.rs`: an `ExtendsPath` and the layered
+read that resolves it. `crates/oneharness-core/src/domain/usage.rs` is byte-identical
+between `oneharness-core-v0.17.1` and `oneharness-core-v0.18.0`, and `onejudge-cli`
+0.13.5, `oneagentgraph-cli` 0.4.10 and the engine wheel now all link 0.18.0, read off
+each wheel's own SBOM.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
@@ -331,18 +342,19 @@ served them.
    watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
    `just telemetry-server`) is the structured view. Measured against real runs on
-   **`onepipeline-api` 0.11.2**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.12.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 20 on the envelope, where
+   what re-opens this paragraph: `telemetry_schema_version` 20 on the envelope, unmoved
+   across this bump, where
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10,
-   unmoved across this bump, where 0.7.3 served
+   unmoved across this bump too, where 0.7.3 served
    8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
    answer); spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,
    which read `starting`, `waiting`, `surfacing`, `settled`, and `finished` across the
    runs read here; no run read served the `dispatching` this paragraph used to name.
-   On 0.11.2 this was re-read against the recorded runs under
+   On 0.12.1 this was re-read against the recorded runs under
    `tests/fixtures/timeline-runs/`, which serve both schema numbers, every phase above,
    and every span kind but `human-wait`, which none of those runs records.
    **A lane is a member the run's own graphs declared**, from 0.9.0: a session's

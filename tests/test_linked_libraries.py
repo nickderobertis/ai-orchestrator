@@ -598,15 +598,15 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Re-measured 2026-09-21 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.16.1 and names the `oneharness-cli`
+#: between them would mean anything. Re-measured 2026-09-23 on this host's installed
+#: wheels: `config/oneharness.version` reads 0.16.2 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.17.1, and the engine wheel links 0.17.1 as well — while the sibling
-#: `oneagentgraph-cli` and `onejudge-cli` wheels are still compiled against 0.17.0, which
-#: is the pairing `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
+#: against as 0.18.0, and the engine wheel links 0.18.0 as well — as do the sibling
+#: `oneagentgraph-cli` and `onejudge-cli` wheels, which is the pairing
+#: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The two numbers
 #: **coincide on this adoption**, which proves nothing: they are independently
-#: released artifacts, they have differed on every adoption recorded here before this
+#: released artifacts, they have differed on most adoptions recorded here before this
 #: one, and an equality gate would read that coincidence as a contract.
 UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core")
 
@@ -620,9 +620,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.9", core="0.17.1"),
-    LinkedCore(dependent="onejudge", dependent_version="0.13.4", core="0.17.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.44.1", core="0.17.1"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.10", core="0.18.0"),
+    LinkedCore(dependent="onejudge", dependent_version="0.13.5", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.44.2", core="0.18.0"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -750,20 +750,14 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: The one declared exception to the gate below, measured when the engine pin moved to
-#: onepipeline 0.44.1: the newest `onepipeline-api-cli` on PyPI, 0.11.2, links onepipeline
-#: 0.42.0, and no release linking 0.44.1 exists. The manager ruled that the engine pin
-#: moves regardless, because holding it would keep every dispatch on an engine without the
-#: fixes it carries; until a UI release links it, a browser adopt drives 0.42.0 and is not
-#: used for a run launched under this pin (AGENTS.md's onepipeline-ui roster entry,
-#: docs/dag-ui.md's "Which release is answering"). Satisfied only while both measured
-#: versions are exactly these, so it fails, naming itself, the moment either pin or the
-#: UI's linked engine moves — and is then deleted, not re-dated.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
-    linked="0.42.0",
-    pinned="0.44.1",
-    because="no onepipeline-ui release links onepipeline 0.44.1 yet",
-)
+#: **None, and kept.** The one entry this carried was measured when the engine pin moved
+#: to onepipeline 0.44.1 over a newest `onepipeline-api-cli` that linked 0.42.0. The
+#: `extends` adoption closed it: `onepipeline-api-cli` 0.12.1 links onepipeline 0.44.2,
+#: which is what `config/onepipeline.version` now names, so the two pins agree and the
+#: exception is deleted rather than re-dated — as its own terms required. What stays is
+#: the escape hatch, because the next adoption that outruns the reader's release needs
+#: to declare one without rebuilding the machinery to do it in.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
 
 
 def test_the_ui_api_links_the_engine_this_host_pins() -> None:
@@ -910,9 +904,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     The sentence this backs is the sharpest form of the whole module's subject: the
     `oneagentgraph` and `onejudge` a dispatch runs are compiled *into the engine wheel*,
     and this host also installs each of them as a standalone CLI whose wheel resolved its
-    own `oneharness-core`. Those two numbers are free to differ and, on this adoption,
-    do — so a reader who measured the sibling's own wheel would be measuring an artifact
-    no dispatch loads.
+    own `oneharness-core`. Those two numbers are free to differ, and have on every
+    adoption recorded here until this one — so a reader who measured the sibling's own
+    wheel would be measuring an artifact no dispatch loads. On this adoption they
+    coincide at 0.18.0, which is a coincidence and not a contract: it is the reason the
+    pairing below is written out rather than asserted as an inequality.
 
     Written as the pairing rather than as an inequality. An inequality would go green on
     a build where both moved together, which is the reading it exists to deny, and would
@@ -929,8 +925,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.17.0", "0.17.1"),
-        "onejudge-cli": ("0.17.0", "0.17.1"),
+        "oneagentgraph-cli": ("0.18.0", "0.18.0"),
+        "onejudge-cli": ("0.18.0", "0.18.0"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "
