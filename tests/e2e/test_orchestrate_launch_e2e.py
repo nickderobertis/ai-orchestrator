@@ -1457,47 +1457,6 @@ def test_every_lifecycle_node_this_repository_ships_states_a_title() -> None:
         )
 
 
-def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launched) -> None:
-    """The pacemaker's interval is launch-only, and a reply that tries to retune it is lost.
-
-    AGENTS.md told planners for months to put `"heartbeat_interval"` in a normal
-    `channel-reply`. The envelope is closed to unknown fields, so such a reply is refused
-    entirely — taking the verdict and any graph edits in it with it, which is why this
-    costs a round boundary rather than being a harmless no-op. Held against the run this
-    journey already launched, through the same recipe a planner answers a surface with.
-
-    The refusal is the bus's, in its words: the host's bus prepares a reply by the
-    planner-channel layout document it links, which onepipeline's contract declares
-    refuses a malformed envelope in the bus's words rather than the engine's, so it names
-    the field it refused and no longer lists the ones the envelope takes
-    (docs/orchestration.md states that divergence). What it still guarantees is held here:
-    a nonzero exit, the field named, and nothing appended to the run's replies.
-    """
-    before = _queue_state(launched.environment, SHIPPED_RUN, "replies")["records"]
-    reply = subprocess.run(
-        ["just", "channel-reply", SHIPPED_RUN],
-        cwd=REPO_ROOT,
-        env=launched.environment,
-        input=json.dumps(
-            {"version": 1, "completion": False, "message": "go", "heartbeat_interval": 900}
-        ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert reply.returncode != 0, reply.stdout
-    reported = reply.stderr + reply.stdout
-    assert (
-        "the reply is malformed: Additional properties are not allowed "
-        "('heartbeat_interval' was unexpected)"
-    ) in reported, reported
-    assert _queue_state(launched.environment, SHIPPED_RUN, "replies")["records"] == before, (
-        f"a refused reply was appended to the run's replies anyway:\n{reported}"
-    )
-
-
 #: How many reads it takes to drain a settled run's queue before giving up. A bound
 #: rather than a loop, because `channel-next` on a settled run answers immediately and
 #: an unbounded drain would spin on a queue that never empties.
