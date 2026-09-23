@@ -2,9 +2,10 @@
 # `tests/ask_seam`
 
 The host-tool journeys over the seam a dispatched agent asks its manager through: the
-real `scripts/ask-manager.sh` shim, the installed `onemessagebus ask` it hands every
-question to under `config/onemessagebus.yaml`, and the real launches that decide what a dispatch is
-given to ask with and which bus configuration its run records.
+real `scripts/ask-manager.sh` adapter, the installed engine's `onepipeline ask` it execs,
+which raises every question under the bus configuration the run's launch recorded, and
+the real launches that decide what a dispatch is given to ask with and which bus
+configuration its run records.
 
 - **These journeys prove this host's wiring, never the bus's behaviour.** What a question
   does once it is on the queue — its correlation, its wait, a timeout that carries no

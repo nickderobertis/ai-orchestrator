@@ -392,9 +392,8 @@ def test_a_ruling_echoing_a_correlation_no_pending_question_holds_is_refused_nam
     """
     environment = dict(replying.environment)
     environment["ONEPIPELINE_RUN_ID"] = replying.run
-    environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(ASK_WINDOW_SECONDS)
     asking = subprocess.Popen(  # noqa: S603 - the real wrapper, as an agent runs it
-        [str(ASK_MANAGER), "Should the test key cover docs?"],
+        [str(ASK_MANAGER), "--timeout", str(ASK_WINDOW_SECONDS), "Should the test key cover docs?"],
         cwd=REPO_ROOT,
         env=environment,
         text=True,

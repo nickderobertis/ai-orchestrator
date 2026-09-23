@@ -13,17 +13,18 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.43.1**
+that source on every `just check` rather than restated: **`onepipeline` v0.44.1**
 (`config/onepipeline.version`) and
 the **`onevcs` 0.30.1** its `Cargo.lock` resolves, which is the copy a dispatched
-lifecycle node publishes through. The manager verbs — `just publish-branch`,
-`just repo-recover`, `just recoverable`, `just work-status`, `just integrate` — run
-the `onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.30.1** as well at
-this pair of pins; the two are separate pins that have coincided before and will
+lifecycle node publishes through — and the copy `just publish-branch` and `just
+repo-recover` land through, since both run the engine's own landing verbs. The other
+manager verbs — `just recoverable`, `just work-status`, `just integrate` — run the
+`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.30.1** as well at this
+pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.43.1
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.44.1
 and 0.30.1. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
@@ -671,7 +672,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.43.1 and is refused **by its own name**, at every schema version and on a live
+v0.44.1 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1362,102 +1363,58 @@ the complete stack, but the PR diff against its stack base is child-only.
 
 <!-- llmlint: ignore[changed_behavior_has_e2e] Every behaviour this section describes past the graph run belongs to `onepipeline` and `onevcs` — when drafting is invoked, what the plan's own `body` bypasses, and what a publication does when a draft cannot start — and each is proven in its repository. This suite doubles the published CLIs at the recipe boundary precisely because driving one for real would open a pull request on a real repository. What this repository owns is the graph and its response contract, and `tests/e2e/test_orchestrate_launch_e2e.py` drives that for real: the launch record's `pr_author_graph`, a drafting turn answering `{body}`, and a non-conforming answer being re-prompted. -->
 
-**Three commands here draft a body, and they are the three that open a change
-request.** A run's own publication closeout is one of them; the other two are the
-out-of-band landing verbs, which is how branches usually reach a base on this host:
+**One drafter, reached two ways.** A change request's body is drafted by an **agent
+graph a command names** — [`graphs/pr-author.yaml`](../graphs/pr-author.yaml) — and the
+engine is what runs it on both roads a branch takes to a change request here: a run's own
+publication closeout, and the two out-of-band landing verbs, which is how branches
+usually reach a base on this host.
 
 | command | what it lands | how drafting reaches it |
 | --- | --- | --- |
 | `just orchestrate <source:project>` | a run's own lifecycle publications | `onepipeline start --pr-author-graph graphs/pr-author.yaml` |
-| `just publish-branch <branch> --repo <checkout>` | a complete branch no session holds | `scripts/land-branch.sh` → `scripts/draft-pr-body.sh` → `onevcs publish-branch --body-file <PATH>` |
-| `just repo-recover <branch> --repo <checkout>` | a preserved branch with an incomplete-step marker | the same, into `onevcs recover --body-file <PATH>` |
+| `just publish-branch <branch> --repo <checkout>` | a complete branch no session holds | `onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml`, into the linked `onevcs publish-branch` |
+| `just repo-recover <branch> --repo <checkout>` | a preserved branch with an incomplete-step marker | `onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml`, into the linked `onevcs recover` |
 
 `just integrate` is not among them and needs nothing: the local merge train opens no
 change request, so there is no body for it to carry.
 
-A change request's body is drafted by an **agent graph the launch names**, exactly
-as its observer is: `onepipeline start --pr-author-graph <REF>`. Naming none is the
-shipped default, and a launch that names none opens its change requests with the
-body its plan states, or with none. `just orchestrate` names
-[`graphs/pr-author.yaml`](../graphs/pr-author.yaml), so every remote publication
-from this host is drafted and a bare `onepipeline start` elsewhere is not. A node
-that states its own `body` (a plan schema 3 field) publishes with that.
+Naming no graph is the shipped default, and a launch that names none opens its change
+requests with the body its plan states, or with none. `just orchestrate` names this one,
+so every remote publication from this host is drafted and a bare `onepipeline start`
+elsewhere is not. A node that states its own `body` (a plan schema 3 field) publishes
+with that.
 
-The two landing verbs reach the **same** surface out of band:
-`scripts/draft-pr-body.sh` composes `onepipeline`'s own task, runs that same graph in
-a temporary worktree of the branch, and reads the body back out of the same field —
-so what an operator's landing publishes is what the run path would have published for
-that branch. `scripts/land-branch.sh` is the wrapper both recipes go through: it reads
-the branch and `--repo` out of the arguments, hands them to the drafter, and appends
-`--body-file` to the argument list it forwards. An argument list it cannot read that
-way — an option it does not know the shape of, or no `--repo` — lands exactly as it
-did before, with no body and no refusal.
-
-**`--repo` names a checkout however `onevcs` lets one be named**, and the drafter
-takes a directory. So a value that is not a directory is put back to the registry with
-`onevcs resolve`, and the checkout that answers — an alias's, an identity's, an
-origin's — is the tree the branch is drafted from. Nothing about the forwarded
-arguments changes: what the verb receives is what the caller typed. Being stricter here
-than the verb was not free while it lasted. `just repos` lists an alias per checkout and
-that is the form an operator types, so every alias-form landing met the drafter's `is
-not a directory` refusal, spent no turn, and opened its change request with an empty
-description while the landing itself succeeded — a message that read like a refusal in
-front of a PR nobody knew was bodyless until a person opened it. A value the registry
-does not know either keeps that ending exactly, because a refusal `onevcs` itself would
-not make is the one thing this wrapper may not add.
-
-Two escapes, in the order they win. A caller who passed `--body` or `--body-file` has
-already decided what the change request says, so it is forwarded untouched and no turn
-is spent. `--no-draft` skips drafting; it is this wrapper's own option, consumed rather
-than forwarded, since `onevcs` has no such thing. It is the escape for a bulk landing —
-an operator working down `just recoverable` over dozens of branches pays one agent turn
-per branch otherwise.
-
-**A third case needs no escape, because there is nothing to describe.** A `local-direct`
-identity builds the base's squash commit itself and opens no change request, and `onevcs`
-has no path that attaches a body to a commit — so a body drafted for one is prose nobody
-can ever read, bought at the slowest seam in the landing. The wrapper therefore asks
-`onevcs rules check` for the resolved publication policy and lands straight away when
-the answer is `local-direct`. It is read from `rules check` and never from `onevcs
-resolve`'s own `workflow` field, which is what `onevcs register` derived from the origin
-and is explicitly not the routing: every identity on this host registers as `remote`
-while its rules resolve `local-direct`, so reading one for the other would skip drafting
-for all of them. Only a definite `local-direct` skips — an answer the wrapper cannot
-read, an unregistered value, and a policy it does not know each draft exactly as before,
-which is the same rule the checkout lookup above follows: miss rather than take away a
-body somebody wanted. `tests/e2e/test_publish_branch_e2e.py` drives both halves against
-a real drafting seam, the skip and the `change-open` landing that still gets its body.
-
-**A drafter whose member died says what killed it, and keeps the proof.** Where the
-graph ran and nothing answered, `oneagentgraph` is what knows why: it classifies each
-dead member with a `rule`, a `cause`, and a `detail` naming the thing to fix — the
-environment indirection nobody set, say. So the drafter writes one line per dead member
-above the `dispatch-failed` ending, and reports a detail `oneagentgraph` marked
-`truncated` as truncated rather than bounding it a second time. That ending also names
-the events file those lines came out of, and keeps it: the temporary directory removed
-on every other path survives this one, which is what lets an operator check the reported
-diagnosis against the run that produced it. Finding that unset indirection by hand cost
-twenty minutes once, out of a file the script had already read and then deleted.
+The landing verbs are the engine's, so what an operator's landing publishes is what the
+run path would have published for that branch. Their contract, which the recipes rely
+on and `tests/e2e/test_publish_branch_e2e.py` drives through them: the branch, `--repo`
+— a path or an alias `just repos` lists — and every other argument reach the linked
+`onevcs` verb unchanged; a caller's own `--body` or `--body-file` is forwarded untouched
+and spends no turn; `--no-draft` spends none either, and is the escape for a bulk
+landing down `just recoverable`; a `local-direct` identity, which builds the base's
+squash commit itself and opens no change request, is never drafted for; and a draft
+that cannot run — its dispatch failed, or it answered with no body — never blocks the
+landing, which opens its change request with no body and says which ending left it
+so. The recipes name the graph ahead of the caller's arguments, so a caller ending its
+options with `--` still has its branch drafted for.
 
 **The turn is spent before the gate**, which is a decision rather than an oversight.
 The body is an argument to `onevcs`, so it has to exist before the verb is called, and
-the verb is what runs the identity's gate: a branch the gate then rejects has paid for
-a body nothing used. Moving drafting behind the gate would mean `onevcs` calling out
-to a drafter, which is a different repository's design. The cost is bounded and rare,
-and `--no-draft` is the escape.
+the verb is what runs the identity's merge path: a branch the merge path then rejects
+has paid for a body nothing used. The cost is bounded and rare, and `--no-draft` is the
+escape.
 
 **`onevcs recoverable`'s printed `Resume:` line drafts nothing.** It renders its own
 argv — `onevcs publish-branch <BRANCH> --repo <PATH>` — and pasting that reaches the
-verb directly, below the wrapper, which is a change request opened with an empty
-description. `just recoverable` re-renders each of those commands in its `just` form
-for that reason, so the line an operator pastes is the one that drafts; every other
+verb directly, below the engine's drafting verb, which is a change request opened with
+an empty description. `just recoverable` re-renders each of those commands in its `just`
+form for that reason, so the line an operator pastes is the one that drafts; every other
 line of the report, and the whole of `--json`, is `onevcs`'s own and passes through
 untouched.
 
 On the run path, what runs is one turn of that graph, after the final branch-vs-base
 gate passes and before the change request is **published** — the one ordering the
 landing verbs cannot have, for the reason above: there, drafting is what produces an
-argument to the verb that runs the gate. **The closeout runs in one order, and the
+argument to the verb that runs the merge path. **The closeout runs in one order, and the
 onepipeline 0.28.0 moved where the drafter sits in it**
 (https://github.com/nickderobertis/onepipeline/pull/235, on the `onevcs` half at
 https://github.com/nickderobertis/onevcs/pull/138):
@@ -1481,8 +1438,8 @@ https://github.com/nickderobertis/onevcs/pull/138):
    `ONEPIPELINE_RUNS_DIR` in the dispatch's environment serve, so the drafter can read
    every tool call the worker made and cite what it finds. `graphs/pr-author.yaml`'s
    member is written to finish the description the worker started and to read that
-   transcript, and `tests/drafting_task_contract.py` holds both headings to the pinned
-   engine beside the opening sentence.
+   transcript, and `tests/test_engine_contracts.py` holds both headings to the pinned
+   engine.
 4. Where it drafted a body and the session holds a change request, the body is written
    onto it — `onevcs change describe`, under the node's own `title` on every write, so
    the change request carries the plan's subject whatever the worker opened it under —
@@ -1534,7 +1491,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.43.1.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.44.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1611,7 +1568,7 @@ goes when the session does.
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
 `onevcs` 0.30.1 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.43.1 settles the node that
+… which cannot land while it is one"*, and `onepipeline` v0.44.1 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached once the last step has settled and the publication
 starts, because a release the node adopted early has not happened yet or because the
@@ -2306,7 +2263,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.43.1 — so every number in it was a
+journey it named are absent from `onepipeline` v0.44.1 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

@@ -54,6 +54,7 @@ from conftest import git
 from fake_backend import (
     ASK_QUESTION_ENV,
     ASK_RECORD_ENV,
+    ASK_TIMEOUT_ENV,
     AUTHOR_PLAN_ENV,
     DISPATCHED_MEMBER,
     ENVIRONMENT_KEYS_ENV,
@@ -593,7 +594,7 @@ def _environment(
     if record is not None:
         environment[ASK_QUESTION_ENV] = ASK_QUESTION
         environment[ASK_RECORD_ENV] = str(record)
-        environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(ASK_WINDOW_SECONDS)
+        environment[ASK_TIMEOUT_ENV] = str(ASK_WINDOW_SECONDS)
     return environment
 
 
@@ -1955,9 +1956,12 @@ def test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_han
         f"the manager's envelope is not what reached the dispatch of run {dispatch.run}:\n"
         f"{asked['out']}"
     )
-    assert asked["err"].splitlines() == [f"correlation: {answer.get('correlation')}"], (
-        f"a successful ask reported something beyond its correlation on stderr:\n{asked['err']}"
-    )
+    # The verb's two announcements — the correlation as the question is queued, and the
+    # window it waits — and nothing else.
+    assert asked["err"].splitlines() == [
+        f"correlation: {answer.get('correlation')}",
+        f"waiting up to {ASK_WINDOW_SECONDS} seconds for the reply",
+    ], f"a successful ask reported something beyond the verb's own on stderr:\n{asked['err']}"
 
 
 #: The shapes of launch this module makes, each read for the bus configuration its run

@@ -17,9 +17,8 @@ Only what a paid provider or a whole launch would spend is substituted: a record
 `claude`/`codex` stands in for the provider, and a recording `uv`/`oneharness` for the
 binary an entry point hands off to where the journey is about what that entry point
 exported rather than about the turn. Every script, helper and config is the real one,
-under a real bash; the real `oneharness` CLI runs wherever a turn is the subject. The
-draft-pr-body entry point is driven the same way by `tests/e2e/test_draft_pr_body_e2e.py`,
-and session setup by `tests/test_session_setup.py`.
+under a real bash; the real `oneharness` CLI runs wherever a turn is the subject.
+Session setup is driven the same way by `tests/test_session_setup.py`.
 
 Every environment here is built from nothing but a `PATH`, a `HOME` this test owns, and
 what each journey names, so `XDG_CONFIG_HOME` is always absent and a host's own

@@ -1,19 +1,33 @@
-"""`scripts/ask-manager.sh` turns its three invocation forms into one `onemessagebus ask`.
+"""`scripts/ask-manager.sh` is the engine's `onepipeline ask`, and decides nothing itself.
 
-The shim is what `ORCHESTRATOR_ASK_MANAGER` names, and every task the dispatch appendix
-reaches spells its three forms: the question as one argument, `--file <path>`, and stdin.
-Everything after the question is on the bus — the correlation, the wait, the answer — is
-the installed `onemessagebus` release's, so what this module holds is the translation and
-nothing else: one exec per ask, with the argv this host's configuration and the run's own
-channel directory make, the question as the frame on stdin, and the bus's answer and exit
-status passed through untouched.
+The adapter is what `ORCHESTRATOR_ASK_MANAGER` names, so a dispatch has one executable path
+to ask through; everything a question is — its three input forms, its frame on the run's
+channel, the reply window, the one JSON line that answers — is the engine verb's. So this
+module holds the adapter to being transparent: every argument reaches the verb in order,
+stdin reaches it unread, and the verb's stdout and exit status are the adapter's own. That
+half runs the real adapter from a mirror checkout whose locked `onepipeline` is a recording
+stand-in, because only a recorder can say what reached it. The other half asks through the
+real adapter into the installed engine over a real channel, with `--file` and on stdin,
+and reads each frame's text back off the channel with the bus's own `next`.
 
-The published CLI is doubled by a recording stub installed where the shim resolves its bus
-— `.venv/bin/onemessagebus` of the checkout the shim is in, a mirror of this one holding the
-real script and the real configuration — on a PATH that holds nothing else a shell could
-spawn, so a second process — a retry, a re-ask, a queue read — fails the journey rather
-than passing silently. The last journey drives the real bus instead, because what an
-escaped question reads back as is the bus's to say.
+`tests/ask_seam/ask_manager/test_ask_manager_e2e.py` drives the same adapter over a run
+`just orchestrate` really launched, with a manager answering.
+
+llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] One
+Nx project: the `reads_recipes` marker moves these journeys between targets of the *same*
+project, which is the mechanism `tests/conftest.py` documents and enforces — it refuses a marked
+journey that reads anything its tier's key does not cover, and `tests/test_nx_cache_scope.py`
+holds the selectors to a partition of the suite — rather than a way around a project
+boundary; the host-tool journeys that spend a launch are the ones `tests/ask_seam/` splits
+into projects of their own.
+
+llmlint: ignore-file[tests_mirror_real_usage] The two real-channel journeys ask on a run
+root `tests/e2e/probe_run_root.py` builds rather than one a launch wrote, because what
+they read is the channel the engine writes and a launch would spend a whole run to give
+them a launch record. That builder's records are reconciled field by field against the
+installed engine by `tests/test_engine_contracts.py`, and
+`tests/ask_seam/ask_manager/test_ask_manager_e2e.py` asks through the same adapter on runs
+`just orchestrate` really launched.
 """
 
 from __future__ import annotations
@@ -21,559 +35,219 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import stat
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import NamedTuple, TypedDict
 
 import pytest
+from probe_run_root import run_root
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_recipes
 
-#: The real shim and the configuration it reads, as this checkout tracks them. Every
-#: journey but the last drives a copy of each from a mirror checkout, because the shim runs
-#: the bus at its own checkout's `.venv/bin/onemessagebus` and this checkout's is the real
-#: install, never a journey's to replace.
+#: The real adapter, and the configuration the run's channel is read back under.
 SHIM = REPO_ROOT / "scripts" / "ask-manager.sh"
 CONFIG = REPO_ROOT / "config" / "onemessagebus.yaml"
+BUS = REPO_ROOT / ".venv" / "bin" / "onemessagebus"
 
 RUN = "shim-run-1"
-ASKER = "worker-7"
 
-#: The argv every ask begins with, before the configuration — the shim's own checkout's —
-#: the run's channel directory, the asker and the shim's own appendages: the reply window
-#: as `--timeout`, and `--about` only when a node is named.
-PREFIX_WITHOUT_CONFIG = ["ask", "surfaces", "--blocking", "--config"]
+#: What the stand-in answers, byte for byte, which the adapter must hand back unchanged.
+STUB_ANSWER = '{"answer":"reply","correlation":"c-1","reply":{"message":"main"}}\n'
 
-#: The shim's reply window when none is named, which is `config/onemessagebus.yaml`'s
-#: `codecs.monitor.reply_window_seconds` (`tests/test_onemessagebus_config.py`).
-DEFAULT_WINDOW = "3000"
+#: Arguments the verb reads, in an order and with spellings the adapter must not touch:
+#: flags with their values, an argument carrying a space and one carrying a newline, and
+#: after the end-of-options marker an option-shaped word and an empty argument.
+ARGUMENTS = [
+    "--about",
+    "node-a",
+    "--timeout",
+    "45",
+    "two words",
+    "line\nbreak",
+    "--",
+    "--not-an-option",
+    "",
+]
 
-REPLY_ANSWER = (
-    '{"answer":"reply","correlation":"c-1","reply":{"id":0,'
-    '"reply":{"version":3,"completion":true,"message":"main"},"correlation":"c-1"}}\n'
-)
-TIMEOUT_ANSWER = '{"answer":"timeout","correlation":"c-1"}\n'
+#: Stdin the adapter must pass on without reading: a NUL, bytes that are not UTF-8, and no
+#: trailing newline.
+RAW_STDIN = b"question\x00with a nul \xff\xfe and no newline"
 
-#: A question carrying every byte JSON reserves, plus a control and non-ASCII text.
-AWKWARD_QUESTION = 'back\\slash "quoted"\nsecond line\r\ttabbed \x01 ünï 日本'
+#: A question carrying every byte JSON reserves, a control, and non-ASCII text.
+AWKWARD_QUESTION = 'back\\slash "quoted"\nsecond line\r\ttabbed \x01 ünï 日本\n'
 
 STUB = """\
 #!{python}
 import json, os, sys
-record = {{"argv": sys.argv[1:], "stdin": sys.stdin.buffer.read().decode("utf-8", "replace")}}
+record = {{"argv": sys.argv[1:], "stdin": sys.stdin.buffer.read().hex()}}
 with open(os.environ["SHIM_STUB_LOG"], "a", encoding="utf-8") as log:
     log.write(json.dumps(record) + "\\n")
 sys.stdout.write(os.environ["SHIM_STUB_ANSWER"])
-sys.stderr.write("correlation: c-1\\n")
 sys.exit(int(os.environ["SHIM_STUB_EXIT"]))
 """
 
 
 class Invocation(TypedDict):
-    """One exec the stub recorded: the arguments it was handed and the whole of its stdin."""
+    """One exec the stand-in recorded: its arguments, and its stdin as hex."""
 
     argv: list[str]
     stdin: str
 
 
-class Bench(NamedTuple):
-    """A mirror checkout whose locked bus is the stub, on a PATH of the shebang's tools alone."""
+class Mirror(NamedTuple):
+    """A checkout holding the real adapter, whose locked engine is the recording stand-in."""
 
-    #: The mirror checkout: the real shim under `scripts/`, the real configuration under
-    #: `config/`, and the stub at `.venv/bin/onemessagebus`.
-    checkout: Path
-    bin: Path
+    shim: Path
     log: Path
-    runs: Path
-
-    @property
-    def shim(self) -> Path:
-        return self.checkout / "scripts" / "ask-manager.sh"
-
-    @property
-    def config(self) -> Path:
-        return self.checkout / "config" / "onemessagebus.yaml"
-
-    @property
-    def bus(self) -> Path:
-        return self.checkout / ".venv" / "bin" / "onemessagebus"
-
-    def environment(self, answer: str = REPLY_ANSWER, exit_status: int = 0) -> dict[str, str]:
-        """The environment a dispatch asks from, pointed at the stub."""
-        return {
-            "PATH": str(self.bin),
-            "HOME": os.environ.get("HOME", "/"),
-            "LC_ALL": "C.UTF-8",
-            "ONEPIPELINE_RUN_ID": RUN,
-            "ONEPIPELINE_RUNS_DIR": str(self.runs),
-            "ONEPIPELINE_CHANNEL_ASKER": ASKER,
-            "SHIM_STUB_LOG": str(self.log),
-            "SHIM_STUB_ANSWER": answer,
-            "SHIM_STUB_EXIT": str(exit_status),
-        }
 
     def invocations(self) -> list[Invocation]:
-        """Every exec the stub recorded, oldest first."""
         if not self.log.exists():
             return []
-        # `cast` rather than a validating read: `STUB` above writes exactly this shape.
-        return [
-            cast(Invocation, json.loads(line)) for line in self.log.read_text("utf-8").splitlines()
-        ]
+        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
 
 
 @pytest.fixture
-def bench(tmp_path: Path) -> Iterator[Bench]:
-    """A mirror checkout whose bus is the stub, and a run root whose channel nobody may read.
-
-    The shim runs the `onemessagebus` at its own checkout's `.venv/bin` — resolved from its
-    location exactly as `config/onemessagebus.yaml` is, whatever PATH offers — so the stub
-    stands where that resolution lands, in a checkout of the journey's own holding a copy
-    of the real shim and the real configuration; `tests/ask_seam/bus_resolution/` proves
-    the resolution itself, against this checkout's real bus.
-    """
+def mirror(tmp_path: Path) -> Mirror:
     checkout = tmp_path / "checkout"
     (checkout / "scripts").mkdir(parents=True)
-    (checkout / "config").mkdir()
-    shutil.copy2(SHIM, checkout / "scripts" / SHIM.name)
-    shutil.copy2(CONFIG, checkout / "config" / CONFIG.name)
-    stub = checkout / ".venv" / "bin" / "onemessagebus"
-    stub.parent.mkdir(parents=True)
-    # llmlint: ignore[e2e_not_mocked] The published CLI the shim execs is the one double tests/AGENTS.md sanctions below a wrapper: what is under test is the argv and stdin the shim hands it and that nothing else is spawned, which only a recording stand-in as the shim's checkout's own locked bus, on an otherwise empty PATH, can observe. The real bus is driven by the last journey here, by tests/ask_seam/bus_resolution/ and by tests/ask_seam/ask_manager/test_ask_manager_e2e.py.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    stub.write_text(STUB.format(python=sys.executable), encoding="utf-8")
-    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
-    directory = tmp_path / "bin"
-    directory.mkdir()
-    for program in ("env", "bash"):
-        found = shutil.which(program)
-        assert found is not None, f"{program} is not on this host's PATH"
-        (directory / program).symlink_to(found)
-    runs = tmp_path / "runs"
-    channel = runs / RUN / "channel"
-    channel.mkdir(parents=True)
-    channel.chmod(0)
-    try:
-        yield Bench(checkout, directory, tmp_path / "stub.log", runs)
-    finally:
-        channel.chmod(stat.S_IRWXU)
+    shim = checkout / "scripts" / SHIM.name
+    shutil.copy2(SHIM, shim)
+    engine = checkout / ".venv" / "bin" / "onepipeline"
+    engine.parent.mkdir(parents=True)
+    # llmlint: ignore[e2e_not_mocked] The engine the adapter execs is the published CLI below this repository's wrapper, and what is under test is exactly what reaches it — argv, stdin — and that its answer comes back unchanged, which only a recording stand-in at the adapter's own locked path can observe. The real engine is driven by the last two journeys here and by tests/ask_seam/.  # noqa: E501 - a directive is one line
+    engine.write_text(STUB.format(python=sys.executable), encoding="utf-8")
+    engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+    return Mirror(shim, tmp_path / "stub.log")
 
 
-def _ask(
+def _through(
+    shim: Path,
     arguments: list[str],
     environment: dict[str, str],
-    stdin: str | bytes | None = None,
-    *,
-    shim: Path = SHIM,
+    stdin: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run ``shim`` exactly as an agent runs `"$ORCHESTRATOR_ASK_MANAGER"`."""
+    """Run the adapter exactly as an agent runs `"$ORCHESTRATOR_ASK_MANAGER"`."""
     return subprocess.run(
         [str(shim), *arguments],
         env=environment,
-        input=stdin.encode("utf-8") if isinstance(stdin, str) else stdin,
+        input=stdin,
         capture_output=True,
-        timeout=e2e_timeout(30),
+        timeout=e2e_timeout(60),
         check=False,
     )
 
 
-def _expected_argv(bench: Bench) -> list[str]:
-    return [
-        *PREFIX_WITHOUT_CONFIG,
-        str(bench.config),
-        "--transport-dir",
-        str(bench.runs / RUN / "channel"),
-        "--asker",
-        ASKER,
-        "--timeout",
-        DEFAULT_WINDOW,
-    ]
-
-
-def _frame(question: str) -> str:
-    return json.dumps(
-        {"kind": "planner-question", "message": question, "source": "proposal"},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-@pytest.mark.parametrize("form", ["argument", "file", "stdin"])
-def test_each_invocation_form_is_one_exec_of_the_bus_ask(
-    bench: Bench, tmp_path: Path, form: str
-) -> None:
-    """The argv is `ask`'s over the run's channel plus `--timeout`, and stdin is the frame alone.
-
-    `ask surfaces --blocking --config <path> --transport-dir <dir> --asker <asker>`, then
-    `--timeout <window>` — the shim's one appendage when no node is named, because `ask`
-    reads the reply window from no configuration, and without it a question nobody answers
-    waits for as long as the dispatch runs.
-    """
-    question = "Should the cursor be an opaque token or a node id?"
-    match form:
-        case "argument":
-            result = _ask([question], bench.environment(), shim=bench.shim)
-        case "file":
-            written = tmp_path / "question.md"
-            written.write_text(question, encoding="utf-8")
-            result = _ask(["--file", str(written)], bench.environment(), shim=bench.shim)
-        case _:
-            result = _ask([], bench.environment(), stdin=question, shim=bench.shim)
-
-    assert result.returncode == 0, result.stderr.decode()
-    invocations = bench.invocations()
-    assert len(invocations) == 1, invocations
-    assert invocations[0]["argv"] == _expected_argv(bench)
-    assert invocations[0]["stdin"] == _frame(question) + "\n"
-    assert json.loads(invocations[0]["stdin"])["message"] == question
-
-
-def test_a_named_node_is_the_one_further_appendage(bench: Bench) -> None:
-    """`--about <node>` follows `--timeout` exactly when the node variable is set."""
-    environment = {**bench.environment(), "ORCHESTRATOR_ASK_MANAGER_NODE": "node-a"}
-    environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = "45"
-    result = _ask(["Which base?"], environment, shim=bench.shim)
-
-    assert result.returncode == 0, result.stderr.decode()
-    [invocation] = bench.invocations()
-    expected = _expected_argv(bench)
-    expected[-1] = "45"
-    assert invocation["argv"] == [*expected, "--about", "node-a"]
-
-
-@pytest.mark.parametrize(
-    ("variable", "value", "named"),
-    [
-        ("ONEPIPELINE_CHANNEL_ASKER", "   ", b"ONEPIPELINE_CHANNEL_ASKER is blank"),
-        (
-            "ONEPIPELINE_CHANNEL_ASKER",
-            "-worker",
-            b"ONEPIPELINE_CHANNEL_ASKER is '-worker', which begins with '-'",
-        ),
-        (
-            "ORCHESTRATOR_ASK_MANAGER_NODE",
-            "node-a\nnode-b",
-            b"ORCHESTRATOR_ASK_MANAGER_NODE is not",
-        ),
-        ("ORCHESTRATOR_ASK_MANAGER_NODE", "n" * 513, b"ORCHESTRATOR_ASK_MANAGER_NODE is not"),
-    ],
-    ids=["a blank asker", "an asker read as a flag", "a two-line node", "a node past 512 bytes"],
-)
-def test_an_asker_or_node_the_bus_would_refuse_is_refused_by_name(
-    bench: Bench, variable: str, value: str, named: bytes
-) -> None:
-    """What the bus would refuse as `--asker` or `--about` is refused here, naming its variable."""
-    result = _ask(["Which base?"], {**bench.environment(), variable: value}, shim=bench.shim)
-
-    assert result.returncode == 2, result.stderr.decode()
-    assert named in result.stderr, result.stderr.decode()
-    assert bench.invocations() == []
-
-
-@pytest.mark.parametrize(
-    "asker",
-    ["worker-7", "worker 7", "w-", "Ünï-日本"],
-    ids=["word", "spaced", "dash last", "utf-8"],
-)
-def test_a_well_formed_asker_reaches_the_bus_unchanged(bench: Bench, asker: str) -> None:
-    """An asker the bus takes is forwarded as `--asker` byte for byte, a `-` inside it included."""
-    result = _ask(
-        ["Which base?"],
-        {**bench.environment(), "ONEPIPELINE_CHANNEL_ASKER": asker},
-        shim=bench.shim,
-    )
-
-    assert result.returncode == 0, result.stderr.decode()
-    [invocation] = bench.invocations()
-    argv = invocation["argv"]
-    assert argv[argv.index("--asker") + 1] == asker
-
-
-def test_a_node_of_exactly_512_bytes_is_still_asked_about(bench: Bench) -> None:
-    """The bound is the bus's own, so a node at it is forwarded as it was named."""
-    node = "n" * 512
-    result = _ask(
-        ["Which base?"],
-        {**bench.environment(), "ORCHESTRATOR_ASK_MANAGER_NODE": node},
-        shim=bench.shim,
-    )
-
-    assert result.returncode == 0, result.stderr.decode()
-    [invocation] = bench.invocations()
-    assert invocation["argv"][-2:] == ["--about", node]
-
-
-class Edge(NamedTuple):
-    """One value an ask's environment could carry, at or past an edge of the bus's rule."""
-
-    variable: str
-    flag: str
-    value: str
-
-
-#: Each side of every edge of the installed bus's rules for `--about` and `--asker`: its
-#: byte bound, the control characters it refuses, and a blank value.
-EDGES = (
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "n" * 512),
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "n" * 513),
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "node\nnext"),
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "node\rnext"),
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "node\tnext"),
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "node\x7fnext"),
-    Edge("ORCHESTRATOR_ASK_MANAGER_NODE", "--about", "   "),
-    Edge("ONEPIPELINE_CHANNEL_ASKER", "--asker", "   "),
-    Edge("ONEPIPELINE_CHANNEL_ASKER", "--asker", "worker\nnext"),
-    Edge("ONEPIPELINE_CHANNEL_ASKER", "--asker", "w" * 513),
-    Edge("ONEPIPELINE_CHANNEL_ASKER", "--asker", "-worker"),
-    Edge("ONEPIPELINE_CHANNEL_ASKER", "--asker", "worker-7.a_b"),
-)
-
-
-@pytest.mark.parametrize(
-    "edge",
-    EDGES,
-    ids=[
-        "node of 512 bytes",
-        "node of 513 bytes",
-        "node with a line break",
-        "node with a carriage return",
-        "node with a tab",
-        "node with a delete",
-        "blank node",
-        "blank asker",
-        "asker with a line break",
-        "asker of 513 bytes",
-        "asker beginning with a dash",
-        "asker of word characters",
-    ],
-)
-def test_the_shim_refuses_exactly_what_the_installed_bus_refuses(
-    bench: Bench, tmp_path: Path, edge: Edge
-) -> None:
-    """The shim's checks on the asker and the node are the bus's, held to the bus itself.
-
-    The shim refuses a value before it can reach `onemessagebus ask`, so its rule is a
-    restatement of the bus's, and a restatement drifts. So each value is put to both: the
-    shim against the recording stub, and the installed bus as the same flag on a real ask
-    that nobody answers. A refusal from either is exit 2; an accepted value is asked, so
-    the stub answers 0 and the real ask ends in its one-second `timeout` at exit 1. The two
-    must agree on every edge.
-    """
-    shim = _ask(
-        ["Which base?"], {**bench.environment(), edge.variable: edge.value}, shim=bench.shim
-    )
-    assert shim.returncode in (0, 2), shim.stderr.decode()
-
-    channel = tmp_path / "bus-channel"
-    channel.mkdir()
-    named_asker = [] if edge.flag == "--asker" else ["--asker", ASKER]
-    bus = subprocess.run(
-        [
-            "onemessagebus",
-            "ask",
-            "surfaces",
-            "--blocking",
-            "--timeout",
-            "1",
-            "--config",
-            str(CONFIG),
-            "--transport-dir",
-            str(channel),
-            *named_asker,
-            edge.flag,
-            edge.value,
-        ],
-        input=_frame("Which base?"),
-        env=dict(os.environ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(30),
-        check=False,
-    )
-    assert bus.returncode in (1, 2), bus.stderr
-
-    assert (shim.returncode == 2) == (bus.returncode == 2), (
-        f"for {edge.flag} {edge.value!r} the shim exited {shim.returncode} and the installed "
-        f"bus exited {bus.returncode}:\nshim: {shim.stderr.decode()}\nbus: {bus.stderr}"
-    )
-
-
-@pytest.mark.parametrize(
-    ("answer", "exit_status"), [(REPLY_ANSWER, 0), (TIMEOUT_ANSWER, 1)], ids=["reply", "timeout"]
-)
-def test_the_buses_answer_and_exit_status_pass_through_untouched(
-    bench: Bench, answer: str, exit_status: int
-) -> None:
-    """Whatever the bus answers is the shim's whole stdout and its exit, asked once."""
-    result = _ask(["Which base?"], bench.environment(answer, exit_status), shim=bench.shim)
-
-    assert result.stdout.decode("utf-8") == answer
-    assert result.returncode == exit_status
-    assert len(bench.invocations()) == 1, "the shim asked more than once"
-
-
-def test_the_question_is_escaped_into_the_frame_byte_for_byte(bench: Bench) -> None:
-    """Backslash, quote, newline, carriage return, tab and a control survive the frame."""
-    result = _ask([AWKWARD_QUESTION], bench.environment(), shim=bench.shim)
-
-    assert result.returncode == 0, result.stderr.decode()
-    [invocation] = bench.invocations()
-    assert json.loads(invocation["stdin"])["message"] == AWKWARD_QUESTION
-
-
-def test_a_question_that_is_not_utf8_is_refused_and_nothing_is_asked(bench: Bench) -> None:
-    """A malformed frame is never sent: the shim names why and the bus is not spawned."""
-    result = _ask([], bench.environment(), stdin=b"which base? \xff\xfe", shim=bench.shim)
-
-    assert result.returncode == 2
-    assert b"not well-formed UTF-8" in result.stderr
-    assert bench.invocations() == []
-
-
-@pytest.mark.parametrize("form", ["file", "stdin"])
-def test_a_question_carrying_a_nul_byte_is_refused_rather_than_cut_short(
-    bench: Bench, tmp_path: Path, form: str
-) -> None:
-    """A NUL ends a shell read early, so a question carrying one is refused, never truncated."""
-    question = b"which base?\x00and the rest"
-    if form == "file":
-        written = tmp_path / "question.md"
-        written.write_bytes(question)
-        result = _ask(["--file", str(written)], bench.environment(), shim=bench.shim)
-    else:
-        result = _ask([], bench.environment(), stdin=question, shim=bench.shim)
-
-    assert result.returncode == 2, result.stderr.decode()
-    assert b"carries a NUL byte" in result.stderr
-    assert bench.invocations() == []
-
-
-@pytest.mark.parametrize("form", ["file", "stdin"])
-def test_a_question_that_cannot_be_read_is_refused_by_name_and_nothing_is_asked(
-    bench: Bench, tmp_path: Path, form: str
-) -> None:
-    """Input that opens but fails to read — a directory — is named, never a shell error.
-
-    bash's `read` answers a failed read with the status it gives the end of input, so a shim
-    reading that status alone would go on to ask with no question at all.
-    """
-    unreadable = tmp_path / "question.md"
-    unreadable.mkdir()
-    if form == "file":
-        result = _ask(["--file", str(unreadable)], bench.environment(), shim=bench.shim)
-    else:
-        # A descriptor rather than `open`, which refuses a directory, where a shell's `<`
-        # opens one read-only exactly as this does.
-        directory = os.open(unreadable, os.O_RDONLY)
-        try:
-            result = subprocess.run(
-                [str(bench.shim)],
-                env=bench.environment(),
-                stdin=directory,
-                capture_output=True,
-                timeout=e2e_timeout(30),
-                check=False,
-            )
-        finally:
-            os.close(directory)
-
-    assert result.returncode == 2, result.stderr.decode()
-    assert b"could not be read (read exited 1)" in result.stderr, result.stderr
-    assert b"unbound variable" not in result.stderr, result.stderr
-    assert result.stdout == b"", "a refusal printed something an asker could read as an answer"
-    assert bench.invocations() == []
-
-
-def test_a_question_file_that_cannot_be_opened_is_refused_by_name(
-    bench: Bench, tmp_path: Path
-) -> None:
-    """A path `-r` passes but no read can open — a unix socket — is named, and nothing asked."""
-    path = tmp_path / "question.sock"
-    listener = socket.socket(socket.AF_UNIX)
-    try:
-        listener.bind(str(path))
-        assert os.access(path, os.R_OK), "the socket is not readable, so this proves nothing"
-        result = _ask(["--file", str(path)], bench.environment(), shim=bench.shim)
-    finally:
-        listener.close()
-
-    assert result.returncode == 2, result.stderr.decode()
-    assert f"the question file '{path}' could not be opened".encode() in result.stderr
-    assert result.stdout == b""
-    assert bench.invocations() == []
-
-
-def test_an_unset_run_is_refused_by_name_and_nothing_is_asked(bench: Bench) -> None:
-    """With no run there is no channel directory to name, so nothing is guessed."""
-    environment = bench.environment()
-    del environment["ONEPIPELINE_RUN_ID"]
-    result = _ask(["Which base?"], environment, shim=bench.shim)
-
-    assert result.returncode == 2
-    assert b"ONEPIPELINE_RUN_ID is not set" in result.stderr
-    assert bench.invocations() == []
-
-
-def test_a_checkout_without_the_bus_is_refused_by_name_with_the_way_back(bench: Bench) -> None:
-    """With no bus at the checkout's own `.venv/bin`, the shim names that path and its remedy.
-
-    The real bus is put first on PATH, because a shim that fell back to it would be running
-    the mismatch this resolution exists to prevent: the remedy is the step that installs the
-    checkout's own, never whatever the search path offers.
-    """
-    bench.bus.unlink()
-    (bench.bin / "onemessagebus").symlink_to(REPO_ROOT / ".venv" / "bin" / "onemessagebus")
-    result = _ask(["Which base?"], bench.environment(), shim=bench.shim)
-
-    assert result.returncode == 2, result.stderr
-    assert f"has no onemessagebus at {bench.bus}".encode() in result.stderr, result.stderr
-    assert f"run 'just bootstrap' in {bench.checkout}".encode() in result.stderr, result.stderr
-    assert result.stdout == b"", "a refusal printed something an asker could read as an answer"
-    assert bench.invocations() == []
-
-
-def test_an_escaped_question_reads_back_from_a_real_channel_as_it_was_asked(
-    tmp_path: Path,
-) -> None:
-    """Through the installed bus: the queued surface's `message` is the question, exactly.
-
-    Nobody answers, so the ask ends in the bus's own named `timeout` at a non-zero exit —
-    which is also the shim passing a real timeout through.
-    """
-    runs = tmp_path / "runs"
-    channel = runs / RUN / "channel"
-    channel.mkdir(parents=True)
-    environment = {
-        **os.environ,
-        "ONEPIPELINE_RUN_ID": RUN,
-        "ONEPIPELINE_RUNS_DIR": str(runs),
-        "ONEPIPELINE_CHANNEL_ASKER": ASKER,
-        "ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS": "1",
+def _stub_environment(mirror: Mirror, exit_status: int) -> dict[str, str]:
+    return {
+        "PATH": os.environ["PATH"],
+        "SHIM_STUB_LOG": str(mirror.log),
+        "SHIM_STUB_ANSWER": STUB_ANSWER,
+        "SHIM_STUB_EXIT": str(exit_status),
     }
-    environment.pop("ORCHESTRATOR_ASK_MANAGER_NODE", None)
-    asked = _ask([AWKWARD_QUESTION], environment)
 
+
+def test_every_argument_reaches_the_verb_in_order_and_stdin_unread(mirror: Mirror) -> None:
+    """One exec of `onepipeline ask`, with the caller's argv and stdin exactly as given."""
+    asked = _through(mirror.shim, ARGUMENTS, _stub_environment(mirror, 0), RAW_STDIN)
+
+    assert asked.returncode == 0, asked.stderr.decode()
+    assert mirror.invocations() == [{"argv": ["ask", *ARGUMENTS], "stdin": RAW_STDIN.hex()}]
+
+
+@pytest.mark.parametrize("exit_status", [0, 1, 2, 7])
+def test_the_verbs_answer_and_exit_status_are_the_adapters_own(
+    mirror: Mirror, exit_status: int
+) -> None:
+    asked = _through(mirror.shim, ["q"], _stub_environment(mirror, exit_status), b"")
+
+    assert asked.returncode == exit_status
+    assert asked.stdout == STUB_ANSWER.encode()
+    assert len(mirror.invocations()) == 1, "the adapter ran the verb more than once"
+
+
+#: Every execute bit, so clearing them leaves a file that exists and cannot be run.
+EXECUTE_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+
+
+def _no_locked_engine(checkout: Path) -> None:
+    """Nothing at the locked path at all: a checkout that never installed one."""
+
+
+def _locked_engine_that_cannot_be_run(checkout: Path) -> None:
+    """A locked engine that exists with no execute bit: a half-finished install."""
+    engine = checkout / ".venv" / "bin" / "onepipeline"
+    engine.parent.mkdir(parents=True)
+    # Same stand-in as the mirror's, so what stops it running is the mode and nothing else.
+    engine.write_text(STUB.format(python=sys.executable), encoding="utf-8")
+    engine.chmod(engine.stat().st_mode & ~EXECUTE_BITS)
+
+
+@pytest.mark.parametrize(
+    "locked_engine",
+    [_no_locked_engine, _locked_engine_that_cannot_be_run],
+    ids=("absent", "not-executable"),
+)
+def test_a_checkout_whose_locked_engine_cannot_run_asks_the_one_on_path(
+    tmp_path: Path, locked_engine: Callable[[Path], None]
+) -> None:
+    """Where the checkout's locked engine cannot be run, the adapter runs `PATH`'s.
+
+    The adapter's `[ -x ]` is one test with two ways to be false, and both reach a
+    dispatch: a checkout that installed nothing, and one whose install left a file
+    behind without its execute bit. Both are driven, because the second is the one that
+    would keep passing if the test became `[ -e ]` — the adapter would then exec a file
+    it cannot run, and the ask would die at 126 having reached no engine at all.
+
+    The stand-in is put on `PATH` rather than at the checkout's `.venv/bin`, so the only
+    way it records an invocation is by the fallback.
+    """
+    checkout = tmp_path / "bare-checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    shim = checkout / "scripts" / SHIM.name
+    shutil.copy2(SHIM, shim)
+    locked_engine(checkout)
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    engine = on_path / "onepipeline"
+    # llmlint: ignore[e2e_not_mocked] The stand-in is the engine the fallback resolves, and what is under test is only that the fallback reaches it and hands its answer back; the real engine is driven by the real-channel journeys below.  # noqa: E501 - a directive is one line
+    engine.write_text(STUB.format(python=sys.executable), encoding="utf-8")
+    engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+    log = tmp_path / "stub.log"
+    environment = {
+        "PATH": f"{on_path}{os.pathsep}{os.environ['PATH']}",
+        "SHIM_STUB_LOG": str(log),
+        "SHIM_STUB_ANSWER": STUB_ANSWER,
+        "SHIM_STUB_EXIT": "0",
+    }
+
+    asked = _through(shim, ["q"], environment, b"")
+
+    assert asked.returncode == 0, asked.stderr.decode()
+    assert asked.stdout == STUB_ANSWER.encode()
+    assert Mirror(shim, log).invocations() == [{"argv": ["ask", "q"], "stdin": ""}]
+
+
+def _asked_on_a_real_channel(tmp_path: Path, arguments: list[str], stdin: bytes | None) -> str:
+    """Ask through the real adapter into the installed engine, and read the frame back."""
+    runs = tmp_path / "runs"
+    run_root(runs, RUN)
+    environment = {**os.environ, "ONEPIPELINE_RUN_ID": RUN, "ONEPIPELINE_RUNS_DIR": str(runs)}
+    environment.pop("ONEPIPELINE_CHANNEL_ASKER", None)
+
+    asked = _through(SHIM, ["--timeout", "1", *arguments], environment, stdin)
+
+    # Nobody answers, so the ask ends in the bus's own named `timeout` at exit 1.
     assert asked.returncode == 1, asked.stderr.decode()
     assert json.loads(asked.stdout)["answer"] == "timeout"
     claimed = subprocess.run(
-        [
-            "onemessagebus",
-            "next",
-            "surfaces",
-            "--format",
-            "json",
-            "--config",
-            str(CONFIG),
-            "--transport-dir",
-            str(channel),
-        ],
-        env=environment,
+        [str(BUS), "next", "surfaces", "--format", "json", "--config", str(CONFIG)]
+        + ["--transport-dir", str(runs / RUN / "channel")],
         capture_output=True,
         text=True,
         timeout=e2e_timeout(30),
@@ -582,6 +256,22 @@ def test_an_escaped_question_reads_back_from_a_real_channel_as_it_was_asked(
     assert claimed.returncode == 0, claimed.stderr
     document = json.loads(claimed.stdout)
     record = document.get("record", document)
-    assert record["message"] == AWKWARD_QUESTION
-    assert record["asker"] == ASKER
+    assert record["kind"] == "planner-question"
+    assert record["source"] == "proposal"
     assert record["blocking"] is True
+    message = record["message"]
+    assert isinstance(message, str)
+    return message
+
+
+def test_a_question_asked_with_file_reads_back_off_the_channel_unaltered(tmp_path: Path) -> None:
+    question = tmp_path / "question.txt"
+    question.write_text(AWKWARD_QUESTION, encoding="utf-8")
+
+    assert _asked_on_a_real_channel(tmp_path, ["--file", str(question)], None) == AWKWARD_QUESTION
+
+
+def test_a_question_asked_on_stdin_reads_back_off_the_channel_unaltered(tmp_path: Path) -> None:
+    message = _asked_on_a_real_channel(tmp_path, [], AWKWARD_QUESTION.encode("utf-8"))
+
+    assert message == AWKWARD_QUESTION

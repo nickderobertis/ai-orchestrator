@@ -52,7 +52,6 @@ the reasoning.
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -64,9 +63,9 @@ from typing import NamedTuple
 import onejudge_bundle
 import probe_run_root
 import pytest
-from published_surface import surface_of
 from test_linked_libraries import _linked_version
 
+from orchestrator import follow_up_drafts
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
@@ -1791,13 +1790,11 @@ def test_the_watch_cuts_the_status_view_where_the_health_report_really_starts() 
 # What each restatement below is for, and what its drift costs, is stated where it is
 # made; each gate names the consequence of the one it reconciles.
 
-#: The reading whose restatements these gates reconcile.
-SUPERVISION_READINGS = REPO_ROOT / "scripts" / "supervision-readings.py"
-
-#: The builder two of its journeys compose a run root with. It writes the engine's own
+#: The builder the view journeys compose a run root with. It writes the engine's own
 #: records so the installed engine will read them, which makes every field name in it a
 #: copy of the same contracts — reconciled below by building one and reading it back.
 PROBE_RUN_ROOT = REPO_ROOT / "tests" / "e2e" / "probe_run_root.py"
+
 
 #: How `RunPaths` names one file under a run root. Anchored on the accessor and held
 #: inside its own body — no closing brace between the two — for both directions of the
@@ -1812,16 +1809,8 @@ RUNS_DIR_ENV = re.compile(r'pub const RUNS_DIR_ENV: &(?:\'static )?str = "([^"]+
 
 #: How `sys::process_start_token` encodes what it read out of `/proc/<pid>/stat`. The
 #: prefix is captured rather than written here, because this gate exists to say the
-#: reading strips the prefix the engine actually stamps.
+#: draft strips the prefix the engine actually stamps.
 START_TOKEN_ENCODING = re.compile(r'\.map\(\|ticks\| format!\("([^"{]*)\{ticks\}"\)\)')
-
-#: `onevcs`'s state root: the variable that moves it, where it sits when nothing does,
-#: and the directory under it every per-run clone and isolated worktree is cut in.
-ONEVCS_HOME_ENV = re.compile(r'pub const HOME_ENV: &(?:\'static )?str = "([^"]+)";')
-ONEVCS_DEFAULT_HOME = re.compile(r'home\.join\("([^"]+)"\)')
-ONEVCS_WORKSPACES_DIR = re.compile(
-    r'pub fn workspaces_dir\(\)[^{]*\{\s*Ok\(root\(\)\?\.join\("([^"]+)"\)\)'
-)
 
 #: One field of a serde-derived record, with the attributes above it — which is where a
 #: `rename` moves its wire name and a `default` says the engine can read a record that
@@ -1844,9 +1833,9 @@ BUS_REEXPORT = re.compile(r"pub use onemessagebus_agent::event::\{([^}]*)\};")
 #: How onepipeline takes the version it stamps: the newest its bus profile reads.
 ENVELOPE_VERSION_FROM_THE_BUS = "pub const ENVELOPE_VERSION: u32 = EVENT_ENVELOPE_READS[0];"
 
-#: `/proc/<pid>/stat` split at the last `)`, as the two Python copies added with these
-#: readings spell it. The existing shell and journey copies spell the same split with
-#: `rsplit`; both are reconciled against the engine's own index by the lease gate above.
+#: `/proc/<pid>/stat` split at the last `)`, as the run-root builder spells it. The
+#: existing shell and journey copies spell the same split with `rsplit`; both are
+#: reconciled against the engine's own index by the lease gate above.
 RINDEX_STAT_FIELD = re.compile(r'rindex\("\)"\)\s*\+\s*2\s*:\]\.split\(\)\[(\d+)\]')
 
 
@@ -1882,63 +1871,6 @@ class Record(NamedTuple):
     #: Where a `#[serde(flatten)]` field's struct is declared, when the record carries
     #: one: its fields travel as the record's own on the wire, so they are read there.
     flattened_from: str | None = None
-
-
-def _module_source(path: Path) -> ast.Module:
-    """One of this repository's Python files, parsed rather than pattern-matched.
-
-    Parsed because the values below are what the file *assigns*, and a regex over its
-    text answers about how it is written instead — which is the same distance from the
-    contract that made these copies worth gating.
-    """
-    return ast.parse(path.read_text("utf-8"), filename=str(path))
-
-
-def _assigned(path: Path, name: str) -> ast.expr:
-    """The expression one module-level constant of `path` is assigned."""
-    for statement in _module_source(path).body:
-        match statement:
-            case ast.Assign(targets=[ast.Name(id=assigned)], value=value) if assigned == name:
-                return value
-    raise AssertionError(
-        f"{path.name} no longer assigns a module-level `{name}`, so this gate is "
-        "reconciling a restatement nothing makes; update the gate with the reading"
-    )
-
-
-def _constant(path: Path, name: str) -> object:
-    """The literal value one module-level constant of `path` holds."""
-    return ast.literal_eval(_assigned(path, name))
-
-
-def _pattern(path: Path, name: str) -> re.Pattern[str]:
-    """The regular expression one module-level `re.compile(...)` constant holds."""
-    match _assigned(path, name):
-        case ast.Call(
-            func=ast.Attribute(value=ast.Name(id="re"), attr="compile"),
-            args=[ast.Constant(value=str() as source), *_],
-        ):
-            return re.compile(source)
-    raise AssertionError(
-        f"{path.name}'s `{name}` is no longer a literal `re.compile(...)`, so this gate "
-        "cannot read the pattern it reconciles; update the gate with the reading"
-    )
-
-
-def _joined_under_a_run_root(accessor: str) -> str:
-    """The file or directory name one `RunPaths` accessor joins onto a run's directory."""
-    joined = re.search(
-        RUN_PATHS_JOIN.format(accessor=re.escape(accessor)),
-        _source(ONEPIPELINE, "ledger.rs"),
-        re.DOTALL,
-    )
-    assert joined is not None, (
-        f"onepipeline {ONEPIPELINE.ref}'s `RunPaths::{accessor}` no longer joins a "
-        f"literal name onto the run's directory where this gate reads it, so "
-        f"{SUPERVISION_READINGS.name}'s copy of that name cannot be reconciled; re-read "
-        "`ledger.rs` and correct both"
-    )
-    return joined.group(1)
 
 
 def _declared_fields(
@@ -1989,236 +1921,94 @@ def _declared_fields(
     return tuple(fields)
 
 
-def test_the_readings_look_under_the_runs_root_the_engine_writes() -> None:
-    """The store both readings answer about is `onepipeline`'s, resolved its way.
+# `orchestrator/follow_up_drafts.py` resolves the node a draft names out of the engine's
+# dispatch registry, so every name it reads there is a copy of the engine's; the gates
+# below hold each one to the installed engine's own declaration.
 
-    A runs root read some other way is not a narrower answer, it is an answer about a
-    different store: no run root is found, every run reads as absent, and every live
-    rendezvous is reported as bound to no run this host supervises. That is the same
-    sentence a rendezvous belonging to somebody else's test gets, so the drift would
-    undo exactly what this reading is for while the view still renders.
+
+def _joined_under_a_run_root(accessor: str) -> str:
+    """The file or directory name one `RunPaths` accessor joins onto a run's directory."""
+    joined = re.search(
+        RUN_PATHS_JOIN.format(accessor=re.escape(accessor)),
+        _source(ONEPIPELINE, "ledger.rs"),
+        re.DOTALL,
+    )
+    assert joined is not None, (
+        f"onepipeline {ONEPIPELINE.ref}'s `RunPaths::{accessor}` no longer joins a "
+        "literal name onto the run's directory where this gate reads it, so "
+        "orchestrator/follow_up_drafts.py's copy of that name cannot be reconciled; "
+        "re-read `ledger.rs` and correct both"
+    )
+    return joined.group(1)
+
+
+def test_a_draft_looks_under_the_runs_root_the_engine_writes() -> None:
+    """The store a draft resolves its node from is `onepipeline`'s, resolved its way.
+
+    A runs root read some other way is an answer about a different store: no dispatch is
+    found and every draft names its node `unresolved` while the pointer still renders.
     """
     ledger = _source(ONEPIPELINE, "ledger.rs")
-    for pattern, constant, what in (
-        (RUNS_DIR_ENV, "RUNS_ROOT_ENV", "the variable that moves the runs root"),
-        (DEFAULT_RUNS_DIR, "DEFAULT_RUNS_ROOT", "the runs root when nothing names one"),
+    for pattern, copied, what in (
+        (RUNS_DIR_ENV, follow_up_drafts.RUNS_ROOT_ENV, "the variable that moves the runs root"),
+        (DEFAULT_RUNS_DIR, follow_up_drafts.DEFAULT_RUNS_ROOT, "the runs root nothing names"),
     ):
         declared = pattern.search(ledger)
         assert declared is not None, (
             f"onepipeline {ONEPIPELINE.ref} no longer declares {what} where this gate "
-            f"reads it, so {SUPERVISION_READINGS.name}'s copy of it cannot be "
+            "reads it, so orchestrator/follow_up_drafts.py's copy of it cannot be "
             "reconciled; re-read `ledger.rs` and correct both"
         )
-        assert _constant(SUPERVISION_READINGS, constant) == declared.group(1), (
-            f"{SUPERVISION_READINGS.name} resolves {what} as "
-            f"{_constant(SUPERVISION_READINGS, constant)!r} while onepipeline "
-            f"{ONEPIPELINE.ref} declares {declared.group(1)!r}. Both readings would "
-            "answer about a store nothing is writing"
+        assert copied == declared.group(1), (
+            f"orchestrator/follow_up_drafts.py resolves {what} as {copied!r} while "
+            f"onepipeline {ONEPIPELINE.ref} declares {declared.group(1)!r}"
         )
 
 
-def test_the_readings_read_the_run_marker_and_registry_the_engine_writes() -> None:
-    """A run root is what the engine marks one, and the dispatches are where it puts them.
+def test_a_draft_reads_the_dispatch_registry_and_record_the_engine_writes() -> None:
+    """The registry is where the engine puts dispatches, and each field read is declared.
 
-    The marker is what parts a run root from any other directory under the runs root,
-    and the registry is the only thing that turns a rendezvous's process ancestry into
-    the dispatch it sits under. A rename of either leaves the reading answering that no
-    run and no dispatch is there — a whole host of live work reported as belonging to
-    nobody.
+    A renamed directory or field fails nothing: the entry stops naming a dispatch and
+    every draft names its node `unresolved`.
     """
-    for accessor, constant in (("launch", "LAUNCH_RECORD"), ("dispatches", "DISPATCH_REGISTRY")):
-        declared = _joined_under_a_run_root(accessor)
-        assert _constant(SUPERVISION_READINGS, constant) == declared, (
-            f"{SUPERVISION_READINGS.name} looks for "
-            f"{_constant(SUPERVISION_READINGS, constant)!r} under a run root while "
-            f"onepipeline {ONEPIPELINE.ref} writes `RunPaths::{accessor}` as "
-            f"{declared!r}, so every run reads as a directory that is not one"
-        )
-
-
-def test_the_readings_read_the_dispatch_record_the_engine_writes() -> None:
-    """Every field the rendezvous attribution reads is one `DispatchRecord` declares.
-
-    A renamed field fails nothing: the entry stops naming a dispatch and every
-    rendezvous under a live one is reported as under no dispatch this runs root
-    records, which is the sentence reserved for a rendezvous that is somebody else's.
-    """
+    joined = _joined_under_a_run_root("dispatches")
+    assert joined == follow_up_drafts.DISPATCH_REGISTRY, (
+        f"orchestrator/follow_up_drafts.py looks for {follow_up_drafts.DISPATCH_REGISTRY!r} "
+        f"under a run root while onepipeline {ONEPIPELINE.ref} writes "
+        f"`RunPaths::dispatches` as {joined!r}"
+    )
     declared = {
         field.name for field in _declared_fields(ONEPIPELINE, "ledger.rs", "DispatchRecord")
     }
-    for constant in ("DISPATCH_NODE", "DISPATCH_PID", "DISPATCH_STARTED"):
-        read = _constant(SUPERVISION_READINGS, constant)
+    for read in (
+        follow_up_drafts.DISPATCH_NODE,
+        follow_up_drafts.DISPATCH_PID,
+        follow_up_drafts.DISPATCH_STARTED,
+    ):
         assert read in declared, (
-            f"{SUPERVISION_READINGS.name} reads {read!r} off a dispatch registry entry "
-            f"while onepipeline {ONEPIPELINE.ref}'s `DispatchRecord` declares "
-            f"{sorted(declared)}. Every rendezvous under a live dispatch would report "
-            "itself as under none"
+            f"orchestrator/follow_up_drafts.py reads {read!r} off a dispatch registry "
+            f"entry while onepipeline {ONEPIPELINE.ref}'s `DispatchRecord` declares "
+            f"{sorted(declared)}"
         )
 
 
-def test_the_readings_strip_the_start_token_the_engine_stamps() -> None:
+def test_a_draft_strips_the_start_token_the_engine_stamps() -> None:
     """The stamp that tells a live dispatch from a reused pid is `onepipeline`'s spelling.
 
-    The reading takes an entry's start time only when it carries this prefix and treats
-    a record spelling it any other way as unverifiable, which leaves the entry usable
-    but unchecked. So a re-spelled prefix does not fail either: it silently returns
-    every attribution to the unverified pid match this exists to improve on, on a host
-    that holds dozens of stale entries.
+    A draft accepts a pid match only when the recorded start time is the live process's
+    own, so a re-spelled prefix does not fail either: every draft silently names its node
+    `unresolved`.
     """
     declared = START_TOKEN_ENCODING.search(_source(ONEPIPELINE, "sys.rs"))
     assert declared is not None, (
         f"onepipeline {ONEPIPELINE.ref} no longer encodes a process's start token from "
-        f"`/proc/<pid>/stat` where this gate reads it, so {SUPERVISION_READINGS.name}'s "
+        "`/proc/<pid>/stat` where this gate reads it, so orchestrator/follow_up_drafts.py's "
         "copy of that prefix cannot be reconciled; re-read `sys.rs` and correct both"
     )
-    assert _constant(SUPERVISION_READINGS, "PROC_STAT_START") == declared.group(1), (
-        f"{SUPERVISION_READINGS.name} strips "
-        f"{_constant(SUPERVISION_READINGS, 'PROC_STAT_START')!r} from a recorded start "
-        f"time while onepipeline {ONEPIPELINE.ref} stamps {declared.group(1)!r}, so "
-        "every attribution falls back to an unverified pid match"
-    )
-
-
-def test_the_readings_measure_the_worktree_root_onevcs_cuts_under() -> None:
-    """The second filesystem these readings measure is the one `onevcs` writes into.
-
-    It is the one the incident this reading was written from filled, and it is not
-    always the one the runs root is on. Resolved any other way, the free-space line
-    reports a filesystem nothing is filling — which reads exactly like a healthy host.
-    """
-    home = _source(ONEVCS, "home.rs")
-    for pattern, constant, what in (
-        (ONEVCS_HOME_ENV, "ONEVCS_HOME_ENV", "the variable that moves its state root"),
-        (ONEVCS_DEFAULT_HOME, "DEFAULT_ONEVCS_HOME", "that root under a home directory"),
-        (ONEVCS_WORKSPACES_DIR, "ONEVCS_WORKSPACES", "the directory worktrees are cut in"),
-    ):
-        declared = pattern.search(home)
-        assert declared is not None, (
-            f"{ONEVCS.crate} {ONEVCS.ref} no longer declares {what} where this gate "
-            f"reads it, so {SUPERVISION_READINGS.name}'s copy cannot be reconciled; "
-            "re-read `home.rs` and correct both"
-        )
-        assert _constant(SUPERVISION_READINGS, constant) == declared.group(1), (
-            f"{SUPERVISION_READINGS.name} resolves {what} as "
-            f"{_constant(SUPERVISION_READINGS, constant)!r} while {ONEVCS.crate} "
-            f"{ONEVCS.ref} declares {declared.group(1)!r}, so the free-space line "
-            "measures a filesystem no dispatch is writing to"
-        )
-
-
-def test_the_readings_watch_for_the_rendezvous_the_installed_bus_publishes() -> None:
-    """The words that make a process a rendezvous are the bus command line's own.
-
-    Read from the installed binary rather than from the crate, because what a live
-    process carries on its argv is what that binary accepts. Each name matters: the
-    program and its two verbs are what the reading matches, and the flag is where it
-    reads the channel — and so the run — from. A bus that renamed a verb would leave
-    every rendezvous of that shape unreported; one that renamed the flag, or stopped
-    taking one directory with it, would report every one as unattributable, which is the
-    sentence reserved for a process whose command line names no run.
-    """
-    bus = _constant(SUPERVISION_READINGS, "BUS")
-    verbs = _constant(SUPERVISION_READINGS, "RENDEZVOUS_VERBS")
-    flag = _constant(SUPERVISION_READINGS, "TRANSPORT_DIR_FLAG")
-    assert isinstance(bus, str) and isinstance(flag, str) and isinstance(verbs, tuple), (
-        f"{SUPERVISION_READINGS.name}'s BUS, RENDEZVOUS_VERBS and TRANSPORT_DIR_FLAG are no "
-        "longer a program name, a tuple of verbs and a flag"
-    )
-    binary = REPO_ROOT / ".venv" / "bin" / bus
-    assert binary.is_file(), (
-        f"no {bus} is installed at {binary}, so {SUPERVISION_READINGS.name} watches for a "
-        "program this host does not run; run 'just bootstrap'"
-    )
-    version = subprocess.run(
-        [str(binary), "--version"], capture_output=True, text=True, check=False
-    )
-    assert version.returncode == 0 and version.stdout.split()[:1] == [bus], (
-        f"the installed bus names itself {version.stdout.strip()!r} rather than {bus!r}, so "
-        f"{SUPERVISION_READINGS.name} matches a program name nothing carries"
-    )
-    surface = surface_of(bus)
-    for verb in verbs:
-        assert (verb,) in surface.paths, (
-            f"the installed {bus} publishes no {verb!r} verb, so "
-            f"{SUPERVISION_READINGS.name} matches a command nothing runs"
-        )
-        reported = subprocess.run(
-            [str(binary), verb, "--help"], capture_output=True, text=True, check=False
-        )
-        assert re.search(OPTION_WITH_A_VALUE.format(flag=re.escape(flag)), reported.stdout), (
-            f"`{bus} {verb}` no longer takes one value with {flag!r}, so "
-            f"{SUPERVISION_READINGS.name} reads every live {verb} as naming no channel:\n"
-            f"{reported.stdout}"
-        )
-
-
-#: How clap's help states an option taking one value: `      --transport-dir <DIR>  …`.
-OPTION_WITH_A_VALUE = r"(?m)^\s+{flag} <[A-Z_]+>\s"
-
-#: This host's own two rendezvous: the ask shim a dispatched agent asks through, and the
-#: observer graph whose monitor's judge side is a bus `serve`. The reading binds either to
-#: its run only if each names the run's channel the way the engine keeps it.
-RENDEZVOUS_PRODUCERS = (
-    REPO_ROOT / "scripts" / "ask-manager.sh",
-    REPO_ROOT / "graphs" / "dag-scope.yaml",
-)
-
-
-def test_the_readings_bind_a_rendezvous_by_the_channel_directory_the_engine_keeps() -> None:
-    """A run's channel is the directory the engine keeps it in, and this host names it so.
-
-    The reading takes a rendezvous's run to be the directory holding the channel it names,
-    so the channel directory's name is the engine's to decide — `RunPaths::channel_dir` —
-    and both of this host's producers have to compose it under the flag the reading reads.
-    A renamed directory would report every live rendezvous as unattributable; a producer
-    that named its channel some other way would leave its own rendezvous unattributed.
-    """
-    declared = _joined_under_a_run_root("channel_dir")
-    kept = _constant(SUPERVISION_READINGS, "CHANNEL_DIRECTORY")
-    assert kept == declared, (
-        f"{SUPERVISION_READINGS.name} reads a run's channel as {kept!r} while onepipeline "
-        f"{ONEPIPELINE.ref}'s `RunPaths::channel_dir` joins {declared!r}, so every live "
-        "rendezvous reads as naming no run"
-    )
-    flag = _constant(SUPERVISION_READINGS, "TRANSPORT_DIR_FLAG")
-    assert isinstance(flag, str) and isinstance(kept, str)
-    composed = re.compile(rf'{re.escape(flag)}\s+"[^"\n]*/{re.escape(kept)}"')
-    for producer in RENDEZVOUS_PRODUCERS:
-        assert composed.search(producer.read_text("utf-8")) is not None, (
-            f"{producer.relative_to(REPO_ROOT)} no longer names its channel as "
-            f'`{flag} "…/{kept}"`, so {SUPERVISION_READINGS.name} cannot bind the '
-            "rendezvous it starts to its run"
-        )
-
-
-def test_the_readings_cut_the_status_view_where_the_engine_opens_its_health_report() -> None:
-    """The reading is inserted above the line a supervisor's watch is told to cut at.
-
-    Two copies of that anchor now exist — `AGENTS.md`'s `sed` program, gated above, and
-    this reading's own pattern — and this one decides where the free-space line lands.
-    Below the opener it would be invisible to every watch that follows this
-    repository's own guidance, which is a reading nobody ever sees rather than a
-    missing one.
-    """
-    view = STATUS_VIEW.search(_source(ONEPIPELINE, "views.rs"))
-    assert view is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer composes its status view where this "
-        "gate reads it, so nothing here can say where that view's two documents meet"
-    )
-    opener = view.group(0).find(HEALTH_BLOCK_OPENER)
-    assert opener != -1, (
-        f"onepipeline {ONEPIPELINE.ref} no longer opens the embedded health report with "
-        f"{HEALTH_BLOCK_OPENER!r}, so {SUPERVISION_READINGS.name} has no boundary to "
-        "put its reading above"
-    )
-    # The engine writes it as a Rust string literal, opening quote included, and the
-    # reading matches the rendered line — so the literal's own quote is dropped and
-    # what is matched is the text a supervisor sees.
-    written = HEALTH_BLOCK_OPENER.lstrip('"').rstrip()
-    assert _pattern(SUPERVISION_READINGS, "PROVIDERS").match(written) is not None, (
-        f"{SUPERVISION_READINGS.name}'s boundary pattern does not match {written!r}, "
-        f"which is how onepipeline {ONEPIPELINE.ref} opens the health report, so the "
-        "free-space reading lands below the cut and no watch following AGENTS.md sees it"
+    assert declared.group(1) == follow_up_drafts.PROC_STAT_START, (
+        f"orchestrator/follow_up_drafts.py strips {follow_up_drafts.PROC_STAT_START!r} "
+        f"from a recorded start time while onepipeline {ONEPIPELINE.ref} stamps "
+        f"{declared.group(1)!r}"
     )
 
 
@@ -2393,13 +2183,11 @@ def test_the_built_journal_names_events_the_engine_produces(built_run_root: Path
 
 
 def test_the_built_run_root_reads_the_start_time_field_onevcs_records() -> None:
-    """The two Python copies added with these readings index the field `onevcs` does.
+    """The run-root builder indexes the field of `/proc/<pid>/stat` `onevcs` does.
 
-    These two spell the split with `rindex`, so they are read with their own pattern
-    and compared against `onevcs`'s one declaration. A copy
-    reading the wrong field of `/proc/<pid>/stat` verifies nothing while looking like
-    it does: every live dispatch reads as a reused pid, and every rendezvous under one
-    is reported as under no dispatch at all.
+    It spells the split with `rindex`, so it is read with its own pattern and compared
+    against `onevcs`'s one declaration. A copy reading the wrong field verifies nothing
+    while looking like it does: every built dispatch reads as a reused pid.
     """
     declared = ONEVCS_STAT_FIELD.search(_source(ONEVCS, "workspace.rs"))
     assert declared is not None, (
@@ -2407,59 +2195,16 @@ def test_the_built_run_root_reads_the_start_time_field_onevcs_records() -> None:
         "/proc/<pid>/stat in workspace.rs, so what a process's creation identity means "
         "has moved; re-read it and correct every copy"
     )
-    for path in (SUPERVISION_READINGS, PROBE_RUN_ROOT):
-        copied = RINDEX_STAT_FIELD.search(path.read_text("utf-8"))
-        assert copied is not None, (
-            f"{path.name} no longer indexes /proc/<pid>/stat in the shape this gate "
-            "reconciles; it tells a live dispatch from a reused pid on that answer, so "
-            "update the gate and the copy together"
-        )
-        assert copied.group(1) == declared.group(1), (
-            f"{path.name} reads field {copied.group(1)} of /proc/<pid>/stat while "
-            f"{ONEVCS.crate} {ONEVCS.ref} reads field {declared.group(1)}, so no "
-            "dispatch this host runs can be verified as the one its record names"
-        )
-
-
-def test_the_readings_indent_as_the_engine_indents_a_runs_block() -> None:
-    """A reading added beside the engine's lines is indented the way the engine indents.
-
-    The one value in this filter that is presentation rather than fact, and it is
-    reconciled for the same reason as the rest: it is the engine's choice, not this
-    repository's. A drift here is the mildest failure in this module — a line that reads
-    as a second document rather than as part of the run's own block — but it is also the
-    one a reader would put down to taste rather than to drift, so it is gated instead of
-    noticed.
-
-    Read from the two lines this module already reads for other reasons, and required to
-    agree with each other: one literal could be indented by accident, two that disagree
-    would mean the view has no single block depth for this to match at all.
-    """
-    view = STATUS_VIEW.search(_source(ONEPIPELINE, "views.rs"))
-    assert view is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer composes its status view where this "
-        "gate reads it, so nothing here can say how deep a run's block is indented"
+    copied = RINDEX_STAT_FIELD.search(PROBE_RUN_ROOT.read_text("utf-8"))
+    assert copied is not None, (
+        f"{PROBE_RUN_ROOT.name} no longer indexes /proc/<pid>/stat in the shape this gate "
+        "reconciles; it tells a live dispatch from a reused pid on that answer, so "
+        "update the gate and the copy together"
     )
-    composed = f"{view.group(0)}{_status_run_lines()}"
-    depths = set()
-    for literal in (HEALTH_BLOCK_OPENER, UNREAD_SURFACE_LINE):
-        assert literal in composed, (
-            f"onepipeline {ONEPIPELINE.ref}'s status view no longer writes {literal!r}, "
-            "so this gate is reading a line the view does not print"
-        )
-        written = literal.lstrip('"')
-        depths.add(written[: len(written) - len(written.lstrip())])
-    assert len(depths) == 1, (
-        f"onepipeline {ONEPIPELINE.ref}'s status view indents the lines inside a run's "
-        f"block by {sorted(depths)}, so there is no single depth for "
-        f"{SUPERVISION_READINGS.name} to match; re-read the view and correct the reading"
-    )
-    indent = depths.pop()
-    assert _constant(SUPERVISION_READINGS, "INDENT") == indent, (
-        f"{SUPERVISION_READINGS.name} indents its readings by "
-        f"{_constant(SUPERVISION_READINGS, 'INDENT')!r} while onepipeline "
-        f"{ONEPIPELINE.ref} indents a run's own block by {indent!r}, so every line this "
-        "host adds reads as a second document beside the view rather than as part of it"
+    assert copied.group(1) == declared.group(1), (
+        f"{PROBE_RUN_ROOT.name} reads field {copied.group(1)} of /proc/<pid>/stat while "
+        f"{ONEVCS.crate} {ONEVCS.ref} reads field {declared.group(1)}, so no built "
+        "dispatch can be verified as the one its record names"
     )
 
 
@@ -2576,7 +2321,7 @@ CHECKPOINT_RESTATEMENTS = (
         what="the rule that keeps a reader's checkpoint out of this repository's own tree",
     ),
     Restatement(
-        path=Path("tests/e2e/test_supervision_readings_e2e.py"),
+        path=Path("tests/host_views/test_status_and_host_views_e2e.py"),
         reads=re.compile(r"DERIVED_BY_A_READER = frozenset\(\{\"([a-z._]+)\"\}\)"),
         what="the record the reading views are allowed to leave behind",
     ),
@@ -3339,3 +3084,33 @@ def test_the_suites_layout_fixture_is_the_document_the_engine_publishes_at_its_t
         f"{onejudge_bundle.ENGINE_LAYOUT} differs from the planner-channel layout onepipeline "
         f"publishes at {ONEPIPELINE_SCHEMAS.ref}; replace it with that document, byte for byte"
     )
+
+
+#: The composed-task sections `graphs/pr-author.yaml`'s member reads its starting point
+#: from — the change request the session holds, and the command that renders the
+#: worker's transcript. Both are the engine's literals, composed into the drafting task
+#: by the closeout and by the landing verbs alike, and the prompt names each in
+#: backticks; the pull request template's `## What` and `## Why` it tells the drafter to
+#: write are not the engine's and are not gated here.
+DRAFTING_STARTING_POINTS = ("## Change request", "## Worker transcript")
+
+
+def test_the_drafter_starts_from_sections_the_pinned_engine_composes() -> None:
+    """Each heading the drafting prompt reads by name is one the installed engine writes.
+
+    Read from the installed binary, a stripped native executable in whose read-only data
+    each heading is a literal: a heading the engine reworded would leave the drafter
+    looking for a section the task no longer opens, silently starting over on a
+    description the worker had begun.
+    """
+    prompt = (REPO_ROOT / "graphs" / "pr-author.yaml").read_text(encoding="utf-8")
+    engine = (REPO_ROOT / ".venv" / "bin" / "onepipeline").read_bytes()
+    for heading in DRAFTING_STARTING_POINTS:
+        assert f"`{heading}`" in prompt, (
+            f"graphs/pr-author.yaml no longer names {heading!r} in backticks, so this gate "
+            "reads a section the prompt does not rely on; move the gate with the prompt"
+        )
+        assert heading.encode("utf-8") in engine, (
+            f"the installed onepipeline does not carry {heading!r}, which "
+            "graphs/pr-author.yaml tells the drafter to read its starting point from"
+        )

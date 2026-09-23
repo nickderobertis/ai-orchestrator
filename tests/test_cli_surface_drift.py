@@ -217,8 +217,7 @@ def _accepted_by(delegates: tuple[tuple[str, tuple[str, ...]], ...]) -> frozense
     """Every long flag the delegated published verbs accept between them."""
     accepted: set[str] = set()
     for tool, path in delegates:
-        surface = surface_of(tool)
-        accepted |= set(surface.flags.get(path, frozenset())) | set(surface.flags[()])
+        accepted |= surface_of(tool).accepted(path)
     return frozenset(accepted)
 
 
@@ -260,10 +259,7 @@ def _drift_in(span: str, where: str, recipes: dict[str, Recipe]) -> list[Drift]:
             prefixed = tokens[max(0, index - 2) : index] == ["uv", "run"]
             if path or carries_flag or prefixed:
                 written = " ".join((token, *path))
-                invoked = Invocation(
-                    written,
-                    frozenset(surface.flags.get(path, frozenset())) | surface.flags[()],
-                )
+                invoked = Invocation(written, surface.accepted(path))
                 if (
                     ahead < len(tokens)
                     and SUBCOMMAND_SHAPED.match(tokens[ahead])

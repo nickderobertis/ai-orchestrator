@@ -41,8 +41,8 @@ PLAN_PROJECT_LINE="Plan project: <source>:<project>"
 PLAN_PROJECT_DECLARATION='^Plan project:[[:space:]]*(.*[^[:space:]]|)[[:space:]]*$'
 PLAN_PROJECT_QUALIFIED='^[A-Za-z0-9_.-]+:[^[:space:]]+$'
 
-#: What a planning flow will use as a run name. Narrower than what
-#: `scripts/ask-manager.sh` accepts as a run id, and deliberately so: `onepipeline`
+#: What a planning flow will use as a run name. Narrower than what the engine's
+#: `onepipeline ask` accepts as a run id, and deliberately so: `onepipeline`
 #: mints the run id from the plan's `name` and NORMALIZES it on the way — measured,
 #: `with.dots` becomes run `with-dots`, while case and `_` survive. Everything a flow
 #: prints and every verb it tells a manager to type names the run, so a name that could

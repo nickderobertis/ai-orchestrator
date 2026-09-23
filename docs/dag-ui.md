@@ -184,15 +184,15 @@ when it is not the release `config/onepipeline.version` names, so a bump that mo
 alone fails on this host rather than at whatever a browser adoption then drives.
 
 **They are not level today, by one declared exception.** `config/onepipeline.version`
-reads 0.43.1, and the adopted `onepipeline-ui` 0.11.2 — the newest release there is —
+reads 0.44.1, and the adopted `onepipeline-ui` 0.11.2 — the newest release there is —
 links onepipeline 0.42.0. The engine pin moved anyway, on the manager's ruling, because
-holding it would have kept every dispatch on an engine without the planner-channel and
-routing fixes 0.43.1 carries; the gate reads the pair through
+holding it would have kept every dispatch on an engine without the fixes each later
+release carries; the gate reads the pair through
 `DECLARED_UI_ENGINE_DIVERGENCE` in the same module, which is satisfied only while the two
-are exactly 0.42.0 and 0.43.1 and fails, naming itself, the moment either moves. **Until
-an `onepipeline-ui` release links onepipeline 0.43.1, do not adopt a run from the
+are exactly 0.42.0 and 0.44.1 and fails, naming itself, the moment either moves. **Until
+an `onepipeline-ui` release links onepipeline 0.44.1, do not adopt a run from the
 browser**: the adopt would drive that run with the reader's own 0.42.0 while every other
-dispatch on this host runs 0.43.1. Adopt with `just orchestrate --adopt <run-id>`
+dispatch on this host runs 0.44.1. Adopt with `just orchestrate --adopt <run-id>`
 instead. What `/healthz` is for from here is the
 question that gate cannot answer — which release is answering **on this port right
 now**, since both pieces load once at start and a server left running from before a bump

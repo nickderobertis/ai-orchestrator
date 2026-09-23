@@ -481,13 +481,25 @@ _verdict verdict run *text:
     jq -cn --arg verdict "$verdict" --arg text "$text" 'if $verdict == "approve" then {version: 3, completion: true, reason: "approved"} else {version: 3, completion: false, reason: $text, message: $text} end' \
         | "{{just_executable()}}" --justfile "{{justfile()}}" channel-reply "$run"
 
-# Reclaim the dead working directories this host accumulates: `scripts/sweep.sh`
-# composes `oneagentgraph sweep` and `onevcs sweep` and adds the trailer naming what
-# neither examined. Quiet on success — the two reports and that trailer appear only
-# when a verb failed or a family went unexamined, and `--dry-run` always prints them.
-# What it still does not reclaim is docs/orchestration.md, "The recorded run".
+# Reclaim the dead working directories this host accumulates: `onevcs sweep`, then
+# `oneagentgraph sweep`, each with the caller's options and each printing its own report,
+# whose "Families not examined" section names every family it left and who owns it. The
+# second runs whatever the first exits, and the recipe fails if either did. The floor is
+# `--min-age-hours 4` when the caller names none, because both verbs' own 24 hours
+# reclaims almost nothing on a host that churns workspaces hourly (docs/orchestration.md,
+# "The recorded run").
+# llmlint: ignore[tool_output_is_signal] the two verbs' own reports are what this command is run to read.
 sweep *args:
-    @./scripts/sweep.sh "$@"
+    #!/usr/bin/env bash
+    set -uo pipefail
+    floor=(--min-age-hours 4)
+    for argument in "$@"; do
+        case "$argument" in --min-age-hours | --min-age-hours=*) floor=() ;; esac
+    done
+    status=0
+    uv run onevcs sweep "$@" "${floor[@]}" || status=$?
+    uv run oneagentgraph sweep "$@" "${floor[@]}" || status=$?
+    exit "$status"
 
 # Three verbs, one per branch state, and between them they cover every state a
 # branch here can be in — so no branch state is a reason to reach for raw `git` or
@@ -508,47 +520,39 @@ sweep *args:
 # Verify and publish a complete unpublished branch that no session holds, under the
 # policy its identity's rules resolve.
 # `just publish-branch <branch> --repo <checkout> [--title <T>] [--policy <P>]
-#  [--body <TEXT> | --body-file <PATH>]`.
+#  [--body <TEXT> | --body-file <PATH>] [--no-draft]`.
 #
 # The state between the two verbs below: `onevcs recover` is for a branch whose
 # provenance is incomplete, and `integrate` is a local merge train that opens no
 # change request. A branch that is simply *done* and unpublished had neither of
 # those, which is what left an agent reaching for `gh pr create` by hand.
 #
-# Give it a body. A remote lifecycle publication has its body drafted for it by
-# `graphs/pr-author.yaml`; a branch landed by hand has nobody drafting one, and
-# every one of them opened with an empty description until onevcs 0.7.0 took a
-# caller's. Naming both `--body` and `--body-file` is refused rather than ranked.
+# The engine's `onepipeline publish-branch` drafts the change request's body through
+# `graphs/pr-author.yaml`, the drafter a run's own publications use, and forwards every
+# other argument to the linked `onevcs publish-branch` unchanged. A caller's own
+# `--body`/`--body-file` and `--no-draft` skip the drafting turn, a `local-direct`
+# identity is never drafted for, and a draft that cannot run never blocks the landing.
 #
 # `--policy` may narrow the rules-resolved policy but never widen it past requiring
-# approvals; the CLI enforces that rather than this wrapper.
-#
-# This is one of the two commands here that draft a change request's body: the branch
-# and `--repo` are read out of the arguments, `scripts/draft-pr-body.sh` writes the
-# body, and it reaches `onevcs` as `--body-file`. A caller's own `--body`/`--body-file`
-# wins and `--no-draft` skips it; see `scripts/land-branch.sh`.
+# approvals; the CLI enforces that rather than this recipe.
 # llmlint: ignore[tool_output_is_signal] what this verified and where it published the branch — the merge path's verdict, the route taken, and the change request's URL — is the product an operator runs it for, exactly as for the `integrate` train below.
 publish-branch *args:
-    @./scripts/land-branch.sh publish-branch "$@"
+    @./scripts/onepipeline.sh publish-branch --pr-author-graph graphs/pr-author.yaml "$@"
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow,
 # attesting the incomplete-step marker it carries.
 # `just repo-recover <branch> --repo <canonical-checkout> [--title <T>]
-#  [--body <TEXT> | --body-file <PATH>]`.
-#
-# It takes a body on the same terms `publish-branch` does, and wants one more: a
-# branch reached this verb because its workstream died, so what it was doing is
-# exactly what no reader can reconstruct from the diff.
+#  [--body <TEXT> | --body-file <PATH>] [--no-draft]`.
 #
 # This is the incomplete-provenance verb. A branch with nothing left incomplete is
 # `just publish-branch`'s; `onevcs recover` takes no `--policy`, because the policy a
-# recovered branch publishes under is the one its rules already resolved.
-#
-# It drafts the change request's body the same way `just publish-branch` does, under
-# the same two escapes; see `scripts/land-branch.sh`.
+# recovered branch publishes under is the one its rules already resolved. It drafts the
+# body through the same engine verb and drafter, under the same escapes, and a branch
+# reaches it because its workstream died — so what it was doing is exactly what no
+# reader can reconstruct from the diff.
 # llmlint: ignore[tool_output_is_signal] what this verified, what it attested, and where it published the branch — the merge path's verdict, the recovered marker, and the change request's URL — is the product an operator runs it for, exactly as for `publish-branch` above.
 repo-recover *args:
-    @./scripts/land-branch.sh recover "$@"
+    @./scripts/onepipeline.sh repo-recover --pr-author-graph graphs/pr-author.yaml "$@"
 
 # The across-round derivation this recipe used to print has no successor verb,
 # because it has no successor step: the engine reconciles a live desired graph
@@ -785,18 +789,17 @@ telemetry-server *args:
     @./scripts/telemetry-server.sh "$@"
 
 # Show a run's live state: what is driving it, what is running, and what it is running
-# in. The free-space reading `scripts/status.sh` adds sits ABOVE the `providers:` line,
-# which is where a supervisor's watch is told to cut this view.
+# in. The engine prints its `free space:` lines ABOVE the `providers:` line, which is
+# where a supervisor's watch is told to cut this view.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
-    @./scripts/status.sh "$@"
+    @./scripts/onepipeline.sh status "$@"
 
-# Show every live dispatch on this host, with its owner and load contribution — and,
-# from `scripts/host.sh`, the free space they are running in and every live rendezvous
-# holding a question open, named with the run it is bound to.
+# Show every live dispatch on this host, with its owner and load contribution, and the
+# free space of the filesystems they are running in.
 # llmlint: ignore[tool_output_is_signal] the requested per-dispatch host inventory is this viewing command's product.
 host *args:
-    @./scripts/host.sh "$@"
+    @./scripts/onepipeline.sh host "$@"
 
 # List every preserved-but-unpublished branch across the registered repository
 # identities and the command that lands each one.

@@ -622,7 +622,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.4.9", core="0.17.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.13.4", core="0.17.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.43.1", core="0.17.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.44.1", core="0.17.1"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -751,18 +751,18 @@ def _ui_api_linked_engine() -> str:
 
 
 #: The one declared exception to the gate below, measured when the engine pin moved to
-#: onepipeline 0.43.1: the newest `onepipeline-api-cli` on PyPI, 0.11.2, links onepipeline
-#: 0.42.0, and no release linking 0.43.1 exists. The manager ruled that the engine pin
+#: onepipeline 0.44.1: the newest `onepipeline-api-cli` on PyPI, 0.11.2, links onepipeline
+#: 0.42.0, and no release linking 0.44.1 exists. The manager ruled that the engine pin
 #: moves regardless, because holding it would keep every dispatch on an engine without the
-#: channel and routing fixes 0.43.1 carries; until a UI release links it, a browser adopt
-#: drives 0.42.0 and is not used for a run launched under this pin (AGENTS.md's
-#: onepipeline-ui roster entry, docs/dag-ui.md's "Which release is answering"). Satisfied
-#: only while both measured versions are exactly these, so it fails, naming itself, the
-#: moment either pin or the UI's linked engine moves — and is then deleted, not re-dated.
+#: fixes it carries; until a UI release links it, a browser adopt drives 0.42.0 and is not
+#: used for a run launched under this pin (AGENTS.md's onepipeline-ui roster entry,
+#: docs/dag-ui.md's "Which release is answering"). Satisfied only while both measured
+#: versions are exactly these, so it fails, naming itself, the moment either pin or the
+#: UI's linked engine moves — and is then deleted, not re-dated.
 DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
     linked="0.42.0",
-    pinned="0.43.1",
-    because="no onepipeline-ui release links onepipeline 0.43.1 yet",
+    pinned="0.44.1",
+    because="no onepipeline-ui release links onepipeline 0.44.1 yet",
 )
 
 

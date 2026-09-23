@@ -1,20 +1,19 @@
 """The contracts the manager/planner seam restates are reconciled with their source.
 
-`scripts/plan-brief.sh` and `scripts/ask-manager.sh` are shell, and shell cannot import.
-So each of them holds a copy of a contract that is owned somewhere else — the task
-template `personas/planner.yaml` states — and a copy is only sound while something
-reconciles it. The second copy runs the other way: the ask shim declares what its
-environment must carry, and the journeys that prove a launch builds it hold their own
-list of those names.
+`scripts/plan-brief.sh` is shell, and shell cannot import, so it holds a copy of a
+contract owned somewhere else — the task template `personas/planner.yaml` states — and a
+copy is only sound while something reconciles it. The second copy runs the other way: the
+engine's `onepipeline ask`, which `scripts/ask-manager.sh` runs, refuses without the run it
+asks on, and the journeys that prove a launch builds that hold their own list of the names
+they measure. The third is the persona's fallback ask, a statement of the engine's channel
+layout a planner runs when its launch exported no adapter.
 
 Every copy fails quietly if it drifts, which is why they are gated here rather than
 reviewed. A `PLAN_REQUIRED_SECTIONS` that no longer matches the template lets a brief
-through that is not a task, or refuses one that is. And an input the shim starts
+through that is not a task, or refuses one that is. And an input the ask starts
 requiring that no journey checks for is a launch path free to stop providing it — which
 is exactly how a whole launch path came to export the seam nowhere at all, unnoticed for
-every run this host had ever driven. The shim's run-id rule once had a third copy to
-match, the grammar the bus's retired `onejudge` codec read a run out of a frame with; the
-judge side now reads no run at all, so the rule stands on its own.
+every run this host had ever driven.
 """
 
 from __future__ import annotations
@@ -42,13 +41,13 @@ from orchestrator.root import REPO_ROOT
 PLAN_SCRIPT = REPO_ROOT / "scripts" / "plan-brief.sh"
 TASK_TEMPLATE = REPO_ROOT / "personas" / "planner.yaml"
 
-#: The shim a dispatched agent asks its manager through, which composes the run's channel
-#: directory from the run id before handing the question to `onemessagebus ask`.
+#: The adapter a dispatched agent asks its manager through, and the one input the verb it
+#: runs refuses to ask without: the run whose channel the question goes on.
 ASK_SCRIPT = REPO_ROOT / "scripts" / "ask-manager.sh"
+REQUIRED_ASK_INPUT = "ONEPIPELINE_RUN_ID"
 
 #: A stand-in for the bus that answers nothing and records everything: the arguments it
-#: was handed, one per line, and the frame it was handed on stdin. Both sides exec the
-#: same one, so what is compared is what each would really have asked with.
+#: was handed, one per line, and the frame it was handed on stdin.
 BUS_RECORDER = (
     "#!/bin/sh\n"
     ': >"$RECORD_ARGV"\n'
@@ -56,23 +55,17 @@ BUS_RECORDER = (
     'cat >"$RECORD_FRAME"\n'
 )
 
-#: The environment names that change how the shim asks. Cleared before each side runs, so
-#: a dispatch running this suite cannot hand the shim an asker, a node or a reply window
-#: the persona's block has no way to state.
-ASK_OVERRIDES = (
-    "ONEPIPELINE_CHANNEL_ASKER",
-    "ORCHESTRATOR_ASK_MANAGER_NODE",
-    "ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS",
-)
+#: The environment name that changes how a question is asked, cleared before the
+#: fallback runs so a dispatch running this suite cannot hand it an asker.
+ASK_OVERRIDES = ("ONEPIPELINE_CHANNEL_ASKER",)
 
-#: The bus configuration every launch hands the engine, read out of the launch wrapper
-#: rather than restated: `--bus-config "${script_dir%/scripts}/<path>"`, resolved against
-#: this checkout. It is the file the shim opens, and the file whose parse the engine then
-#: records for the run, which is how the two sides reach one policy by different routes.
-LAUNCH_WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
-LAUNCH_BUS_CONFIG = re.compile(r'--bus-config "\$\{script_dir%/scripts\}/(?P<path>[^"]+)"')
+#: What the engine's `ask` raises, which the fallback has to raise too: one blocking
+#: frame of this kind and source on this queue of the run's channel directory.
+QUESTION_QUEUE = "surfaces"
+QUESTION_KIND = "planner-question"
+QUESTION_SOURCE = "proposal"
 
-#: The run both sides are probed on, and the record the engine writes for it. Nothing is
+#: The run the fallback is probed on, and the record the engine writes for it. Nothing is
 #: launched and the bus never runs here, so the recorded policy is a one-line stand-in
 #: rather than a configuration: what this gate asks is that the fallback passes whatever
 #: its run's record holds, and a document no policy could be is what makes a fallback
@@ -88,12 +81,6 @@ RECORDED_POLICY = {"seam-probe": "the messaging policy this run's launch record 
 #: what every other gate in this file does.
 LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "ask_seam" / "launch" / "test_launch_ask_seam_e2e.py"
 CHECKED_INPUT = re.compile(r'Input\(\s*"([A-Z0-9_]+)"')
-
-#: How `scripts/ask-manager.sh` declares an environment variable it cannot ask without,
-#: in the `Environment:` block of its own header. The `(optional)` ones are deliberately
-#: not matched: a launch that provides none of them is still a launch an agent can ask
-#: from.
-REQUIRED_INPUT = re.compile(r"^#\s+([A-Z0-9_]+)\s+\(required\)", re.MULTILINE)
 
 #: `PLAN_REQUIRED_SECTIONS=("## What" "## Why" "## Acceptance criteria")`, read out of
 #: the helper rather than restated, so this gate compares the shell's own list.
@@ -147,70 +134,53 @@ def test_the_brief_template_the_plan_recipe_requires_is_the_one_the_doctrine_sta
     )
 
 
-def test_every_input_the_wrapper_requires_is_one_a_launch_is_measured_for() -> None:
-    """A launch is proven to build exactly what the shim refuses without.
+def test_every_input_the_wrapper_requires_is_one_a_launch_is_measured_for(
+    tmp_path: Path,
+) -> None:
+    """A launch is proven to build what the ask refuses without.
 
-    The shim's header names each variable it cannot ask without, and the journeys name
-    each one they read out of a real dispatch's environment. Only one direction is an
-    error: a required input nothing measures is a launch path free to drop it, and the
-    failure lands on some agent's first blocking question rather than in the suite. The
-    journeys may check *more* than the shim strictly requires — the seam itself is one
-    such name, since a shim never reads the variable that names it.
+    The installed verb, through the adapter, is asked with that input unset and has to
+    refuse naming it — so a release that stopped requiring it, or renamed it, fails here —
+    and the launch journeys have to measure it in a real dispatch's environment. A required
+    input nothing measures is a launch path free to drop it, and the failure lands on some
+    agent's first blocking question rather than in the suite.
     """
-    required = set(REQUIRED_INPUT.findall(ASK_SCRIPT.read_text(encoding="utf-8")))
-    assert required, (
-        f"{ASK_SCRIPT.name}'s header declares no required environment at all; this gate "
-        "reads the `(required)` lines of its `Environment:` block"
+    environment = {name: value for name, value in os.environ.items() if name != REQUIRED_ASK_INPUT}
+    refused = subprocess.run(
+        [str(ASK_SCRIPT), "--timeout", "1", "Which way?"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
     )
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert REQUIRED_ASK_INPUT in refused.stderr, refused.stderr
 
     measured = set(CHECKED_INPUT.findall(LAUNCH_JOURNEYS.read_text(encoding="utf-8")))
 
-    assert required <= measured, (
-        f"{ASK_SCRIPT.name} requires {sorted(required - measured)} of the environment a "
-        f"launch builds, and {LAUNCH_JOURNEYS.name} measures no launch shape for it"
+    assert REQUIRED_ASK_INPUT in measured, (
+        f"the ask requires {REQUIRED_ASK_INPUT}, and {LAUNCH_JOURNEYS.name} measures no "
+        "launch shape for it"
     )
 
 
-def _mirrored_shim(directory: Path, recorder: Path) -> Path:
-    """The real shim in a checkout of its own, whose locked bus is ``recorder``.
-
-    The shim runs the `onemessagebus` at its own checkout's `.venv/bin`, resolved from its
-    location exactly as its configuration is and never from PATH, so a stand-in reaches
-    it only from there. The mirror holds the real script and a copy of the real
-    configuration at the same relative path, so what the shim asks under is that policy.
-    """
-    checkout = directory / "checkout"
-    (checkout / "scripts").mkdir(parents=True)
-    (checkout / "config").mkdir()
-    shutil.copy2(ASK_SCRIPT, checkout / "scripts" / ASK_SCRIPT.name)
-    handed = _handed_to_every_launch()
-    shutil.copy2(handed, checkout / "config" / handed.name)
-    bus = checkout / ".venv" / "bin" / "onemessagebus"
-    bus.parent.mkdir(parents=True)
-    bus.symlink_to(recorder)
-    return checkout / "scripts" / ASK_SCRIPT.name
-
-
-def _asked(
-    command: list[str], directory: Path, runs_dir: str | None, *, shim: bool = False
-) -> tuple[list[str], str]:
-    """Run one side against a recording stand-in for the bus, and read what it asked with.
+def _asked(command: list[str], directory: Path, runs_dir: str | None) -> tuple[list[str], str]:
+    """Run the fallback against a recording stand-in for the bus, and read what it asked with.
 
     The stand-in shadows any real `onemessagebus` on PATH — where the persona's fallback,
-    which travels into any repository, finds its bus — and, with ``shim``, stands as the
-    locked bus of the checkout the real shim is run from; it answers nothing, so what is
-    measured is the invocation each side composes rather than a reply. Each side runs in a
+    which travels into any repository, finds its bus; it answers nothing, so what is
+    measured is the invocation the fallback composes rather than a reply. It runs in a
     working directory of its own with the run's record already written under it, so a
-    `runs_dir` left unset exercises the `runs` default both sides fall back to without
-    either of them writing into this checkout.
+    `runs_dir` left unset exercises the `runs` default without writing into this checkout.
     """
     scratch = directory / "scratch"
     scratch.mkdir(parents=True)
     recorder = directory / "onemessagebus"
     recorder.write_text(BUS_RECORDER, encoding="utf-8")
     recorder.chmod(0o755)
-    if shim:
-        command = [*command, str(_mirrored_shim(directory, recorder)), PLACEHOLDER_QUESTION]
     argv_at, frame_at = directory / "argv", directory / "frame"
     root = Path(runs_dir) if runs_dir is not None else directory / "runs"
     (root / ASK_PROBE_RUN).mkdir(parents=True, exist_ok=True)
@@ -243,20 +213,6 @@ def _asked(
     return argv_at.read_text(encoding="utf-8").splitlines(), frame_at.read_text(encoding="utf-8")
 
 
-def _handed_to_every_launch() -> Path:
-    """The bus configuration `scripts/onepipeline.sh` hands the engine, read off the script.
-
-    Read rather than restated, so a repointed `--bus-config` fails here: that file is the
-    one the shim opens, and the one whose parse the engine records for every run it starts.
-    """
-    declared = LAUNCH_BUS_CONFIG.search(LAUNCH_WRAPPER.read_text(encoding="utf-8"))
-    assert declared is not None, (
-        f"{LAUNCH_WRAPPER.name} no longer hands a launch `--bus-config` under its own "
-        "checkout, so this gate cannot read which policy the engine records for a run"
-    )
-    return REPO_ROOT / declared["path"]
-
-
 def _invocation(argv: list[str]) -> tuple[tuple[str, ...], dict[str, str]]:
     """One side's argv as its positional words and its options, so flag order is free.
 
@@ -280,60 +236,39 @@ def _invocation(argv: list[str]) -> tuple[tuple[str, ...], dict[str, str]]:
 
 
 @pytest.mark.parametrize("runs_dir", [None, "/tmp/elsewhere/runs"])
-def test_the_personas_fallback_asks_exactly_as_the_shim_does(
+def test_the_personas_fallback_asks_as_the_engine_does(
     tmp_path: Path, runs_dir: str | None
 ) -> None:
-    """A planner whose launch exported no shim asks the way the shim would have.
+    """A planner whose launch exported no adapter raises the question the engine would.
 
     `personas/planner.yaml` becomes every planner's own system prompt and travels into
-    whatever repository is being planned against, so a fallback naming a retired request
-    path is wrong everywhere a planner runs — and it is the one message a planner cannot
-    afford to get wrong, because a blocking question that reaches nobody produces no
-    other signal. The persona's block and `scripts/ask-manager.sh` are two statements of
-    one invocation, so both are run against a recording stand-in for the bus and compared:
-    the queue, every option and its value, the channel directory each derives from the
-    run, and the frame each composes. Under a runs root that is set and one that is not,
-    because the derivation carries a default and a persona restating only the set case
-    would send a planner to whatever `runs` its working directory holds.
-
-    **`--config` is compared like everything else**, as the two ends of one identity. The
-    shim opens the file every launch hands the engine, read here off `scripts/onepipeline.sh`
-    rather than restated. The fallback opens the parse of that same file which the engine
-    recorded for the run it is asking on, so its `--config` document must be that record —
-    written here by hand, carrying a policy no real configuration would, so a fallback
-    reading anything else could not pass by coincidence. That the record really is that
-    file's parse is `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`'s, per launch shape.
-    Neither end may drift: a repointed `--bus-config`, a fallback that read another file,
-    and a fallback that passed no configuration at all each fail here.
+    whatever repository is being planned against, and a blocking question that reaches
+    nobody produces no other signal. So its fallback is run against a recording stand-in
+    for the bus and held to the engine's `ask`: one blocking `planner-question` frame of
+    source `proposal` on the `surfaces` queue of the run's channel directory — under a runs
+    root that is set and one that is not, because the derivation carries a default — under
+    the policy the engine recorded for the run, written here by hand so a fallback reading
+    anything else could not pass by coincidence.
+    `tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py` asks with the
+    fallback and with the adapter on a run `just orchestrate` really launched and compares
+    what the manager is handed.
     """
     snippet = fallback_snippet(TASK_TEMPLATE)
     bash = shutil.which("bash")
     assert bash is not None, "bash is not on this host's PATH"
 
-    persona_argv, persona_frame = _asked(
-        [bash, "-c", snippet], tmp_path / "persona", runs_dir=runs_dir
-    )
-    shim_argv, shim_frame = _asked([bash], tmp_path / "shim", runs_dir=runs_dir, shim=True)
+    argv, frame = _asked([bash, "-c", snippet], tmp_path / "persona", runs_dir=runs_dir)
 
-    persona_positional, persona_options = _invocation(persona_argv)
-    shim_positional, shim_options = _invocation(shim_argv)
-    assert persona_positional == shim_positional, (
-        f"{TASK_TEMPLATE.name}'s fallback asks `{' '.join(persona_positional)}` where "
-        f"{ASK_SCRIPT.name} asks `{' '.join(shim_positional)}`"
+    positional, options = _invocation(argv)
+    assert positional == ("ask", QUESTION_QUEUE), (
+        f"{TASK_TEMPLATE.name}'s fallback asks `{' '.join(positional)}`"
     )
-
-    handed = _handed_to_every_launch()
-    shim_config = Path(shim_options.pop("--config", ""))
-    assert shim_config.relative_to(tmp_path / "shim" / "checkout") == handed.relative_to(
-        REPO_ROOT
-    ), (
-        f"{ASK_SCRIPT.name} asks under {shim_config}, where every launch hands the engine "
-        f"{handed}; the shim and the run's own record are no longer one policy"
-    )
-    assert shim_config.read_bytes() == handed.read_bytes(), (
-        f"the mirror's {shim_config} is not a copy of {handed}, so this compares two policies"
-    )
-    asked_under = Path(persona_options.pop("--config", ""))
+    assert "--blocking" in options, options
+    root = Path(runs_dir) if runs_dir is not None else Path("runs")
+    assert options.get("--transport-dir") == str(root / ASK_PROBE_RUN / "channel"), options
+    asked_under = Path(options.get("--config", ""))
+    if not asked_under.is_absolute():
+        asked_under = tmp_path / "persona" / asked_under
     assert asked_under.is_file(), (
         f"{TASK_TEMPLATE.name}'s fallback asks under {asked_under}, which it did not write; "
         "a planner running it would ask under the bus's defaults rather than this run's policy"
@@ -341,18 +276,13 @@ def test_the_personas_fallback_asks_exactly_as_the_shim_does(
     assert json.loads(asked_under.read_text(encoding="utf-8")) == RECORDED_POLICY, (
         f"{TASK_TEMPLATE.name}'s fallback asks under "
         f"{asked_under.read_text(encoding='utf-8')!r}, not the policy the engine recorded "
-        f"for this run ({json.dumps(RECORDED_POLICY)}); the two sides read different "
-        f"configurations, and only one of them is {handed}"
+        f"for this run ({json.dumps(RECORDED_POLICY)})"
     )
-
-    assert persona_options == shim_options, (
-        f"{TASK_TEMPLATE.name}'s fallback passes {persona_options} where {ASK_SCRIPT.name} "
-        f"passes {shim_options}; the two have stopped stating one invocation"
-    )
-    assert json.loads(persona_frame) == json.loads(shim_frame), (
-        f"{TASK_TEMPLATE.name}'s fallback composes {persona_frame!r} where "
-        f"{ASK_SCRIPT.name} composes {shim_frame!r}"
-    )
+    assert json.loads(frame) == {
+        "kind": QUESTION_KIND,
+        "message": PLACEHOLDER_QUESTION,
+        "source": QUESTION_SOURCE,
+    }, f"{TASK_TEMPLATE.name}'s fallback composes {frame!r}"
 
 
 def test_the_personas_fallback_names_no_retired_request_path() -> None:

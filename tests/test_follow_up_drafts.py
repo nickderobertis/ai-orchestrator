@@ -13,15 +13,13 @@ Nothing below the module is doubled. The node a draft names is resolved against 
 processes — this test's own, and a child it starts — read out of the real `/proc`, and git
 state is read from real repositories in a temporary directory.
 
-The dispatch registry has a second reader, `scripts/supervision-readings.py`, which cannot
-import this package. The two are reconciled here by name and by answer: both read one
-registry this test writes for processes that exist.
+The registry names the draft reads are held to the installed engine by
+`tests/test_engine_contracts.py`.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import importlib.util
 import io
 import json
 import os
@@ -29,14 +27,12 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator.follow_up_drafts import Author, DispatchStamp, Draft, Refused
 from orchestrator.project_store import frontmatter
-from orchestrator.root import REPO_ROOT
 
 #: A body carrying every required heading, with a fenced block whose own `## ` line is code.
 BODY = (
@@ -462,63 +458,6 @@ def test_a_runs_root_carrying_a_control_character_names_no_registry(
     monkeypatch.setenv(drafts.RUNS_ROOT_ENV, f"{tmp_path}\nruns")
     assert drafts.runs_root() is None
     assert drafts.resolve_node(RUN, runs_root=None, pid=os.getpid()) == drafts.UNRESOLVED
-
-
-def _supervision_readings() -> ModuleType:
-    """`scripts/supervision-readings.py`, loaded by path: its name carries a hyphen."""
-    path = REPO_ROOT / "scripts" / "supervision-readings.py"
-    spec = importlib.util.spec_from_file_location("supervision_readings", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_both_readers_of_the_dispatch_registry_name_the_same_store() -> None:
-    """Every engine-owned name the two readers share is one value, not two memories of it."""
-    readings = _supervision_readings()
-    for shared in (
-        "DISPATCH_REGISTRY",
-        "DISPATCH_NODE",
-        "DISPATCH_PID",
-        "DISPATCH_STARTED",
-        "PROC_STAT_START",
-        "RUNS_ROOT_ENV",
-        "DEFAULT_RUNS_ROOT",
-    ):
-        assert getattr(drafts, shared) == getattr(readings, shared), (
-            f"orchestrator/follow_up_drafts.py and scripts/supervision-readings.py disagree "
-            f"about {shared}; one of them is reading a registry the engine does not write"
-        )
-
-
-@pytest.mark.parametrize("stale", [False, True], ids=["live", "stale"])
-def test_both_readers_of_the_dispatch_registry_give_the_same_answer(
-    tmp_path: Path, child: int, stale: bool
-) -> None:
-    """One registry, one process tree: the dispatch a process sits under is one answer.
-
-    The supervision reading also accepts an entry recording no start time, as unverified;
-    a draft does not, because it names a node permanently. So the registry here records
-    start times, which is what the engine writes, and on that the two must agree.
-    """
-    readings = _supervision_readings()
-    (tmp_path / RUN).mkdir()
-    (tmp_path / RUN / readings.LAUNCH_RECORD).write_text("{}", encoding="utf-8")
-    started = f"{drafts.PROC_STAT_START}1" if stale else _live_start(os.getpid())
-    _write_entry(tmp_path, RUN, "self.json", _entry(os.getpid(), "the-node", started))
-
-    by_process, _ = readings._dispatches(tmp_path)
-    supervised = readings._under_dispatch(child, by_process)
-    drafted = drafts.resolve_node(RUN, runs_root=tmp_path, pid=child)
-
-    if stale:
-        assert supervised is None
-        assert drafted == drafts.UNRESOLVED
-    else:
-        assert supervised is not None and supervised.startswith(f"{RUN}/the-node ")
-        assert drafted == "the-node"
-    assert readings._started(child) == drafts.process_started(child)
 
 
 def _git(cwd: Path, *arguments: str) -> None:

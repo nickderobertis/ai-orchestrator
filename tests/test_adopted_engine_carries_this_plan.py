@@ -431,6 +431,36 @@ CHANNEL_AND_RECORDS_LANDINGS = (
 )
 
 
+#: The three engine-side nodes of the scripts-audit plan. Together they make the engine
+#: own what this repository composed around it in scripts of its own: a harness-neutral
+#: stop guard, free space on `host` and `status`, and an `ask` verb; `publish-branch` and
+#: `repo-recover` verbs that draft the body the run path drafts; and a relink onto the
+#: onevcs and oneagentgraph releases whose `sweep` verbs report as JSON.
+#: `tests/unwatched/test_unwatched_and_stop_hook_e2e.py` drives the guard through the
+#: `Stop` hook, `tests/e2e/test_publish_branch_e2e.py` lands through `just publish-branch`,
+#: and `tests/e2e/test_sweep_e2e.py` reads both sweep reports.
+SCRIPTS_AUDIT_LANDINGS = (
+    Landing(
+        node="op-supervision-verbs",
+        change_request=437,
+        commit="b1bbb4f2edd580a7368fb053be1337bb810e3a3f",
+        did="a harness-neutral stop guard, free space on host and status, and an ask verb",
+    ),
+    Landing(
+        node="op-publication-verbs",
+        change_request=448,
+        commit="b117e4521b146b5daba63b482ef3eaf4bd85845b",
+        did="publish-branch and repo-recover verbs that draft the body the run path drafts",
+    ),
+    Landing(
+        node="op-relink-sweepers",
+        change_request=452,
+        commit="559b63b42192bbed2e51ab1bd383ee263816e33c",
+        did="relink the onevcs and oneagentgraph releases carrying the JSON sweep reports",
+    ),
+)
+
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -445,6 +475,7 @@ LANDINGS = (
     *WORKTREE_POOL_LANDINGS,
     *AGENT_VISIBILITY_LANDINGS,
     *CHANNEL_AND_RECORDS_LANDINGS,
+    *SCRIPTS_AUDIT_LANDINGS,
 )
 
 

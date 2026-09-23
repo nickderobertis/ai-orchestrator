@@ -1,21 +1,19 @@
 """A dispatched agent asks its manager over a real run's planner channel, and gets their answer.
 
-`scripts/ask-manager.sh` is the command `ORCHESTRATOR_ASK_MANAGER` names, and it is a shim:
-its three invocation forms become one `onemessagebus ask surfaces --blocking` over this
-host's `config/onemessagebus.yaml` and the run's own channel directory. Everything after the
-question is on the queue — the correlation it is bound by, the wait, and the one JSON line
-that answers — is the installed `onemessagebus` release's, and every rule it keeps (a
-timeout carries no ruling, a wait never draws another question's reply, a listener is
-re-armed rather than a question re-asked) is proven by that release's own suite, with the
-incidents behind each rule in its `docs/ask.md`. None of it is re-proved here.
+`scripts/ask-manager.sh` is the command `ORCHESTRATOR_ASK_MANAGER` names, and it is the
+engine's `onepipeline ask` and nothing else: its three invocation forms raise one
+`planner-question` on the run's `surfaces` queue, under the bus policy the run's launch
+record carries. Everything after the question is on the queue — the correlation it is bound
+by, the wait, and the one JSON line that answers — is the engine's and the linked bus's, and
+every rule it keeps is proven by their own suites. None of it is re-proved here.
 
 What these journeys prove is the **configuration**: that this host's wiring reaches those
 behaviours on a run `just orchestrate` really launched. The question an agent asks is the
 surface a manager's own `just channel-next` hands out, carrying the bus's correlation; the
-ruling `just channel-reply --correlation` sends is the answer the shim prints, and nothing
-else is; an unanswered question ends in the bus's named `timeout`; and a process that was
-never given a run is refused before anything is asked. The translation itself — argv, the
-frame on stdin, the answer passed through — is held against a recording stub by
+ruling `just channel-reply --correlation` sends is the answer the adapter prints, and
+nothing else is; an unanswered question ends in the bus's named `timeout`; and a process
+that was never given a run is refused before anything is asked. That the adapter passes
+its argv, stdin, answer and status through untouched is held by
 `tests/e2e/test_ask_manager_shim_e2e.py`.
 
 Only the paid model is doubled, at the `oneharness` seam, exactly as
@@ -79,8 +77,6 @@ INHERITED_ENVIRONMENT = (
     "ONEPIPELINE_CHANNEL_ASKER",
     "ONEPIPELINE_NODE_SCRATCH_DIR",
     "ORCHESTRATOR_ASK_MANAGER",
-    "ORCHESTRATOR_ASK_MANAGER_NODE",
-    "ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -265,9 +261,8 @@ def _ask(
     """
     environment = dict(asked.environment)
     environment["ONEPIPELINE_RUN_ID"] = asked.run
-    environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(window)
     asking = subprocess.Popen(  # noqa: S603 - the real shim, as an agent runs it
-        [str(ASK_MANAGER), *arguments],
+        [str(ASK_MANAGER), "--timeout", str(window), *arguments],
         cwd=cwd,
         env=environment,
         text=True,
@@ -442,7 +437,7 @@ def test_each_way_of_asking_puts_one_question_to_the_manager_and_returns_only_th
 ) -> None:
     """The round trip, through every form, from outside this checkout.
 
-    Everything between the agent and the manager is real: the shim, the installed bus over
+    Everything between the agent and the manager is real: the adapter, the engine's ask over
     `config/onemessagebus.yaml`, the run's channel, `just channel-next`, and `just
     channel-reply --correlation`. What is asserted is the whole of what the configuration
     owes each side.
@@ -451,8 +446,8 @@ def test_each_way_of_asking_puts_one_question_to_the_manager_and_returns_only_th
     it carries the correlation their reply binds by — `channel-next` and the shim reach
     the same queue under the same layout, or nothing would be handed out at all. The agent
     is handed exactly one line: the bus's `reply` answer, carrying that correlation and the
-    envelope the manager sent, at exit 0. Its stderr leads with that same correlation,
-    which is the bus announcing the question was queued, and nothing else is there.
+    envelope the manager sent, at exit 0. Its stderr is the verb's two announcements — that
+    same correlation as the question is queued, and the window it waits — and nothing else.
 
     And the ask leaves nothing behind for the next reader: once it is answered, the run
     hands out no further surface.
@@ -487,9 +482,10 @@ def test_each_way_of_asking_puts_one_question_to_the_manager_and_returns_only_th
     assert record is not None and record["reply"] == json.loads(ruling(ANSWER)), (
         f"the ask returned something other than the envelope the manager sent:\n{out}"
     )
-    assert err.splitlines() == [f"correlation: {correlation}"], (
-        f"a successful ask reported something beyond the correlation it was queued under:\n{err}"
-    )
+    assert err.splitlines() == [
+        f"correlation: {correlation}",
+        f"waiting up to {ANSWERED_WINDOW_SECONDS} seconds for the reply",
+    ], f"a successful ask reported something beyond the correlation it was queued under:\n{err}"
 
     left = _drained(asked)
     assert not left, f"an answered ask left surfaces on run {asked.run}'s channel: {left}"
@@ -599,10 +595,9 @@ def test_an_unset_run_is_refused_by_name_rather_than_guessed_at(asked: Asked) ->
     """
     environment = dict(asked.environment)
     environment.pop("ONEPIPELINE_RUN_ID", None)
-    environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(SHORT_WINDOW_SECONDS)
 
     refused = subprocess.run(  # noqa: S603 - the real shim, with no run exported
-        [str(ASK_MANAGER), QUESTION],
+        [str(ASK_MANAGER), "--timeout", str(SHORT_WINDOW_SECONDS), QUESTION],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -634,42 +629,39 @@ class Refusal(NamedTuple):
     names: str
 
 
-#: Every way of asking the shim itself refuses before the bus is spawned. Each is a state a
-#: dispatched agent can genuinely be in — a run computed badly, a question that came out
-#: empty, a file that is not there, a window that is not a number — and each has to say
-#: which, because the agent reading the refusal is the one that has to repair it.
+#: Every way of asking the engine's `ask` refuses before anything is raised. Each is a
+#: state a dispatched agent can genuinely be in — a run computed badly, a question that
+#: came out empty, a file that is not there, a window that is not a number, a run with no
+#: launch record — and each has to say which, because the agent reading the refusal is the
+#: one that has to repair it. The adapter decides none of them; the verb does.
 REFUSALS = (
     Refusal("an empty run", {"ONEPIPELINE_RUN_ID": ""}, ("Which way?",), "is not set"),
-    Refusal("a blank run", {"ONEPIPELINE_RUN_ID": "   "}, ("Which way?",), "names no run"),
+    Refusal("a blank run", {"ONEPIPELINE_RUN_ID": "   "}, ("Which way?",), "is not set"),
     # Arrives from the environment a dispatch was started with, which is somebody else's to
     # write, and becomes part of the channel directory's path.
     Refusal(
-        "a climbing run", {"ONEPIPELINE_RUN_ID": "../elsewhere"}, ("Which way?",), "names no run"
+        "a climbing run", {"ONEPIPELINE_RUN_ID": "../elsewhere"}, ("Which way?",), "not a run id"
     ),
-    Refusal("an empty question", {}, ("   ",), "question is empty"),
-    Refusal("an unreadable file", {}, ("--file", "/nonexistent/question.txt"), "is not readable"),
-    Refusal("two files", {}, ("--file", "one.txt", "two.txt"), "exactly one path"),
-    Refusal("an unknown option", {}, ("--why",), "not an option"),
-    Refusal(
-        "a window that is not seconds",
-        {"ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS": "soon"},
-        ("Which way?",),
-        "not a number of seconds",
-    ),
+    Refusal("an empty question", {}, ("   ",), "is blank"),
+    Refusal("an unreadable file", {}, ("--file", "/nonexistent/question.txt"), "could not be read"),
+    Refusal("a file beside words", {}, ("--file", "one.txt", "two.txt"), "cannot be used with"),
+    Refusal("an unknown option", {}, ("--why",), "unexpected argument"),
+    Refusal("a window that is not seconds", {}, ("--timeout", "soon", "Which way?"), "'soon'"),
+    Refusal("a run with no launch record", {}, ("Which way?",), "launch.json"),
 )
 
 
 @pytest.mark.parametrize("refusal", REFUSALS, ids=lambda row: row.what)
-def test_a_question_that_cannot_reach_a_manager_names_its_cause_and_a_remedy(
+def test_a_question_that_cannot_reach_a_manager_names_its_cause(
     tmp_path: Path, refusal: Refusal
 ) -> None:
-    """Every refusal exits 2, is silent on stdout, and says what to do about it.
+    """Every refusal exits 2, is silent on stdout, and names its cause.
 
     An agent asking a question is already stuck; a refusal it cannot act on leaves it stuck
-    with one more thing to work out. So each names what is wrong *and* the repair, on one
-    `ask-manager:` line, and none leaves anything on stdout — a caller reads stdout as the
-    answer. The runs root named here holds the run's channel directory, so a refusal that
-    let the ask through would have somewhere to ask; nothing may be written there.
+    with one more thing to work out. So each names what is wrong, and none leaves anything
+    on stdout — a caller reads stdout as the answer. The runs root named here holds the
+    run's channel directory, so a refusal that let the ask through would have somewhere to
+    ask; nothing may be written there.
     """
     runs = tmp_path / "runs"
     channel = runs / "a-run" / "channel"
@@ -681,7 +673,6 @@ def test_a_question_that_cannot_reach_a_manager_names_its_cause_and_a_remedy(
         {
             "ONEPIPELINE_RUNS_DIR": str(runs),
             "ONEPIPELINE_RUN_ID": "a-run",
-            "ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS": str(SHORT_WINDOW_SECONDS),
             **refusal.overrides,
         }
     )
@@ -702,10 +693,6 @@ def test_a_question_that_cannot_reach_a_manager_names_its_cause_and_a_remedy(
         f"a refused question printed something a caller would read as an answer:\n{refused.stdout}"
     )
     assert refusal.names in refused.stderr, refused.stderr
-    reported = [line for line in refused.stderr.splitlines() if line.startswith("ask-manager: ")]
-    assert reported and all("; " in line for line in reported), (
-        f"the refusal states no remedy beside its cause:\n{refused.stderr}"
-    )
     looked = subprocess.run(
         [
             "onemessagebus",

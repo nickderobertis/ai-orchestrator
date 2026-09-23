@@ -11,9 +11,9 @@ llmlint: ignore-file[tests_mirror_real_usage] Composing the record is this file'
 purpose, and no real launch can be asked for the conditions it is composed for: a launch
 whose process is gone beside a dispatch whose is not, a registry entry whose recorded
 start time is not its live process's, one carrying no start time, and one that is not the
-JSON the engine writes. Only the record is composed; the recipes, the engine and the
-rendezvous that read it are real. That it resembles what a launch writes is held rather
-than assumed — `tests/e2e/test_supervision_readings_e2e.py` renders both views over a run
+JSON the engine writes. Only the record is composed; the recipes and the engine that
+read it are real. That it resembles what a launch writes is held rather
+than assumed — `tests/host_views/test_status_and_host_views_e2e.py` renders both views over a run
 root `just orchestrate` wrote, and `tests/test_engine_contracts.py` reconciles every
 field of every record here against the installed engine's own declaration of it. The
 second is what the first cannot give: a stale key is read past in silence, which is what

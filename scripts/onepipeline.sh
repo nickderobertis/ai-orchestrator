@@ -50,8 +50,8 @@
 # `tests/test_engine_contracts.py` holds the pin.
 #
 # A launch also has to carry ORCHESTRATOR_ASK_MANAGER, the path of
-# `scripts/ask-manager.sh`, the shim a dispatched agent asks through `onemessagebus ask`
-# with. It is established here for the same reason the two above
+# `scripts/ask-manager.sh`, which a dispatched agent asks its manager through — the
+# engine's own `onepipeline ask`. It is established here for the same reason the two above
 # are: it reaches a dispatch only by inheritance, so the launching process is the
 # last place that can put it there, and `start` and `adopt` are every shape of launch
 # this repository has. `scripts/ask-manager-env.sh` owns the path and the refusal.
@@ -108,6 +108,21 @@ case "${1:-}" in
         export_ask_manager onepipeline || exit $?
         ;;
 esac
+
+# The two landing verbs are no launch, but spend a drafting turn under
+# `oneharness.pr-author.toml`, whose chain's `env_from` names the same identity
+# indirections a dispatch's do, and publish through the same merge-queue lock a
+# dispatch's publication waits on — so they carry both, and nothing else a launch does.
+if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ]; then
+    # shellcheck source=scripts/dispatch-env.sh
+    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+    . "$script_dir/dispatch-env.sh"
+    export_dispatch_environment onepipeline || exit $?
+    # shellcheck source=scripts/lock-timeout.sh
+    # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+    . "$script_dir/lock-timeout.sh"
+    export_lock_timeout onepipeline || exit $?
+fi
 
 # What a plan is put in front of a person as is its design document, and their approval
 # of that document is what gates dispatch. So a launch asks before it dispatches: this is

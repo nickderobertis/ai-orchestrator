@@ -66,8 +66,6 @@ INHERITED = (
     "ONEPIPELINE_CHANNEL_ASKER",
     "ONEPIPELINE_NODE_SCRATCH_DIR",
     "ORCHESTRATOR_ASK_MANAGER",
-    "ORCHESTRATOR_ASK_MANAGER_NODE",
-    "ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS",
     "ONEMESSAGEBUS_CONFIG",
     "ONEMESSAGEBUS_TRANSPORT_DIR",
     "CLAUDE_CODE_SESSION_ID",
@@ -218,7 +216,6 @@ def _asked(command: list[str], launched: Launched, scratch: Path) -> Question:
             **launched.environment,
             "ONEPIPELINE_RUN_ID": launched.run,
             "ONEPIPELINE_NODE_SCRATCH_DIR": str(scratch),
-            "ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS": str(WINDOW_SECONDS),
         },
         capture_output=True,
         text=True,
@@ -266,7 +263,9 @@ def test_the_personas_fallback_lands_the_question_the_shim_lands(
         tmp_path / "persona-scratch",
     )
     shim = _asked(
-        [bash, str(ASK_SCRIPT), PLACEHOLDER_QUESTION], launched, tmp_path / "shim-scratch"
+        [bash, str(ASK_SCRIPT), "--timeout", str(WINDOW_SECONDS), PLACEHOLDER_QUESTION],
+        launched,
+        tmp_path / "shim-scratch",
     )
 
     assert persona == shim, (

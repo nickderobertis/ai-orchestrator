@@ -14,10 +14,11 @@ import json
 from orchestrator.root import REPO_ROOT
 
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
-#: The checked-in script the `Stop` hook runs, named relative to this checkout the way
-#: the registration names it — through `$CLAUDE_PROJECT_DIR`, which is what makes one
-#: registration work from every worktree of this repository.
-STOP_HOOK = "scripts/stop-unwatched-guard.sh"
+#: The `Stop` hook's command: the engine's stop guard in its own docs page's
+#: Claude Code wiring, named by path out of this checkout's locked install — through
+#: `$CLAUDE_PROJECT_DIR`, which is what makes one registration work from every worktree of
+#: this repository — with nothing of this repository's between the harness and the verb.
+STOP_HOOK = '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard --format claude-code'
 REQUIRED = (
     "Bash(just monitor:*)",
     "Bash(just repos:*)",
@@ -73,13 +74,10 @@ def test_allowlist_grants_no_blanket_wildcard() -> None:
 def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     """AGENTS.md's watch rule names this hook as what enforces its first property.
 
-    Registered beside the `SessionStart` hook already there and running the checked-in
-    script rather than an inline command, for the reason that hook is written that way:
-    what the hook does is a file in this repository, reviewed and tested like everything
-    else here, and a command line in a settings file is neither. The bound is its own
-    because the hook has one of its own — it gives the verb a shorter one and, when that
-    runs out, ends the turn with a warning that it went unguarded — so this is the outer
-    bound the harness enforces past it.
+    Registered beside the `SessionStart` hook already there, as exactly the engine's
+    documented wiring and nothing more, and with a bound of its own: a killed hook is a
+    stop that was never guarded, so the harness's bound is kept as the page keeps it.
+    `tests/unwatched/test_unwatched_and_stop_hook_e2e.py` runs this command.
     """
     settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
     hooks = settings["hooks"]
@@ -87,21 +85,18 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     registered = hooks.get("Stop")
     assert registered, "no Stop hook is registered, so nothing asks what is unwatched"
     commands = [
-        command["command"]
+        command
         for matcher in registered
         for command in matcher["hooks"]
         if command["type"] == "command"
     ]
-    assert any(STOP_HOOK in command for command in commands), (
-        f"no registered Stop hook runs {STOP_HOOK}: {commands}"
+    assert [command["command"] for command in commands] == [STOP_HOOK], (
+        f"the Stop hook is not the engine's stop guard wired as its page gives: {commands}"
     )
-    assert (REPO_ROOT / STOP_HOOK).is_file(), f"{STOP_HOOK} is registered and is not there"
-    bounds = [
-        command.get("timeout")
-        for matcher in registered
-        for command in matcher["hooks"]
-        if STOP_HOOK in command.get("command", "")
-    ]
+    assert (REPO_ROOT / ".venv" / "bin" / "onepipeline").is_file(), (
+        "the Stop hook names this checkout's locked engine, and there is none installed"
+    )
+    bounds = [command.get("timeout") for command in commands]
     assert all(isinstance(bound, int) and bound > 0 for bound in bounds), (
         f"the Stop hook is registered without a bound of its own: {bounds}"
     )

@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from fake_backend import AGENT_DELAY_ENV, ASK_QUESTION_ENV, ASK_RECORD_ENV
+from fake_backend import AGENT_DELAY_ENV, ASK_QUESTION_ENV, ASK_RECORD_ENV, ASK_TIMEOUT_ENV
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import project_from_plan
 
@@ -220,7 +220,7 @@ def live_run(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment[AGENT_DELAY_ENV] = str(WORKER_HELD_SECONDS)
     environment[ASK_QUESTION_ENV] = ASKED
     environment[ASK_RECORD_ENV] = str(tmp_path / "asked.json")
-    environment["ORCHESTRATOR_ASK_MANAGER_TIMEOUT_SECONDS"] = str(QUESTION_HELD_SECONDS)
+    environment[ASK_TIMEOUT_ENV] = str(QUESTION_HELD_SECONDS)
     plan = tmp_path / "watch-live.plan.json"
     plan.write_text(json.dumps(_TWO_NODES), encoding="utf-8")
     project = project_from_plan(plan)

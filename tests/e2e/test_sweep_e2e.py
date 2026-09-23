@@ -1,26 +1,20 @@
-"""`just sweep` reclaims every family this host accumulates, and says what it did not.
+"""`just sweep` runs the two published sweep verbs, and each says what it did not reach.
 
-Nothing here is doubled. The recipe, the wrapper, and both published verbs are the real
-ones; what makes that safe is isolation rather than substitution — `ONEAGENTGRAPH_STATE_DIR`,
-`TMPDIR`, and `ONEVCS_HOME` put every family this run judges inside `tmp_path`, and
-`AI_ORCHESTRATOR_HOME` does the same for the legacy worktree root the trailer reports on.
-`TMPDIR` carries twice as much weight as it used to: it is both where `oneagentgraph`
-writes the family it owns and the host scratch root the trailer now measures, so a
-journey that let it point at the real `/tmp` would report on 83 GiB of this host.
+The recipe runs `onevcs sweep` and then `oneagentgraph sweep`, each with the caller's
+options and a four-hour floor when the caller names none, prints both verbs' own
+reports, and fails when either verb did. Nothing is parsed: every family either verb
+leaves alone is named in that verb's own "Families not examined" section with who owns
+it, and these journeys hold both installed verbs' `--format json` to that contract — the
+field set, and every `not_examined[]` entry carrying a non-empty `owner` — over a state
+root holding a pool slot and a preserved unpublished branch, the two families a wrapper
+here once had to name itself.
 
-A sweep with nothing to act on is a short form of two sentences, so several journeys
-below rehearse with `--dry-run` first and then sweep for real: the rehearsal is where
-the reports are read, and the real pass is where the disk and the short form are.
-`--dry-run` keeps its report because it removes nothing and is asked in order to be
-answered.
-
-Several journeys remove for real rather than rehearsing, because their claims are about
-what is left on disk. The one that holds a directory open holds it with an actual
-process — a child that takes the exclusive `owner.lock` the sweeper's ownership proof
-consults and then sits there — since a stub would prove only that this suite can write a
-file the sweeper reads. It is preceded by a rehearsal whose only job is to prove the
-isolation took: a real removal pass is worth running only once the report has named
-`tmp_path` as the roots it will sweep.
+Nothing is doubled. The recipe and both published verbs are the real ones; what makes
+that safe is isolation rather than substitution — `ONEAGENTGRAPH_STATE_DIR`, `TMPDIR` and
+`ONEVCS_HOME` put every family this run judges inside `tmp_path`. The pool slot is one a
+real `onevcs session open` placed and `session close` returned, and the preserved branch
+is a real commit its origin does not have. What each recipe argument reaches is the
+delegated-recipes table's row; what the verbs do with it is proven here.
 
 What the command covers and why is docs/orchestration.md, "The recorded run".
 
@@ -31,187 +25,63 @@ is a follow-up.
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] Same site, same
 follow-up: this module declares no marker-based tier and the project it sits in is
 pre-existing.
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] These journeys are not
+expensive: every one runs on local state under `tmp_path` in under half a second
+(`pytest --durations` over the module), spending no harness turn, no launch and no
+network, so an edge of their own would save their tier nothing it pays for.
+llmlint: ignore-file[tests_mirror_real_usage] Two states here have no interface that
+produces them: a `temp`-family directory whose owner died or is alive — the journey that
+holds one alive does so with a real process taking the real lock — and a `workspaces` that
+is a file, which is what a half-provisioned onevcs state root looks like and the one way to
+make the real verb refuse. The pool slot and the preserved branch are produced through
+`onevcs register`, `session open` and `session close` and real git.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import re
-import shutil
 import subprocess
 import textwrap
-import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import TypedDict, cast
 
 import pytest
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: The wrapper whose trailer is the subject of most of this module.
-WRAPPER = REPO_ROOT / "scripts" / "sweep.sh"
+#: The installed verbs, named by path so a journey measures the release this checkout
+#: pins rather than whichever copy another checkout left on the search path.
+ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"
+ONEAGENTGRAPH = REPO_ROOT / ".venv" / "bin" / "oneagentgraph"
 
-
-def _declared(constant: str) -> str:
-    """One constant's value, read out of the wrapper itself.
-
-    Read rather than restated, because a restatement would let the wrapper and this
-    module drift apart while both stayed green — and it is the wrapper's claim, not
-    this module's, that the journeys below hold against what the verbs report.
-    """
-    for line in WRAPPER.read_text().splitlines():
-        name, separator, value = line.partition("=")
-        if name == constant and separator:
-            return value.strip("'")
-    raise AssertionError(f"{WRAPPER.name} declares no {constant}")
-
-
-def _declared_families(constant: str) -> tuple[str, ...]:
-    """The families the trailer claims for one verb, as the wrapper declares them."""
-    return tuple(family.strip() for family in _declared(constant).split(","))
-
-
-#: The families each verb owns, as the trailer claims them. Held against what the
-#: installed verbs report examining, so a release that adds or renames a family fails
-#: here rather than leaving the trailer describing the previous one.
-ONEAGENTGRAPH_FAMILIES = _declared_families("ONEAGENTGRAPH_FAMILIES")
-ONEVCS_FAMILIES = _declared_families("ONEVCS_FAMILIES")
-
-#: Every family this recipe composes, as its own short forms name them. Composed from
-#: the families declared above rather than pasted, so a release that renames one fails
-#: here too instead of leaving the short form describing the previous release.
-FAMILIES = f"oneagentgraph {', '.join(ONEAGENTGRAPH_FAMILIES)}; onevcs {', '.join(ONEVCS_FAMILIES)}"
-
-
-def _declared_block(constant: str) -> list[str]:
-    """One multi-line single-quoted constant's value, read out of the wrapper itself.
-
-    Separate from `_declared` because that one reads a value off one line and this one
-    is a sentence spanning several: the wrapper writes it with `printf`, so what an
-    operator sees is these lines with the first indented under the verdict above it.
-    """
-    text = WRAPPER.read_text()
-    opening = f"\n{constant}='"
-    start = text.find(opening)
-    if start < 0:
-        raise AssertionError(f"{WRAPPER.name} declares no multi-line {constant}")
-    start += len(opening)
-    end = text.index("'", start)
-    return text[start:end].splitlines()
-
-
-#: The clause every one-line verdict ends with, and the paragraph the long form carries
-#: instead. Read rather than restated, for the reason `_declared` gives: a successful
-#: sweep is one line, so the clause is part of the verdict rather than a note under it.
-FREE_SPACE_CLAUSE = _declared("FREE_SPACE_CLAUSE")
-
-#: The family that is not a directory and that no sweep examines: the preserved
-#: unpublished branches holding the workspaces the verbs above retained. It is named in
-#: the one-line verdicts as well as in the trailer, because the one line is what an
-#: operator reads on almost every sweep.
-PRESERVED_BRANCH_CLAUSE = _declared("PRESERVED_BRANCH_CLAUSE")
-#: The other family no sweep examines, named in the one line for the opposite reason:
-#: a warm worktree slot is kept on purpose, and the clause names the two verbs that own
-#: it — the read, and the prune that empties the idle ones.
-POOL_CLAUSE = _declared("POOL_CLAUSE")
-#: Both standing clauses, in the order every one-line verdict carries them.
-STANDING_CLAUSES = f"{PRESERVED_BRANCH_CLAUSE}; {POOL_CLAUSE}"
-FREE_SPACE_LINES = [
-    f"    {line}" if index == 0 else line
-    for index, line in enumerate(_declared_block("FREE_SPACE_NOTE"))
-]
-
-#: The two readings that used to be one sentence. Nothing reclaimed with candidates
-#: examined means every candidate was live or within retention — the sweep working —
-#: and nothing reclaimed with none examined means there was nothing to judge. A host
-#: filling up looks like the first and reads like the second.
-NOTHING_EXAMINED = (
-    f"just sweep: nothing reclaimed — no candidate was examined; every family ({FAMILIES}) "
-    f"was empty; {STANDING_CLAUSES}; {FREE_SPACE_CLAUSE}."
+#: The fields both verbs' JSON reports carry, as the sweeper nodes of the plan that
+#: retired this repository's own composition state them.
+REPORT_FIELDS = frozenset(
+    {"schema_version", "verb", "dry_run", "min_age_hours", "examined", "not_examined", "totals"}
 )
 
+#: Each installed verb's whole field set: the contract's fields and the ones each adds
+#: beyond it. Held by equality, so a field either release adds or drops fails here by
+#: name rather than passing through a restatement nobody re-reads.
+VERB_FIELDS = {
+    "onevcs": REPORT_FIELDS | {"reclaimed", "retained", "root", "session_records"},
+    "oneagentgraph": REPORT_FIELDS | {"reclaimed", "retained"},
+}
 
-def nothing_reclaimed(examined: int) -> str:
-    """The short form for a sweep that judged candidates and could take none of them."""
-    return (
-        f"just sweep: nothing reclaimed — {examined} candidate(s) examined across every "
-        f"family ({FAMILIES}), all live or within retention; {STANDING_CLAUSES}; "
-        f"{FREE_SPACE_CLAUSE}."
-    )
+#: The families onevcs names as not examined over an identity holding a pool and a
+#: registered checkout: the two this repository's retired wrapper used to name itself.
+OWNED_ELSEWHERE = frozenset({"pool", "preserved-branches"})
 
-
-def reclaimed(taken: int, examined: int) -> str:
-    """The short form for a sweep that took something and left nothing to act on."""
-    return (
-        f"just sweep: reclaimed {taken} of {examined} candidate(s) examined — every "
-        f"family examined: {FAMILIES}; {STANDING_CLAUSES}; {FREE_SPACE_CLAUSE}."
-    )
-
-
-def short_form(verdict: str) -> list[str]:
-    """The whole of what the composition writes when there is nothing to act on: one line."""
-    return [verdict]
-
-
-#: Every section heading of the long form — both verbs' and the trailer's — which the
-#: composition prints only when something is left for an operator to act on.
-SECTIONS = (
-    "=== oneagentgraph sweep — the scratch a dispatch leaves behind ===",
-    "=== onevcs sweep — the workspaces a publication leaves behind ===",
-    "=== just sweep — what this run looked at ===",
-)
-
-#: The floor the recipe passes when the caller names none. It is the recipe's own
-#: choice rather than either verb's default, so the journeys below ask both verbs
-#: whether they take it and whether they then apply it.
-RECIPE_DEFAULT_AGE = re.compile(r"This recipe passes (\d+) when you name none")
-
-#: The one number the composed help restates that neither verb owns: the age floor
-#: both of them default to when nobody passes one. Matched against what each installed
-#: verb declares, below.
-DEFAULT_AGE_CLAIM = re.compile(r"Their own default is (\d+),")
-
-#: The prefix `oneagentgraph` gives the scratch it writes under `TMPDIR`. A directory
-#: without it is not in the `temp` family and is not a candidate — which is what makes
-#: everything else under that root the family the trailer reports on and nothing
-#: reclaims.
+#: The prefix `oneagentgraph` writes its `temp` family under; a directory without it is
+#: not a candidate.
 TEMP_FAMILY_PREFIX = "oneagentgraph-"
 
-#: A real `uv` lock, of the shape `uv run` takes in that root on the way to each verb —
-#: so no sweep can observe a root without one. A lock is the only thing besides an
-#: examined family left out of the count, and the journeys below hold every part of
-#: that: this one out of the count, any other loose file in it, this one's bytes still
-#: in the size, and the exclusion named in the report rather than only in the source.
-UV_LOCK_TRANSIENT = "uv-eff31e9f3b703349.lock"
-
-#: The pattern the wrapper excludes, as the wrapper declares it. The report has to name
-#: this: an exclusion an operator cannot read is a count of part of the root reading as
-#: a count of the root, which is the all-clear-shaped answer the trailer exists to stop
-#: giving one root up.
-UV_LOCK_PATTERN = _declared("UV_LOCK_TRANSIENT")
-
-#: How many directories under the pre-adoption worktree root the entry reads out one at
-#: a time before folding the rest into a tally by class. Read from the wrapper for the
-#: reason `_declared` gives: the fold is what the journey below is about, and a
-#: restatement would let the two drift apart while both stayed green.
-NAMED_DIRECTORIES = int(_declared("WORKTREE_NAMED_DIRECTORIES"))
-
-#: An entry under the host scratch root shaped like the one that really fills this
-#: host: `nx` writes one of these per invocation, never reuses one, and never removes
-#: one, and 3,646 of them were 75 GiB of the 83 GiB in `/tmp` while every sweep
-#: reported success. The trailing id is what makes them read as thousands of unrelated
-#: producers, and folding it is what the trailer's name groups are for.
-NX_CACHE_FAMILY = "nx-native-file-cache-"
-
-#: The file the sweeper's ownership proof consults, and the two facts it records: the
-#: owner's pid and the kernel's start token for it. A recycled pid is why the token is
-#: there, and an exclusive lock on this file is what a live owner holds.
+#: The file the sweeper's ownership proof consults, and a pid no process on this host
+#: has: its directory is the one that must be reclaimed, so that a journey asserting the
+#: held one survived is not passing because nothing was swept at all.
 OWNER_LOCK = "owner.lock"
-
-#: A pid no process on this host has. Its directory is the one that must be reclaimed,
-#: so that a journey asserting the held one survived is not passing because nothing was
-#: swept at all.
 DEAD_OWNER = "999999 1\n"
 
 #: Written by the holder below: it takes the lock, records itself, and says so. The
@@ -238,37 +108,28 @@ HOLDER = textwrap.dedent(
 )
 
 
-def _age(path: Path, hours: float) -> None:
-    """Move `path` and everything under it that many hours into the past.
-
-    Both verbs judge an age floor from what is on disk, so a journey about the floor
-    has to move the disk rather than the clock: nothing here is allowed to substitute
-    either verb's idea of now.
-    """
-    when = time.time() - hours * 3600
-    for target in (path, *path.rglob("*")):
-        os.utime(target, (when, when))
-
-
-def _git(*arguments: str, cwd: Path | None = None) -> None:
+def _git(*arguments: str, cwd: Path | None = None) -> str:
     """One git command, with an identity so a commit works under any host config."""
-    subprocess.run(
+    return subprocess.run(
         ["git", "-c", "user.email=sweep@example.invalid", "-c", "user.name=sweep", *arguments],
         cwd=cwd,
         check=True,
         capture_output=True,
-    )
+        text=True,
+        timeout=e2e_timeout(60),
+    ).stdout
 
 
-class Borrowed(NamedTuple):
-    """A worktree under the pre-adoption root and the checkout that lent it.
+class SweepReport(TypedDict):
+    """The fields of a sweep verb's `--format json` report these journeys read."""
 
-    Named rather than a pair, because every journey below reads both and which is which
-    is the whole distinction the reading draws.
-    """
-
-    tree: Path
-    lender: Path
+    schema_version: int
+    verb: str
+    dry_run: bool
+    min_age_hours: float
+    examined: list[dict[str, object]]
+    not_examined: list[dict[str, str]]
+    totals: dict[str, int]
 
 
 class Host:
@@ -279,7 +140,6 @@ class Host:
         self.runs = tmp_path / "oneagentgraph-state"
         self.temp = tmp_path / "tmp"
         self.onevcs_home = tmp_path / "onevcs-home"
-        self.worktrees = tmp_path / "ai-orchestrator-home" / "worktrees"
         self.runs.mkdir(parents=True)
         self.temp.mkdir(parents=True)
         (self.onevcs_home / "workspaces").mkdir(parents=True)
@@ -291,180 +151,58 @@ class Host:
             "ONEAGENTGRAPH_STATE_DIR": str(self.runs),
             "TMPDIR": str(self.temp),
             "ONEVCS_HOME": str(self.onevcs_home),
-            "AI_ORCHESTRATOR_HOME": str(self.worktrees.parent),
         }
 
-    def scratch(self, name: str, *, held: bool, age_hours: float = 0, payload: int = 4096) -> Path:
+    def onevcs(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(ONEVCS), *arguments],
+            cwd=self.root,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=e2e_timeout(120),
+        )
+
+    def identity_with_a_pool_slot_and_a_preserved_branch(self) -> Path:
+        """A registered checkout holding an unpublished branch, and one warm pool slot.
+
+        Every piece is made by the tool that owns it: the origin and the checkout by
+        git, the registration by `onevcs register`, and the slot by a real `onevcs
+        session open` placed on the pool and `session close` returning it — so the
+        state root is one onevcs itself would recognise, not an outline of one.
+        """
+        origin = self.root / "origin.git"
+        _git("init", "--quiet", "--bare", "--initial-branch=main", str(origin))
+        checkout = self.root / "project"
+        _git("clone", "--quiet", str(origin), str(checkout))
+        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=checkout)
+        _git("push", "--quiet", "origin", "HEAD:main", cwd=checkout)
+        _git("checkout", "--quiet", "-b", "preserved", cwd=checkout)
+        _git("commit", "--quiet", "--allow-empty", "-m", "unpublished", cwd=checkout)
+        assert _git("log", "--oneline", "origin/main..preserved", cwd=checkout).strip(), (
+            "the preserved branch carries no commit its origin lacks"
+        )
+
+        registered = self.onevcs("register", str(checkout))
+        assert registered.returncode == 0, registered.stderr
+        opened = self.onevcs("session", "open", str(checkout), "--pool", "1")
+        assert opened.returncode == 0, opened.stderr
+        session = json.loads(opened.stdout)
+        assert "/pool/" in session["worktree"], (
+            f"the session was not placed on a pool slot: {session}"
+        )
+        closed = self.onevcs("session", "close", session["token"])
+        assert closed.returncode == 0, closed.stderr
+        return checkout
+
+    def scratch(self, name: str, *, held: bool) -> Path:
         """One `temp`-family directory, with an owner that is either alive or gone."""
         directory = self.temp / f"{TEMP_FAMILY_PREFIX}{name}"
         directory.mkdir()
-        (directory / "payload").write_bytes(b"\0" * payload)
+        (directory / "payload").write_bytes(b"\0" * 4096)
         if not held:
             (directory / OWNER_LOCK).write_text(DEAD_OWNER)
-        if age_hours:
-            _age(directory, age_hours)
-        return directory
-
-    def loose_file(self, name: str, *, payload: int = 4096) -> Path:
-        """One file directly under the host scratch root, belonging to no verb here.
-
-        `uv` writes one of these — `uv-<hash>.lock` — into this root on the way to
-        every sweep, so this is not a hypothetical shape.
-        """
-        path = self.temp / name
-        path.write_bytes(b"\0" * payload)
-        return path
-
-    def unowned(self, name: str, *, payload: int = 4096) -> Path:
-        """One entry under the host scratch root that no verb this recipe composes owns.
-
-        Deliberately unprefixed: measured on the adopted release, `oneagentgraph`
-        counts a directory beside its own in the `temp` family's directory total and
-        then judges it by nothing — neither reclaiming it nor retaining it with a
-        reason — so an entry shaped like this belongs to no sweeper here. That is the
-        whole of what the trailer's new family is made of.
-        """
-        directory = self.temp / name
-        directory.mkdir()
-        (directory / "payload").write_bytes(b"\0" * payload)
-        return directory
-
-    def _lender(self) -> Path:
-        """The checkout a run clone borrows its objects from, cut once per host."""
-        lender = self.root / "lender"
-        if not lender.exists():
-            _git("init", "--quiet", str(lender))
-            _git("commit", "--quiet", "--allow-empty", "-m", "lender", cwd=lender)
-        return lender
-
-    def workspace(
-        self,
-        session: str,
-        *,
-        finished: bool,
-        family: str = "publications",
-        age_hours: float = 0,
-    ) -> Path:
-        """One run root shaped as `onevcs` cuts one — really, not just in outline.
-
-        A tree that merely looks the part is retained: onevcs proves a workspace is its
-        own from the run clone inside it and refuses one whose repository borrows no
-        lender's objects, so the clone here is a real `git clone --shared`, which is
-        what a run clone is. `finished` is the other half of that proof — a gate
-        verdict under `gate-logs` is what says the publication got to the end — and a
-        root without one is retained with that reason.
-        """
-        root = self.onevcs_home / "workspaces" / family / f"{session}-1a2b3c-18cd0-0"
-        (root / "worktree").mkdir(parents=True)
-        _git("clone", "--quiet", "--shared", str(self._lender()), str(root / "clone"))
-        if finished:
-            gate = root / "gate-logs" / session
-            gate.mkdir(parents=True)
-            (gate / "gate-0001.log").write_text("gate passed\n")
-        if age_hours:
-            _age(root, age_hours)
-        return root
-
-    def leftover_content(self, name: str) -> Path:
-        """One leftover under that root that is no git working tree at all.
-
-        Deliberately a plain directory and not a git working tree, because that is what
-        this root really holds: measured on the host this composition was written for,
-        not one of its directories was a git repository at all while the trailer
-        retained the whole root on the claim that every one of them was a registered
-        worktree its lender still listed.
-        """
-        directory = self.worktrees / name
-        directory.mkdir(parents=True)
-        (directory / "payload").write_bytes(b"\0" * 4096)
-        return directory
-
-    def registered_worktree(self, name: str, *, branch: str) -> Borrowed:
-        """One directory under that root that really is a registered worktree.
-
-        A real `git worktree add` from a real lender rather than a tree that looks the
-        part: the whole point of the reading is that it asks git, so a stand-in would
-        prove only that this journey can write whatever the reading looks for.
-        """
-        lender = self.root / f"lender-{name}"
-        _git("init", "--quiet", str(lender))
-        _git("commit", "--quiet", "--allow-empty", "-m", "lender", cwd=lender)
-        directory = self.worktrees / name
-        directory.parent.mkdir(parents=True, exist_ok=True)
-        _git("worktree", "add", "--quiet", str(directory), "-b", branch, cwd=lender)
-        return Borrowed(tree=directory, lender=lender)
-
-    def repository_with_a_separate_git_dir(self, name: str) -> Path:
-        """One directory under that root whose `.git` is a file and whose lender is none.
-
-        The shape the classification has to tell from a registered worktree and cannot
-        tell by the `.git` file alone: `git init --separate-git-dir` puts the git
-        directory elsewhere and leaves a `.git` file pointing at it, exactly as a
-        worktree does. What parts them is where that read lands — a lender's
-        registration, or a git directory of this repository's own — so a stand-in would
-        prove only that this journey can write what the reading looks for.
-        """
-        directory = self.worktrees / name
-        directory.parent.mkdir(parents=True, exist_ok=True)
-        _git(
-            "init",
-            "--quiet",
-            f"--separate-git-dir={self.root / f'elsewhere-{name}'}",
-            str(directory),
-        )
-        _git("commit", "--quiet", "--allow-empty", "-m", "own", cwd=directory)
-        return directory
-
-    def submodule_of_another_repository(self, name: str) -> Borrowed:
-        """One directory under that root whose objects live in a superproject's store.
-
-        The third shape whose `.git` is a file: a submodule resolves under its
-        superproject's `.git/modules/`, which is neither a lender's worktree
-        registration nor a git directory of its own. Calling it a repository of its own
-        would tell an operator its commits are theirs to publish from here and send them
-        to `rm` for a checkout `git submodule deinit` owns. A real `git submodule add`
-        from a real superproject, for the reason the worktree above is a real one.
-
-        The superproject is the directory the worktree root sits in, because `git
-        submodule add` will only put a submodule inside its superproject's own working
-        tree — so a superproject somewhere else and a `mv` afterwards would leave a
-        `.git` file this classification is precisely the reading of.
-        """
-        superproject = self.worktrees.parent
-        origin = self.root / f"origin-{name}"
-        _git("init", "--quiet", str(origin))
-        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=origin)
-        superproject.mkdir(parents=True, exist_ok=True)
-        _git("init", "--quiet", str(superproject))
-        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=superproject)
-        self.worktrees.mkdir(parents=True, exist_ok=True)
-        _git(
-            # A file path is the only kind of origin this journey can have, and git
-            # refuses one over its `file://` transport by default.
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "--quiet",
-            str(origin),
-            str(self.worktrees / name),
-            cwd=superproject,
-        )
-        return Borrowed(tree=self.worktrees / name, lender=superproject)
-
-    def own_repository(self, name: str, *, committed: bool = True) -> Path:
-        """One directory under that root that is a repository rather than a worktree.
-
-        It borrows nobody's object store, so no lender lists it and none can remove it
-        — a different reading and a different owner from the worktree above. Left
-        without a commit, its `HEAD` names a branch that does not exist yet, which is
-        the one shape whose branch the reading cannot resolve.
-        """
-        directory = self.worktrees / name
-        directory.parent.mkdir(parents=True, exist_ok=True)
-        _git("init", "--quiet", str(directory))
-        if committed:
-            _git("commit", "--quiet", "--allow-empty", "-m", "own", cwd=directory)
         return directory
 
 
@@ -476,15 +214,7 @@ def host(tmp_path: Path) -> Host:
 def sweep(
     host: Host, *arguments: str, environment: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """The real recipe, against the roots this journey owns.
-
-    `environment` is for a journey that injects a fault at one of the wrapper's
-    external dependencies — by putting a stand-in for a tool ahead of the installed one
-    on `PATH`, so the wrapper's own lookup resolves the stand-in and never reaches the
-    real program. The recipe, the wrapper and every line of its reporting still run end
-    to end; what is replaced is one dependency at that boundary, and what is asserted is
-    what the wrapper reports when that dependency comes back a failure.
-    """
+    """The real recipe, against the roots this journey owns."""
     return subprocess.run(
         ["just", "sweep", *arguments],
         cwd=REPO_ROOT,
@@ -493,24 +223,118 @@ def sweep(
         text=True,
         capture_output=True,
         stdin=subprocess.DEVNULL,
-        timeout=e2e_timeout(120),
+        timeout=e2e_timeout(180),
     )
 
 
-def trailer(report: str) -> str:
-    """The part of the report the composition itself writes."""
-    _, _, tail = report.partition("=== just sweep — what this run looked at ===")
-    return tail
+def _report(verb: Path, host: Host) -> SweepReport:
+    """One installed verb's JSON report over this journey's roots, as a rehearsal."""
+    answered = subprocess.run(
+        [str(verb), "sweep", "--dry-run", "--min-age-hours", "4", "--format", "json"],
+        cwd=host.root,
+        env=host.environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=e2e_timeout(120),
+    )
+    assert answered.returncode == 0, answered.stderr
+    report = json.loads(answered.stdout)
+    assert isinstance(report, dict), answered.stdout
+    # The shape is what the journeys below assert field by field — a missing field fails
+    # there by name — so the cast only lets the type checker read what they then check.
+    return cast(SweepReport, report)
 
 
-def examined(report: str) -> str:
-    section, _, _ = trailer(report).partition("Families not examined:")
-    return section
+@pytest.mark.parametrize("verb", [ONEVCS, ONEAGENTGRAPH], ids=lambda verb: verb.name)
+def test_each_verb_reports_every_family_it_left_with_its_owner(host: Host, verb: Path) -> None:
+    """The contract this recipe prints on: every family named is examined or owned.
+
+    Over a state root holding a pool slot and a preserved unpublished branch, both
+    families onevcs deliberately leaves alone are named with who reaches them, and no
+    `not_examined[]` entry of either verb — whichever families it names — lacks an owner:
+    a family named with neither is what turns "reclaimed nothing" into an all-clear.
+    """
+    checkout = host.identity_with_a_pool_slot_and_a_preserved_branch()
+
+    report = _report(verb, host)
+
+    expected = VERB_FIELDS[verb.name]
+    assert set(report) == expected, (
+        f"`{verb.name} sweep --format json` lacks {sorted(expected - set(report))} "
+        f"and adds {sorted(set(report) - expected)}"
+    )
+    assert report["verb"] == f"{verb.name} sweep", report["verb"]
+    assert report["dry_run"] is True
+    assert report["min_age_hours"] == 4
+    assert isinstance(report["examined"], list) and report["examined"], report
+    assert isinstance(report["totals"], dict), report
+    unowned = [
+        entry
+        for entry in report["not_examined"]
+        if not (isinstance(entry.get("owner"), str) and entry["owner"].strip())
+    ]
+    assert not unowned, f"{verb.name} names families not examined with no owner: {unowned}"
+    if verb == ONEVCS:
+        named = {entry["family"]: entry for entry in report["not_examined"]}
+        assert set(named) >= OWNED_ELSEWHERE, (
+            f"onevcs left {sorted(OWNED_ELSEWHERE - set(named))} unnamed over a state root "
+            f"holding a pool slot and a preserved branch: {report['not_examined']}"
+        )
+        assert named["preserved-branches"]["path"] == str(checkout), named["preserved-branches"]
 
 
-def not_examined(report: str) -> str:
-    _, _, section = trailer(report).partition("Families not examined:")
-    return section
+def test_the_recipe_prints_both_reports_onevcs_first_with_the_default_floor(
+    host: Host,
+) -> None:
+    """Both verbs' own text reports, in order, each told the four-hour floor."""
+    host.identity_with_a_pool_slot_and_a_preserved_branch()
+
+    result = sweep(host, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    reported = result.stdout + result.stderr
+    onevcs_at = reported.find("Families not examined:")
+    oneagentgraph_at = reported.find('sweep: examined family "runs"')
+    assert onevcs_at != -1, f"onevcs's report is not in the output:\n{reported}"
+    assert oneagentgraph_at != -1, f"oneagentgraph's report is not in the output:\n{reported}"
+    assert onevcs_at < oneagentgraph_at, f"oneagentgraph's report came first:\n{reported}"
+    assert "pool, reached by `onevcs pool status project`" in reported, reported
+    assert "preserved-branches, reached by `onevcs recoverable --repo project`" in reported
+    assert str(host.temp) in reported and str(host.runs) in reported, reported
+    # The floor both verbs were given: onevcs says it of the session record the slot's
+    # session left, which it keeps as inside the floor.
+    assert "inside the 4 hour(s) the age floor leaves alone" in reported, reported
+
+
+def test_a_floor_the_caller_names_replaces_the_default(host: Host) -> None:
+    """`--min-age-hours 0` reaches both verbs in place of the four hours."""
+    host.identity_with_a_pool_slot_and_a_preserved_branch()
+
+    result = sweep(host, "--dry-run", "--min-age-hours", "0")
+
+    assert result.returncode == 0, result.stderr
+    reported = result.stdout + result.stderr
+    assert "the age floor leaves alone" not in reported, (
+        f"a verb still applied a floor the caller replaced with 0:\n{reported}"
+    )
+
+
+def test_one_verb_failing_leaves_the_other_sweeping_and_fails_the_recipe(host: Host) -> None:
+    """onevcs refusing its state root costs oneagentgraph nothing, and the status says so.
+
+    A `workspaces` that is a file is what a half-provisioned onevcs state root looks
+    like, and the real verb refuses it.
+    """
+    (host.onevcs_home / "workspaces").rmdir()
+    (host.onevcs_home / "workspaces").write_text("not a directory\n", encoding="utf-8")
+    dead = host.scratch("dead", held=False)
+
+    result = sweep(host, "--min-age-hours", "0")
+
+    assert result.returncode != 0, "the recipe hid a verb's failure"
+    assert "cannot read the workspaces under" in result.stderr, result.stderr
+    assert not dead.exists(), "oneagentgraph did not sweep after onevcs failed"
 
 
 def test_a_directory_a_live_process_holds_survives_a_real_sweep(host: Host) -> None:
@@ -536,1475 +360,17 @@ def test_a_directory_a_live_process_holds_survives_a_real_sweep(host: Host) -> N
 
         # The rehearsal that licenses the removal below: it must name this journey's own
         # roots, so a release that stopped honouring the overrides fails here rather
-        # than sweeping the operator's scratch. It is also where the retention is read,
-        # because the real pass below has nothing to act on and so says the short form.
+        # than sweeping the operator's scratch.
         rehearsal = sweep(host, "--dry-run", "--min-age-hours", "0")
         assert rehearsal.returncode == 0, rehearsal.stderr
-        assert str(host.temp) in rehearsal.stdout
-        assert str(host.runs) in rehearsal.stdout
-        assert "is still locked by its owner" in rehearsal.stdout
+        rehearsed = rehearsal.stdout + rehearsal.stderr
+        assert str(host.temp) in rehearsed, rehearsed
 
         result = sweep(host, "--min-age-hours", "0")
 
         assert result.returncode == 0, result.stderr
         assert held.exists(), "a directory a live process holds was removed"
         assert not dead.exists(), "the dead directory beside it was not reclaimed"
-        assert result.stdout.splitlines() == short_form(reclaimed(1, 2))
     finally:
         holder.terminate()
         holder.wait(timeout=e2e_timeout(30))
-
-
-def test_the_report_names_every_family_examined_and_every_family_it_could_not(
-    host: Host,
-) -> None:
-    """Each family appears in exactly one of the two lists, so neither can hide one.
-
-    Every family this recipe knows about is on this host at once: the two each verb
-    owns, the pre-adoption worktree root, and the host scratch root. The verbs' four
-    are claimed as examined and the other two as not, and no name is in both lists.
-    """
-    host.workspace("onevcs-s-aaaaaaaaaaaa", finished=False)
-    host.leftover_content("nickderobertis__llmlint")
-    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    for family in ONEAGENTGRAPH_FAMILIES + ONEVCS_FAMILIES:
-        assert family in examined(result.stdout), f"{family} is in neither list"
-        assert family not in not_examined(result.stdout), f"{family} is in both lists"
-    assert str(host.worktrees) in not_examined(result.stdout)
-    assert str(host.temp) in not_examined(result.stdout)
-    assert str(host.temp) not in examined(result.stdout), "the scratch root is in both lists"
-
-
-def test_the_families_the_trailer_claims_are_the_families_the_verbs_examined(
-    host: Host,
-) -> None:
-    """The trailer names families rather than pointing at the reports above it.
-
-    That is worth more to a reader and costs a restatement, so the restatement is held
-    to what the installed verbs report examining: a release that renames `temp` or adds
-    a third family fails here instead of leaving the trailer describing the one before.
-    """
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    reported = {
-        line.split('"')[1]
-        for line in result.stdout.splitlines()
-        if line.startswith("sweep: examined family ")
-    }
-    assert reported == set(ONEAGENTGRAPH_FAMILIES)
-    onevcs_report, _, _ = result.stdout.partition("Families not examined:")
-    _, _, onevcs_families = onevcs_report.partition("Families examined:")
-    reported = {
-        line.split(" — ")[0].strip()
-        for line in onevcs_families.splitlines()
-        if line.startswith("  ")
-    }
-    assert reported == set(ONEVCS_FAMILIES)
-
-
-def test_a_sweep_that_reclaimed_nothing_still_says_what_it_looked_at(host: Host) -> None:
-    """The failure the composition exists to prevent: `0 B` with no account of the scope."""
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    assert "would reclaim 0 B from 0 directories" in result.stdout
-    assert "would reclaim 0 workspace(s), 0 bytes" in result.stdout
-    for family in ONEAGENTGRAPH_FAMILIES + ONEVCS_FAMILIES:
-        assert family in examined(result.stdout)
-
-
-def test_a_sweep_with_nothing_left_to_act_on_is_the_short_form(host: Host) -> None:
-    """Coverage was complete and nothing here is an operator's, so the sections stay away.
-
-    Proven on a pass that really reclaimed rather than on an idle host, because the
-    claim is about a *working* sweep being quiet — one that swept nothing would print
-    the same short form for the wrong reason, which is what the pair of journeys below
-    is about. The verdict still names all four families and now says how many
-    candidates it judged, so the short form is an account of the scope and not an
-    unqualified all-clear.
-    """
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
-    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
-
-
-def test_nothing_reclaimed_with_candidates_examined_is_not_the_sentence_for_an_empty_host(
-    host: Host,
-) -> None:
-    """The two readings a single `Reclaimed: none` used to give one answer for.
-
-    A host whose families are full of live work reclaims nothing, and so does a host
-    with no families to judge at all. The first is the sweep working; the second is a
-    sweep that looked at nothing, and on a host where the disk is filling those are
-    opposite pieces of news. Both are driven here against the same recipe and the same
-    roots, and the assertion is that the two answers differ — asserted as a comparison
-    as well as against each sentence, so a future edit that made both say one thing
-    again fails here rather than passing two half-checks.
-    """
-    empty = sweep(host, "--min-age-hours", "0")
-
-    assert empty.returncode == 0, empty.stderr
-    assert empty.stdout.splitlines() == short_form(NOTHING_EXAMINED), empty.stdout
-
-    live = host.scratch("live", held=True)
-    holder = subprocess.Popen(
-        ["python3", "-c", HOLDER, str(live)],
-        stdout=subprocess.PIPE,
-        text=True,
-        cwd=str(live),
-    )
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline().strip() == "held", "the holder never took the lock"
-
-        judged = sweep(host, "--min-age-hours", "0")
-    finally:
-        holder.terminate()
-        holder.wait(timeout=e2e_timeout(30))
-
-    assert judged.returncode == 0, judged.stderr
-    assert judged.stdout.splitlines() == short_form(nothing_reclaimed(1)), judged.stdout
-    assert live.exists(), "the candidate this journey is about was reclaimed"
-    assert judged.stdout != empty.stdout, (
-        "a sweep that judged a candidate and could take none of it said exactly what a "
-        "sweep with nothing to judge said; those are opposite pieces of news on a host "
-        "whose disk is filling"
-    )
-
-
-def test_a_family_neither_verb_examined_keeps_both_reports_and_the_trailer(
-    host: Host,
-) -> None:
-    """The other half, and the state this whole composition exists for.
-
-    Every verb succeeds and the recipe still exits 0, exactly as in the journey above.
-    The one difference is that the pre-adoption worktree root is on this host, so a
-    family nothing here examines is in reach — and that alone has to bring back both
-    reports and the trailer that names it. A `0 B reclaimed` with that root unmentioned
-    is the all-clear that filled this host's disk.
-    """
-    dead = host.scratch("dead", held=False)
-    legacy = host.leftover_content("nickderobertis__llmlint")
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    for section in SECTIONS:
-        assert section in result.stdout, "an unexamined family did not bring the report back"
-    assert str(host.worktrees) in not_examined(result.stdout)
-    for verdict in (NOTHING_EXAMINED, nothing_reclaimed(1), reclaimed(1, 1)):
-        assert verdict not in result.stdout, "the short form stood in for the long one"
-    assert "\n".join(FREE_SPACE_LINES) in result.stdout, (
-        "the long form is what a reader opens because something is wrong, with the "
-        "`Reclaimed:` line above it; it has to say what really answers that question"
-    )
-    assert legacy.exists(), "a root this sweep only reports on was reclaimed"
-    assert not dead.exists(), "the families the verbs do own went unswept"
-
-
-def test_the_host_scratch_root_is_named_in_the_trailer_with_what_it_measured(
-    host: Host,
-) -> None:
-    """The family that actually fills this host, measured and named and left alone.
-
-    Neither verb reaches it: `oneagentgraph` owns only what it prefixed under this
-    root and `onevcs` keeps its workspaces elsewhere, so before this the root was in
-    neither list — and a `0 B reclaimed` beside 139 GB of it read as an all-clear. The
-    claims here are what an operator needs in order to act: a size, a count that
-    leaves the prefixed family out rather than double-counting it, and the largest
-    name group with its trailing ids folded, since the one that filled this disk was
-    3,646 directories of one producer and hid inside a total as a long tail.
-
-    It sweeps for real rather than rehearsing, because the other half of the claim is
-    that nothing here removed or rewrote any of it while the families the verbs do own
-    were reclaimed around it.
-    """
-    grouped = [
-        host.unowned(f"{NX_CACHE_FAMILY}{token}", payload=64 * 1024)
-        for token in ("3a91b2c", "7f0d415", "c21e9a8")
-    ]
-    alone = host.unowned("node-compile-cache")
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(
-        rf"{re.escape(str(host.temp))} — \d+ KiB across 4 entries, "
-        r"and no verb here examines any of it\.",
-        entry,
-    ), entry
-    assert re.search(rf"{NX_CACHE_FAMILY}\w+ and 2 more like it — [\d.]+ [KMGT]iB", entry), entry
-    assert re.search(r"node-compile-cache — [\d.]+ KiB", entry), entry
-    assert f"A {UV_LOCK_PATTERN} is out of that count" in entry, entry
-    for directory in [*grouped, alone]:
-        assert (directory / "payload").exists(), f"{directory} was reclaimed by this recipe"
-    assert not dead.exists(), "the family the verbs do own went unswept beside it"
-
-
-def test_what_oneagentgraph_owns_is_left_out_of_both_of_the_numbers(host: Host) -> None:
-    """Nothing is counted in two families at once, which is what the trailer is for.
-
-    A root holding one directory of each: an owned one four thousand times the size of
-    the other, still on disk because this is a rehearsal. A count that included it
-    would say two entries, and a size that included it would be reported in MiB — so
-    the family would be reported as unexamined while a verb above reported examining
-    it, which is the one outcome the two lists exist to rule out.
-    """
-    host.scratch("owned", held=True, payload=4 * 1024 * 1024)
-    host.unowned("node-compile-cache")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(rf"{re.escape(str(host.temp))} — \d+ KiB across 1 entries", entry), entry
-
-
-def test_the_trailer_names_the_three_largest_name_groups_and_stops(host: Host) -> None:
-    """Three groups, largest first, and the rest deliberately unnamed.
-
-    A screenful of groups is the skimming the trailer is rationed against, and one
-    group hides whether the rest of the root is a second producer or ten thousand small
-    ones — so the count is three and the order is by size. Five groups are on this root
-    and the two smallest have to be absent, which is the half of the rule that a
-    listing printing everything would still pass.
-    """
-    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c", payload=256 * 1024)
-    host.unowned(f"{NX_CACHE_FAMILY}7f0d415", payload=256 * 1024)
-    host.unowned("node-compile-cache", payload=512 * 1024)
-    host.unowned("nds-audit", payload=192 * 1024)
-    host.unowned("xwin-cache", payload=128 * 1024)
-    # Not `pytest-of-nick`, which is the shape this host really carries but is also in
-    # the path of every temporary directory pytest hands this journey.
-    host.unowned("bun-install", payload=64 * 1024)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    groups = [line.strip() for line in entry.splitlines() if line.startswith(" " * 6)]
-    assert len(groups) == 3, groups
-    assert groups[0].startswith(NX_CACHE_FAMILY), groups
-    assert "and 1 more like it" in groups[0], groups
-    assert groups[1].startswith("node-compile-cache — "), groups
-    assert groups[2].startswith("nds-audit — "), groups
-    assert "xwin-cache" not in entry, "the trailer named more groups than it rations"
-    assert "bun-install" not in entry
-
-
-def test_a_loose_file_is_in_both_numbers_even_though_it_is_in_no_name_group(
-    host: Host,
-) -> None:
-    """A loose file fills a device as well as a directory does, so it is in the account.
-
-    The name groups are built from `du -d 1`, which lists directories, so a root filled
-    by one enormous file is in no group — and that is the whole of what it is missing
-    from. It moves the count, which is of entries, and it moves the size, which is the
-    root's. A family reported as one directory and a few KiB while a 4 MiB file sat
-    beside it would be an account of part of the root reading as an account of the
-    root, which is the failure this trailer exists to prevent one root up.
-
-    It is also proof of the other half of criterion one: this sweep measures the file
-    and does not touch it. Nothing here writes to this root or removes anything under
-    it, so the file is still on disk, at its own length, afterwards.
-    """
-    host.unowned("node-compile-cache", payload=4096)
-    loose = host.loose_file("core.20260823", payload=4 * 1024 * 1024)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(rf"{re.escape(str(host.temp))} — \d+(\.\d+)? MiB across 2 entries", entry), (
-        entry
-    )
-    assert re.search(r"node-compile-cache — \d+ KiB", entry), entry
-    assert "core.20260823" not in entry, "a loose file is in the numbers, not in a group"
-    assert loose.stat().st_size == 4 * 1024 * 1024, "a file this recipe only measures moved"
-
-
-def test_the_lock_left_out_of_the_count_is_named_as_left_out_rather_than_dropped(
-    host: Host,
-) -> None:
-    """The exclusion is disclosed where an operator reads it, not only in the source.
-
-    A `uv-*.lock` is out of the count, and that is right: `uv run` holds one in this
-    root for the length of each verb it runs, so counting it would leave the family
-    non-empty on every host that has ever swept. But an exclusion nobody can see turns
-    a count of part of the root into an account of the root, which is the same
-    all-clear-shaped answer this trailer exists to stop giving one root up. So the
-    report names it and says why, and both halves are held here: the lock is still out
-    of the count, and the count now says so.
-
-    It is out of the count and of nothing else, which is the other half of what the
-    report has to get right: the size is the root's less the family a verb above
-    examined, so a lock's bytes are in it. A real one has none, and the lock below is
-    given 4 MiB precisely so that a size which quietly dropped them would report KiB
-    here and fail.
-
-    The root also holds however many locks the recipe's own two `uv run`s take on their
-    way past, every one of them out of the count too, which is why the count is of the
-    single directory beside them.
-    """
-    host.unowned("node-compile-cache")
-    lock = host.loose_file(UV_LOCK_TRANSIENT, payload=4 * 1024 * 1024)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(rf"{re.escape(str(host.temp))} — \d+(\.\d+)? MiB across 1 entries", entry), (
-        entry
-    )
-    assert f"A {UV_LOCK_PATTERN} is out of that count" in entry, entry
-    assert "bytes stay in the size above" in entry, entry
-    assert lock.stat().st_size == 4 * 1024 * 1024, "a file this recipe only measures moved"
-
-
-def test_a_scratch_root_holding_only_examined_scratch_and_this_recipes_lock_is_quiet(
-    host: Host,
-) -> None:
-    """The quiet form survives the new family, and is quiet for the right reason.
-
-    A root whose every entry either belongs to a verb that examined it or was written
-    by this recipe on its way there leaves nothing for an operator to do, so it is not
-    a family and the sweep stays in its short form. Reporting it anyway would put a section in
-    front of a reader at every dispatch start, and what a reader learns to skim past is
-    the trailer that names the family nothing looked at — which is the whole thing this
-    rationing protects.
-
-    The lock file below is the reason the count has an exclusion at all, and it is what
-    `uv run` really leaves here on the way to each verb rather than a shape invented
-    for this journey: counted, this family would be non-empty on every host that has
-    ever run the recipe and the short form below would be unreachable rather than
-    rationed. It is the *only* exclusion — the journey above puts an ordinary loose
-    file in the same root and it moves the count.
-    """
-    dead = host.scratch("dead", held=False)
-    loose = host.loose_file(UV_LOCK_TRANSIENT)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
-    assert str(host.temp) not in result.stdout
-    assert loose.exists(), "a file this recipe only measures was removed"
-    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
-
-
-def test_each_directory_under_the_worktree_root_is_reported_as_what_it_actually_is(
-    host: Host,
-) -> None:
-    """The retention reason is read of that root rather than asserted of it.
-
-    The trailer used to keep the whole root on one sentence — that every directory below
-    it was a registered git worktree whose lender still listed it and whose branch could
-    still hold unpublished work. On the host it was written for, not one of them was a
-    git working tree at all: the reason read as evidence and had never been checked, and
-    a reason nothing checks is worse than no reason. So both shapes are on this root at
-    once here and each has to earn its own reading and its own owner — the worktree the
-    one it always claimed, the leftover a different one.
-    """
-    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/keep")
-    leftover = host.leftover_content("nickderobertis__onevcs")
-    own = host.own_repository("nickderobertis__onevcs-fork")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert (
-        f"{borrowed.tree.name} — a registered worktree of its lender, on feat/keep in "
-        f"{borrowed.lender}" in entry
-    ), entry
-    assert f"{leftover.name} — not a git working tree at all" in entry, entry
-    assert re.search(rf"{own.name} — a git repository of its own, on \w+", entry), entry
-    assert "A registered worktree can still hold a branch nothing has published" in entry, entry
-    assert "just recoverable names the verb for" in entry, entry
-    assert "What is not a git working tree holds no branch and no lender lists it" in entry, entry
-    assert "A git repository of its own borrows no lender and is listed by none" in entry, entry
-    assert all(directory.exists() for directory in (borrowed.tree, leftover, own)), (
-        "a root this sweep only reports on was reclaimed"
-    )
-
-
-def test_a_worktree_its_lender_no_longer_lists_is_not_reported_as_one_that_is(
-    host: Host,
-) -> None:
-    """The reading asks git, which is the only thing that can answer this one.
-
-    This directory has a `.git` and everything else a registered worktree has; what it
-    does not have any more is the lender that lent it, which somebody deleted or moved
-    out from under it. From the outside the two are indistinguishable. Nothing can
-    publish from it and no `git worktree remove` will reach it, so the owner it gets is
-    the one for a tree that reaches no history rather than the one that sends an operator
-    to a registry its entry is not in — deliberately not one that claims a lender, since
-    a `.git` git will not read is equally what a corrupt standalone repository leaves and
-    this reading cannot tell those two apart.
-    """
-    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/lost")
-    # The lender itself, not the registration inside it: a checkout somebody deleted or
-    # moved is how this really happens, and reaching in to delete git's own admin entry
-    # would manufacture the state through an interface no operator has.
-    shutil.rmtree(borrowed.lender)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert f"{borrowed.tree.name} — a working tree carrying a .git that git cannot read" in entry, (
-        entry
-    )
-    assert "A .git git cannot read reaches no history" in entry, entry
-    assert "a registered worktree of its lender" not in entry, entry
-
-
-def test_a_repository_whose_git_directory_is_elsewhere_is_not_read_as_a_worktree(
-    host: Host,
-) -> None:
-    """A `.git` file is not what makes a worktree, and this is the shape that proves it.
-
-    `git init --separate-git-dir` leaves exactly what a registered worktree leaves — a
-    `.git` file naming a git directory somewhere else — so a reading that stopped at
-    that file would send an operator to a lender that does not exist and to a `git
-    worktree remove` that reaches nothing. What parts them is where the file points: a
-    lender keeps its registration under `<lender>/.git/worktrees/<name>`, and a
-    repository of its own keeps its objects. Both shapes are on this root at once here,
-    because telling them apart is the only thing this reading is for.
-    """
-    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/keep")
-    elsewhere = host.repository_with_a_separate_git_dir("nickderobertis__onevcs-split")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(rf"{elsewhere.name} — a git repository of its own, on \w+", entry), entry
-    assert f"{elsewhere.name} — a registered worktree" not in entry, entry
-    # The worktree beside it still earns the reading it always had, so this is the two
-    # being told apart rather than the classification collapsing onto one answer.
-    assert (
-        f"{borrowed.tree.name} — a registered worktree of its lender, on feat/keep in "
-        f"{borrowed.lender}" in entry
-    ), entry
-    assert "A git repository of its own borrows no lender and is listed by none" in entry, entry
-    assert all(directory.exists() for directory in (borrowed.tree, elsewhere)), (
-        "a root this sweep only reports on was reclaimed"
-    )
-
-
-def test_a_submodule_is_not_read_as_a_repository_whose_objects_are_its_own(
-    host: Host,
-) -> None:
-    """The third `.git`-file shape, and the one whose owner is somebody else's command.
-
-    A submodule's git directory is elsewhere like a worktree's and is not a lender's
-    registration like a repository's, so the two readings beside it both let it through
-    to "a git repository of its own" — which would tell an operator its commits are
-    theirs to publish from here and send them to remove by hand a checkout that
-    `git submodule deinit` in the superproject owns. What parts it from the repository
-    beside it is that git names a superproject working tree for it and nothing for the
-    other, so both are on this root at once.
-    """
-    borrowed = host.submodule_of_another_repository("nickderobertis__vendored")
-    own = host.own_repository("nickderobertis__standalone")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert (
-        f"{borrowed.tree.name} — a submodule of another repository, on " in entry
-        and f" in {borrowed.lender}" in entry
-    ), entry
-    assert f"{borrowed.tree.name} — a git repository of its own" not in entry, entry
-    assert f"{borrowed.tree.name} — a registered worktree" not in entry, entry
-    # The repository beside it keeps the reading it always had, so this is the two being
-    # told apart rather than the classification collapsing onto the new answer.
-    assert re.search(rf"{own.name} — a git repository of its own, on \w+", entry), entry
-    assert "A submodule holds its objects in the superproject named beside it" in entry, entry
-    assert "git submodule deinit" in entry, entry
-    assert all(directory.exists() for directory in (borrowed.tree, own)), (
-        "a root this sweep only reports on was reclaimed"
-    )
-
-
-def test_a_repository_whose_branch_cannot_be_read_still_says_what_the_directory_is(
-    host: Host,
-) -> None:
-    """A reading that fails halfway is still a reading, and says which half it got.
-
-    A repository with no commit yet has a `HEAD` naming a branch that does not exist,
-    so git answers what the directory *is* and refuses to answer what it is on. The
-    class is what carries the owner, so it is the half that must survive: reporting the
-    whole directory as unreadable over a branch name would send an operator to check a
-    root that answered perfectly well.
-    """
-    unborn = host.own_repository("nickderobertis__fresh", committed=False)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert f"{unborn.name} — a git repository of its own, on an unreadable branch" in entry, entry
-    assert "A git repository of its own borrows no lender and is listed by none" in entry, entry
-
-
-def test_past_the_named_directories_the_worktree_root_folds_into_a_tally_by_class(
-    host: Host,
-) -> None:
-    """The fold has to drop the tail, and the tail has to be the part that can wait.
-
-    A root of leftovers with one real worktree among them is the shape that decides
-    this: named in file order the worktree can fall off the end behind ten directories
-    holding nothing, and the one directory with unpublished work in it is the one an
-    operator needed to see. So the listing is ordered by what the reading found, the
-    fold takes the least actionable, and what it took is accounted for by class rather
-    than as a bare remainder — a count of eleven with nothing said about them is the
-    same unanswered question one root up.
-    """
-    kept = host.registered_worktree("zz-still-borrowed", branch="feat/keep")
-    for index in range(10):
-        host.leftover_content(f"leftover-{index}")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    listed = [line.strip() for line in entry.splitlines() if line.startswith(" " * 6)]
-    readings = [line for line in listed if re.match(r"^(zz-still-borrowed|leftover-\d) — ", line)]
-    assert "across 11 directories." in entry, entry
-    assert listed[0].startswith(f"{kept.tree.name} — a registered worktree of its lender"), listed
-    assert len(readings) == NAMED_DIRECTORIES, readings
-    assert "… and 3 more, unnamed here. In all: 1 a registered worktree, 10 not a git" in entry, (
-        entry
-    )
-
-
-def test_a_worktree_root_holding_no_directory_at_all_says_that_rather_than_classifying(
-    host: Host,
-) -> None:
-    """A root of loose files is a family with bytes in it and nothing to classify.
-
-    It is not the same as a root nothing could be read of, and it is not the same as an
-    empty one either — an empty root is no family and says nothing at all. This one has
-    a size, so it is named, and what it holds is not work: no branch is in it and no
-    lender lists any of it.
-    """
-    host.worktrees.mkdir(parents=True)
-    (host.worktrees / "repos.json").write_bytes(b"\0" * 4096)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert f"{host.worktrees} — " in entry, entry
-    assert "across 0 directories." in entry, entry
-    assert "No directory is under it at all: what it holds is loose entries" in entry, entry
-    assert "none is classified here" not in entry, "a readable root took the unreadable phrase"
-
-
-def test_a_worktree_root_holding_nothing_is_not_a_family_and_says_nothing(
-    host: Host,
-) -> None:
-    """An empty root is nothing to act on, and reporting it would never stop.
-
-    The sections print when a family this run found went unexamined, so a root that
-    exists and holds nothing would keep the long form on for ever over a directory with
-    nothing in it — and what a reader learns to skim past is the trailer naming the
-    family nothing looked at.
-    """
-    host.worktrees.mkdir(parents=True)
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
-    assert str(host.worktrees) not in result.stdout, "an empty root was reported as a family"
-    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
-
-
-def test_each_scratch_name_group_says_how_recently_anything_in_it_was_written(
-    host: Host,
-) -> None:
-    """A size alone cannot tell an accumulation from a dead one, and only one is news.
-
-    The residue of a leak that was fixed weeks ago and the cache that is filling this
-    root right now are the same number of bytes, so a group reported by size alone tells
-    an operator nothing about whether to care. The recency is what parts them: two
-    groups here, identical but for when anything in them was last written.
-    """
-    # Each age carries a margin past the boundary it is asserted at, because the sweep
-    # floors an age into whole units and reads the clock in whole seconds: a fixture
-    # written exactly five minutes ago reports 4m or 5m depending on where in the
-    # second it landed.
-    filling = host.unowned(f"{NX_CACHE_FAMILY}3a91b2c", payload=256 * 1024)
-    _age(filling, 5.5 / 60)
-    recent = host.unowned("nds-audit", payload=192 * 1024)
-    _age(recent, 2 + 5 / 60)
-    residue = host.unowned("node-compile-cache", payload=128 * 1024)
-    _age(residue, 40 * 24 + 1)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(rf"{filling.name} — [\d.]+ KiB, newest written 5m ago", entry), entry
-    assert re.search(rf"{recent.name} — [\d.]+ KiB, newest written 2h ago", entry), entry
-    assert re.search(rf"{residue.name} — [\d.]+ KiB, newest written 40d ago", entry), entry
-    assert "a group nothing writes to any more is residue" in entry, entry
-
-
-def test_a_group_stamped_in_the_future_reads_as_written_now_rather_than_as_a_negative_age(
-    host: Host,
-) -> None:
-    """A clock that disagrees with a filesystem is a thing that happens on real hosts.
-
-    A copy that preserved a stamp from a machine running ahead, or a root on a mount
-    whose clock drifted, leaves an entry written "after" the sweep reads it. There is no
-    honest age to report for that, and the two dishonest ones both mislead: a negative
-    number reads as a defect in the sweep, and an unsigned one reads as the oldest thing
-    on the root. It is reported as freshly written, which is the reading that cannot
-    send an operator to clear it — and it falls out of the first band rather than out of
-    a clamp, which is why this journey is what says so.
-    """
-    ahead = host.unowned("node-compile-cache", payload=4096)
-    _age(ahead, -48)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(rf"{ahead.name} — [\d.]+ KiB, newest written just now", entry), entry
-
-
-def test_a_group_whose_newest_write_cannot_be_read_says_so_rather_than_reading_as_never(
-    host: Host,
-) -> None:
-    """A missing recency degrades to a phrase, because a missing one is not a very old one.
-
-    The size and the recency come from two walks over the same root, and anything the
-    size walk lists that the timestamp walk did not reach has no recency to report. The
-    directory below is a deterministic instance of that: its name matches the `uv` lock
-    pattern the timestamp walk skips, while `du` lists it like any other directory. Read
-    as "never written" it would be the oldest thing on the root and the one an operator
-    would clear first, which is exactly the wrong answer to have invented.
-    """
-    unstamped = host.unowned(UV_LOCK_TRANSIENT, payload=256 * 1024)
-    stamped = host.unowned("node-compile-cache", payload=4096)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert re.search(
-        rf"{re.escape(unstamped.name)} — [\d.]+ KiB, newest write unreadable", entry
-    ), entry
-    assert re.search(rf"{stamped.name} — [\d.]+ KiB, newest written just now", entry), entry
-    assert unstamped.exists(), "a directory this recipe only measures was removed"
-
-
-def test_the_preserved_unpublished_branches_are_named_with_the_verb_that_answers_them(
-    host: Host,
-) -> None:
-    """The family that holds the rest, named where an operator reads the rest.
-
-    A workspace is retained because a branch in it has not been published, so a sweep's
-    retentions are that family's shadow — and until it was named here an operator read
-    the shadow with no way to see what cast it or which verb answers it. It is not a
-    family of directories, so no sweep examines it and none can: judging one means
-    deciding whether work should land.
-
-    It is named in both places a verdict is read. The long form here carries it with the
-    verb, and the short form the journey below is about carries the same in one line.
-    """
-    host.leftover_content("nickderobertis__llmlint")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert "preserved unpublished branches" in entry, entry
-    assert "just recoverable names every one of them" in entry, entry
-    assert "preserved unpublished branches" not in examined(result.stdout), (
-        "a family no sweep examines was claimed as examined"
-    )
-
-
-def test_the_standing_family_does_not_take_the_short_form_away_from_a_quiet_sweep(
-    host: Host,
-) -> None:
-    """Naming it everywhere must not make the long form unconditional.
-
-    The preserved branches are unexamined on every host and at every moment, so an entry
-    that decided whether the sections print would print them for ever — and what a
-    reader learns to skim past is the trailer naming the family nothing looked at, which
-    is the whole thing the rationing protects. So this family is named in the one line
-    instead, and the one line stays one line.
-    """
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == short_form(reclaimed(1, 1))
-    assert PRESERVED_BRANCH_CLAUSE in result.stdout, "the one line left the family unnamed"
-    assert POOL_CLAUSE in result.stdout, "the one line left the pool unnamed"
-    assert not dead.exists(), "the short form came from a sweep that reclaimed nothing"
-
-
-def test_the_pool_is_named_as_a_family_no_sweep_examines_with_its_two_owners(
-    host: Host,
-) -> None:
-    """The warm worktree slots are named where an operator reads the rest, with their owners.
-
-    A slot survives its session's close on purpose, so a sweep that removed one would
-    undo the reason the pool exists — and a family kept on purpose that no report named
-    would read as something the sweep forgot. It is named in both places a verdict is
-    read: the long form here with the verb that reads it and the verb that empties it,
-    and the one line the journey above holds.
-    """
-    host.leftover_content("nickderobertis__llmlint")
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert "warm worktree slots" in entry, entry
-    assert "onevcs pool status <repo>" in " ".join(entry.split()), entry
-    assert "onevcs pool prune <repo>" in entry, entry
-    assert "warm worktree slots" not in examined(result.stdout), (
-        "a family no sweep examines was claimed as examined"
-    )
-
-
-def test_the_floor_this_recipe_passes_by_default_is_one_both_verbs_apply(
-    host: Host,
-) -> None:
-    """The default is the recipe's own, and both verbs have to take it and obey it.
-
-    Both verbs default to 24 hours, and on this host that reclaimed 0 B while four
-    hours reclaimed 23.9 GB: the families churn hourly, so a floor nothing is ever
-    older than never fires, and a sweep that never fires reports success while the
-    device fills. So the recipe names four rather than leaving the verbs to their own
-    default — and a number only one of them accepts, or applies differently, would be
-    worse than no default at all. Every claim here is read from behaviour: a
-    directory either side of the floor, in each verb's own families.
-    """
-    inside = host.scratch("inside", held=False, age_hours=3)
-    outside = host.scratch("outside", held=False, age_hours=5)
-    kept = host.workspace("onevcs-s-aaaaaaaaaaaa", finished=True, age_hours=3)
-    swept = host.workspace("onevcs-s-bbbbbbbbbbbb", finished=True, age_hours=5)
-
-    result = sweep(host, "--dry-run")
-
-    assert result.returncode == 0, result.stderr
-    assert f"would reclaim {outside}" in result.stdout
-    assert f"{inside} was written" in result.stdout
-    assert "inside this sweep's 14400s floor" in result.stdout
-    assert "keeping anything written inside the last 4 hour(s)" in result.stdout
-    assert f"{swept} — " in result.stdout.partition("Retained:")[0]
-    assert f"{kept} — it was written 3 hour(s) ago" in result.stdout
-
-
-@pytest.mark.parametrize(
-    ("arguments", "floor"),
-    [
-        ((), "4 hour(s)"),
-        (("--min-age-hours", "0"), "0 second(s)"),
-        (("--min-age-hours=0",), "0 second(s)"),
-    ],
-    ids=("default", "spaced", "joined"),
-)
-def test_the_age_floor_means_one_thing_across_every_family(
-    host: Host, arguments: tuple[str, ...], floor: str
-) -> None:
-    """One `--min-age-hours` reaches both verbs, in either spelling, and both obey it.
-
-    The `oneagentgraph` half is read from its decision rather than from its echo: a
-    directory whose owner is gone is inside the default floor and outside a zero one, so
-    the same scratch is retained under one and reclaimed under the other. The default
-    row is this recipe's own four hours rather than the verbs' twenty-four; what makes
-    that a floor both of them take, and apply, is the journey above.
-    """
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--dry-run", *arguments)
-
-    assert result.returncode == 0, result.stderr
-    assert f"keeping anything written inside the last {floor}" in result.stdout
-    reclaimed = f"would reclaim {dead}" in result.stdout
-    assert reclaimed is (floor == "0 second(s)")
-
-
-def test_a_verb_that_fails_leaves_its_families_in_the_not_examined_list(host: Host) -> None:
-    """The recovery path: one sweeper down must not cost the other its reclamation.
-
-    A `workspaces` that is a file is what a half-provisioned or hand-edited state root
-    looks like, and `onevcs sweep` refuses it outright. The families it owns then move
-    into the not-examined list — never quietly out of both — the other verb still sweeps,
-    and the recipe's status says a family was left unswept.
-    """
-    (host.onevcs_home / "workspaces").rmdir()
-    (host.onevcs_home / "workspaces").write_text("not a directory\n")
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 1, result.stdout
-    assert not dead.exists(), "a failing verb stopped the other one from reclaiming"
-    for section in SECTIONS:
-        assert section in result.stdout, "a failed verb cost the reports that explain it"
-    for family in ONEVCS_FAMILIES:
-        assert family in not_examined(result.stdout)
-        assert family not in examined(result.stdout)
-    for family in ONEAGENTGRAPH_FAMILIES:
-        assert family in examined(result.stdout)
-
-
-def test_both_of_onevcss_families_are_reclaimed_for_real(host: Host) -> None:
-    """The half of the sweep the rename is about, removing for real in both families.
-
-    `onevcs sweep` owns two families and this composition is the only reason either is
-    reclaimed here at all, so neither is proven by a report. Both roots below are real
-    shared run clones carrying a recorded gate verdict, and the claim is that they are
-    off the disk afterwards. The third has no verdict under `gate-logs` — nothing there
-    can say its publication finished — and its survival is what keeps the two removals
-    from passing because everything in reach was swept.
-    """
-    reclaimable = [
-        host.workspace("onevcs-s-aaaaaaaaaaaa", finished=True, family=family)
-        for family in ONEVCS_FAMILIES
-    ]
-    unfinished = host.workspace("onevcs-s-bbbbbbbbbbbb", finished=False)
-
-    # The rehearsal reads the report — every root named, in both families, with the
-    # retention that keeps the third — and the pass after it reads the disk.
-    rehearsal = sweep(host, "--dry-run", "--min-age-hours", "0")
-    assert rehearsal.returncode == 0, rehearsal.stderr
-    for root in [*reclaimable, unfinished]:
-        assert str(root) in rehearsal.stdout
-    assert "its gate has recorded no verdict" in rehearsal.stdout
-    for family in ONEVCS_FAMILIES:
-        assert family in examined(rehearsal.stdout)
-
-    result = sweep(host, "--min-age-hours", "0")
-
-    assert result.returncode == 0, result.stderr
-    for root in reclaimable:
-        assert not root.exists(), f"{root} survived a sweep that had every reason to take it"
-    assert unfinished.exists(), "a workspace whose gate recorded no verdict was reclaimed"
-
-
-#: A number of hours in the shape `scripts/sweep.sh` forwards that both adopted verbs
-#: refuse, measured on oneagentgraph 0.4.9 and onevcs 0.30.1: each holds its floor as a
-#: duration and refuses anything past 5124095576030430 hours as more than it can hold.
-#: The fractional hour this journey used to send stopped being a refusal when
-#: oneagentgraph 0.4.7 took a decimal floor, which is also why no argument makes one of
-#: the two verbs fail alone any more.
-PAST_EVERY_FLOOR = "5124095576030431"
-
-
-def test_a_sweep_whose_every_verb_failed_says_so_rather_than_listing_nothing(
-    host: Host,
-) -> None:
-    """An empty `Families examined:` reads as a formatting artefact, not as an answer.
-
-    Both refusals are the verbs' own: :data:`PAST_EVERY_FLOOR` is a number of hours the
-    wrapper's shape admits and that each verb refuses as more than its floor can hold,
-    so this is the real state of a host where nothing got swept, and the sentence in
-    place of the empty list is what an operator watching a filling disk has to be told.
-    """
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, "--min-age-hours", PAST_EVERY_FLOOR)
-
-    assert result.returncode == 1, result.stdout
-    assert "none — every sweeper this recipe composes failed" in examined(result.stdout)
-    for family in ONEAGENTGRAPH_FAMILIES + ONEVCS_FAMILIES:
-        assert family in not_examined(result.stdout)
-    # Each half says what to do about itself, so a report of two unswept families is
-    # still actionable.
-    assert "Re-run uv run oneagentgraph sweep" in not_examined(result.stdout)
-    assert "Re-run uv run onevcs sweep" in not_examined(result.stdout)
-    assert dead.exists(), "a sweep in which nothing ran removed something"
-
-
-# llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Deliberate fault injection
-# at the published-CLI boundary the recipe delegates to, not a substitution of the layer
-# under test: on the adopted oneagentgraph 0.4.9 and onevcs 0.30.1 the real sweep verbs
-# accept and refuse the same values and oneagentgraph's sweep succeeds on any state, so no
-# real usage reaches a oneagentgraph-only refusal. The `uv` stand-in answers only that one
-# call and forwards every other one to the real uv, so the recipe, the wrapper, the real
-# onevcs sweep and the whole report still run as an operator runs them; the manager ruled
-# this in place of deleting the journey, and the docstring below gives the evidence.
-def test_the_other_verb_still_sweeps_when_oneagentgraph_is_the_one_that_fails(
-    host: Host, tmp_path: Path
-) -> None:
-    """The honesty property from the other side: a half-sweep must read as one.
-
-    `oneagentgraph`'s families move into the not-examined list carrying the status that
-    put them there, `onevcs` still examines its own and reports what it retained, and the
-    recipe exits non-zero so the gap is in the status and not only in the report. The
-    failure a family disappears from *both* lists is the one thing this whole composition
-    exists to rule out.
-
-    **The one refusal here that is not the verb's own, and why.** This journey used to
-    send `--min-age-hours 1.5`, which `oneagentgraph sweep` refused and `onevcs sweep`
-    took. oneagentgraph 0.4.7 took a decimal floor, and on the adopted oneagentgraph
-    0.4.9 and onevcs 0.30.1 the two verbs accept and refuse exactly the same values in
-    the shape the wrapper forwards, while `oneagentgraph sweep` answers success on any
-    state or environment once its arguments parse — so nothing real makes it fail
-    alone. The fault is therefore injected where the wrapper reaches the verb, since the
-    locked install `uv run` resolves is not on `PATH` to be shadowed: a stand-in named
-    `uv` goes ahead of the installed one, forwards every other invocation to the first
-    real uv on `PATH` past its own directory, and answers only `uv run oneagentgraph
-    sweep` as a verb refusing its arguments does, with status 2. The recipe, the
-    wrapper, the real `onevcs sweep` and every line of the reporting run end to end.
-
-    The mirror, `test_a_verb_that_fails_leaves_its_families_in_the_not_examined_list`,
-    fails `onevcs` for real and so proves the property for onevcs's families only;
-    without this journey nothing would prove the trailer names *oneagentgraph's*
-    families as not examined when that verb is the one that failed.
-    """
-    workspace = host.workspace("onevcs-s-aaaaaaaaaaaa", finished=False)
-    dead = host.scratch("dead", held=False)
-    stand_ins = tmp_path / "path-stand-ins"
-    stand_ins.mkdir()
-    refuses = stand_ins / "uv"
-    refuses.write_text(
-        textwrap.dedent(
-            """\
-            #!/usr/bin/env bash
-            # Answer exactly `uv run oneagentgraph sweep ...` as the verb refusing it would.
-            if [ "${1:-}" = run ] && [ "${2:-}" = oneagentgraph ] && [ "${3:-}" = sweep ]; then
-              echo "error: the oneagentgraph sweep this journey refuses" >&2
-              exit 2
-            fi
-            # Everything else reaches the real uv: the first one on PATH past this directory.
-            own="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            IFS=: read -r -a entries <<<"$PATH"
-            for entry in "${entries[@]}"; do
-              if [ "$entry" != "$own" ] && [ -x "$entry/uv" ]; then
-                exec "$entry/uv" "$@"
-              fi
-            done
-            echo "uv stand-in: no uv on PATH past $own" >&2
-            exit 127
-            """
-        )
-    )
-    refuses.chmod(0o755)
-    # Ahead of the installed `uv` rather than in place of it: nothing outside this
-    # journey's own `tmp_path` is modified, and the substitution lasts exactly as long as
-    # the `PATH` this one invocation is given.
-    environment = dict(host.environment)
-    environment["PATH"] = f"{stand_ins}{os.pathsep}{environment['PATH']}"
-
-    result = sweep(host, "--min-age-hours", "1.5", environment=environment)
-
-    assert result.returncode == 1, result.stdout
-    assert "the oneagentgraph sweep this journey refuses" in result.stderr
-    assert "oneagentgraph sweep exited 2" in not_examined(result.stdout)
-    for family in ONEAGENTGRAPH_FAMILIES:
-        assert family in not_examined(result.stdout)
-        assert family not in examined(result.stdout)
-    for family in ONEVCS_FAMILIES:
-        assert family in examined(result.stdout)
-        assert family not in not_examined(result.stdout)
-    # onevcs did not merely print a header: it read this journey's own state and named
-    # what it found there — at the fractional floor it takes, as the wrapper forwards it.
-    assert str(workspace) in result.stdout
-    assert dead.exists(), "the refused verb swept anyway"
-
-
-# llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
-
-
-def test_the_two_age_floors_the_composed_help_claims_are_the_ones_the_verbs_have(
-    host: Host,
-) -> None:
-    """The help states a floor of its own and one of theirs, and both are asked.
-
-    `--min-age-hours` is forwarded rather than interpreted here, so the help makes two
-    claims about two other repositories: that they still default to twenty-four when
-    nobody passes one — the number this recipe's own default is chosen against — and
-    that each of them takes the number it passes instead. The two verbs have not always
-    accepted the same numbers — `oneagentgraph sweep` refused a fractional hour until
-    0.4.7 — so a default only one of them accepts would be a half-sweep at every bare
-    invocation, and it would be this recipe that caused it. Neither claim is observable
-    from the age journeys above, which read one verb's echo and the other's behaviour
-    rather than what either declares.
-    """
-    help_text = sweep(host, "--help").stdout
-    theirs = DEFAULT_AGE_CLAIM.search(help_text)
-    assert theirs is not None, "the composed help no longer claims a shared default age"
-    ours = RECIPE_DEFAULT_AGE.search(help_text)
-    assert ours is not None, "the composed help no longer names the floor it passes"
-
-    for verb in ("oneagentgraph", "onevcs"):
-        declared = subprocess.run(
-            ["uv", "run", verb, "sweep", "--help"],
-            cwd=REPO_ROOT,
-            env=host.environment,
-            check=True,
-            text=True,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            timeout=e2e_timeout(120),
-        )
-        assert f"[default: {theirs.group(1)}]" in declared.stdout, (
-            f"{verb} sweep no longer defaults to the {theirs.group(1)} hours "
-            "just sweep --help tells an operator both verbs do"
-        )
-        taken = subprocess.run(
-            ["uv", "run", verb, "sweep", "--dry-run", "--min-age-hours", ours.group(1)],
-            cwd=REPO_ROOT,
-            env=host.environment,
-            check=False,
-            text=True,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            timeout=e2e_timeout(120),
-        )
-        assert taken.returncode == 0, (
-            f"{verb} sweep refuses the {ours.group(1)} hours this recipe passes when "
-            f"the caller names none: {taken.stderr}"
-        )
-
-
-@pytest.mark.parametrize("flag", ["--help", "-h"], ids=("long", "short"))
-def test_asking_for_help_answers_and_sweeps_nothing(host: Host, flag: str) -> None:
-    """Help is a question, not a sweep — including on a host whose scratch is reclaimable.
-
-    A `--help` that fell through to the verbs would remove directories on the way to
-    printing its own usage, which is the worst possible reading of an operator asking
-    what the command does.
-    """
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, flag)
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("Usage: just sweep [--dry-run] [--min-age-hours HOURS]")
-    assert "--min-age-hours HOURS" in result.stdout
-    assert "=== oneagentgraph sweep" not in result.stdout, "help reached the verbs"
-    assert "=== just sweep — what this run looked at ===" not in result.stdout
-    assert dead.exists(), "asking for help swept"
-
-
-def test_the_help_accounts_for_every_family_no_verb_here_sweeps(host: Host) -> None:
-    """`--help` describes the four unswept families, and a description is a contract.
-
-    It is what an operator reads before running this at all, so its account of the
-    families neither verb reaches is the first thing they believe about them — and it
-    was the one part of that account nothing held to a real report. A help text naming
-    two families where a run reports three, or promising a removal this recipe does not
-    make, would stay green for ever.
-    """
-    borrowed = host.registered_worktree("nickderobertis__llmlint", branch="feat/keep")
-    kept = host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
-    dead = host.scratch("dead", held=False)
-
-    helped = sweep(host, "--help")
-    # A real sweep rather than a rehearsal: the promise below is that nothing under
-    # either root is removed, and only a run that removes something proves it. The
-    # floor is named so that the one directory that should go is old enough to go —
-    # the retention this recipe defaults to would otherwise keep it and leave the
-    # promise proven by a sweep that removed nothing at all.
-    ran = sweep(host, "--min-age-hours", "0")
-
-    assert helped.returncode == 0, helped.stderr
-    assert ran.returncode == 0, ran.stderr
-    # Each family the help claims, by the name the help gives it and with the owner it
-    # sends the reader to. `$TMPDIR` and `~/.ai-orchestrator/worktrees` are how the help
-    # names two roots whose resolved paths differ per host, which is why these are the
-    # tokens rather than this journey's own directories.
-    for named in (
-        "host scratch root ($TMPDIR, or /tmp)",
-        "pre-adoption ~/.ai-orchestrator/worktrees root",
-        "preserved unpublished branches",
-        "just recoverable",
-        "pool of warm worktree slots",
-        "onevcs pool status <repo>",
-        "onevcs pool prune <repo>",
-        "Nothing here removes anything in any of them",
-    ):
-        assert named in helped.stdout, f"the help does not account for {named}"
-    # Four claimed, and four is what a run that has all of them reports: an entry
-    # starts at two spaces and its own lines are indented further, so this counts
-    # families rather than lines. A fifth family added to the report without the help
-    # gaining it fails here, which is the drift this holds against.
-    entries = [line for line in not_examined(ran.stdout).splitlines() if re.match(r"  \S", line)]
-    assert len(entries) == 4, entries
-    assert borrowed.tree.exists(), "a root the help promises to leave alone was reclaimed"
-    assert kept.exists(), "an entry the help promises to leave alone was reclaimed"
-    assert not dead.exists(), "the promise came from a sweep that reclaimed nothing"
-
-
-#: A root nothing can read is the one way to make `find` and `du` fail here without
-#: substituting either, and root reads a mode-000 directory regardless. The journeys
-#: below say so rather than passing vacuously.
-needs_unprivileged = pytest.mark.skipif(
-    os.geteuid() == 0,
-    reason="root reads a mode-000 directory, so the unreadable root these prove cannot exist",
-)
-
-
-@needs_unprivileged
-def test_a_legacy_root_this_sweep_cannot_read_is_still_named_and_the_trailer_still_prints(
-    host: Host,
-) -> None:
-    """The measurement that fails must not take the report with it.
-
-    This root is the family least likely to be readable — its directories belong to
-    other checkouts — and it is the last thing the run touches. Under `set -euo
-    pipefail` a `find` that cannot walk it aborted the whole sweep *after* both verbs
-    had already run, discarding their reports and this trailer and leaving the
-    operator `find`'s bare errno. So the numbers degrade, the root is still named,
-    and the exit still belongs to the verbs.
-    """
-    host.leftover_content("nickderobertis__llmlint")
-    host.worktrees.chmod(0o000)
-    try:
-        result = sweep(host, "--dry-run")
-    finally:
-        host.worktrees.chmod(0o755)
-
-    assert result.returncode == 0, result.stderr
-    assert (
-        f"{host.worktrees} — an unmeasurable size across an unreadable number of directories."
-        in not_examined(result.stdout)
-    )
-    assert "check the root with ls -ld" in not_examined(result.stdout)
-    # The reading of what each directory is degrades with the numbers rather than
-    # inventing a class for a directory it could not reach: an unlisted root gets the
-    # phrase, and every directory under it stays unclassified rather than becoming
-    # leftover content somebody is then told to remove by hand.
-    assert "none is classified here" in not_examined(result.stdout), result.stdout
-    assert "not a git working tree" not in not_examined(result.stdout), result.stdout
-    for family in ONEAGENTGRAPH_FAMILIES + ONEVCS_FAMILIES:
-        assert family in examined(result.stdout), "a failed measurement cost a verb its report"
-
-
-@needs_unprivileged
-def test_a_legacy_root_whose_size_cannot_be_measured_keeps_the_count_it_could_get(
-    host: Host,
-) -> None:
-    """One unreadable worktree makes `du`'s total partial, and a partial total is not one.
-
-    The count is a listing of the root itself and still answers, so the entry carries
-    the number it has and names the one it does not. Reporting the partial figure
-    instead would understate exactly the family this trailer exists to stop
-    understating.
-    """
-    unreadable = host.leftover_content("nickderobertis__llmlint")
-    readable = host.leftover_content("nickderobertis__onevcs")
-    unreadable.chmod(0o000)
-    try:
-        result = sweep(host, "--dry-run")
-    finally:
-        unreadable.chmod(0o755)
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert f"{host.worktrees} — an unmeasurable size across 2 directories." in entry
-    assert "check the root with ls -ld" in entry
-    # The reading degrades per directory as well as per number: the one that cannot be
-    # read says so, and the one beside it is still read. Calling the unreadable one
-    # leftover content — which is what a `.git` test that could not stat answers — would
-    # send an operator to remove a directory nothing here has looked inside.
-    assert f"{unreadable.name} — unreadable, so what it is could not be read" in entry, entry
-    assert f"{readable.name} — not a git working tree at all" in entry, entry
-    assert "A directory whose reading this sweep could not finish is" in entry, entry
-
-
-# llmlint: ignore-block[e2e_not_mocked] Fault injection at an external dependency
-# boundary rather than a substitution of the layer under test; the docstring below
-# states how and why, and the `awk` journey further down states the same pattern.
-def test_a_worktree_reading_git_cannot_finish_is_unclassified_rather_than_a_repository(
-    host: Host, tmp_path: Path
-) -> None:
-    """The reading's own last question can fail, and a "no" is the answer it must not give.
-
-    Once a directory has resolved a git directory that is not a lender's registration,
-    one question is left: whether a superproject owns that storage. Git answers it, and
-    a failed answer is not a negative one — taking it for a negative names a
-    superproject's checkout a repository whose commits are its own and sends an
-    operator to remove by hand a tree `git submodule deinit` owns. So the failure takes
-    the class a reading that could not finish takes, and the directory is reported as
-    unclassified with the owner that says to look before removing.
-
-    The failure is arranged the way the `awk` one below is: a stand-in named `git` goes
-    ahead of the installed one on `PATH` and forwards every invocation to the real git
-    except that one question, which it refuses. Nothing above that boundary is
-    substituted — the real `just sweep`, the real wrapper, and every line of its
-    reporting run end to end — and it is the only way to reach this branch, because a
-    directory git can resolve at all is one it answers this question about.
-    """
-    own = host.own_repository("nickderobertis__standalone")
-    stand_ins = tmp_path / "path-stand-ins"
-    stand_ins.mkdir()
-    refuses = stand_ins / "git"
-    refuses.write_text(
-        textwrap.dedent(
-            f"""\
-            #!/usr/bin/env bash
-            for argument in "$@"; do
-              if [ "$argument" = "--show-superproject-working-tree" ]; then
-                exit 1
-              fi
-            done
-            exec {shutil.which("git")} "$@"
-            """
-        )
-    )
-    refuses.chmod(0o755)
-    # Ahead of the installed `git` rather than in place of it: nothing is modified
-    # outside this journey's own `tmp_path`, and the substitution lasts exactly as long
-    # as the `PATH` this one invocation is given.
-    environment = dict(host.environment)
-    environment["PATH"] = f"{stand_ins}{os.pathsep}{environment['PATH']}"
-
-    result = sweep(host, "--dry-run", environment=environment)
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    assert f"{own.name} — unreadable, so what it is could not be read" in entry, entry
-    assert f"{own.name} — a git repository of its own" not in entry, entry
-    assert f"{own.name} — a submodule of another repository" not in entry, entry
-    assert "A directory whose reading this sweep could not finish is" in entry, entry
-    assert own.exists(), "a root this sweep only reports on was reclaimed"
-
-
-# llmlint: ignore-end[e2e_not_mocked]
-
-
-@needs_unprivileged
-def test_a_scratch_root_this_sweep_cannot_read_is_still_named_and_nothing_is_lost(
-    host: Host,
-) -> None:
-    """The measurement that fails must not take the sweep with it.
-
-    This root is walked last, after both verbs have already swept and after the
-    trailer's other measurement, so under `set -euo pipefail` a `find` or `du` that
-    cannot read it would abort the run *there* — discarding both reports, the trailer,
-    and the other family it names, and leaving the operator a bare errno. So each
-    number degrades to a phrase, the root is still named, and the exit still belongs
-    to the verbs.
-    """
-    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
-    host.temp.chmod(0o333)
-    try:
-        result = sweep(host, "--dry-run")
-    finally:
-        host.temp.chmod(0o755)
-
-    assert result.returncode == 0, result.stderr
-    assert (
-        f"{host.temp} — an unmeasurable size across an unreadable number of entries"
-        in not_examined(result.stdout)
-    )
-    assert "check the root with ls -ld" in not_examined(result.stdout)
-    for section in SECTIONS:
-        assert section in result.stdout, "a failed measurement cost a verb its report"
-    for family in ONEVCS_FAMILIES:
-        assert family in examined(result.stdout), "a failed measurement cost a verb its report"
-
-
-@needs_unprivileged
-def test_a_scratch_root_this_sweep_can_only_partly_read_reports_a_floor_not_a_total(
-    host: Host,
-) -> None:
-    """A partial total is not a total, and the difference is the point of the number.
-
-    The root itself lists, so the count answers and the size is as much of it as this
-    sweep could reach. Printing that as *the* size would understate exactly the family
-    the trailer exists to stop understating, so it is reported as a floor and says so.
-    """
-    unreadable = host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
-    (unreadable / "inner").mkdir()
-    (unreadable / "inner").chmod(0o000)
-    try:
-        result = sweep(host, "--dry-run")
-    finally:
-        (unreadable / "inner").chmod(0o755)
-
-    assert result.returncode == 0, result.stderr
-    assert re.search(
-        rf"{re.escape(str(host.temp))} — at least [\d.]+ [KMGT]iB across 1 entries",
-        not_examined(result.stdout),
-    ), not_examined(result.stdout)
-    assert "the family is at least this large" in not_examined(result.stdout)
-
-
-# llmlint: ignore-block[e2e_not_mocked] Fault injection at an external dependency
-# boundary rather than a substitution of the layer under test; the docstring below
-# states how and why, since it is the one place in this module that does it.
-def test_a_scratch_measurement_that_cannot_run_says_so_rather_than_reporting_a_zero(
-    host: Host, tmp_path: Path
-) -> None:
-    """The other way that measurement fails: the root reads fine and the tool does not.
-
-    Every journey above makes the *root* fail — a directory nothing can read, a subtree
-    nothing can walk. This makes the measurement fail instead, which is the case the two
-    cannot reach: `find` answers, so the entry count is real, while the `awk` that turns
-    one walk into a size and its name groups comes back a failure. The report has to
-    keep the number it got and say the other one is missing, because a family reported
-    as `0 KiB` is one an operator reads as empty — and this family is the one that
-    filled this host's disk.
-
-    How the failure is arranged, stated plainly because it is the one place in this
-    module that does it: a stand-in named `awk` is written into a directory put ahead of
-    the installed one on `PATH`, so the wrapper's own lookup finds the stand-in and the
-    real `awk` is never called. That is fault injection at an external dependency
-    boundary. Nothing above that boundary is substituted — the real `just sweep`, the
-    real wrapper, its real `find` and `du`, and every line of its reporting run end to
-    end — and every assertion below is on the wrapper's own output.
-    """
-    host.unowned(f"{NX_CACHE_FAMILY}3a91b2c")
-    dead = host.scratch("dead", held=False, age_hours=5)
-    # Ahead of the installed `awk` rather than in place of it: nothing is modified
-    # outside this journey's own `tmp_path`, and the substitution lasts exactly as long
-    # as the `PATH` this one invocation is given.
-    stand_ins = tmp_path / "path-stand-ins"
-    stand_ins.mkdir()
-    refuses = stand_ins / "awk"
-    refuses.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
-    refuses.chmod(0o755)
-    environment = dict(host.environment)
-    environment["PATH"] = f"{stand_ins}{os.pathsep}{environment['PATH']}"
-
-    result = sweep(host, environment=environment)
-
-    assert result.returncode == 0, result.stderr
-    entry = not_examined(result.stdout)
-    # The count survives and the size does not, which is the whole distinction: one
-    # measurement failed and the report says which. One entry rather than two, because
-    # the reclaimable directory beside it carries `oneagentgraph`'s own prefix and is
-    # left out of this family's numbers as a family a verb above examined.
-    assert f"{host.temp} — an unmeasurable size across 1 entries" in entry, entry
-    assert "A number above is missing rather than zero" in entry, entry
-    # No name group is claimed, because the measurement that would have grouped them is
-    # the one that failed. Reporting the largest of nothing is what a zero would be.
-    assert "Those are its largest by name" not in entry, entry
-    assert not dead.exists(), (
-        "a dependency that failed after both verbs had swept stopped the sweep "
-        "reclaiming, which is the one thing this degrade may never do"
-    )
-
-
-# llmlint: ignore-end[e2e_not_mocked]
-
-
-@pytest.mark.parametrize(
-    ("arguments", "reason"),
-    [
-        (("--min-age-hours",), "needs a number of hours after it"),
-        (("--min-age-hours", "yesterday"), "takes a number of hours, not 'yesterday'"),
-        (("--min-age-hours=-1",), "takes a number of hours, not '-1'"),
-        (("--force",), "unrecognized argument '--force'"),
-    ],
-    ids=("bare", "not-a-number", "negative", "unknown"),
-)
-def test_an_argument_neither_verb_takes_is_refused_before_either_runs(
-    host: Host, arguments: tuple[str, ...], reason: str
-) -> None:
-    """One refusal naming what is accepted, rather than the same error from two verbs."""
-    dead = host.scratch("dead", held=False)
-
-    result = sweep(host, *arguments)
-
-    assert result.returncode == 2, result.stdout
-    assert reason in result.stderr
-    assert dead.exists(), "a refused invocation swept anyway"
-
-
-#: A `uv` that answers `uv run <verb> sweep` with a report whose *shape* is a released
-#: verb's and whose count lines are not. This is what a release rewording one of them
-#: looks like from the recipe: every section is there, the exit status is 0, and the two
-#: numbers the composition reads out of them are gone.
-REWORDED_UV = """#!/usr/bin/env bash
-set -euo pipefail
-if [ "${1:-}" != run ]; then exec /usr/bin/env "$@"; fi
-case "${2:-}" in
-  oneagentgraph)
-    printf 'sweep: examined family "runs" at /somewhere — 3 folders\\n'
-    printf 'sweep: examined family "temp" at /elsewhere — 1 folder\\n'
-    printf 'sweep: reclaimed 0 B from 0 folders; examined: runs, temp; unexamined: none\\n'
-    ;;
-  onevcs)
-    printf 'Families examined:\\n'
-    printf '  publications — 2 roots in /somewhere\\n'
-    printf '  recoveries — 0 roots in /elsewhere\\n'
-    printf 'Families not examined:\\n  none\\n'
-    printf 'Reclaimed:\\n  none\\n'
-    ;;
-esac
-"""
-
-
-# llmlint: ignore-block[e2e_not_mocked] The recipe, its parsing and its output are the
-# real ones; what is substituted is `uv`, the boundary the recipe crosses to reach the
-# two published verbs, and it is substituted with a report *only a future release could
-# write*. That is the whole condition under test — a verb that succeeded and reworded a
-# line — and it cannot be arranged with the installed verbs, which by construction still
-# write the lines this recipe reads.
-def test_a_report_whose_counts_cannot_be_read_prints_the_sections_rather_than_guessing(
-    host: Host, tmp_path: Path
-) -> None:
-    """An unreadable count is a third answer, and it may not collapse into either of two.
-
-    The composition tells "nothing reclaimed, candidates examined" from "nothing
-    reclaimed, nothing examined" by reading counts out of each verb's own report. A
-    release that rewords one of those lines leaves it reading zero, which is the second
-    sentence — and that sentence, wrongly given, is an all-clear on a host where nothing
-    was looked at. So it prints the verbs' own reports instead, which is where the
-    operator can see what really happened.
-    """
-    stub = tmp_path / "stub-bin"
-    stub.mkdir()
-    (stub / "uv").write_text(REWORDED_UV, encoding="utf-8")
-    (stub / "uv").chmod(0o755)
-    environment = {**host.environment, "PATH": f"{stub}{os.pathsep}{host.environment['PATH']}"}
-
-    result = subprocess.run(
-        ["just", "sweep", "--min-age-hours", "0"],
-        cwd=REPO_ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-        timeout=e2e_timeout(120),
-    )
-
-    assert result.returncode == 0, result.stderr
-    for verdict in (NOTHING_EXAMINED, nothing_reclaimed(0), reclaimed(0, 0)):
-        assert verdict not in result.stdout, (
-            "a report whose counts could not be read was answered with a verdict about "
-            f"how many candidates were judged:\n{result.stdout}"
-        )
-    for section in SECTIONS:
-        assert section in result.stdout, (
-            f"an unreadable count cost the reports that are the answer:\n{result.stdout}"
-        )
-    assert "3 folders" in result.stdout, (
-        "the verb's own report is not in front of the operator, so nothing here says "
-        f"which line stopped being readable:\n{result.stdout}"
-    )
-
-
-# llmlint: ignore-end[e2e_not_mocked]

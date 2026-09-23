@@ -26,8 +26,8 @@
 #     than the one holding the tracked file — so a path names a file it cannot open,
 #     and the refusal it then met named that same path.
 #   * **`ORCHESTRATOR_ASK_MANAGER` is exported into the launch environment**, holding
-#     the path of `scripts/ask-manager.sh`, the shim that hands a question to
-#     `onemessagebus ask`, which is how the dispatched planner stops and asks rather
+#     the path of `scripts/ask-manager.sh`, which runs the engine's `onepipeline ask`,
+#     which is how the dispatched planner stops and asks rather
 #     than guessing at a decision fork. A launch that dropped it would
 #     produce exactly the confidently-wrong plan the ask channel exists to prevent.
 #     Established through `scripts/ask-manager-env.sh`, which every launch path shares,
