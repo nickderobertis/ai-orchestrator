@@ -1,16 +1,23 @@
 # llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real llmlint wrapper boundary (scripts/llmlint-oneharness.sh) prove this chain without spending another paid model invocation.
 # LLM lint is a third, independent side of the harness, with its own priority
 # order — it keeps that order even though the worker's discovered oneharness.toml
-# prefers Claude Code.
-run_mode = "fallback"
+# prefers Claude Code. Forced by scripts/llmlint-oneharness.sh.
+#
+# It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`: the
+# judged tier is run by a recipe rather than started by the engine, so there is no node
+# scratch directory for the runtime-directory repoint to point at. A worker's own
+# `just lint-llm-diff` runs it inside a dispatch, but the recipe is the caller either
+# way.
+extends = "oneharness.identities.toml"
+
 # The judged tier is run by a recipe rather than started by the engine, so nothing
 # else switches recording on for it and no `onepipeline.*` label is inherited unless a
 # worker's own `just lint-llm-diff` is what invoked it — in which case the dispatch's
 # keys come through the worker's environment and `role = "llmlint"` is what tells this
 # tier's sessions from that worker's own. The key is this host's; the engine stamps none
 # like it.
-history = true
 history_labels = { role = "llmlint" }
+
 # Codex carries this tier, and a second Codex identity absorbs an exhausted quota
 # before the chain leaves the provider. Past that it now reaches the workers'
 # alternate Claude subscriptions before the primary one — this tier is no longer
@@ -25,8 +32,6 @@ harnesses = [
     "claude-code:primary",
 ]
 
-[harness.codex]
-model = "gpt-5.6-sol"
 # Codex's read-only filesystem sandbox is usable on this host, but its default
 # network isolation asks bubblewrap to configure loopback in a namespace that the
 # outer container forbids. Grant network only: Codex retains its OS-enforced
@@ -41,89 +46,21 @@ model = "gpt-5.6-sol"
 # non-Codex candidate at all, and both Codex identities inherit it. It is only
 # consulted when Codex actually sandboxes (this tier forces oneharness
 # `--mode read-only`); with the sandbox bypassed there is no policy to widen.
+#
+# Declared at the harness level, which is also what keeps this role's variants
+# untouched — and so keeps every credential mask `oneharness.identities.toml` states
+# for them. `oneharness.dispatch.toml` explains why mentioning a variant at all is
+# what costs a mask on the released oneharness.
 # llmlint: ignore[least_privilege_grants] Codex exposes only coarse disk/network grants; llmlint needs repository reads and its model endpoint, with the outer container as boundary.
+[harness.codex]
 args = ["-c", 'sandbox_permissions=["disk-full-read-access","network-full-access"]']
 
-# A variant rather than the bare `codex`, so the environment rules below reach it; no
-# `unset_env` for `CODEX_HOME`, which this identity honours. AGENTS.md says why.
+# The board credential is the plan store's and this role never reaches the store, so it
+# stops here rather than travelling to the provider. Stated per role rather than in the
+# shared parent because it is a per-role policy and a parent's mask is one no child can
+# remove — `oneharness.identities.toml` says so at this same variant. The board
+# *nomination* is left travelling on purpose: a live lane handed the owner, number and
+# repository but no token skips and says why, where one handed nothing cannot tell a
+# misconfigured lane from a deliberate one.
 [harness.codex.variant.primary]
-model = "gpt-5.6-sol"
-# The board credential is the plan store's and this role never reaches the store, so
-# it stops here rather than travelling to the provider. The board *nomination* is left
-# travelling on purpose: a live lane handed the owner, number and repository but no
-# token skips and says why, where one handed nothing cannot tell a misconfigured lane
-# from a deliberate one.
 unset_env = ["GH_PROJECTS_TOKEN"]
-
-# The second Codex identity, which this side's chain names like every other side's;
-# tests/e2e/test_oneharness_timeout_e2e.py holds this config's resolved order to that
-# chain, since a side that dropped this candidate would silently lose its quota. See
-# scripts/codex-alt-home.sh for the indirection.
-[harness.codex.variant.alternate]
-model = "gpt-5.6-sol"
-env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
-unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN"]
-
-[harness.claude-code]
-# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
-# refusing; harmless on other harnesses.
-env = { IS_SANDBOX = "1" }
-
-# The four Claude identities carry the same routing as every other role's.
-# scripts/llmlint-oneharness.sh exports every Claude indirection, because oneharness
-# refuses to start when a
-# named variant's `env_from` source is unset in the parent.
-[harness.claude-code.variant.alternate]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
-# Subscription auth must not be shadowed by ambient API or OAuth credentials.
-unset_env = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-    "GH_PROJECTS_TOKEN",
-]
-
-[harness.claude-code.variant.alternate2]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
-unset_env = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-    "GH_PROJECTS_TOKEN",
-]
-
-# The primary-backup subscription, reached just before the primary one. It is
-# credentialed from the directory scripts/claude-alt-config-dir.sh resolves into
-# ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR, which is that helper's to default; a
-# host that never logged it in reports `failure_kind: "auth"` and falls through, so the
-# candidate costs nothing until then.
-[harness.claude-code.variant.primary-backup]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR" }
-unset_env = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-    "GH_PROJECTS_TOKEN",
-]
-
-# The last resort in every chain: the primary subscription, credentialed from the
-# directory scripts/claude-alt-config-dir.sh resolves into
-# ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR, which is that helper's to default. Every
-# higher-precedence credential selector is masked, so this identity can never run as
-# another account.
-[harness.claude-code.variant.primary]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR" }
-unset_env = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-    "GH_PROJECTS_TOKEN",
-]

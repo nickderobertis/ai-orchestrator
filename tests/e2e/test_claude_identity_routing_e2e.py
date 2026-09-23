@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
@@ -71,8 +72,16 @@ DEFAULT_LEAVES = {
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": ".claude",
 }
 
-#: Every role config this repository ships.
-ROLE_CONFIGS = tuple(sorted(path.name for path in REPO_ROOT.glob("oneharness*.toml")))
+#: Every ROLE config this repository ships. Only files declaring a `harnesses` chain
+#: are runnable; the shared parents `oneharness*.toml` also matches declare none, and
+#: `oneharness run` refuses them before reaching the indirection under test here.
+ROLE_CONFIGS = tuple(
+    sorted(
+        path.name
+        for path in REPO_ROOT.glob("oneharness*.toml")
+        if "harnesses" in tomllib.loads(path.read_text(encoding="utf-8"))
+    )
+)
 
 DISPATCH_ENVIRONMENT = REPO_ROOT / "scripts" / "dispatch-env.sh"
 LLMLINT_WRAPPER = REPO_ROOT / "scripts" / "llmlint-oneharness.sh"

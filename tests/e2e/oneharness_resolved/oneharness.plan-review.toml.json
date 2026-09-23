@@ -1,0 +1,405 @@
+{
+  "all": {
+    "value": null
+  },
+  "allowed_tools": {
+    "value": null
+  },
+  "bypass": {
+    "value": false
+  },
+  "denied_tools": {
+    "value": null
+  },
+  "env": {},
+  "exclude": {
+    "value": null
+  },
+  "harness": {
+    "claude-code": {
+      "allowed_tools": {
+        "value": null
+      },
+      "args": {
+        "value": null
+      },
+      "bin": {
+        "value": null
+      },
+      "denied_tools": {
+        "value": null
+      },
+      "env": {
+        "IS_SANDBOX": {
+          "value": "1"
+        }
+      },
+      "hooks": {
+        "value": null
+      },
+      "model": {
+        "value": null
+      },
+      "reasoning": {
+        "value": null
+      },
+      "settings": {
+        "value": null
+      },
+      "variant": {
+        "alternate": {
+          "allowed_tools": {
+            "value": null
+          },
+          "args": {
+            "value": null
+          },
+          "bin": {
+            "value": null
+          },
+          "denied_tools": {
+            "value": null
+          },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {
+            "CLAUDE_CONFIG_DIR": {
+              "value": "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"
+            }
+          },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "unset_env": {
+            "value": [
+              "ANTHROPIC_API_KEY",
+              "ANTHROPIC_AUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+              "GH_PROJECTS_TOKEN"
+            ]
+          }
+        },
+        "alternate2": {
+          "allowed_tools": {
+            "value": null
+          },
+          "args": {
+            "value": null
+          },
+          "bin": {
+            "value": null
+          },
+          "denied_tools": {
+            "value": null
+          },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {
+            "CLAUDE_CONFIG_DIR": {
+              "value": "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR"
+            }
+          },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "unset_env": {
+            "value": [
+              "ANTHROPIC_API_KEY",
+              "ANTHROPIC_AUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+              "GH_PROJECTS_TOKEN"
+            ]
+          }
+        },
+        "primary": {
+          "allowed_tools": {
+            "value": null
+          },
+          "args": {
+            "value": null
+          },
+          "bin": {
+            "value": null
+          },
+          "denied_tools": {
+            "value": null
+          },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {
+            "CLAUDE_CONFIG_DIR": {
+              "value": "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"
+            }
+          },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "unset_env": {
+            "value": [
+              "ANTHROPIC_API_KEY",
+              "ANTHROPIC_AUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+              "GH_PROJECTS_TOKEN"
+            ]
+          }
+        },
+        "primary-backup": {
+          "allowed_tools": {
+            "value": null
+          },
+          "args": {
+            "value": null
+          },
+          "bin": {
+            "value": null
+          },
+          "denied_tools": {
+            "value": null
+          },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {
+            "CLAUDE_CONFIG_DIR": {
+              "value": "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR"
+            }
+          },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "unset_env": {
+            "value": [
+              "ANTHROPIC_API_KEY",
+              "ANTHROPIC_AUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_TOKEN",
+              "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+              "GH_PROJECTS_TOKEN"
+            ]
+          }
+        }
+      }
+    },
+    "codex": {
+      "allowed_tools": {
+        "value": null
+      },
+      "args": {
+        "value": null
+      },
+      "bin": {
+        "value": null
+      },
+      "denied_tools": {
+        "value": null
+      },
+      "env": {},
+      "hooks": {
+        "value": null
+      },
+      "model": {
+        "value": "gpt-6-astra"
+      },
+      "reasoning": {
+        "value": null
+      },
+      "settings": {
+        "value": null
+      },
+      "variant": {
+        "alternate": {
+          "allowed_tools": {
+            "value": null
+          },
+          "args": {
+            "value": null
+          },
+          "bin": {
+            "value": null
+          },
+          "denied_tools": {
+            "value": null
+          },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {
+            "CODEX_HOME": {
+              "value": "ORCHESTRATOR_CODEX_ALT_HOME"
+            }
+          },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "gpt-6-astra"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "unset_env": {
+            "value": [
+              "OPENAI_API_KEY",
+              "GH_PROJECTS_TOKEN"
+            ]
+          }
+        },
+        "primary": {
+          "allowed_tools": {
+            "value": null
+          },
+          "args": {
+            "value": null
+          },
+          "bin": {
+            "value": null
+          },
+          "denied_tools": {
+            "value": null
+          },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {},
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "gpt-6-astra"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "unset_env": {
+            "value": [
+              "GH_PROJECTS_TOKEN"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "harnesses": {
+    "value": [
+      "codex:primary",
+      "codex:alternate",
+      "claude-code:alternate",
+      "claude-code:alternate2",
+      "claude-code:primary-backup",
+      "claude-code:primary"
+    ]
+  },
+  "history": {
+    "value": true
+  },
+  "history_dir": {
+    "value": null
+  },
+  "history_labels": {
+    "role": {
+      "value": "agent"
+    }
+  },
+  "history_pointer_file": {
+    "value": null
+  },
+  "hooks": {
+    "value": null
+  },
+  "max_parallel": {
+    "value": null
+  },
+  "mode": {
+    "value": null
+  },
+  "model": {
+    "value": null
+  },
+  "models": {
+    "value": null
+  },
+  "output_format": {
+    "value": null
+  },
+  "reasoning": {
+    "value": null
+  },
+  "require_available": {
+    "value": false
+  },
+  "run_mode": {
+    "value": "fallback"
+  },
+  "schema_file": {
+    "value": "config/plan-review-verdict.schema.json"
+  },
+  "schema_max_retries": {
+    "value": 2
+  },
+  "schema_version": "0.11",
+  "server_overloaded_max_retries": {
+    "value": 2
+  },
+  "stream": {
+    "value": false
+  },
+  "system": {
+    "value": null
+  },
+  "timeout": {
+    "value": 300
+  }
+}

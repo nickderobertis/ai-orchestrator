@@ -25,11 +25,10 @@ import os
 import re
 import shlex
 import subprocess
-import tomllib
-from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import NamedTuple
 
 import pytest
+from harness_configs import extends_chain, harness_routing
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -64,50 +63,13 @@ INDIRECTION_SOURCES = (
 )
 
 #: The configs whose members run oneharness in-library, so their variants resolve from
-#: this process's environment rather than a spawned CLI's.
+#: this process's environment rather than a spawned CLI's. Each is a ROLE config; the
+#: variants themselves are stated in the shared parents these extend, which is why the
+#: read below walks the chain rather than the named file alone.
 SINGLE_SIDED_CONFIGS = (
     REPO_ROOT / "oneharness.check-in.toml",
     REPO_ROOT / "oneharness.pr-author.toml",
 )
-
-
-class Variant(TypedDict, total=False):
-    """One authentication variant of a harness, narrowed to what is read here.
-
-    `env_from` is the indirection this module exists for: it maps the variable the
-    variant sets to the variable it reads that value out of the parent process, and
-    `oneharness` refuses to start the variant when the second one is unset.
-    """
-
-    env_from: dict[str, str]
-
-
-class Harness(TypedDict, total=False):
-    """One harness's routing, narrowed to its variants."""
-
-    variant: dict[str, Variant]
-
-
-class HarnessRouting(TypedDict, total=False):
-    """One oneharness config, narrowed to the two tables this suite reads.
-
-    `oneharness` owns the rest of the schema and is what validates it; these are the
-    keys a journey here consults — the variants whose indirections have to exist, and
-    the identity order a chain declares.
-    """
-
-    harness: dict[str, Harness]
-    harnesses: list[str]
-
-
-def harness_routing(config: Path) -> HarnessRouting:
-    """One oneharness config, as the CLI that reads it lays it out.
-
-    `cast` rather than a validating read: the file is this repository's own and
-    `oneharness` is what holds it to its schema, so `HarnessRouting` states the shape
-    consulted here instead of restating somebody else's validation.
-    """
-    return cast(HarnessRouting, tomllib.loads(config.read_text(encoding="utf-8")))
 
 
 def _configured_indirections() -> tuple[str, ...]:
@@ -116,11 +78,17 @@ def _configured_indirections() -> tuple[str, ...]:
     Derived rather than listed: `oneharness` refuses to start a variant whose
     indirection is unset, so a config that names a new one has to reach the journeys
     below or they would fail on it with the environment out of sight again.
+
+    Read as a union over each config's whole `extends` chain. That is exactly right
+    rather than an approximation of the merge: `env_from` merges KEY-WISE and no layer
+    can remove a key, so every indirection any document in the chain names is one the
+    resolved variant carries — which is the question this function asks.
     """
     named = {
         variable
         for config in SINGLE_SIDED_CONFIGS
-        for harness in harness_routing(config).get("harness", {}).values()
+        for document in map(harness_routing, extends_chain(config))
+        for harness in document.get("harness", {}).values()
         for variant in harness.get("variant", {}).values()
         for variable in variant.get("env_from", {}).values()
     }

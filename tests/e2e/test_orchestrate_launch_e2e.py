@@ -43,7 +43,8 @@ from fake_backend import (
     RUN_TASK,
     RecordedTurn,
 )
-from harness_indirections import established_indirections, harness_routing
+from harness_configs import copied_with_its_parents, harness_routing
+from harness_indirections import established_indirections
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
 from planner_channel import BUS_CONFIG, RUNS_OWN_PROJECTION_COMPLAINT
@@ -505,10 +506,15 @@ def routed_persona_run(
     """Launch distinct side configs with one named and one omitted persona."""
     tmp_path = tmp_path_factory.mktemp("routed-persona")
     environment = _environment(tmp_path, oneharness_bin)
-    worker_config = tmp_path / "worker.toml"
-    judge_config = tmp_path / "judge.toml"
-    worker_config.write_bytes((REPO_ROOT / "oneharness.toml").read_bytes())
-    judge_config.write_bytes((REPO_ROOT / "oneharness.judge.toml").read_bytes())
+    # Each side's real routing, copied with the parents it extends: a role config states
+    # its chain and inherits the six identities, and `extends` resolves against the
+    # directory of the file declaring it, so a copy on its own resolves nothing.
+    worker_config = copied_with_its_parents(
+        REPO_ROOT / "oneharness.toml", tmp_path, name="worker.toml"
+    )
+    judge_config = copied_with_its_parents(
+        REPO_ROOT / "oneharness.judge.toml", tmp_path, name="judge.toml"
+    )
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
     plan = tmp_path / "routed-persona.plan.json"
@@ -3257,13 +3263,11 @@ MISSING_INDIRECTION = "AIO_1109_MISSING_SOURCE"
 #: A credential the hook prints in the refused case, which nothing the run keeps may carry.
 PLANTED_SECRET = "planted-by-the-dispatch-env-journey-and-never-recorded"
 
-#: The variant of `oneharness.toml` the journey's added `env_from` member is written on:
-#: the first in the worker's chain, and the one the engine names when the source is missing.
+#: The identity the journey's added `env_from` member is written on: the first in the
+#: worker's chain, and the one the engine names when the source is missing.
 ADDED_ON_VARIANT = "claude-code:alternate"
-ADDED_ON_LINE = (
-    'env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", '
-    'XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }'
-)
+#: The variable that member SETS, which only the variant's own turn would carry.
+ADDED_KEY = "AIO_1109_ADDED"
 
 
 def _hook_checkout(tmp_path: Path, credentials: str) -> Path:
@@ -3286,15 +3290,28 @@ def _hook_checkout(tmp_path: Path, credentials: str) -> Path:
 
 
 def _worker_config_reading(tmp_path: Path, indirection: str) -> Path:
-    """This repository's agent-side routing with one more `env_from` member on its first variant."""
-    routing = (REPO_ROOT / "oneharness.toml").read_text(encoding="utf-8")
-    assert routing.count(ADDED_ON_LINE) == 1, (
-        f"oneharness.toml no longer spells {ADDED_ON_VARIANT}'s env_from as this journey "
-        "expects; re-read the variant and update ADDED_ON_LINE"
+    """This repository's agent-side routing with one more `env_from` member on its first
+    identity, copied with the parents it extends.
+
+    The member is added to the ROLE file, which is where a routing change lands now:
+    the variant's own indirections are stated in `oneharness.identities.toml` and its
+    runtime repoint in `oneharness.dispatch.toml`, and `env_from` merges KEY-WISE — so
+    a role naming the variant adds a source beside the ones it inherits rather than
+    replacing them, which is the shape ai-orchestrator#1109 arrives in.
+    """
+    config = copied_with_its_parents(REPO_ROOT / "oneharness.toml", tmp_path)
+    heads = harness_routing(config)["harnesses"][0]
+    assert heads == ADDED_ON_VARIANT, (
+        f"this journey plants its indirection on the identity at the head of the worker's "
+        f"chain, which the engine names in its refusal; that is now {heads}, so re-read "
+        "the chain and update ADDED_ON_VARIANT"
     )
-    added = ADDED_ON_LINE.replace(" }", f', AIO_1109_ADDED = "{indirection}" }}')
-    config = tmp_path / "oneharness.toml"
-    config.write_text(routing.replace(ADDED_ON_LINE, added), encoding="utf-8")
+    harness, _, variant = ADDED_ON_VARIANT.partition(":")
+    with config.open("a", encoding="utf-8") as routing:
+        routing.write(
+            f"\n[harness.{harness}.variant.{variant}]\n"
+            f'env_from = {{ {ADDED_KEY} = "{indirection}" }}\n'
+        )
     return config
 
 
@@ -3496,7 +3513,12 @@ def _family_probes() -> dict[str, str]:
 
 
 def _env_from_sources() -> tuple[str, ...]:
-    """Every variable this repository's harness routing reads a value out of."""
+    """Every variable this repository's harness routing reads a value out of.
+
+    Every `oneharness*.toml`, the two SHARED parents included rather than the ten role
+    configs alone: the variants and their indirections are stated in the parents now,
+    so the role files name few sources and would answer this almost empty.
+    """
     sources: set[str] = set()
     for config in sorted(REPO_ROOT.glob("oneharness*.toml")):
         for declared in re.findall(

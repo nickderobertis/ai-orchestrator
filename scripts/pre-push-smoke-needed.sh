@@ -6,6 +6,11 @@ launch_paths=(
   "scripts/"
   "config/oneharness.version"
   "config/onejudge.base.yaml"
+  # The two shared parents every role config extends. They are where an identity, a
+  # model or a credential mask now changes, so a change to either moves the launch path
+  # for every role below even when no role file is touched at all.
+  "oneharness.identities.toml"
+  "oneharness.dispatch.toml"
   "oneharness.toml"
   "oneharness.judge.toml"
   "oneharness.orchestrator.toml"

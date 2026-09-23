@@ -5,7 +5,7 @@ declares in `config/onemessagebus.yaml` — is served only what a planner can ru
 `supervisor` at each turn boundary, and a `boolean` `judge` scoring its completion bar. The
 binding refuses `assess` and a `numeric` `judge`, with exit 2 — after which `oneagentgraph`
 classifies the member `provider-failure`/`protocol` and kills it, and the run carries on
-reporting `ACTIVE` with nobody watching it. Measured against onejudge 0.13.4 with a
+reporting `ACTIVE` with nobody watching it. Measured against onejudge 0.13.5 with a
 `kind: command` judge that logged every op it was asked:
 
 - `assessment` is asked as `assess`, once the conversation ends.

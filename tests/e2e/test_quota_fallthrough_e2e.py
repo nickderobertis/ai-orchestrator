@@ -149,7 +149,7 @@ WORKED_REJECTION: Rejection = {
     **ZERO_WORK_REJECTION,
     "usage": {"input_tokens": 1200, "output_tokens": 340},
     "total_cost_usd": 0.21,
-    "modelUsage": {"claude-opus-5": {"inputTokens": 1200, "outputTokens": 340}},
+    "modelUsage": {"claude-opus-5-5": {"inputTokens": 1200, "outputTokens": 340}},
 }
 
 

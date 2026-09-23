@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -407,9 +408,16 @@ def test_every_side_resolves_its_intended_effective_deadline(
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
     }
-    assert {config.name for config in configs.values()} == {
-        path.name for path in REPO_ROOT.glob("oneharness*.toml")
-    }, "a turn config this repository ships is not one of the sides this test resolves"
+    # Every config a TURN runs under is one of the sides resolved above. Only files
+    # declaring a `harnesses` chain: nothing is dispatched against the shared parents.
+    shipped = {
+        path.name
+        for path in REPO_ROOT.glob("oneharness*.toml")
+        if "harnesses" in tomllib.loads(path.read_text(encoding="utf-8"))
+    }
+    assert {config.name for config in configs.values()} == shipped, (
+        "a turn config this repository ships is not one of the sides this test resolves"
+    )
 
     for side, config in configs.items():
         assert effective[side]["harnesses"]["value"] == INTENDED_CHAINS[side], (

@@ -163,7 +163,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.42.0"}
+{"status":"ok","onepipeline_version":"0.44.2"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -183,20 +183,17 @@ reads the engine out of the adopted read-API wheel's own bill of materials and f
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than at whatever a browser adoption then drives.
 
-**They are not level today, by one declared exception.** `config/onepipeline.version`
-reads 0.44.1, and the adopted `onepipeline-ui` 0.11.2 — the newest release there is —
-links onepipeline 0.42.0. The engine pin moved anyway, on the manager's ruling, because
-holding it would have kept every dispatch on an engine without the fixes each later
-release carries; the gate reads the pair through
-`DECLARED_UI_ENGINE_DIVERGENCE` in the same module, which is satisfied only while the two
-are exactly 0.42.0 and 0.44.1 and fails, naming itself, the moment either moves. **Until
-an `onepipeline-ui` release links onepipeline 0.44.1, do not adopt a run from the
-browser**: the adopt would drive that run with the reader's own 0.42.0 while every other
-dispatch on this host runs 0.44.1. Adopt with `just orchestrate --adopt <run-id>`
-instead. What `/healthz` is for from here is the
-question that gate cannot answer — which release is answering **on this port right
-now**, since both pieces load once at start and a server left running from before a bump
-goes on serving what it loaded.
+**They are level today, and the exception that said otherwise is gone.**
+`config/onepipeline.version` reads 0.44.2 and the adopted `onepipeline-ui` 0.12.1 links
+onepipeline 0.44.2, so a run adopted from the browser is driven by the same engine every
+other dispatch on this host runs, and `DECLARED_UI_ENGINE_DIVERGENCE` in the same module
+is `None`. It held while no `onepipeline-ui` release linked 0.44.1, over which a browser
+adopt would have driven a run with the reader's own 0.42.0; it was deleted rather than
+re-dated the moment a reader linking the pinned engine existed, which is what its own
+terms required. What `/healthz` is for from here is the question that gate cannot
+answer — which release is answering **on this port right now**, since both pieces load
+once at start and a server left running from before a bump goes on serving what it
+loaded.
 
 The pair has been apart before, and that history is worth keeping because it says what
 the old freedom cost. The reader has been moved with the engine because a reader linking
@@ -216,8 +213,8 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.11.2**, the release `config/onepipeline-ui.version` pins, is the
-one that made this a supervising surface: the project list and per-project page are the
+**`onepipeline-ui` 0.12.1**, the release `config/onepipeline-ui.version` pins, carries
+what made this a supervising surface: the project list and per-project page are the
 landing view, the run page carries the channel with its byte-for-byte reply composer,
 `attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its
 unwatched badge, and the rendered reads, and an **Agents** panel lists every oneharness
@@ -283,7 +280,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.4.9**.
+linked crate; on the adopted release that is **oneagentgraph 0.4.10**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
@@ -344,7 +341,7 @@ over this host's own root a first page of the run list answered in 17 to 40 seco
 *warm*, a run detail or a run-scoped timeline in about 20, and a browser — one page
 load, one `/api/v2/events` subscription, one run list, then the selected run's detail
 and timeline — sat on `Loading execution history…` for over a minute and a half before
-showing anything. **0.7.0 bounds that** — and the adopted 0.11.2 keeps it for the run
+showing anything. **0.7.0 bounds that** — and the adopted 0.12.1 keeps it for the run
 list, which is why the numbers below are read off that route — and it is the difference
 between a view an operator opens and one they avoid: on the same root the same request
 answers in **0.03-0.45 s** warm on the adopted release, against 76 s on the first cold

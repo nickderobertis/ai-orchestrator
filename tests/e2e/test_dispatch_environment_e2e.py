@@ -47,7 +47,8 @@ from typing import NamedTuple
 
 import pytest
 import short_state
-from harness_indirections import established_indirections, harness_routing
+from harness_configs import harness_routing
+from harness_indirections import established_indirections
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -55,9 +56,16 @@ from orchestrator.root import REPO_ROOT
 #: Who the indirection helpers attribute their diagnostics to when one of them refuses.
 INDIRECTION_CALLER = "tests/e2e/test_dispatch_environment_e2e.py"
 
-#: Every role config this repository ships, read off the tree so a role added here is
-#: covered rather than forgotten.
-ROLE_CONFIGS = tuple(sorted(path.name for path in REPO_ROOT.glob("oneharness*.toml")))
+#: Every ROLE config this repository ships, read off the tree so a role added here is
+#: covered rather than forgotten. Only files declaring a `harnesses` chain: the shared
+#: parents name no candidates, so including them would add no coverage silently.
+ROLE_CONFIGS = tuple(
+    sorted(
+        path.name
+        for path in REPO_ROOT.glob("oneharness*.toml")
+        if "harnesses" in harness_routing(path)
+    )
+)
 
 #: How a graph document names the oneharness config a member's side reads, relative to
 #: its own directory — the spelling `tests/e2e/test_path_dispatched_personas_e2e.py`
@@ -151,6 +159,9 @@ def _identifiers(candidates: tuple[Candidate, ...]) -> list[str]:
 MASKED_CANDIDATES = _candidates(MASKED_CONFIGS)
 PLAN_STORE_CANDIDATES = _candidates(PLAN_STORE_CONFIGS)
 DISPATCH_CANDIDATES = _candidates(DISPATCH_CONFIGS)
+
+#: Every candidate of every role, which is the model journey's subject.
+ALL_CANDIDATES = _candidates(ROLE_CONFIGS)
 
 #: The follow-up agent's candidates, whose turn works in a directory that is no repository
 #: and so must be handed each identity's own bypass argument.
@@ -353,6 +364,71 @@ def test_the_follow_up_agent_hands_every_identity_its_own_bypass_argument(
         f"{candidate.config} handed {candidate.identity} {argv[1:-1]} with no {expected}; "
         f"its turn runs in a scratch directory that is no repository, where {provider} "
         "without bypass refuses the turn or denies it its tools"
+    )
+
+
+#: The committed effective configurations
+#: `tests/e2e/test_oneharness_config_equivalence_e2e.py` holds to the real CLI. The
+#: journey below reads its expectation out of these rather than out of the same resolver
+#: it is checking: the record is the artifact a reviewer reads a routing change in, so a
+#: turn matching it is the wire agreeing with the review.
+RESOLVED_RECORDS = Path(__file__).parent / "oneharness_resolved"
+
+MODEL_ARGUMENT = "--model"
+
+
+def _recorded_model(candidate: Candidate) -> str:
+    """The model `candidate`'s committed record resolves, nearest layer first.
+
+    A variant states its own `model` throughout this host's configs, and the fallbacks
+    are the layering's own: a variant that stated none would take the harness table's,
+    and a harness that stated none the run-level value.
+    """
+    # llmlint: ignore[boundary_inputs_validated] The committed record beside this module,
+    # captured from `oneharness config`; every value read out of it is narrowed here.
+    record = json.loads((RESOLVED_RECORDS / f"{candidate.config}.json").read_text("utf-8"))
+    family, _, variant = candidate.identity.partition(":")
+    harness = record.get("harness", {}).get(family, {})
+    for layer in (harness.get("variant", {}).get(variant, {}), harness, record):
+        named = layer.get("model", {}).get("value")
+        if isinstance(named, str):
+            return named
+    raise AssertionError(
+        f"{candidate.config}'s committed record names no model for {candidate.identity}, "
+        f"so nothing below says which tier that identity spends"
+    )
+
+
+@pytest.mark.parametrize("candidate", ALL_CANDIDATES, ids=_identifiers(ALL_CANDIDATES))
+def test_every_identity_spends_its_turn_on_the_model_its_role_resolves(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """Read off the command line the provider was given, not off the config that names it.
+
+    A tier is a decision made once — `oneharness.identities.toml` states one model for
+    the Claude identities and one for the Codex identities, and a role restates one only
+    where it deliberately differs — and it is spent one identity at a time. So a move
+    that reached the resolver and not the wire is invisible until the quota bill arrives,
+    which is exactly how a codex-first side here came to spend a tier neither its config
+    nor its record named (`tests/e2e/test_controlled_turn_model_e2e.py` re-takes that on
+    the controlled path). Every candidate of every chain, because the identity that keeps
+    an old tier is the one reached after the ones ahead of it are spent.
+    """
+    expected = _recorded_model(candidate)
+    _turn(tmp_path, oneharness_bin, candidate)
+    # llmlint: ignore[boundary_inputs_validated] The recorder's own JSON, written by this
+    # module's provider; the one element read out of it is compared against a string.
+    argv: list[str] = json.loads((tmp_path / "argv.json").read_text(encoding="utf-8"))
+    named = [
+        argv[at + 1]
+        for at, word in enumerate(argv)
+        if word == MODEL_ARGUMENT and at + 1 < len(argv)
+    ]
+
+    assert named == [expected], (
+        f"{candidate.config} handed {candidate.identity} {named} on its provider's "
+        f"command line, not the {expected!r} its committed record resolves; this turn "
+        f"is billed against whatever that name selects"
     )
 
 

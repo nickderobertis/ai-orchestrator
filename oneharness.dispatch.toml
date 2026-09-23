@@ -1,0 +1,69 @@
+# The identities, plus the `XDG_RUNTIME_DIR` repoint onto the node's own scratch that
+# only a dispatched side needs — the launching session's is mounted `noexec` here.
+#
+# A PARENT only, named so oneharness's discovery cannot find it. It is a layer of its
+# own because `env_from` merges KEY-WISE, so the repoint lands beside each variant's own
+# indirection rather than replacing it. `oneharness.toml`, `oneharness.judge.toml` and
+# `oneharness.follow-up.toml` extend it; every other role extends the identities
+# directly, having no node scratch directory to name.
+
+extends = "oneharness.identities.toml"
+
+# **Every variant below restates the `unset_env` its parent already states, and that is
+# a workaround with a retirement condition.** The masks are inherited correctly either
+# way; what the lines buy is that `oneharness config` REPORTS them, because on the
+# pinned release an inherited mask is reported as `[]` whenever the child mentions the
+# variant — which adding the repoint does. Every list is its parent's verbatim, so
+# deleting one changes no behaviour and makes this host's reported credential isolation
+# false. Drafted upstream; when `oneharness config` reports the mask a turn applies,
+# these go and the repoints stay. docs/onejudge-integration.md states the merge rule
+# and the defect.
+
+# No `unset_env`: its parent states none either, so the three roles that must keep the
+# board credential can. The note in `oneharness.identities.toml` says why.
+[harness.codex.variant.primary]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+
+[harness.codex.variant.alternate]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN"]
+
+[harness.claude-code.variant.alternate]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+[harness.claude-code.variant.primary-backup]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+[harness.claude-code.variant.primary]
+env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
