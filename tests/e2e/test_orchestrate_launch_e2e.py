@@ -678,8 +678,8 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
     }
     assert expected_configs <= origins[0], origins
     # The fake backend writes this JSONL itself, and `RecordedTurn` — its own declaration
-    # of what it writes — is what the cast states, so this reads the producer's shape
-    # this test consumes from that test-owned schema.
+    # of what it writes — is what the cast names, so this reads a test-owned schema rather
+    # than reaching past somebody else's validation.
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     prompts = [
         cast(RecordedTurn, json.loads(line))["prompt"]
@@ -731,9 +731,9 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
     assert run.returncode == 0, run.stdout + run.stderr
     # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only
     # place a supervised graph invocation's review contract is observable; no published
-    # view carries it. The fake backend writes this JSONL itself and its own `RecordedTurn`
-    # the one field consumed, so this reads a test-owned schema rather than reaching
-    # past somebody else's validation.
+    # view carries it. The fake backend writes this JSONL itself, and its own `RecordedTurn`
+    # declares the one field consumed here, so this reads a test-owned schema rather than
+    # reaching past somebody else's validation.
     prompts = [
         cast(RecordedTurn, json.loads(line))["prompt"]
         for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
