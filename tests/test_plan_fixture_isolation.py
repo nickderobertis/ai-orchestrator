@@ -6,10 +6,11 @@ each write a record under the same native id and then one removes its copy while
 reads its own through the installed store CLI. `tests/plan_fixture_isolation_peer.py` is
 the half they both run and says how they rendezvous.
 
-This is what replaced a fixed host-wide fixture root and the reader/sweeper lock that
-bounded it. That lock could only keep a sweep off records whose writing process was gone,
-so it never covered the removal that actually broke a gate here — a live test removing a
-record it had just written, in a root some other tier was mid-walk in.
+The removal is a *live* test's own, of a record it has just written, because that is the
+case no lock over the store can bound: a reader/sweeper lock reaches only records whose
+writing process is gone, and the removal that refuses a peer's walk comes from a process
+still running. So isolation is the only thing that can hold here, and this is what asserts
+it holds.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ PEER = "tests/plan_fixture_isolation_peer.py"
 PEER_SECONDS = 600
 
 
-def _started(scratch: Path, role: str) -> subprocess.Popen[str]:
+def _started(scratch: Path, role: peer.Role) -> subprocess.Popen[str]:
     """One peer pytest session, in this process's own environment plus its role.
 
     The environment is inherited rather than scrubbed, this process's own fixture root
@@ -74,22 +75,22 @@ def test_two_concurrent_test_processes_keep_their_own_fixture_roots(tmp_path: Pa
     """
     scratch = tmp_path / "rendezvous"
     scratch.mkdir()
-    peers = {role: _started(scratch, role) for role in (peer.KEEPER, peer.REMOVER)}
+    peers = {role: _started(scratch, role) for role in (peer.Role.KEEPER, peer.Role.REMOVER)}
     # Drained remover-first, because the keeper only ends once the remover has removed:
     # waiting on the keeper first would hold a full pipe against the peer it is waiting for.
     reported = {
         role: peers[role].communicate(timeout=PEER_SECONDS)[0]
-        for role in (peer.REMOVER, peer.KEEPER)
+        for role in (peer.Role.REMOVER, peer.Role.KEEPER)
     }
     for role, process in peers.items():
         assert process.returncode == 0, f"the {role} peer failed:\n{reported[role]}"
 
     roots = {
         role: Path((scratch / f"{role}.root").read_text(encoding="utf-8"))
-        for role in (peer.KEEPER, peer.REMOVER)
+        for role in (peer.Role.KEEPER, peer.Role.REMOVER)
     }
-    assert roots[peer.KEEPER] != roots[peer.REMOVER], (
-        f"both test processes resolved {roots[peer.KEEPER]} for the "
+    assert roots[peer.Role.KEEPER] != roots[peer.Role.REMOVER], (
+        f"both test processes resolved {roots[peer.Role.KEEPER]} for the "
         f"{plan_fixture_source.SOURCE!r} source, so one's removal is the other's missing "
         f"record — which is the sharing this isolation ended"
     )
@@ -98,9 +99,9 @@ def test_two_concurrent_test_processes_keep_their_own_fixture_roots(tmp_path: Pa
             f"the {role} peer used the root onetaskgraph.yaml states rather than its own"
         )
 
-    kept = roots[peer.KEEPER] / "projects" / f"{peer.SHARED_NATIVE}.md"
-    gone = roots[peer.REMOVER] / "projects" / f"{peer.SHARED_NATIVE}.md"
+    kept = roots[peer.Role.KEEPER] / "projects" / f"{peer.SHARED_NATIVE}.md"
+    gone = roots[peer.Role.REMOVER] / "projects" / f"{peer.SHARED_NATIVE}.md"
     assert kept.is_file(), f"the keeper's own record is gone from {kept}"
     assert not gone.exists(), f"the remover never removed {gone}"
-    assert (roots[peer.KEEPER] / TASKS_DIRECTORY / peer.SHARED_NATIVE).is_dir()
-    assert not (roots[peer.REMOVER] / TASKS_DIRECTORY / peer.SHARED_NATIVE).exists()
+    assert (roots[peer.Role.KEEPER] / TASKS_DIRECTORY / peer.SHARED_NATIVE).is_dir()
+    assert not (roots[peer.Role.REMOVER] / TASKS_DIRECTORY / peer.SHARED_NATIVE).exists()

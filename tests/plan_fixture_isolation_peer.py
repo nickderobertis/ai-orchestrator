@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import time
+from enum import StrEnum
 from pathlib import Path
 from typing import TypedDict
 
@@ -36,8 +37,19 @@ from orchestrator.root import REPO_ROOT
 SCRATCH_ENV = "PLAN_FIXTURE_ISOLATION_SCRATCH"
 ROLE_ENV = "PLAN_FIXTURE_ISOLATION_ROLE"
 
-KEEPER = "keeper"
-REMOVER = "remover"
+
+class Role(StrEnum):
+    """Which half of the rendezvous this peer plays. A closed two-value vocabulary.
+
+    A `StrEnum` because the value travels as an environment variable and comes back as
+    the text of one: the members are the two strings a peer may be handed, so the
+    membership check below is a parse of that variable rather than a comparison against
+    constants that could drift from what the driver sets.
+    """
+
+    KEEPER = "keeper"
+    REMOVER = "remover"
+
 
 #: The native id both peers write, deliberately the same in both roots: what proves the
 #: roots are distinct is that removing this id in one leaves it readable in the other, and
@@ -142,8 +154,7 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
     roots, so a peer that reached a wrong conclusion fails here rather than reporting a
     green the driver would have to second-guess.
     """
-    role = os.environ[ROLE_ENV]
-    assert role in (KEEPER, REMOVER), role
+    role = Role(os.environ[ROLE_ENV])
     root = plan_fixture_source.root()
     assert root != plan_fixture_source.tracked_root(), (
         f"this peer resolved the tracked root {root}, so its session fixture stated none"
@@ -153,9 +164,9 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
     write_plan_project(root, PLAN, native_id=SHARED_NATIVE)
     assert _stored_project(), "the record this peer just wrote is not in its own store"
     _announce(f"{role}.created")
-    _await(f"{REMOVER if role == KEEPER else KEEPER}.created")
+    _await(f"{Role.REMOVER if role is Role.KEEPER else Role.KEEPER}.created")
 
-    if role == REMOVER:
+    if role is Role.REMOVER:
         _remove(root)
         _announce("removed")
         return

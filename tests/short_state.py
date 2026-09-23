@@ -14,8 +14,8 @@ journey paid double the provider invocations and double the wall clock, and a jo
 whose subject is *timing* got wrong arithmetic —
 `tests/e2e/test_observer_graph_liveness_e2e.py` holds a worker for a measured number of
 seconds, and a worker held twice put the settlement it measures against wherever the
-second delay landed. Its own private short root, and `tests/e2e/test_monitor_cursor_e2e.py`'s,
-are what this replaces.
+second delay landed. So a journey minting a short root privately is a journey budgeting
+this arithmetic on its own: there is one fixture, and it is this one.
 
 So the root is minted directly under the system temporary directory, short enough that the
 longest session name this host composes still fits with room over — `BUDGET` states that

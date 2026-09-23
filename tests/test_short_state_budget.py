@@ -21,6 +21,7 @@ import re
 import socket
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import short_state
@@ -62,7 +63,14 @@ def composition_overhead() -> int:
     return EPOCH_MILLIS_DIGITS + pid_digits + len(LONGEST_SIDE) + SEPARATORS
 
 
-def shipped_session_parts() -> tuple[set[str], set[str]]:
+class ShippedSessionParts(NamedTuple):
+    """The two halves of a session name that belong to this repository."""
+
+    graphs: frozenset[str]
+    members: frozenset[str]
+
+
+def shipped_session_parts() -> ShippedSessionParts:
     """Every graph name and member name the documents in `graphs/` declare.
 
     The two halves a session name is composed from that belong to this repository, which
@@ -81,7 +89,7 @@ def shipped_session_parts() -> tuple[set[str], set[str]]:
         assert declared, f"{document} declares an empty members mapping"
         members.update(declared)
     assert graphs and members, "no graph document named a graph and a member"
-    return graphs, members
+    return ShippedSessionParts(frozenset(graphs), frozenset(members))
 
 
 def _bound(length: int) -> OSError | None:
@@ -117,6 +125,15 @@ def test_the_kernel_takes_an_address_one_byte_under_the_limit_and_refuses_one_at
     )
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is
+# not a narrower key inside a memoized tier: it moves this one test out of every memoized
+# tier into the uncached `orchestrator:test-checkouts`, because its subject — the socket
+# layout the installed `oneharness` under `.venv` documents — is outside this workspace and
+# no `nx.json` glob hashes it. A project of its own would give this gate a key, and a
+# memoized green would replay across the very oneharness upgrade that could move the
+# socket, which is the one thing it exists to catch. `tests/conftest.py`'s own checkout
+# guard states that reasoning where it enforces the marker, and every `reads_checkouts`
+# test in this repository is tiered this way for it.
 @pytest.mark.reads_checkouts
 def test_the_installed_oneharness_still_puts_the_socket_where_the_budget_assumes(
     oneharness_bin: str,
@@ -147,6 +164,9 @@ def test_the_installed_oneharness_still_puts_the_socket_where_the_budget_assumes
         f"the installed oneharness no longer documents its session store under {store!r}, "
         f"so a state root is no longer followed by {short_state.SOCKET_LAYOUT!r}"
     )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def test_the_session_reservation_covers_the_longest_name_this_repository_can_compose() -> None:

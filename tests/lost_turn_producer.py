@@ -159,10 +159,11 @@ def recording_refusals() -> RecordedRefusals:
     return RecordedRefusals(base_url=_serve_refusals(models), models=models)
 
 
-#: The session name the run is addressed by. Ordinary rather than the one character it had
-#: to be while the session directory sat under `tmp_path`: `--control` binds a Unix socket
-#: under that directory and Linux caps the address at 108 bytes, which the short state root
-#: `tests/short_state.py` mints leaves room under.
+#: The session name the run is addressed by. It may be an ordinary readable name because
+#: `--control` binds a Unix socket under the session directory and Linux caps the address
+#: at 108 bytes: what a name of this length needs is exactly what `tests/short_state.py`
+#: reserves for one, so anything longer is that module's budget to answer rather than a
+#: byte to shave off here.
 CONTROL_SESSION = "controlled-turn"
 
 #: How long either local command may take before it is treated as hung. Both are
