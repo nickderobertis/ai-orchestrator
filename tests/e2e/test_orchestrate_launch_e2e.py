@@ -54,6 +54,7 @@ from shared_dispatch_bar import (
     shared_completion_bar,
 )
 from test_observer_judge_ops import judge_argv
+from test_short_state_budget import SUFFIX, composition_overhead, shipped_session_parts
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
@@ -846,6 +847,40 @@ def test_every_controlled_turn_of_the_launched_run_was_taken_under_its_socket(
         f"{sorted({str(turn['control']) for turn in retaken})}, state root "
         f"{launched.environment['XDG_STATE_HOME']}"
     )
+    _reconcile_session_names({str(turn["control"]) for turn in controlled})
+
+
+def _reconcile_session_names(sessions: set[str]) -> None:
+    """Hold the budget's session reservation to the names the real producer just composed.
+
+    `tests/short_state.py` reserves a fixed number of bytes for a session name under the
+    socket layout, and `tests/test_short_state_budget.py` argues that reservation from the
+    graph and member names this repository ships plus what `oneagentgraph` adds around
+    them. That producer publishes no surface that answers the second without running a
+    graph — so this is where it is answered, off the names a real launch was addressed by:
+    a component added to the composition shows up here as overhead past what the budget
+    allows for, before it shows up as a socket nobody could open.
+    """
+    graphs, members = shipped_session_parts()
+    allowed = composition_overhead()
+    for session in sorted(sessions):
+        graph = next((name for name in graphs if session.startswith(f"{name}-")), None)
+        member = next((name for name in members if f"-{name}-" in session), None)
+        assert graph and member, (
+            f"the session {session!r} a controlled turn was addressed by names no graph "
+            f"and member this repository ships ({sorted(graphs)}, {sorted(members)}), so "
+            f"the budget's reservation is argued from documents that no longer decide it"
+        )
+        overhead = len(session) - len(graph) - len(member)
+        assert overhead <= allowed, (
+            f"{session!r} spends {overhead} bytes around {graph!r} and {member!r} where "
+            f"tests/test_short_state_budget.py allows {allowed}; oneagentgraph composes a "
+            f"session name differently now, so the reservation it argues is short"
+        )
+        assert len(session) + len(SUFFIX) <= short_state.RESERVED_FOR_A_SESSION, (
+            f"{session!r} plus {SUFFIX!r} is past the "
+            f"{short_state.RESERVED_FOR_A_SESSION} bytes tests/short_state.py reserves"
+        )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")

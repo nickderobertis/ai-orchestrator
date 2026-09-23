@@ -38,17 +38,50 @@ GRAPH_NAME = re.compile(r"^name:\s*(\S+)\s*$", re.MULTILINE)
 MEMBERS_BLOCK = re.compile(r"^members:$", re.MULTILINE)
 MEMBER_KEY = re.compile(r"^  ([a-z0-9-]+):$", re.MULTILINE)
 
-#: What `oneagentgraph` puts between those two when it composes a session name:
-#: `<graph>-<millis>-<pid>-<member>-<side>`, then oneharness's own `.sock` suffix. The
-#: epoch is in milliseconds and the side is `skill` or `user`; the process id's width is
-#: this host's, read below rather than assumed.
+#: What `oneagentgraph` puts around a graph and a member when it composes a session name:
+#: `<graph>-<millis>-<pid>-<member>-<side>`, where the epoch is in milliseconds and the
+#: side is `skill` or `user`. Stated here rather than derived, because the producer
+#: publishes no surface that answers it without running a graph — so it is reconciled
+#: against the producer instead, by
+#: `tests/e2e/test_orchestrate_launch_e2e.py`, which measures this overhead off the names
+#: a real launch's controlled turns were really addressed by.
 EPOCH_MILLIS_DIGITS = 13
 LONGEST_SIDE = "skill"
 SEPARATORS = 4
+
+#: oneharness's own suffix on the socket file, which the reservation has to cover too.
 SUFFIX = ".sock"
 
 #: Where Linux states the largest process id it will issue.
 PID_MAX = Path("/proc/sys/kernel/pid_max")
+
+
+def composition_overhead() -> int:
+    """Everything `oneagentgraph` adds around the graph and member names, at its widest."""
+    pid_digits = len(PID_MAX.read_text(encoding="utf-8").strip())
+    return EPOCH_MILLIS_DIGITS + pid_digits + len(LONGEST_SIDE) + SEPARATORS
+
+
+def shipped_session_parts() -> tuple[set[str], set[str]]:
+    """Every graph name and member name the documents in `graphs/` declare.
+
+    The two halves a session name is composed from that belong to this repository, which
+    is why they are read out of the documents that declare them rather than listed.
+    """
+    graphs: set[str] = set()
+    members: set[str] = set()
+    for document in sorted(GRAPHS.glob("*.yaml")):
+        text = document.read_text(encoding="utf-8")
+        named = GRAPH_NAME.search(text)
+        assert named is not None, f"{document} states no name"
+        graphs.add(named.group(1))
+        opened = MEMBERS_BLOCK.search(text)
+        assert opened is not None, f"{document} declares no members"
+        declared = MEMBER_KEY.findall(text[opened.end() :])
+        assert declared, f"{document} declares an empty members mapping"
+        members.update(declared)
+    assert graphs and members, "no graph document named a graph and a member"
+    return graphs, members
 
 
 def _bound(length: int) -> OSError | None:
@@ -116,10 +149,6 @@ def test_the_installed_oneharness_still_puts_the_socket_where_the_budget_assumes
     )
 
 
-def _longest(pattern: re.Pattern[str], text: str) -> str:
-    return max(pattern.findall(text), key=len, default="")
-
-
 def test_the_session_reservation_covers_the_longest_name_this_repository_can_compose() -> None:
     """What this host reserves is enough for the graphs and members it actually ships.
 
@@ -127,31 +156,12 @@ def test_the_session_reservation_covers_the_longest_name_this_repository_can_com
     than the reservation allows would refuse its own control socket, and the graph
     documents are where that name is decided.
     """
-    graph, member = "", ""
-    for document in sorted(GRAPHS.glob("*.yaml")):
-        text = document.read_text(encoding="utf-8")
-        named = GRAPH_NAME.search(text)
-        assert named is not None, f"{document} states no name"
-        graph = max(graph, named.group(1), key=len)
-        opened = MEMBERS_BLOCK.search(text)
-        assert opened is not None, f"{document} declares no members"
-        member = max(member, _longest(MEMBER_KEY, text[opened.end() :]), key=len)
-    assert graph and member, "no graph document named a graph and a member"
-
-    pid_digits = len(PID_MAX.read_text(encoding="utf-8").strip())
-    longest = (
-        len(graph)
-        + EPOCH_MILLIS_DIGITS
-        + pid_digits
-        + len(member)
-        + len(LONGEST_SIDE)
-        + SEPARATORS
-        + len(SUFFIX)
-    )
+    graphs, members = shipped_session_parts()
+    graph, member = max(graphs, key=len), max(members, key=len)
+    longest = len(graph) + len(member) + composition_overhead() + len(SUFFIX)
     assert longest <= short_state.RESERVED_FOR_A_SESSION, (
         f"the longest session name this repository composes is {longest} bytes "
-        f"({graph}-<{EPOCH_MILLIS_DIGITS} digits>-<{pid_digits} digits>-{member}-"
-        f"{LONGEST_SIDE}{SUFFIX}) where tests/short_state.py reserves "
+        f"({graph}-…-{member}-{LONGEST_SIDE}{SUFFIX}) where tests/short_state.py reserves "
         f"{short_state.RESERVED_FOR_A_SESSION}; raise the reservation and lower the budget "
         f"with it, or a controlled turn under it is refused for its address"
     )
