@@ -1,17 +1,20 @@
 """A reader racing the record writers sees whole records and nothing else.
 
-The root a fixture project is written into is walked concurrently by every other test
-process's `onetaskgraph` reads, and that walk takes in every task file under the root —
-not only the project being read — so a task file caught empty, between a truncating open
-and the write that follows it, refuses an unscoped read in some other process, and on the
-plan-store release this host ran then refused a read scoped to some *other* project too.
-A publication's own pre-push gate failed exactly that way, in `merge-policy:test` and
-`plan-tooling:test`, on records `tests/ask_seam/` was writing at that moment
-(`tests/plan_fixture_root.py` records the incident). So `publish_record` stages a record
-beside its destination and renames it into place, and this drives a reader process
-against two writer processes replacing one project for long enough to catch a truncating
-write — every read through the module's own `read_records`, so the listing rule that
-keeps a stage out of a reader's hands is the one under test too.
+The root a fixture project is written into is walked concurrently by everything a journey
+launches — its `just` recipes, its driver, and the dispatches below it — and that walk
+takes in every task file under the root, not only the project being read. So a task file
+caught empty, between a truncating open and the write that follows it, refuses an unscoped
+read in some other process, and on the plan-store release this host ran then refused a read
+scoped to some *other* project too. A publication's own pre-push gate failed exactly that
+way, in `merge-policy:test` and `plan-tooling:test`, back when every tier of this suite
+shared one fixture root and `tests/ask_seam/` was writing records into it at that moment.
+Each test process has had a fixture root of its own since
+(`tests/plan_fixture_source.py`), which narrows who can meet a half-written record but not
+what one does to a reader. So `publish_record` stages a record beside its destination and
+renames it into place, and this drives a reader process against two writer processes
+replacing one project for long enough to catch a truncating write — every read through the
+module's own `read_records`, so the listing rule that keeps a stage out of a reader's hands
+is the one under test too.
 
 The tier is clock-bounded, which is why it is a project of its own rather than a test in
 `tests/test_project_store.py`: `nx affected` charges it to a change of the store or of

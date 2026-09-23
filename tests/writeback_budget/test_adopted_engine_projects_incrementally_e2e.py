@@ -43,6 +43,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
+import plan_fixture_source
 import pytest
 from driven_run import (
     PATIENCE_SECONDS,
@@ -59,7 +60,6 @@ from driven_run import (
     waited_for,
 )
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
-from plan_fixture_root import ROOT as FIXTURE_ROOT
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -143,6 +143,7 @@ def _destination(driven: DrivenRun) -> dict[str, DestinationTask]:
     source keeps it, so a journey can compare it byte for byte.
     """
     source, native = driven.project.split(":", 1)
+    fixtures = plan_fixture_source.root()
     listed = subprocess.run(
         [
             str(ONETASKGRAPH_BIN),
@@ -169,7 +170,7 @@ def _destination(driven: DrivenRun) -> dict[str, DestinationTask]:
     for entry in payload["items"]:
         identifier, item = entry["id"], entry["item"]
         assert isinstance(identifier, str) and identifier.startswith(f"{source}:"), entry
-        record = FIXTURE_ROOT / TASKS_DIRECTORY / f"{identifier.split(':', 1)[1]}.md"
+        record = fixtures / TASKS_DIRECTORY / f"{identifier.split(':', 1)[1]}.md"
         assert record.is_file(), f"{identifier} is kept nowhere this journey can read: {record}"
         metadata = item.get("metadata") or {}
         tasks[metadata["onepipeline.id"]] = DestinationTask(

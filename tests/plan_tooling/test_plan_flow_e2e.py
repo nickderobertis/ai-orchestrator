@@ -59,6 +59,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
+import plan_fixture_source
 import pytest
 from fake_backend import (
     AUTHOR_PLAN_ENV,
@@ -67,7 +68,6 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
 )
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -122,10 +122,10 @@ INHERITED_ENVIRONMENT = (
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
-#: The source `onetaskgraph.yaml` roots at the shared fixture directory every tier of this
-#: suite publishes into, which is the store both the planner stand-in writes the plan to
-#: and `just plans` reads the document back out of.
-FIXTURE_SOURCE = "test-fixtures"
+#: The source `onetaskgraph.yaml` configures for this suite's own projects, rooted per
+#: test process: the store both the planner stand-in writes the plan to and `just plans`
+#: reads the document back out of.
+FIXTURE_SOURCE = plan_fixture_source.SOURCE
 
 #: The source both launches of a planning flow write their own generated project into,
 #: which is where `onepipeline` then reads the plan it launches from.
@@ -345,7 +345,7 @@ def _plan_records(stored: Stored) -> dict[str, str]:
         ],
     }
     return {
-        str(FIXTURE_ROOT / relative): content
+        str(plan_fixture_source.root() / relative): content
         for relative, content in render_plan_project(plan, native_id=stored.project).items()
     }
 
@@ -521,7 +521,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
         second_repository="github.com/nickderobertis/onepipeline-ui",
         document=f"{unique}-document",
         document_qualified=f"{FIXTURE_SOURCE}:{unique}-document",
-        document_path=FIXTURE_ROOT / "documents" / f"{unique}-document.md",
+        document_path=plan_fixture_source.root() / "documents" / f"{unique}-document.md",
     )
     destination = tmp_path / "board"
     # Created rather than left to the first write: a `local-md` source canonicalizes its
@@ -1090,7 +1090,7 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
         second_repository="github.com/nickderobertis/onepipeline-ui",
         document=f"{unique}-document",
         document_qualified=f"{FIXTURE_SOURCE}:{unique}-document",
-        document_path=FIXTURE_ROOT / "documents" / f"{unique}-document.md",
+        document_path=plan_fixture_source.root() / "documents" / f"{unique}-document.md",
     )
     environment = _environment(
         tmp_path, stored, destination=DEFAULT_BOARD, declared_at=None, checkout=checkout

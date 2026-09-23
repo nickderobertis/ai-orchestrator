@@ -26,7 +26,7 @@ from typing import Any, NamedTuple
 import follow_up_variables
 import onejudge_bundle
 import onevcs_state_snapshot
-import plan_fixture_root
+import plan_fixture_source
 import plan_root_variable
 import pytest
 from nx_inputs import (
@@ -186,7 +186,7 @@ def _plan_store_root_variables() -> Mapping[str, str]:
 
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """Give this test process its own root for the `authoring` and `drafts` plan sources.
+    """Give this test process its own root for every writable plan source it stores into.
 
     `onetaskgraph.yaml` roots both relatively, inside this checkout — `.plans` and
     `.follow-ups` — and they hold a developer's own authored plans and unverified
@@ -198,6 +198,12 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
     verify, consume or replace records nobody asked it to touch, and its own verdict
     would depend on whatever those directories happened to hold.
 
+    `test-fixtures` is here for a sharper reason still, and it is the whole of that
+    source's safety: the records under it are this suite's own, written and *removed* by
+    the tests themselves, and a fixed host-wide root made one tier's removal another
+    tier's refused walk — `tests/plan_fixture_source.py` has the incident and why a
+    reader lock could not cover it.
+
     So the roots are stated once, here, for every test process — at session scope and by
     mutating the environment, because a function-scoped patch is undone between tests and
     would not be in force while the module- and session-scoped fixtures that spend the
@@ -205,8 +211,15 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
     it overrides these the way it overrides an enclosing dispatch's.
     """
     base = tmp_path_factory.mktemp("plan-store-roots")
+    isolated = {
+        **_plan_store_root_variables(),
+        # No launch helper composes this one, because nothing outside `tests/` and
+        # `onetaskgraph.yaml` names the source at all; it is composed once in
+        # `tests/plan_fixture_source.py` and read back from there by every writer.
+        plan_fixture_source.SOURCE: plan_fixture_source.ROOT_VARIABLE,
+    }
     with pytest.MonkeyPatch.context() as patched:
-        for source, variable in _plan_store_root_variables().items():
+        for source, variable in isolated.items():
             # Created rather than left to the first write: a `local-md` source
             # canonicalizes its root when it is built, so an absent one is refused as a
             # broken source by every read, not only by the write that would have made it.
@@ -248,20 +261,6 @@ def _real_plan_store_roots(request: pytest.FixtureRequest) -> Iterator[None]:
         for source in named:
             patched.delenv(variables[source], raising=False)
         yield
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _shared_plan_fixture_root() -> None:
-    """Hold this process's reader lock on the shared local-md fixture root.
-
-    Nx runs this repository's test tiers as concurrent processes over one configured
-    `test-fixtures` root, so a record removed by one of them is a record another is
-    walking. Every process takes the shared lock before it runs anything, which is
-    what makes a sweep possible at all — see `tests/plan_fixture_root.py` for the
-    refusal a removal mid-walk produces and the gate it has already failed.
-    """
-    plan_fixture_root.sweep_dead_owners()
-    plan_fixture_root.hold_shared()
 
 
 @pytest.fixture(scope="session")

@@ -13,6 +13,10 @@ __pycache__/
 # Unverified follow-up drafts (the `drafts` plan source); a follow-up agent verifies them
 # after a run, and nothing here is repository content.
 /.follow-ups/
+# The `test-fixtures` plan source's tracked root. Every test process states a temporary
+# root of its own over it, so this directory stays empty in practice; it is named here so
+# a read taken without that isolation cannot leave records in the tree.
+/.test-fixtures/
 # uv
 # (uv.lock IS committed)
 

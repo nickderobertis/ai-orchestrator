@@ -45,9 +45,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
+import plan_fixture_source
 import pytest
 from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV
-from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
@@ -91,8 +91,8 @@ PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
 #: The store a plan is drafted in here, the source both launches read out of, and the
-#: second local store the flow copies into.
-FIXTURE_SOURCE = "test-fixtures"
+#: second local store the flow copies into. The first is rooted per test process.
+FIXTURE_SOURCE = plan_fixture_source.SOURCE
 AUTHORING_SOURCE = "authoring"
 DESTINATION = "destination"
 
@@ -144,7 +144,7 @@ def _plan_project(native: str) -> str:
     a real driver, and a dispatch that reports and stops.
     """
     write_plan_project(
-        FIXTURE_ROOT,
+        plan_fixture_source.root(),
         {
             "schema_version": 3,
             "goal": {"text": "Deliver the paginated listing"},

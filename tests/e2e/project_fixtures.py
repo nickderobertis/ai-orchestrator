@@ -1,10 +1,10 @@
 """Materialize test-owned local Markdown projects for real onepipeline launches.
 
-Nothing here removes what it wrote. The root is the one `onetaskgraph.yaml` configures
-for the `test-fixtures` source, which every concurrent test tier of this repository
-reads at once, and a record removed mid-walk refuses the walk rather than disappearing
-from it. Reclaiming belongs to `tests/plan_fixture_root.py`, which runs under the
-exclusive lock and only against records whose writing process is gone.
+The root is this process's own for the `test-fixtures` source, resolved at each write
+rather than at import: `tests/conftest.py` states it per test process at session scope,
+which is after this module is imported. Nothing here removes what it wrote, and nothing
+has to — the root goes with the process that owns it, under pytest's own temporary-root
+retention. `tests/plan_fixture_source.py` says why no test process shares one.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from plan_fixture_root import ROOT as _PROJECT_ROOT
+import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator.project_store import frontmatter, publish_record, write_plan_project
@@ -96,7 +96,7 @@ def local_project(content: str, name: str) -> str:
     if not isinstance(plan, dict):
         raise ValueError("a plan fixture must be a JSON object")
     plan.setdefault("name", native)
-    write_plan_project(_PROJECT_ROOT, plan, native_id=native)
+    write_plan_project(plan_fixture_source.root(), plan, native_id=native)
     project = f"test-fixtures:{native}"
     _designed(native)
     approved(project)
@@ -132,14 +132,16 @@ def _designed(native: str) -> None:
 
     Its title carries the project's own unique native id, and that is load-bearing rather
     than cosmetic: a record is copied over the destination it matches **by title**, and
-    this root is shared by every tier of this suite at once, so two documents sharing a
-    title would let one project's approval land on another's document.
+    one test process writes every one of its projects into one root, so two documents
+    sharing a title would let one project's approval land on another's document.
     """
-    # Staged and renamed into place, as the plan's own records are: a document read
-    # walks every file under `documents/`, so one caught empty mid-write refuses a
-    # peer process's read of some other project's document.
+    # Staged and renamed into place, as the plan's own records are: a document read walks
+    # every file under `documents/`, so one caught empty mid-write refuses whichever read
+    # met it — and a journey's own `just` recipes, driver and dispatches all walk this
+    # root while the next fixture writes into it.
+    root = plan_fixture_source.root()
     publish_record(
-        _PROJECT_ROOT / "documents" / f"{native}-design.md",
+        root / "documents" / f"{native}-design.md",
         frontmatter(
             {"title": f"Design: {native}", "project": native},
             f"## What\n\nThe fixture plan {native}.\n\n"
@@ -150,7 +152,7 @@ def _designed(native: str) -> None:
             "## Planned tasks\n\n"
             "| Task | What it delivers | Depends on | Where it lives |\n"
             "| --- | --- | --- | --- |\n"
-            f"| the plan's own tasks | the fixture | none | {_PROJECT_ROOT}/tasks/{native} |\n",
+            f"| the plan's own tasks | the fixture | none | {root}/tasks/{native} |\n",
         ),
     )
 
