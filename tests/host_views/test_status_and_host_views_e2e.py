@@ -40,6 +40,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import short_state
 from example_records import isolated_examples
 from probe_run_root import Probe, run_name, run_root
 from project_fixtures import helper
@@ -243,7 +244,7 @@ def test_the_views_answer_over_a_run_root_a_real_launch_wrote(tmp_path: Path) ->
             **examples.environment,
             "ONEAGENTGRAPH_ONEHARNESS_BIN": str(FAKE_BACKEND),
             "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         }
         launched = subprocess.run(
             ["just", "orchestrate", "examples:scheduler-research", "--detach"],
