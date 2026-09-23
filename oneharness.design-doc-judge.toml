@@ -6,17 +6,16 @@
 # This is the half of the reversal that motivates it. Every other pairing on this host
 # puts Claude on the side that works and Codex on the side that supervises; here the
 # supervisor is judging whether prose reads plainly to a non-specialist, so the Claude
-# subscriptions lead this side and `oneharness.design-doc.toml` leads with Codex.
+# subscriptions lead this side and `oneharness.design-doc.toml` leads with Codex. It is
+# also the one supervisory side off the cheaper tier, because this review *is* the
+# deliverable's quality bar — so its Claude identities keep the Opus tier
+# `oneharness.identities.toml` states, where `oneharness.judge.toml` drops to Sonnet.
 #
-# It is a separate file for the reason every copy of this routing is: the sides that
-# share an identity order do not share a deadline, and pointing this member at
-# `oneharness.judge.toml` would take this side's own deadline and its model tier away at
-# once. tests/e2e/test_oneharness_timeout_e2e.py reads both back from the real CLI.
-
-# run_mode: how the selected harnesses are run. "fallback" tries them in priority
-# order and stops at the first that can actually run, falling through only
-# harnesses that cannot run at all — see the note in oneharness.toml.
-run_mode = "fallback"
+# It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`: the
+# design-document pair is launched by `just plan` rather than inside a node's dispatch,
+# so there is no node scratch directory for the runtime-directory repoint to point at.
+# tests/e2e/test_oneharness_timeout_e2e.py reads both sides back from the real CLI.
+extends = "oneharness.identities.toml"
 
 # timeout: the per-turn deadline in seconds. Stated rather than inherited, for the
 # reason the writer's is: this role is a bounded job, so the unbounded default would
@@ -24,13 +23,6 @@ run_mode = "fallback"
 # turns are not the same size — a reviewer reads one document and answers, where the
 # writer reads a whole plan and composes one — and still well clear of that reading.
 timeout = 600
-
-# Record this side's runs to disk too; a pinned `--config` skips the user-level
-# config.toml, so history must be enabled here.
-# Nothing that runs this side is a dispatch, so no engine switches recording on for it:
-# this line is the only thing that does. `oneharness.toml`'s note explains why its own
-# copy is kept even though the engine makes it redundant there.
-history = true
 
 # `role` names the SIDE of the conversation: this is the side that supervises, and
 # `oneharness.judge.toml` states it the same way so telemetry and `just history` treat
@@ -56,39 +48,21 @@ harnesses = [
     "claude-code:primary",
 ]
 
-# [harness.<id>]: per-harness overrides. Model names differ per provider, so
-# each harness names its own.
-# Sol is the flagship tier of the GPT-5.6 family; name it explicitly so the tier
-# cannot drift under us.
-[harness.codex]
-model = "gpt-5.6-sol"
-
-# A variant rather than the bare `codex`, so the environment rules below reach it; no
-# `unset_env` for `CODEX_HOME`, which this identity honours. AGENTS.md says why.
+# **Each variant below restates a whole `unset_env` to leave `GH_PROJECTS_TOKEN`
+# travelling, which is this role's whole point** — it supervises a turn whose task reads the plan out of the store. A child replaces the parent's
+# mask only with a non-empty list, so "the parent's mask minus one name" is written by
+# stating what remains. Do NOT fold these into `oneharness.identities.toml`: each is
+# the parent's list with the board credential taken out.
+# No `unset_env`: its parent states none either, precisely so this role can leave the
+# board credential travelling. An empty list would not help — it inherits rather than
+# clears.
 [harness.codex.variant.primary]
 model = "gpt-5.6-sol"
 
-# The second Codex identity. See scripts/codex-alt-home.sh for the indirection.
 [harness.codex.variant.alternate]
-model = "gpt-5.6-sol"
-env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
 unset_env = ["OPENAI_API_KEY"]
 
-[harness.claude-code]
-# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
-# refusing; harmless on other harnesses.
-env = { IS_SANDBOX = "1" }
-
-# The four Claude identities carry the same routing every other role names, with the
-# same portable indirections and credential masking. They do NOT carry
-# `oneharness.judge.toml`'s cheaper supervisor tier: that file trades review depth for
-# loop overhead across every dispatch on this host, and this side exists because the
-# review here IS the deliverable's quality bar — whether a document reads plainly to a
-# non-specialist is the judgment this role was given its own pairing to get.
 [harness.claude-code.variant.alternate]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
-# Subscription auth must not be shadowed by ambient API or OAuth credentials.
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -97,8 +71,6 @@ unset_env = [
 ]
 
 [harness.claude-code.variant.alternate2]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -106,14 +78,7 @@ unset_env = [
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 ]
 
-# The primary-backup subscription, reached just before the primary one. It is
-# credentialed from the directory scripts/claude-alt-config-dir.sh resolves into
-# ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR, which is that helper's to default; a
-# host that never logged it in reports `failure_kind: "auth"` and falls through, so the
-# candidate costs nothing until then.
 [harness.claude-code.variant.primary-backup]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR" }
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -121,20 +86,10 @@ unset_env = [
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 ]
 
-# The last resort in every chain: the primary subscription, credentialed from the
-# directory scripts/claude-alt-config-dir.sh resolves into
-# ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR, which is that helper's to default. Every
-# higher-precedence credential selector is masked, so this identity can never run as
-# another account.
 [harness.claude-code.variant.primary]
-model = "claude-opus-5"
-env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR" }
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 ]
-
-# Inspect the effective, fully layered config (and where each value came from)
-# with `oneharness config`.

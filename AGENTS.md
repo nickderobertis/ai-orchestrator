@@ -1104,11 +1104,24 @@ through its typed SDK. Discovery: `onejudge --help`, `oneharness --help`, and
 in the four configs it loads, the engine pin links the core that resolves a dispatched
 member's config, and the read API's own copy of that engine does the same for a run
 adopted from the browser. A parent that cannot be read settles the node
-`infrastructure-failure` naming both files, before anything is dispatched. The identity
-block is nonetheless restated per file rather than shared through a parent, so read a
-`oneharness*.toml` as self-contained.
+`infrastructure-failure` naming both files, before anything is dispatched.
 `tests/e2e/test_extends_chain_dispatch_e2e.py` drives a chain down both dispatch roads
 and the CLI's own, and holds that refusal down each dispatch road.
+
+**So the identities are stated once and a role file is short.** Two shared parents at
+the root carry them and nothing runs against either: `oneharness.identities.toml` holds
+the six identities, and `oneharness.dispatch.toml` extends it to add the
+`XDG_RUNTIME_DIR` repoint the three dispatched sides need. Each `oneharness.<role>.toml`
+names one of the two and states what is a decision about that role — its chain order,
+deadline, labels, tier. Neither parent is named `oneharness.toml`, so discovery cannot
+find one; keep it that way. **Each role's identity order stays its own**: no parent
+declares a chain.
+
+**A parent may hold no `harnesses`, `stream`, `schema_file`, or path-valued key**, and
+that is correctness rather than taste: a parent holding one resolves correctly and
+produces a member that will not start. **A resolved configuration is not evidence about
+a turn**, so audit a credential mask from a real turn rather than from `oneharness
+config`.
 
 **Every role names the same six identities**, differing only in order, because a role
 that omitted one would lose that quota once everything ahead of it was exhausted; the
@@ -1117,9 +1130,10 @@ before it, and `tests/e2e/test_oneharness_timeout_e2e.py` holds every config's c
 its intended order. **Every identity in every chain is spelled as a variant**, the first Codex one as
 `codex:primary` rather than a bare `codex`, because `unset_env`, `env_from` and
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
-candidate no per-identity environment rule reaches — the `GH_PROJECTS_TOKEN` mask and
-the `XDG_RUNTIME_DIR` repoint the `oneharness.*.toml` files declare, each explained
-beside its rule. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
+candidate no per-identity environment rule reaches — the credential masks and the
+`XDG_RUNTIME_DIR` repoint, each explained beside its rule. `codex:primary`'s
+`GH_PROJECTS_TOKEN` mask is the one no parent may hold, so each of the seven roles that
+masks it declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
 which is ambient configuration a developer may export and this is the identity that
 honours it; `tests/e2e/test_dispatch_environment_e2e.py` reads what a turn is handed
 off the turn's own provider rather than off the configs. Each side's order is a

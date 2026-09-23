@@ -46,7 +46,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from harness_indirections import established_indirections, harness_routing
+from harness_configs import harness_routing
+from harness_indirections import established_indirections
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -54,9 +55,16 @@ from orchestrator.root import REPO_ROOT
 #: Who the indirection helpers attribute their diagnostics to when one of them refuses.
 INDIRECTION_CALLER = "tests/e2e/test_dispatch_environment_e2e.py"
 
-#: Every role config this repository ships, read off the tree so a role added here is
-#: covered rather than forgotten.
-ROLE_CONFIGS = tuple(sorted(path.name for path in REPO_ROOT.glob("oneharness*.toml")))
+#: Every ROLE config this repository ships, read off the tree so a role added here is
+#: covered rather than forgotten. Only files declaring a `harnesses` chain: the shared
+#: parents name no candidates, so including them would add no coverage silently.
+ROLE_CONFIGS = tuple(
+    sorted(
+        path.name
+        for path in REPO_ROOT.glob("oneharness*.toml")
+        if "harnesses" in harness_routing(path)
+    )
+)
 
 #: How a graph document names the oneharness config a member's side reads, relative to
 #: its own directory — the spelling `tests/e2e/test_path_dispatched_personas_e2e.py`

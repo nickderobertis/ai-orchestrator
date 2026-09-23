@@ -21,7 +21,9 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
+from harness_configs import copied_with_its_parents
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -92,19 +94,31 @@ def _plan(oneharness_bin: str, config: Path, *arguments: str) -> Plan:
     )
 
 
-def _single_family_chain(config: Path, destination: Path) -> str:
-    """Copy the committed worker config, keeping only its first harness family.
+class SingleFamilyChain(NamedTuple):
+    """A narrowed copy of the committed routing, and the harness family it kept."""
+
+    config: Path
+    family: str
+
+
+def _single_family_chain(config: Path, destination: Path) -> SingleFamilyChain:
+    """Copy the committed worker config into `destination`, keeping one harness family.
 
     Derived from the real file rather than written out, so this proves something
     about the chain this repository actually dispatches on: drop the identities whose
     turn-control mechanism differs and what is left is still several identities, which
     is the whole point of the claim being measured.
+
+    The parents it extends are copied beside it, because the identities the surviving
+    chain names are stated there rather than here — a role config copied on its own
+    names an `extends` path that resolves nowhere, and `oneharness` refuses it.
     """
+    copied = copied_with_its_parents(config, destination, name="single-family-chain.toml")
     kept: list[str] = []
     family: str | None = None
     lines: list[str] = []
     in_chain = False
-    for raw in config.read_text(encoding="utf-8").splitlines():
+    for raw in copied.read_text(encoding="utf-8").splitlines():
         stripped = raw.strip()
         if stripped.startswith("harnesses = ["):
             in_chain = True
@@ -127,8 +141,8 @@ def _single_family_chain(config: Path, destination: Path) -> str:
         f"{config} no longer chains several identities of one harness family; this test "
         "measures a MULTI-identity chain, so re-derive it rather than weakening the claim"
     )
-    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return family or ""
+    copied.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return SingleFamilyChain(copied, family or "")
 
 
 def test_the_committed_chain_takes_control_on_each_candidates_own_mechanism(
@@ -177,8 +191,7 @@ def test_a_multi_identity_chain_takes_control_and_streaming_together(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
     """Both concerns on one chain of several identities — the thing 0.7.2 unblocked."""
-    config = tmp_path / "single-family-chain.toml"
-    family = _single_family_chain(WORKER_CONFIG, config)
+    config, family = _single_family_chain(WORKER_CONFIG, tmp_path)
 
     planned = _plan(oneharness_bin, config, "--session", "e2e-control", "--control", "--stream")
 
@@ -210,8 +223,7 @@ def test_a_multi_identity_chain_takes_control_and_streaming_together(
 def test_streaming_alone_asks_for_no_control_channel(tmp_path: Path, oneharness_bin: str) -> None:
     """The two are separable in the other direction too, which is why one is not a lever
     for the other: a streamed turn opens no control channel and carries the prompt on argv."""
-    config = tmp_path / "single-family-chain.toml"
-    _single_family_chain(WORKER_CONFIG, config)
+    config = _single_family_chain(WORKER_CONFIG, tmp_path).config
 
     planned = _plan(oneharness_bin, config, "--stream")
 

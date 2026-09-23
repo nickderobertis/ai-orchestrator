@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from collections.abc import Mapping
 from typing import NamedTuple
 
@@ -295,20 +296,32 @@ RESTATING_SITES = (
 
 
 def test_every_harness_config_is_a_restating_site() -> None:
-    """The site list covers every `oneharness.*.toml`, not the ones somebody named.
+    """The site list covers every ROLE config, not the ones somebody named.
 
-    Each of those files says in a comment what its labels add beside the engine's, so
-    each is a restatement, and a config added later without a row would be one the
-    reconciliation above silently stops covering — which is how the list came to omit
-    eight of ten the first time it was written.
+    Each role config says in a comment what its own `history_labels` add beside the
+    engine's, so each is a restatement, and a config added later without a row would be
+    one the reconciliation above silently stops covering — which is how the list came to
+    omit eight of ten the first time it was written.
+
+    The subject set is the configs that declare `history_labels`, stated here rather
+    than left to the glob. `oneharness*.toml` also matches the two SHARED parents —
+    `oneharness.identities.toml` and `oneharness.dispatch.toml` — which state the six
+    identities every role extends and declare no labels at all: a label names which
+    SIDE of a conversation a session is, which is a fact about a role and not about an
+    identity. They restate nothing because they say nothing about labels, which is the
+    answer this test's own message asks a config to give.
     """
-    configs = {path.name for path in REPO_ROOT.glob("oneharness*.toml")}
+    configs = {
+        path.name
+        for path in REPO_ROOT.glob("oneharness*.toml")
+        if "history_labels" in tomllib.loads(path.read_text(encoding="utf-8"))
+    }
     listed = {path for path, _ in RESTATING_SITES if path.startswith("oneharness")}
 
     assert configs == listed, (
-        f"`oneharness*.toml` at the root is {sorted(configs)} and RESTATING_SITES lists "
-        f"{sorted(listed)}. Add a row for each config that restates the engine's label "
-        "keys, or say in the config why it restates nothing"
+        f"the `oneharness*.toml` configs declaring `history_labels` are {sorted(configs)} "
+        f"and RESTATING_SITES lists {sorted(listed)}. Add a row for each config that "
+        "restates the engine's label keys, or say in the config why it restates nothing"
     )
 
 

@@ -1,0 +1,169 @@
+# The six harness identities every role on this host routes over, stated once.
+#
+# A PARENT only: every `oneharness.<role>.toml` reaches it through `extends`, directly
+# or through `oneharness.dispatch.toml`, and nothing runs against it. Named so
+# oneharness's discovery — walking up for a bare `oneharness.toml` — cannot find it.
+#
+# **What must not be moved into here:** no `harnesses`, no `stream`, no `schema_file`,
+# and no path-valued key — no `history_dir`, no `history_pointer_file`, no variant
+# `env_file`. A parent holding one resolves correctly and produces a member that will
+# not start. docs/onejudge-integration.md says which reader breaks on which key, and
+# states the `unset_env` merge rule the masks below depend on.
+
+# run_mode: how the selected harnesses are run. Set explicitly, so every role reads
+# the same under any oneharness release: since 0.15.0 an unset run_mode resolves to
+# "fallback" and "parallel" is the opt-in, where earlier releases defaulted the
+# other way.
+#   "parallel" runs them all at once and reports each.
+#   "fallback" tries them in priority order and stops at the first that can
+#   actually run, falling through only harnesses that cannot run at all (not
+#   installed, unspawnable, or an auth/quota rejection) — so one committed file
+#   works wherever a given harness happens to be authenticated.
+run_mode = "fallback"
+
+# Record a normalized cross-harness transcript of every run to disk (viewable with
+# `oneharness history`). onejudge pins a role file via `--config`, which skips the
+# user-level config.toml — so history must be enabled HERE (or via ONEHARNESS_HISTORY)
+# to capture dispatched runs, not just in a user config.
+#
+# **Redundant for a dispatch and kept anyway.** The adopted onepipeline sets
+# ONEHARNESS_HISTORY=1 on every dispatch it starts, so a worker's turn would record
+# with this line gone. What it still covers is every turn this host runs *outside* a
+# dispatch — `just review-plan`, `just smoke`, the design-document pair, the judged
+# lint tier — where no engine is in the picture and this is the only thing enabling
+# it. So the redundancy is per turn rather than per file: removing it would silently
+# stop recording exactly the turns nobody is watching a run for.
+history = true
+
+# [harness.<id>]: per-harness overrides. Model names differ per provider, so each
+# harness names its own. Sol is the flagship tier of the GPT-5.6 family (Sol > Terra >
+# Luna); `gpt-5.6` aliases to it, but name it explicitly so the tier can't drift under
+# us. The three roles that run on the GPT-6 Astra tier restate it, and say why.
+[harness.codex]
+model = "gpt-5.6-sol"
+
+# **Every variant states its own `model`, even where it equals the harness-level value
+# directly above.** This is deliberate and must stay. A variant that named no `model`
+# would run the same model but REPORT it from a different place — `oneharness config`
+# would show the value resolved at `[harness.codex]` rather than at the variant — and
+# what a role file states about its own tier is read off exactly that. The duplication
+# is the price of the report being stable, and this refactor's whole equivalence
+# proof is that `oneharness config` says what it said before.
+#
+# A variant rather than the bare `codex`, so the environment rules here reach it:
+# `unset_env`, `env_from` and `env_file` are declarable on a variant ONLY, so a bare
+# harness id in a chain is a candidate no per-identity rule reaches. This one
+# deliberately declares no `unset_env` for `CODEX_HOME`, which is ambient
+# configuration a developer may export and this is the identity that honours it.
+# AGENTS.md says why.
+[harness.codex.variant.primary]
+model = "gpt-5.6-sol"
+# **This variant deliberately declares no `unset_env`, and it is the one variant that
+# cannot.** Its only mask anywhere on this host is `GH_PROJECTS_TOKEN`, and that is a
+# per-ROLE policy rather than a property of the identity: seven roles never reach the
+# plan store and stop the board credential here, while three exist to read and write
+# the board and must let it travel.
+#
+# A child replaces `unset_env` only with a NON-EMPTY list — an empty or absent one
+# inherits the parent's, which is the documented merge rule and what a real turn
+# applies. So there is no spelling for "mask nothing", and a mask stated here would be
+# one those three roles could never remove: every other variant's mask is a longer list
+# they can replace with a shorter one, and this one's would be the whole of it.
+#
+# Each of the seven roles that masks the board credential therefore says so at its own
+# `[harness.codex.variant.primary]`. `tests/e2e/test_dispatch_environment_e2e.py` drives
+# a real turn on every identity of every role and reads what the provider was handed,
+# which is what catches this rather than any reading of the resolved config.
+
+# The second Codex identity, reached only after the first one's quota is gone.
+# scripts/codex-alt-home.sh derives this non-secret path from HOME for every
+# dispatch and guarantees the directory exists; env_from maps it to CODEX_HOME in
+# only this child, so — unlike a literal /home/... value — the committed config is
+# machine-independent. A host that never authenticated a second Codex account
+# leaves that directory empty, which oneharness classifies as `auth` and falls
+# through, so this candidate costs nothing until it is logged in.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+# Subscription auth must not be shadowed by an ambient API key: `codex login`
+# writes ChatGPT tokens into the alternate home, and OPENAI_API_KEY would outrank
+# them and silently bill the wrong account.
+unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN"]
+
+[harness.claude-code]
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless on other harnesses.
+env = { IS_SANDBOX = "1" }
+
+# The first alternate Claude subscription. scripts/claude-alt-config-dir.sh derives
+# this non-secret path from HOME for every wrapper and hook, so no two drift; env_from
+# maps it to the Claude-specific name in only this child, and unlike a literal
+# /home/... value the committed config stays machine-independent.
+#
+# Its `model` is stated for the reason the codex variants' is, directly above: the
+# value is what `[harness.claude-code]` would give it anyway, and stating it keeps
+# `oneharness config` reporting the tier from the variant. The two roles that run
+# their Claude identities on the cheaper supervisor tier restate it, and say why.
+[harness.claude-code.variant.alternate]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+# The second alternate Claude subscription, reached when the first one's quota is
+# gone. It is credentialed from its own config directory, derived by the same one
+# helper; a host that never authenticated it reports `failure_kind: "auth"` and
+# falls through, so the candidate costs nothing until `claude login` runs against
+# that directory. tests/e2e/test_oneharness_timeout_e2e.py holds every role's chain
+# as the real CLI resolves it.
+[harness.claude-code.variant.alternate2]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+# The primary-backup subscription, reached just before the primary one everywhere. It
+# is credentialed from the directory scripts/claude-alt-config-dir.sh resolves into
+# ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR, which is that helper's to default; a
+# host that never logged it in reports `failure_kind: "auth"` and falls through, so the
+# candidate costs nothing until then.
+[harness.claude-code.variant.primary-backup]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+# The last resort in every chain: the primary subscription, credentialed from the
+# directory scripts/claude-alt-config-dir.sh resolves into
+# ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR, which is that helper's to default. Every
+# higher-precedence credential selector is masked, so this identity can never run as
+# another account.
+[harness.claude-code.variant.primary]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "GH_PROJECTS_TOKEN",
+]
+
+# Inspect the effective, fully layered config a role resolves — and where each value
+# came from — with `oneharness config --config oneharness.<role>.toml`.

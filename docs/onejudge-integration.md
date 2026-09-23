@@ -61,6 +61,82 @@ the two sides *different* identities without moving concurrent runs; that pair i
 specified under Harnesses below. `config/onejudge.base.yaml` carries only the loop's own
 concerns (persona defaults, session), never harness/model selection.
 
+### Where the identities are stated, and what a role file carries
+
+Every role config above extends a shared parent, so the six identities are written down
+once rather than ten times:
+
+| File | What it holds |
+| --- | --- |
+| `oneharness.identities.toml` | The six identities: each variant's `model`, its `env_from` indirection for `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, its `unset_env` credential mask, and `[harness.claude-code]`'s `IS_SANDBOX`. Plus `run_mode` and `history`. |
+| `oneharness.dispatch.toml` | Extends the above and adds one thing: the `XDG_RUNTIME_DIR` repoint onto the node's own scratch, which `env_from`'s key-wise merge lands beside each variant's own indirection. |
+| `oneharness.<role>.toml` | What is really a decision about that role: its `harnesses` order, its `timeout`, its `history_labels`, its `stream` / `schema_file` / `schema_max_retries`, its `mode`, and its model tier where that differs. |
+
+`oneharness.toml`, `oneharness.judge.toml` and `oneharness.follow-up.toml` extend
+`oneharness.dispatch.toml`, because those are the sides the engine starts inside a
+node's dispatch and so the only ones with a node scratch directory to point at. The
+other seven extend `oneharness.identities.toml` directly.
+
+Neither parent is named `oneharness.toml`, so oneharness's own project-config discovery
+— walking up from the working directory for that exact name — cannot find one. Keep it
+that way: a discovered parent would hand a bare run an identity set with no chain to
+select from.
+
+**Each role's identity order remains its own.** No parent declares a `harnesses` chain,
+which is deliberate twice over. A role that inherited a neighbour's order would silently
+queue where that neighbour queues — the whole point of the supervisory sides leading
+with Codex and the worker leading with Claude — and the graph layer reads `harnesses`
+off the child document alone, so a member inheriting one is refused before it starts for
+naming no chain. The same holds for `stream` and `schema_file`, and for every
+path-valued key (`history_dir`, `history_pointer_file`, a variant's `env_file`): the
+released core resolves only the `extends` path against the declaring file's directory,
+so any other relative path in a parent would mean a different file per child.
+
+#### How `unset_env` merges, and the one mask a parent cannot hold
+
+A **non-empty** child list replaces the parent's whole. An **empty or absent** one
+inherits it. There is no removal spelling, deliberately, so that there is one merge rule
+rather than two. That is the rule a real turn applies, and it shapes the layout twice.
+
+"The parent's mask minus one name" is written by stating what remains, which is what the
+three roles that reach the plan store — the design-document pair and the follow-up agent
+— do to leave `GH_PROJECTS_TOKEN` travelling.
+
+But `codex:primary`'s mask cannot live in a parent at all. That identity honours an
+ambient `CODEX_HOME` and masks nothing except the board credential, so for those three
+roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
+an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
+state no mask at that variant, and each of the seven roles that masks the board
+credential says so itself. It is the one place the six-identity block is not the whole
+story, and both parents carry a note at that variant explaining why.
+
+Every variant also keeps its own `model` line even where it matches the harness-level
+value, because a variant inheriting that value reports its tier from a different place,
+and `oneharness config` is where a role's tier is read.
+
+#### A resolved config is not evidence about a turn
+
+`oneharness config` misreports an inherited mask. Measured on the adopted release: a
+child that merely *mentions* a variant table without giving it a non-empty `unset_env`
+is reported as masking nothing — `unset_env: []` — while the turn it runs still applies
+the parent's mask. Adding one `env_from` key or one `model` line is exactly that case.
+
+So `oneharness.dispatch.toml`, `oneharness.judge.toml`, `oneharness.pr-author.toml` and
+`oneharness.plan-review.toml` restate masks they would inherit correctly anyway. The
+restatement changes no behaviour; it keeps what this host *reports* about its own
+credential isolation true, which is what a reviewer and the equivalence record below
+both read. A follow-up against oneharness is what retires them.
+
+Both halves are held, and it takes both.
+`tests/e2e/test_oneharness_config_equivalence_e2e.py` holds all ten roles' reported
+configurations to a committed record under `tests/e2e/oneharness_resolved/`, so a
+deliberate routing change is a visible update to that record in the same commit.
+`tests/e2e/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
+every role and reads what the provider was actually handed. The second is not a
+duplicate of the first: during this refactor the record called every role identical
+while three roles had in fact stopped handing the board credential to `codex:primary`,
+and only the real turn said so.
+
 ### The judge side is the one named `oneharness.judge.toml`
 
 The engine starts both sides as plain `oneharness`. `config/onejudge.base.yaml` names
@@ -185,10 +261,12 @@ onejudge schema          # the annotated, authoritative config reference
 ```
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This prose explains the user-facing routing contract; the TOML files remain authoritative and existing integration tests validate their selections. -->
-The committed configs are **that init output** with deliberate routing edits:
-the worker prefers an alternate Claude subscription, the judge prefers Codex and
-can fall back only to the primary Claude subscription, and both add an
-`IS_SANDBOX` env so claude-code runs under root. init's starter
+The committed configs began as **that init output** with deliberate routing edits: the
+worker prefers an alternate Claude subscription, and the judge prefers Codex. What each
+file now carries is only those edits — the identities they route over, and the
+`IS_SANDBOX` env that lets claude-code run under root, moved into the shared parent
+described above, so `onejudge init --force` regenerates a starter pair rather than
+anything these files still restate. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
@@ -214,10 +292,11 @@ whose values it inherits, and the parent is resolved **against the extending fil
 directory** rather than against the working directory. `oneharness config --config
 <child> --format json` reports each inherited field with the *parent's* path as its
 `source`, so a reader can see which file a value came from, and `config_files` lists the
-chain parent-first. That is what makes this pin movable at all for the refactor beside
-it: the ten `oneharness*.toml` files here restate one six-identity block, and `FileConfig`
-refuses an unknown key — so a host whose CLI predates this release refuses every one of
-those files at the first read.
+chain parent-first. That is what the ten `oneharness*.toml` files here are built on:
+each names `oneharness.identities.toml` as its parent, directly or through
+`oneharness.dispatch.toml`, rather than restating one six-identity block apiece.
+`FileConfig` refuses an unknown key — so a host whose CLI predates this release refuses
+every one of those files at the first read.
 What 0.16.1 before it changed
 ([oneharness#1344](https://github.com/nickderobertis/oneharness/pull/1344)) is three
 things: a base-id `--bin` (or `--mock-harness`) override now
@@ -927,9 +1006,12 @@ the turn. That hook running untrusted, under the bypass mode every dispatch runs
 nothing here marks a workspace trusted; the same delegated-recipes journeys hold the
 probe to failing on either.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
-`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
+`config/oneharness.version`, `config/onejudge.base.yaml`,
+`oneharness.identities.toml`, `oneharness.dispatch.toml`, `oneharness.toml`,
 `oneharness.judge.toml`, `oneharness.orchestrator.toml`, or
-`oneharness.check-in.toml`; every other pushed diff skips it.
+`oneharness.check-in.toml`; every other pushed diff skips it. The two shared parents
+are on that list because they are where an identity, a model or a credential mask now
+changes — a launch path can move without any role file being touched at all.
 
 ### The record a fallback chain is judged by
 

@@ -52,10 +52,19 @@ def _helper_defaults() -> dict[str, str]:
 
 
 def _chain_identities() -> set[str]:
-    """Every identity any shipped config's chain names."""
+    """Every identity any shipped ROLE config's chain names.
+
+    The subject set is the configs that declare a `harnesses` chain, stated here rather
+    than left to the glob: `oneharness*.toml` also matches the two SHARED parents —
+    `oneharness.identities.toml` and `oneharness.dispatch.toml` — which state the six
+    identities every role extends and deliberately name no chain, so that each role's
+    order stays its own. Reading them for `harnesses` would raise rather than answer.
+    """
     identities: set[str] = set()
     for config in REPO_ROOT.glob("oneharness*.toml"):
-        identities.update(tomllib.loads(config.read_text(encoding="utf-8"))["harnesses"])
+        chain = tomllib.loads(config.read_text(encoding="utf-8")).get("harnesses")
+        if chain is not None:
+            identities.update(chain)
     return identities
 
 
