@@ -36,6 +36,7 @@ from typing import Any, NamedTuple, NewType, TypedDict, cast
 import plan_fixture_source
 import plan_root_variable
 import pytest
+import short_state
 from fake_backend import (
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
@@ -328,7 +329,7 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(one) for one in answers])
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN"] = "local-md"
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT"] = str(destination)
     # `authoring` is in this list because the tail *launches* out of it: the project it

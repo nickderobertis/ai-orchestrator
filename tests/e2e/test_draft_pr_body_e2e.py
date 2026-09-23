@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import short_state
 from drafting_task_contract import onepipeline_opening
 from harness_indirections import (
     INDIRECTION_SOURCES,
@@ -165,7 +166,7 @@ def _identity(tmp_path: Path, *, answers: list[str], register: bool = True) -> I
     prompts = tmp_path / "prompts.jsonl"
     environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
     # Keeps this journey's harness history out of the host's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment.update(established_indirections(INDIRECTION_CALLER))
 
     if register:

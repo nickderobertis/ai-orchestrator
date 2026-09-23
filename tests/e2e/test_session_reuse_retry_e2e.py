@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict, cast
 
 import pytest
+import short_state
 from conftest import git
 from fake_backend import PROMPT_LOG_ENV
 from project_fixtures import project_from_plan
@@ -306,7 +307,7 @@ def _environment(world: Stranded, oneharness_bin: str) -> dict[str, str]:
     # graph scratch are all this journey's and none of them the host's.
     environment["ONEVCS_HOME"] = str(world.home)
     environment["ONEPIPELINE_RUNS_DIR"] = str(world.root / "runs")
-    environment["XDG_STATE_HOME"] = str(world.root / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(world.root))
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin

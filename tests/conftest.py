@@ -54,6 +54,7 @@ from nx_inputs import (
     repository_relative,
 )
 from registered_checkouts import listed_checkout_paths
+from short_state import short_state_base  # noqa: F401 - registered by being named here
 from waits import install_default_bounds
 
 from orchestrator.root import REPO_ROOT
@@ -85,6 +86,11 @@ onevcs_state_snapshot.snapshot()
 # scope is set up after launches that already load the file. `tests/onejudge_bundle.py`
 # is how, and why nothing leaves the host.
 onejudge_bundle.seed_process_cache()
+
+# `short_state_base` is imported rather than defined here because `tests/short_state.py`
+# owns the whole mechanism — the socket-address arithmetic, the budget it refuses past, and
+# the minting — while pytest resolves a fixture by the name the conftest carries. Naming it
+# in this import is what makes the autouse base run in every test process.
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The directories under this checkout that git ignores and Nx therefore never hashes.

@@ -27,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import short_state
 from harness_indirections import established_indirections
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper, project_from_plan
@@ -126,7 +127,7 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment.update(established_indirections(__name__))
     # Keeps a launch's history and sibling state out of the host's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import short_state
+
 from orchestrator.root import REPO_ROOT
 
 #: The committed configuration a conversation's judge side reads unless a journey names
@@ -151,7 +153,7 @@ def start(
     _scratch(scratch, config)
     document = scratch / "onejudge.yaml"
     document.write_text(json.dumps(_document(conversation)), encoding="utf-8")
-    spawned = {**environment, "XDG_STATE_HOME": str(scratch / "state")}
+    spawned = {**environment, "XDG_STATE_HOME": str(short_state.state_home(scratch))}
     if isinstance(conversation.agent, Taken):
         # llmlint: ignore[e2e_not_mocked] Only the paid model's words are scripted.
         spawned["MOCK_STDOUT"] = json.dumps({"result": conversation.agent.said})

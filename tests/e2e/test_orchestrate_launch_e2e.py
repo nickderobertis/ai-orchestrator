@@ -33,6 +33,7 @@ from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 import follow_up_variables
 import plan_root_variable
 import pytest
+import short_state
 from example_records import SOURCE, ExampleCopy, isolated_examples, tracked_root
 from fake_backend import (
     AGENT_DELAY_ENV,
@@ -303,6 +304,10 @@ class PromptRecord(TypedDict):
     config: str | None
     prompt: str
     system: str
+    #: The session name this invocation was asked to open a control socket for, or `None`.
+    #: `tests/e2e/fake_backend.py`'s `RecordedTurn` is where it is written and says what a
+    #: turn recorded both ways means.
+    control: str | None
 
 
 class Surface(TypedDict, total=False):
@@ -440,7 +445,7 @@ def _environment(
     environment.update(established_indirections(INDIRECTION_CALLER))
     # Keeps this run's graph scratch, its history, and its sibling state out of the
     # host's, so a journey never reads or reclaims a live dispatch's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 
@@ -803,6 +808,52 @@ def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
         if named is not None and named.group(1) == member:
             found.append(turn)
     return found
+
+
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_every_controlled_turn_of_the_launched_run_was_taken_under_its_socket(
+    launched: Launched,
+) -> None:
+    """The run's control sockets opened, and no turn was re-taken without one.
+
+    oneharness addresses a controlled turn's socket at
+    `$XDG_STATE_HOME/oneharness/sessions/control/<session>.sock`, and Linux caps a Unix
+    socket address at 108 bytes. Past it the socket is refused and the caller asks again
+    with everything the same but `--control`, so the turn runs twice: double the provider
+    invocations, double the wall clock, and — for a journey that measures how long a
+    worker is held — arithmetic against a worker held twice. Nothing fails, which is why
+    this went unseen for as long as every launched journey put its state root under
+    pytest's own `tmp_path`.
+
+    So the proof is the turn's own record rather than a length: this run is launched
+    through the real `just orchestrate`, under the short root `tests/short_state.py`
+    mints, and the stand-in records per turn which session it was asked to open a socket
+    for. A turn appearing once, with a name, is a turn whose socket opened — the
+    delegated `oneharness` run would have refused outright otherwise, which is what makes
+    the caller ask again. A turn appearing twice, once with a name and once without, is
+    that refusal.
+    """
+    turns = _recorded_turns(launched.prompt_log)
+    controlled = [turn for turn in turns if turn["control"]]
+    assert controlled, (
+        "no turn of this run was asked to open a control socket, so nothing here says "
+        f"whether one could be opened; the run recorded {len(turns)} turn(s)"
+    )
+    uncontrolled = {
+        (turn["config"], turn["system"], turn["prompt"]) for turn in turns if not turn["control"]
+    }
+    retaken = [
+        turn
+        for turn in controlled
+        if (turn["config"], turn["system"], turn["prompt"]) in uncontrolled
+    ]
+    assert not retaken, (
+        f"{len(retaken)} of {len(controlled)} controlled turn(s) were asked again with no "
+        f"control socket, which is what oneharness's caller does when the socket address "
+        f"is refused: sessions "
+        f"{sorted({str(turn['control']) for turn in retaken})}, state root "
+        f"{launched.environment['XDG_STATE_HOME']}"
+    )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")

@@ -61,6 +61,7 @@ from typing import Any, NamedTuple, NewType, TypedDict, cast
 
 import plan_fixture_source
 import pytest
+import short_state
 from fake_backend import (
     AUTHOR_PLAN_ENV,
     MEMBER_OF_CONFIG,
@@ -430,7 +431,7 @@ def _environment(
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([PASSING_VERDICT])
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     # The destination the flow copies into, added through the store's own environment
     # layer rather than through a `--set` flag: that layer is the one every part of the
     # flow sees — the copy, the location read after it, and this journey's own reads —

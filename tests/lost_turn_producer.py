@@ -34,6 +34,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
+import short_state
+
 #: The one producer whose transcript reaches the monitor's judge side, as `oneharness list` ids it.
 PRODUCER = "codex"
 
@@ -157,9 +159,11 @@ def recording_refusals() -> RecordedRefusals:
     return RecordedRefusals(base_url=_serve_refusals(models), models=models)
 
 
-#: The session name the run is addressed by. One character, because `--control` binds a
-#: Unix socket under the session directory and Linux caps that address at 108 bytes.
-CONTROL_SESSION = "m"
+#: The session name the run is addressed by. Ordinary rather than the one character it had
+#: to be while the session directory sat under `tmp_path`: `--control` binds a Unix socket
+#: under that directory and Linux caps the address at 108 bytes, which the short state root
+#: `tests/short_state.py` mints leaves room under.
+CONTROL_SESSION = "controlled-turn"
 
 #: How long either local command may take before it is treated as hung. Both are
 #: sub-second against binaries on this host, so this only ever catches a wedge — there is
@@ -235,7 +239,7 @@ def controlled_turn(
             "--session",
             CONTROL_SESSION,
             "--session-dir",
-            str(root / "sessions"),
+            str(short_state.state_home(root) / "sessions"),
             "--cwd",
             str(root),
             "--timeout",

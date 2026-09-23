@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
+import short_state
 from fake_backend import (
     JUDGE_CONFIG_NAME,
     JUDGE_SEND_BACK_ENV,
@@ -201,7 +202,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     # and its graph scratch are all this journey's and none of them the host's.
     environment["ONEVCS_HOME"] = str(identity.home)
     environment["ONEPIPELINE_RUNS_DIR"] = str(root / "runs")
-    environment["XDG_STATE_HOME"] = str(root / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(root))
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin

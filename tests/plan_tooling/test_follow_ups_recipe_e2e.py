@@ -50,6 +50,7 @@ from typing import NamedTuple
 import follow_up_variables
 import plan_root_variable
 import pytest
+import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
@@ -281,7 +282,7 @@ def _bench(tmp: Path) -> Bench:
     environment["REAL_PLAN_STORE"] = str(ONETASKGRAPH_BIN)
     environment["OLDER_PLAN_STORE_VERSION"] = OLDER_PLAN_STORE_VERSION
     environment["OLDER_PLAN_STORE_DIR"] = str(OLDER_PLAN_STORE)
-    environment["XDG_STATE_HOME"] = str(tmp / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp))
     # `oneagentgraph` keeps each member's scratch — its report, the effective harness
     # config it ran under, and everything the turn writes in its working directory —
     # under a state directory of its own, which it takes from this name rather than from

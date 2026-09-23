@@ -47,6 +47,7 @@ from typing import NamedTuple
 
 import plan_fixture_source
 import pytest
+import short_state
 from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV
 from project_fixtures import helper
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -201,7 +202,7 @@ def _flow(tmp_path: Path, oneharness_bin: str) -> Flow:
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([PASSING_VERDICT])
     environment[AGENT_DELAY_ENV] = str(TURN_SECONDS)
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN"] = "local-md"
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT"] = str(destination)
     # `authoring` is in this list because both launches of the flow read the project each

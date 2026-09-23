@@ -26,6 +26,7 @@ from pathlib import Path
 
 import plan_root_variable
 import pytest
+import short_state
 from waits import timeout as e2e_timeout
 
 from orchestrator.project_store import write_plan_project
@@ -203,7 +204,7 @@ def test_a_plan_node_naming_an_unshipped_persona_fails_before_a_harness_starts(
 
     environment = dict(os.environ)
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     # The probe project is written into this launch directory's own `.plans`, and
     # `onetaskgraph.yaml` roots the `authoring` source there *relatively* — so the root
     # is stated here, over whatever one this process was given, or the launch reads a

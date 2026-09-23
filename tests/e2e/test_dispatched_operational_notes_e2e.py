@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import NamedTuple, cast
 
 import pytest
+import short_state
 from fake_backend import JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
 from project_fixtures import project_from_plan
@@ -204,7 +205,7 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     environment.update(established_indirections(INDIRECTION_CALLER))
     # Keeps this run's graph scratch and history out of the host's, so it never reads or
     # reclaims a live dispatch's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

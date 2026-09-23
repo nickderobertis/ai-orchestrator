@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import NamedTuple, NewType, NotRequired, Protocol, TypedDict, cast
 
 import pytest
+import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import (
     MANAGER_PATIENCE_SECONDS,
@@ -170,7 +171,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment.update(_sandboxed_home(tmp_path))
     return environment
 

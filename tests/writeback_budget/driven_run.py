@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple, NewType
 
 import pytest
+import short_state
 from fake_backend import AGENT_DELAY_ENV
 from harness_indirections import established_indirections
 from held_onetaskgraph import HOLD_ENV, LOG_ENV, REAL_ENV
@@ -342,7 +343,7 @@ def _environment(tmp_path: Path, oneharness_bin: str, caller: str, session: str)
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = session
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     # The real CLI the provider stand-in hands a turn to once its hold ends.
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)

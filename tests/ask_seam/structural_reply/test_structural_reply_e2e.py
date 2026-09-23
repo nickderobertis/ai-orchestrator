@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import BUS_CONFIG
 from project_fixtures import helper, project_from_plan
@@ -101,7 +102,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "review-launches")
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

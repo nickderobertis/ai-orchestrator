@@ -37,6 +37,7 @@ from typing import NamedTuple, cast
 
 import follow_up_variables
 import pytest
+import short_state
 from fake_backend import (
     ENVIRONMENT_KEYS_ENV,
     MEMBER_OF_CONFIG,
@@ -138,7 +139,7 @@ def _environment(
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment[PROMPT_LOG_ENV] = str(turns)
     environment[ENVIRONMENT_KEYS_ENV] = ",".join(
         [

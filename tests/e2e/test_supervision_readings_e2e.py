@@ -79,6 +79,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import short_state
 from example_records import isolated_examples
 from probe_run_root import Probe, record_dispatch, run_name, run_root
 from waits import timeout as e2e_timeout
@@ -526,7 +527,7 @@ def test_the_readings_answer_over_a_run_root_a_real_launch_wrote(tmp_path: Path)
                 Path(__file__).resolve().parent / "fake_backend.py"
             ),
             "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         }
         launched = subprocess.run(
             ["just", "orchestrate", "examples:scheduler-research", "--detach"],
