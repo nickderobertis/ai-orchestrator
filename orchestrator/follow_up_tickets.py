@@ -56,6 +56,10 @@ from pathlib import Path
 from typing import Literal, NamedTuple, NewType, NoReturn
 
 from onetaskgraph_sdk import CopyReport
+
+# The SDK's `__all__` exports the `QueryResponseOf…` schema roots but not their item models,
+# so `QualifiedTask` has no public name; the follow-up "Export the SDK's query item models
+# (QualifiedTask et al.) beside the QueryResponseOf… schema roots" retires this import.
 from onetaskgraph_sdk._generated.query_response_of_qualified_task import QualifiedTask
 
 from orchestrator import follow_up_drafts as drafts

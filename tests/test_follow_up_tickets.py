@@ -24,10 +24,7 @@ from types import SimpleNamespace
 
 import follow_up_variables
 import pytest
-from onetaskgraph_sdk import CopyReport
-from onetaskgraph_sdk._generated.query_response_of_qualified_task import (
-    QueryResponse as QueryResponseOfQualifiedTask,
-)
+from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_tickets as tickets
