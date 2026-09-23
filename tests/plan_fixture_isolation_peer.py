@@ -43,10 +43,6 @@ REMOVER = "remover"
 #: two different ids would prove that of two unrelated records instead.
 SHARED_NATIVE = "test-shared-native-id"
 
-#: The root `onetaskgraph.yaml` states for this source, relative to the checkout. A peer
-#: that resolved it stated no root of its own, which is the whole failure.
-TRACKED_ROOT = ".test-fixtures"
-
 #: The plan each peer stores: one record, complete enough for `write_plan_project`.
 PLAN: dict[str, object] = {
     "name": SHARED_NATIVE,
@@ -132,7 +128,7 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
     role = os.environ[ROLE_ENV]
     assert role in (KEEPER, REMOVER), role
     root = plan_fixture_source.root()
-    assert root != REPO_ROOT / TRACKED_ROOT, (
+    assert root != plan_fixture_source.tracked_root(), (
         f"this peer resolved the tracked root {root}, so its session fixture stated none"
     )
     (_scratch() / f"{role}.root").write_text(str(root), encoding="utf-8")

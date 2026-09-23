@@ -94,7 +94,9 @@ def test_two_concurrent_test_processes_keep_their_own_fixture_roots(tmp_path: Pa
         f"record — which is the sharing this isolation ended"
     )
     for role, root in roots.items():
-        assert root != REPO_ROOT / peer.TRACKED_ROOT, f"the {role} peer used the tracked root"
+        assert root != plan_fixture_source.tracked_root(), (
+            f"the {role} peer used the root onetaskgraph.yaml states rather than its own"
+        )
 
     kept = roots[peer.KEEPER] / "projects" / f"{peer.SHARED_NATIVE}.md"
     gone = roots[peer.REMOVER] / "projects" / f"{peer.SHARED_NATIVE}.md"

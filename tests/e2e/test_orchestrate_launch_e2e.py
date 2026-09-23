@@ -41,6 +41,7 @@ from fake_backend import (
     JUDGE_CONFIG_NAME,
     PROMPT_LOG_ENV,
     RUN_TASK,
+    RecordedTurn,
 )
 from harness_indirections import established_indirections, harness_routing
 from no_paid_provider import REFUSAL, VERSION
@@ -298,16 +299,6 @@ class GraphRef(TypedDict):
 
 class GraphHistory(TypedDict):
     refs: list[GraphRef]
-
-
-class PromptRecord(TypedDict):
-    config: str | None
-    prompt: str
-    system: str
-    #: The session name this invocation was asked to open a control socket for, or `None`.
-    #: `tests/e2e/fake_backend.py`'s `RecordedTurn` is where it is written and says what a
-    #: turn recorded both ways means.
-    control: str | None
 
 
 class Surface(TypedDict, total=False):
@@ -679,11 +670,12 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
         str(routed_persona_run.judge_config),
     }
     assert expected_configs <= origins[0], origins
-    # The fake backend writes this JSONL itself; PromptRecord states the one field
+    # The fake backend writes this JSONL itself, and `RecordedTurn` — its own declaration
+    # of what it writes — is what the cast states, so this reads the producer's shape
     # this test consumes from that test-owned schema.
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     prompts = [
-        cast(PromptRecord, json.loads(line))["prompt"]
+        cast(RecordedTurn, json.loads(line))["prompt"]
         for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()
     ]
     assert any(
@@ -732,11 +724,11 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
     assert run.returncode == 0, run.stdout + run.stderr
     # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only
     # place a supervised graph invocation's review contract is observable; no published
-    # view carries it. The fake backend writes this JSONL itself and PromptRecord states
+    # view carries it. The fake backend writes this JSONL itself and its own `RecordedTurn`
     # the one field consumed, so this reads a test-owned schema rather than reaching
     # past somebody else's validation.
     prompts = [
-        cast(PromptRecord, json.loads(line))["prompt"]
+        cast(RecordedTurn, json.loads(line))["prompt"]
         for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     # llmlint: ignore-end[tests_mirror_real_usage]
@@ -787,19 +779,19 @@ def test_every_dag_scope_member_starts_with_the_graph(
     )
 
 
-def _recorded_turns(prompt_log: Path) -> list[PromptRecord]:
+def _recorded_turns(prompt_log: Path) -> list[RecordedTurn]:
     """Every turn of a launched run, as the stand-in model was given it."""
-    # The fake backend writes this JSONL itself, one object per turn with every field
-    # PromptRecord names; it is test-owned on both ends, so the cast states that schema
-    # rather than skipping a validation of somebody else's.
+    # The fake backend writes this JSONL itself, one object per turn, and declares what it
+    # writes as `RecordedTurn` — so the cast names the producer's own type rather than a
+    # second copy of its shape, and a field it adds or drops moves both ends together.
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     return [
-        cast(PromptRecord, json.loads(line))
+        cast(RecordedTurn, json.loads(line))
         for line in prompt_log.read_text(encoding="utf-8").splitlines()
     ]
 
 
-def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
+def _turns_of(turns: list[RecordedTurn], member: str) -> list[RecordedTurn]:
     """The turns `oneagentgraph` pinned to one named dag-scope member."""
     found = []
     for turn in turns:
@@ -2247,7 +2239,7 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
     )
 
 
-def _monitor_agent_turns(prompt_log: Path) -> list[PromptRecord]:
+def _monitor_agent_turns(prompt_log: Path) -> list[RecordedTurn]:
     """Every turn the monitor's AGENT side was given, newest last."""
     return [
         turn

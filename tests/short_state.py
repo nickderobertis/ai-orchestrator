@@ -20,10 +20,13 @@ are what this replaces.
 So the root is minted directly under the system temporary directory, short enough that the
 longest session name this host composes still fits with room over — `BUDGET` states that
 arithmetic and `state_home` refuses a root past it, rather than leaving the next caller to
-rediscover the limit from a refusal buried in a dispatch's log. The session-scoped fixture
-below owns the whole of it: one base per test process, removed with everything under it
-when that process ends. Each owner gets a directory of its own under that base, because two
-journeys sharing one state root read each other's oneharness sessions and history.
+rediscover the limit from a refusal buried in a dispatch's log.
+`tests/test_short_state_budget.py` holds each of its three terms to what owns it.
+
+The session-scoped fixture below owns the whole of it: one base per test process, removed
+with everything under it when that process ends. Each owner gets a directory of its own
+under that base, because two journeys sharing one state root read each other's oneharness
+sessions and history.
 """
 
 from __future__ import annotations
@@ -36,20 +39,28 @@ from pathlib import Path
 
 import pytest
 
-#: Linux's cap on a Unix socket address (`sun_path`), which oneharness reports by name
-#: when it refuses one. One byte is left to the terminating NUL.
+#: The platform's cap on a Unix socket address (`sun_path`, its terminating NUL included).
+#: The kernel's rather than oneharness's, so it is held to the kernel:
+#: `tests/test_short_state_budget.py` binds a real socket either side of it.
 UNIX_SOCKET_ADDRESS_BYTES = 108
 
-#: What oneharness puts between a state root and the socket, at its own defaults.
+#: What oneharness puts between a state root and that socket at its own defaults —
+#: `--session-dir` under `<XDG_STATE_HOME>/oneharness/sessions`, the socket in its
+#: `control/` directory. Its one source is the installed CLI, which
+#: `tests/test_short_state_budget.py` reads both halves back out of.
 SOCKET_LAYOUT = "/oneharness/sessions/control/"
 
-#: The longest session name this host composes, by its shape rather than by a measurement
-#: that would go stale: `<graph>-<millis>-<pid>-<member>-<side>`, where the graph is at
-#: most `node-scope`, the member at most `pr-author`, and the side `skill` or `user`.
-LONGEST_SESSION_NAME = len("node-scope") + 1 + 13 + 1 + 7 + 1 + len("pr-author") + 1 + len("skill")
+#: What this host reserves under that layout for a session name and its `.sock` suffix.
+#: A decision rather than a copy of anybody's value — nothing published states a maximum
+#: session name — and `tests/test_short_state_budget.py` is what keeps it a sufficient
+#: one, against the longest name the graphs and members this repository ships compose.
+RESERVED_FOR_A_SESSION = 54
 
-#: What a state root may spend, so that the longest address above still fits.
-BUDGET = UNIX_SOCKET_ADDRESS_BYTES - 1 - len(SOCKET_LAYOUT) - LONGEST_SESSION_NAME - len(".sock")
+#: What is left for a state root, which is what `state_home` refuses to spend past. The
+#: byte taken off the top is the terminating NUL the limit above counts, so an address of
+#: exactly `UNIX_SOCKET_ADDRESS_BYTES` characters is one byte too long rather than the
+#: longest that fits.
+BUDGET = UNIX_SOCKET_ADDRESS_BYTES - 1 - len(SOCKET_LAYOUT) - RESERVED_FOR_A_SESSION
 
 #: How the base is named. Short on purpose — every byte here is a byte a session name
 #: cannot have — and recognisable enough that a leftover directory says whose it was.
@@ -106,8 +117,9 @@ def state_home(owner: Path) -> Path:
     if len(str(known)) > BUDGET:
         raise AssertionError(
             f"{known} is {len(str(known))} bytes where a state root may spend {BUDGET}: "
-            f"oneharness adds {SOCKET_LAYOUT!r} and up to {LONGEST_SESSION_NAME} bytes of "
-            f"session name, and the {UNIX_SOCKET_ADDRESS_BYTES}-byte socket-address limit "
-            f"turns the excess into a controlled turn refused and re-taken without control"
+            f"oneharness adds {SOCKET_LAYOUT!r} and this host reserves "
+            f"{RESERVED_FOR_A_SESSION} bytes for the session name under it, so anything "
+            f"over turns a controlled turn into one refused for its address and re-taken "
+            f"without control"
         )
     return known
