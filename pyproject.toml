@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 # classifier is the truthful statement of that, and the one PyPI refuses an upload over.
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "onetaskgraph-sdk==0.2.41",
+    "onetaskgraph-sdk==0.2.43",
     "oneagentgraph-cli==0.4.10",
     "oneharness-cli==0.16.2",
     "onejudge==0.13.5",

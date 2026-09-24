@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import venv
 from pathlib import Path
@@ -17,6 +18,7 @@ from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import design_approval, follow_up_comments, plan_copy, plan_store
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
+from orchestrator.root import REPO_ROOT
 
 #: A plan-store CLI of another release, the suite's own decoy: it reports a version no
 #: checkout pins, delegates everything else to `REAL_PLAN_STORE`, and appends one line
@@ -429,13 +431,49 @@ def test_a_later_page_a_source_failed_to_answer_refuses_the_whole_listing(
     ]
 
 
-def test_the_pages_a_listing_is_typed_over_are_the_sdks_own_published_models() -> None:
-    """Each generated `QueryResponse` the helper is bound to is the SDK's public one.
+#: Each listing the store reads through :func:`plan_store.every_page`, and the public
+#: `QueryResponseOf…` name of the page it answers with.
+LISTINGS = {
+    "task_list": "QueryResponseOfQualifiedTask",
+    "document_list": "QueryResponseOfQualifiedDocument",
+    "project_list": "QueryResponseOfQualifiedProject",
+    "task_deps": "QueryResponseOfQualifiedEdge",
+    "label_list": "QueryResponseOfQualifiedLabel",
+    "search": "QueryResponseOfSearchHit",
+}
 
-    `plan_store` takes them from the modules that define them, because the public alias
-    is invisible to a strict type checker; what makes that safe is that each is the very
-    class the SDK publishes under its `QueryResponseOf…` name, which this holds — a release
-    that moved or re-generated them fails here rather than at a dispatch.
+#: A consumer of the store written as one would be: the page types imported from the
+#: SDK's public namespace, each listing read through the store, and every page held to
+#: the public name. Under the repository's strict settings an alias the SDK does not
+#: export is an `attr-defined` error at the import, and a page read as `Any` fails its
+#: `assert_type`.
+STRICT_CONSUMER = """\
+from typing import assert_type
+
+from onetaskgraph_sdk import (
+    Client,
+    QueryResponseOfQualifiedDocument,
+    QueryResponseOfQualifiedEdge,
+    QueryResponseOfQualifiedLabel,
+    QueryResponseOfQualifiedProject,
+    QueryResponseOfQualifiedTask,
+    QueryResponseOfSearchHit,
+)
+
+from orchestrator import plan_store
+
+
+def read(client: Client) -> None:
+{reads}
+"""
+
+
+def test_the_pages_a_listing_is_typed_over_are_the_sdks_public_names() -> None:
+    """The store's page types are the ones the SDK publishes, imported from it by name.
+
+    Every `QueryResponseOf…` the SDK publishes in `__all__` is the very class the store
+    binds, and the store binds no other: a release that renamed, dropped or re-generated
+    one fails here rather than at a dispatch.
     """
     published = {
         name: getattr(onetaskgraph_sdk, name)
@@ -448,11 +486,60 @@ def test_the_pages_a_listing_is_typed_over_are_the_sdks_own_published_models() -
         if name.startswith("QueryResponseOf")
     }
 
+    assert set(published) == set(LISTINGS.values()), published
     assert bound == published, (set(bound) ^ set(published), bound, published)
     assert all(bound[name] is published[name] for name in published)
     assert {"items", "errors", "next"} <= set(
         published["QueryResponseOfQualifiedTask"].model_fields
     )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This test's subject is
+# `orchestrator/plan_store.py` as a strict consumer reads it, and everything the mypy run
+# reads — the package, `pyproject.toml`'s `[tool.mypy]`, the locked SDK — is inside the key
+# `orchestrator:test` is memoized on, so a project of its own would carry the same key over
+# the same inputs. That tier already drives real subprocesses (`just`, Nx, the plan-store
+# CLI) by this repository's realistic-tests invariant; one mypy run over one module is that.
+def test_the_public_page_names_type_check_under_the_repositorys_strict_settings(
+    tmp_path: Path,
+) -> None:
+    """A strict consumer importing the public names reads every listing typed, not `Any`.
+
+    The real mypy runs over a module importing the six names from `onetaskgraph_sdk`
+    itself, under `pyproject.toml`'s own `[tool.mypy]`, and asserts each page
+    :func:`plan_store.every_page` returns is the public name for its listing. The public
+    names were once aliases a strict checker would not re-export, which is why the store
+    reached into the SDK's generated modules; this is what says it no longer has to.
+    """
+    reads = "\n".join(
+        f"    assert_type(plan_store.every_page({method!r}, client.{method}), list[{name}])"
+        for method, name in LISTINGS.items()
+    )
+    consumer = tmp_path / "strict_consumer.py"
+    consumer.write_text(STRICT_CONSUMER.format(reads=reads), encoding="utf-8")
+
+    checked = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--config-file",
+            str(REPO_ROOT / "pyproject.toml"),
+            "--cache-dir",
+            str(tmp_path / "mypy-cache"),
+            str(consumer),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "Success: no issues found in 1 source file" in checked.stdout, checked.stdout
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def test_a_page_cursor_already_followed_is_refused_naming_it(

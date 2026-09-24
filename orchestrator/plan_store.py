@@ -15,32 +15,12 @@ from typing import NewType
 from onetaskgraph_sdk import (
     Client,
     OnetaskgraphError,
-)
-
-# The SDK publishes these as `onetaskgraph_sdk.QueryResponseOf…`, each an alias of the
-# `QueryResponse` its generated module defines — and an alias whose name differs from the
-# original is not a re-export to a strict type checker, so through the public name mypy
-# sees nothing, and a `type: ignore` there would make every page `Any` and untype every
-# reader. They are taken from the modules that define them instead;
-# `tests/test_plan_store_sdk.py` holds each to its public alias, so an SDK that moved
-# them fails there rather than at a dispatch.
-from onetaskgraph_sdk._generated.query_response_of_qualified_document import (
-    QueryResponse as QueryResponseOfQualifiedDocument,
-)
-from onetaskgraph_sdk._generated.query_response_of_qualified_edge import (
-    QueryResponse as QueryResponseOfQualifiedEdge,
-)
-from onetaskgraph_sdk._generated.query_response_of_qualified_label import (
-    QueryResponse as QueryResponseOfQualifiedLabel,
-)
-from onetaskgraph_sdk._generated.query_response_of_qualified_project import (
-    QueryResponse as QueryResponseOfQualifiedProject,
-)
-from onetaskgraph_sdk._generated.query_response_of_qualified_task import (
-    QueryResponse as QueryResponseOfQualifiedTask,
-)
-from onetaskgraph_sdk._generated.query_response_of_search_hit import (
-    QueryResponse as QueryResponseOfSearchHit,
+    QueryResponseOfQualifiedDocument,
+    QueryResponseOfQualifiedEdge,
+    QueryResponseOfQualifiedLabel,
+    QueryResponseOfQualifiedProject,
+    QueryResponseOfQualifiedTask,
+    QueryResponseOfSearchHit,
 )
 
 from orchestrator.project_store import (
