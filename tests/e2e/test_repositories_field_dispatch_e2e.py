@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import pytest
+import short_state
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from project_fixtures import project_from_plan
 from scratch_identity import Identity, seeded
@@ -280,7 +281,7 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     environment["ONEVCS_HOME"] = str(identity.home)
     environment.update(identity.environment)
     environment["ONEPIPELINE_RUNS_DIR"] = str(root / "runs")
-    environment["XDG_STATE_HOME"] = str(root / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(root))
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin

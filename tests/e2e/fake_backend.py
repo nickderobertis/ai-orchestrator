@@ -254,6 +254,8 @@ MONITOR_MEMBER = "monitor"
 #: Where a turn's conversation handle arrives, which is what says two turns are one
 #: conversation.
 SESSION_FLAG = "--session"
+#: What asks oneharness to open the turn-control socket, addressed by that handle.
+CONTROL_FLAG = "--control"
 #: A fenced shell block of the composed system prompt, the one assignment in it this
 #: stand-in fills in with the cursor it carries, and the resume line a read ends with.
 SHELL_BLOCK = re.compile(r"^```sh\n(?P<body>.*?)^```", re.MULTILINE | re.DOTALL)
@@ -414,6 +416,12 @@ class RecordedTurn(TypedDict):
     system: str | None
     environment: dict[str, str | None]
     scripted_answer: str | None
+    #: The session name this invocation was asked to open a turn-control socket for, or
+    #: `None` when it was asked for no socket at all. It is what tells a controlled turn
+    #: from the *same* turn re-taken after oneharness refused the socket's address: the
+    #: caller asks again with everything the same but this, so one turn recorded both ways
+    #: is a refusal, and a turn only ever recorded with a name is one whose socket opened.
+    control: str | None
 
 
 def _flag(argv: list[str], name: str) -> str | None:
@@ -662,6 +670,7 @@ def main(argv: list[str]) -> int:
                 "system": system,
                 "environment": {key: os.environ.get(key) for key in named},
                 "scripted_answer": scripted_answer,
+                "control": _flag(argv, SESSION_FLAG) if CONTROL_FLAG in argv else None,
             }
             recorded.write(json.dumps(turn) + "\n")
     if config and Path(config).name == JUDGE_CONFIG_NAME:

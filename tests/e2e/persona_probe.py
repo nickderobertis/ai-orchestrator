@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
+import short_state
 from harness_indirections import established_indirections
 from waits import timeout as e2e_timeout
 
@@ -106,7 +107,7 @@ def probe_environment(tmp_path: Path, oneharness_bin: str, caller: str) -> dict[
     environment.update(established_indirections(caller))
     # Keeps this run's graph scratch and history out of the host's, so a probe never
     # reads or reclaims a live dispatch's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

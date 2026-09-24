@@ -86,6 +86,7 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 
 import pytest
+import short_state
 from onejudge_sdk import OneJudge, RunConfig
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -612,7 +613,7 @@ def test_a_judge_side_prompt_names_every_configured_artifact_by_its_resolved_pat
                 json.dumps({"value": True, "reason": "the design is written"}),
             ]
         ),
-        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
     }.items():
         monkeypatch.setenv(name, value)
 

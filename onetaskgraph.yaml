@@ -15,7 +15,10 @@ sources:
   test-fixtures:
     plugin: local-md
     config:
-      root: /tmp/ai-orchestrator-test-projects
+      # This suite's own launchable projects. Rooted relatively and gitignored, beside
+      # the two above, because every test process states a temporary root of its own over
+      # this one (`tests/plan_fixture_source.py`); nothing writes here.
+      root: .test-fixtures
   plans:
     plugin: github-projects
     config:

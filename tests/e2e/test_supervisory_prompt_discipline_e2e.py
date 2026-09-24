@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import NamedTuple, cast
 
 import pytest
+import short_state
 from example_records import isolated_examples
 from fake_backend import AGENT_DELAY_ENV, JUDGE_CONFIG_NAME, PROMPT_LOG_ENV
 from harness_indirections import established_indirections
@@ -374,7 +375,7 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     environment.update(established_indirections(INDIRECTION_CALLER))
     # Keeps this journey's graph scratch and history out of the host's, so it never
     # reads or reclaims a live dispatch's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     # Where the merged base ⊕ persona config is written. Named rather than left to the
     # state home above, because this journey globs for one member's copy of it and a
     # path it chose is the only one it can be sure belongs to its own launch.

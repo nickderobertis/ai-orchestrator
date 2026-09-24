@@ -31,7 +31,6 @@ import json
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,11 +90,11 @@ HELD_NODE = "held"
 #: turn is the pacing, the third puts the member's ~15-second heartbeat inside a hold,
 #: and the last hold ends within a few seconds of the settlement it has to be cancelled
 #: at — later, and a hold expiring during the driver's own closeout would read as one
-#: waited out. That arithmetic holds only while the worker is held **once**: the
-#: launched environment's session store sits under `tmp_path`, whose control-socket
-#: address is past the 108 bytes Linux allows, so every controlled turn there is refused
-#: and re-taken without control — a worker held twice, and a settlement landing wherever
-#: in a hold the second delay puts it. `_paced_launch` gives the run a short store.
+#: waited out. That arithmetic holds only while the worker is held **once**, which is what
+#: the short session store `tests/short_state.py` mints buys: a store whose control-socket
+#: address is past the 108 bytes Linux allows has every controlled turn refused and
+#: re-taken without control — a worker held twice, and a settlement landing wherever in a
+#: hold the second delay puts it.
 PACED_HOLD_SECONDS = 12
 HELD_SECONDS = 38
 
@@ -542,10 +541,6 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
     scripted quiet, so the pacing measured is the graph's and not the model's.
     """
     environment = _launched_environment(tmp_path, oneharness_bin)
-    # A session store of its own, and a deliberately short one: `HELD_SECONDS` explains
-    # why, and `test_monitor_cursor_e2e.py`'s `session_state` is the same remedy.
-    session_store = Path(tempfile.mkdtemp(prefix="ogl-"))
-    environment["XDG_STATE_HOME"] = str(session_store)
     # llmlint: ignore-block[live_tier_compiles_and_requires_credential] The boundary under
     # test is the graph's pacing of a conversation, and a credentialed turn would prove
     # nothing more about it; the paid provider is the one thing this suite doubles.
@@ -604,7 +599,6 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
                 timeout=e2e_timeout(60),
                 check=False,
             )
-            shutil.rmtree(session_store, ignore_errors=True)
     return Paced(
         events=_graph_events(tmp_path / "graph-state"),
         readings=readings,

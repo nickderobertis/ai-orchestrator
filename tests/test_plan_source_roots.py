@@ -181,8 +181,12 @@ def test_the_reader_this_module_checks_roots_with_agrees_with_the_installed_cli(
     absolute against the document's own directory rather than leaving each reading
     process to resolve it against a working directory of its own. The reader here reads
     what the document *says*, so resolving its answer the same way is what puts the two
-    on one footing — and a root the document already states absolutely is left where it
-    is by that join, which is how `test-fixtures` rides along as the control.
+    on one footing.
+
+    The environment is stripped of every `ONETASKGRAPH_` name, so what is compared is the
+    document rather than the roots this suite states over it: `test-fixtures` is rooted
+    relatively in the file and per test process in the environment
+    (`tests/plan_fixture_source.py`), and it is the file's answer that belongs here.
     """
     resolved = _resolved_configuration()
     text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")

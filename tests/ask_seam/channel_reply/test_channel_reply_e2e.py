@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, NewType, cast
 
 import pytest
+import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import BUS_CONFIG, next_surface_record, reply, ruling
 from project_fixtures import helper, project_from_plan
@@ -158,7 +159,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider's answer is scripted.
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(PASSING_VERDICT)])
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "review-launches")
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     # Host state under the real `HOME` reaches a launch these journeys make, so a
     # sandbox is what makes them answer about this checkout.
     home = tmp_path / "home"

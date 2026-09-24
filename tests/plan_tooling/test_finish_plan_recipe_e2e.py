@@ -33,8 +33,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
+import plan_fixture_source
 import plan_root_variable
 import pytest
+import short_state
 from fake_backend import (
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
@@ -42,7 +44,6 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
     RecordedTurn,
 )
-from plan_fixture_root import ROOT as FIXTURE_ROOT
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -86,9 +87,9 @@ INHERITED_ENVIRONMENT = (
 PUBLICATION_ALIAS = "ai-orchestrator"
 EXECUTION_ALIAS = "ai-orchestrator-isolated"
 
-#: The source a plan is drafted in here — the shared fixture store every tier of this
-#: suite publishes into, which is what stands in for the gitignored `authoring` root.
-FIXTURE_SOURCE = "test-fixtures"
+#: The source a plan is drafted in here — this process's own fixture store, which is
+#: what stands in for the gitignored `authoring` root.
+FIXTURE_SOURCE = plan_fixture_source.SOURCE
 
 #: The source both launches of a planning flow write their own generated project into,
 #: which is where `onepipeline` then reads the plan it launches from.
@@ -207,7 +208,7 @@ def _draft(
     name: str,
     criteria: str = STATES_ITS_BAR,
     *,
-    root: Path = FIXTURE_ROOT,
+    root: Path | None = None,
     source: str = FIXTURE_SOURCE,
     document_suffix: str = FIXTURE_DOCUMENT_SUFFIX,
 ) -> Drafted:
@@ -227,6 +228,9 @@ def _draft(
     journey would produce.
     """
     native = f"test-{os.getpid()}-{name}"
+    # Resolved here rather than as a default argument: this process's own fixture root is
+    # stated by a session fixture, which runs long after this module is imported.
+    root = plan_fixture_source.root() if root is None else root
     write_plan_project(
         root,
         {
@@ -325,7 +329,7 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(one) for one in answers])
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN"] = "local-md"
     environment[f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT"] = str(destination)
     # `authoring` is in this list because the tail *launches* out of it: the project it

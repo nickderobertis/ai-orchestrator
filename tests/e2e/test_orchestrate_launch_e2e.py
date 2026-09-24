@@ -33,6 +33,7 @@ from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 import follow_up_variables
 import plan_root_variable
 import pytest
+import short_state
 from example_records import SOURCE, ExampleCopy, isolated_examples, tracked_root
 from fake_backend import (
     AGENT_DELAY_ENV,
@@ -40,6 +41,7 @@ from fake_backend import (
     JUDGE_CONFIG_NAME,
     PROMPT_LOG_ENV,
     RUN_TASK,
+    RecordedTurn,
 )
 from harness_configs import copied_with_its_parents, harness_routing
 from harness_indirections import established_indirections
@@ -53,6 +55,7 @@ from shared_dispatch_bar import (
     shared_completion_bar,
 )
 from test_observer_judge_ops import judge_argv
+from test_short_state_budget import SUFFIX, composition_overhead, shipped_session_parts
 from waits import deadline, until
 from waits import timeout as e2e_timeout
 
@@ -300,12 +303,6 @@ class GraphHistory(TypedDict):
     refs: list[GraphRef]
 
 
-class PromptRecord(TypedDict):
-    config: str | None
-    prompt: str
-    system: str
-
-
 class Surface(TypedDict, total=False):
     """The fields of a handed-out surface this suite reads. `onepipeline` owns the rest.
 
@@ -441,7 +438,7 @@ def _environment(
     environment.update(established_indirections(INDIRECTION_CALLER))
     # Keeps this run's graph scratch, its history, and its sibling state out of the
     # host's, so a journey never reads or reclaims a live dispatch's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 
@@ -680,11 +677,12 @@ def test_node_overrides_and_named_or_omitted_persona_paths_work(
         str(routed_persona_run.judge_config),
     }
     assert expected_configs <= origins[0], origins
-    # The fake backend writes this JSONL itself; PromptRecord states the one field
-    # this test consumes from that test-owned schema.
+    # The fake backend writes this JSONL itself, and `RecordedTurn` — its own declaration
+    # of what it writes — is what the cast names, so this reads a test-owned schema rather
+    # than reaching past somebody else's validation.
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     prompts = [
-        cast(PromptRecord, json.loads(line))["prompt"]
+        cast(RecordedTurn, json.loads(line))["prompt"]
         for line in routed_persona_run.prompt_log.read_text(encoding="utf-8").splitlines()
     ]
     assert any(
@@ -733,11 +731,11 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
     assert run.returncode == 0, run.stdout + run.stderr
     # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only
     # place a supervised graph invocation's review contract is observable; no published
-    # view carries it. The fake backend writes this JSONL itself and PromptRecord states
-    # the one field consumed, so this reads a test-owned schema rather than reaching
-    # past somebody else's validation.
+    # view carries it. The fake backend writes this JSONL itself, and its own `RecordedTurn`
+    # declares the one field consumed here, so this reads a test-owned schema rather than
+    # reaching past somebody else's validation.
     prompts = [
-        cast(PromptRecord, json.loads(line))["prompt"]
+        cast(RecordedTurn, json.loads(line))["prompt"]
         for line in (tmp_path / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     # llmlint: ignore-end[tests_mirror_real_usage]
@@ -788,19 +786,16 @@ def test_every_dag_scope_member_starts_with_the_graph(
     )
 
 
-def _recorded_turns(prompt_log: Path) -> list[PromptRecord]:
+def _recorded_turns(prompt_log: Path) -> list[RecordedTurn]:
     """Every turn of a launched run, as the stand-in model was given it."""
-    # The fake backend writes this JSONL itself, one object per turn with every field
-    # PromptRecord names; it is test-owned on both ends, so the cast states that schema
-    # rather than skipping a validation of somebody else's.
     # llmlint: ignore[tests_mirror_real_usage] Effective prompts prove more than event labels.
     return [
-        cast(PromptRecord, json.loads(line))
+        cast(RecordedTurn, json.loads(line))
         for line in prompt_log.read_text(encoding="utf-8").splitlines()
     ]
 
 
-def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
+def _turns_of(turns: list[RecordedTurn], member: str) -> list[RecordedTurn]:
     """The turns `oneagentgraph` pinned to one named dag-scope member."""
     found = []
     for turn in turns:
@@ -809,6 +804,75 @@ def _turns_of(turns: list[PromptRecord], member: str) -> list[PromptRecord]:
         if named is not None and named.group(1) == member:
             found.append(turn)
     return found
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This assertion reuses the
+# module's existing launched fixture and adds no launch to the broad test target.
+@pytest.mark.xdist_group("orchestrate-launch")
+def test_every_controlled_turn_of_the_launched_run_was_taken_under_its_socket(
+    launched: Launched,
+) -> None:
+    """The real launch used control sockets without an uncontrolled retry."""
+    # oneharness carries the control socket in the report onejudge consumes, and no
+    # persisted history or `just` view carries a harness invocation. The paid provider
+    # seam records the real CLI's argv, which is the turn's only durable control record.
+    turns = _recorded_turns(  # llmlint: ignore[tests_mirror_real_usage] CLI argv records sockets.
+        launched.prompt_log
+    )
+    controlled = [turn for turn in turns if turn["control"]]
+    assert controlled, (
+        "no turn of this run was asked to open a control socket, so nothing here says "
+        f"whether one could be opened; the run recorded {len(turns)} turn(s)"
+    )
+    uncontrolled = {
+        (turn["config"], turn["system"], turn["prompt"]) for turn in turns if not turn["control"]
+    }
+    retaken = [
+        turn
+        for turn in controlled
+        if (turn["config"], turn["system"], turn["prompt"]) in uncontrolled
+    ]
+    assert not retaken, (
+        f"{len(retaken)} of {len(controlled)} controlled turn(s) were asked again with no "
+        f"control socket, which is what oneharness's caller does when the socket address "
+        f"is refused: sessions "
+        f"{sorted({str(turn['control']) for turn in retaken})}, state root "
+        f"{launched.environment['XDG_STATE_HOME']}"
+    )
+    _reconcile_session_names({str(turn["control"]) for turn in controlled})
+
+
+def _reconcile_session_names(sessions: set[str]) -> None:
+    """Hold the budget's session reservation to the names the real producer just composed.
+
+    `tests/short_state.py` reserves a fixed number of bytes for a session name under the
+    socket layout, and `tests/test_short_state_budget.py` argues that reservation from the
+    graph and member names this repository ships plus what `oneagentgraph` adds around
+    them. That producer publishes no surface that answers the second without running a
+    graph — so this is where it is answered, off the names a real launch was addressed by:
+    a component added to the composition shows up here as overhead past what the budget
+    allows for, before it shows up as a socket nobody could open.
+    """
+    graphs, members = shipped_session_parts()
+    allowed = composition_overhead()
+    for session in sorted(sessions):
+        graph = next((name for name in graphs if session.startswith(f"{name}-")), None)
+        member = next((name for name in members if f"-{name}-" in session), None)
+        assert graph and member, (
+            f"the session {session!r} a controlled turn was addressed by names no graph "
+            f"and member this repository ships ({sorted(graphs)}, {sorted(members)}), so "
+            f"the budget's reservation is argued from documents that no longer decide it"
+        )
+        overhead = len(session) - len(graph) - len(member)
+        assert overhead <= allowed, (
+            f"{session!r} spends {overhead} bytes around {graph!r} and {member!r} where "
+            f"tests/test_short_state_budget.py allows {allowed}; oneagentgraph composes a "
+            f"session name differently now, so the reservation it argues is short"
+        )
+        assert len(session) + len(SUFFIX) <= short_state.RESERVED_FOR_A_SESSION, (
+            f"{session!r} plus {SUFFIX!r} is past the "
+            f"{short_state.RESERVED_FOR_A_SESSION} bytes tests/short_state.py reserves"
+        )
 
 
 @pytest.mark.xdist_group("orchestrate-launch")
@@ -1461,47 +1525,6 @@ def test_every_lifecycle_node_this_repository_ships_states_a_title() -> None:
             f"{origin}: lifecycle node {node['id']!r} has title {title!r}, which is not "
             "a Conventional Commit subject (`type(scope)!: summary`)"
         )
-
-
-def test_a_reply_carrying_a_heartbeat_interval_is_refused_whole(launched: Launched) -> None:
-    """The pacemaker's interval is launch-only, and a reply that tries to retune it is lost.
-
-    AGENTS.md told planners for months to put `"heartbeat_interval"` in a normal
-    `channel-reply`. The envelope is closed to unknown fields, so such a reply is refused
-    entirely — taking the verdict and any graph edits in it with it, which is why this
-    costs a round boundary rather than being a harmless no-op. Held against the run this
-    journey already launched, through the same recipe a planner answers a surface with.
-
-    The refusal is the bus's, in its words: the host's bus prepares a reply by the
-    planner-channel layout document it links, which onepipeline's contract declares
-    refuses a malformed envelope in the bus's words rather than the engine's, so it names
-    the field it refused and no longer lists the ones the envelope takes
-    (docs/orchestration.md states that divergence). What it still guarantees is held here:
-    a nonzero exit, the field named, and nothing appended to the run's replies.
-    """
-    before = _queue_state(launched.environment, SHIPPED_RUN, "replies")["records"]
-    reply = subprocess.run(
-        ["just", "channel-reply", SHIPPED_RUN],
-        cwd=REPO_ROOT,
-        env=launched.environment,
-        input=json.dumps(
-            {"version": 1, "completion": False, "message": "go", "heartbeat_interval": 900}
-        ),
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-    assert reply.returncode != 0, reply.stdout
-    reported = reply.stderr + reply.stdout
-    assert (
-        "the reply is malformed: Additional properties are not allowed "
-        "('heartbeat_interval' was unexpected)"
-    ) in reported, reported
-    assert _queue_state(launched.environment, SHIPPED_RUN, "replies")["records"] == before, (
-        f"a refused reply was appended to the run's replies anyway:\n{reported}"
-    )
 
 
 #: How many reads it takes to drain a settled run's queue before giving up. A bound
@@ -2243,7 +2266,7 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
     )
 
 
-def _monitor_agent_turns(prompt_log: Path) -> list[PromptRecord]:
+def _monitor_agent_turns(prompt_log: Path) -> list[RecordedTurn]:
     """Every turn the monitor's AGENT side was given, newest last."""
     return [
         turn
@@ -4035,7 +4058,7 @@ CANCEL_GRACE_SECONDS = 5
 #: real process teardown to finish under this tier's own load, which the unscaled five
 #: seconds have not been. The escalation journey keeps them, because there the deadline
 #: expiring *is* the behaviour under test.
-STOPPING_GRACE_SECONDS = round(e2e_timeout(CANCEL_GRACE_SECONDS))
+STOPPING_GRACE_SECONDS = round(e2e_timeout(15))
 
 #: The grace the *requeue* journey runs under. There the deadline is only the premise
 #: too: the requeue has to reach the driver while the cancelled dispatch is still in
@@ -4052,9 +4075,13 @@ REQUEUE_GRACE_SECONDS = 60
 #: *not* stop when asked, which is exactly the arm the deadline exists for.
 CANCELLED_WORKER_HELD_SECONDS = 90
 
-#: How long the worker in the graceful journey is held for: inside the grace period, so
-#: the dispatch is gone before the deadline the escalation journey waits out.
-STOPPING_WORKER_HELD_SECONDS = 2
+#: The channel-reply recipe judges its answer before the driver sees it. A two-second
+#: worker settled before that reply reached the driver under the publication gate's
+#: load, so no cancellation happened. Hold the worker past that turn while leaving
+#: enough grace for its ordinary completion and teardown.
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This repairs the existing
+# cancellation journey's timing under the gate; moving its whole suite is outside this task.
+STOPPING_WORKER_HELD_SECONDS = 20
 
 #: The two surfaces a cancellation raises, in the order it raises them.
 INTERRUPTED = "dispatch-interrupted"

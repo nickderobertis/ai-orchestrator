@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import short_state
 from harness_indirections import established_indirections
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from waits import timeout as e2e_timeout
@@ -373,7 +374,7 @@ def _publication(
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(attempts)
     environment["FAKE_CODEX_PROMPT_LOG"] = str(tmp_path / "prompts.jsonl")
     # Keeps this journey's harness history out of the host's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment.update(established_indirections(INDIRECTION_CALLER))
     registered = _just("register-repo", str(checkout), environment=environment)
     assert registered.returncode == 0, registered.stderr + registered.stdout
@@ -1130,7 +1131,7 @@ def _hosted(tmp_path: Path, *, answers: list[str], pre_push: str | None = None) 
     environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
     # Keeps this journey's harness history out of the host's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment.update(established_indirections(INDIRECTION_CALLER))
 
     # The origin the identity is resolved from is the one the rules and the host are

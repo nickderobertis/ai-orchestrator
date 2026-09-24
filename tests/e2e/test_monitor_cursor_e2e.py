@@ -35,9 +35,7 @@ import json
 import re
 import shutil
 import subprocess
-import tempfile
 from collections import Counter
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -210,22 +208,6 @@ def _stream_as_of(
     return Counter(_events(rendered.stdout))
 
 
-@pytest.fixture
-def session_state() -> Iterator[Path]:
-    """An `XDG_STATE_HOME` of this journey's own, and a deliberately short one.
-
-    The monitor's harness turns open a `--control` socket in the session store under it,
-    and Linux caps a Unix socket address at 108 bytes: under an xdist worker's `tmp_path`
-    that address is 124 bytes, so every controlled turn is refused and retried without
-    control, and a stopped turn replaying a controlled turn's invocation fails outright.
-    """
-    root = Path(tempfile.mkdtemp(prefix="mcs-"))
-    try:
-        yield root
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
 def _take_a_stopped_turn(read: MonitorRead, environment: dict[str, str]) -> None:
     """Take one more turn of the member `read` was a turn of, as its harness invocation.
 
@@ -264,7 +246,7 @@ def _take_a_stopped_turn(read: MonitorRead, environment: dict[str, str]) -> None
 # pytest journey over the real recipe, not a shell test suite.
 @pytest.mark.xdist_group("monitor-cursor")
 def test_a_monitor_carries_its_cursor_across_turns_and_writes_no_file(
-    tmp_path: Path, oneharness_bin: str, session_state: Path
+    tmp_path: Path, oneharness_bin: str
 ) -> None:
     """Each turn reads from the resume line the turn before it ended with, and nothing else.
 
@@ -292,7 +274,6 @@ def test_a_monitor_carries_its_cursor_across_turns_and_writes_no_file(
     environment[MONITOR_REFUSED_TURNS_ENV] = str(REFUSED_TURN)
     environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
     environment[GRAPH_STATE_ENV] = str(tmp_path / "graph-state")
-    environment["XDG_STATE_HOME"] = str(session_state)
     plan = tmp_path / "cursor.plan.json"
     plan.write_text(
         json.dumps(

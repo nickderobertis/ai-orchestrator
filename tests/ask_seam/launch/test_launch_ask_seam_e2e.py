@@ -49,6 +49,7 @@ from typing import NamedTuple, NewType, NotRequired, TypedDict, cast
 
 import plan_root_variable
 import pytest
+import short_state
 from conftest import git
 from fake_backend import (
     ASK_QUESTION_ENV,
@@ -577,7 +578,7 @@ def _environment(
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment[PROMPT_LOG_ENV] = str(turns)
     environment[ENVIRONMENT_KEYS_ENV] = ",".join(
         [

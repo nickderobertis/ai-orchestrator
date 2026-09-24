@@ -42,6 +42,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import short_state
 from example_records import isolated_examples
 from run_snapshot import snapshot_run
 from waits import timeout as e2e_timeout
@@ -190,7 +191,7 @@ def test_the_listing_does_find_a_run_whose_launch_record_is_present(
                 Path(__file__).resolve().parent / "fake_backend.py"
             ),
             "REAL_ONEHARNESS_BIN": shutil.which("oneharness") or "oneharness",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         }
         launched = subprocess.run(
             ["just", "orchestrate", "examples:scheduler-research", "--detach"],

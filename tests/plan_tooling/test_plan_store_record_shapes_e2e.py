@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import short_state
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -261,7 +262,7 @@ def _environment(tmp_path: Path, *answers: object) -> dict[str, str]:
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(one) for one in answers])
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
     # Keeps these journeys' harness history out of the host's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

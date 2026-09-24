@@ -34,6 +34,7 @@ from pathlib import Path
 
 import plan_root_variable
 import pytest
+import short_state
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import helper, local_project
 from waits import timeout as e2e_timeout
@@ -146,7 +147,7 @@ def _reviewing(tmp_path: Path, *answers: object) -> dict[str, str]:
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(one) for one in answers])
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
     # Keeps this journey's harness history out of the host's.
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

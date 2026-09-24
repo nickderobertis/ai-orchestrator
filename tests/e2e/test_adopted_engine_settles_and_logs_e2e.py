@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, cast
 
 import pytest
+import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import project_from_plan
 from waits import deadline
@@ -123,7 +124,7 @@ def held(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[HeldRun]:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(

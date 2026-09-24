@@ -40,6 +40,7 @@ from typing import NamedTuple, TypedDict
 import follow_up_variables
 import plan_root_variable
 import pytest
+import short_state
 from harness_indirections import established_indirections
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper, project_from_plan
@@ -192,7 +193,7 @@ def _bench(tmp: Path, oneharness_bin: str) -> Bench:
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment.update(established_indirections(INDIRECTION_CALLER))
-    environment["XDG_STATE_HOME"] = str(tmp / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp))
     return Bench(environment, tmp, runs, drafts_root)
 
 

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict
 
 import pytest
+import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from planner_channel import Surface, just, next_surface_record
 from planner_fallback import PLACEHOLDER_QUESTION, shortened_fallback
@@ -123,7 +124,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     environment["UV_CACHE_DIR"] = os.environ.get("UV_CACHE_DIR") or str(
         Path.home() / ".cache" / "uv"
     )
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.

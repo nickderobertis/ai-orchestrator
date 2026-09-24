@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import IO, NamedTuple, NewType, NotRequired, TypedDict
 
 import pytest
+import short_state
 from fake_backend import AGENT_DELAY_ENV
 from harness_indirections import established_indirections
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
@@ -178,7 +179,7 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     # launch and the first poll. See the module docstring for why a converged run — which
     # is what a plan of human actions alone produces — measures the wrong thing.
     environment[AGENT_DELAY_ENV] = str(WORKING_SECONDS)
-    environment["XDG_STATE_HOME"] = str(tmp_path / "state")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
 
 

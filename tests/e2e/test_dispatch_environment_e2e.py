@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import short_state
 from harness_configs import harness_routing
 from harness_indirections import established_indirections
 from waits import timeout as e2e_timeout
@@ -247,7 +248,7 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
         "XDG_RUNTIME_DIR": str(tmp_path / "ambient-runtime"),
         "ONEHARNESS_HARNESSES": candidate.identity,
         # Keeps this journey's harness history out of the host's.
-        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         "PATH": f"{front}{os.pathsep}{os.environ['PATH']}",
     }
     ran = subprocess.run(

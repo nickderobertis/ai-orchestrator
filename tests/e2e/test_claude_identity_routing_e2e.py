@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import short_state
 from project_fixtures import project_from_plan
 from waits import timeout as e2e_timeout
 
@@ -171,7 +172,7 @@ def _existing_host(
         # What the engine hands a dispatch; this host's scratch rather than the suite's.
         "ONEPIPELINE_NODE_SCRATCH_DIR": str(tmp_path / "node-scratch"),
         # Keeps each journey's harness history out of the host's.
-        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         "ONEHARNESS_HISTORY": "false",
     }
     (tmp_path / "node-scratch").mkdir()
@@ -367,7 +368,7 @@ def test_the_adopted_engine_reports_a_claude_login_refusal_as_authentication(
             "ONEPIPELINE_NODE_GRAPH": str(graph),
             "ONEAGENTGRAPH_STATE_DIR": str(tmp_path.parent / "login-refusal-graphs"),
             "ONEHARNESS_BIN_CLAUDE_CODE": str(provider),
-            "XDG_STATE_HOME": str(tmp_path.parent / "login-refusal-state"),
+            "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         }
     )
     project = project_from_plan(plan, run)
