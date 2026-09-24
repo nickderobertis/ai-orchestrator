@@ -103,16 +103,22 @@ UPSTREAM_REFERENCE = re.compile(
     r"https://github\.com/nickderobertis/[A-Za-z0-9_.-]+/(?:issues|pull)/\d+"
 )
 
-#: The fills the plan this gate landed in deletes in its later nodes, each exempt from
-#: the vocabulary check while it exists and required to exist while listed. A later node
-#: moves what it deletes from here to `RETIRED`.
-RETIRING: tuple[str, ...] = (
-    "scripts/dag-ui-server.js",
-    "scripts/dag-ui-screens.sh",
-)
+#: The fills a plan is in the middle of deleting, each exempt from the vocabulary check
+#: while it exists and required to exist while listed. The node that deletes one moves
+#: it from here to `RETIRED`, naming what replaced it. Empty when no deletion is in flight.
+RETIRING: tuple[str, ...] = ()
 #: Each fill already deleted, mapped to the library verb or configuration that replaced
 #: it, and required not to exist.
 RETIRED: dict[str, str] = {
+    "scripts/dag-ui-server.js": (
+        "onepipeline-api 0.11.2+'s own `serve --ui`, which answers the browser view "
+        "built into the same binary at every path the API does not own, so the view and "
+        "its data share one origin with nothing in front of them"
+    ),
+    "scripts/dag-ui-screens.sh": (
+        "the `dag-ui-screens` recipe of onepipeline-ui itself, the gallery of the "
+        "repository that builds the view and iterates on it"
+    ),
     "scripts/hold-run-lease.sh": (
         "onevcs 0.15.6+: `session open` skips every run root a session record still "
         "`open` names, so nothing on this side holds a lease"

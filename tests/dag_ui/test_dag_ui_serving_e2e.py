@@ -1,31 +1,27 @@
 """`just dag-ui` serves the published bundle and its read API on one origin.
 
-The published packages split the view from its data: `onepipeline-ui` is a built
-static bundle that asks for `/api/v2/...` relative to wherever it was served from,
-and `onepipeline-api` serves that data and not the bundle. A browser accepts only
-one arrangement of those two — same origin — because the read API sends no CORS
-headers, so the proxy this recipe starts is load-bearing rather than convenience.
+One process does it. `onepipeline-api serve --ui` answers the DAG Observatory of its
+own release at `/` and the `/api/v2/...` contract and `/healthz` beside it, out of the
+binary alone, so the same-origin arrangement a browser requires — the bundle asks for
+`/api/v2/...` relative to wherever it was served from, and the reader sends no CORS
+headers — is the published verb's rather than this repository's to compose.
 
-Nothing here is doubled. Both recipes run for real — `just telemetry-server` starts
-the published read API and `just dag-ui` serves the published bundle against it —
-so what a proxied request returns is what the read API itself said, and the two
-recipes finding each other is part of what these journeys prove rather than
-something a stand-in arranged. Both are free to run: the read API serves a local
-run store and starts no agents.
+Nothing here is doubled. The recipe runs for real, so what a request returns is what
+the published reader itself said and the view handed back is the one built into it.
+It is free to run: the reader serves a local run store and starts no agents.
 
 **What is deliberately absent is a rendered page.** That the bundle draws what the
 reader serves is `onepipeline-ui`'s own tier to hold, and a journey here that drove a
 browser put one on this repository's merge path, where nothing provisions it. So assert
 what the reader answers, which is the layer a rendered row could only ever be as true
-as; `tests/dag_ui/AGENTS.md` records what that cost, and
-`test_no_browser_needed_e2e.py` beside this file is what holds it.
+as, and `tests/dag_ui/AGENTS.md` records what that cost. No journey, recipe or script
+here drives a browser now — the screenshot harness that did is `onepipeline-ui`'s own —
+so the probe that used to hold this tier to needing none has no client left to hold.
 """
 
 from __future__ import annotations
 
-import concurrent.futures
 import contextlib
-import http.client
 import importlib.metadata
 import json
 import os
@@ -36,7 +32,6 @@ import socket
 import subprocess
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -60,11 +55,13 @@ READ_API_ADDRESS = REPO_ROOT / "config" / "read-api.address"
 
 #: The adopted `onepipeline-ui` release, taken from the same table every other pin
 #: check reads rather than from a literal here. Both halves of that release — the
-#: wheel behind `just telemetry-server` and the npm bundle behind `just dag-ui` —
-#: are pinned to it, which is what makes one value enough to judge both.
+#: wheel `just dag-ui` runs and the npm bundle of the same version — are pinned to it,
+#: which is what makes one value enough to judge both.
 ADOPTED_UI = next(tool for tool in PUBLISHED_TOOLS if tool.npm_package == "onepipeline-ui")
-#: Where the npm half of that release installs, and what `scripts/dag-ui-server.js`
-#: serves by default.
+#: Where the npm half of that release installs. Nothing serves it — the view `--ui`
+#: answers is built into the wheel — which is exactly what makes it the independent
+#: reference the served bytes are held to: a binary serving some other release's view
+#: would differ from the bundle this host pinned beside it.
 INSTALLED_BUNDLE = REPO_ROOT / "node_modules" / "onepipeline-ui"
 
 #: A runs root holding real recorded runs, so the timeline `docs/telemetry.md`
@@ -190,7 +187,7 @@ TIMELINE_SCHEMA_VERSION = 10
 TELEMETRY_SCHEMA_VERSION = 20
 
 #: The variable `scripts/launcher-session.sh` resolves the acting session into, and
-#: `scripts/telemetry-server.sh` renders as the API's `--session`.
+#: `scripts/telemetry-server.sh` renders as the server's `--session`.
 LAUNCHER_SESSION_ENV = "ONEPIPELINE_LAUNCHER_SESSION"
 #: The session the ownership journeys act as. Not any run's recorded launcher, which
 #: is the whole point: what is asserted is the refusal a *stranger* meets.
@@ -199,14 +196,6 @@ STRANGER_SESSION = LauncherSession("dag-ui-serving-e2e-stranger")
 #: runs. Two, because one group and one ungrouped remainder cannot show an ordering.
 FIRST_PROJECT = "plans:dag-ui-grouping-first"
 SECOND_PROJECT = "plans:dag-ui-grouping-second"
-
-#: How many of the read API's keepalive comments an idle stream is held for: the first
-#: proves the connection outlived one of its idle intervals, the second that it was not
-#: the last thing the connection carried.
-KEEPALIVES_HELD = 2
-#: How much shorter than the read API's own the proxied stream's idle stretch may be.
-#: Both are opened at once and paced by the same timer, so they differ by scheduling.
-IDLE_TOLERANCE = 0.9
 
 
 def _free_port() -> int:
@@ -269,21 +258,20 @@ class Answer(NamedTuple):
 
 @dataclass
 class Served:
-    """The bundle server this recipe started, and the read API it was pointed at."""
+    """The one origin this recipe started: the view, its data, and its liveness."""
 
     base: str
-    api: str
 
     def get(self, path: str) -> Answer:
         request = urllib.request.Request(f"{self.base}{path}")
         return self._answer(request)
 
     def post(self, path: str, payload: dict[str, object]) -> Answer:
-        """One mutation, over the proxy, as the session the API was started under.
+        """One mutation, as the session the server was started under.
 
-        Over the proxy for the same reason every read here is: the proxied origin is
-        the only one the bundle asks on, so a mutation asserted against the API
-        directly would prove nothing about the arrangement an operator acts through.
+        On the served origin for the same reason every read here is: it is the only
+        one the bundle asks on, so a mutation asserted anywhere else would prove
+        nothing about the arrangement an operator acts through.
         """
         request = urllib.request.Request(
             f"{self.base}{path}",
@@ -304,9 +292,8 @@ class Served:
 def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
     """Wait on the fact that ``url`` answers, rather than on a duration.
 
-    Both servers are waited for, not just the one under test: a proxied request that
-    arrives before the API behind it has bound answers 502 for a reason that has
-    nothing to do with the proxy.
+    A server that has not bound yet refuses every connection, which is a failure with
+    nothing to do with what any journey here is measuring.
     """
     deadline = time.monotonic() + e2e_timeout(60)
     while time.monotonic() < deadline:
@@ -323,22 +310,21 @@ def _await_ready(url: str, process: subprocess.Popen[str], what: str) -> None:
 
 
 @contextlib.contextmanager
-def _both_recipes(
+def _the_recipe(
     runs_root: Path,
     graph_records: Path | None = None,
     acting_session: LauncherSession | None = None,
 ) -> Iterator[Served]:
-    """Both recipes, for real: `just telemetry-server` behind `just dag-ui`.
+    """`just dag-ui`, for real, and nothing else started beside it.
 
-    This is the arrangement the documentation tells an operator to start in two
-    shells, and the published read API is the thing the proxy exists to reach — so
-    it is what runs here. Ports are chosen per test rather than taken from
+    That there is nothing else is half of what these journeys are about: the recipe
+    is the published `onepipeline-api serve --ui`, so the view and its data come out
+    of one process on one port. The port is chosen per test rather than taken from
     `config/read-api.address`, because a suite that bound the one documented address
-    could not run twice at once; the two are still wired to each other through the
-    recipes' own flags.
+    could not run twice at once; that the unflagged recipe binds the address that file
+    names is asserted off the recipe's own rendering instead.
     """
-    api_port = _free_port()
-    ui_port = _free_port()
+    port = _free_port()
     # The acting session is given the way an operator's shell gives it — through the
     # harness variable `scripts/launcher-session.sh` reads — rather than by spelling
     # `--session` here, because what this journey is about is the recipe deriving it.
@@ -356,49 +342,40 @@ def _both_recipes(
     serving.pop("CODEX_SESSION_ID", None)
     if acting_session is not None:
         serving["CLAUDE_CODE_SESSION_ID"] = acting_session
-    api = _serve(
-        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)],
+    recipe = _serve(
+        ["just", "dag-ui", "--runs-root", str(runs_root), "--bind", f"127.0.0.1:{port}"],
         serving,
     )
-    recipe = _serve(
-        ["just", "dag-ui"],
-        {
-            **os.environ,
-            "DAG_UI_PORT": str(ui_port),
-            "DAG_UI_API_URL": f"http://127.0.0.1:{api_port}",
-        },
-    )
-    base = f"http://127.0.0.1:{ui_port}"
+    base = f"http://127.0.0.1:{port}"
     try:
-        _await_ready(f"http://127.0.0.1:{api_port}/healthz", api, "the read API")
-        _await_ready(f"{base}/", recipe, "the bundle server")
-        yield Served(base=base, api=f"http://127.0.0.1:{api_port}")
+        _await_ready(f"{base}/healthz", recipe, "the DAG Observatory")
+        yield Served(base=base)
     finally:
-        _stop(recipe, api)
+        _stop(recipe)
 
 
 @pytest.fixture
 def served(tmp_path: Path) -> Iterator[Served]:
-    """The recipes over an empty runs root, which is what connectivity needs."""
+    """The recipe over an empty runs root, which is what connectivity needs."""
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
-    with _both_recipes(runs_root) as pair:
-        yield pair
+    with _the_recipe(runs_root) as served:
+        yield served
 
 
 @pytest.fixture
 def served_recorded(tmp_path: Path) -> Iterator[Served]:
-    """The same recipes over a private copy of the checked-in recorded run.
+    """The same recipe over a private copy of the checked-in recorded runs.
 
     Copied rather than served in place so no journey can write to the fixture: the
-    read API only reads, but the recipes are the real ones and a future flag that
+    read API only reads, but the recipe is the real one and a future flag that
     wrote would corrupt the tree rather than a temporary directory.
     """
     runs_root = tmp_path / "runs"
     shutil.copytree(TIMELINE_RUNS, runs_root)
     graph_records = _graph_records(tmp_path / "graph-records")
-    with _both_recipes(runs_root, graph_records) as pair:
-        yield pair
+    with _the_recipe(runs_root, graph_records) as served:
+        yield served
 
 
 # llmlint: ignore-block[tests_mirror_real_usage] The checked-in recorded runs all
@@ -443,13 +420,13 @@ class Grouped(NamedTuple):
 
 @pytest.fixture
 def served_grouped(tmp_path: Path) -> Iterator[Grouped]:
-    """The recipes over recorded runs some of which name a project, as a stranger."""
+    """The recipe over recorded runs some of which name a project, as a stranger."""
     runs_root = tmp_path / "runs"
     shutil.copytree(TIMELINE_RUNS, runs_root)
     placed = _grouped_runs_root(runs_root)
     graph_records = _graph_records(tmp_path / "graph-records")
-    with _both_recipes(runs_root, graph_records, acting_session=STRANGER_SESSION) as pair:
-        yield Grouped(pair, placed)
+    with _the_recipe(runs_root, graph_records, acting_session=STRANGER_SESSION) as served:
+        yield Grouped(served, placed)
 
 
 def _recorded_launcher_session(run: RunId) -> LauncherSession:
@@ -469,26 +446,26 @@ def _recorded_launcher_session(run: RunId) -> LauncherSession:
 
 @pytest.fixture
 def served_unattributed(tmp_path: Path) -> Iterator[Served]:
-    """The recipes over a private copy, where this host can name no acting session."""
+    """The recipe over a private copy, where this host can name no acting session."""
     runs_root = tmp_path / "runs"
     shutil.copytree(TIMELINE_RUNS, runs_root)
     graph_records = _graph_records(tmp_path / "graph-records")
-    with _both_recipes(runs_root, graph_records, acting_session=None) as pair:
-        yield pair
+    with _the_recipe(runs_root, graph_records, acting_session=None) as served:
+        yield served
 
 
 @pytest.fixture
 def served_as_owner(tmp_path: Path) -> Iterator[Served]:
-    """The recipes over a private copy, acting as the recorded run's own launcher."""
+    """The recipe over a private copy, acting as the recorded run's own launcher."""
     runs_root = tmp_path / "runs"
     shutil.copytree(TIMELINE_RUNS, runs_root)
     graph_records = _graph_records(tmp_path / "graph-records")
-    with _both_recipes(
+    with _the_recipe(
         runs_root,
         graph_records,
         acting_session=_recorded_launcher_session(SETTLED_RUN),
-    ) as pair:
-        yield pair
+    ) as served:
+        yield served
 
 
 def _declared_members(graph: str) -> list[str]:
@@ -541,11 +518,15 @@ def _graph_records(root: Path) -> Path:
 
 
 def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
-    """The view an operator opens is the installed package, not a copy kept here."""
+    """The view an operator opens is the adopted release's, out of the binary itself.
+
+    Held to the npm half of the same release, which nothing here serves: that is what
+    makes it an independent reference rather than a restatement of what was served.
+    """
     status, body, _ = served.get("/")
 
     assert status == 200
-    assert body == (REPO_ROOT / "node_modules/onepipeline-ui/dist/index.html").read_bytes()
+    assert body == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
 
     # And its assets, which is what makes the page more than markup: an index that
     # loads while its bundle 404s renders nothing and looks like a working server.
@@ -553,28 +534,44 @@ def test_the_recipe_serves_the_published_bundle(served: Served) -> None:
     status, script, content_type = served.get(asset)
     assert status == 200, asset
     assert "javascript" in content_type, content_type
-    assert len(script) > 1000
+    assert script == (INSTALLED_BUNDLE / "dist" / asset.lstrip("/")).read_bytes(), asset
+
+    # And a deep link, which is the other half of what `--ui` promises: a path the
+    # bundle has no file for is the app's own route, answered with its index so the
+    # link opens rather than 404ing at a browser that never loaded the app. A path
+    # rather than `/` with a query, because `/` is a file the bundle has and would be
+    # answered without the fallback ever being reached.
+    status, body, _ = served.get("/runs/some-run")
+    assert status == 200
+    assert body == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
 
 
 def test_the_read_api_answers_on_the_same_origin_as_the_view(served: Served) -> None:
     """The bundle asks for `/api/v2/...` where it was served from, and nowhere else.
 
-    Asserted against what the read API itself answers directly, so the claim is that
-    the proxy carried its answer rather than that something answered: a body the
-    proxy could have synthesized proves nothing about which process produced it.
+    One process answers both, so what is asserted is that the origin serving the view
+    also serves the data and the liveness route — and that what comes back is the read
+    API's own contract rather than something a static file server could have produced.
     """
     for path in ("/healthz", "/api/v2/runs"):
-        status, body, content_type = served.get(path)
-        direct = urllib.request.urlopen(f"{served.api}{path}", timeout=e2e_timeout(10))
+        status, _, content_type = served.get(path)
 
         assert status == 200, path
         assert content_type == "application/json", path
-        assert json.loads(body).keys() == json.loads(direct.read()).keys(), path
 
-    # And the read API's own contract, which nothing but the read API produces.
+    # The read API's own contract, which nothing but the read API produces.
     listed = json.loads(served.get("/api/v2/runs")[1])
     assert listed["api_version"] == 2
     assert listed["runs"] == []
+    assert json.loads(served.get("/healthz")[1])["status"] == "ok"
+
+    # And an API path it does not serve is its own refusal, in its own error shape,
+    # rather than the view's index — the two are told apart by the app, and a `/api`
+    # path answered with HTML would read to it as a route served empty.
+    status, body, content_type = served.get("/api/v2/no-such-route")
+    assert status == 404, body
+    assert content_type == "application/json", content_type
+    assert json.loads(body) != {}
 
 
 def test_the_timeline_this_repository_documents_is_what_the_reader_answers(
@@ -582,8 +579,8 @@ def test_the_timeline_this_repository_documents_is_what_the_reader_answers(
 ) -> None:
     """`docs/telemetry.md`'s timeline paragraph, held to the adopted reader's own answer.
 
-    Asserted over the proxy, because the proxied origin is the only one the bundle
-    asks on. Every assertion below fails on 0.5.0, which is what the pin was moved for.
+    Asserted on the served origin, because it is the only one the bundle asks on.
+    Every assertion below fails on 0.5.0, which is what the pin was moved for.
     """
     status, body, content_type = served_recorded.get(
         f"/api/v2/runs/{RECORDED_RUN}/timeline?scope=run"
@@ -974,7 +971,7 @@ def test_a_stop_from_the_browser_is_refused_for_a_run_this_session_does_not_own(
     )
 
 
-def test_an_unattributed_server_owns_nothing_and_says_so_through_the_proxy(
+def test_an_unattributed_server_owns_nothing_and_says_so_to_the_view(
     served_unattributed: Served,
 ) -> None:
     """What `scripts/telemetry-server.sh`'s header promises about a server with no session.
@@ -985,7 +982,7 @@ def test_an_unattributed_server_owns_nothing_and_says_so_through_the_proxy(
     reports no run. The second is the dangerous one, because from a browser it reads as
     a host with nothing to supervise rather than as a server that cannot say who it is.
 
-    `_both_recipes` clears every variable the acting-session ladder reads, so this is a
+    `_the_recipe` clears every variable the acting-session ladder reads, so this is a
     real unattributed start and not one this journey merely asked for.
     """
     status, body, _ = served_unattributed.post(f"/api/v2/runs/{SETTLED_RUN}/stop", {})
@@ -1036,66 +1033,20 @@ def test_the_recipe_hands_the_api_the_acting_session_so_an_owner_is_recognised(
     )
 
 
-#: The three shutdown controls `docs/dag-ui.md` names, in the words the adopted bundle
-#: labels them with, and the two routes they are sent to. Restated rather than read from
-#: the page, because the claim is that the page and the served view agree, and reading
-#: one to check the other would pass whenever both moved together.
-SHUTDOWN_CONTROLS = (
-    "Shut down this run",
-    "Shut down all my runs",
-    "Shut down the entire host",
-)
+#: The two routes the view's shutdown controls send to, which is the half of that
+#: feature this repository can ask the reader about: `just dag-ui` answers them or it
+#: does not. What the *bundle* labels those controls and whether the dialog renders is
+#: `onepipeline-ui`'s, asserted in its own `e2e/dag-ui-shutdown.spec.ts` against a real
+#: browser; the promises `docs/dag-ui.md` makes about that dialog are reconciled against
+#: that repository's published `docs/contract.md` in `tests/test_ui_api_contract.py`.
 RUN_SHUTDOWN_ROUTE = "/api/v2/runs/{run}/shutdown"
 SCOPED_SHUTDOWN_ROUTE = "/api/v2/shutdown"
 
 
-def _served_script(served: Served) -> str:
-    """The script the bundle's index loads, as the proxy hands it to a browser."""
-    index = served.get("/")[1].decode()
-    asset = index.split('src="', 1)[1].split('"', 1)[0]
-    status, script, _ = served.get(asset)
-    assert status == 200, asset
-    return script.decode()
-
-
-# llmlint: ignore[tests_mirror_real_usage] This tier provisions no browser by rule —
-# `test_no_browser_needed_e2e.py` enforces it and `tests/dag_ui/AGENTS.md` says why — so
-# driving the rendered dialog is `onepipeline-ui`'s own `e2e/dag-ui-shutdown.spec.ts`;
-# what this composition owns is that the bundle it serves carries the control, read off
-# the bytes the proxy hands a browser, beside the journeys that drive its routes.
-def test_the_served_view_offers_the_shutdown_control(served: Served) -> None:
-    """What `just dag-ui` hands a browser carries the three shutdown controls and their dialog.
-
-    Read off the script the proxy serves rather than off the installed package, because a
-    bundle server left running from before a bump serves what it loaded: this is the view
-    an operator actually opens. No browser renders it — that is `onepipeline-ui`'s own
-    tier — so what is asserted is that the served view *offers* the controls, the routes
-    they send to, and the dialog's two statements `docs/dag-ui.md` leans on: the host
-    scope naming the runs other sessions own, and an incomplete shutdown reading as one.
-    """
-    script = _served_script(served)
-
-    for control in SHUTDOWN_CONTROLS:
-        assert control in script, (
-            f"the view `just dag-ui` serves offers no {control!r}; docs/dag-ui.md tells an "
-            "operator it can shut runs down from the browser"
-        )
-    assert "/shutdown`" in script and f"`{SCOPED_SHUTDOWN_ROUTE}`" in script, (
-        f"the served view sends to neither {RUN_SHUTDOWN_ROUTE} nor {SCOPED_SHUTDOWN_ROUTE}"
-    )
-    assert "Runs other sessions own" in script, (
-        "the served host-scope dialog no longer lists the runs other sessions own apart"
-    )
-    assert "Shutdown incomplete" in script, (
-        "the served view has no way to say a shutdown was incomplete, so one would read "
-        "as a success"
-    )
-
-
-def test_the_shutdown_routes_answer_through_the_proxy_and_refuse_a_stranger(
+def test_the_shutdown_routes_answer_on_the_served_origin_and_refuse_a_stranger(
     served_grouped: Grouped,
 ) -> None:
-    """The reader behind `just telemetry-server` answers both shutdown routes, as the engine.
+    """The reader `just dag-ui` runs answers both shutdown routes, as the engine.
 
     Asked only what it refuses before anything is signalled — a run another session owns,
     a scoped shutdown naming no scope, a run that is not there — so nothing is shut down
@@ -1180,21 +1131,27 @@ def _linked_onepipeline_release() -> str:
 
 
 def test_the_served_bundle_is_the_adopted_release(served: Served) -> None:
-    """What a browser is handed is the npm half of the release `config/` adopted.
+    """What a browser is handed is the view of the release `config/` adopted.
 
-    Moving the pin installs a release; it does not put one in front of anybody. A
-    `node_modules` nobody reinstalled goes on serving the bundle it already has, and
-    no pin check can see that — every one of them reads a declaration rather than
-    the server. So the release is read off the package the bundle server is serving
-    out of, and the bytes handed back are held to that same package's `index.html`.
+    Moving the pin installs a release; it does not put one in front of anybody, and a
+    server left running from before a bump goes on serving the view it loaded — which
+    no pin check can see, because every one of them reads a declaration rather than a
+    running process. So the bytes handed back are held to the npm half of the adopted
+    release, whose own `package.json` is first held to the pin: the wheel and the
+    package are two artifacts of one version, so a binary whose built-in view is some
+    other release's differs from the bundle installed beside it.
     """
     installed = json.loads((INSTALLED_BUNDLE / "package.json").read_text(encoding="utf-8"))
 
     assert installed["version"] == ADOPTED_UI.adopted_version, (
         f"{INSTALLED_BUNDLE} holds {ADOPTED_UI.npm_package} {installed['version']}, not the "
-        f"adopted {ADOPTED_UI.adopted_version} — run 'just bootstrap' and restart 'just dag-ui'"
+        f"adopted {ADOPTED_UI.adopted_version} — run 'just bootstrap', so this measures the "
+        "adopted release rather than whichever one is installed"
     )
-    assert served.get("/")[1] == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes()
+    assert served.get("/")[1] == (INSTALLED_BUNDLE / "dist" / "index.html").read_bytes(), (
+        "the view this binary serves is not the adopted release's — run 'just bootstrap' "
+        "and restart 'just dag-ui'"
+    )
 
 
 # llmlint: ignore[changed_behavior_has_e2e] no run on this host can carry a release event
@@ -1231,7 +1188,7 @@ def test_the_served_reader_links_the_engine_the_adopted_wheel_links(served: Serv
 
     This host pins the engine that *writes* a run store and the reader of it
     separately, and nothing but `/healthz` says whether the reader answering is the
-    one the adopted wheel would have started: a reader left over from before a bump
+    one the adopted wheel would have started: a server left over from before a bump
     holds the same port and serves the same route table. So the field is read off
     the running server and held to what the adopted wheel records linking.
 
@@ -1250,357 +1207,50 @@ def test_the_served_reader_links_the_engine_the_adopted_wheel_links(served: Serv
     )
 
 
-@dataclass
-class HeldStream:
-    """What one event stream carried while the client that opened it sent nothing."""
-
-    snapshot: bool
-    keepalives: int
-    #: The longest the stream went carrying nothing — read off the stream rather than
-    #: restated here, because the interval that produces it is the read API's.
-    longest_idle: float
-    #: How long it lasted before the far side ended it, or `None` if it was still open.
-    closed_after: float | None
-
-
-def _keepalives(stream: str) -> int:
-    """Count the SSE comment lines that are all an idle stream ever carries."""
-    return sum(1 for line in stream.splitlines() if line.startswith(":"))
-
-
-def _hold_event_stream(origin: str, keepalives: int) -> HeldStream:
-    """Read `/api/v2/events` from ``origin``, never sending on it, as an `EventSource` does.
-
-    The stream's only traffic is the opening snapshot and the read API's own keepalive
-    comment, so waiting for ``keepalives`` of them is both the hold and the
-    measurement: the gap between two is an idle stretch the connection survived.
-
-    The wait is not scaled by `waits`, because it is not a hang guard — it is a signal
-    ticking in another process, and a multiple of it would only sit longer on a
-    schedule that does not move. The socket deadline is the hang guard, and it is
-    scaled.
-    """
-    address = urllib.parse.urlsplit(origin)
-    connection = http.client.HTTPConnection(
-        address.hostname or "", address.port or 80, timeout=e2e_timeout(60)
-    )
-    started = last = time.monotonic()
-    received = ""
-    longest_idle = 0.0
-    closed_after = None
-    try:
-        connection.request("GET", "/api/v2/events", headers={"Accept": "text/event-stream"})
-        response = connection.getresponse()
-        assert response.status == 200, f"{origin} refused the event stream: {response.status}"
-        while _keepalives(received) < keepalives:
-            # `read1` rather than `read`, which would block for a full buffer an idle
-            # stream never fills. Both ways this route can end are the far side hanging
-            # up: an empty result, and — because an event stream is sent chunked and
-            # never reaches a terminating chunk — a truncated body.
-            try:
-                chunk = response.read1(4096)
-            except (http.client.IncompleteRead, ConnectionError):
-                chunk = b""
-            arrived = time.monotonic()
-            if not chunk:
-                closed_after = arrived - started
-                break
-            received += chunk.decode()
-            longest_idle = max(longest_idle, arrived - last)
-            last = arrived
-    finally:
-        connection.close()
-    return HeldStream(
-        snapshot="event: snapshot" in received,
-        keepalives=_keepalives(received),
-        longest_idle=longest_idle,
-        closed_after=closed_after,
-    )
-
-
-def test_an_idle_event_stream_is_held_open_through_the_proxy(served: Served) -> None:
-    """The view's live telemetry is one stream nobody writes to, and it must survive.
-
-    `Bun.serve` closes a connection nothing has been sent on after ten seconds by
-    default, which is shorter than the interval between the read API's keepalives — so
-    a proxy taking that default can never carry this stream. The browser renders each
-    close as a live-telemetry warning, reconnects, and loses it again, which is an
-    indicator that fires every few seconds and therefore says nothing when telemetry
-    is genuinely gone.
-
-    Both streams are held at once and asserted on separately, because "the stream
-    closed" has two suspects. A journey watching only the proxied one would blame this
-    repository for the read API's bug, and neither the bound nor the keepalive
-    interval is restated here — the proxied stream is held to what the read API's own
-    stream did beside it, whatever that turns out to be.
-    """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        proxied = pool.submit(_hold_event_stream, served.base, KEEPALIVES_HELD)
-        direct = pool.submit(_hold_event_stream, served.api, KEEPALIVES_HELD)
-        through_proxy, from_the_api = proxied.result(), direct.result()
-
-    assert from_the_api.closed_after is None, (
-        f"the read API closed its own event stream after {from_the_api.closed_after:.1f}s, "
-        "so nothing here can be concluded about the proxy in front of it"
-    )
-    assert through_proxy.closed_after is None, (
-        f"the proxy closed the event stream after {through_proxy.closed_after:.1f}s while "
-        "the read API held its own open; `just dag-ui` is imposing an idle bound"
-    )
-    for what, held in (("proxied", through_proxy), ("direct", from_the_api)):
-        assert held.snapshot, f"the {what} stream carried no opening snapshot"
-        assert held.keepalives >= KEEPALIVES_HELD, (
-            f"the {what} stream carried {held.keepalives} keepalive(s), not {KEEPALIVES_HELD}"
-        )
-    assert through_proxy.longest_idle >= from_the_api.longest_idle * IDLE_TOLERANCE, (
-        f"the proxied stream went idle for at most {through_proxy.longest_idle:.1f}s where the "
-        f"read API's own went {from_the_api.longest_idle:.1f}s, so the proxy is pacing it"
-    )
-
-
-def test_an_api_path_the_read_api_refuses_is_passed_back_as_it_refused_it(
-    served: Served,
-) -> None:
-    """A proxy that invented its own answers would hide exactly this.
-
-    The view distinguishes a route the read API does not serve from one it served
-    empty, so the status and the body have to be the API's rather than the proxy's.
-    """
-    status, body, content_type = served.get("/api/v2/no-such-route")
-
-    assert status == 404
-    assert content_type == "application/json"
-    assert json.loads(body) != {}
-
-
-def test_a_client_route_falls_back_to_the_view_and_a_climb_out_does_not(served: Served) -> None:
-    """An unknown path is a route the app owns; a path leaving the bundle is not."""
-    status, body, _ = served.get("/?run=some-run&view=overall")
-    assert status == 200
-    assert b"<!doctype html>" in body[:20].lower()
-
-    status, body, _ = served.get("/..%2fpackage.json")
-    assert status == 404, body
-    assert b"ai-orchestrator" not in body
-
-
-def test_a_read_api_that_is_not_up_is_reported_rather_than_rendered() -> None:
-    """Starting the two in two shells means one is often not up yet.
-
-    A thrown proxy fetch renders a runtime error page into an XHR, which tells the
-    operator nothing about which address refused. This answers in the error shape
-    the view already reads.
-    """
-    ui_port = _free_port()
-    api = f"http://127.0.0.1:{_free_port()}"
-    recipe = _serve(
-        ["just", "dag-ui"],
-        {**os.environ, "DAG_UI_PORT": str(ui_port), "DAG_UI_API_URL": api},
-    )
-    base = f"http://127.0.0.1:{ui_port}"
-    try:
-        _await_ready(f"{base}/", recipe, "the bundle server")
-        status, body, content_type = Served(base=base, api=api).get("/api/v2/runs")
-    finally:
-        _stop(recipe)
-
-    assert status == 502
-    assert content_type == "application/json"
-    reported = json.loads(body)["error"]
-    assert reported["code"] == "read_api_unreachable"
-    assert "just telemetry-server" in reported["message"]
-
-
-@pytest.mark.parametrize(
-    ("variable", "value", "reason"),
-    [
-        ("DAG_UI_PORT", "not-a-port", "DAG_UI_PORT must be a port number, not not-a-port"),
-        ("DAG_UI_HOST", "127.0.0.1:8765", "DAG_UI_HOST must be a hostname"),
-        ("DAG_UI_API_URL", "127.0.0.1:8765", "DAG_UI_API_URL must be an http(s) URL"),
-        ("DAG_UI_API_URL", "", "DAG_UI_API_URL must be an http(s) URL, not nothing"),
-    ],
-    ids=("port", "host", "api-url", "empty-api-url"),
-)
-def test_the_recipe_refuses_an_environment_value_that_is_not_one(
-    variable: str, value: str, reason: str
-) -> None:
-    """Each of these becomes something whose own failure would blame the wrong thing.
-
-    A misspelled port binds an arbitrary one, a host Bun cannot resolve throws out
-    of `serve` and reads as a crash, and an address that is not an absolute origin
-    makes every proxied request throw and be reported as the read API refusing. So
-    each is refused at startup, naming the variable rather than the symptom.
-    """
-    result = subprocess.run(
-        ["just", "dag-ui"],
-        cwd=REPO_ROOT,
-        env={**os.environ, variable: value},
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-    )
-
-    assert result.returncode != 0
-    assert reason in result.stderr
-
-
-# llmlint: ignore-block[tests_mirror_real_usage] These four journeys drive the server's
-# refusal paths, and each one needs a repository state `just dag-ui` cannot be asked to
-# produce: an address file that is not an address, a fabricated one to prove the file is
-# what the proxy reads, an absent published bundle, and a bundle directory holding
-# nothing. The recipe reads this checkout's own config and its real installed bundle, so
-# through it none of these four conditions can be reached at all — running the server
-# under a fabricated root is the only way to observe a refusal that only occurs when the
-# configuration is broken. The journeys above drive the recipe itself for real.
-def test_a_read_api_address_file_that_is_not_one_is_refused(tmp_path: Path) -> None:
-    """A misshapen address would become a proxy target that fails later as a 502.
-
-    Blaming the read API for a file this repository got wrong is the failure this
-    check exists to prevent, so the server refuses at startup and names the file.
-    """
-    server = tmp_path / "scripts"
-    server.mkdir()
-    shutil.copy2(REPO_ROOT / "scripts/dag-ui-server.js", server / "dag-ui-server.js")
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "read-api.address").write_text("not an address\n", encoding="utf-8")
-
-    result = subprocess.run(
-        ["bun", str(server / "dag-ui-server.js")],
-        env={**os.environ, "DAG_UI_DIST": str(REPO_ROOT / "node_modules/onepipeline-ui/dist")},
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-    )
-
-    assert result.returncode == 2, result.stdout
-    assert "read-api.address must hold one HOST:PORT, not not an address" in result.stderr
-
-
-def test_the_address_file_is_what_an_unnamed_api_proxies_to(tmp_path: Path) -> None:
-    """`just dag-ui` with nothing named is the documented invocation, and it reads a file.
-
-    Every other journey here names `DAG_UI_API_URL`, so only the refusal arm of that
-    read runs and a target hardcoded beside it would pass the whole suite while the
-    two recipes stopped finding each other. Driven the way the failure arm is — a
-    throwaway tree carrying its own `config/read-api.address` — because the checked-in
-    address is the one port a suite must not bind if it is to run twice at once.
-    """
-    api_port = _free_port()
-    ui_port = _free_port()
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir()
-    server = tmp_path / "scripts"
-    server.mkdir()
-    shutil.copy2(REPO_ROOT / "scripts/dag-ui-server.js", server / "dag-ui-server.js")
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "read-api.address").write_text(
-        f"127.0.0.1:{api_port}\n", encoding="utf-8"
-    )
-
-    api = _serve(
-        ["just", "telemetry-server", "--runs-dir", str(runs_root), "--port", str(api_port)]
-    )
-    unnamed = {key: value for key, value in os.environ.items() if key != "DAG_UI_API_URL"}
-    recipe = _serve(
-        ["bun", str(server / "dag-ui-server.js")],
-        {
-            **unnamed,
-            "DAG_UI_DIST": str(REPO_ROOT / "node_modules/onepipeline-ui/dist"),
-            "DAG_UI_PORT": str(ui_port),
-        },
-    )
-    base = f"http://127.0.0.1:{ui_port}"
-    try:
-        _await_ready(f"http://127.0.0.1:{api_port}/healthz", api, "the read API")
-        _await_ready(f"{base}/", recipe, "the bundle server")
-        status, body, content_type = Served(base=base, api=f"http://127.0.0.1:{api_port}").get(
-            "/api/v2/runs"
-        )
-    finally:
-        _stop(recipe, api)
-
-    # The read API's own contract, which nothing but the read API produces — so the
-    # proxy reached the address the file named rather than answering for it.
-    assert status == 200, body
-    assert content_type == "application/json"
-    assert json.loads(body)["api_version"] == 2
-
-
-def test_a_missing_published_bundle_is_named_rather_than_served_empty(tmp_path: Path) -> None:
-    """A worktree with no install is the ordinary case a fresh clone is in.
-
-    Serving an empty directory would answer every request with a 404 that reads as
-    a broken app rather than as an install nobody ran yet. Driven at the default
-    location — the server copied into a tree that genuinely has no `node_modules` —
-    because that is the state the advice it gives is advice for.
-    """
-    server = tmp_path / "scripts"
-    server.mkdir()
-    shutil.copy2(REPO_ROOT / "scripts/dag-ui-server.js", server / "dag-ui-server.js")
-
-    environment = {key: value for key, value in os.environ.items() if key != "DAG_UI_DIST"}
-    result = subprocess.run(
-        ["bun", str(server / "dag-ui-server.js")],
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-    )
-
-    assert result.returncode == 2, result.stdout
-    assert "no published bundle at" in result.stderr
-    assert "just bootstrap" in result.stderr
-
-
-def test_a_named_bundle_directory_that_holds_none_names_the_variable(tmp_path: Path) -> None:
-    """`DAG_UI_DIST` is how the screenshot tier points the server elsewhere.
-
-    Pointed at a directory with no bundle in it, the advice to run `just bootstrap`
-    would be wrong: the install is fine and the variable is not. So this path says
-    which variable to fix instead.
-    """
-    result = subprocess.run(
-        ["bun", str(REPO_ROOT / "scripts/dag-ui-server.js")],
-        env={**os.environ, "DAG_UI_DIST": str(tmp_path / "nothing-here")},
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-    )
-
-    assert result.returncode == 2, result.stdout
-    assert "DAG_UI_DIST must name a directory holding a published bundle" in result.stderr
-
-
-# llmlint: ignore-end[tests_mirror_real_usage]
 # llmlint: ignore-block[tests_mirror_real_usage] This whole test is a drift gate over the
 # two recipes' own text, not a behavioural journey, and the property it holds has no
 # behavioural signature: a script carrying a hardcoded literal equal to the configured
 # address serves byte-identical answers, so every operator-facing route through it passes
 # while the second copy sits there waiting to drift. Both halves are that same gate — the
-# dry run reads what the recipe would run without starting a server, and the loop reads
-# whether either script restates the address. Reading the source is the only thing that can
-# see either, which is why `tests/test_watch_surface_drift.py` and
-# `tests/test_engine_contracts.py` read theirs. The journeys either side of this one
-# start both servers for real and drive them over HTTP.
+# dry runs read what each recipe would run without starting a server, and the last
+# assertion reads whether the script they both reach restates the address. Reading the
+# source is the only thing that can see either, which is why
+# `tests/test_watch_surface_drift.py` and `tests/test_engine_contracts.py` read theirs.
+# The journeys above this one start the real server and drive it over HTTP.
 def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
-    """`just dag-ui` finds `just telemetry-server` only while they agree on it."""
+    """Both recipes bind the address `config/read-api.address` names, and read it there.
+
+    They can only disagree about it by restating it, now that both reach one script:
+    `just dag-ui` is `just telemetry-server` with the published `--ui`. So what this
+    holds is that each recipe still runs through that script — a `just dag-ui` that
+    grew a launcher of its own would be the second copy this gate exists to catch —
+    and that the script reads the file rather than carrying the value.
+    """
     address = READ_API_ADDRESS.read_text(encoding="utf-8").strip()
     host, _, port = address.partition(":")
     assert host and port.isdigit(), address
 
-    dry_run = subprocess.run(
-        ["just", "--dry-run", "telemetry-server", "--host", host],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-    )
-    assert dry_run.returncode == 0, dry_run.stderr
+    for recipe, flags in (("telemetry-server", ()), ("dag-ui", ("--ui",))):
+        dry_run = subprocess.run(
+            ["just", "--dry-run", recipe],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+        )
+        assert dry_run.returncode == 0, dry_run.stderr
+        rendered = f"{dry_run.stdout}{dry_run.stderr}"
+        assert "scripts/telemetry-server.sh" in rendered, (
+            f"`just {recipe}` no longer runs scripts/telemetry-server.sh: {rendered!r}. "
+            "Whatever it runs instead is a second place the read API address is decided"
+        )
+        for flag in flags:
+            assert flag in rendered, f"`just {recipe}` no longer passes {flag}: {rendered!r}"
 
-    # Neither script may carry its own copy of the address: that is the drift this
-    # file exists to prevent, and a literal here would be a third one.
-    for script in ("scripts/telemetry-server.sh", "scripts/dag-ui-server.js"):
-        text = (REPO_ROOT / script).read_text(encoding="utf-8")
-        assert "read-api.address" in text, f"{script} must read the address from its one source"
-        assert address not in text, f"{script} restates the read API address"
+    # The script may not carry its own copy of the address: that is the drift this
+    # file exists to prevent, and a literal here would be a second one.
+    script = "scripts/telemetry-server.sh"
+    text = (REPO_ROOT / script).read_text(encoding="utf-8")
+    assert "read-api.address" in text, f"{script} must read the address from its one source"
+    assert address not in text, f"{script} restates the read API address"
     # llmlint: ignore-end[tests_mirror_real_usage]

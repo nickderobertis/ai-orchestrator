@@ -1555,13 +1555,13 @@ def test_a_verdict_recipe_refuses_a_shape_the_verdict_does_not_have(
 def test_the_telemetry_server_recipe_supplies_the_runs_root_the_other_views_read(
     tmp_path: Path,
 ) -> None:
-    """The published verb requires a runs root; the recipe's was optional.
+    """The published verb requires a runs root, and an operator should not have to type one.
 
     So the wrapper defaults it to the same directory `just runs` and `just status`
     read, which is what keeps the API serving the runs the planner is looking at.
     The address is supplied on this path too, from `config/read-api.address`: leaving
-    the published CLI's own default to stand there is what would let `just dag-ui`
-    and this recipe stop finding each other after that file moved.
+    the published CLI's own default to stand there would restate the address in a
+    second place, to be edited apart from the file every reader resolves it through.
     """
     checkout, trace = _checkout(tmp_path)
     address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
@@ -1569,6 +1569,47 @@ def test_the_telemetry_server_recipe_supplies_the_runs_root_the_other_views_read
     assert _run(checkout, trace, "telemetry-server").returncode == 0
     assert trace.read_text().splitlines() == [
         f"uv run onepipeline-api serve --runs-root runs --bind {address}",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_the_dag_ui_recipe_is_that_same_server_with_the_published_ui_flag(
+    tmp_path: Path,
+) -> None:
+    """`just dag-ui` is the read API plus the view built into the same binary.
+
+    Nothing is served, proxied or built here any more, so what the recipe owes is one
+    published command carrying `--ui`, on the runs root and the address every other
+    view resolves — the same three defaults, from the same one sources. A `dag-ui`
+    that grew a launcher of its own would be a second place this host decides where
+    the Observatory answers.
+    """
+    checkout, trace = _checkout(tmp_path)
+    address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
+
+    assert _run(checkout, trace, "dag-ui").returncode == 0
+    assert trace.read_text().splitlines() == [
+        f"uv run onepipeline-api serve --runs-root runs --bind {address} --ui",
+    ]
+
+
+@pytest.mark.reads_recipes
+def test_the_dag_ui_recipe_forwards_what_a_caller_names(tmp_path: Path) -> None:
+    """A caller who names a root or an address owns it, and keeps `--ui` beside it.
+
+    This is how `tests/dag_ui/test_dag_ui_serving_e2e.py` drives it — a throwaway runs
+    root on a port of its own — so a recipe that dropped either the caller's words or
+    its own flag would leave those journeys measuring some other server.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(
+        checkout, trace, "dag-ui", "--runs-root", "/elsewhere", "--bind", "127.0.0.1:19000"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "uv run onepipeline-api serve --ui --runs-root /elsewhere --bind 127.0.0.1:19000",
     ]
 
 
@@ -1664,7 +1705,7 @@ def test_the_telemetry_server_recipe_leaves_an_explicit_session_alone(
     assert result.returncode == 0, result.stderr
     rendered = trace.read_text().splitlines()
     assert rendered == [
-        f"uv run onepipeline-api serve --runs-root runs {' '.join(spelling)} --bind {address}",
+        f"uv run onepipeline-api serve --runs-root runs --bind {address} {' '.join(spelling)}",
     ]
     assert rendered[0].count("--session") == 1, (
         f"the recipe rendered {rendered[0]!r}, which names `--session` more than once; "
@@ -1680,8 +1721,11 @@ def test_the_telemetry_server_recipe_leaves_an_explicit_session_alone(
         (("--session", "a session"), "--session must be 1-200 characters"),
         (("--session=a;b",), "--session must be 1-200 characters"),
         (("--session",), "--session needs a session id"),
+        (("--session", "--bind", "0.0.0.0:9000"), "--session needs a session id"),
+        (("--runs-root", "--session", "a;b"), "--session must be 1-200 characters"),
+        (("--bind", "--session", "a;b"), "--session must be 1-200 characters"),
     ],
-    ids=("space", "metacharacter", "missing-value"),
+    ids=("space", "metacharacter", "missing-value", "next-is-a-flag", "after-root", "after-bind"),
 )
 def test_the_telemetry_server_recipe_refuses_a_caller_session_that_is_not_one(
     tmp_path: Path, spelling: tuple[str, ...], reason: str
@@ -1690,6 +1734,13 @@ def test_the_telemetry_server_recipe_refuses_a_caller_session_that_is_not_one(
 
     It becomes the same ownership credential, so a value `scripts/launcher-session.sh`
     would refuse to derive must not reach `onepipeline-api serve` by being typed instead.
+
+    The last three rows are the ways a scan can be walked past that check. A wrapper
+    that skips whatever follows `--runs-root` or `--bind` swallows the `--session`
+    itself, leaving its value to reach the CLI validated by nothing and spelled twice —
+    once by the caller and once by the ladder, with which one acts the binary's to
+    decide. And a `--session` whose next word is an option has been given no identity at
+    all, which has to be said rather than read as one.
     """
     checkout, trace = _checkout(tmp_path)
 
@@ -1799,114 +1850,83 @@ def test_a_caller_that_cannot_load_the_session_helper_refuses_naming_it(
 
 @pytest.mark.reads_recipes
 @pytest.mark.parametrize(
-    ("invocation", "reason"),
+    ("invocation", "delegated"),
     [
         (
-            ("telemetry-server", "--port", "not-a-port"),
-            "--port must be a port number in 0-65535",
+            ("telemetry-server", "--runs-root", "/elsewhere"),
+            "uv run onepipeline-api serve --bind 127.0.0.1:8765 --runs-root /elsewhere",
         ),
-        (("telemetry-server", "--port", "70000"), "--port must be a port number in 0-65535"),
-        (("telemetry-server", "--host", "127.0.0.1:8765"), "--host must be a hostname"),
         (
-            ("telemetry-server", "--bind", "0.0.0.0:19000", "--port", "9000"),
-            "--bind names the whole address",
+            ("telemetry-server", "--runs-root=/elsewhere"),
+            "uv run onepipeline-api serve --bind 127.0.0.1:8765 --runs-root=/elsewhere",
+        ),
+        (
+            ("telemetry-server", "--bind", "0.0.0.0:9000"),
+            "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:9000",
+        ),
+        (
+            ("telemetry-server", "--bind=0.0.0.0:9000"),
+            "uv run onepipeline-api serve --runs-root runs --bind=0.0.0.0:9000",
         ),
     ],
-    ids=("port-word", "port-range", "host-with-port", "bind-and-port"),
+    ids=("runs-root", "runs-root-equals", "bind", "bind-equals"),
 )
-def test_the_telemetry_server_recipe_refuses_an_address_half_it_cannot_join(
-    tmp_path: Path, invocation: tuple[str, ...], reason: str
+def test_a_default_the_caller_spelled_is_not_supplied_twice(
+    tmp_path: Path, invocation: tuple[str, ...], delegated: str
 ) -> None:
-    """`--host` and `--port` are joined into one `HOST:PORT` word before they leave.
+    """A caller who names a default owns it whole, in either of the two spellings.
 
-    So a host carrying its own colon, or a port that is not a number, would reach
-    `--bind` as an address neither this script nor the caller meant — and the CLI
-    would report a bind failure for a value it was never given.
+    Both spellings, because the wrapper decides whether to add its own by scanning the
+    caller's words: a scan that recognised only the separated form would hand the CLI
+    two `--runs-root` or two `--bind` values and leave which one acts up to the binary,
+    which is the one outcome nobody could read off the command line afterwards. The
+    other default is still supplied beside it, so what this shows is one flag being
+    yielded rather than the wrapper falling silent.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    assert _run(checkout, trace, *invocation).returncode == 0
+    rendered = trace.read_text().splitlines()
+    assert rendered == [delegated]
+    assert rendered[0].count("--runs-root") == 1, rendered
+    assert rendered[0].count("--bind") == 1, rendered
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        ("telemetry-server", "--host", "0.0.0.0"),
+        ("telemetry-server", "--port", "9000"),
+        ("telemetry-server", "--runs-dir", "/elsewhere"),
+    ],
+    ids=("host", "port", "runs-dir"),
+)
+def test_a_retired_flag_spelling_is_forwarded_to_the_published_verb_as_typed(
+    tmp_path: Path, invocation: tuple[str, ...]
+) -> None:
+    """The three spellings this wrapper used to adapt are gone, and nothing renders them.
+
+    They were this recipe's own — `--runs-dir`, `--host`, `--port` — and adapting them
+    meant a parser here holding a copy of the published vocabulary, to be edited apart
+    from it. What is left is forwarding: a caller typing an old spelling reaches
+    `onepipeline-api serve` unchanged and is refused there, by the verb that owns the
+    vocabulary and names the argument. So what this asserts is that the wrapper neither
+    refuses the word itself nor rewrites it into something the CLI accepts — it arrives
+    exactly as typed, which is what the trace shows.
     """
     checkout, trace = _checkout(tmp_path)
 
     result = _run(checkout, trace, *invocation)
 
-    assert result.returncode == 2, result.stdout
-    assert reason in result.stderr
-    assert not trace.exists(), "a refused invocation must not reach the read API at all"
-
-
-@pytest.mark.reads_recipes
-def test_the_telemetry_server_recipe_renders_host_and_port_as_one_bind(
-    tmp_path: Path,
-) -> None:
-    """Two flags became one, and the recipe keeps taking both."""
-    checkout, trace = _checkout(tmp_path)
-
-    assert _run(checkout, trace, "telemetry-server", "--port", "9000").returncode == 0
-    assert (
-        _run(
-            checkout, trace, "telemetry-server", "--runs-dir", "/elsewhere", "--host", "0.0.0.0"
-        ).returncode
-        == 0
+    assert result.returncode == 0, result.stderr
+    rendered = trace.read_text().splitlines()
+    assert len(rendered) == 1, rendered
+    assert rendered[0].endswith(" ".join(invocation[1:])), (
+        f"the wrapper rendered {rendered[0]!r} rather than forwarding {invocation[1]!r} as "
+        "typed; an adaptation has grown back, and whichever flag the CLI then acts on is a "
+        "decision nobody can read off the command line"
     )
-
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --runs-root runs --bind 127.0.0.1:9000",
-        "uv run onepipeline-api serve --runs-root /elsewhere --bind 0.0.0.0:8765",
-    ]
-
-
-@pytest.mark.reads_recipes
-@pytest.mark.parametrize(
-    ("invocation", "delegated"),
-    [
-        (
-            ("telemetry-server", "--runs-dir=/elsewhere"),
-            "uv run onepipeline-api serve --runs-root /elsewhere --bind 127.0.0.1:8765",
-        ),
-        (
-            ("telemetry-server", "--runs-root=/elsewhere"),
-            "uv run onepipeline-api serve --runs-root /elsewhere --bind 127.0.0.1:8765",
-        ),
-        (
-            ("telemetry-server", "--port=9000"),
-            "uv run onepipeline-api serve --runs-root runs --bind 127.0.0.1:9000",
-        ),
-        (
-            ("telemetry-server", "--host=0.0.0.0"),
-            "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:8765",
-        ),
-    ],
-    ids=("runs-dir", "runs-root", "port", "host"),
-)
-def test_the_telemetry_server_recipe_takes_a_flag_in_either_spelling(
-    tmp_path: Path, invocation: tuple[str, ...], delegated: str
-) -> None:
-    """`--flag value` and `--flag=value` are one flag, and an operator types both."""
-    checkout, trace = _checkout(tmp_path)
-
-    assert _run(checkout, trace, *invocation).returncode == 0
-    assert trace.read_text().splitlines() == [delegated]
-
-
-@pytest.mark.reads_recipes
-@pytest.mark.parametrize(
-    ("flag", "reason"),
-    [
-        ("--runs-dir", "--runs-dir needs a directory"),
-        ("--host", "--host needs an address"),
-        ("--port", "--port needs a port"),
-    ],
-    ids=("runs-dir", "host", "port"),
-)
-def test_the_telemetry_server_recipe_names_the_flag_it_was_given_nothing_for(
-    tmp_path: Path, flag: str, reason: str
-) -> None:
-    """A flag with its value missing must not be forwarded as if it had one."""
-    checkout, trace = _checkout(tmp_path)
-
-    result = _run(checkout, trace, "telemetry-server", flag)
-
-    assert result.returncode == 2, result.stdout
-    assert reason in result.stderr
-    assert not trace.exists(), "a refused invocation must not reach the read API at all"
 
 
 @pytest.mark.reads_recipes
@@ -1976,7 +1996,7 @@ def test_the_telemetry_server_recipe_refuses_an_address_file_that_is_not_one(
     else:
         address.write_text(content, encoding="utf-8")
 
-    result = _run(checkout, trace, "telemetry-server", "--port", "9000")
+    result = _run(checkout, trace, "telemetry-server")
 
     assert result.returncode == 2, result.stdout
     assert reason in result.stderr

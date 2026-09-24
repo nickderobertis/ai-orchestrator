@@ -34,11 +34,12 @@ loader that reads a plan:
   engine binary itself, because that is the artifact that runs;
 * the plan loader, which has to read `adoption` and `consumes` and refuse a bad value
   of each before anything is dispatched;
-* the read API `just telemetry-server` runs, which is the third half's own artifact
-  and the one a claim about the view rests on.
+* the read API `just telemetry-server` and `just dag-ui` both run, which is the third
+  half's own artifact and the one a claim about the view rests on.
 
 The view half is measured further in `tests/dag_ui/test_dag_ui_serving_e2e.py`, because
-what a view does is what it serves: that journey starts both recipes on one origin and
+what a view does is what it serves: that journey starts `just dag-ui` — the same
+published binary, with `--ui`, answering the view and its data on one origin — and
 reads the release tier off what the reader answers, which is what a rendered row could
 only ever be as true as. That the *bundle* draws one is `onepipeline-ui`'s own tier to
 hold.
@@ -749,9 +750,10 @@ def test_the_read_api_the_view_is_served_from_is_the_adopted_release() -> None:
     """The third half is two artifacts of one release, and this is the one with a CLI.
 
     `config/onepipeline-ui.version` names a release published as both a wheel and an
-    npm package, and only the wheel can be asked its own version. The bundle half is
-    read where it is served, in `tests/dag_ui/test_dag_ui_serving_e2e.py`, which is the
-    only place a bundle can honestly be asked anything.
+    npm package, and only the wheel can be asked its own version — the wheel that also
+    carries the view, since `serve --ui`. The bundle half is read where it is served, in
+    `tests/dag_ui/test_dag_ui_serving_e2e.py`, which is the only place a bundle can
+    honestly be asked anything.
     """
     adopted = (REPO_ROOT / "config" / "onepipeline-ui.version").read_text("utf-8").strip()
     assert Release.parse(adopted, "config/onepipeline-ui.version") >= RELEASE_VIEW_FLOOR, (

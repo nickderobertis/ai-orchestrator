@@ -358,10 +358,10 @@ def read_api(stopped: Launch) -> Iterator[str]:
         [
             "just",
             "telemetry-server",
-            "--runs-dir",
+            "--runs-root",
             str(stopped.runs_root),
-            "--port",
-            str(port),
+            "--bind",
+            f"127.0.0.1:{port}",
         ],
         cwd=REPO_ROOT,
         env=serving,

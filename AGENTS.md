@@ -286,8 +286,11 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   `ONETASKGRAPH_SDK_BINARY` names, and `orchestrator/plan_store.py` says why.
   `onetaskgraph --help`; https://github.com/nickderobertis/onetaskgraph.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
-- **`onepipeline-ui`** — the DAG API and browser view behind `just telemetry-server`
-  and `just dag-ui`: a live and historical view of orchestrated DAG execution that
+- **`onepipeline-ui`** — the DAG API and browser view behind `just dag-ui`, which is
+  `onepipeline-api serve --ui`: one binary answering the view built into it and the
+  read API it reads on one origin, so nothing here serves or proxies a bundle (`just
+  telemetry-server` is the same command without the view). A live and historical view
+  of orchestrated DAG execution that
   also **supervises** it — stopping, adopting, replying to and shutting down runs, each
   behind the engine's own authority and the acting session the server runs as — by
   wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so

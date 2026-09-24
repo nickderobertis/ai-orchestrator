@@ -555,8 +555,6 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/config/read-api.address",
       "{workspaceRoot}/config/onepipeline-ui.version",
-      "{workspaceRoot}/scripts/dag-ui.sh",
-      "{workspaceRoot}/scripts/dag-ui-server.js",
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/telemetry-server.sh",
       "{workspaceRoot}/tests/dag_ui/**/*",

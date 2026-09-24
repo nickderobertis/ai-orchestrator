@@ -38,7 +38,7 @@ items were replaced by three recipe-coverage items.
 | `tests/test_redaction.py` | Keep all | Unit contract for surviving `orchestrator/redaction.py`. |
 | `tests/test_session_setup.py` | Keep all | Each case covers provisioning logic still implemented by `scripts/session-setup.sh`; size is not upstream ownership. |
 | `tests/test_smoke_selector.py` | Keep | Proves the selector in this checkout's `scripts/smoke.sh`. |
-| `tests/dag_ui/test_dag_ui_serving_e2e.py` | Keep all | Drives this checkout's server/proxy recipes around the published UI bundle. UI behavior itself is not asserted. |
+| `tests/dag_ui/test_dag_ui_serving_e2e.py` | Keep all | Drives this checkout's two serving recipes over the published `onepipeline-api serve [--ui]`, which answers the view and its data on one origin. UI behavior itself is not asserted. |
 | `tests/e2e/test_delegated_recipes_e2e.py` | Convert | Keeps every existing journey, adds the previously absent real `repo-policy` delegation and `lint-llm-validate` validator journey. |
 | `tests/e2e/test_gate_selection_e2e.py` | Keep all | Drives this checkout's comparison-base script and pre-push hook. |
 | `tests/e2e/test_llmlint_cache_e2e.py` | Keep all | Required real Nx cached-verdict journey. |
@@ -49,7 +49,7 @@ items were replaced by three recipe-coverage items.
 | `tests/e2e/test_quota_fallthrough_e2e.py` | Keep all | Required real oneharness fallback-chain journey. |
 | `tests/e2e/test_repo_registry_apply_e2e.py` | Keep all | Drives this checkout's tracked checkout/rules installer; it does not re-prove onevcs lifecycle behavior. |
 | `tests/e2e/test_session_setup_e2e.py` | Keep all | Required real PyPI installation journey for adopted releases. |
-| `tests/e2e/test_workspace_contract_e2e.py` | Convert | Keeps every existing test and adds the missing non-recursive proof of the `test-e2e` entry point; all other cases still drive this checkout's quality, bootstrap, log, screenshot, and workspace wrappers. |
+| `tests/e2e/test_workspace_contract_e2e.py` | Convert | Keeps every existing test and adds the missing non-recursive proof of the `test-e2e` entry point; all other cases still drive this checkout's quality, bootstrap, log, and workspace wrappers. |
 
 Helper modules (`conftest.py`, `published_tools.py`, `nx_inputs.py`, and the e2e
 helpers) contain no tests and remain because the kept journeys import them.
@@ -91,8 +91,8 @@ argument adaptation. The following need configuration or state beyond spelling:
 | `register-repo`, `repo-recover`, `integrate`, `sync` | A real invocation against *this host's* registry mutates registered repositories, branches, or remotes and is unsafe in this checkout's test run. Local argument forwarding is driven; onevcs covers the operations in `crates/onevcs/tests/e2e/registry.rs`, `lifecycle.rs`, and `cli.rs`. |
 | `publish-branch` | Driven end to end in `test_publish_branch_e2e.py`, not only forwarded: it publishes a real branch onto a real base, is refused by the repository's own real `pre-push` hook, and lands past a `gate:` an unmigrated rules file still names — which is how the removal is proven rather than asserted. The row above is about this host's registry, not about the verb — `ONEVCS_HOME` pointed at a scratch registry, over a throwaway origin, reaches nothing of this host's, which is the same isolation `test_repo_registry_apply_e2e.py` uses. This one earns that cost because it is the verb that closes the raw-`git` gap, so "it forwards its arguments" is not the claim worth making about it. |
 | `repos`, `recoverable`, `repo-policy`, `repos-apply` | The first two forwarding shapes are driven with the published CLI doubled; real registry/rules installation and policy resolution are driven safely in `test_repo_registry_apply_e2e.py`. |
-| `telemetry-server` | Its host/port/address-file adaptations and failures are driven through the real wrapper; the long-running read API is the doubled published boundary. |
-| `dag-ui` / `dag-ui-screens` | Real recipes serve the installed bundle, proxy a real HTTP boundary, and drive screenshot argument/error journeys in the UI-serving and workspace modules. |
+| `telemetry-server` | The three defaults it supplies — the runs root, the address file, the acting session — and their failures are driven through the real wrapper; the long-running read API is the doubled published boundary. |
+| `dag-ui` | The real recipe starts the published `onepipeline-api serve --ui` and is driven over a real HTTP boundary in the UI-serving module: the view at `/`, its assets, `/healthz` and `/api/v2/…` from one origin. |
 | `new-persona` | Real scaffolding, invalid input, and destination behavior are driven in the delegated-recipes module. |
 | `replan` | Intentionally has no engine verb: its real recipe is driven and proves the migration diagnostic. |
 
@@ -103,7 +103,7 @@ Every listed recipe is covered by one of four real e2e tables/journeys:
 - delegated operator verbs are enumerated in `DELEGATIONS` or have a dedicated
   wrapper journey in `test_delegated_recipes_e2e.py`;
 - quality/workspace verbs (`bootstrap`, `check`, `test`, `gate`, `upgrade`, format,
-  lint, typecheck, llmlint, and `dag-ui-screens`) are driven in
+  lint, typecheck, and llmlint) are driven in
   `test_workspace_contract_e2e.py` and the two llmlint modules;
 - `dag-ui` is driven in `test_dag_ui_serving_e2e.py`;
 - `repos-apply` and `repo-policy` are driven in

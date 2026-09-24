@@ -69,11 +69,13 @@ launching Claude or Codex session: a live graph, node tasks and results,
 PR/check/gate/log detail, per-role transcripts, and a whole-run planner view.
 
 ```sh
-just telemetry-server   # the published read API over ./runs
-just dag-ui             # the published bundle, on the same origin
+just dag-ui             # the published view and its read API, on one origin
 ```
 
-Then open the address `just dag-ui` prints. See [`docs/dag-ui.md`](docs/dag-ui.md).
+That is `onepipeline-api serve --ui` over `./runs`: one binary serves the view built
+into it and the data it reads, so nothing here serves or proxies a bundle. `just
+telemetry-server` is the same command without the view. Then open the address it
+prints.
 
 ## One tracked graph
 

@@ -102,12 +102,13 @@ RUN_END_HOOKS_WORKSPACE = "runEndHooksWorkspace"
 #: new file is a re-take of that measurement rather than a glob to widen.
 HOST_VIEWS_WORKSPACE = "hostViewsWorkspace"
 #: The key `dag-ui:test` is memoized on: what the journeys over `just dag-ui` and
-#: `just telemetry-server` drive and read — those two recipes and the scripts they
-#: reach, the address both resolve each other through, the pins that decide which
-#: published bundle and reader are installed, and the recorded runs they render.
+#: `just telemetry-server` drive and read — those two recipes, the one script they both
+#: reach and the acting-session ladder it sources, the address that script binds from,
+#: the pin that decides which reader and which built-in bundle are installed, and the
+#: recorded runs they render.
 #: Named file by file rather than by directory, and deliberately not `config/**/*`,
-#: `scripts/**/*` or `orchestrator/**/*`: these journeys start two real servers per
-#: test, so every glob wider than what they actually open makes an unrelated edit pay
+#: `scripts/**/*` or `orchestrator/**/*`: these journeys start a real server per test,
+#: so every glob wider than what they actually open makes an unrelated edit pay
 #: for that. `orchestrator/root.py` is deliberately *not* in it, though the
 #: module imports `REPO_ROOT` from there: it is a path helper nearly everything imports,
 #: so covering it would start those servers for edits that cannot change what these

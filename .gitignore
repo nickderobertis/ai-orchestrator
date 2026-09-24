@@ -55,11 +55,6 @@ dist/
 # record of envelopes the criteria bar passed, keyed on the bar, and never content.
 /.cache/envelope-passes/
 
-# Screenshot galleries (`just dag-ui-screens`). One directory per invocation, so two
-# concurrent runs never write into each other's; they are evidence to look at, not
-# repository content, and nothing here is ever compared against a checked-in image.
-/.screenshots/
-
 # Preserved command output (scripts/preserved-log.sh). Deliberately per-worktree
 # and deliberately ignored: it is diagnostic evidence, not repository content. The
 # justfile's `set tempdir` names `.logs/just` under it, created by the justfile itself

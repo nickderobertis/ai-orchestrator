@@ -765,25 +765,20 @@ watch *args:
 telemetry *args:
     @./scripts/onepipeline.sh telemetry "$@"
 
-# Serve the published DAG Observatory bundle against a running read API, proxying
-# `/api` and `/healthz` to it so the browser view and its data share one origin.
-# `DAG_UI_PORT` and `DAG_UI_API_URL` move either end.
+# Serve the DAG Observatory — the browser view and the read API it reads, on one
+# origin, out of the one published binary. `--ui` is the read API's own flag: the
+# bundle of its own release is built into it and answered at every path the API does
+# not own, so nothing here serves, proxies or builds a view. The address it binds and
+# the runs root it serves are `just telemetry-server`'s, and the server prints both.
 # llmlint: ignore[tool_output_is_signal] the served URL and its request log are the foreground development server's operator-facing product.
-dag-ui:
-    ./scripts/dag-ui.sh
+dag-ui *args:
+    @./scripts/telemetry-server.sh --ui "$@"
 
-# Photograph the published DAG Observatory at every viewport in the matrix
-# (`scripts/dag-ui-screens.sh`, documented in docs/dag-ui.md) against its own
-# throwaway API and UI servers, and print the gallery it wrote. The gallery is per
-# invocation and gitignored, so two of these at once neither collide nor leave the
-# tree dirty. Extra arguments reach `playwright screenshot`.
-dag-ui-screens *args:
-    ./scripts/dag-ui-screens.sh "$@"
-
-# Serve the DAG telemetry API — which also stops, adopts, replies to and shuts down
-# runs as this session — loopback-bound by default.
-# `--runs-dir`, `--host`, and `--port` keep working; the wrapper renders them as
-# the published `--runs-root` and `--bind`.
+# Serve the DAG telemetry API alone — which also stops, adopts, replies to and shuts
+# down runs as this session — loopback-bound by default. Every flag is the published
+# `onepipeline-api serve`'s own; what the wrapper supplies is the runs root
+# `ONEPIPELINE_RUNS_DIR` names, the `--bind` address `config/read-api.address` holds,
+# and the `--session` this host acts as.
 # llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
 telemetry-server *args:
     @./scripts/telemetry-server.sh "$@"

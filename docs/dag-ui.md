@@ -4,10 +4,12 @@ The live and historical view of orchestrated DAG execution — which also
 **supervises** it, stopping, adopting, replying to and shutting down runs, each
 behind the engine's own authority and the acting session the server runs as — is
 [`onepipeline-ui`](https://github.com/nickderobertis/onepipeline-ui). It is not
-built in this repository: the design record, the component choices, the schema
-validation, and the browser tier that photographs it all live there, beside the
-code they describe. This page is the operational half — how the two published
-pieces are started here, and what each of the recipes around them does.
+built in this repository, and since `onepipeline-api serve --ui` it is not even
+composed here: the design record, the component choices, the schema validation, and
+the browser tier that photographs it all live there, beside the code they describe,
+and one published binary serves the view and its data together. This page is the
+operational half — how that binary is started here, and what each of the two recipes
+around it does.
 
 It is not a read-only view, and that changes what starting it means rather than
 only what it shows: the API wraps every post-launch verb, the browser performs each
@@ -16,45 +18,66 @@ the reader links. [Supervising from the
 browser](#supervising-from-the-browser) is that half; start there before acting from
 a tab, because two of those three sentences are about *whose* run and *which* engine.
 
-## The two published pieces
+## The one published binary
 
-The project publishes them separately, because they contain different things.
+**The view and its data come out of one process.** The `onepipeline-api-cli` wheel,
+installed by session setup at the release `config/onepipeline-ui.version` declares,
+provides one command, `onepipeline-api serve`. It wraps the onepipeline SDK and serves
+the `/api/v2/...` contract plus `/healthz`; with **`--ui`** it also serves the DAG
+Observatory **built into that same binary** — the view of its own release — at `/`,
+answering every path the API does not own with the bundle's `index.html` so a deep link
+opens. That is what makes the arrangement a browser requires its own rather than this
+repository's: the bundle asks for `/api/v2/...` relative to wherever it was served from
+and declares no API host, and the reader sends no CORS headers, so the two have to
+share an origin. They do, inside the binary.
 
-* **The API** — the `onepipeline-api-cli` wheel, installed by session setup
-  at the release `config/onepipeline-ui.version` declares, providing one command,
-  `onepipeline-api serve --runs-root DIR [--session ID]`. It wraps the onepipeline
-  SDK and serves the `/api/v2/...` contract plus `/healthz`.
-* **The view** — the `onepipeline-ui` npm package, pinned to the same release in
-  `package.json` and installed by `scripts/workspace-install.sh`. It installs no
-  command: it is a built static bundle under `dist/`, to be served.
+Which flags it takes is the command's own to say — `onepipeline-api serve --help`, and
+nothing here restates it; the three this host supplies a default for are under [Run
+it](#run-it) below, because those defaults are this repository's.
+
+**The `onepipeline-ui` npm package is still installed, and deliberately so.** It is the
+same built bundle published as a package, pinned to the same release in `package.json`
+and installed by `scripts/workspace-install.sh`. Nothing serves it — that is the point,
+and it is why a reader arriving later should not take it for cruft. It is a test-time
+reference and nothing else: `tests/dag_ui/test_dag_ui_serving_e2e.py` holds what the
+binary serves — the `index.html` and the script asset it loads — byte for byte to that
+installed package, having first held the package's own version to
+`config/onepipeline-ui.version`. It is an artifact of the release rather than a copy
+of what was served, which is what makes it an independent reference at all.
+
+That comparison is older than this arrangement but only now means anything. Through the
+proxy the journey compared what was served against the very directory the proxy served
+it out of, which no server could fail; the binary carries its own copy of the view, so
+the same comparison is now a cross-check between two artifacts of one release and fails
+if they are not. The asset half of it is new — it used to assert only that the script
+was longer than a thousand bytes.
 
 ## Run it
 
 ```sh
 just bootstrap
-just telemetry-server   # the read API; reads ./runs, or --runs-dir elsewhere
-just dag-ui             # the bundle, in a second shell
+just dag-ui             # the view and its data, on one origin
 ```
 
-Open the address `just dag-ui` prints — it names the port it bound, which
-`DAG_UI_PORT` moves.
+Open the address it prints. The server names the runs root it is serving and the
+address it bound on its first line.
 
-The bundle asks for `/api/v2/...` relative to wherever it was served from — it
-declares no API host — and the read API serves the data but not the bundle. So
-`scripts/dag-ui-server.js` puts the two behind **one origin**: it serves the
-bundle and proxies those two path prefixes to the API. A second port would make
-every request cross-origin, and the read API sends no CORS headers, so a
-same-origin proxy is the only arrangement a browser accepts. `DAG_UI_PORT`,
-`DAG_UI_HOST`, `DAG_UI_API_URL`, and `DAG_UI_DIST` move either end of it.
+`just telemetry-server` is the same command without `--ui`, for the read API alone.
+Every flag either recipe takes is the published verb's own, forwarded untouched; what
+`scripts/telemetry-server.sh` supplies is three defaults, each from the one source this
+host keeps it in:
 
-`just telemetry-server` keeps the recipe's own flag spellings: `--runs-dir`,
-`--host`, and `--port` are rendered as the published `--runs-root` and `--bind`,
-and the runs root defaults to the one `just runs` and `just status` read
-(`ONEPIPELINE_RUNS_DIR`, or `runs`), so the API serves the runs the planner is
-already looking at.
+* **`--runs-root`** — the runs directory `just runs` and `just status` read
+  (`ONEPIPELINE_RUNS_DIR`, or `runs`), so the view serves the runs the planner is
+  already looking at.
+* **`--bind`** — the address `config/read-api.address` holds, which is the one source
+  both recipes bind from. Leaving the published CLI's own default to stand there would
+  restate the address in a second place.
+* **`--session`** — who the browser acts as, covered below.
 
-It also hands the API **`--session`**, which is who the browser acts as and is
-covered below.
+A caller who spells any of the three owns it whole and keeps it:
+`just dag-ui --runs-root /elsewhere --bind 0.0.0.0:9000` serves that root on that
+address.
 
 ## Supervising from the browser
 
@@ -92,13 +115,11 @@ consequences to hold:
   turn that started it.
 
 `tests/dag_ui/test_dag_ui_serving_e2e.py` drives the grouping and both halves of
-the identity rule over the proxy — the stranger's refusal naming the owner, and the
-same stop reaching past ownership when the server acts as the run's own recorded
+the identity rule on the served origin — the stranger's refusal naming the owner, and
+the same stop reaching past ownership when the server acts as the run's own recorded
 launcher — because the refusal on its own is equally satisfied by a server with no
-session at all. `scripts/dag-ui-server.js` needed nothing for any of it: it already
-proxies every `/api` path and `/healthz` and forwards the method, headers and body,
-which is what carries a `POST` through — confirmed by those journeys asking over the
-bundle server's origin rather than the API's.
+session at all. Each of those is a `POST` to the same origin the view was served from,
+which is the arrangement an operator acts through.
 
 **An adopt from the browser is the one that changes which engine runs a dispatch.**
 `POST .../adopt` retains **this API binary** at its own driver verb, so the adopted
@@ -146,17 +167,21 @@ branch and where it went, and the host's other unpublished branches it did not p
 One the engine says was not complete answers `200` with that report and reads
 **Shutdown incomplete**, never as a success; a request that lost its answer reads as
 lost, since the engine may still be carrying it out.
-`tests/dag_ui/test_dag_ui_serving_e2e.py` holds that the pair the two recipes serve
-carries the control and answers its routes, without shutting anything down.
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds that the reader the two recipes serve
+answers both shutdown routes and refuses what it should, without shutting anything
+down. That the *view* carries these controls and draws this dialog is
+`onepipeline-ui`'s own tier, which renders them in a browser this repository does not
+provision; what every promise above is held to here is that repository's published
+`docs/contract.md`, reconciled at the pinned tag by `tests/test_ui_api_contract.py`.
 
 ## Which release is answering
 
 Moving `config/onepipeline-ui.version` installs a release; it does not put one in
-front of an operator. Both pieces are loaded once, at start: a `just
-telemetry-server` and a `just dag-ui` left running from before a bump go on
-serving what they loaded, so **an adoption reaches a browser only after both are
-restarted**. Neither notices the other's release either — the reader and the
-bundle are separate artifacts of one version.
+front of an operator. The binary is loaded once, at start: a `just dag-ui` left
+running from before a bump goes on serving the reader and the view it loaded, so
+**an adoption reaches a browser only after it is restarted**. The two halves can no
+longer be apart from each other — one binary carries both — so what is left to ask is
+which binary is answering.
 
 `/healthz` is what answers the question without guessing. The read API reports its
 own liveness *and* the `onepipeline` release it links:
@@ -205,10 +230,10 @@ nothing to do with reading runs, and the Observatory was adopted anyway because 
 reader carries its own engine. None of those readers could drive a run from a browser;
 this one can, which is what ended the freedom rather than any of them.
 
-`tests/dag_ui/test_dag_ui_serving_e2e.py` holds a freshly started pair to the
-adopted release from that same served surface: the bundle handed back is the npm
-half installed at `config/onepipeline-ui.version`, and the reader answering links
-the engine the adopted wheel links. So a bump that installs one release and
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds a freshly started server to the
+adopted release from that same served surface: the view handed back is byte-for-byte
+the npm bundle installed at `config/onepipeline-ui.version`, and the reader answering
+links the engine the adopted wheel links. So a bump that installs one release and
 serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
@@ -261,11 +286,12 @@ accounting does not move, because the duplicate rows carried no usage: the per-t
 moved the reader's own linked `onepipeline`, which is what `/healthz` reports: 0.6.4
 answered `0.7.3` and 0.6.5 answers `0.18.3`, still not
 `config/onepipeline.version` and still not expected to be.
-`tests/dag_ui/test_dag_ui_serving_e2e.py` holds this over the pair as an operator's
-browser reads them — over HTTP — including that no span the read API serves for a real
-recorded run carries a release. It renders nothing: that a bundle draws what the reader
-serves is `onepipeline-ui`'s own tier to hold, and
-`tests/dag_ui/test_no_browser_needed_e2e.py` holds this one to needing no browser. The
+`tests/dag_ui/test_dag_ui_serving_e2e.py` holds this on the served origin as an
+operator's browser reads it — over HTTP — including that no span the read API serves for
+a real recorded run carries a release. It renders nothing, and it needs no browser to
+run: that a bundle draws what the reader serves is `onepipeline-ui`'s own tier to hold,
+and a browser in a check tier here would be a browser on every publication's merge path,
+which nothing on this host provisions. The
 runs behind all of it are checked-in fixtures and cannot grow a release event, so what
 fails the day a repository here declares a target is
 `tests/e2e/test_release_adoption_in_force_e2e.py`, which asks every registered
@@ -387,29 +413,9 @@ pre-adoption roots are still absent from the listing with no reason given.
 
 ## Photograph it
 
-```sh
-just dag-ui-screens                      # every surface, every viewport
-just dag-ui-screens --run <run-id>       # a named run rather than the newest
-just dag-ui-screens --runs-root DIR      # a different store
-```
-
-This starts an API and a bundle server on ports of its own, drives Playwright's
-`screenshot` command over them, and prints the gitignored per-invocation gallery
-it wrote under `.screenshots/`. Two of these at once neither collide nor leave the
-tree dirty. Extra arguments reach `playwright screenshot`, so `--full-page` and
-friends work.
-
-The viewport matrix is declared once, in `scripts/dag-ui-screens.sh`: the desktop
-sizes this view is read at, down to the smallest laptop still in use, plus one
-phone width — the only entry where the shell's two columns stop fitting, and
-therefore where every reflow defect shows up first.
-
-What it photographs is bounded by what the published packages ship. `onepipeline-ui`
-publishes the built bundle alone — no fixture server, and no screenshot surface
-with the per-surface waits its own repository's tier uses — so the surfaces here
-are the ones a URL names against a real runs root: the run list, and the
-`overall`, `graph`, and `timeline` views of one run when the runs root has one. A
-runs root with no runs in it is photographed as the empty run list, and the recipe
-says so rather than reporting a fuller gallery than it captured. For the
-surface-by-surface tier with its own fixtures, run `just dag-ui-screens` in
-`onepipeline-ui` itself.
+In `onepipeline-ui`, with the `dag-ui-screens` recipe of that repository — there, not
+here: no recipe of this justfile photographs anything. The gallery is a development
+tool of the repository that builds the view: it has the per-surface waits and the
+fixture server this repository cannot reach, and this repository does not iterate on
+the view. What is here instead is `just dag-ui` against a real runs root, which is the
+surface an operator reads and the one these pages document.

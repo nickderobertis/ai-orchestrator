@@ -341,7 +341,9 @@ served them.
    is the driver having given up, with the record saying why, and nothing is going to
    watch this run again — which is the one an operator acts on rather than waits out.
 2. **The run timeline** (`GET /api/v2/runs/{run}/timeline?scope=run`, served by
-   `just telemetry-server`) is the structured view. Measured against real runs on
+   `just telemetry-server` — or by `just dag-ui`, which is the same published server
+   with the browser view built into it answering on the same origin) is the structured
+   view. Measured against real runs on
    **`onepipeline-api` 0.12.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 20 on the envelope, unmoved
