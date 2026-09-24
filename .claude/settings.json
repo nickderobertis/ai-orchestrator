@@ -49,6 +49,8 @@
       "Bash(just monitor:*)",
       "Bash(just status:*)",
       "Bash(just recoverable:*)",
+      "Bash(just unpublished --host)",
+      "Bash(just unpublished --print-surface)",
       "Bash(just host:*)",
       "Bash(just channel-next:*)",
       "Bash(just channel-reply:*)",

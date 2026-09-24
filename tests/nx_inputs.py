@@ -43,6 +43,15 @@ SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 #: project's own files, and the suite modules `tests/conftest.py` imports — nothing
 #: else, because the race reads a temporary root and nothing of this checkout.
 PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
+#: The key `unpublished-view:test` is memoized on. Files rather than trees, for the reason
+#: `unwatchedWorkspace` names, and measured the same way: the tier traced under `strace -f
+#: -e trace=openat,execve`, each opened path normalized and intersected with what git
+#: tracks. So the key is the justfile, the two scripts the recipe reaches and the module
+#: they run, the lock that decides which `onevcs` answers, the registry helper the seeding
+#: runs, and the suite modules `tests/conftest.py` imports with the two `config/` files and
+#: two scripts they read — never `scripts/**`, because an edit to a script this view never
+#: reaches must not pay for its real sessions.
+UNPUBLISHED_VIEW_WORKSPACE = "unpublishedViewWorkspace"
 
 #: The key the `unwatched` project's one tier is memoized on, and it names files rather
 #: than trees because these journeys arm real
@@ -333,6 +342,17 @@ PROJECT_STORE_RACE_PROJECT = "project-store-race"
 PROJECT_STORE_RACE_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
+
+#: The project whose test target owns the journey over `just unpublished`: the real
+#: recipe, wrapper and module over a scratch `onevcs` registry holding a branch in every
+#: state the view distinguishes. A project of its own for the reason `unwatched` is: real
+#: `onevcs` sessions, real `git` and a real `just` per assertion are a cost `nx affected`
+#: can only keep off an unrelated edit where it is a separate project.
+UNPUBLISHED_VIEW_PROJECT = "unpublished-view"
+#: That project's one test target: nothing here reads this repository's prose.
+UNPUBLISHED_VIEW_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+UNPUBLISHED_VIEW_ROOT = "tests/e2e/unpublished_view"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

@@ -1812,6 +1812,25 @@ a branch that carries no incomplete marker, which names it for a `local-direct`
 identity. Reach for the train when several finished branches must land on one base in
 an order, and for `publish-branch` when there is one.
 
+`just unpublished` asks the same question from the other end: not *which row is this
+branch on* but *what is this host still holding, and what is it costing*. It answers
+for every registered identity under `--host`, from any directory — the gap that
+matters, because `just recoverable` run inside a checkout answers for that identity
+alone — and for named `onevcs` sessions under
+repeated `--session <s-token>`. The own-sessions target, `--own` and the default, is
+refused until the adopted `onevcs` carries the session labels the engine stamps, and a
+session opened before that adoption carries none, so that target never reaches what it
+preserved and nothing backfills it, while an explicit `--session <s-token>` still does,
+through the holder record. A row's `--json` keys are `identity`, `branch`, `base`, `provenance`, `landed`,
+`change_url`, `stopped_because`, `session`, `run`, `node`, `manager_session`,
+`resume_command` (the landing command in its `just` form), `in_flight`, `counted`,
+`acknowledgement` and `disk` — the run root's bytes and each build-output directory under
+its worktree on its own, which is the reason to reach for it, because the number a person
+acts on is the disk rather than the branch count. It reclaims nothing, lands nothing and
+closes nothing; the verbs above stay where they are. `--acknowledge <branch> --reason
+"<why>"` drops a branch out of the count without landing it — acknowledging is never
+landing.
+
 Every row of that table reads the branch from the identity's **publication
 checkout**, never from wherever a session happens to be working. So a branch that
 exists only in a session worktree or a per-run clone is on no row yet: each verb

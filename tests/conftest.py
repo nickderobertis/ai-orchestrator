@@ -47,6 +47,8 @@ from nx_inputs import (
     RUN_END_HOOKS_WORKSPACE,
     SESSION_SETUP_ROOT,
     SESSION_SETUP_WORKSPACE,
+    UNPUBLISHED_VIEW_ROOT,
+    UNPUBLISHED_VIEW_WORKSPACE,
     UNWATCHED_ROOT,
     UNWATCHED_WORKSPACE,
     WRITEBACK_BUDGET_ROOT,
@@ -141,6 +143,7 @@ OWNED_PROJECTS = {
     HOST_VIEWS_ROOT: OwnedProject(key=HOST_VIEWS_WORKSPACE, docs_tier=False),
     SESSION_SETUP_ROOT: OwnedProject(key=SESSION_SETUP_WORKSPACE, docs_tier=False),
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
+    UNPUBLISHED_VIEW_ROOT: OwnedProject(key=UNPUBLISHED_VIEW_WORKSPACE, docs_tier=False),
 }
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes

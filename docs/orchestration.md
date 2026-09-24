@@ -3148,6 +3148,84 @@ block-once memory is the engine's, under its own state root, and
 runs roots holding an unwatched run, a watched one, a continuation and a worker-shaped
 environment.
 
+### The preserved branches this host is holding onto
+
+`just unpublished` is the inventory beside the listing below: what this host is still
+holding, what each branch costs in disk, and the `just` command that lands it. It is a
+view over `onevcs` verbs — `recoverable --json` for the rows, `repos` for the registered
+identities and `session holders --json` for the sessions each row joins to — and never a
+re-derivation from `git` or a walk of
+`events.jsonl`; the one `git` it runs is a `rev-parse` that keys an acknowledgement and
+decides nothing about what is unpublished. `orchestrator/unpublished.py` is the one
+statement of the contract: the row shape, the counting rule, the exit statuses, the
+acknowledgement file, and the session-label keys.
+
+```sh
+just unpublished --host                       # every registered identity
+just unpublished --session s-0123456789ab …   # one session token, repeatable
+just unpublished --host --json                # the rows, for something other than a person
+just unpublished --host --no-disk             # skip the walk
+just unpublished --acknowledge BRANCH --reason "why it is deliberately left"
+```
+
+**Two targets answer today, and the third is declared and refused.** `--host` answers
+for every registered identity from any directory, asking each one by name, which is the
+visibility gap: `just recoverable` run inside a checkout answers for that identity alone. `--session <s-token>` answers for the
+branches those sessions hold or held, the branch read off the holder record rather than
+derived from the token, because a retried session holds a branch named for an earlier
+one. The **own-sessions** target — the default, `--own`, and a `--session` naming a
+manager session id rather than an `s-` token — is a filter on the session labels (`run`,
+`node`, `launcher`) the engine stamps and the adopted `onevcs` stores, which a later node
+turns on as one filtered read; until then it refuses, naming what it awaits, and this
+repository joins nothing to imitate it. **A session opened before that adoption carries
+no labels**, so the own-sessions target never reaches a branch it preserved and nothing
+backfills them; unlike a branch no session record names, such a branch is still reached by
+an explicit `--session <s-token>`, through its holder record, as any other is.
+
+**What a row carries** is what `onevcs` states — the identity, the branch and its base,
+the provenance, the `landed` object, the change URL and why the workstream stopped —
+joined to the `onevcs` session token that preserved it (`null` for a branch no session
+record names), with `run`, `node` and `manager_session` `null` until those labels land.
+Beside that it carries the resume command **in its `just` form**, because the raw
+`onevcs publish-branch` line lands with an empty description; whether the row is in
+flight; whether it is counted; its acknowledgement; and the disk — the run root, clone
+and worktree together, and each build-output directory under the worktree
+(`target`, `node_modules`, `.venv`, `.nx`, `dist`) called out on its own. The walk
+counts allocated file bytes and follows no symbolic link, so a sparse file does not
+claim its apparent length as disk cost. The default rendering is that table plus a
+trailer stating the counted total and the bytes held by build output, with both ways
+out named beside each counted row.
+
+**A row `onevcs` reports a `held_by` for is shown, marked in flight, and never counted**
+— a publication landing that branch this moment is exactly what a consumer of this view
+must not refuse a turn over. It is the presence of `held_by` that decides it rather than
+which `holding` value it carries: every variant of that enum is a session that has not
+finished with the branch, so one `onevcs` adds is in flight without anything here moving. Every `landed.state` the listing carries counts: `no`, `unknown`
+(the *may have landed* rows) and `in-part`.
+
+**Acknowledging is never landing.** `--acknowledge <branch> --reason "<text>"` records
+that the calling manager session has seen and deliberately left that branch; the row
+still shows, marked with its reason, with `counted` false. It is keyed on that session
+and on **what the branch stands at**, so a branch that moves past the recorded tip counts
+again, and it is invisible to every other session. A missing or blank reason is refused,
+because an acknowledgement carrying only a branch is indistinguishable downstream from
+one nobody meant, and so is a branch no row of the host-level reading names. The record
+lives under `$XDG_STATE_HOME/ai-orchestrator/stop-unfinished/acknowledged/`, one file per
+session; nothing in the tree or the runs root is written.
+
+**The exit status is the whole of what a consumer branches on**: `7` when at least one
+row is counted — preserved, not in flight, not acknowledged at its current tip — `0`
+when none is, `2` on a refused invocation, and any other non-zero when the view could not
+answer, which it says on standard error. Everything it could not resolve goes there too,
+where it changes no status. An acknowledgement answers for the host-level target it was
+looked up in, read after the write: `7` while any other branch there still counts, since
+one branch left deliberately says nothing about the rest. A wrapper that cannot load its
+helper or interpreter also returns the could-not-answer status, with the failed prerequisite on standard error.
+`scripts/unpublished.sh --print-surface` prints that
+vocabulary for a consumer to read rather than restate. The view reclaims no disk, lands
+no branch and closes no session: `just sweep`, the three landing verbs and `onevcs
+session close` stay where they are.
+
 ### Preserved work that has not been published
 
 `just recoverable` lists every branch across the registered repository identities that

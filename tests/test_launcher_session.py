@@ -249,7 +249,7 @@ def test_the_helper_is_sourced_rather_than_run() -> None:
 
 
 def test_every_caller_sources_this_one_definition() -> None:
-    """The two callers reach the ladder through this file and hold no copy of it.
+    """Every caller reaches the ladder through this file and holds no copy of it.
 
     This is the property the file exists for: a reader that identified itself
     differently from the launcher would match no run, and `just stop` would refuse
@@ -259,6 +259,7 @@ def test_every_caller_sources_this_one_definition() -> None:
     callers = (
         REPO_ROOT / "scripts" / "onepipeline.sh",
         REPO_ROOT / "scripts" / "telemetry-server.sh",
+        REPO_ROOT / "scripts" / "unpublished.sh",
     )
 
     for caller in callers:

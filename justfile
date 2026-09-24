@@ -807,6 +807,14 @@ host *args:
 recoverable *args:
     @./scripts/recoverable.sh "$@"
 
+# The preserved-but-unpublished branches this host is holding onto, what each costs in
+# disk, and the `just` command that lands each one. `just unpublished --help` names the
+# targets and flags and `scripts/unpublished.sh --print-surface` the exit statuses;
+# `orchestrator/unpublished.py` is the one statement of the contract.
+# llmlint: ignore[tool_output_is_signal] the requested unpublished-branch inventory is this viewing command's product.
+unpublished *args:
+    @./scripts/unpublished.sh "$@"
+
 # Report everything onevcs knows about one piece of work:
 # `just work-status <change-url|session-token|branch|commit> [--json]`.
 #

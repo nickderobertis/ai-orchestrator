@@ -28,6 +28,12 @@ REQUIRED = (
     # was refused reads the same answer by hand rather than approving it afresh each
     # session.
     "Bash(just unwatched:*)",
+    # These fixed reads are routine. A dynamic session token needs approval per use:
+    # its wildcard would admit a suffix carrying `--acknowledge`. Acknowledging is
+    # the recipe's only write; it touches the XDG state directory alone, never the
+    # tree or runs root, and changes the guard's count.
+    "Bash(just unpublished --host)",
+    "Bash(just unpublished --print-surface)",
     "Bash(just results:*)",
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",
@@ -69,6 +75,11 @@ def test_allowlist_covers_the_orchestrator_and_planner_command_surface() -> None
 
 def test_allowlist_grants_no_blanket_wildcard() -> None:
     assert not BLANKET.intersection(_allowed())
+    assert "Bash(just unpublished:*)" not in _allowed()
+    assert not any(rule.startswith("Bash(just unpublished --acknowledge") for rule in _allowed())
+    assert not any(
+        "*" in rule for rule in _allowed() if rule.startswith("Bash(just unpublished")
+    ), "an unpublished read grant must not admit a suffix that can acknowledge a branch"
 
 
 def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:

@@ -94,6 +94,8 @@ from nx_inputs import (
     SELECTED_TARGETS,
     SESSION_SETUP_PROJECT,
     SESSION_SETUP_SCOPED,
+    UNPUBLISHED_VIEW_PROJECT,
+    UNPUBLISHED_VIEW_SCOPED,
     UNWATCHED_PROJECT,
     UNWATCHED_SCOPED,
     WRITEBACK_BUDGET_PROJECT,
@@ -129,6 +131,10 @@ PYTHON_WITNESS = "orchestrator/labels.py"
 #: The module the replacement race is over, and the one path of `orchestrator/` its
 #: tier is keyed on; `PYTHON_WITNESS` is the control, a module the store never imports.
 STORE_WITNESS = "orchestrator/project_store.py"
+#: The wrapper `just unpublished` runs, which only the view's own tier reads; and a script
+#: in the recipe tier's `scripts/**` the view never reaches, the control.
+UNPUBLISHED_WITNESS = "scripts/unpublished.sh"
+UNREACHED_SCRIPT_WITNESS = "scripts/recoverable.sh"
 #: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
 FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
 #: The project every Python tier belongs to, and the tier the code suite runs in.
@@ -654,6 +660,7 @@ SKIPPABLE_TIERS = frozenset(
         (HOST_VIEWS_PROJECT, HOST_VIEWS_SCOPED),
         (SESSION_SETUP_PROJECT, SESSION_SETUP_SCOPED),
         (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
+        (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
     }
 )
 
@@ -914,6 +921,34 @@ def test_a_diff_of_the_record_store_alone_selects_its_race_tier(selector: Select
         )
         assert PROJECT in selector.selected(CODE_SCOPED), (
             f"a diff of {PYTHON_WITNESS} must still select the code tier that reads it"
+        )
+
+
+def test_a_diff_of_the_unpublished_view_alone_selects_its_journey_tier(
+    selector: Selector,
+) -> None:
+    """The journey over `just unpublished` is charged to what it drives, not to `scripts/**`.
+
+    Each of its tests spends real `onevcs` sessions, real `git` and a real `just`, so a
+    project of its own keyed file by file is what keeps that cost off an edit to a script
+    the view never reaches. Both halves are asked of the real selector: a change to the
+    wrapper selects the tier, and a change to another script leaves it out — while still
+    selecting the recipe tier, whose key does cover every script.
+    """
+    with selector.planted(UNPUBLISHED_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert UNPUBLISHED_VIEW_PROJECT in selector.selected(UNPUBLISHED_VIEW_SCOPED), (
+            f"a diff of {UNPUBLISHED_WITNESS} must select the tier that drives it"
+        )
+
+    with selector.planted(UNREACHED_SCRIPT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert UNPUBLISHED_VIEW_PROJECT not in selector.selected(UNPUBLISHED_VIEW_SCOPED), (
+            f"a diff of {UNREACHED_SCRIPT_WITNESS} reaches nothing the view reads, so "
+            "charging its real sessions to it is the cost the project boundary keeps off"
+        )
+        assert PROJECT in selector.selected(RECIPE_SCOPED), (
+            f"a diff of {UNREACHED_SCRIPT_WITNESS} must still select the recipe tier"
         )
 
 
