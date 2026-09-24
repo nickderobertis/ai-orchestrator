@@ -622,7 +622,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.4.10", core="0.18.0"),
     LinkedCore(dependent="onejudge", dependent_version="0.13.5", core="0.18.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.44.2", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.44.4", core="0.18.0"),
 )
 
 #: The pins that may not be reconciled today, each with the measured pair it was
@@ -750,14 +750,13 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: **None, and kept.** The one entry this carried was measured when the engine pin moved
-#: to onepipeline 0.44.1 over a newest `onepipeline-api-cli` that linked 0.42.0. The
-#: `extends` adoption closed it: `onepipeline-api-cli` 0.12.1 links onepipeline 0.44.2,
-#: which is what `config/onepipeline.version` now names, so the two pins agree and the
-#: exception is deleted rather than re-dated — as its own terms required. What stays is
-#: the escape hatch, because the next adoption that outruns the reader's release needs
-#: to declare one without rebuilding the machinery to do it in.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
+#: The UI API wheel still links an older engine than the pinned launcher. These measured
+#: releases make the exception fail as soon as either wheel changes.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
+    linked="0.44.2",
+    pinned="0.44.4",
+    because="no onepipeline-ui release links onepipeline 0.44.4 yet",
+)
 
 
 def test_the_ui_api_links_the_engine_this_host_pins() -> None:

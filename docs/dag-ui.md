@@ -208,14 +208,17 @@ reads the engine out of the adopted read-API wheel's own bill of materials and f
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than at whatever a browser adoption then drives.
 
-**They are level today, and the exception that said otherwise is gone.**
-`config/onepipeline.version` reads 0.44.2 and the adopted `onepipeline-ui` 0.12.1 links
-onepipeline 0.44.2, so a run adopted from the browser is driven by the same engine every
-other dispatch on this host runs, and `DECLARED_UI_ENGINE_DIVERGENCE` in the same module
-is `None`. It held while no `onepipeline-ui` release linked 0.44.1, over which a browser
-adopt would have driven a run with the reader's own 0.42.0; it was deleted rather than
-re-dated the moment a reader linking the pinned engine existed, which is what its own
-terms required. What `/healthz` is for from here is the question that gate cannot
+**They are not level today, by one declared exception.** `config/onepipeline.version`
+reads 0.44.4, and the adopted `onepipeline-ui` 0.12.1 — the newest release there is —
+links onepipeline 0.44.2. The engine pin moved anyway, because 0.44.4 is the release that
+labels every session a node opens with its run, node and launching session; the gate
+reads the pair through `DECLARED_UI_ENGINE_DIVERGENCE` in the same module, which is
+satisfied only while the two are exactly 0.44.2 and 0.44.4 and fails, naming itself, the
+moment either moves. **Until an `onepipeline-ui` release links onepipeline 0.44.4, do not
+adopt a run from the browser**: the adopt would drive that run with the reader's own
+0.44.2, an engine this host did not pin, while every other dispatch on this host runs
+0.44.4. Adopt through the launcher, `just orchestrate --adopt <run-id>`, until the
+declaration retires. What `/healthz` is for from here is the question that gate cannot
 answer — which release is answering **on this port right now**, since both pieces load
 once at start and a server left running from before a bump goes on serving what it
 loaded.

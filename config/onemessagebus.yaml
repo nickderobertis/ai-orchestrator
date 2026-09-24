@@ -41,7 +41,7 @@ profile: planner-channel
 # `@` pin to the protocol the installed onejudge speaks, against a bundle derived from
 # that release, and the resolved layout to the four queues the engine writes.
 schemas:
-  - "https://raw.githubusercontent.com/nickderobertis/onepipeline/v0.44.2/schemas/planner-channel.json@1"
+  - "https://raw.githubusercontent.com/nickderobertis/onepipeline/v0.44.4/schemas/planner-channel.json@1"
   - "https://raw.githubusercontent.com/nickderobertis/onejudge/v0.13.5/schemas/judge-seat-frames.json@8"
 authors:
   # The channel's authors, as the bus's Contract A has a configuration declare them: the

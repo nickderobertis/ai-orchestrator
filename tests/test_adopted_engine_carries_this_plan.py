@@ -461,6 +461,18 @@ SCRIPTS_AUDIT_LANDINGS = (
 )
 
 
+#: The engine-side node of the unpublished-and-unfinished plan: every session a node opens
+#: carries `run`, `node` and `launcher` labels on its `onevcs` session record.
+#: `tests/e2e/test_repositories_field_dispatch_e2e.py` reads them after a real dispatch.
+UNPUBLISHED_UNFINISHED_LANDINGS = (
+    Landing(
+        node="op-session-labels",
+        change_request=482,
+        commit="a8116795dfe91134542f3cde6d0cf69f9f3d6daa",
+        did="label every session a node opens with its run, node and launching session",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -476,6 +488,7 @@ LANDINGS = (
     *AGENT_VISIBILITY_LANDINGS,
     *CHANNEL_AND_RECORDS_LANDINGS,
     *SCRIPTS_AUDIT_LANDINGS,
+    *UNPUBLISHED_UNFINISHED_LANDINGS,
 )
 
 

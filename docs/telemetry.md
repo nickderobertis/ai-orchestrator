@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.44.2 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.44.4 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.

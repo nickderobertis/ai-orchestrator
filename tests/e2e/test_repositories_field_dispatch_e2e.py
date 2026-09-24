@@ -26,6 +26,11 @@ pair that disagreed would read as agreeing. `session holders` lists open session
 What each session actually recorded as its publication checkout is in the record `onevcs`
 wrote for it, and nothing but that record says.
 
+**Each session also carries the labels the engine stamps on it** — `run`, `node` and
+`launcher`, the run's id, the node's id and the launching session the launch was given.
+That is read through `onevcs session holders --json`, the verb a
+caller reads labels from, which lists a closed session's record as well as an open one's.
+
 The identity is a scratch one under a **hosted** origin — a bare origin served through a
 fake `ssh`, registered as `github.com/scratchowner/scratchname` — because the origin
 form is only a value `repositories` can hold for a hosted identity, and this host's own
@@ -57,7 +62,7 @@ import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import NamedTuple, NewType, TypedDict, cast
 
 import pytest
 import short_state
@@ -128,10 +133,14 @@ TASK = (
 )
 
 
+#: A session's token as `onevcs` mints it: what the journal and `session holders` name it by.
+SessionToken = NewType("SessionToken", str)
+
+
 class SessionOpened(TypedDict):
     """The payload fields of a `session-opened` record this journey reads."""
 
-    token: str
+    token: SessionToken
     worktree: str
 
 
@@ -179,6 +188,17 @@ class Launched(NamedTuple):
 
     identity: Identity
     placements: dict[str, Placement]
+
+
+class Holder(TypedDict):
+    """The fields of one `session holders --json` entry this journey reads.
+
+    `onevcs` owns the listing and reports more than this; these are the two fields the
+    question needs, stated rather than restated from its schema.
+    """
+
+    token: SessionToken
+    labels: dict[str, str]
 
 
 def _plan(root: Path) -> Path:
@@ -389,6 +409,46 @@ def test_the_origin_form_executes_in_a_clone_of_the_checkout_the_alias_form_does
         f"the origin form's worktree {by_origin.worktree} was cut outside the scratch "
         f"registry's workspaces"
     )
+
+
+@pytest.mark.xdist_group("repositories-field-dispatch")
+def test_every_session_a_node_opened_carries_its_run_node_and_launcher(
+    launched: Launched,
+) -> None:
+    """`session holders --json` names each node's session with the labels the engine stamped.
+
+    The run id, the node id and the launching session the launch was given — the
+    `CLAUDE_CODE_SESSION_ID` this journey states, which `scripts/launcher-session.sh`
+    exports as `ONEPIPELINE_LAUNCHER_SESSION`. Below the engine release that stamps them
+    each session carries no labels at all, which is the failure this reads.
+    """
+    listed = subprocess.run(
+        ["uv", "run", "onevcs", "session", "holders", ORIGIN, "--json"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "ONEVCS_HOME": str(launched.identity.home),
+            **launched.identity.environment,
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert listed.returncode == 0, f"session holders failed:\n{listed.stdout}\n{listed.stderr}"
+    holders = cast(list[Holder], json.loads(listed.stdout))
+    for node in (BY_ORIGIN, BY_ALIAS):
+        matching = [
+            holder
+            for holder in holders
+            if holder["labels"].get("run") == RUN_NAME and holder["labels"].get("node") == node
+        ]
+        assert len(matching) == 1, f"node {node} has {len(matching)} holders in {holders}"
+        assert matching[0]["labels"] == {
+            "run": RUN_NAME,
+            "node": node,
+            "launcher": LAUNCHING_SESSION,
+        }, f"node {node}'s holder is listed as {matching[0]}"
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
