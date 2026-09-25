@@ -80,6 +80,7 @@
   "targets": {
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/run_end_hooks --no-cov -n 4 --dist loadgroup",
+      "parallelism": false,
       "options": {
         "cwd": "."
       },

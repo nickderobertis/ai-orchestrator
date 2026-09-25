@@ -799,7 +799,7 @@ user:
 # base declares — the base once declared an `assessment`, and a member that inherited one
 # died asking its judge side a question it could not serve. `null` is onejudge's own unset
 # form and oneagentgraph inserts it, so this overrides rather than being skipped as absent.
-# Measured against onejudge 0.13.5.
+# Measured against onejudge 0.14.0.
 #
 # It has nothing to answer anyway — this member authors no target-project content — and
 # its judge side is the planner channel, which cannot serve the `assess` op the key would

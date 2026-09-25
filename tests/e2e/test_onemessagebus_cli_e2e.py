@@ -165,3 +165,63 @@ def test_nothing_to_claim_and_a_refused_record_append_nothing(tmp_path: Path) ->
     assert status["records"] == 0
     assert status["waiting"] == []
     assert status["pending"] is None
+
+
+def _events(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Run one `events` stream verb of the installed binary, which takes no transport."""
+    return subprocess.run(
+        [BUS, "events", *args],
+        input=stdin,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_the_installed_bus_links_no_agent_profile_and_names_no_stack_crate(
+    tmp_path: Path,
+) -> None:
+    """`--profile agent` is refused by the generic refusal, and nothing is written.
+
+    From onemessagebus 0.9.0 the bus compiles in no product's vocabulary: the agent
+    stack's streams are read through onepipeline's and onevcs's own readers, and the
+    CLI offers `open` alone. The refusal is the one any unlinked name meets, so it names
+    the profiles this build does link and no crate of the stack. Re-adopting a release
+    that still carries the agent profile fails here, where `--profile agent` would
+    otherwise be read as a stream verb's vocabulary again.
+    """
+    stream = tmp_path / "events.ndjson"
+    refusal = "`agent` is not a profile this build links; choose one of: open"
+
+    emitted = _events(
+        "emit",
+        str(stream),
+        "--kind",
+        "session-opened",
+        "--stream",
+        "s",
+        "--profile",
+        "agent",
+        stdin="{}",
+    )
+    merged = _events("merge", str(stream), "--profile", "agent")
+
+    for refused in (emitted, merged):
+        assert refused.returncode == 2, refused
+        assert refused.stderr.strip() == f"onemessagebus: {refusal}"
+        assert "onemessagebus-agent" not in refused.stderr
+        assert refused.stdout == ""
+    assert not stream.exists()
+
+    written = _events("emit", str(stream), "--kind", "session-opened", "--stream", "s", stdin="{}")
+    assert written.returncode == 0, written.stderr
+    envelope = json.loads(written.stdout)
+    assert (envelope["source"], envelope["kind"], envelope["seq"]) == (
+        "onemessagebus",
+        "session-opened",
+        1,
+    )
+    read = _events("merge", str(stream), "--profile", "open")
+    assert read.returncode == 0, read.stderr
+    assert [json.loads(line) for line in read.stdout.splitlines()] == [envelope]

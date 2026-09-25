@@ -1017,6 +1017,45 @@ def test_the_coverage_tier_is_unmemoized_and_waits_for_the_tier_that_measures() 
         )
 
 
+#: The two tiers that write under this checkout's configured `authoring` root in one Nx
+#: run: the run-end hooks journey seeds a plan project there and reads it back byte for
+#: byte, and the ask-seam launch journeys opt into that root with
+#: `real_plan_store_roots("authoring", ...)` and launch `just plan`, whose closeout
+#: records a planner pass on every project that appeared under it during its window.
+#: Run together, the second rewrites the first's seed mid-journey.
+AUTHORING_ROOT_WRITERS = (RUN_END_HOOKS_ROOT, f"{ASK_SEAM_ROOT}/launch")
+
+
+def test_the_tiers_writing_the_configured_authoring_root_never_run_together() -> None:
+    """One of the two is declared exclusive, so Nx never schedules them side by side.
+
+    A scheduling constraint rather than an assertion loosened in either journey: each
+    journey's reading is right about its own subject, and what made them disagree was
+    only that one Nx invocation ran both at once. `parallelism: false` on a target is
+    Nx's own declaration that the task runs with no other task beside it, which is the
+    narrowest scheduling constraint Nx declares between two projects. The opt-in is read
+    back too, so the pair stays the pair that actually shares the root.
+    """
+    launch_module = REPO_ROOT / AUTHORING_ROOT_WRITERS[1] / "test_launch_ask_seam_e2e.py"
+    assert re.search(
+        r"real_plan_store_roots\(\s*\"authoring\"", launch_module.read_text(encoding="utf-8")
+    ), f"{launch_module} no longer opts into the configured authoring root; re-read the pair"
+
+    exclusive = [
+        root
+        for root in AUTHORING_ROOT_WRITERS
+        if json.loads((REPO_ROOT / root / "project.json").read_text(encoding="utf-8"))["targets"][
+            "test"
+        ].get("parallelism")
+        is False
+    ]
+    assert exclusive, (
+        f'neither of {AUTHORING_ROOT_WRITERS} declares `"parallelism": false` on its test '
+        "target, so one Nx run can schedule both while each writes the configured "
+        "authoring root the other reads back"
+    )
+
+
 def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     """A new test that reads a new path must not be able to replay a stale verdict."""
     globs = _effective_inputs("orchestrator", CODE_SCOPED)

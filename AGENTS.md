@@ -300,9 +300,6 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
   **this pin can govern a dispatch**, and the two pins are held to linking one engine by
   `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
-  Where that gate declares the two apart, a browser adopt drives an engine this host
-  did not pin, so adopt with `just orchestrate --adopt` until the declaration retires
-  ([`docs/dag-ui.md`](docs/dag-ui.md#which-release-is-answering) names the releases).
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;

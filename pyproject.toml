@@ -8,13 +8,13 @@ requires-python = ">=3.13"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "onetaskgraph-sdk==0.2.43",
-    "oneagentgraph-cli==0.4.10",
+    "oneagentgraph-cli==0.5.2",
     "oneharness-cli==0.16.2",
-    "onejudge==0.13.5",
-    "onemessagebus-cli==0.8.0",
-    "onepipeline-api-cli==0.12.1",
-    "onepipeline-cli==0.44.4",
-    "onevcs-cli==0.30.2",
+    "onejudge==0.14.0",
+    "onemessagebus-cli==0.9.0",
+    "onepipeline-api-cli==0.13.0",
+    "onepipeline-cli==0.45.0",
+    "onevcs-cli==0.32.0",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like
     # the wheels so the lock and this list agree; `tests/test_host_installs.py` states

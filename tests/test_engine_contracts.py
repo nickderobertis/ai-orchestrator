@@ -281,14 +281,13 @@ ONEAGENTGRAPH = Engine("oneagentgraph", f"v{_linked_version('oneagentgraph')}", 
 #: not make the pin the core's version — `tests/test_linked_libraries.py` gates that
 #: distinction.
 ONEHARNESS = Engine("oneharness", _pinned_tag("oneharness"), "crates/oneharness-core/src")
-#: The message bus a journal envelope is, at the `onemessagebus-agent` onepipeline links.
-#: Since onepipeline 0.31.0 the envelope, its `Source`, and the envelope versions a
-#: build reads are that crate's — over the `onemessagebus` core, released from the same
-#: repository at the same commit — and `src/event.rs` re-exports them. Read at the agent
-#: crate's own tag, with the source root at `crates/` so both crates are reachable.
-ONEMESSAGEBUS = Engine(
-    "onemessagebus", f"onemessagebus-agent-v{_linked_version('onemessagebus-agent')}", "crates"
-)
+#: The message bus a journal envelope's core shape is, at the `onemessagebus` onepipeline
+#: links. Since onepipeline 0.45.0 the bus declares only the generic `Envelope<V>`; the
+#: agent-stack vocabulary it is instantiated over — `Source`, the flattened dimensions,
+#: the envelope versions a build reads — is onepipeline's own `src/vocabulary.rs`, which
+#: `src/event.rs` re-exports. Read at the bus workspace's tag, with the source root at
+#: `crates/` so the core crate's path names it.
+ONEMESSAGEBUS = Engine("onemessagebus", f"v{_linked_version('onemessagebus')}", "crates")
 
 
 class Vocabulary(NamedTuple):
@@ -1827,11 +1826,11 @@ PIPELINE_KIND_WORD = re.compile(r'Self::\w+ => "([a-z][a-z-]*)",')
 #: How `Source` — which library produced an envelope — is spelled on the wire.
 SOURCE_RENAME = re.compile(r'#\[serde\(rename_all = "([a-z-]+)"\)\]\s*pub enum Source')
 SOURCE_VARIANT = re.compile(r"^\s{4}([A-Z][A-Za-z]*),", re.MULTILINE)
-#: onepipeline's re-export of the bus's envelope types, which is what makes the bus the
-#: place a journal envelope is declared.
-BUS_REEXPORT = re.compile(r"pub use onemessagebus_agent::event::\{([^}]*)\};")
-#: How onepipeline takes the version it stamps: the newest its bus profile reads.
-ENVELOPE_VERSION_FROM_THE_BUS = "pub const ENVELOPE_VERSION: u32 = EVENT_ENVELOPE_READS[0];"
+#: onepipeline's re-export of its own vocabulary's envelope types, which is what makes
+#: `src/vocabulary.rs` the place a journal envelope's `Source` and versions are declared.
+VOCABULARY_REEXPORT = re.compile(r"pub use crate::vocabulary::\{([^}]*)\};")
+#: How onepipeline takes the version it stamps: the newest its vocabulary reads.
+ENVELOPE_VERSION_FROM_THE_VOCABULARY = "pub const ENVELOPE_VERSION: u32 = EVENT_ENVELOPE_READS[0];"
 
 #: `/proc/<pid>/stat` split at the last `)`, as the run-root builder spells it. The
 #: existing shell and journey copies spell the same split with `rsplit`; both are
@@ -1847,6 +1846,18 @@ class Field(NamedTuple):
     #: Whether the engine can read a record that omits it. A `default` says yes; every
     #: other field is one this repository's builder has to write or the engine refuses.
     optional: bool
+
+
+class Declared(NamedTuple):
+    """Where a struct is declared: which engine, and which file inside its source root.
+
+    A generic record's flattened parameter is declared by whichever crate instantiates
+    it, which need not be the crate declaring the record — the journal envelope is the
+    bus core's `Envelope<V>` over onepipeline's own `Dimensions`.
+    """
+
+    engine: Engine
+    source: str
 
 
 class Record(NamedTuple):
@@ -1870,11 +1881,11 @@ class Record(NamedTuple):
     found: Callable[[Path], list[dict[str, object]]]
     #: Where a `#[serde(flatten)]` field's struct is declared, when the record carries
     #: one: its fields travel as the record's own on the wire, so they are read there.
-    flattened_from: str | None = None
+    flattened_from: Declared | None = None
 
 
 def _declared_fields(
-    engine: Engine, source: str, struct: str, flattened_from: str | None = None
+    engine: Engine, source: str, struct: str, flattened_from: Declared | None = None
 ) -> tuple[Field, ...]:
     """Every field one engine record declares on the wire, in declaration order.
 
@@ -1902,7 +1913,9 @@ def _declared_fields(
                 "its wire record, and nothing names where that struct is declared, so its "
                 "keys cannot be reconciled; name the source it is read from"
             )
-            fields.extend(_declared_fields(engine, flattened_from, flattened.group(1)))
+            fields.extend(
+                _declared_fields(flattened_from.engine, flattened_from.source, flattened.group(1))
+            )
             continue
         fields.append(
             Field(
@@ -2055,7 +2068,7 @@ BUILT_RECORDS = (
             for line in (root / "events.jsonl").read_text("utf-8").splitlines()
             if line
         ],
-        flattened_from="onemessagebus-agent/src/event.rs",
+        flattened_from=Declared(ONEPIPELINE, "vocabulary.rs"),
     ),
     Record(
         "each dispatch registry entry",
@@ -2118,17 +2131,21 @@ def test_the_built_run_root_writes_the_records_the_engine_declares(
         )
 
 
-def test_onepipeline_stamps_the_newest_envelope_version_its_bus_reads() -> None:
+def test_onepipeline_stamps_the_newest_envelope_version_its_vocabulary_reads() -> None:
     """The version a built journal is held to is the one onepipeline writes.
 
-    Read off the bus's registry since the envelope moved there, which is right only
-    while onepipeline still takes its own stamp from that read set rather than
-    declaring a number of its own again.
+    Read off `EVENT_ENVELOPE_READS` in onepipeline's own `src/vocabulary.rs`, which is
+    right only while `src/event.rs` still takes its stamp from that read set, imported
+    from the vocabulary, rather than declaring a number of its own again.
     """
-    assert ENVELOPE_VERSION_FROM_THE_BUS in _source(ONEPIPELINE, "event.rs"), (
+    event = _source(ONEPIPELINE, "event.rs")
+    reexport = VOCABULARY_REEXPORT.search(event)
+    assert ENVELOPE_VERSION_FROM_THE_VOCABULARY in event and (
+        reexport is not None and "EVENT_ENVELOPE_READS" in re.findall(r"\w+", reexport.group(1))
+    ), (
         f"onepipeline {ONEPIPELINE.ref} no longer takes `ENVELOPE_VERSION` from "
-        f"{ONEMESSAGEBUS.crate}'s `EVENT_ENVELOPE_READS[0]`, so the version a built "
-        "journal is reconciled against may not be the one the engine writes"
+        "`crate::vocabulary::EVENT_ENVELOPE_READS[0]`, so the version a built journal "
+        "is reconciled against may not be the one the engine writes"
     )
 
 
@@ -2146,24 +2163,24 @@ def test_the_built_journal_names_events_the_engine_produces(built_run_root: Path
         f"onepipeline {ONEPIPELINE.ref} no longer spells its own event kinds where this "
         "gate reads them, so a built journal cannot be reconciled against them"
     )
-    reexport = BUS_REEXPORT.search(event)
+    reexport = VOCABULARY_REEXPORT.search(event)
     assert reexport is not None and {"Envelope", "Source"} <= set(
         re.findall(r"\w+", reexport.group(1))
     ), (
         f"onepipeline {ONEPIPELINE.ref} no longer re-exports `Envelope` and `Source` from "
-        f"`onemessagebus_agent::event`, so {ONEMESSAGEBUS.crate} {ONEMESSAGEBUS.ref} is no "
-        "longer where a journal envelope is declared; re-read `event.rs`"
+        "`crate::vocabulary`, so its `src/vocabulary.rs` is no longer where a journal "
+        "envelope's vocabulary is declared; re-read `event.rs`"
     )
-    bus_event = _source(ONEMESSAGEBUS, "onemessagebus-agent/src/event.rs")
-    rename = SOURCE_RENAME.search(bus_event)
+    vocabulary = _source(ONEPIPELINE, "vocabulary.rs")
+    rename = SOURCE_RENAME.search(vocabulary)
     assert rename is not None and rename.group(1) == "lowercase", (
-        f"{ONEMESSAGEBUS.crate} {ONEMESSAGEBUS.ref} no longer writes `Source` in lowercase, "
+        f"onepipeline {ONEPIPELINE.ref} no longer writes `Source` in lowercase, "
         f"so how {PROBE_RUN_ROOT.name} spells the producer of a built envelope has moved"
     )
-    declaration = re.search(r"pub enum Source \{.*?\n\}", bus_event, re.DOTALL)
+    declaration = re.search(r"pub enum Source \{.*?\n\}", vocabulary, re.DOTALL)
     assert declaration is not None, (
-        f"{ONEMESSAGEBUS.crate} {ONEMESSAGEBUS.ref} no longer declares `Source` where this "
-        "gate reads it"
+        f"onepipeline {ONEPIPELINE.ref} no longer declares `Source` in `src/vocabulary.rs` "
+        "where this gate reads it"
     )
     sources = {variant.lower() for variant in SOURCE_VARIANT.findall(declaration.group(0))}
     for envelope in (
@@ -2241,12 +2258,12 @@ BUILT_VALUES = (
         re.compile(r"pub const PLAN_SCHEMA_VERSION: u32 = (\d+);"),
         lambda root: [str(json.loads((root / "plan.json").read_text("utf-8"))["schema_version"])],
     ),
-    # The newest version the bus profile reads, which onepipeline stamps as its own —
-    # `test_onepipeline_stamps_the_newest_envelope_version_its_bus_reads` holds that.
+    # The newest version onepipeline's vocabulary reads, which it stamps as its own —
+    # `test_onepipeline_stamps_the_newest_envelope_version_its_vocabulary_reads` holds that.
     Value(
         "each journal envelope's version",
-        ONEMESSAGEBUS,
-        "onemessagebus-agent/src/registry.rs",
+        ONEPIPELINE,
+        "vocabulary.rs",
         re.compile(r"pub const EVENT_ENVELOPE_READS: &\[u32\] = &\[(\d+)"),
         lambda root: [str(envelope["v"]) for envelope in _built_envelopes(root)],
     ),

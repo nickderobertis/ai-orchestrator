@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.44.4 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.45.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.16.2/0.13.5 upgrade (`config/oneharness.version` and
+after the 0.16.2/0.14.0 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -254,8 +254,13 @@ under `crates/onejudge/src/` changes between v0.13.4 and v0.13.5
 to `domain/config.rs`, `io/config.rs` and `io/init.rs`: an `ExtendsPath` and the layered
 read that resolves it. `crates/oneharness-core/src/domain/usage.rs` is byte-identical
 between `oneharness-core-v0.17.1` and `oneharness-core-v0.18.0`, and `onejudge-cli`
-0.13.5, `oneagentgraph-cli` 0.4.10 and the engine wheel now all link 0.18.0, read off
-each wheel's own SBOM.
+0.13.5, `oneagentgraph-cli` 0.4.10 and the engine wheel then all linked 0.18.0, read off
+each wheel's own SBOM. The onejudge half then moved to 0.14.0 on the same terms: between
+v0.13.5 and v0.14.0 only `crates/onejudge/src/note.rs` and `sdk_schema.rs` change
+([onejudge#112](https://github.com/nickderobertis/onejudge/pull/112)), taking the note
+contract off the retired bus agent crate, and `onejudge-cli` 0.14.0, `oneagentgraph-cli`
+0.5.2 and the engine wheel all still link `oneharness-core` 0.18.0, read off each wheel's
+own SBOM.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
@@ -344,7 +349,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.12.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.13.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 20 on the envelope, unmoved
    across this bump, where

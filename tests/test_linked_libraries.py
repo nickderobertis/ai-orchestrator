@@ -620,9 +620,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.4.10", core="0.18.0"),
-    LinkedCore(dependent="onejudge", dependent_version="0.13.5", core="0.18.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.44.4", core="0.18.0"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.2", core="0.18.0"),
+    LinkedCore(dependent="onejudge", dependent_version="0.14.0", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.45.0", core="0.18.0"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -766,13 +766,11 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: The UI API wheel still links an older engine than the pinned launcher. These measured
-#: releases make the exception fail as soon as either wheel changes.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
-    linked="0.44.2",
-    pinned="0.44.4",
-    because="no onepipeline-ui release links onepipeline 0.44.4 yet",
-)
+#: `None` because the two pins link one engine: the adopted `onepipeline-api-cli`
+#: 0.13.0's SBOM declares onepipeline 0.45.0, the release `config/onepipeline.version`
+#: names. Kept as a slot rather than deleted so the next adoption that meets a UI
+#: release behind the engine declares the pair it measured instead of rebuilding this.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
 
 
 def test_the_ui_api_links_the_engine_this_host_pins() -> None:
@@ -818,6 +816,50 @@ def test_the_ui_api_links_the_engine_this_host_pins() -> None:
         f"{pinned}. Move `config/onepipeline-ui.version` to a release linking {pinned}, "
         "or hold the engine pin until one exists; see AGENTS.md's 'Which pin governs a "
         "dispatch' and docs/dag-ui.md's 'Which release is answering'"
+    )
+
+
+#: The bus crate the agent stack's vocabulary and the note contract used to live in,
+#: deleted by onemessagebus 0.9.0: the envelope, `Source` and filter moved to
+#: onepipeline's `src/vocabulary.rs`, `Phase` to onevcs, and the note to onejudge.
+RETIRED_BUS_AGENT_CRATE = "onemessagebus-agent"
+
+
+def _sbom_crates(distribution: str) -> set[str]:
+    """Every crate name `distribution`'s one CycloneDX SBOM declares it links."""
+    installed = importlib.metadata.distribution(distribution)
+    sboms = [entry for entry in (installed.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
+    assert len(sboms) == 1, (
+        f"{distribution} must ship exactly one SBOM for what it links to be read from; "
+        f"found {[str(entry) for entry in sboms]}"
+    )
+    document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
+    return {component["name"] for component in document["components"]}
+
+
+@pytest.mark.parametrize("distribution", [ENGINE_DISTRIBUTION, UI_API_DISTRIBUTION])
+def test_no_engine_this_host_can_drive_a_dispatch_with_links_the_retired_bus_agent_crate(
+    distribution: str,
+) -> None:
+    """Re-adopting a release that still links `onemessagebus-agent` fails here.
+
+    Both wheels that can drive a dispatch — the launcher's engine, and the read API an
+    adopt from the browser retains as the driver — are read, because either one linking
+    the crate is a build resolving two owners of the agent envelope, and that is what
+    the move off the bus existed to end. The bus core it sat over must still be linked,
+    so an SBOM that simply stopped listing the bus cannot pass for one that dropped the
+    agent crate.
+    """
+    linked = _sbom_crates(distribution)
+
+    assert "onemessagebus" in linked, (
+        f"{distribution}'s SBOM declares no onemessagebus core, so it cannot say what "
+        "carries a journal envelope; re-read the adopted release"
+    )
+    assert RETIRED_BUS_AGENT_CRATE not in linked, (
+        f"{distribution}'s SBOM still links {RETIRED_BUS_AGENT_CRATE}, which onemessagebus "
+        "0.9.0 deleted; adopt a release that takes the agent vocabulary from onepipeline, "
+        "onevcs and onejudge instead"
     )
 
 

@@ -141,7 +141,7 @@ and only the real turn said so.
 
 The engine starts both sides as plain `oneharness`. `config/onejudge.base.yaml` names
 `bin: oneharness`, and a live dispatch's process tree on this host, measured against
-onepipeline 0.44.4, reads `onepipeline drive` → `oneharness run --format json --compact
+onepipeline 0.45.0, reads `onepipeline drive` → `oneharness run --format json --compact
 --events --history --config <member-scratch>/oneharness.toml` → the provider, with no
 process of this repository's between them. Which side a turn is, is which config it was
 handed: `config/onejudge.base.yaml` pins `provider.judge_config: oneharness.judge.toml`,
@@ -184,11 +184,11 @@ members:
 **This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
 `oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
 side, and every dispatch keeps its single simulated user; stacking one is a change to a
-graph and a manager's decision. The shape is stated in [onejudge v0.13.5's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.13.5/docs/judges.md)
+graph and a manager's decision. The shape is stated in [onejudge v0.14.0's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.14.0/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
-graph member, in [oneagentgraph v0.4.10's
-`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.4.10/docs/contract.md).
+graph member, in [oneagentgraph v0.5.2's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.2/docs/contract.md).
 `tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
@@ -1320,7 +1320,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.13.5 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.13.5/docs/protocol.md)),
+([onejudge v0.14.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.14.0/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
