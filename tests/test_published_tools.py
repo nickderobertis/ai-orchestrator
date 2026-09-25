@@ -96,7 +96,7 @@ def test_session_setup_declares_every_published_tool(tool: PublishedTool) -> Non
     and the post-install verification alike, so an entry missing there would silently
     leave that tool unprovisioned on every session. That the declared tools are then
     really installed and verified is proven by
-    `tests/e2e/test_session_setup_e2e.py::test_session_setup_syncs_every_published_tool_from_pypi`.
+    `tests/session_setup_pypi/test_session_setup_e2e.py::test_session_setup_syncs_every_published_tool_from_pypi`.
     """
     script = (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8")
 

@@ -48,7 +48,7 @@ items were replaced by three recipe-coverage items.
 | `tests/e2e/test_orchestrate_launch_e2e.py` | Convert; details below | Retains configuration/adoption proof and removes three `onepipeline` semantic re-proofs. |
 | `tests/e2e/test_quota_fallthrough_e2e.py` | Keep all | Required real oneharness fallback-chain journey. |
 | `tests/e2e/test_repo_registry_apply_e2e.py` | Keep all | Drives this checkout's tracked checkout/rules installer; it does not re-prove onevcs lifecycle behavior. |
-| `tests/e2e/test_session_setup_e2e.py` | Keep all | Required real PyPI installation journey for adopted releases. |
+| `tests/session_setup_pypi/test_session_setup_e2e.py` | Keep all | Required real PyPI installation journey for adopted releases. |
 | `tests/e2e/test_workspace_contract_e2e.py` | Convert | Keeps every existing test and adds the missing non-recursive proof of the `test-e2e` entry point; all other cases still drive this checkout's quality, bootstrap, log, and workspace wrappers. |
 
 Helper modules (`conftest.py`, `published_tools.py`, `nx_inputs.py`, and the e2e

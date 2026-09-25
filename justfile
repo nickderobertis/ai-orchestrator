@@ -57,14 +57,18 @@ bootstrap:
 # process, so a failure is still readable afterwards and a *running* recipe can be
 # followed with `tail -f .logs/check.log` instead of through /proc.
 #
-# Two Nx invocations because two questions: what the diff reaches, and what no diff
-# can speak for. `test-checkouts` reads other repositories and `coverage` reads what
-# the tier beside it just measured, so both stay out of the selection — as
-# `workspace:check-nx-cache` always has. AGENTS.md carries why skipping the rest
-# checks nothing less, and `tests/nx_inputs.py` declares which tier is in which half.
+# Three phases because two questions and a third check: what the diff reaches, what
+# no diff can speak for, and the cross-worktree cache contract. `test-checkouts` reads
+# other repositories and `coverage` reads what the tier beside it just measured, so
+# both stay out of the selection — as `workspace:check-nx-cache` always has. Nx takes
+# one selection per invocation, so these are three invocations, and every one of them
+# runs whatever an earlier one returned: one run reports every failing target, and
+# the recipe fails if any phase did, naming each that failed. AGENTS.md carries why
+# skipping the rest checks nothing less, and `tests/nx_inputs.py` declares which tier
+# is in which half.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; { ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes && ./scripts/nx.sh run-many -t test-checkouts,coverage && ./scripts/nx.sh run workspace:check-nx-cache; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage"); ./scripts/nx.sh run workspace:check-nx-cache 2>&1 | redact_secrets >>"$log" || failed+=("workspace:check-nx-cache"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 3 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
@@ -96,8 +100,11 @@ gate remote="" base="":
 #
 # A green run says one line, like `check`: the suite's own output is the failure
 # report, and it is streamed in full when there is one.
+#
+# It runs one tier `check` never does: `session-setup-pypi:test-pypi`, the journeys that
+# install the adopted published tools from PyPI, which no diff selection may reach.
 test *nx_args:
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs,test-recipes,test-checkouts,coverage {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs,test-recipes,test-checkouts,test-pypi,coverage {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
 # The e2e suite alone (the real recipes, wrappers, and harness CLI) — quick inner loop.
 #
@@ -132,7 +139,7 @@ format-check:
 # file an EXIT trap removes takes that account with it.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx playwright typescript@6 && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx playwright typescript@6 && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-docs,test-recipes,test-checkouts,test-pypi,coverage; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
 # --- delegated verbs ------------------------------------------------------
 #

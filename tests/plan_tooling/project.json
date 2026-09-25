@@ -7,6 +7,51 @@
     "scope:plan-tooling",
     "type:tests"
   ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-criteria-examples",
+    "support-delegation-checkout",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-fake-codex-untrusted-directory",
+    "support-follow-up-variables",
+    "support-no-paid-provider",
+    "support-nx-workspace",
+    "support-older-plan-store",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-run-task-store-instruction",
+    "support-scratch-identity",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planToolingWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/oneharness.plan-review.toml",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/oneharness.design-doc.toml",
+      "{workspaceRoot}/oneharness.design-doc-judge.toml",
+      "{workspaceRoot}/oneharness.follow-up.toml",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/graphs/**/*",
+      "{workspaceRoot}/personas/**/*",
+      "{workspaceRoot}/scratch/personas/**/*",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/plan_tooling/**/*",
+      "{workspaceRoot}/tests/fixtures/timeline-runs/dag-ui-truth-monitor-slice/**/*"
+    ]
+  },
   "targets": {
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_tooling -m 'not reads_docs' --no-cov -n 4 --dist loadgroup",
@@ -14,7 +59,11 @@
         "cwd": "."
       },
       "inputs": [
-        "planToolingWorkspace"
+        "planToolingWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
       ]
     },
     "test-docs": {

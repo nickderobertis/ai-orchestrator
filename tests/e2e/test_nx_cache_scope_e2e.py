@@ -93,6 +93,8 @@ from nx_inputs import (
     RUN_END_HOOKS_SCOPED,
     SELECTED_TARGETS,
     SESSION_SETUP_PROJECT,
+    SESSION_SETUP_PYPI_PROJECT,
+    SESSION_SETUP_PYPI_SCOPED,
     SESSION_SETUP_SCOPED,
     UNPUBLISHED_VIEW_PROJECT,
     UNPUBLISHED_VIEW_SCOPED,
@@ -102,8 +104,9 @@ from nx_inputs import (
     WRITEBACK_BUDGET_SCOPED,
     covers,
     matches,
+    project_root,
     repository_relative_globs,
-    resolve_input_globs,
+    target_input_globs,
 )
 from nx_workspace import WORKSPACE_INSTALL_MARKS, copy_checkout
 
@@ -212,6 +215,24 @@ class Checkout:
         assert result.returncode == 0, result.stdout + result.stderr
         rendered = next(line for line in result.stdout.splitlines() if line.startswith("{"))
         return json.loads(rendered)
+
+    def graph(self) -> dict:
+        """The project graph Nx builds here: every project's resolved configuration, and
+        every edge between them, from one read of Nx itself."""
+        written = self.root / ".nx-graph.json"
+        result = subprocess.run(
+            ["./scripts/nx.sh", "graph", f"--file={written}"],
+            cwd=self.root,
+            env={**os.environ, "XDG_CACHE_HOME": str(self.cache)},
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        try:
+            return json.loads(written.read_text(encoding="utf-8"))["graph"]
+        finally:
+            written.unlink()
 
     def resolved_target(self, target: str) -> dict:
         """Ask Nx itself how one target resolves, defaults and all.
@@ -621,7 +642,7 @@ PROBE = f"{PROBE_STEM}.txt"
 #: everything under them, and a change git does not report is one `nx affected` never
 #: sees. Named rather than skipped in silence, so a key that starts covering an ignored
 #: directory arrives as a failure here instead of as a hole in the measurement below.
-UNDIFFABLE_GLOBS = frozenset({"{workspaceRoot}/scratch/**/*"})
+UNDIFFABLE_GLOBS = frozenset({"{workspaceRoot}/scratch/personas/**/*"})
 
 
 def _comparison_overrides() -> frozenset[str]:
@@ -697,10 +718,11 @@ class Selector(Checkout):
 
     def deterministic_tiers(self, projects: set[str]) -> set[tuple[str, str]]:
         """Which of the deterministic tier's diff-selected targets ``projects`` declare."""
+        nodes = self.graph()["nodes"]
         return {
             (project, target)
             for project in projects
-            for target in self.resolved_project(project)["targets"]
+            for target in nodes[project]["data"]["targets"]
             if target in SELECTED_TARGETS
         }
 
@@ -729,24 +751,55 @@ class Selector(Checkout):
     def keyed_filesets(self) -> dict[str, set[tuple[str, str]]]:
         """Every fileset the diff-selected tiers are keyed on, and which tiers declare it.
 
-        The inputs are Nx's own resolution of each project, so a fileset a
-        `targetDefaults` entry supplies is read exactly as one a `project.json` states.
-        Only the named-input expansion happens here, and that is a lookup in the same
-        `nx.json` Nx just read.
+        The inputs and the edges are Nx's own graph, so a fileset a `targetDefaults` entry
+        supplies is read exactly as one a `project.json` states, and a unit's files reach
+        the tiers that take them through the edges Nx built. Only the named-input
+        expansion happens here: a project's own `namedInputs` over the `nx.json` Nx just
+        read, a `dependencies` input over every transitive dependency, and a `projects`
+        input over each project it names.
         """
-        named = json.loads((self.root / "nx.json").read_text(encoding="utf-8"))["namedInputs"]
+        graph = self.graph()
+        shared = json.loads((self.root / "nx.json").read_text(encoding="utf-8"))["namedInputs"]
+        nodes = {name: node["data"] for name, node in graph["nodes"].items()}
+
+        def dependencies(project: str) -> set[str]:
+            reached: set[str] = set()
+            pending = [edge["target"] for edge in graph["dependencies"].get(project, [])]
+            while pending:
+                name = pending.pop()
+                if name not in reached:
+                    reached.add(name)
+                    pending.extend(edge["target"] for edge in graph["dependencies"].get(name, []))
+            return reached
+
+        def expand(entries: list, project: str) -> list[str]:
+            data = nodes[project]
+            owned = "" if data["root"] in ("", ".") else f"{data['root']}/"
+            named = {**shared, **data.get("namedInputs", {})}
+            globs: list[str] = []
+            for entry in entries:
+                match entry:
+                    case {"input": str() as name, "dependencies": True}:
+                        for dependency in sorted(dependencies(project)):
+                            globs.extend(expand([name], dependency))
+                    case {"input": str() as name, "projects": str() | list() as listed}:
+                        for named_project in [listed] if isinstance(listed, str) else listed:
+                            globs.extend(expand([name], named_project))
+                    case dict():
+                        pass  # an env or runtime input contributes no file coverage
+                    case str() if entry in named:
+                        globs.extend(expand(named[entry], project))
+                    case str():
+                        globs.append(entry.replace("{projectRoot}/", owned))
+            return globs
+
         keyed: dict[str, set[tuple[str, str]]] = {}
-        for project in sorted(self.projects()):
-            resolved = self.resolved_project(project)
-            root = resolved["root"]
-            owned = "" if root in ("", ".") else f"{root}/"
-            for target, declared in resolved["targets"].items():
+        for project, data in sorted(nodes.items()):
+            for target, declared in data["targets"].items():
                 if target not in SELECTED_TARGETS:
                     continue
-                for glob in resolve_input_globs(declared.get("inputs") or ["default"], named):
-                    keyed.setdefault(glob.replace("{projectRoot}/", owned), set()).add(
-                        (project, target)
-                    )
+                for glob in expand(declared.get("inputs") or ["default"], project):
+                    keyed.setdefault(glob, set()).add((project, target))
         return keyed
 
     def project_roots(self) -> set[str]:
@@ -1130,3 +1183,131 @@ def test_a_diff_of_the_workspace_configuration_selects_every_project(
         "a diff of nx.json must leave the deterministic tier nothing to skip: it is "
         "where every other tier's key is declared"
     )
+
+
+#: A test-support module several graph-keyed tiers reach — through `dependencies` edges
+#: and through `orchestrator:test-recipes`' `projects` list alike — and one only a single
+#: tier reaches: the pair the project graph has to tell apart, where a hand-kept list
+#: per tier could only be right by being kept right.
+SHARED_HELPER = "tests/e2e/probe_run_root.py"
+SINGLE_TIER_HELPER = "tests/llmlint_install.py"
+#: The ask-seam journey among them, by the row `tests/nx_inputs.py` keeps for it.
+BUS_RESOLUTION = next(
+    journey for journey in ASK_SEAM_JOURNEYS if journey.project == "ask-seam-bus-resolution"
+)
+#: The graph-keyed tiers whose modules reach `SHARED_HELPER`, and the one whose modules
+#: reach `SINGLE_TIER_HELPER`.
+REACHES_SHARED = frozenset(
+    {
+        f"{PROJECT}:{RECIPE_SCOPED}",
+        f"{BUS_RESOLUTION.project}:{ASK_SEAM_SCOPED}",
+        f"{HOST_VIEWS_PROJECT}:{HOST_VIEWS_SCOPED}",
+        f"{UNWATCHED_PROJECT}:{UNWATCHED_SCOPED}",
+    }
+)
+REACHES_SINGLE = frozenset({f"{PROJECT}:{RECIPE_SCOPED}"})
+#: Graph-keyed tiers that reach neither helper: the controls, without which a tier that
+#: re-ran for everything would pass the half above.
+REACHES_NEITHER = frozenset(
+    {
+        f"{DAG_UI_PROJECT}:{DAG_UI_SCOPED}",
+        f"{SESSION_SETUP_PROJECT}:{SESSION_SETUP_SCOPED}",
+        f"{PROJECT_STORE_RACE_PROJECT}:{PROJECT_STORE_RACE_SCOPED}",
+    }
+)
+
+
+def test_a_test_support_edit_selects_and_re_runs_exactly_the_tiers_whose_modules_reach_it(
+    selector: Selector,
+) -> None:
+    """A shared helper's edit selects and invalidates every tier that imports it and no
+    tier that does not, through the edges the project graph declares.
+
+    Both halves are asked of real Nx for each helper: the selection `just check` narrows
+    to, which reaches a tier through the reverse edge from the helper's unit, and the
+    cache, which re-runs a tier only when its key moved. Every tier here is keyed through
+    the graph rather than on a whole tree — the orchestrator project's `test` and
+    `test-docs` read every tracked path by design, so the orchestrator project is selected
+    and those tiers re-run for any edit and are not what this is about. The expected sets
+    are reconciled against the declared keys first, so what real Nx is asked is the claim
+    `tests/test_nx_cache_scope.py` holds statically.
+    """
+    tiers = REACHES_SHARED | REACHES_NEITHER
+    for tier in sorted(tiers):
+        project, target = tier.split(":")
+        root = project_root(project)
+        assert covers(target_input_globs(root, target), SHARED_HELPER) == (
+            tier in REACHES_SHARED
+        ), tier
+        assert covers(target_input_globs(root, target), SINGLE_TIER_HELPER) == (
+            tier in REACHES_SINGLE
+        ), tier
+        assert selector.ran_the_command(tier)
+
+    for helper, reaches in ((SHARED_HELPER, REACHES_SHARED), (SINGLE_TIER_HELPER, REACHES_SINGLE)):
+        with selector.planted(helper) as reported_by_git:
+            assert reported_by_git
+            selected = selector.selected()
+            chosen = {tier for tier in tiers if tier.split(":")[0] in selected}
+            assert chosen == reaches, (
+                f"a diff of {helper} alone selected the projects of {sorted(chosen)}; the "
+                f"tiers whose modules reach it are {sorted(reaches)}"
+            )
+            re_ran = {tier for tier in tiers if selector.ran_the_command(tier)}
+            assert re_ran == reaches, (
+                f"an edit to {helper} re-ran {sorted(re_ran)}; the tiers whose modules "
+                f"reach it are {sorted(reaches)}"
+            )
+
+
+#: The script both session-setup targets run, and what their keys are there to notice.
+SESSION_SETUP_WITNESS = "scripts/session-setup.sh"
+#: The one module of `orchestrator/` the session-setup journeys import.
+ROOT_WITNESS = "orchestrator/root.py"
+
+
+def test_the_session_setup_journeys_are_charged_to_session_setup_alone(
+    selector: Selector,
+) -> None:
+    """Real provisioning and PyPI installs are paid for by an edit that can move them.
+
+    An edit to `orchestrator/` code these journeys do not import selects neither
+    session-setup project and invalidates neither target; an edit to
+    `orchestrator/root.py`, which every one of their modules imports, re-runs both; and an
+    edit to the setup script selects the target `just check` runs and invalidates both —
+    the PyPI journeys' included, which `just check` never runs and `just test` then
+    re-runs rather than replays.
+    """
+    tiers = (
+        f"{SESSION_SETUP_PROJECT}:{SESSION_SETUP_SCOPED}",
+        f"{SESSION_SETUP_PYPI_PROJECT}:{SESSION_SETUP_PYPI_SCOPED}",
+    )
+    for tier in tiers:
+        assert selector.ran_the_command(tier)
+
+    with selector.planted(PYTHON_WITNESS) as reported_by_git:
+        assert reported_by_git
+        selected = selector.selected()
+        for project in (SESSION_SETUP_PROJECT, SESSION_SETUP_PYPI_PROJECT):
+            assert project not in selected, f"a diff of {PYTHON_WITNESS} alone selected {project}"
+        for tier in tiers:
+            assert not selector.ran_the_command(tier), (
+                f"{tier} re-ran for an edit to {PYTHON_WITNESS}, which it never reads"
+            )
+
+    with selector.planted(ROOT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        for tier in tiers:
+            assert selector.ran_the_command(tier), (
+                f"{tier} replayed a verdict for an edit to {ROOT_WITNESS}, which its modules import"
+            )
+
+    with selector.planted(SESSION_SETUP_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert SESSION_SETUP_PROJECT in selector.selected(SESSION_SETUP_SCOPED), (
+            f"a diff of {SESSION_SETUP_WITNESS} must select the setup journey `just check` runs"
+        )
+        for tier in tiers:
+            assert selector.ran_the_command(tier), (
+                f"{tier} replayed a verdict for an edit to {SESSION_SETUP_WITNESS}, which it runs"
+            )

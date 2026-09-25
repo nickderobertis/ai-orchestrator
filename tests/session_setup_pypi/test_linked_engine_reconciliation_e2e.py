@@ -27,12 +27,18 @@ unit gate holds the last two together on this checkout; what only a journey can 
 is that the wheel's declaration is true of the binary it shipped — which is the one
 step where a rebuild, a repair, or an install from somewhere else parts a host from
 every lockfile describing it, and the step no document can check itself.
+
+llmlint: ignore-file[tests_mirror_real_usage] The subject here is what the installed engine
+binary links, and no command it offers reports that: the executable's own bytes and the
+SBOM its wheel ships are the only interface to the answer, and AGENTS.md's "The
+installed binary decides" names that SBOM as where the answer is measured. What this
+journey drives for real is the provisioning a session runs — the real setup script and a
+real `uv sync` from PyPI.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 
@@ -40,27 +46,12 @@ from provisioning import run_setup, setup_repo
 from test_linked_libraries import (
     DECLARED_DIVERGENCES,
     LINKED_HARNESS_CORES,
+    LINKED_IN_BINARY,
     RECONCILED_PINS,
     UNRECONCILABLE_PIN,
 )
 
 from orchestrator.root import REPO_ROOT
-
-#: How a crate names itself in a compiled binary: cargo embeds the registry source
-#: path of every dependency, and `<name>-<version>` is the directory component of it.
-#: The same expression `AGENTS.md` hands an operator, applied to the bytes directly so
-#: this journey needs no binutils to answer a question about a file it already has.
-#: `oneharness-core` is in here beside the three reconciled crates and is not one of
-#: them: no `config/*.version` here names that crate — `config/oneharness.version`
-#: names the CLI, a separate artifact — so it has no pin to reconcile
-#: against and is checked binary-against-SBOM only. Sorted longest-first so
-#: `oneharness-core` is tried before any prefix of it could swallow the hyphen.
-LINKED_CRATES = (*sorted(RECONCILED_PINS), UNRECONCILABLE_PIN.crate)
-LINKED_IN_BINARY = re.compile(
-    rb"\b("
-    + b"|".join(crate.encode() for crate in sorted(LINKED_CRATES, key=len, reverse=True))
-    + rb")-([0-9]+\.[0-9]+\.[0-9]+)\b"
-)
 
 #: Where PEP 770 puts a wheel's SBOMs, and the engine distribution that ships one.
 ENGINE_DISTRIBUTION = "onepipeline_cli"

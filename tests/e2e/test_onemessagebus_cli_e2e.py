@@ -5,7 +5,7 @@ number: it says which release `uv sync` put in `.venv` and nothing about whether
 binary moves a message. The observer's judge side and the manager's recipes are pointed
 at this binary next, so this journey drives it the way they will — through its own
 queue verbs over a transport directory it owns — and holds `onemessagebus --version`
-to the pin, the way `tests/e2e/test_linked_engine_reconciliation_e2e.py` drives
+to the pin, the way `tests/session_setup_pypi/test_linked_engine_reconciliation_e2e.py` drives
 `.venv/bin/onepipeline`.
 
 Nothing is doubled: the binary is the installed release, the transport is a local

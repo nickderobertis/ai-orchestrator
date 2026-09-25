@@ -1,0 +1,26 @@
+{
+  "name": "support-persona-probe",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-harness-indirections",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/e2e/persona_probe.py"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

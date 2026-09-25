@@ -47,8 +47,8 @@ CHECK_UNCONDITIONAL = ",".join(UNCONDITIONAL_TARGETS)
 #: rather than read from the `justfile` — this suite exists to catch one of them
 #: drifting. `coverage` is last in each: it waits on the measuring tier and enforces
 #: the floor on what that tier wrote.
-TEST_TARGETS = "test,test-docs,test-recipes,test-checkouts,coverage"
-UPGRADE_TARGETS = "build,lint,typecheck,test,test-docs,test-recipes,test-checkouts,coverage"
+TEST_TARGETS = "test,test-docs,test-recipes,test-checkouts,test-pypi,coverage"
+UPGRADE_TARGETS = f"build,lint,typecheck,{TEST_TARGETS}"
 
 
 #: The status `scripts/nx-selection.sh` reads as "nothing to narrow against", taken from
@@ -180,6 +180,10 @@ fi
 invocation="$(basename "$0") $*"
 if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" || "${FAIL_INVOCATION:-}" == "$invocation" ]]; then
   echo "$(basename "$0"): captured failure detail" >&2
+  exit 9
+fi
+if [[ -n "${FAIL_INVOCATIONS:-}" ]] && grep -Fxq -- "$invocation" <<<"$FAIL_INVOCATIONS"; then
+  echo "$invocation: planted failure" >&2
   exit 9
 fi
 """
@@ -545,8 +549,63 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "nx.sh: captured failure detail" in result.stderr
-    assert "check: deterministic checks failed" in result.stderr
-    assert trace.read_text().splitlines() == [f"nx.sh run-many -t {CHECK_SELECTED}"]
+    assert "check: deterministic checks failed in 3 of 3 phases" in result.stderr
+    assert trace.read_text().splitlines() == _check_trace("run-many")
+
+
+@pytest.mark.reads_recipes
+def test_one_check_run_reports_every_phase_that_failed(tmp_path: Path) -> None:
+    """A failure in the diff selection does not hide one in a later phase.
+
+    Failures are planted in two different phases — a target of the diff selection and
+    the cross-worktree cache check — and the phase between them passes. One run of the
+    recipe has to run all three, report both failures and name both phases, and exit
+    non-zero; a recipe that stopped at the first failure would leave the second to be
+    discovered by another full gate after the first was fixed.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    selected, unconditional, cache_check = _check_trace("run-many")
+    planted = "\n".join((selected, cache_check))
+
+    result = _run(
+        "just",
+        "check",
+        cwd=checkout,
+        env=_recipe_env(checkout, trace, FAIL_INVOCATIONS=planted),
+    )
+
+    assert result.returncode != 0
+    assert trace.read_text().splitlines() == [selected, unconditional, cache_check]
+    assert f"{selected}: planted failure" in result.stderr
+    assert f"{cache_check}: planted failure" in result.stderr
+    assert f"{unconditional}: planted failure" not in result.stderr
+    assert (
+        "check: deterministic checks failed in 2 of 3 phases "
+        "(the diff selection; workspace:check-nx-cache)"
+    ) in result.stderr
+    assert "all deterministic checks passed" not in result.stdout
+    log = (checkout / ".logs/check.log").read_text()
+    assert f"{selected}: planted failure" in log and f"{cache_check}: planted failure" in log
+
+
+@pytest.mark.reads_recipes
+def test_a_check_run_failing_only_in_an_unconditional_phase_still_fails(tmp_path: Path) -> None:
+    """The phase no diff selects decides the verdict too: a green selection is not a pass."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _, unconditional, _ = _check_trace("run-many")
+
+    result = _run(
+        "just",
+        "check",
+        cwd=checkout,
+        env=_recipe_env(checkout, trace, FAIL_INVOCATIONS=unconditional),
+    )
+
+    assert result.returncode != 0
+    assert trace.read_text().splitlines() == _check_trace("run-many")
+    assert "check: deterministic checks failed in 1 of 3 phases (test-checkouts,coverage)" in (
+        result.stderr
+    )
 
 
 @pytest.mark.reads_recipes

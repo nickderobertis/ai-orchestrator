@@ -625,6 +625,22 @@ LINKED_HARNESS_CORES = (
     LinkedCore(dependent="onepipeline", dependent_version="0.44.4", core="0.18.0"),
 )
 
+#: How a crate names itself in a compiled binary: cargo embeds the registry source
+#: path of every dependency, and `<name>-<version>` is the directory component of it.
+#: The same expression `AGENTS.md` hands an operator, applied to the bytes directly so
+#: a journey needs no binutils to answer a question about a file it already has.
+#: `oneharness-core` is in here beside the three reconciled crates and is not one of
+#: them: no `config/*.version` here names that crate — `config/oneharness.version`
+#: names the CLI, a separate artifact — so it has no pin to reconcile
+#: against and is checked binary-against-SBOM only. Sorted longest-first so
+#: `oneharness-core` is tried before any prefix of it could swallow the hyphen.
+LINKED_CRATES = (*sorted(RECONCILED_PINS), UNRECONCILABLE_PIN.crate)
+LINKED_IN_BINARY = re.compile(
+    rb"\b("
+    + b"|".join(crate.encode() for crate in sorted(LINKED_CRATES, key=len, reverse=True))
+    + rb")-([0-9]+\.[0-9]+\.[0-9]+)\b"
+)
+
 #: The pins that may not be reconciled today, each with the measured pair it was
 #: declared against. A divergence is permitted only where the linked release is not
 #: installable from PyPI at all — never as a convenience, and never as "not yet

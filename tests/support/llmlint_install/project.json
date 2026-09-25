@@ -1,0 +1,24 @@
+{
+  "name": "support-llmlint-install",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/llmlint_install.py",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/scripts/setup-llmlint.sh"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

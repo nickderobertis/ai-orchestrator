@@ -26,8 +26,9 @@ half is split out into `tests/e2e/unpublished_view/test_unpublished_e2e.py`, the
 `orchestrator/project.json` runs `test-recipes` with `--no-cov` and gives `coverage` a
 `dependsOn` of `test` alone — so that is the one tier whose measurement the 100% floor over
 `orchestrator/` is read from. Moving this helper into that project's directory would not
-change what either reads: both import it, so it sits beside the suite modules and each key
-names it as a file.
+change what either reads: both import it, so it sits beside the suite modules as the
+`support-unpublished-registry` unit, and each project reaches it through its dependency on
+that unit.
 """
 
 from __future__ import annotations

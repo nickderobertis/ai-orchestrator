@@ -1,18 +1,11 @@
 """E2E coverage for the worktree-local session toolchain bootstrap.
 
-llmlint: ignore-file[shell_test_tiers_stay_split] Which Nx project owns this module is a
-property of the module, not of the one assertion this change adds to it: it has driven
-the real `scripts/session-setup.sh`, a real `uv sync` from PyPI and the real published
-tools from the orchestrator project since it was written, while the tier that owns a
-real session-setup run of *this* checkout is `tests/session_setup`. Moving it beside
-that project is a change to `nx.json`, `orchestrator/project.json` and
-`tests/nx_inputs.py` together, and is a follow-up rather than one assertion's to make.
-llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] Same site, same
-follow-up: this module declares no marker-based tier and the project it sits in is
-pre-existing.
-llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Same site, same
-follow-up: the cost of these journeys predates this change and moving them behind a
-narrower edge is the project split above.
+Every journey here runs the real `scripts/session-setup.sh` in a fixture repository
+`tests/e2e/provisioning.py` builds, and that script's real `uv sync` installs the
+adopted published tools from PyPI. That is a cost and an outside service no ordinary
+edit should pay for, so this module belongs to the `session-setup-pypi` project, whose
+one target no selection `just check` makes can reach: keyed on what the journeys copy
+and run, and run by `just test` and `just upgrade`.
 """
 
 from __future__ import annotations
@@ -133,6 +126,11 @@ def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Pa
     )
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] Each journey here still drives the real
+# `scripts/session-setup.sh` entry point end to end; what it plants is the state that
+# script finds on disk — a workspace root it cannot sweep, installed metadata that is
+# wrong or gone — because no command reaches those failure paths except a host in that
+# state, and the assertions read only what the script itself reports and exits with.
 def test_session_setup_continues_when_the_workspace_sweep_fails(tmp_path: Path) -> None:
     """A real failing sweep, produced by real state rather than by replacing the recipe.
 
@@ -156,6 +154,9 @@ def test_session_setup_continues_when_the_workspace_sweep_fails(tmp_path: Path) 
     # setup's sweep is worth running for at all.
     assert "sweep: examined family" in result.stderr
     assert "workspace sweep failed; continuing session setup" in result.stderr
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
 
 
 def test_session_setup_continues_when_the_workspace_sweep_is_unavailable(tmp_path: Path) -> None:
@@ -208,6 +209,11 @@ def test_sessionsetup_reports_missing_uv_at_full_entry_point(tmp_path: Path) -> 
     assert "cannot install required project dependencies: uv is not installed" in result.stderr
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] Each journey here still drives the real
+# `scripts/session-setup.sh` entry point end to end; what it plants is the state that
+# script finds on disk — a workspace root it cannot sweep, installed metadata that is
+# wrong or gone — because no command reaches those failure paths except a host in that
+# state, and the assertions read only what the script itself reports and exits with.
 def test_session_setup_rejects_corrupt_distribution_metadata(tmp_path: Path) -> None:
     repo = setup_repo(tmp_path)
     installed = run_setup(repo, tmp_path)
@@ -245,14 +251,9 @@ def test_session_setup_rejects_missing_distribution_metadata(tmp_path: Path) -> 
     assert "oneharness-cli metadata is unavailable" in result.stderr
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey sits beside
-# the other session-setup journeys of this module, which share its `setup_repo` and
-# `run_setup` fixture family in the `tests/e2e` tree; moving one of them alone would split a
-# single family across two Nx projects, and which project owns this module is not this
-# change's to move.
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same site, same reason.
-# llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is a
-# pytest journey over the real setup script, not a shell test suite.
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
 def test_session_setup_warms_every_schema_link_and_reports_each_by_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -308,8 +309,3 @@ def test_session_setup_warms_every_schema_link_and_reports_each_by_name(
     assert [(one["url"], one["version"]) for one in json.loads(listed.stdout)["entries"]] == [
         (origin.url, pin)
     ]
-
-
-# llmlint: ignore-end[shell_test_tiers_stay_split]
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

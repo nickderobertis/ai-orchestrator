@@ -118,6 +118,19 @@ rules:
         - "scripts/check-dag-state-contract.py"
         - "scripts/check-nx-cache.sh"
         - "scripts/check-oneharness-ui-contract.sh"
+  # `session-setup-pypi`'s one target is deliberately not named `test`: `just check`
+  # fans out over `nx affected -t ...,test,...`, and a target of that name would put
+  # a suite that syncs from PyPI back into the affected tier, which
+  # `external_service_suite_stays_out_of_the_affected_tier` forbids. The two upstream
+  # rules conflict at this one file and JSON carries no site-scoped directive, so this
+  # per-rule exclusion is that site's; every other project is still judged, and
+  # `tests/test_nx_cache_scope.py` holds `just test` and `just upgrade` to naming
+  # `test-pypi` so the target the fanout misses is still run.
+  - name: new_projects_keep_the_graph_uniform
+    override: true
+    files:
+      exclude:
+        - "tests/session_setup_pypi/project.json"
   # Tests read suite-controlled environment variables set by the suite itself,
   # not inputs crossing an external trust boundary.
   - name: boundary_inputs_validated

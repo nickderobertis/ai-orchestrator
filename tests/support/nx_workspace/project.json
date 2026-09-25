@@ -1,0 +1,22 @@
+{
+  "name": "support-nx-workspace",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/e2e/nx_workspace.py"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

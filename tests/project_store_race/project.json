@@ -7,6 +7,23 @@
     "scope:project-store-race",
     "type:tests"
   ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-plan-fixture-source",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "projectStoreRaceWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/project_store_race/**/*",
+      "{workspaceRoot}/tests/fixtures/planner-channel.json"
+    ]
+  },
   "targets": {
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/project_store_race --no-cov",
@@ -14,7 +31,11 @@
         "cwd": "."
       },
       "inputs": [
-        "projectStoreRaceWorkspace"
+        "projectStoreRaceWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
       ]
     }
   }

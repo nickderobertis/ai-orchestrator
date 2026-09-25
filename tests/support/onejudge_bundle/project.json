@@ -1,0 +1,25 @@
+{
+  "name": "support-onejudge-bundle",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/onejudge_bundle.py",
+      "{workspaceRoot}/config/onejudge.version",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/tests/fixtures/planner-channel.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

@@ -7,6 +7,77 @@
     "scope:orchestrator",
     "lang:python"
   ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-credential-dialect",
+    "support-criteria-examples",
+    "support-delegation-checkout",
+    "support-example-records",
+    "support-fake-backend",
+    "support-fake-codex-untrusted-directory",
+    "support-follow-up-variables",
+    "support-harness-configs",
+    "support-harness-indirections",
+    "support-judge-protocol-double",
+    "support-llmlint-install",
+    "support-lost-turn-producer",
+    "support-mock-oneharness",
+    "support-monitor-conversation",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-nx-workspace",
+    "support-observer-environment",
+    "support-older-plan-store",
+    "support-onejudge-bundle",
+    "support-onevcs-stand-in",
+    "support-onevcs-state-snapshot",
+    "support-persona-identifiers",
+    "support-persona-probe",
+    "support-persona-recipes",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-plan-store-pin",
+    "support-planner-channel",
+    "support-planner-fallback",
+    "support-probe-run-root",
+    "support-project-fixtures",
+    "support-published-surface",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-run-snapshot",
+    "support-scratch-identity",
+    "support-shared-dispatch-bar",
+    "support-short-state",
+    "support-stub-onetaskgraph",
+    "support-unpublished-registry",
+    "support-waits",
+    "support-watch-rule"
+  ],
+  "namedInputs": {
+    "recipeWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/tests/fixtures/**/*",
+      "{workspaceRoot}/tests/test_launcher_session.py",
+      "{workspaceRoot}/tests/fixtures/planner-channel.json",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/tests/e2e/test_ask_manager_shim_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_base_freshness_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_delegated_recipes_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_just_tempdir_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_repos_bootstrap_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_setup_llmlint_e2e.py",
+      "{workspaceRoot}/config/oneharness.version"
+    ]
+  },
   "targets": {
     "build": {
       "command": "uv build",
@@ -27,7 +98,7 @@
       ]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
       "options": {
         "cwd": "."
       },
@@ -48,7 +119,7 @@
       ]
     },
     "test-docs": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m reads_docs --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -57,16 +128,36 @@
       ]
     },
     "test-recipes": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m reads_recipes --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m reads_recipes --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
       "inputs": [
-        "recipeWorkspace"
+        "recipeWorkspace",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-conftest",
+            "support-delegation-checkout",
+            "support-follow-up-variables",
+            "support-llmlint-install",
+            "support-nx-inputs",
+            "support-nx-workspace",
+            "support-onejudge-bundle",
+            "support-onevcs-state-snapshot",
+            "support-plan-fixture-source",
+            "support-plan-root-variable",
+            "support-plan-sources",
+            "support-probe-run-root",
+            "support-registered-checkouts",
+            "support-short-state",
+            "support-waits"
+          ]
+        }
       ]
     },
     "test-checkouts": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m reads_checkouts --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view -m reads_checkouts --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       }

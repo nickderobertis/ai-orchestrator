@@ -1,0 +1,27 @@
+{
+  "name": "support-harness-indirections",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-harness-configs",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/e2e/harness_indirections.py",
+      "{workspaceRoot}/oneharness.check-in.toml",
+      "{workspaceRoot}/oneharness.pr-author.toml"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

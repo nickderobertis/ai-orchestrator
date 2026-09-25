@@ -1,10 +1,21 @@
 """The tiers Nx memoizes and the file sets it hashes, from one declaration each.
 
-A cache key is a claim, and two places state it: `nx.json` declares the globs Nx
-hashes, and this suite enforces that the tests keyed on them read nothing else.
-Restating the globs on the enforcing side would let the claim and the key drift
+A cache key is a claim, and two places state it: the Nx configuration declares the
+globs Nx hashes, and this suite enforces that the tests keyed on them read nothing
+else. Restating the globs on the enforcing side would let the claim and the key drift
 apart silently — a guard permitting a read the key does not cover is exactly the
 false green the keys exist to prevent — so both sides resolve them from here.
+
+A tier's key is resolved through the project graph, as Nx resolves it. Each test
+project declares what it reads itself under its own named input in its `project.json`,
+and every shared test-support module under `tests/` is a project of its own under
+`tests/support/` whose `testSupport` input names that module and the data files it
+opens. A tier takes those through its `implicitDependencies` — Nx hashes a
+`{"input": "testSupport", "dependencies": true}` input across every transitive
+dependency — so a helper enters a key by an edge rather than by a path copied into
+each tier's list, and an edit to it invalidates exactly the tiers whose modules reach
+it. `nx.json` keeps only what is shared: the whole-workspace keys and the empty
+`testSupport` a project that is not a unit contributes.
 
 The tier names live here for the same reason. A tier is named by
 `orchestrator/project.json`, by the recipes that run it, by the guards that hold
@@ -14,8 +25,10 @@ that missed one of those would leave a guard checking a target nobody runs.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
@@ -23,12 +36,23 @@ from orchestrator.root import REPO_ROOT
 
 #: The key `orchestrator:test` is memoized on: the workspace minus its prose.
 CODE_WORKSPACE = "codeWorkspace"
-#: The key `orchestrator:test-recipes` is memoized on: what the recipe journeys
-#: drive, plus the modules that define and collect them.
+#: The orchestrator project's own named input `orchestrator:test-recipes` is keyed on:
+#: what the recipe journeys drive, plus the modules that define them. The helpers those
+#: modules import reach the key as the project's test-support dependencies.
 RECIPE_WORKSPACE = "recipeWorkspace"
 #: The key `plan-tooling:test` is memoized on: what the host-tool journeys over this
 #: repository's plan surface drive and read. Narrower than the whole workspace by the
 #: prose those journeys never open, which is what makes editing `docs/` free of them.
+#: Its trees were measured rather than kept by habit — the tier's own command traced under
+#: `strace -f -y -e trace=openat,execve`, so every child a launch spawns counts, each
+#: opened path intersected with what git tracks. `config/`, `scripts/` and `orchestrator/`
+#: were read in full, every tracked file of each, so each stays a tree. `graphs/` and
+#: `personas/` stay trees though one run read only some of each, because a plan names
+#: its graph and its personas by path and the family is what the tier can read. The
+#: rest of tracked `scratch/` was read not at all and is not in the key; what stays is
+#: `scratch/personas/`, the draft-persona family `personas/README.md` names, which the
+#: `check-plan` journeys write and read back. Git ignores it, so Nx hashes nothing there:
+#: the glob declares the family so the read guard admits it, rather than keying anything.
 PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: The key `session-setup:test` is memoized on: what the journey over this checkout's
 #: own provisioning drives and reads. Named file by file rather than as `scripts/**/*`
@@ -37,7 +61,10 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: script, the lock and the one pin it reads makes an unrelated edit pay for that. The
 #: last step that script runs — `just repos-bootstrap`, over the tracked checkout list —
 #: is in the key as its script, the list reader it sources and the list itself, because
-#: what the journey asserts about the siblings is decided by those three files.
+#: what the journey asserts about the siblings is decided by those three files. The one
+#: module of `orchestrator/` in it is `orchestrator/root.py`, which the journey imports
+#: `REPO_ROOT` from, directly and through `tests/conftest.py`: session setup runs no
+#: other orchestrator code, so no other edit there starts a real provisioning.
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 #: The key `project-store-race:test` is memoized on: the module under race, the
 #: project's own files, and the suite modules `tests/conftest.py` imports — nothing
@@ -47,10 +74,11 @@ PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
 #: `unwatchedWorkspace` names, and measured the same way: the tier traced under `strace -f
 #: -e trace=openat,execve`, each opened path normalized and intersected with what git
 #: tracks. So the key is the justfile, the two scripts the recipe reaches and the module
-#: they run, the lock that decides which `onevcs` answers, the registry helper the seeding
-#: runs, and the suite modules `tests/conftest.py` imports with the two `config/` files and
-#: two scripts they read — never `scripts/**`, because an edit to a script this view never
-#: reaches must not pay for its real sessions.
+#: they run, the lock that decides which `onevcs` answers, and the two `config/` files and
+#: two scripts the suite's shared modules read — never `scripts/**`, because an edit to a
+#: script this view never reaches must not pay for its real sessions. The registry helper
+#: the seeding runs, and every other shared module the journeys import, reach the key as
+#: the project's test-support dependencies.
 UNPUBLISHED_VIEW_WORKSPACE = "unpublishedViewWorkspace"
 
 #: The key the `unwatched` project's one tier is memoized on, and it names files rather
@@ -187,7 +215,8 @@ class AskSeamJourney(NamedTuple):
     project: str
     #: The directory it owns: its module and its `project.json`, and nothing else.
     root: str
-    #: The `nx.json` named input its one target is memoized on.
+    #: The named input its `project.json` declares, which its one target is memoized on
+    #: with the `testSupport` of every unit it depends on.
     key: str
 
 
@@ -313,6 +342,24 @@ SESSION_SETUP_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 SESSION_SETUP_ROOT = "tests/session_setup"
 
+#: The project whose one target owns the journeys that run the real
+#: `scripts/session-setup.sh` in a fixture repository `tests/e2e/provisioning.py` builds,
+#: where its real `uv sync` installs the adopted published tools from PyPI: the setup
+#: journeys themselves, and the one that reads what the installed engine binary links. A
+#: project of its own, not a second target of `session-setup`, because Nx's edges and
+#: `nx affected` both work per project: an edit only these journeys reach would otherwise
+#: select the project the deterministic tier runs.
+SESSION_SETUP_PYPI_PROJECT = "session-setup-pypi"
+#: That project's one target. Memoized on the pins and the files its journeys copy and
+#: run, which decide what they install, and deliberately outside `SELECTED_TARGETS` and
+#: `UNCONDITIONAL_TARGETS`: `just check` never reaches an outside service, and `just test`
+#: and `just upgrade` run it.
+SESSION_SETUP_PYPI_SCOPED = "test-pypi"
+#: The named input its own files are declared under in its `project.json`.
+SESSION_SETUP_PYPI_WORKSPACE = "sessionSetupPypiWorkspace"
+#: The directory it owns, which every other project's tiers ignore.
+SESSION_SETUP_PYPI_ROOT = "tests/session_setup_pypi"
+
 #: The project whose test target owns the journeys over `just status` and `just host` —
 #: the two views a supervisor reads a run and this host through, driven as real recipes
 #: over the installed engine, one of them over a run root a real launch wrote. A project
@@ -382,6 +429,127 @@ def nx_config() -> dict:
     return json.loads((REPO_ROOT / "nx.json").read_text(encoding="utf-8"))
 
 
+#: The named input a test-support unit declares its own files under: the module, and
+#: every data file it opens. `nx.json` declares it empty, so a project that is not a unit
+#: contributes nothing when a dependent takes it from the graph.
+TEST_SUPPORT = "testSupport"
+#: How a tier's cached target takes every unit it depends on, transitively, into its key.
+FROM_DEPENDENCIES = {"input": TEST_SUPPORT, "dependencies": True}
+#: The directory each test-support unit is declared in, one directory per unit. The
+#: modules themselves stay where pytest's `pythonpath` imports them from — `tests/` and
+#: `tests/e2e/` — and each unit names its module by path: an Nx project owns a directory,
+#: and one directory per helper module under the import path would be forty entries of
+#: `pythonpath` and a rewrite of every stand-in path the journeys execute.
+SUPPORT_ROOT = "tests/support"
+
+
+@functools.cache
+def project_declarations() -> dict[str, dict]:
+    """Every project Nx reads here, keyed by the root its `project.json` sits at.
+
+    Derived from what git would commit — tracked or not yet added — rather than listed,
+    so a project added, moved, or dropped reaches every reader of the graph by existing.
+    The workspace root's own project is keyed by the empty string.
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"]
+        + [":(glob)**/project.json"],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    declarations: dict[str, dict] = {}
+    for relative in sorted(filter(None, listing.split("\0"))):
+        declared = REPO_ROOT / relative
+        if declared.is_file():
+            parent = str(Path(relative).parent)
+            declarations["" if parent == "." else parent] = json.loads(
+                declared.read_text(encoding="utf-8")
+            )
+    return declarations
+
+
+def project_root(name: str) -> str:
+    """The root of the project Nx knows as ``name``."""
+    roots = [root for root, declared in project_declarations().items() if declared["name"] == name]
+    assert len(roots) == 1, f"{len(roots)} projects are named {name!r}: {roots}"
+    return roots[0]
+
+
+def dependency_roots(root: str) -> list[str]:
+    """The roots of every project ``root`` depends on, transitively, in a stable order.
+
+    Only declared edges: nothing in this workspace infers one, so `implicitDependencies`
+    is the whole of the graph a `dependencies` input walks.
+    """
+    reached: set[str] = set()
+    pending = list(project_declarations()[root].get("implicitDependencies", []))
+    while pending:
+        name = pending.pop()
+        dependency = project_root(name)
+        if dependency in reached:
+            continue
+        reached.add(dependency)
+        pending.extend(project_declarations()[dependency].get("implicitDependencies", []))
+    return sorted(reached)
+
+
+def named_inputs(root: str = "") -> dict[str, list]:
+    """The named inputs a target of the project at ``root`` resolves against.
+
+    A project's own `namedInputs` override `nx.json`'s of the same name, which is how a
+    unit's `testSupport` replaces the empty one and how a tier's key is its own.
+    """
+    declared = project_declarations().get(root, {}).get("namedInputs", {})
+    return {**nx_config()["namedInputs"], **declared}
+
+
+def project_input_globs(entries: list, root: str = "") -> list[str]:
+    """Expand one project's declared inputs into the repository-relative globs Nx hashes.
+
+    A `dependencies` input is expanded in each transitive dependency's own context — its
+    own named inputs, its own root — and a `projects` input in each project it names and
+    no further, which is what Nx does with each; every other non-file entry contributes no
+    file coverage, as in :func:`resolve_input_globs`.
+    """
+    named = named_inputs(root)
+    globs: list[str] = []
+    for entry in entries:
+        match entry:
+            case {"input": str() as name, "dependencies": True}:
+                for dependency in dependency_roots(root):
+                    globs.extend(project_input_globs([name], dependency))
+            case {"input": str() as name, "projects": str() | list() as named_projects}:
+                # Each project named, and only those: Nx does not walk their edges.
+                listed = [named_projects] if isinstance(named_projects, str) else named_projects
+                for project in listed:
+                    globs.extend(project_input_globs([name], project_root(project)))
+            case dict():
+                pass  # an env or runtime input contributes no file coverage
+            case str() if entry in named:
+                globs.extend(project_input_globs(named[entry], root))
+            case _:
+                globs.extend(repository_relative_globs([entry], project_root=root))
+    return globs
+
+
+def target_input_globs(root: str, target: str) -> list[str]:
+    """Every repository-relative glob the target ``target`` of the project at ``root``
+    hashes, `targetDefaults` and the project graph included."""
+    return list(_target_input_globs(root, target))
+
+
+@functools.cache
+def _target_input_globs(root: str, target: str) -> tuple[str, ...]:
+    # Cached because every test's read guard asks for one, and the answer is a property
+    # of the declarations this process started with.
+    declared = project_declarations()[root]["targets"][target].get("inputs") or nx_config()[
+        "targetDefaults"
+    ].get(target, {}).get("inputs", ["default"])
+    return tuple(project_input_globs(declared, root))
+
+
 def resolve_input_globs(entries: list, named: dict[str, list]) -> list[str]:
     """Expand a target's declared inputs into the file globs Nx will hash.
 
@@ -405,18 +573,14 @@ def resolve_input_globs(entries: list, named: dict[str, list]) -> list[str]:
 
 def repository_relative_globs(globs: list[str], *, project_root: str = "") -> list[str]:
     """Rewrite Nx's own glob spelling into paths relative to the repository root."""
-    return [
-        glob.replace("{workspaceRoot}/", "").replace("{projectRoot}/", f"{project_root}/")
-        for glob in globs
-    ]
+    owned = f"{project_root}/" if project_root else ""
+    return [glob.replace("{workspaceRoot}/", "").replace("{projectRoot}/", owned) for glob in globs]
 
 
 def named_input_globs(name: str, *, project_root: str = "") -> list[str]:
-    """Expand one named input into repository-relative globs."""
-    named = nx_config()["namedInputs"]
-    return repository_relative_globs(
-        resolve_input_globs(named[name], named), project_root=project_root
-    )
+    """Expand one named input, as the project at ``project_root`` declares it, into
+    repository-relative globs."""
+    return project_input_globs([name], project_root)
 
 
 def matches(glob: str, relative: str) -> bool:

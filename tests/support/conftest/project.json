@@ -1,0 +1,36 @@
+{
+  "name": "support-conftest",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-follow-up-variables",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/conftest.py",
+      "{workspaceRoot}/config/oneagentgraph.version",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/config/onejudge.version",
+      "{workspaceRoot}/scripts/workspace-install.sh"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "support-provisioning",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/e2e/provisioning.py",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/config/*.version",
+      "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/setup-llmlint.sh",
+      "{workspaceRoot}/scripts/repos-bootstrap.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

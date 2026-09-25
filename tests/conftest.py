@@ -31,7 +31,7 @@ import plan_root_variable
 import pytest
 from nx_inputs import (
     ASK_SEAM_JOURNEYS,
-    CODE_WORKSPACE,
+    CODE_SCOPED,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
     HOST_VIEWS_ROOT,
@@ -42,9 +42,13 @@ from nx_inputs import (
     PLAN_TOOLING_WORKSPACE,
     PROJECT_STORE_RACE_ROOT,
     PROJECT_STORE_RACE_WORKSPACE,
+    RECIPE_SCOPED,
     RECIPE_WORKSPACE,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_WORKSPACE,
+    SESSION_SETUP_PYPI_ROOT,
+    SESSION_SETUP_PYPI_SCOPED,
+    SESSION_SETUP_PYPI_WORKSPACE,
     SESSION_SETUP_ROOT,
     SESSION_SETUP_WORKSPACE,
     UNPUBLISHED_VIEW_ROOT,
@@ -54,8 +58,8 @@ from nx_inputs import (
     WRITEBACK_BUDGET_ROOT,
     WRITEBACK_BUDGET_WORKSPACE,
     covers,
-    named_input_globs,
     repository_relative,
+    target_input_globs,
 )
 from registered_checkouts import listed_checkout_paths
 from short_state import short_state_base  # noqa: F401 - registered by being named here
@@ -125,8 +129,11 @@ READS_RECIPES_MARKER = "reads_recipes"
 class OwnedProject(NamedTuple):
     """One directory-owned test project, in what the read guards need of it."""
 
+    #: Its own named input, which its `project.json` declares.
     key: str
     docs_tier: bool
+    #: The target its narrow key belongs to.
+    target: str = "test"
 
 
 OWNED_PROJECTS = {
@@ -142,6 +149,9 @@ OWNED_PROJECTS = {
     RUN_END_HOOKS_ROOT: OwnedProject(key=RUN_END_HOOKS_WORKSPACE, docs_tier=False),
     HOST_VIEWS_ROOT: OwnedProject(key=HOST_VIEWS_WORKSPACE, docs_tier=False),
     SESSION_SETUP_ROOT: OwnedProject(key=SESSION_SETUP_WORKSPACE, docs_tier=False),
+    SESSION_SETUP_PYPI_ROOT: OwnedProject(
+        key=SESSION_SETUP_PYPI_WORKSPACE, docs_tier=False, target=SESSION_SETUP_PYPI_SCOPED
+    ),
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
     UNPUBLISHED_VIEW_ROOT: OwnedProject(key=UNPUBLISHED_VIEW_WORKSPACE, docs_tier=False),
 }
@@ -424,7 +434,7 @@ def _code_key_reads_are_declared(
         return
     # Resolved before the wrapper is installed: reading the declaration through the
     # guard that consults it is a loop waiting for its first prose-shaped path.
-    globs = named_input_globs(CODE_WORKSPACE)
+    globs = target_input_globs("orchestrator", CODE_SCOPED)
     opener = builtins.open
 
     # `Any` throughout because this stands in for `open` itself: its signature is a
@@ -448,15 +458,19 @@ def _code_key_reads_are_declared(
     monkeypatch.setattr(io, "open", guarded)
 
 
-def _owned_project(request: pytest.FixtureRequest) -> OwnedProject | None:
-    """The directory-owned project this test belongs to, or `None` for a marker tier."""
+def _owned_directory(request: pytest.FixtureRequest) -> str | None:
+    """The directory of the project this test belongs to, or `None` for a marker tier."""
     module = repository_relative(request.node.path)
     if module is None:
         return None
-    for directory, owned in OWNED_PROJECTS.items():
-        if module.startswith(f"{directory}/"):
-            return owned
-    return None
+    owning = (directory for directory in OWNED_PROJECTS if module.startswith(f"{directory}/"))
+    return next(owning, None)
+
+
+def _owned_project(request: pytest.FixtureRequest) -> OwnedProject | None:
+    """The directory-owned project this test belongs to, or `None` for a marker tier."""
+    directory = _owned_directory(request)
+    return None if directory is None else OWNED_PROJECTS[directory]
 
 
 @pytest.fixture(autouse=True)
@@ -483,12 +497,16 @@ def _owned_project_reads_are_declared(
     which is why it is honoured only where that second target exists. Where it does not,
     a prose read is a read outside the project's only key and fails here.
     """
-    owned = _owned_project(request)
-    if owned is None:
+    directory = _owned_directory(request)
+    if directory is None:
         return
+    owned = OWNED_PROJECTS[directory]
     if owned.docs_tier and request.node.get_closest_marker(READS_DOCS_MARKER):
         return
-    globs = named_input_globs(owned.key)
+    # The whole key, through the project graph: the project's own named input and the
+    # `testSupport` of every unit it depends on, exactly as Nx hashes the target.
+    target = owned.target
+    globs = target_input_globs(directory, target)
     opener = builtins.open
 
     # `Any` for the same reason the two guards around it use it: this stands in for
@@ -497,9 +515,11 @@ def _owned_project_reads_are_declared(
         uncovered = _outside_a_key(file, globs)
         if uncovered is not None:
             raise AssertionError(
-                f"{request.node.name} reads {uncovered}, which the {owned.key} key does "
-                f"not cover; add the path to that key in nx.json, or this project "
-                f"replays a verdict recorded before the file it depends on last moved"
+                f"{request.node.name} reads {uncovered}, which {directory}:{target}'s key "
+                "does not "
+                f"cover; add the path to {owned.key} in {directory}/project.json, or depend "
+                "on the test-support unit that carries it, or this project replays a "
+                "verdict recorded before the file it depends on last moved"
             )
         return opener(file, *args, **kwargs)
 
@@ -529,11 +549,12 @@ def _recipe_reads_are_declared(
     """
     if request.node.get_closest_marker(READS_RECIPES_MARKER) is None:
         return
-    globs = named_input_globs(RECIPE_WORKSPACE)
+    globs = target_input_globs("orchestrator", RECIPE_SCOPED)
     module = repository_relative(request.node.path)
     assert module is not None and covers(globs, module), (
         f"{request.node.name} is declared @pytest.mark.{READS_RECIPES_MARKER} from {module}, "
-        f"which nx.json's {RECIPE_WORKSPACE} does not cover; add the module to that key "
+        f"which orchestrator/project.json's {RECIPE_WORKSPACE} does not cover; add the "
+        "module to that key "
         "or the tier replays a verdict recorded before this test existed"
     )
     opener = builtins.open

@@ -1,0 +1,27 @@
+{
+  "name": "support-project-fixtures",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-fake-codex",
+    "support-no-paid-provider",
+    "support-plan-fixture-source",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/e2e/project_fixtures.py"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "support-monitor-conversation",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-short-state"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/monitor_conversation.py",
+      "{workspaceRoot}/config/onemessagebus.yaml"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

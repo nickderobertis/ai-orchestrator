@@ -7,6 +7,20 @@
     "scope:ask-seam",
     "type:tests"
   ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-probe-run-root",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "askSeamBusResolution": [
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/scripts/ask-manager.sh",
+      "{workspaceRoot}/tests/ask_seam/bus_resolution/test_bus_resolution_e2e.py",
+      "{workspaceRoot}/tests/fixtures/planner-channel.json",
+      "{workspaceRoot}/uv.lock"
+    ]
+  },
   "targets": {
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/bus_resolution --no-cov -n 4 --dist loadgroup",
@@ -14,7 +28,11 @@
         "cwd": "."
       },
       "inputs": [
-        "askSeamBusResolution"
+        "askSeamBusResolution",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
       ]
     }
   }

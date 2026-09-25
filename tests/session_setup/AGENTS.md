@@ -12,6 +12,12 @@ bootstrap no journey may run.
   file rather than as `scripts/**/*` or `config/**/*`: the journey re-provisions the
   project environment from the lock, so every glob wider than the script, the lock and
   the one pin it reads makes an unrelated edit pay for that.
+  The helpers its module imports reach that key as the test-support units under
+  `tests/support/` this project depends on. The one module of `orchestrator/` in it is
+  `orchestrator/root.py`, which the journey imports `REPO_ROOT` from.
+- **The journeys that run the same script in a fixture repository and install the
+  published tools from PyPI are not here.** They are `tests/session_setup_pypi/`, a
+  project of their own, because an edit only they read would otherwise select this one.
 - **It holds the shared toolchain.** A run of the real setup takes `uv`'s exclusive lock
   on this checkout's `.venv`, so the journey declares `shares_workspace_install` and is
   scheduled beside every other journey that does.

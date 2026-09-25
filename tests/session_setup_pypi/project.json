@@ -1,0 +1,40 @@
+{
+  "name": "session-setup-pypi",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/session_setup_pypi",
+  "tags": [
+    "scope:session-setup-pypi",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-onejudge-bundle",
+    "support-provisioning",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "sessionSetupPypiWorkspace": [
+      "{workspaceRoot}/tests/session_setup_pypi/**/*",
+      "!{workspaceRoot}/tests/session_setup_pypi/**/*.md",
+      "{workspaceRoot}/tests/test_linked_libraries.py",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/orchestrator/root.py"
+    ]
+  },
+  "targets": {
+    "test-pypi": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_setup_pypi --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "sessionSetupPypiWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

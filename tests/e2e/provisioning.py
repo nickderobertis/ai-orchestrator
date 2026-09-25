@@ -7,15 +7,9 @@ One copy because both drive the *same* real script — a second fixture builder
 would be a second answer to "what does a provisioned worktree contain", and the
 one that went stale would be the one nobody was reading.
 
-llmlint: ignore-file[shell_test_tiers_stay_split] Which Nx project owns the journeys
-this fixture feeds is a property of those modules, not of the three files this change
-adds to the fixture: they have installed real published tools from the orchestrator
-project since they were written, while a real session-setup run of *this* checkout is
-owned by `tests/session_setup`. Moving them is a change to `nx.json`,
-`orchestrator/project.json` and `tests/nx_inputs.py` together, drafted as a follow-up.
-llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Same site, same
-follow-up: the cost of those journeys predates this change, and putting them behind a
-narrower edge is the project split above.
+This module is a test-support unit, `tests/support/provisioning/`, carrying every file
+it copies, so a tier reaches it by an edge and an edit here re-runs exactly the tiers
+whose modules import it.
 """
 
 from __future__ import annotations

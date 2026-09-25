@@ -1022,10 +1022,11 @@ split at those seams rather than at convenient ones:
   keeps the `wholeWorkspace` key. Seconds, not minutes.
 - **`orchestrator:test-recipes`** runs the tests marked `@pytest.mark.reads_recipes`
   — the journeys that build real worktrees and run real package installs to drive
-  `just` recipes and shell scripts — keyed on `recipeWorkspace`: the `justfile`,
-  `scripts/**`, the root manifests, the fixtures, and the modules that define and
-  collect those tests. They read no prose and no `orchestrator/` at all, and most
-  commits here touch nothing else, so most commits replay them.
+  `just` recipes and shell scripts — keyed on `recipeWorkspace`, which
+  `orchestrator/project.json` declares: the `justfile`, `scripts/**`, the root
+  manifests, the fixtures, and the modules that define those tests, plus the
+  test-support units their modules import. They read no prose and no `orchestrator/`
+  at all, and most commits here touch nothing else, so most commits replay them.
 - **`orchestrator:test-checkouts`** runs the tests marked
   `@pytest.mark.reads_checkouts` and is **uncached**, because there is no key that
   would be right. Its subject is the *other* repositories this host routes — their
@@ -1036,10 +1037,34 @@ split at those seams rather than at convenient ones:
 - **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
   whole workspace with `docs/**` and `**/*.md` removed.
 
+`just check` runs these in three phases, because Nx takes one selection per invocation:
+the diff selection (`format-check`, `lint`, `typecheck`, `test`, `test-docs`,
+`test-recipes` over the projects `scripts/nx-selection.sh` picks), the unconditional
+`test-checkouts` and `coverage`, and `workspace:check-nx-cache`. Every phase runs
+whatever an earlier one returned, all three write one `.logs/check.log`, and the recipe
+fails if any phase did, naming each that failed — so one run reports every failing
+target rather than the first phase's alone. One tier is outside all three:
+`session-setup-pypi:test-pypi`, the journeys that run real session setup in a fixture
+repository and install the adopted published tools from PyPI. It is a project of its own
+because an outside service is no diff's to charge, and `just test` and `just upgrade`
+run it.
+
 `tests/conftest.py` holds that last boundary from the other side: an *unmarked* test
 that opens a registered checkout fails there, naming the checkout and the marker,
 because such a read in a memoized tier is exactly the false green these keys exist
 to prevent.
+
+A shared helper under `tests/` reaches a key through the project graph rather than
+through a list each tier keeps. Every such module is a **test-support unit**: a project
+of its own under `tests/support/`, whose `testSupport` named input carries the module
+and the data files it opens, and whose `implicitDependencies` are the units it imports.
+Each test project depends on the units its modules import, and its narrow target takes
+them with `{"input": "testSupport", "dependencies": true}`, which Nx hashes across every
+transitive dependency; `orchestrator`, whose `test-recipes` reaches fewer helpers than
+its other tiers, names that target's closure with a `projects` input instead, because
+Nx's edges are per project. So an edit to a helper invalidates exactly the tiers whose modules reach it,
+`nx affected` selects them through the reverse edges, and each tier's own key lives in
+its own `project.json`, leaving `nx.json` only the keys every project shares.
 
 `workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
 it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
@@ -1067,8 +1092,10 @@ from inside a child process is out of a guard's reach, but a journey that hands 
 real tool the whole tree copies the tree first, and copying is itself a read.
 
 `tests/test_nx_cache_scope.py` holds every declaration to its globs — that nothing
-but documentation and the front end falls outside the code key, that the recipe key
-covers every module routing a test into it and stays inside the code key, that the
+but documentation and the front end falls outside the code key, that every tier of the
+suite depends on exactly the test-support units its modules import and takes exactly
+those into its key, that no configuration names a path that does not exist, that the
+recipe key covers every module routing a test into it and stays inside the code key, that the
 cache-check key carries every `$root/` path its script names, and that every
 repository file the browser tier's fixture stack imports or names is part of
 `dagUiServerSurface`. That last one is the browser tier's `conftest.py`: a runtime
@@ -1094,8 +1121,8 @@ The suite waits on subprocesses rather than on compute — a serial run holds on
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
 `orchestrator:test-recipes`, `orchestrator:test-checkouts`, `plan-tooling:test`,
-`plan-tooling:test-docs`, each ask-seam journey's `test` target, and `just test-e2e` all
-run `-n 4 --dist loadgroup`.
+`plan-tooling:test-docs`, `session-setup-pypi:test-pypi`, each ask-seam journey's `test`
+target, and `just test-e2e` all run `-n 4 --dist loadgroup`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its

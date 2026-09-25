@@ -7,6 +7,26 @@
     "scope:session-setup",
     "type:tests"
   ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-nx-workspace",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "sessionSetupWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/repos-bootstrap.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/tests/session_setup/**/*",
+      "{workspaceRoot}/orchestrator/root.py"
+    ]
+  },
   "targets": {
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_setup --no-cov",
@@ -14,7 +34,11 @@
         "cwd": "."
       },
       "inputs": [
-        "sessionSetupWorkspace"
+        "sessionSetupWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
       ]
     }
   }

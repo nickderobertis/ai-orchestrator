@@ -1,0 +1,58 @@
+{
+  "name": "support-delegation-checkout",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-follow-up-variables",
+    "support-plan-root-variable"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/delegation_checkout.py",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/scripts/planner-surface.sh",
+      "{workspaceRoot}/scripts/new-persona.sh",
+      "{workspaceRoot}/scripts/telemetry-server.sh",
+      "{workspaceRoot}/scripts/smoke.sh",
+      "{workspaceRoot}/scripts/smoke-probe.py",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/orchestrate.sh",
+      "{workspaceRoot}/scripts/run-ended.sh",
+      "{workspaceRoot}/scripts/plan.sh",
+      "{workspaceRoot}/scripts/finish-plan.sh",
+      "{workspaceRoot}/scripts/plan-brief.sh",
+      "{workspaceRoot}/scripts/review-plan.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/ask-manager-env.sh",
+      "{workspaceRoot}/scripts/ask-manager.sh",
+      "{workspaceRoot}/scripts/plan-root-env.sh",
+      "{workspaceRoot}/scripts/follow-up-env.sh",
+      "{workspaceRoot}/scripts/follow-up-draft.sh",
+      "{workspaceRoot}/scripts/follow-up.sh",
+      "{workspaceRoot}/scripts/follow-ups.sh",
+      "{workspaceRoot}/scripts/dispatch-appendix-env.sh",
+      "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/dispatch-env-hook.sh",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh",
+      "{workspaceRoot}/scripts/node-scratch-dir.sh",
+      "{workspaceRoot}/scripts/repos.sh",
+      "{workspaceRoot}/scripts/recoverable.sh"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

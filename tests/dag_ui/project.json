@@ -7,6 +7,32 @@
     "scope:dag-ui",
     "type:tests"
   ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-nx-workspace",
+    "support-published-tools",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "dagUiWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/config/onepipeline-ui.version",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/telemetry-server.sh",
+      "{workspaceRoot}/tests/dag_ui/**/*",
+      "!{workspaceRoot}/tests/dag_ui/**/*.md",
+      "{workspaceRoot}/tests/fixtures/timeline-runs/**/*",
+      "{workspaceRoot}/graphs/dag-scope.yaml",
+      "{workspaceRoot}/graphs/node-scope.yaml",
+      "{workspaceRoot}/graphs/pr-author.yaml"
+    ]
+  },
   "targets": {
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/dag_ui --no-cov -n 4 --dist loadgroup",
@@ -14,7 +40,11 @@
         "cwd": "."
       },
       "inputs": [
-        "dagUiWorkspace"
+        "dagUiWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
       ]
     }
   }

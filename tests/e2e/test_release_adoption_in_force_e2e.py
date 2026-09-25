@@ -65,8 +65,7 @@ import pytest
 from onevcs_state_snapshot import host_root
 from project_fixtures import local_project
 from registered_checkouts import registered_checkouts
-from test_linked_engine_reconciliation_e2e import LINKED_IN_BINARY
-from test_linked_libraries import Release
+from test_linked_libraries import LINKED_IN_BINARY, Release
 from waits import timeout as e2e_timeout
 
 from orchestrator.host_installs import by_producer
@@ -674,7 +673,7 @@ def test_the_engine_a_dispatch_runs_links_an_onevcs_that_can_resolve_a_release()
     # No `onepipeline` command reports what it links, so there is no user-facing
     # interface to drive for this question. The registry paths cargo embeds are the
     # artifact's own answer; they are the measurement `AGENTS.md` hands an operator as
-    # `strings | grep`; and `tests/e2e/test_linked_engine_reconciliation_e2e.py` —
+    # `strings | grep`; and `tests/session_setup_pypi/test_linked_engine_reconciliation_e2e.py` —
     # whose expression this reuses rather than restates — reads them the same way.
     # llmlint: ignore[tests_mirror_real_usage] The binary is the only thing that answers.
     found = LINKED_IN_BINARY.findall(ENGINE.resolve().read_bytes())
