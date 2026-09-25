@@ -92,36 +92,65 @@ memo root beside the Nx cache and outside every worktree, which the recipe's fir
 of output names on every run, so a session start where nothing moved is one read per
 checkout; to force one checkout's bootstrap, delete its memo directory under that root
 (each records the path of the checkout it is for) and run the recipe again. And it holds a
-**per-checkout lock**, so two session starts arriving together never run one checkout's
-bootstrap at once — the second waits, then reads the memo the first recorded.
+**per-checkout lock**, so two callers never run one checkout's bootstrap at once.
+
+It runs two ways, and they share the memo, the lock, and each checkout's log and state.
+
+**By hand** — `just repos-bootstrap` — it bootstraps in the foreground: a caller that
+finds a checkout locked waits for it, up to half an hour, then reads the memo the holder
+recorded against the checkout as it stands when the wait ends.
+
+**At session start** — session setup runs `just repos-bootstrap --detach`, and `just
+bootstrap` reaches it the same way — it runs no bootstrap itself. The Claude Code
+SessionStart hook carries the timeout `.claude/settings.json` names, and a sibling whose
+first bootstrap took longer was once killed there with no memo written, to start again
+from nothing at the next session. So for each checkout whose memo does not match and
+whose lock is free, it starts that checkout's bootstrap as a **job detached from the
+hook**, in a session of its own, hands it the lock, and returns whatever the job is
+doing. The job holds the lock until it exits, appends its output to `bootstrap.log` in
+the checkout's memo directory, and keeps a `state` file there — `running` with its
+process and the `HEAD` it began at, then how it ended — and writes the memo only when
+the bootstrap succeeded with `HEAD` where it began. A job killed partway leaves `running`
+behind and no memo; one whose checkout's `HEAD` moved under it ends `stale` and writes
+no memo either, since what it provisioned is a tree the checkout no longer is. A
+checkout whose lock is held is never started a second time; a checkout whose memo
+matches is never started at all.
 
 It prints one line per listed checkout, opening with what happened to it, and a summary
 counting each outcome; `tests/test_repos_bootstrap_docs.py` holds this list to exactly
 the outcomes the script reports:
 
-- `ran` — that sibling's own bootstrap ran and succeeded; the line names the log its
-  output was kept in.
-- `unchanged` — its memo matches, so nothing ran.
+- `ran` — by hand: that sibling's own bootstrap ran and succeeded; the line names the log
+  its output was kept in.
+- `unchanged` — its memo matches, so nothing ran; after a detached job, the line says
+  when it completed.
+- `started` — at session start: a job was started for it; the line names the job's
+  process and its log.
+- `running` — at session start: a job, or a caller by hand, holds its lock and its
+  `HEAD` has not moved; the line names the holder's process, and nothing was started
+  beside it.
+- `stale` — at session start: its `HEAD` moved since the job began — either the job is
+  still running, and nothing is started beside it, or it has ended without writing a
+  memo and a new job was started.
 - `skip` — nothing to run, with the reason: not on this host, a checkout of this
   repository, no justfile, or no `bootstrap` recipe.
 - `refused` — it could not get as far as running: a justfile `just` could not read a
-  `bootstrap` recipe out of, a directory it could not enter, a memo it could not write,
-  or a lock another caller held too long.
-- `failed` — the bootstrap ran and exited non-zero; the line names the exit status and
-  the log.
+  `bootstrap` recipe out of, a directory it could not enter, a memo, log or state it could
+  not write, a `HEAD` naming a commit git cannot read, a job that did not start, or, by
+  hand, a lock another caller held too long.
+- `failed` — by hand, the bootstrap ran and exited non-zero, and the line names the exit
+  status and the log. At session start, the last job exited non-zero or was killed
+  before it finished; the line says which, names that job's log — kept as
+  `bootstrap.failed.log` — and says a new job was started.
 
-A `failed` or `refused` line makes the recipe exit non-zero when run by hand; session
-setup logs it and continues, since a sibling's gate missing a tool is a report for
-whoever runs that sibling's bootstrap by hand, never a reason for this session to be
-without a toolchain. It runs each sibling's bootstrap **exactly as that repository
-defines it**: what a bootstrap does to the host is that repository's decision, and a
-defect there is that repository's to fix.
+A `failed` or `refused` line makes the recipe exit non-zero; session setup logs it and
+continues, since a sibling's gate missing a tool is a report for whoever runs that
+sibling's bootstrap by hand, never a reason for this session to be without a toolchain.
+It runs each sibling's bootstrap **exactly as that repository defines it**: what a
+bootstrap does to the host is that repository's decision, and a defect there is that
+repository's to fix.
 
-Two bounds to know. The Claude Code SessionStart hook that runs session setup carries
-the timeout `.claude/settings.json` names, and a sibling whose first bootstrap takes
-longer than what is left of it is cut off there and left without a memo, so the next
-session start runs it again; `just repos-bootstrap` by hand, or `just bootstrap`, has no
-such bound. And a journey of session setup names its own checkout list in
+A journey of session setup names its own checkout list in
 `ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS`, so the real script can be driven over
 stand-ins the journey registers rather than over this host's siblings.
 

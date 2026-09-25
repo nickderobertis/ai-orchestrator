@@ -45,12 +45,13 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     assert "This answers for the publication and recovery workspaces onevcs owns" in (
         installed.stderr
     ), installed.stderr
-    # The last step reached the registered sibling checkouts through the recipe, and
-    # under this fixture's `HOME` every listed `~/` path is absent, so each one was
-    # skipped and no sibling's bootstrap ran — which is the report a host holding none
-    # of them gets, and what keeps this journey off the real siblings.
+    # The last step reached the registered sibling checkouts through the recipe's
+    # detached form, and under this fixture's `HOME` every listed `~/` path is absent,
+    # so each one was skipped and no sibling's job started — which is the report a host
+    # holding none of them gets, and what keeps this journey off the real siblings.
     assert re.search(
-        r"^repos-bootstrap: 0 ran, 0 unchanged, [1-9]\d* skipped, 0 refused, 0 failed$",
+        r"^repos-bootstrap: 0 started, 0 running, 0 stale, 0 unchanged, [1-9]\d* skipped, "
+        r"0 refused, 0 failed$",
         installed.stderr,
         re.MULTILINE,
     ), installed.stderr

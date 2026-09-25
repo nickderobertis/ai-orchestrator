@@ -4,9 +4,11 @@
 The journey over this checkout's own provisioning: the real `scripts/session-setup.sh`,
 verifying the plan-store CLI the project lock installs at the version
 `config/onetaskgraph.version` pins, creating the plan root a fresh checkout lacks, and
-reaching `just repos-bootstrap` over stand-in siblings the journey registers through
-`ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS` — never over this host's real siblings, whose
-bootstrap no journey may run.
+reaching `just repos-bootstrap --detach` over stand-in siblings the journey registers
+through `ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS` — never over this host's real siblings,
+whose bootstrap no journey may run. The sibling jobs it starts outlive each session
+start by design, so the journey waits on the ending each job writes to its state and
+releases and waits out every one it started before it ends; it signals none.
 
 - **One target, `session-setup:test`, keyed on `sessionSetupWorkspace`**, named file by
   file rather than as `scripts/**/*` or `config/**/*`: the journey re-provisions the

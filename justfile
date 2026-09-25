@@ -709,8 +709,8 @@ repos-apply *args:
     @./scripts/apply-repo-registry.sh "$@"
 
 # Run each registered sibling checkout's own `just bootstrap` ahead of the dispatch
-# that publishes through its gate: `just repos-bootstrap [--checkouts FILE]`. Session
-# setup calls it last, which is how `just bootstrap` reaches it; docs/host-setup.md,
+# that publishes through its gate: `just repos-bootstrap [--checkouts FILE] [--detach]`.
+# Session setup calls it last, which is how `just bootstrap` reaches it; docs/host-setup.md,
 # "The sibling gates", is the account of what it reads, reports, and costs.
 # llmlint: ignore[tool_output_is_signal] The per-checkout table of what happened to each sibling is what an operator runs this to read.
 repos-bootstrap *args:

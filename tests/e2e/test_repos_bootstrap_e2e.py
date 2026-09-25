@@ -31,7 +31,9 @@ from __future__ import annotations
 import os
 import subprocess
 import textwrap
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, TypeIs, get_args
 
 import pytest
 from waits import timeout as e2e_timeout
@@ -708,7 +710,94 @@ def test_the_recipe_answers_its_usage_and_refuses_an_argument_it_does_not_take(
 
     helped = invoke("--help")
     assert helped.returncode == 0, helped.stdout + helped.stderr
-    assert "usage: repos-bootstrap.sh [--checkouts FILE]" in helped.stderr
+    assert "usage: repos-bootstrap.sh [--checkouts FILE] [--detach]" in helped.stderr
+
+    # The job `--detach` starts is not a way in: run by hand, it refuses a directory
+    # that is not a checkout root, and a real checkout without the lock.
+    # llmlint: ignore-block[tests_mirror_real_usage] A hand-run `--job` is exactly the
+    # misuse these refusals exist for, so the internal entry point is what has to be
+    # driven to prove them; no caller reaches them any other way.
+    stand_in = _marking(tmp_path, "sibling")
+    for checkout, refusal in (
+        (tmp_path, "--job takes a checkout root"),
+        (stand_in, "--job runs only under the lock"),
+    ):
+        job = invoke("--job", str(checkout))
+        assert job.returncode == 2, job.stdout + job.stderr
+        assert refusal in job.stderr
+    # Nor is a descriptor 9 holding some other file's lock this checkout's lock.
+    elsewhere = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'exec 9>>"$1" && flock -n 9 && exec just repos-bootstrap --job "$2"',
+            "locked-elsewhere",
+            str(tmp_path / "another.lock"),
+            str(stand_in),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        env=_environment(tmp_path),
+    )
+    assert elsewhere.returncode == 2, elsewhere.stdout + elsewhere.stderr
+    assert "--job runs only under the lock" in elsewhere.stderr
+    assert _marks(tmp_path) == []
+
+    # This checkout's own lock file, opened but not yet locked: while another caller holds
+    # it the job refuses, and once it is free the job takes it, as any caller may.
+    memo_dir = _log_of(_line(_run(tmp_path, _listing(tmp_path, stand_in)), "ran", stand_in)).parent
+    (stand_in / "scripts" / "setup.sh").write_text("#!/bin/sh\necho moved\n", encoding="utf-8")
+
+    def job_on_the_real_lock() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                'exec 9>>"$1" && exec just repos-bootstrap --job "$2"',
+                "own-lock",
+                str(memo_dir / "lock"),
+                str(stand_in),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            env=_environment(tmp_path),
+        )
+
+    release = tmp_path / "release"
+    holder = subprocess.Popen(
+        [
+            "flock",
+            str(memo_dir / "lock"),
+            "sh",
+            "-c",
+            'touch "$1.held"; until [ -f "$1" ]; do sleep 0.1; done',
+            "holder",
+            str(release),
+        ]
+    )
+    try:
+        until(
+            "the holder to take the lock",
+            lambda: Path(f"{release}.held").exists(),
+            seconds=30,
+            state=lambda: f"holder exit {holder.poll()}",
+        )
+        contended = job_on_the_real_lock()
+    finally:
+        release.write_text("", encoding="utf-8")
+        holder.wait(timeout=e2e_timeout(30))
+    assert contended.returncode == 2, contended.stdout + contended.stderr
+    assert "--job runs only under the lock" in contended.stderr
+
+    free = job_on_the_real_lock()
+    assert free.returncode == 0, free.stdout + free.stderr
+    assert JobState.read(memo_dir).status == "done"
+    assert _marks(tmp_path) == ["sibling", "sibling"]
+    # llmlint: ignore-end[tests_mirror_real_usage]
 
     unvalued = invoke("--checkouts")
     assert unvalued.returncode == 2
@@ -717,7 +806,7 @@ def test_the_recipe_answers_its_usage_and_refuses_an_argument_it_does_not_take(
     unknown = invoke("--everything")
     assert unknown.returncode == 2
     assert "unknown argument '--everything'" in unknown.stderr
-    assert _marks(tmp_path) == []
+    assert _marks(tmp_path) == ["sibling", "sibling"]
 
 
 def test_a_checkout_it_cannot_enter_or_record_is_refused_and_the_rest_still_run(
@@ -751,3 +840,603 @@ def test_a_checkout_it_cannot_enter_or_record_is_refused_and_the_rest_still_run(
     assert unrecorded.returncode == 1, unrecorded.stdout + unrecorded.stderr
     assert "no memo directory" in _line(unrecorded, "refused", sealed)
     assert _marks(tmp_path) == ["healthy"]
+
+
+# No journey below signals a job it started: the one killed partway is killed by its
+# own bootstrap, and every journey releases and waits out its jobs before it ends.
+
+#: Every status a job's state records, as the script writes it;
+#: `tests/test_repos_bootstrap_docs.py` holds this to the script's own vocabulary.
+JobStatus = Literal["running", "done", "failed", "stale"]
+JOB_ENDINGS: frozenset[JobStatus] = frozenset({"done", "failed", "stale"})
+
+
+def _is_job_status(value: str) -> TypeIs[JobStatus]:
+    return value in get_args(JobStatus)
+
+
+@dataclass(frozen=True)
+class JobState:
+    """What one checkout's `state` file records: how its job stands, and its process."""
+
+    status: JobStatus | None = None
+    pid: int | None = None
+    exit: str | None = None
+
+    @classmethod
+    def read(cls, memo_dir: Path) -> JobState:
+        state = memo_dir / "state"
+        if not state.exists():
+            return cls()
+        fields = dict(
+            row.split(" ", 1) for row in state.read_text(encoding="utf-8").splitlines() if row
+        )
+        status = fields.get("status")
+        assert status is None or _is_job_status(status), fields
+        return cls(
+            status=status,
+            pid=int(fields["pid"]) if "pid" in fields else None,
+            exit=fields.get("exit"),
+        )
+
+    @property
+    def ended(self) -> bool:
+        return self.status in JOB_ENDINGS
+
+    @property
+    def alive(self) -> bool:
+        """Whether the process the job recorded of itself still exists: a read, not a signal."""
+        return self.pid is not None and Path(f"/proc/{self.pid}").exists()
+
+    @property
+    def stopped(self) -> bool:
+        """Whether nothing is left running for this state, however it ended.
+
+        Every job records its process before it bootstraps, so a state with no `pid` is
+        one whose job has not yet begun — unless it has ended, when no job wrote it.
+        """
+        if self.pid is None:
+            return self.ended
+        return not self.alive
+
+
+def _detach(tmp_path: Path, listing: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
+    """One `just repos-bootstrap --detach` over `listing`, bounded well below any bootstrap."""
+    return subprocess.run(
+        ["just", "repos-bootstrap", "--detach", "--checkouts", str(listing)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+        env=_environment(tmp_path, **extra_env),
+    )
+
+
+def _log_of(line: str) -> Path:
+    return Path(line.split("(log: ")[1].rstrip(")"))
+
+
+def _await_ending(memo_dir: Path, *, seconds: float = 60) -> JobState:
+    until(
+        f"the job for {memo_dir.name} to record how it ended",
+        lambda: JobState.read(memo_dir).ended,
+        seconds=seconds,
+        state=lambda: f"state {JobState.read(memo_dir)}",
+    )
+    return JobState.read(memo_dir)
+
+
+def _settle_jobs(tmp_path: Path, release: Path | None = None) -> None:
+    """Release every held stand-in and wait until no job this journey started is alive."""
+    if release is not None:
+        release.write_text("", encoding="utf-8")
+    memo_dirs = [state.parent for state in (tmp_path / "cache").rglob("state")]
+
+    until(
+        "every job this journey started to stop",
+        lambda: all(JobState.read(memo_dir).stopped for memo_dir in memo_dirs),
+        seconds=60,
+        state=lambda: f"states {[JobState.read(memo_dir) for memo_dir in memo_dirs]}",
+    )
+
+
+def test_a_detached_call_returns_while_its_job_works_and_reports_it_until_complete(
+    tmp_path: Path,
+) -> None:
+    """The call returns at once; the next reports the job running and starts nothing.
+
+    Once the job has ended, the call after it reads the checkout as complete.
+    """
+    stand_in = _held(tmp_path, "held")
+    listing = _listing(tmp_path, stand_in)
+    release = tmp_path / "release"
+    environment = {RELEASE_VARIABLE: str(release)}
+    head = _short_head(stand_in)
+    try:
+        first = _detach(tmp_path, listing, **environment)
+
+        assert first.returncode == 0, first.stdout + first.stderr
+        started = _line(first, "started", stand_in)
+        memo_dir = _log_of(started).parent
+        assert "1 started, 0 running, 0 stale, 0 unchanged" in first.stdout
+        # The call has returned and the job it started is still inside the bootstrap,
+        # holding the lock, with no memo claiming a completion it has not reached.
+        until(
+            "the job to be inside the stand-in's bootstrap",
+            lambda: _marks(tmp_path) == [head],
+            seconds=30,
+            state=lambda: f"marks {_marks(tmp_path)}, state {JobState.read(memo_dir)}",
+        )
+        state = JobState.read(memo_dir)
+        assert state.status == "running", state
+        assert state.alive, state
+        assert f"job {state.pid}" in started
+        assert not (memo_dir / "stamp").exists()
+
+        second = _detach(tmp_path, listing, **environment)
+
+        assert second.returncode == 0, second.stdout + second.stderr
+        running = _line(second, "running", stand_in)
+        assert f"pid {state.pid}" in running
+        assert "0 started, 1 running" in second.stdout
+        # The lock was held, so no second job began beside the first.
+        assert _marks(tmp_path) == [head]
+
+        release.write_text("", encoding="utf-8")
+        ending = _await_ending(memo_dir)
+        assert ending.status == "done", ending
+        assert (memo_dir / "stamp").exists()
+        assert "memo written" in (memo_dir / "bootstrap.log").read_text(encoding="utf-8")
+
+        third = _detach(tmp_path, listing, **environment)
+
+        assert third.returncode == 0, third.stdout + third.stderr
+        assert "completed" in _line(third, "unchanged", stand_in)
+        assert _marks(tmp_path) == [head]
+        _line(_run(tmp_path, listing, **environment), "unchanged", stand_in)
+        assert _marks(tmp_path) == [head]
+    finally:
+        _settle_jobs(tmp_path, release)
+
+
+def test_a_failed_job_is_reported_with_its_log_and_started_again(tmp_path: Path) -> None:
+    failing = _stand_in(
+        tmp_path / "failing",
+        bootstrap_body=(
+            f'@echo "failing" >> "${MARKS_VARIABLE}"\n@echo "no cargo-deny here" >&2\n@exit 3\n'
+        ),
+    )
+    listing = _listing(tmp_path, failing)
+    try:
+        first = _detach(tmp_path, listing)
+
+        assert first.returncode == 0, first.stdout + first.stderr
+        memo_dir = _log_of(_line(first, "started", failing)).parent
+        ending = _await_ending(memo_dir)
+        assert ending.status == "failed", ending
+        assert ending.exit == "3", ending
+        assert not (memo_dir / "stamp").exists()
+
+        second = _detach(tmp_path, listing)
+
+        assert second.returncode == 1, second.stdout + second.stderr
+        failed = _line(second, "failed", failing)
+        assert "exit 3; started again" in failed
+        # The log the line names is the failed job's, kept apart from the one the job
+        # just started writes.
+        kept = _log_of(failed)
+        assert kept.name == "bootstrap.failed.log"
+        assert "no cargo-deny here" in kept.read_text(encoding="utf-8")
+        assert _await_ending(memo_dir).status == "failed"
+        assert _marks(tmp_path) == ["failing", "failing"]
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_job_whose_checkout_moves_under_it_is_reported_stale_and_never_trusted(
+    tmp_path: Path,
+) -> None:
+    stand_in = _held(tmp_path, "held")
+    listing = _listing(tmp_path, stand_in)
+    release = tmp_path / "release"
+    environment = {RELEASE_VARIABLE: str(release)}
+    before = _short_head(stand_in)
+    try:
+        first = _detach(tmp_path, listing, **environment)
+        memo_dir = _log_of(_line(first, "started", stand_in)).parent
+        until(
+            "the job to be inside the stand-in's bootstrap",
+            lambda: _marks(tmp_path) == [before],
+            seconds=30,
+            state=lambda: f"marks {_marks(tmp_path)}, state {JobState.read(memo_dir)}",
+        )
+        (stand_in / "README").write_text("moved under a running job\n", encoding="utf-8")
+        _commit(stand_in, "move HEAD under the job")
+        after = _short_head(stand_in)
+
+        while_running = _detach(tmp_path, listing, **environment)
+
+        assert while_running.returncode == 0, while_running.stdout + while_running.stderr
+        stale = _line(while_running, "stale", stand_in)
+        assert "still running" in stale
+        assert "0 started, 0 running, 1 stale" in while_running.stdout
+        assert _marks(tmp_path) == [before]
+
+        release.write_text("", encoding="utf-8")
+        ending = _await_ending(memo_dir)
+        # The bootstrap succeeded, of a tree the checkout no longer is: no memo.
+        assert ending.status == "stale", ending
+        assert not (memo_dir / "stamp").exists()
+
+        after_it_ended = _detach(tmp_path, listing, **environment)
+
+        assert "started again" in _line(after_it_ended, "stale", stand_in)
+        assert _await_ending(memo_dir).status == "done"
+        assert _marks(tmp_path) == [before, after]
+        _line(_detach(tmp_path, listing, **environment), "unchanged", stand_in)
+    finally:
+        _settle_jobs(tmp_path, release)
+
+
+def test_a_job_killed_partway_leaves_no_memo_and_is_reported_killed(tmp_path: Path) -> None:
+    """A job that never reached its ending is read as killed, and started again.
+
+    The stand-in's first bootstrap kills its own process group — the job and everything
+    under it — which is what a host reboot or an operator's kill does to a job, without
+    this journey signalling anything.
+    """
+    once = tmp_path / "killed-once"
+    stand_in = _stand_in(
+        tmp_path / "killed",
+        bootstrap_body=(
+            f'@echo "killed" >> "${MARKS_VARIABLE}"\n'
+            f'@if [ ! -f "{once}" ]; then touch "{once}"; kill -KILL 0; fi\n'
+        ),
+    )
+    listing = _listing(tmp_path, stand_in)
+    try:
+        first = _detach(tmp_path, listing)
+        memo_dir = _log_of(_line(first, "started", stand_in)).parent
+        until(
+            "the job to be killed partway through its bootstrap",
+            lambda: once.exists() and JobState.read(memo_dir).stopped,
+            seconds=30,
+            state=lambda: f"state {JobState.read(memo_dir)}",
+        )
+        assert JobState.read(memo_dir).status == "running"
+        assert not (memo_dir / "stamp").exists()
+
+        second = _detach(tmp_path, listing)
+
+        assert second.returncode == 1, second.stdout + second.stderr
+        assert "killed before it finished; started again" in _line(second, "failed", stand_in)
+        assert _await_ending(memo_dir).status == "done"
+        assert (memo_dir / "stamp").exists()
+        assert _marks(tmp_path) == ["killed", "killed"]
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_foreground_failure_is_read_by_the_next_detached_call(tmp_path: Path) -> None:
+    """A bootstrap run by hand records its state as a job does, and session start reads it."""
+    failing = _stand_in(
+        tmp_path / "failing",
+        bootstrap_body=f'@echo "failing" >> "${MARKS_VARIABLE}"\n@echo "by hand" >&2\n@exit 4\n',
+    )
+    listing = _listing(tmp_path, failing)
+
+    by_hand = _run(tmp_path, listing)
+
+    assert by_hand.returncode == 1, by_hand.stdout + by_hand.stderr
+    memo_dir = _log_of(_line(by_hand, "failed", failing)).parent
+    recorded = JobState.read(memo_dir)
+    assert (recorded.status, recorded.exit) == ("failed", "4"), recorded
+    try:
+        detached = _detach(tmp_path, listing)
+
+        assert detached.returncode == 1, detached.stdout + detached.stderr
+        failed = _line(detached, "failed", failing)
+        assert "exit 4; started again" in failed
+        assert "by hand" in _log_of(failed).read_text(encoding="utf-8")
+        assert _await_ending(memo_dir).status == "failed"
+        assert _marks(tmp_path) == ["failing", "failing"]
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_state_file_in_a_shape_the_script_never_writes_is_read_as_absent(
+    tmp_path: Path,
+) -> None:
+    """A state edited or truncated by hand is neither trusted nor echoed into a report."""
+    stand_in = _marking(tmp_path, "sibling")
+    listing = _listing(tmp_path, stand_in)
+    try:
+        memo_dir = _log_of(_line(_detach(tmp_path, listing), "started", stand_in)).parent
+        assert _await_ending(memo_dir).status == "done"
+        # The checkout moves, so the next call has a job to start, and the state the
+        # last job left is replaced by one no job writes: an unknown status carrying
+        # an escape sequence, and a process id that is not a number.
+        (stand_in / "scripts" / "setup.sh").write_text("#!/bin/sh\necho moved\n", encoding="utf-8")
+        # llmlint: ignore-block[tests_mirror_real_usage] A state in a shape the script
+        # never writes exists only because something else wrote it — an edit by hand, a
+        # truncated disk — so this journey has to be that something; the call it then
+        # makes is the recipe's own.
+        (memo_dir / "state").write_text(
+            "status \x1b[31mfailed\npid ../1\nexit x\n", encoding="utf-8"
+        )
+        # llmlint: ignore-end[tests_mirror_real_usage]
+
+        result = _detach(tmp_path, listing)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        _line(result, "started", stand_in)
+        assert "\x1b" not in result.stdout
+        assert _await_ending(memo_dir).status == "done"
+        assert _marks(tmp_path) == ["sibling", "sibling"]
+
+        # A failed ending that lost its exit status is still a failure, and says so.
+        (stand_in / "scripts" / "setup.sh").write_text("#!/bin/sh\necho again\n", encoding="utf-8")
+        # llmlint: ignore-block[tests_mirror_real_usage] The same hand-edited state as above.
+        (memo_dir / "state").write_text("status failed\n", encoding="utf-8")
+        # llmlint: ignore-end[tests_mirror_real_usage]
+
+        unrecorded = _detach(tmp_path, listing)
+
+        assert unrecorded.returncode == 1, unrecorded.stdout + unrecorded.stderr
+        assert "exit unrecorded; started again" in _line(unrecorded, "failed", stand_in)
+        assert _await_ending(memo_dir).status == "done"
+
+        # A completion time in no shape the script writes is left off the report.
+        # llmlint: ignore-block[tests_mirror_real_usage] The same hand-edited state as above.
+        (memo_dir / "state").write_text("status done\nfinished yesterday\n", encoding="utf-8")
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        unchanged = _line(_detach(tmp_path, listing), "unchanged", stand_in)
+        assert "completed" in unchanged
+        assert "yesterday" not in unchanged
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_detached_call_reports_a_bootstrap_run_by_hand_as_running(tmp_path: Path) -> None:
+    """A caller by hand holding the lock is reported from its state, and nothing joins it."""
+    stand_in = _held(tmp_path, "held")
+    listing = _listing(tmp_path, stand_in)
+    release = tmp_path / "release"
+    environment = _environment(tmp_path, **{RELEASE_VARIABLE: str(release)})
+    head = _short_head(stand_in)
+
+    by_hand = _caller(listing, environment)
+    try:
+        until(
+            "the caller by hand to be inside the stand-in's bootstrap",
+            lambda: _marks(tmp_path) == [head],
+            seconds=30,
+            state=lambda: f"marks {_marks(tmp_path)}",
+        )
+
+        detached = _detach(tmp_path, listing, **{RELEASE_VARIABLE: str(release)})
+
+        assert detached.returncode == 0, detached.stdout + detached.stderr
+        assert "pid " in _line(detached, "running", stand_in)
+        assert "0 started, 1 running" in detached.stdout
+        release.write_text("", encoding="utf-8")
+        output = by_hand.communicate(timeout=e2e_timeout(60))
+    finally:
+        release.write_text("", encoding="utf-8")
+        by_hand.kill()
+
+    assert by_hand.returncode == 0, output
+    assert "completed" in _line(_detach(tmp_path, listing), "unchanged", stand_in)
+    assert _marks(tmp_path) == [head]
+
+
+def test_a_log_or_state_the_detached_call_cannot_write_is_refused_and_nothing_starts(
+    tmp_path: Path,
+) -> None:
+    """A read-only log, and a memo directory no file can be created in, each refuse by name."""
+    stand_in = _marking(tmp_path, "sibling")
+    listing = _listing(tmp_path, stand_in)
+    try:
+        memo_dir = _log_of(_line(_detach(tmp_path, listing), "started", stand_in)).parent
+        assert _await_ending(memo_dir).status == "done"
+        (stand_in / "scripts" / "setup.sh").write_text("#!/bin/sh\necho moved\n", encoding="utf-8")
+        log = memo_dir / "bootstrap.log"
+
+        # llmlint: ignore-block[tests_mirror_real_usage] A log or memo directory this
+        # process may not write is a host's permissions, not something the recipe's
+        # interface can be asked to produce, so the journey sets the permissions itself —
+        # as the module's sealed checkout and unwritable memo root do — and then makes
+        # the recipe's own call.
+        log.chmod(0o400)
+        try:
+            read_only_log = _detach(tmp_path, listing)
+        finally:
+            log.chmod(0o600)
+        assert read_only_log.returncode == 1, read_only_log.stdout + read_only_log.stderr
+        assert "unwritable log" in _line(read_only_log, "refused", stand_in)
+
+        memo_dir.chmod(0o500)
+        try:
+            read_only_memo = _detach(tmp_path, listing)
+        finally:
+            memo_dir.chmod(0o700)
+        assert read_only_memo.returncode == 1, read_only_memo.stdout + read_only_memo.stderr
+        assert "unwritable state" in _line(read_only_memo, "refused", stand_in)
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        assert _marks(tmp_path) == ["sibling"]
+        _line(_detach(tmp_path, listing), "started", stand_in)
+        assert _await_ending(memo_dir).status == "done"
+        assert _marks(tmp_path) == ["sibling", "sibling"]
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_detached_job_for_an_unborn_checkout_is_memoized_like_any_other(
+    tmp_path: Path,
+) -> None:
+    unborn = tmp_path / "unborn"
+    unborn.mkdir()
+    (unborn / "justfile").write_text(
+        f'bootstrap:\n    @echo "unborn" >> "${MARKS_VARIABLE}"\n', encoding="utf-8"
+    )
+    _git("init", "-q", "--initial-branch", "main", cwd=unborn)
+    listing = _listing(tmp_path, unborn)
+    try:
+        memo_dir = _log_of(_line(_detach(tmp_path, listing), "started", unborn)).parent
+        assert _await_ending(memo_dir).status == "done"
+        assert "at no-commit" in (memo_dir / "bootstrap.log").read_text(encoding="utf-8")
+
+        assert "completed" in _line(_detach(tmp_path, listing), "unchanged", unborn)
+        assert _marks(tmp_path) == ["unborn"]
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_job_that_cannot_write_its_memo_is_run_again_by_the_next_call(tmp_path: Path) -> None:
+    """Provisioned and recorded nowhere: the safe side, which the next call corrects."""
+    stand_in = _marking(tmp_path, "sibling")
+    listing = _listing(tmp_path, stand_in)
+    try:
+        memo_dir = _log_of(_line(_detach(tmp_path, listing), "started", stand_in)).parent
+        assert _await_ending(memo_dir).status == "done"
+        (stand_in / "scripts" / "setup.sh").write_text("#!/bin/sh\necho moved\n", encoding="utf-8")
+        stamp = memo_dir / "stamp"
+        recorded = stamp.read_text(encoding="utf-8")
+
+        # llmlint: ignore-block[tests_mirror_real_usage] A memo this process may not
+        # write is a host's permissions, not something the recipe's interface can be
+        # asked to produce, so the journey sets them itself and makes the recipe's call.
+        stamp.chmod(0o400)
+        try:
+            _line(_detach(tmp_path, listing), "started", stand_in)
+            assert _await_ending(memo_dir).status == "done"
+        finally:
+            stamp.chmod(0o600)
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        assert stamp.read_text(encoding="utf-8") == recorded
+        assert "memo not written" in (memo_dir / "bootstrap.log").read_text(encoding="utf-8")
+
+        _line(_detach(tmp_path, listing), "started", stand_in)
+        assert _await_ending(memo_dir).status == "done"
+        assert "completed" in _line(_detach(tmp_path, listing), "unchanged", stand_in)
+        assert _marks(tmp_path) == ["sibling"] * 3
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_head_naming_a_commit_git_cannot_read_is_refused_either_way(tmp_path: Path) -> None:
+    """A checkout whose `HEAD` is a missing commit has no tree to fingerprint or bootstrap."""
+    broken = _marking(tmp_path, "broken")
+    # llmlint: ignore-block[tests_mirror_real_usage] A `HEAD` or branch naming a commit
+    # the repository lacks is damage no git command will produce — `update-ref` refuses a
+    # missing object — so the journey writes the ref file as the damage would, and then
+    # makes the recipe's own calls.
+    (broken / ".git" / "HEAD").write_text("1" * 40 + "\n", encoding="utf-8")
+    # And a `HEAD` still on its branch, where the branch names the missing commit: not a
+    # branch with no commit yet, which is a state of its own.
+    broken_branch = _marking(tmp_path, "broken-branch")
+    (broken_branch / ".git" / "refs" / "heads" / "main").write_text(
+        "1" * 40 + "\n", encoding="utf-8"
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    healthy = _marking(tmp_path, "healthy")
+    listing = _listing(tmp_path, broken, broken_branch, healthy)
+    try:
+        by_hand = _run(tmp_path, listing)
+
+        assert by_hand.returncode == 1, by_hand.stdout + by_hand.stderr
+        assert "unreadable HEAD" in _line(by_hand, "refused", broken)
+        assert "unreadable HEAD" in _line(by_hand, "refused", broken_branch)
+        _line(by_hand, "ran", healthy)
+
+        (healthy / "scripts" / "setup.sh").write_text("#!/bin/sh\necho moved\n", encoding="utf-8")
+        detached = _detach(tmp_path, listing)
+
+        assert detached.returncode == 1, detached.stdout + detached.stderr
+        assert "unreadable HEAD" in _line(detached, "refused", broken)
+        assert "unreadable HEAD" in _line(detached, "refused", broken_branch)
+        assert _await_ending(_log_of(_line(detached, "started", healthy)).parent).status == "done"
+        assert _marks(tmp_path) == ["healthy", "healthy"]
+    finally:
+        _settle_jobs(tmp_path)
+
+
+def test_a_lock_held_with_no_state_recorded_is_reported_held_by_another_caller(
+    tmp_path: Path,
+) -> None:
+    """A holder that records nothing — a caller from before job state — is still never joined."""
+    stand_in = _marking(tmp_path, "sibling")
+    listing = _listing(tmp_path, stand_in)
+    release = tmp_path / "release"
+    memo_dir = _log_of(_line(_run(tmp_path, listing), "ran", stand_in)).parent
+    (stand_in / "scripts" / "setup.sh").write_text("#!/bin/sh\necho moved\n", encoding="utf-8")
+    # llmlint: ignore-block[tests_mirror_real_usage] The holder is a caller that writes no
+    # state — one from before this script kept any — so the journey is that caller: the
+    # real `flock` on the checkout's real lock file, and nothing else of the script's. The
+    # state it leaves is one no job writes, a process and a `HEAD` in no shape the script
+    # does, which is read as no state at all.
+    (memo_dir / "state").write_text("status running\npid abc\nhead zzz\n", encoding="utf-8")
+    holder = subprocess.Popen(
+        [
+            "flock",
+            str(memo_dir / "lock"),
+            "sh",
+            "-c",
+            'touch "$1.held"; until [ -f "$1" ]; do sleep 0.1; done',
+            "holder",
+            str(release),
+        ]
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    try:
+        until(
+            "the holder to take the lock",
+            lambda: Path(f"{release}.held").exists(),
+            seconds=30,
+            state=lambda: f"holder exit {holder.poll()}",
+        )
+
+        detached = _detach(tmp_path, listing)
+
+        assert detached.returncode == 0, detached.stdout + detached.stderr
+        held = _line(detached, "running", stand_in)
+        assert "another caller" in held
+        assert "abc" not in held
+        assert _marks(tmp_path) == ["sibling"]
+    finally:
+        release.write_text("", encoding="utf-8")
+        holder.wait(timeout=e2e_timeout(30))
+
+
+def test_a_checkout_whose_head_breaks_under_a_running_job_is_refused_and_ends_stale(
+    tmp_path: Path,
+) -> None:
+    stand_in = _held(tmp_path, "held")
+    listing = _listing(tmp_path, stand_in)
+    release = tmp_path / "release"
+    environment = {RELEASE_VARIABLE: str(release)}
+    try:
+        memo_dir = _log_of(
+            _line(_detach(tmp_path, listing, **environment), "started", stand_in)
+        ).parent
+        until(
+            "the job to be inside the stand-in's bootstrap",
+            lambda: bool(_marks(tmp_path)),
+            seconds=30,
+            state=lambda: f"state {JobState.read(memo_dir)}",
+        )
+        # llmlint: ignore-block[tests_mirror_real_usage] Damage no git command produces,
+        # as in the journey over a `HEAD` naming a missing commit.
+        (stand_in / ".git" / "HEAD").write_text("1" * 40 + "\n", encoding="utf-8")
+        # llmlint: ignore-end[tests_mirror_real_usage]
+
+        broken = _detach(tmp_path, listing, **environment)
+
+        assert broken.returncode == 1, broken.stdout + broken.stderr
+        refused = _line(broken, "refused", stand_in)
+        assert "unreadable HEAD" in refused and "still running" in refused
+        release.write_text("", encoding="utf-8")
+        assert _await_ending(memo_dir).status == "stale"
+        assert not (memo_dir / "stamp").exists()
+    finally:
+        _settle_jobs(tmp_path, release)

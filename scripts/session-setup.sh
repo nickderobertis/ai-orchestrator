@@ -31,11 +31,12 @@
 #      names for every Rust identity's warm worktree slots, and a command the host lacks
 #      would fail on every idle tick the engine sweeps the pool on. Optional — a host
 #      without `cargo` pools nothing Rust — so it never changes the exit status.
-#  10. Last, `just repos-bootstrap`: every registered sibling checkout's own `just
-#      bootstrap`, memoized per checkout, so the gate a dispatch publishes through has
-#      its tools before the dispatch starts. Last because it is the one step about
-#      other repositories, and a report from it — a sibling that failed — is relayed
-#      and never changes this script's exit status.
+#  10. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
+#      `just bootstrap`, memoized per checkout, started as a job detached from this
+#      hook so the gate a dispatch publishes through gets its tools however long they
+#      take to fetch. Last because it is the one step about other repositories, and a
+#      report from it — a sibling whose job failed — is relayed and never changes this
+#      script's exit status.
 #
 # `set -e` is omitted so optional tool failures do not prevent the remaining
 # setup steps. Missing or unusable onejudge, oneharness, published-tool, or bun
@@ -496,12 +497,11 @@ if ! verify_bun; then
   log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1
 fi
-# The sibling gates, after this checkout's own toolchain is verified and reported: the
-# recipe prints one line per registered checkout and exits non-zero when one of them
-# failed or was refused, and that is a report to relay rather than a reason for this
-# session to be without a toolchain. It never touches `toolchain_failed`.
+# The sibling gates, detached (step 10 above). A non-zero exit is a report to relay,
+# never a reason for this session to be without a toolchain: it never touches
+# `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
-  just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" repos-bootstrap >&2 \
+  just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" repos-bootstrap --detach >&2 \
     || log "a registered sibling checkout's bootstrap failed or was refused (its line above names it); continuing session setup"
 else
   log "sibling checkout bootstrap unavailable; continuing session setup"
