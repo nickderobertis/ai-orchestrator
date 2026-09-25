@@ -31,6 +31,12 @@ stated to the launch for the same reason, so nothing lands in this checkout's ow
 One module fixture drives every phase in order, because they are readings of one run's
 life: its drafts verified once, then re-dispatched with the manager's feedback over the same
 drafts, tickets and board. The refusals ride beside it on runs of their own.
+
+One journey doubles the engine instead, in `delegation_checkout`'s throwaway checkout: what
+the recipe writes and the command lines it delegates, which is `just follow-ups`' row of
+the delegation table. It is here rather than in `tests/e2e/test_delegated_recipes_e2e.py`
+because its answer moves with `orchestrator/follow_up_tickets.py`, which this project's key
+carries and the recipe tier's does not.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+import delegation_checkout
 import follow_up_variables
 import plan_root_variable
 import pytest
@@ -689,6 +696,44 @@ def _moved(bench: Bench, qualified: str, category: str) -> None:
     assert moved["status"] == _item(bench, qualified)["status"], moved
 
 
+#: The agent's own program for the account its task's step 11 asks for: read the artifact
+#: the recipe opened before the dispatch, fill in its `dispositions`, and leave its `drafts`
+#: exactly as it found them — which is what the agent is told, and what the validator holds.
+ACCOUNT_PROGRAM = """\
+import json, pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+held = json.loads(path.read_text(encoding="utf-8"))
+held["dispositions"] = json.loads(sys.argv[2])
+path.write_text(json.dumps(held, indent=2), encoding="utf-8")
+"""
+
+
+def _accounting(
+    bench: Bench, python: str, run: str, entries: list[dict[str, object]], name: str = "account.py"
+) -> list[str]:
+    """The agent's command accounting for every draft it was given, run from the checkout."""
+    helper = _staged(bench, name, ACCOUNT_PROGRAM)
+    return _from_checkout(
+        python,
+        str(helper),
+        str(tickets.dispositions_path(bench.drafts_root, run)),
+        json.dumps(entries),
+    )
+
+
+def _disposed(
+    draft: Path, run: str, disposition: tickets.Disposition, causes: tuple[str, ...], detail: str
+) -> dict[str, object]:
+    """One draft's disposition, as the agent writes it."""
+    return {
+        "draft": _draft_id(run, draft),
+        "disposition": disposition.value,
+        "root_causes": list(causes),
+        "detail": detail,
+    }
+
+
 def _staged(bench: Bench, name: str, text: str) -> Path:
     """What the agent writes in its own scratch before putting it anywhere."""
     staged = bench.tmp / "agent" / name
@@ -838,6 +883,11 @@ class Followed(NamedTuple):
     edited_comment: str
     unsound: subprocess.CompletedProcess[str]
     unsound_ticket: Path
+    omitted: subprocess.CompletedProcess[str]
+    omitted_run: str
+    omitted_draft: Path
+    omitted_account: Path
+    first_account: Path
     legacy: Pass
     legacy_board_before: list[str]
     legacy_board_after: list[str]
@@ -1184,6 +1234,44 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     f"command -v onetaskgraph > {PLAN_STORE_WITNESS} 2>&1; "
                     f"onetaskgraph --version >> {PLAN_STORE_WITNESS} 2>&1",
                 ],
+                # The account its task's last step asks for: one disposition per draft it
+                # was given, the three that reached the board and the one an accepted fix
+                # had already removed.
+                _accounting(
+                    bench,
+                    python,
+                    main,
+                    [
+                        _disposed(
+                            new_draft,
+                            main,
+                            tickets.Disposition.FILED,
+                            (NEW_CAUSE,),
+                            "Its claim holds at the basis; this run's ticket carries it.",
+                        ),
+                        _disposed(
+                            shared_draft,
+                            main,
+                            tickets.Disposition.FILED,
+                            (SHARED_CAUSE,),
+                            "The earlier run's open issue took this run's evidence.",
+                        ),
+                        _disposed(
+                            related_draft,
+                            main,
+                            tickets.Disposition.FILED,
+                            (RELATED_CAUSE,),
+                            "Its claim holds beside a proposal nothing assumes.",
+                        ),
+                        _disposed(
+                            evaporated_draft,
+                            main,
+                            tickets.Disposition.ALREADY_FIXED,
+                            (),
+                            f"The accepted fix in {REMOVING_URL} removes its root cause too.",
+                        ),
+                    ],
+                ),
             ],
         )
         first = _pass(bench, "first", main, report=DROPPED_REPORT)
@@ -1331,10 +1419,55 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             [
                 ["mkdir", "-p", str(unsound_ticket.parent)],
                 ["cp", str(_staged(bench, "unsound.md", rendered)), str(unsound_ticket)],
+                # Its account is sound, so what this run is refused for is the ticket alone.
+                _accounting(
+                    bench,
+                    python,
+                    unsound_run,
+                    [
+                        _disposed(
+                            unsound_draft,
+                            unsound_run,
+                            tickets.Disposition.FILED,
+                            ("left-unsound",),
+                            "Filed, though the ticket it wrote fails the shape.",
+                        )
+                    ],
+                    name="unsound-account.py",
+                ),
             ],
         )
         unsound = _run(["just", "follow-ups", unsound_run, "--to", BOARD], bench)
         started.append(f"{unsound_run}{SUFFIX}")
+
+        # A run whose agent accounts for one of its two drafts and leaves the other out.
+        omitted_run = f"fu-omitted-{pid}"
+        named_draft = _draft(bench, omitted_run, "A draft the account names")
+        omitted_draft = _draft(bench, omitted_run, "A draft the account leaves out")
+        _script(
+            bench,
+            omitted_run,
+            [
+                _accounting(
+                    bench,
+                    python,
+                    omitted_run,
+                    [
+                        _disposed(
+                            named_draft,
+                            omitted_run,
+                            tickets.Disposition.NOT_REPRODUCIBLE,
+                            (),
+                            "Nothing in the tree at the basis bears the claim out.",
+                        )
+                    ],
+                    name="omitted-account.py",
+                )
+            ],
+        )
+        omitted = _run(["just", "follow-ups", omitted_run, "--to", BOARD], bench)
+        started.append(f"{omitted_run}{SUFFIX}")
+        omitted_account = tickets.dispositions_path(bench.drafts_root, omitted_run)
 
         # A run whose tickets were filed at schema 4, carrying `## Repository` and options under
         # `## Suggested fixes` — the shape of the tickets already on the live board — one of
@@ -1494,6 +1627,11 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             edited_comment=edited_comment,
             unsound=unsound,
             unsound_ticket=unsound_ticket,
+            omitted=omitted,
+            omitted_run=omitted_run,
+            omitted_draft=omitted_draft,
+            omitted_account=omitted_account,
+            first_account=tickets.dispositions_path(bench.drafts_root, main),
             legacy=legacy,
             legacy_board_before=legacy_board_before,
             legacy_board_after=legacy_board_after,
@@ -1533,6 +1671,276 @@ def test_a_run_with_no_drafts_or_tickets_ends_at_one_line_and_launches_nothing(
     ]
     assert not (followed.bench.runs / f"{followed.empty_run}{SUFFIX}").exists()
     assert not (followed.bench.plans / "projects" / f"{followed.empty_run}{SUFFIX}.md").exists()
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in plan_tooling's dedicated installed-engine Nx tier. That tier's workspace input
+# covers the recipe, task module and store configuration this test exercises.
+def test_a_consumed_runs_incomplete_account_is_refused_even_without_remaining_drafts(
+    followed: Followed,
+) -> None:
+    run = f"{followed.empty_run}-incomplete"
+    account = tickets.dispositions_path(followed.bench.drafts_root, run)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    missing = f"drafts:{run}/drafts/consumed"
+    account.write_text(
+        json.dumps(
+            {"schema": tickets.ARTIFACT_SCHEMA, "run": run, "drafts": [missing], "dispositions": []}
+        ),
+        encoding="utf-8",
+    )
+
+    refused = _run(["just", "follow-ups", run, "--to", BOARD], followed.bench)
+
+    assert refused.returncode == REFUSED
+    assert missing in refused.stderr
+    assert not (followed.bench.runs / f"{run}{SUFFIX}").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_consumed_runs_account_disposing_of_a_draft_twice_is_refused_naming_it(
+    followed: Followed,
+) -> None:
+    """A draft given two dispositions has no one answer, so the recipe refuses the run."""
+    run = f"{followed.empty_run}-twice"
+    account = tickets.dispositions_path(followed.bench.drafts_root, run)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    twice = f"drafts:{run}/drafts/consumed"
+    entry = {
+        "draft": twice,
+        "disposition": tickets.Disposition.NOT_REPRODUCIBLE.value,
+        "root_causes": [],
+        "detail": "The claim did not hold at its basis.",
+    }
+    account.write_text(
+        json.dumps(
+            {
+                "schema": tickets.ARTIFACT_SCHEMA,
+                "run": run,
+                "drafts": [twice],
+                "dispositions": [entry, {**entry, "disposition": "too-low-impact"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    refused = _run(["just", "follow-ups", run, "--to", BOARD], followed.bench)
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert f"the draft {twice} carries 2 dispositions" in refused.stderr
+    assert not (followed.bench.runs / f"{run}{SUFFIX}").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_consumed_runs_complete_account_exits_without_launching(
+    followed: Followed,
+) -> None:
+    run = f"{followed.empty_run}-complete"
+    account = tickets.dispositions_path(followed.bench.drafts_root, run)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    missing = f"drafts:{run}/drafts/consumed"
+    account.write_text(
+        json.dumps(
+            {
+                "schema": tickets.ARTIFACT_SCHEMA,
+                "run": run,
+                "drafts": [missing],
+                "dispositions": [
+                    {
+                        "draft": missing,
+                        "disposition": tickets.Disposition.NOT_REPRODUCIBLE.value,
+                        "root_causes": [],
+                        "detail": "The claim did not hold at its basis.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ended = _run(["just", "follow-ups", run, "--to", BOARD], followed.bench)
+
+    assert ended.returncode == OK, ended.stdout + ended.stderr
+    assert "nothing to verify and no follow-up run was launched" in ended.stdout
+    assert not (followed.bench.runs / f"{run}{SUFFIX}").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+@pytest.mark.parametrize(
+    ("kind", "refusal"),
+    [
+        ("null", "`dispositions` is not a list"),
+        ("entry", "entry 0 is missing keys"),
+        ("missing-drafts", "is missing keys: drafts"),
+    ],
+)
+def test_a_retry_refuses_a_malformed_existing_account_without_rewriting_it(
+    followed: Followed,
+    kind: str,
+    refusal: str,
+) -> None:
+    run = f"{followed.empty_run}-malformed-{kind}"
+    draft = _draft(followed.bench, run, "An existing account must survive a retry")
+    account = tickets.dispositions_path(followed.bench.drafts_root, run)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    document: dict[str, object] = {
+        "schema": tickets.ARTIFACT_SCHEMA,
+        "run": run,
+        "dispositions": None if kind == "null" else [{"draft": _draft_id(run, draft)}],
+    }
+    if kind != "missing-drafts":
+        document["drafts"] = [_draft_id(run, draft)]
+    written = json.dumps(document)
+    account.write_text(written, encoding="utf-8")
+
+    refused = _run(["just", "follow-ups", run, "--to", BOARD], followed.bench)
+
+    assert refused.returncode == REFUSED
+    assert refusal in refused.stderr
+    assert account.read_text(encoding="utf-8") == written
+    assert not (followed.bench.runs / f"{run}{SUFFIX}").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_retry_keeps_consumed_drafts_in_its_input_set_as_new_drafts_arrive(
+    followed: Followed,
+) -> None:
+    bench = followed.bench
+    run = f"{followed.empty_run}-growing"
+    new_draft = _draft(bench, run, "A draft arriving after the first pass")
+    old_id = f"drafts:{run}/drafts/already-consumed"
+    new_id = _draft_id(run, new_draft)
+    account = tickets.dispositions_path(bench.drafts_root, run)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    prior = {
+        "draft": old_id,
+        "disposition": tickets.Disposition.NOT_REPRODUCIBLE.value,
+        "root_causes": [],
+        "detail": "The first pass could not reproduce this draft.",
+    }
+    account.write_text(
+        json.dumps(
+            {
+                "schema": tickets.ARTIFACT_SCHEMA,
+                "run": run,
+                "drafts": [old_id],
+                "dispositions": [prior],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _script(bench, run, [["true"]])
+
+    refused = _run(["just", "follow-ups", run, "--to", BOARD], bench)
+
+    assert refused.returncode == UNSOUND, refused.stdout + refused.stderr + _ran(bench)
+    assert f"the draft {new_id} is absent from this account" in refused.stderr
+    retained = json.loads(account.read_text(encoding="utf-8"))
+    assert retained["drafts"] == sorted((old_id, new_id))
+    assert retained["dispositions"] == [prior]
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_draft_filename_outside_the_id_grammar_refuses_the_recipe_before_launch(
+    followed: Followed,
+) -> None:
+    bench = followed.bench
+    run = f"{followed.empty_run}-invalid-draft-name"
+    directory = bench.drafts_root / "tasks" / run / "drafts"
+    directory.mkdir(parents=True)
+    invalid = directory / "an invalid draft.md"
+    invalid.write_text("A malformed draft name.\n", encoding="utf-8")
+    try:
+        refused = _run(["just", "follow-ups", run, "--to", BOARD], bench)
+
+        assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+        assert "an invalid draft.md' is not a draft id" in refused.stderr
+        assert not tickets.dispositions_path(bench.drafts_root, run).exists()
+        assert not (bench.runs / f"{run}{SUFFIX}").exists()
+    finally:
+        invalid.unlink()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_filed_account_with_only_a_local_ticket_is_refused_after_the_dispatch(
+    followed: Followed,
+) -> None:
+    bench = followed.bench
+    run = f"{followed.empty_run}-not-copied"
+    draft = _draft(bench, run, "A draft whose ticket was left local")
+    cause = "ticket-left-local"
+    ticket = tickets.ticket_path(bench.drafts_root, run, cause)
+    rendered = tickets.render(
+        _ticket(run, cause, (_draft_id(run, draft),), "some-service: ticket left local", "Local")
+    )
+    _script(
+        bench,
+        run,
+        [
+            ["mkdir", "-p", str(ticket.parent)],
+            ["cp", str(_staged(bench, "not-copied.md", rendered)), str(ticket)],
+            _accounting(
+                bench,
+                str(REPO_ROOT / ".venv" / "bin" / "python3"),
+                run,
+                [
+                    _disposed(
+                        draft,
+                        run,
+                        tickets.Disposition.FILED,
+                        (cause,),
+                        "The ticket was written, but the copy was skipped.",
+                    )
+                ],
+                name="not-copied-account.py",
+            ),
+        ],
+    )
+
+    refused = _run(["just", "follow-ups", run, "--to", BOARD], bench)
+
+    assert refused.returncode != OK
+    assert f"filed root cause {cause} has a local ticket but no bound item" in refused.stderr
+    assert ticket.is_file()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_recipe_launches_one_direct_node_under_the_graph_that_settles_on_the_members_exit(
@@ -1674,6 +2082,10 @@ def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
         str(REPO_ROOT),
         "--plan-store",
         plan_store,
+        "--dispositions",
+        str(tickets.dispositions_path(bench.drafts_root, run)),
+        "--check-dispositions",
+        f"{written} check-dispositions --root {bench.drafts_root} {run}",
     ]
 
 
@@ -2501,3 +2913,220 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     )
     assert followed.board_after_second == followed.board_before_second
     assert _deps(followed.bench, tickets.qualified_id(followed.main, NEW_CAUSE)) == []
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_the_initial_passs_account_names_every_draft_it_was_given_exactly_once(
+    followed: Followed,
+) -> None:
+    """The account the first pass left, over the input set the recipe recorded before it.
+
+    The three drafts whose evidence reached the board are linked to the root causes they
+    support; the fourth, which an accepted fix had already removed, is `already-fixed` under
+    that item's URL. The recipe ran the same validator after the run settled, and exiting
+    `0` is what says it read the account as complete.
+    """
+    account = json.loads(followed.first_account.read_text(encoding="utf-8"))
+    new_draft, shared_draft, evaporated_draft, related_draft = followed.consumed
+
+    assert followed.first.result.returncode == OK, followed.first.result.stderr
+    assert account["run"] == followed.main
+    assert account["drafts"] == sorted(
+        _draft_id(followed.main, draft) for draft in followed.consumed
+    )
+    assert [one["draft"] for one in account["dispositions"]] == [
+        _draft_id(followed.main, draft)
+        for draft in (new_draft, shared_draft, related_draft, evaporated_draft)
+    ]
+    filed = {
+        one["draft"]: one["root_causes"]
+        for one in account["dispositions"]
+        if one["disposition"] == tickets.Disposition.FILED.value
+    }
+    assert filed == {
+        _draft_id(followed.main, new_draft): [NEW_CAUSE],
+        _draft_id(followed.main, shared_draft): [SHARED_CAUSE],
+        _draft_id(followed.main, related_draft): [RELATED_CAUSE],
+    }
+    (removed,) = [
+        one
+        for one in account["dispositions"]
+        if one["disposition"] == tickets.Disposition.ALREADY_FIXED.value
+    ]
+    assert removed["draft"] == _draft_id(followed.main, evaporated_draft)
+    assert REMOVING_URL in removed["detail"]
+    assert removed["root_causes"] == []
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_run_whose_account_leaves_a_draft_out_fails_the_recipe_naming_that_draft(
+    followed: Followed,
+) -> None:
+    """The attached path's second binding, driven through the real recipe.
+
+    Nothing else refuses this run: it wrote no ticket, so the ticket-shape check passes,
+    and the dispatch settled `done`. What fails it is the account, and the refusal names
+    the draft nothing says the fate of — the failure that was invisible while the account
+    was prose in the agent's report, and that the accidental full re-verification of a
+    feedback re-dispatch used to be the only thing to catch.
+    """
+    omitted, bench = followed.omitted, followed.bench
+
+    assert omitted.returncode == UNSOUND, omitted.stdout + omitted.stderr + _ran(bench)
+    left_out = _draft_id(followed.omitted_run, followed.omitted_draft)
+    assert f"the draft {left_out} is absent from this account" in omitted.stderr
+    assert f"follow-ups: the account at {followed.omitted_account} was refused above" in (
+        omitted.stderr
+    )
+    assert "is not a sound ticket" not in omitted.stderr, (
+        "something other than the account refused this run"
+    )
+    results = _run(["just", "results", f"{followed.omitted_run}{SUFFIX}"], bench)
+    assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
+
+    # And the account the recipe recorded before the dispatch holds both drafts, which is
+    # what makes the missing one visible: an input set re-derived afterwards would hold
+    # only the drafts nothing happened to.
+    account = json.loads(followed.omitted_account.read_text(encoding="utf-8"))
+    assert len(account["drafts"]) == 2 and left_out in account["drafts"], account
+    assert [one["draft"] for one in account["dispositions"]] == [
+        draft for draft in account["drafts"] if draft != left_out
+    ], account
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: The task template `just follow-ups` composes its node's task from, for the one journey
+#: below that doubles the engine. Written rather than copied, for the reason
+#: `delegation_checkout` writes the design template: what the template *says* is asserted
+#: against a real dispatch by this module's other journeys, and this one is about where the
+#: recipe lands and what it delegates. The prose below is only what this journey
+#: reads back out of the composed task; every other placeholder the initial mode owes is
+#: appended from the composer's own set, because a template missing one is refused before
+#: anything is delegated and a spelled copy left this journey failing on the placeholders
+#: the initial/feedback split added rather than on anything it is about.
+FOLLOW_UPS_TEMPLATE = "config/follow-up-task.md"
+FOLLOW_UPS_TEMPLATE_PROSE = (
+    "Verify run @RUN@ onto @BOARD@ from @DRAFTS_ROOT@; validate with @VALIDATE@ in @CHECKOUT@.\n"
+    "Decide each status with @BOARD_STATUS@, list the board with @BOARD_ITEMS@, copy with "
+    "@COPY@, and read the store with @PLAN_STORE@.\n"
+    "Assume the accepted items' fixes — @ACCEPTED_STATUSES@ — listed by @ACCEPTED_FILTER@.\n"
+)
+FOLLOW_UPS_TEMPLATE_TEXT = FOLLOW_UPS_TEMPLATE_PROSE + "".join(
+    f"@{name}@\n"
+    for name in tickets.Mode.INITIAL.placeholders
+    if f"@{name}@" not in FOLLOW_UPS_TEMPLATE_PROSE
+)
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# This journey runs in the plan_tooling Nx project, whose planToolingWorkspace key carries
+# follow_up_tickets.py and every script the recipe reads. It is `just follow-ups`' row of
+# the delegation table, and doubles what that table doubles for the reason its module
+# states: the engine is the published CLI the recipe delegates to, so its recorded argv is
+# the subject, while the recipe, its scripts and the shell are real — and this module's
+# other journeys prove what the real engine does with that launch. The run directory it
+# makes is the engine's run root holding an id, which only a launch the double does not
+# make would produce; the free-id choice the recipe makes over it is what is asserted.
+def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
+    tmp_path: Path,
+) -> None:
+    """`just follow-ups run-1` writes `authoring:run-1-follow-ups` and launches it, gated.
+
+    One direct node naming `graphs/follow-up.yaml`, launched on `--dag-graph off` with no
+    other flag. A second launch while a run root already holds the first id launches the
+    same project under the next free id, which the project's `name` — the run id the engine
+    mints — carries.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    (checkout / FOLLOW_UPS_TEMPLATE).write_text(FOLLOW_UPS_TEMPLATE_TEXT, encoding="utf-8")
+    # The plan-store CLI this checkout is provisioned with, which is the only program the
+    # recipe will write into the composed task: it names its own checkout's or refuses, so
+    # a checkout without one launches nothing at all. Linked to the installed CLI rather
+    # than written, because the recipe requires an executable and the task carries its path.
+    store = checkout / ".venv" / "bin" / "onetaskgraph"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.symlink_to(ONETASKGRAPH_BIN)
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+    # The disposition account the dispatch would leave. The engine below the recipe is the
+    # doubled boundary here, so nothing dispatches and nothing writes one — and the
+    # recipe's attached path validates the account after the launch returns, so without
+    # this the journey would read that refusal rather than what the recipe delegated.
+    # This module's real dispatches are where one is written and where the refusal is the
+    # subject.
+    account = tickets.dispositions_path(checkout / ".follow-ups", "run-1")
+    account.parent.mkdir(parents=True, exist_ok=True)
+    account.write_text(
+        json.dumps(
+            {
+                "schema": tickets.ARTIFACT_SCHEMA,
+                "run": "run-1",
+                "drafts": tickets.draft_ids(checkout / ".follow-ups", "run-1"),
+                "dispositions": [
+                    {
+                        "draft": draft,
+                        "disposition": tickets.Disposition.NOT_REPRODUCIBLE.value,
+                        "root_causes": [],
+                        "detail": "nothing in the tree bears the draft out",
+                    }
+                    for draft in tickets.draft_ids(checkout / ".follow-ups", "run-1")
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = tuple(
+        delegation_checkout.at(checkout, line)
+        for line in (
+            "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+            delegation_checkout.ENGINE_VERSION,
+            f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
+            "authoring:run-1-follow-ups --dag-graph off",
+        )
+    )
+
+    first = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
+
+    assert first.returncode == 0, first.stderr
+    assert trace.read_text().splitlines() == list(launched)
+    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    assert 'title: "run-1-follow-ups"' in project
+    assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
+    node = (checkout / ".plans/tasks/run-1-follow-ups/follow-ups.md").read_text(encoding="utf-8")
+    assert '"onepipeline.agent_graph": "graphs/follow-up.yaml"' in node
+    assert '"onepipeline.persona": "../personas/follow-up.yaml"' in node
+    front_matter = node.split("---\n", 2)[1]
+    assert '"onepipeline.repo"' not in front_matter, "a direct node names no repository"
+    assert "repositories:" not in front_matter, "a direct node names no repository"
+    assert f"Verify run run-1 onto followups from {checkout / '.follow-ups'}" in node
+    # The plan store the composed task names: this checkout's own, spelled in full. Never
+    # the one on the search path, which answers about whichever checkout provisioned it —
+    # the resolution two real runs were made wrong by.
+    assert f"read the store with {store}" in node, node
+    assert shutil.which("onetaskgraph", path=os.environ["PATH"]) != str(store), (
+        "this journey's search path already resolves to the checkout's own store, so the "
+        "assertion above would hold however the recipe resolved it"
+    )
+
+    (checkout / "runs" / "run-1-follow-ups").mkdir(parents=True)
+    second = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
+
+    assert second.returncode == 0, second.stderr
+    assert trace.read_text().splitlines() == [*launched, *launched]
+    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    assert 'title: "run-1-follow-ups-2"' in project
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line

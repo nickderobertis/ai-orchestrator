@@ -1814,10 +1814,26 @@ before anything is asked of the board, so it is reported rather than filed.
 ownership on that board: a run changes only the issues its own tickets created and the
 comments whose marker names it — its evidence on another run's issue, and its replies to
 people's comments. The recipe refuses a run something is still driving,
-launches nothing for a run holding no drafts or tickets, and checks every ticket once an
-attached run settles. `--feedback FILE` re-dispatches over the same run with the manager's
-words in the task, `--detach` returns at the launch record printing the follow-up run and
-its watch command, and `--to SOURCE` copies onto another configured source.
+launches nothing for an initial run holding no drafts or tickets after checking any
+existing disposition account, and checks the mode's own account
+once an attached run settles. `--feedback FILE` re-dispatches over the same run with the
+manager's words in the task, `--detach` returns at the launch record printing the follow-up
+run and its watch command, and `--to SOURCE` copies onto another configured source.
+
+**A dispatch is composed in one of two modes, and the caller states which.** Initial
+mode — every launch but a comment gathering — is the task above, and owes a disposition
+artifact giving each of the drafts the recipe recorded before the dispatch exactly one
+of `filed`, `not-reproducible`, `already-fixed` or `too-low-impact`, which
+`python -m orchestrator.follow_up_tickets check-dispositions` reads back. Feedback mode —
+what `just follow-ups-handle-comments` composes, passing `--comments` through — is the far
+shorter `config/follow-up-feedback-task.md`: it answers only the comments that gathering
+quoted, in order, changes only the ticket of an issue a quoted comment sits on, and owes a
+response artifact `python -m orchestrator.follow_up_tickets check-responses` reads back
+against the board's own replies. Each composed task's own acceptance criteria name its
+validator, which is what binds the detached run the success hook launches, and an attached
+run has the recipe re-run it. Before the split there was one task, and a comment-only
+re-dispatch spent its paid turn re-reading and re-copying every unrelated ticket after its
+replies were already posted, until it reached the provider's deadline.
 
 **A ticket names its host and reaches the board as a proposal.** Evidence is a claim about
 trees read on one machine — its registered checkouts, its installed tools, its run

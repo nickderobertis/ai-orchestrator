@@ -15,10 +15,11 @@ branch through a real launch; this holds that no other branch appeared beside it
 It reads the executable surfaces — the justfile, `scripts/`, `orchestrator/`, `graphs/` and
 `.githooks/` — two ways. A shell, YAML or justfile line is scanned as text, skipping
 comments and the lines that only *name* the recipe to a reader (`echo`, `printf`, a usage
-string, a `fail` diagnostic). A Python file is parsed, because Python launches by argument
-list and names the recipe in docstrings: a `"just", "follow-ups"` pair in a list or tuple,
-or a string that names `scripts/follow-ups.sh` outside a docstring, is a launch. Markdown is
-prose and is skipped. A launch spelled through a variable is missed, which is the gap a
+string, a `fail` diagnostic, the re-dispatch an account's refusal suggests). A Python file
+is parsed, because Python launches by argument list and names the recipe in docstrings: a
+`"just", "follow-ups"` pair in a list or tuple, or a string that names
+`scripts/follow-ups.sh` outside a docstring, is a launch. Markdown is prose and is
+skipped. A launch spelled through a variable is missed, which is the gap a
 reviewer reading a new launcher is left to close.
 """
 
@@ -36,8 +37,10 @@ SURFACES = ("justfile", "scripts", "orchestrator", "graphs", ".githooks")
 #: A line that runs the recipe or the script behind it.
 LAUNCH = re.compile(r"\bjust\s+follow-ups\b|\bscripts/follow-ups\.sh\b")
 
-#: A line that only names the recipe to a reader, by its first word.
-NAMING = re.compile(r"^\s*(#|echo\b|printf\b|fail\b|usage=|\"|')")
+#: A line that only names the recipe to a reader, by its first word. `again=` is one of
+#: those: `scripts/follow-ups.sh` composes the re-dispatch it suggests to an operator whose
+#: account was refused, and echoes it in a diagnostic, exactly as `usage=` above it does.
+NAMING = re.compile(r"^\s*(#|echo\b|printf\b|fail\b|usage=|again=|\"|')")
 
 #: The launches that exist on purpose, as file → the one line each holds.
 ALLOWED = {
@@ -46,7 +49,7 @@ ALLOWED = {
         'output=$(cd -- "$checkout" && just follow-ups "$run" --detach) || status=$?'
     ),
     "scripts/follow-ups-handle-comments.sh": (
-        'exec "$checkout/scripts/follow-ups.sh" "$run" --feedback "$feedback" '
+        'exec "$checkout/scripts/follow-ups.sh" "$run" --feedback "$feedback" --comments '
         '${passed[@]+"${passed[@]}"}'
     ),
 }

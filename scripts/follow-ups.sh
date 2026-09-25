@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dispatch the follow-up agent over one run's drafted follow-ups: `just follow-ups <run-id>
-# [--feedback FILE] [--detach] [--to SOURCE]`.
+# [--feedback FILE] [--comments] [--detach] [--to SOURCE]`.
 #
 # During a run every party drafts what it noticed outside its own scope as an unverified
 # follow-up in the run's draft project (`orchestrator/follow_up_drafts.py`). This recipe
@@ -9,7 +9,9 @@
 # cause beside the drafts, and copies each onto the `followups` board — commenting on
 # another run's open issue for the same root cause instead of duplicating it. The ticket's
 # shape and who owns what on the board are `orchestrator/follow_up_tickets.py`'s, which
-# renders both into the task this composes from `config/follow-up-task.md`.
+# renders both into the task this composes from `config/follow-up-task.md`. A re-dispatch
+# over the board's own comments composes the narrower `config/follow-up-feedback-task.md`
+# instead, as `--comments` below says.
 #
 # `scripts/plan.sh` is the precedent for everything about the launch, and each departure
 # from it is named:
@@ -50,12 +52,30 @@
 #   * `--to` names the board the tickets are copied onto, for a journey standing a local
 #     store in for the live board, and is refused unless it names a configured source;
 #   * `--feedback FILE` puts that file's text into the composed task verbatim, under a
-#     heading of its own, for a re-dispatch over the same run's drafts, tickets and board.
+#     heading of its own, for a re-dispatch over the same run's drafts, tickets and board;
+#   * `--comments` says that file is a gathering of the board's own comments rather than a
+#     manager's prose, and composes the **feedback** mode instead — the narrow
+#     comment-answering task, with no inventory, no verification, no accepted-fix
+#     comparison, no status decision and no copy. It is refused without `--feedback`, and
+#     `scripts/follow-ups-handle-comments.sh` is its one caller.
 #
-# **Attached by default, and then the tickets are checked.** With no judge, what holds the
-# agent's output to its shape is this check and the manager's reading, so once an attached
-# run settles every ticket left under `tasks/<run-id>/tickets/` is validated and each one
-# that fails is named. **`--detach` returns once the launch record exists**, printing
+# **Which mode is the caller's to say, never the file's.** Sniffing a feedback file for
+# quoted comments would work for every file this repository writes and narrow silently the
+# first time a manager's own feedback happened to quote one, so the mode is a flag: a bare
+# `--feedback` stays the full re-dispatch AGENTS.md documents for a manager, and only the
+# comment gathering asks for the narrow one.
+#
+# **Attached by default, and then the mode's own account is checked.** With no judge, what
+# holds the agent's output to its shape is this check and the manager's reading, so once an
+# attached run settles the validator that matches the mode is run and its refusal is what
+# this recipe exits non-zero with. In initial mode that is every ticket left under
+# `tasks/<run-id>/tickets/` validated and each one that fails named, then the disposition
+# artifact checked for a disposition per input draft; in feedback mode it is the response
+# artifact alone, because a run answering comments touches no ticket and reading the
+# tickets would refuse it for somebody else's unfinished work. The task's own steps name
+# the same validator, which is what binds the detached path the success hook launches.
+#
+# **`--detach` returns once the launch record exists**, printing
 # exactly `follow-up run: <id>` and `watch it with: just watch <id>` on stdout, because the
 # engine's success hook calls it that way under a deadline an attached run would outlive.
 # The launch goes through `scripts/onepipeline.sh`, which keeps an exported launcher
@@ -73,8 +93,10 @@ NODE_ID="follow-ups"
 PERSONA="../personas/follow-up.yaml"
 GRAPH="graphs/follow-up.yaml"
 
-#: The task template, relative to this checkout.
+#: The task template of each mode, relative to this checkout, and their one statement:
+#: `tests/test_follow_up_tickets.py` reads these two lines to compose each template.
 TEMPLATE="config/follow-up-task.md"
+FEEDBACK_TEMPLATE="config/follow-up-feedback-task.md"
 
 #: The source the project is written into, and what its native id and run id append.
 PLAN_SOURCE="authoring"
@@ -99,11 +121,16 @@ import json, pathlib, sys
 
 from orchestrator.project_store import write_plan_project
 
-(root, native, name, run, node_id, persona, graph, task_file, direct_note, metadata) = sys.argv[1:11]
+(root, native, name, run, node_id, persona, graph, task_file, direct_note, metadata, mode) = sys.argv[1:12]
 task = pathlib.Path(task_file).read_text(encoding="utf-8").rstrip()
+goal = (
+    f"Answer the quoted comments on follow-up tickets for run {run}"
+    if mode == "feedback"
+    else f"Verify the follow-up drafts run {run} left, and put the verified tickets on the board"
+)
 plan = {
     "schema_version": 3,
-    "goal": {"text": f"Verify the follow-up drafts run {run} left, and put the verified tickets on the board"},
+    "goal": {"text": goal},
     "name": name,
     "tasks": [
         {
@@ -117,7 +144,7 @@ plan = {
 write_plan_project(pathlib.Path(root), plan, native_id=native, project_metadata=json.loads(metadata))
 '
 
-usage="just follow-ups <run-id> [--feedback FILE] [--detach] [--to SOURCE]"
+usage="just follow-ups <run-id> [--feedback FILE] [--comments] [--detach] [--to SOURCE]"
 
 fail() {
     echo "follow-ups: $1; $2" >&2
@@ -159,6 +186,7 @@ esac
 shift
 
 feedback=""
+comments=0
 detached=0
 board=""
 while [ $# -gt 0 ]; do
@@ -180,6 +208,10 @@ while [ $# -gt 0 ]; do
             detached=1
             shift
             ;;
+        --comments)
+            comments=1
+            shift
+            ;;
         *)
             fail "'$1' is not an option of this recipe" "usage: $usage"
             ;;
@@ -187,6 +219,10 @@ while [ $# -gt 0 ]; do
 done
 if [ -n "$feedback" ] && { [ ! -f "$feedback" ] || [ ! -r "$feedback" ]; }; then
     fail "the feedback file '$feedback' is not a readable file" "write the feedback there first, then retry"
+fi
+if [ "$comments" -eq 1 ] && [ -z "$feedback" ]; then
+    fail "--comments says which kind of feedback file this is, and none was named" \
+        "gather the board's comments with 'just follow-ups-handle-comments', which names both"
 fi
 
 runs_root="${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}"
@@ -217,16 +253,26 @@ load follow-up-env.sh
 export_follow_up_drafts follow-ups || exit "$?"
 drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
 
-counts=$("$python" -m orchestrator.follow_up_tickets inventory --root "$drafts_root" "$run") ||
-    fail "the drafts and tickets of run '$run' could not be counted under $drafts_root" \
-        "restore the pinned toolchain with 'just bootstrap', then retry"
-read -r held_drafts held_tickets <<<"$counts"
-# llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
-if ! [[ "$held_drafts" =~ $COUNT && "$held_tickets" =~ $COUNT ]]; then
-    fail "counting the drafts and tickets of run '$run' answered '$counts' rather than two counts" \
-        "restore the pinned toolchain with 'just bootstrap', then retry"
+if [ "$comments" -ne 1 ]; then
+    counts=$("$python" -m orchestrator.follow_up_tickets inventory --root "$drafts_root" "$run") ||
+        fail "the drafts and tickets of run '$run' could not be counted under $drafts_root" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+    read -r held_drafts held_tickets <<<"$counts"
+    # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+    if ! [[ "$held_drafts" =~ $COUNT && "$held_tickets" =~ $COUNT ]]; then
+        fail "counting the drafts and tickets of run '$run' answered '$counts' rather than two counts" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+    fi
 fi
-if [ "$held_drafts" -eq 0 ] && [ "$held_tickets" -eq 0 ]; then
+if [ "$comments" -ne 1 ] && [ "$held_drafts" -eq 0 ] && [ "$held_tickets" -eq 0 ]; then
+    # A previous pass can consume every draft and still leave an incomplete account.
+    # Read that account before calling the run empty; no artifact means no pass began.
+    prior=$("$python" -m orchestrator.follow_up_tickets dispositions-path --root "$drafts_root" "$run") ||
+        fail "the disposition account path for run '$run' could not be read" "repair the diagnostic above, then retry"
+    if [ -f "$prior" ]; then
+        "$python" -m orchestrator.follow_up_tickets check-dispositions --root "$drafts_root" "$run" >/dev/null ||
+            fail "the account at $prior was refused above" "correct it before treating this run as complete"
+    fi
     echo "follow-ups: run $run holds no follow-up drafts and no tickets under $drafts_root, so there is nothing to verify and no follow-up run was launched"
     exit 0
 fi
@@ -282,19 +328,65 @@ checkout=$(CDPATH='' cd -- "$script_dir/.." && pwd) || fail "this recipe's check
 store_cli="$checkout/.venv/bin/onetaskgraph"
 [ -x "$store_cli" ] || fail "this checkout has no plan-store CLI at $store_cli, and a task's store instructions may name no other" \
     "provision this checkout with 'just bootstrap', then retry"
-compose=(compose --template "$checkout/$TEMPLATE" --root "$drafts_root" --run "$run" --board "$board"
+tickets_module=("$python" -m orchestrator.follow_up_tickets)
+if [ "$comments" -eq 1 ]; then
+    mode=feedback
+    template="$FEEDBACK_TEMPLATE"
+    # The file is embedded in the dispatched task verbatim and its acceptance criteria rest
+    # on an account of the comments it quotes, so a file that is no gathering of this board
+    # is one nothing should be launched over.
+    # Quiet where it passes: this recipe's one status line is the launch it prints below,
+    # and the command's refusals reach standard error whatever this does with its answer.
+    "${tickets_module[@]}" check-gathering --board "$board" --feedback "$feedback" "$run" >/dev/null ||
+        fail "'$feedback' is not a gathering of '$board' this run could answer, so no follow-up run was launched" \
+            "gather the board's comments with 'just follow-ups-handle-comments $run', which writes one"
+    # Asked of the module rather than restated here: where one gathering's account goes is
+    # `responses_path`'s, and a second spelling of it would drift the day either moves.
+    account=$("${tickets_module[@]}" responses-path --feedback "$feedback") ||
+        fail "where the account answering '$feedback' goes could not be read" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+    validator=("${tickets_module[@]}" check-responses --board "$board" --feedback "$feedback" "$run")
+else
+    mode=initial
+    template="$TEMPLATE"
+    # Written before the launch, never by the dispatch: the agent deletes each draft a
+    # ticket consumed, so an input set derived afterwards would be the drafts nothing
+    # happened to. The artifact only grows, so a re-dispatch keeps the first pass's account.
+    account=$("${tickets_module[@]}" open-dispositions --root "$drafts_root" "$run") ||
+        fail "the drafts of run '$run' could not be recorded as this dispatch's input set under $drafts_root" \
+            "repair the account or draft file the refusal above names, keeping every answer it records, then retry 'just follow-ups $run'"
+    validator=("${tickets_module[@]}" check-dispositions --root "$drafts_root" --board "$board" "$run")
+fi
+
+compose=(compose --mode "$mode" --template "$checkout/$template" --root "$drafts_root" --run "$run"
+    --board "$board"
     --validate "\"$python\" -m orchestrator.follow_up_tickets validate"
     --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status"
     --board-items "\"$python\" -m orchestrator.follow_up_tickets board-items"
     --copy "\"$python\" -m orchestrator.follow_up_tickets copy" --checkout "$checkout"
     --plan-store "$store_cli")
 [ -z "$feedback" ] || compose+=(--feedback "$feedback")
-"$python" -m orchestrator.follow_up_tickets "${compose[@]}" >"$scratch" ||
-    fail "the follow-up agent's task could not be composed from $TEMPLATE" \
-        "the diagnostic above names what to repair"
+if [ "$comments" -eq 1 ]; then
+    printf -v quoted_python '%q' "$python"
+    printf -v quoted_board '%q' "$board"
+    printf -v quoted_feedback '%q' "$feedback"
+    printf -v quoted_run '%q' "$run"
+    compose+=(--responses "$account"
+        --check-responses "$quoted_python -m orchestrator.follow_up_tickets check-responses --board $quoted_board --feedback $quoted_feedback $quoted_run")
+else
+    printf -v quoted_python '%q' "$python"
+    printf -v quoted_root '%q' "$drafts_root"
+    printf -v quoted_board '%q' "$board"
+    printf -v quoted_run '%q' "$run"
+    compose+=(--dispositions "$account"
+        --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root --board $quoted_board $quoted_run")
+fi
+"${tickets_module[@]}" "${compose[@]}" >"$scratch" ||
+    fail "the follow-up agent's task could not be composed from $template" \
+        "restore the tracked template with 'git restore $template' and the toolchain with 'just bootstrap', then retry"
 
 "$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follow_up_run" "$run" "$NODE_ID" \
-    "$PERSONA" "$GRAPH" "$scratch" "$PLAN_DIRECT_PLACEMENT_NOTE" "$FOLLOW_UPS_METADATA" ||
+    "$PERSONA" "$GRAPH" "$scratch" "$PLAN_DIRECT_PLACEMENT_NOTE" "$FOLLOW_UPS_METADATA" "$mode" ||
     fail "the follow-ups project for run '$run' could not be written under $plan_root" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 
@@ -318,17 +410,37 @@ if [ "$detached" -eq 1 ]; then
     exit 0
 fi
 
-echo "follow-ups: launching run $follow_up_run to verify run $run's drafts onto '$board'; watch it with: just watch $follow_up_run" >&2
+if [ "$comments" -eq 1 ]; then
+    echo "follow-ups: launching run $follow_up_run to answer run $run's quoted comments on '$board'; watch it with: just watch $follow_up_run" >&2
+else
+    echo "follow-ups: launching run $follow_up_run to verify run $run's drafts onto '$board'; watch it with: just watch $follow_up_run" >&2
+fi
 status=0
 # llmlint: ignore[tool_output_is_signal] This is an attached launch, so streaming the run as it goes is what the operator stays attached for.
 "$script_dir/onepipeline.sh" start "$project" --dag-graph off || status=$?
 
-# With no judge, this is what holds the output to its shape: every ticket the run left is
-# validated through the store, and each one that fails is named with what is wrong.
+# With no judge, this is what holds the output to its shape. Initial mode validates every
+# ticket the run left through the store, then reads the disposition account; feedback mode
+# reads the response account and nothing else, because that dispatch is not the one that
+# writes tickets and a ticket another dispatch left unfinished is not its refusal to carry.
+again="just follow-ups $run --feedback FILE"
 checked=0
-"$python" -m orchestrator.follow_up_tickets check-run --root "$drafts_root" "$run" || checked=$?
-if [ "$checked" -ne 0 ]; then
-    echo "follow-ups: the ticket(s) named above under $drafts_root/tasks/$run/tickets fail the ticket shape; correct them, or re-dispatch with 'just follow-ups $run --feedback FILE'" >&2
+if [ "$comments" -ne 1 ]; then
+    "${tickets_module[@]}" check-run --root "$drafts_root" "$run" || checked=$?
+    if [ "$checked" -ne 0 ]; then
+        echo "follow-ups: the ticket(s) named above under $drafts_root/tasks/$run/tickets fail the ticket shape; correct them, or re-dispatch with '$again'" >&2
+    fi
+fi
+accounted=0
+"${validator[@]}" >/dev/null || accounted=$?
+if [ "$accounted" -ne 0 ]; then
+    if [ "$comments" -eq 1 ]; then
+        printf -v check_command '%q ' "${validator[@]}"
+        echo "follow-ups: the account at $account was refused above; correct it and run '${check_command% }', reusing any reply already posted under this run's marker" >&2
+    else
+        echo "follow-ups: the account at $account was refused above; correct it, or re-dispatch with '$again'" >&2
+    fi
+    [ "$checked" -ne 0 ] || checked=$accounted
 fi
 if [ "$status" -ne 0 ]; then
     echo "follow-ups: run $follow_up_run did not settle successfully; read it with 'just results $follow_up_run'" >&2

@@ -14,6 +14,7 @@ older than a response waits for the clock to pass a second between them.
 from __future__ import annotations
 
 import dataclasses
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -180,7 +181,13 @@ def test_only_a_persons_comments_after_the_runs_last_marked_comment_are_selected
     # A body carrying a fence is quoted inside a longer one, so it reaches the task whole.
     assert "````text\nThe examples still miss page 9 — see ```listing.py```.\n````" in written
     assert "- URL: file://" in written and "#comment-" in written
-    assert "**Never change a board item's status.**" in written
+    assert "**Never change a board item's status**" in written
+    # The anchor `follow_up_tickets.check-responses` reads this gathering's comments back
+    # out of: one per quoted comment, each naming the issue its own section names, in the
+    # order the sections appear, and none of them read out of a quoted body.
+    assert [one.issue for one in tickets.quoted_comments(written)] == re.findall(
+        r"^### Comment \d+: on `([^`]+)`", written, re.MULTILINE
+    ), written
     assert _snapshot(board) == before, "gathering feedback wrote to the board"
 
 
@@ -409,10 +416,12 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
         "for, or none.",
         "2. **Post its one reply**, naming the comment's id, as those rules state.",
         "3. **Report** the comment's URL beside what you did about it, or why you did nothing.",
-        "**Never change a board item's status.** Before every copy, write the status "
-        "`board-status` prints",
+        "**Never change a board item's status**, and never touch a ticket or an issue no "
+        "comment above names",
     ):
         assert said in flat, said
+    # The anchor sits with the comment it names, so the account's order is the file's.
+    assert tickets.quoted_comments(written) == [tickets.Quoted(own, identifier)], written
     assert "edit this run's one comment" not in flat, "the feedback restates an ownership rule"
     assert written.index("1. **Act on it**") < written.index("2. **Post its one reply**")
 

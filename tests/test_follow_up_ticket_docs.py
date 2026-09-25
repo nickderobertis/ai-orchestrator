@@ -212,6 +212,31 @@ def test_each_follow_up_section_writes_every_ticket_against_the_boards_accepted_
     )
 
 
+def test_the_manager_document_describes_both_modes_and_their_validators() -> None:
+    """AGENTS.md names the two modes, every disposition word, and the command checking each.
+
+    Both vocabularies are read out of the module rather than restated, so a mode renamed or
+    a disposition added leaves the manager reading a rule nothing enforces and fails here.
+    """
+    flat = " ".join(section("AGENTS.md", SECTIONS["AGENTS.md"]).split())
+
+    for mode in tickets.Mode:
+        assert f"**{mode.value.capitalize()} mode**" in flat, mode
+    for disposition in tickets.Disposition:
+        assert f"`{disposition.value}`" in flat, disposition
+    for command in ("check-dispositions", "check-responses"):
+        assert f"`python -m orchestrator.follow_up_tickets {command}`" in flat, command
+    for said in (
+        "Which mode is the **caller's** to state and is never inferred from a feedback "
+        "file's contents",
+        "every input draft with exactly one disposition",
+        "only the comments that gathering quoted",
+        "each composed task's own acceptance criteria require its validator green",
+        "an attached `just follow-ups` re-runs it after the dispatch settles",
+    ):
+        assert said in flat, said
+
+
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 

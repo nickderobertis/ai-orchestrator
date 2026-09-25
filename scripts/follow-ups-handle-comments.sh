@@ -4,8 +4,11 @@
 #
 # `orchestrator/follow_up_comments.py` decides which comments are feedback and writes the
 # file; this script only parses the invocation, resolves the drafts root through the one
-# helper, and hands that file to `scripts/follow-ups.sh --feedback`, so every refusal that
-# path makes is made there once rather than restated here.
+# helper, and hands that file to `scripts/follow-ups.sh --feedback --comments`, so every
+# refusal that path makes is made there once rather than restated here.
+#
+# `--comments` selects the feedback mode explicitly because this caller knows the
+# file's origin; an initial task may also quote comments without changing its mode.
 set -euo pipefail
 
 usage="just follow-ups-handle-comments <run-id> [--detach] [--to SOURCE]"
@@ -92,5 +95,6 @@ drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
 feedback=$(cd -- "$checkout" && "$python" -m orchestrator.follow_up_comments feedback \
     --root "$drafts_root" ${board[@]+"${board[@]}"} "$run") || exit 2
 
+# llmlint: ignore[tool_output_is_signal] This line is the only place the gathering's path is printed: with `--detach` nothing after it names the file, and a refusal `follow-ups.sh` makes before launching is repaired by re-running with this path, so the launch line that follows cannot carry it for both.
 echo "follow-ups-handle-comments: wrote run $run's new board comments to $feedback; re-dispatching with it as feedback" >&2
-exec "$checkout/scripts/follow-ups.sh" "$run" --feedback "$feedback" ${passed[@]+"${passed[@]}"}
+exec "$checkout/scripts/follow-ups.sh" "$run" --feedback "$feedback" --comments ${passed[@]+"${passed[@]}"}

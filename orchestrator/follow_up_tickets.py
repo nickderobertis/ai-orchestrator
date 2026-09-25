@@ -48,12 +48,13 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections import Counter
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, NamedTuple, NewType, NoReturn
+from typing import Literal, NamedTuple, NewType, NoReturn, cast
 
 from onetaskgraph_sdk import CopyReport
 
@@ -463,11 +464,44 @@ COMMENT_ID = re.compile(r'[^\s">]+')
 #: The suffix a ticket's file carries.
 TICKET_SUFFIX = ".md"
 
-#: The placeholders the task template is filled at: values it may name as often as its
+#: The placeholders a task template is filled at: values it may name as often as its
 #: prose needs them, and sections it names exactly once, since a section rendered twice is
 #: two copies of a contract in one task.
 PLACEHOLDER = re.compile(r"@([A-Z][A-Z_]*)@")
-VALUES = (
+
+
+class Mode(StrEnum):
+    """Which dispatch a task is composed for. Each has its own template and its own account.
+
+    **Initial** verifies a run's drafts and puts the tickets that stand on the board; it is
+    what a launch with no gathered feedback composes. **Feedback** answers the board
+    comments one gathering quoted and does nothing else: no inventory, no verification, no
+    accepted-fix comparison, no status decision and no copy for a ticket no quoted comment
+    names. Before the split there was one template, and a comment-only re-dispatch re-read
+    and re-copied every unrelated ticket **after** its replies were already posted, which
+    is how it reached the provider's deadline with the work it was dispatched for done.
+    """
+
+    INITIAL = "initial"
+    FEEDBACK = "feedback"
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        """The placeholders this mode's template may name as often as it likes."""
+        return _MODE_VALUES[self]
+
+    @property
+    def sections(self) -> tuple[str, ...]:
+        """The placeholders this mode's template names exactly once."""
+        return _MODE_SECTIONS[self]
+
+    @property
+    def placeholders(self) -> tuple[str, ...]:
+        """Every placeholder this mode's template names, each at least once."""
+        return (*self.values, *self.sections)
+
+
+INITIAL_VALUES = (
     "RUN",
     "BOARD",
     "DRAFTS_ROOT",
@@ -479,9 +513,38 @@ VALUES = (
     "PLAN_STORE",
     "ACCEPTED_STATUSES",
     "ACCEPTED_FILTER",
+    "DISPOSITIONS",
+    "CHECK_DISPOSITIONS",
 )
-SECTIONS = ("STATUS_VOCABULARY", "TICKET_CONTRACT", "COMMENT_CONTRACT", "REDISPATCH", "FEEDBACK")
-PLACEHOLDERS = (*VALUES, *SECTIONS)
+INITIAL_SECTIONS = (
+    "STATUS_VOCABULARY",
+    "TICKET_CONTRACT",
+    "COMMENT_CONTRACT",
+    "DISPOSITION_CONTRACT",
+    "REDISPATCH",
+    "FEEDBACK",
+)
+INITIAL_PLACEHOLDERS = (*INITIAL_VALUES, *INITIAL_SECTIONS)
+
+FEEDBACK_VALUES = (
+    "RUN",
+    "BOARD",
+    "CHECKOUT",
+    "PLAN_STORE",
+    "DRAFTS_ROOT",
+    "TICKET_METADATA_KEY",
+    "VALIDATE",
+    "BOARD_STATUS",
+    "COPY",
+    "FEEDBACK_FILE",
+    "RESPONSES",
+    "CHECK_RESPONSES",
+)
+FEEDBACK_SECTIONS = ("COMMENT_CONTRACT", "RESPONSE_CONTRACT", "FEEDBACK")
+FEEDBACK_PLACEHOLDERS = (*FEEDBACK_VALUES, *FEEDBACK_SECTIONS)
+
+_MODE_VALUES = {Mode.INITIAL: INITIAL_VALUES, Mode.FEEDBACK: FEEDBACK_VALUES}
+_MODE_SECTIONS = {Mode.INITIAL: INITIAL_SECTIONS, Mode.FEEDBACK: FEEDBACK_SECTIONS}
 
 #: This command's name in its diagnostics.
 PROG = "follow-up-tickets"
@@ -511,6 +574,23 @@ DUPLICATE_OPENING = (
     "Withdrawn as a duplicate: this ticket's work continues on {survivor}, and follow-up "
     "run `{run}` copies it there from now on."
 )
+
+#: **The line a gathered feedback file anchors each comment it quotes on.** The grammar is
+#: declared here, beside the markers, because two programs read it: `follow_up_comments`
+#: renders it into every `### Comment` section it writes, and the response artifact's
+#: validator below reads the comments one feedback file quotes back out of it. A prose
+#: heading would have been the alternative, and a heading an agent reflows is a grammar
+#: that drifts the first time one does.
+QUOTED_COMMENT = '<!-- orchestrator:follow-up-quoted issue="{issue}" comment="{comment}" -->'
+QUOTED_COMMENT_LINE = re.compile(
+    r'<!-- orchestrator:follow-up-quoted issue="(?P<issue>[^"\s>]+)"'
+    r' comment="(?P<comment>[^"\s>]+)" -->'
+)
+#: What every anchor line opens with, and the heading each comment's own section opens
+#: with: one anchor per section is what a reader checks, because an anchor damaged or
+#: struck out would otherwise take its comment out of the account and let it pass.
+QUOTED_COMMENT_OPENING = "<!-- orchestrator:follow-up-quoted"
+QUOTED_COMMENT_HEADING = "### Comment "
 
 #: The host every repository a ticket's issue may be filed in lives on.
 GITHUB = "github.com"
@@ -1719,7 +1799,970 @@ def may_comment_on(
     return owner is not None and owner != run
 
 
-#: What each body heading of the example ticket :func:`ticket_contract` renders says to write.
+#: **The account each mode owes.** A follow-up dispatch runs in one of two modes, and each
+#: leaves one machine-checkable account of what it did: initial mode a *disposition* per
+#: input draft, feedback mode a *response* per quoted comment. Both shapes are declared in
+#: what follows and nowhere else — the task templates render their contracts from
+#: :func:`disposition_contract` and :func:`response_contract`, and the `check-dispositions`
+#: and `check-responses` commands read the written account back through the same constants
+#: — so the instruction an agent follows and the validator that refuses it cannot drift.
+class Disposition(StrEnum):
+    """What one input draft became. Exactly one of these accounts for each.
+
+    Before this, a dropped draft appeared only in the agent's prose, and the one thing that
+    ever surfaced a sound draft an agent had quietly omitted was the accidental full
+    re-verification a feedback re-dispatch performed. That re-pass is gone; this is what
+    replaces it, and it is the reason every draft is named rather than only the dropped ones.
+    """
+
+    FILED = "filed"
+    NOT_REPRODUCIBLE = "not-reproducible"
+    ALREADY_FIXED = "already-fixed"
+    TOO_LOW_IMPACT = "too-low-impact"
+
+    @property
+    def meaning(self) -> str:
+        """What this disposition claims about the draft, as the agent is told it."""
+        return _DISPOSITION_MEANINGS[self]
+
+    @property
+    def names_root_causes(self) -> bool:
+        """Whether this disposition has to link the draft to the root causes it supports."""
+        return self is Disposition.FILED
+
+
+_DISPOSITION_MEANINGS = {
+    Disposition.FILED: (
+        "its claim holds, and its evidence reached the board: as a ticket this run wrote, or "
+        "as this run's evidence comment on another run's open issue for the same root cause. "
+        "`root_causes` names every root cause it supports, each the root cause of a ticket "
+        "this run holds under its `tickets/` whose `drafts` names this draft — which it keeps "
+        "in both cases"
+    ),
+    Disposition.NOT_REPRODUCIBLE: (
+        "its claim does not hold at the basis commit, or nothing in the tree or the "
+        "transcript bears it out"
+    ),
+    Disposition.ALREADY_FIXED: (
+        "the basis already carries the fix, or an accepted ticket's fix removes the root "
+        "cause too, in which case `detail` names that item by URL"
+    ),
+    Disposition.TOO_LOW_IMPACT: (
+        "its claim holds and nothing follows from it worth a ticket; `detail` says what the "
+        "impact is and why it is below the bar"
+    ),
+}
+
+#: Where a run's dispositions are kept: outside the `tasks/` tree the plan store reads, the
+#: way a gathering's feedback is, so nothing here reaches the board as an item.
+DISPOSITIONS_DIRECTORY = "dispositions"
+
+#: The version of both artifacts below. A reader refuses any other, since each is a stored
+#: shape another program reads.
+ARTIFACT_SCHEMA = 1
+
+DISPOSITION_KEYS = ("schema", "run", "drafts", "dispositions")
+DISPOSITION_ENTRY_KEYS = ("draft", "disposition", "root_causes", "detail")
+RESPONSE_KEYS = ("schema", "run", "feedback", "responses")
+RESPONSE_ENTRY_KEYS = ("comment", "issue", "action", "reply")
+
+RESPONSES_SUFFIX = ".responses.json"
+
+
+class Quoted(NamedTuple):
+    """One comment a gathered feedback file quotes, as its anchor line names it.
+
+    A comment is the issue it sits on **and** its id, never the id alone: a board whose
+    comment ids are unique only within an issue gives two comments on two issues one id,
+    which the local stand-in really does.
+    """
+
+    issue: str
+    comment: CommentId
+
+
+@dataclass(frozen=True)
+class Disposed:
+    """What one input draft became, every field of the account's entry validated."""
+
+    draft: QualifiedDraftId
+    disposition: Disposition
+    root_causes: tuple[RootCause, ...]
+    detail: str
+
+
+@dataclass(frozen=True)
+class Response:
+    """What was done about one quoted comment, every field of the entry validated."""
+
+    comment: Quoted
+    action: str
+    reply: CommentId
+
+
+def quoted_comment(issue: str, comment: str) -> str:
+    """The anchor line a feedback file quotes one comment under.
+
+    :class:`OSError` for an id outside the grammar the marker's attributes can carry —
+    whitespace, a `"` or a `>` would end the attribute or the marker — because both come
+    from the board rather than from here, and an anchor that closed early would take its
+    comment out of every account that reads this file back.
+    """
+    for name, value in (("issue", issue), ("comment", comment)):
+        if not COMMENT_ID.fullmatch(value):
+            raise OSError(
+                f"the board named the {name} {value!r}, which a quoted-comment anchor cannot "
+                'carry: one or more characters, none of them whitespace, `"` or `>`'
+            )
+    return QUOTED_COMMENT.format(issue=issue, comment=comment)
+
+
+@dataclass(frozen=True)
+class QuotedMetadata:
+    """The fields a gathering copies under each quoted comment, each ``None`` until read.
+
+    Each is checked against the board comment its section's anchor names, so a field the
+    gathering did not write as the board reports it is a comment quoted as another.
+    """
+
+    url: str | None = None
+    author: str | None = None
+    last_changed: str | None = None
+    issue_title: str | None = None
+
+
+#: Each metadata field's label on its `- <label>: <value>` line, and the attribute it fills.
+QUOTED_METADATA_FIELDS = {
+    "URL": "url",
+    "Author": "author",
+    "Last changed": "last_changed",
+    "Issue title": "issue_title",
+}
+
+
+class Gathering(NamedTuple):
+    """One gathered feedback file as a reader of its anchors sees it."""
+
+    #: Every comment it quotes, in the order it quotes them.
+    quoted: tuple[Quoted, ...]
+    #: The text inside each comment's fence, in anchor order; absent fences are refused.
+    texts: tuple[str | None, ...]
+    #: Metadata copied into the task for each anchor, checked against the named board comment.
+    metadata: tuple[QuotedMetadata, ...]
+    #: The generator's instructions before the first section, if this file carries them.
+    preamble: str
+    #: Non-comment instructions or unknown fields inside a comment section.
+    unexpected: tuple[str, ...]
+    #: A section heading or comment-id field that disagrees with its own anchor.
+    mismatched: tuple[str, ...]
+    #: How many comment sections carry other than exactly one anchor, counting an anchor
+    #: above the first section as one more, and how many anchor lines it carries that are
+    #: not one: one anchor under each section is the only reading under which the account
+    #: below answers the whole gathering.
+    unpaired: int
+    malformed: int
+
+
+def read_gathering(text: str) -> Gathering:
+    """A gathered feedback file read for the comments it quotes and the sections it opens.
+
+    A feedback file quotes each person's comment verbatim inside a fence, and a person may
+    write anything at all in a comment — an anchor line of this very grammar included — so
+    a fenced region is skipped rather than scanned. Without that, one comment quoting the
+    feedback file that quoted it would add a comment to the account that the gathering
+    never selected, and the response artifact would be refused for not answering it.
+
+    The unpaired sections and the malformed anchors are counted for the opposite failure: a
+    single anchor damaged, struck out or moved under another section leaves its comment
+    quoted to a reader and invisible here, so the account could omit it and still pass.
+    Each anchor is paired with the section it sits under rather than the two being totalled,
+    because a section left bare beside one carrying two balances any count.
+    """
+    found = []
+    texts: list[str | None] = []
+    metadata: list[QuotedMetadata] = []
+    mismatched: list[str] = []
+    unexpected: list[str] = []
+    unpaired = malformed = 0
+    #: The anchors under the section being read, or ``None`` above the first one.
+    anchored: int | None = None
+    fence = 0
+    captured: list[str] = []
+    capturing: int | None = None
+    heading_issue: str | None = None
+    section_anchor: int | None = None
+    comment_fields = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        opened = len(stripped) - len(stripped.lstrip("`"))
+        if fence:
+            # A fence closes on a line of backticks alone, at least as long as the one that
+            # opened it, which is the rule `_fenced` writes its fences under.
+            if opened >= fence and opened == len(stripped):
+                if capturing is not None:
+                    texts[capturing] = "\n".join(captured).rstrip()
+                    capturing = None
+                fence = 0
+            elif capturing is not None:
+                captured.append(line)
+            continue
+        if opened >= 3:
+            fence = opened
+            if (
+                stripped == "`" * opened + "text"
+                and section_anchor is not None
+                and texts[section_anchor] is None
+            ):
+                capturing = section_anchor
+                captured = []
+            elif anchored is not None:
+                # Any other fence under a comment section is content the gathering never
+                # wrote, and what it holds would reach the dispatch unread by this check.
+                unexpected.append(stripped)
+            continue
+        if stripped.startswith(QUOTED_COMMENT_HEADING):
+            unpaired += anchored is not None and anchored != 1
+            if anchored == 1 and comment_fields != 1:
+                mismatched.append(
+                    "its comment section must carry exactly one `- Comment id:` field"
+                )
+            anchored = 0
+            comment_fields = 0
+            heading = re.fullmatch(r"### Comment [0-9]+: on `([^`]+)`(?:,.*)?", stripped)
+            heading_issue = heading[1] if heading is not None else None
+            if heading is None:
+                mismatched.append(f"its comment section has no issue in its heading: {stripped}")
+            section_anchor = None
+            continue
+        matched = QUOTED_COMMENT_LINE.fullmatch(stripped)
+        if matched is not None:
+            found.append(Quoted(matched["issue"], CommentId(matched["comment"])))
+            texts.append(None)
+            metadata.append(QuotedMetadata())
+            section_anchor = len(found) - 1
+            if heading_issue is not None and heading_issue != matched["issue"]:
+                mismatched.append(
+                    f"its comment section names {heading_issue}, but its anchor names "
+                    f"{matched['issue']}"
+                )
+            if anchored is None:
+                unpaired += 1
+            else:
+                anchored += 1
+        elif stripped.startswith(QUOTED_COMMENT_OPENING):
+            malformed += 1
+        elif stripped.startswith("- Comment id: ") and section_anchor is not None:
+            comment_fields += 1
+            named = stripped.removeprefix("- Comment id: ")
+            if named != found[section_anchor].comment:
+                mismatched.append(
+                    f"its comment section names id {named}, but its anchor names "
+                    f"{found[section_anchor].comment}"
+                )
+        elif (
+            stripped.startswith(tuple(f"- {label}: " for label in QUOTED_METADATA_FIELDS))
+            and section_anchor is not None
+        ):
+            label, value = stripped[2:].split(": ", 1)
+            field = QUOTED_METADATA_FIELDS[label]
+            if getattr(metadata[section_anchor], field) is not None:
+                mismatched.append(f"its comment section names {label} more than once")
+            metadata[section_anchor] = dataclasses.replace(
+                metadata[section_anchor], **{field: value}
+            )
+        elif stripped and anchored is not None:
+            unexpected.append(stripped)
+    unpaired += anchored is not None and anchored != 1
+    if anchored == 1 and comment_fields != 1:
+        mismatched.append("its comment section must carry exactly one `- Comment id:` field")
+    first = re.search(r"^### Comment ", text, re.MULTILINE)
+    preamble = text[: first.start()].rstrip() if first is not None else text.rstrip()
+    return Gathering(
+        tuple(found),
+        tuple(texts),
+        tuple(metadata),
+        preamble,
+        tuple(unexpected),
+        tuple(mismatched),
+        unpaired,
+        malformed,
+    )
+
+
+def quoted_comments(text: str) -> list[Quoted]:
+    """Every comment a gathered feedback file quotes, in the order it quotes them."""
+    return list(read_gathering(text).quoted)
+
+
+def gathering_on_board(
+    gathering: Gathering, run: str, *, check_issue_title: bool = True
+) -> list[str]:
+    """Every comment a gathering quotes that the board does not hold where it says.
+
+    The syntax alone cannot say a gathering is about anything real: a file written by hand,
+    or one left behind when its issues were closed and reopened elsewhere, quotes comments
+    the account below would then be held to answering and nobody could. So each issue is
+    asked for its comments, and a refusal to answer for an issue is that issue's finding
+    rather than an unreadable board.
+    """
+    from . import follow_up_comments
+
+    found = []
+    for issue in sorted({one.issue for one in gathering.quoted}):
+        try:
+            item = plan_store.task_record(issue)
+            listed = plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
+        except OSError as exc:
+            found.append(f"it quotes {issue}, which the board would not answer for: {exc}")
+            continue
+        if issue_owner(item) != run and not any(
+            may_change_comment(run, comment.body) for comment in listed
+        ):
+            found.append(
+                f"it quotes {issue}, which run {run} neither owns nor marked with its own comment"
+            )
+        comments = {CommentId(comment.id.model_dump()): comment for comment in listed}
+        held = {identifier: comment.body for identifier, comment in comments.items()}
+        found.extend(
+            f"it quotes comment {one.comment} on {issue}, which that issue does not hold"
+            for one in gathering.quoted
+            if one.issue == issue and one.comment not in held
+        )
+        found.extend(
+            f"it quotes comment {one.comment} on {issue}, which a run marker owns"
+            for one in gathering.quoted
+            if one.issue == issue
+            and one.comment in held
+            and comment_owner(held[one.comment]) is not None
+        )
+        found.extend(
+            f"it quotes comment {one.comment} on {issue} with text different from the board"
+            for one, body in zip(gathering.quoted, gathering.texts, strict=True)
+            if one.issue == issue and one.comment in held and body != held[one.comment].rstrip()
+        )
+        location = item.get("location")
+        path = location.get("path") if isinstance(location, Mapping) else None
+        issue_url = item.get("url")
+        for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
+            if one.issue != issue or one.comment not in comments:
+                continue
+            comment = comments[one.comment]
+            author = comment.author or follow_up_comments.UNKNOWN_AUTHOR
+            if fields.author != author:
+                found.append(
+                    f"it quotes comment {one.comment} on {issue} with author {fields.author!r} "
+                    f"rather than the board's {author!r}"
+                )
+            url = follow_up_comments.comment_url_parts(
+                issue_url if isinstance(issue_url, str) else None,
+                path if isinstance(path, str) else None,
+                one.comment,
+                comment.url,
+                issue,
+            )
+            if fields.url != url:
+                found.append(
+                    f"it quotes comment {one.comment} on {issue} with URL "
+                    f"{fields.url!r} rather than the board's {url!r}"
+                )
+            changed = follow_up_comments.moment(
+                comment.updated_at or comment.created_at,
+                f"comment {one.comment!r} on {issue}",
+            ).strftime(follow_up_comments.MOMENT_FORMAT)
+            if fields.last_changed != changed:
+                found.append(
+                    f"it quotes comment {one.comment} on {issue} as last changed "
+                    f"{fields.last_changed!r} rather than the board's {changed!r}"
+                )
+            if check_issue_title and fields.issue_title != item.get("title"):
+                found.append(
+                    f"it quotes {issue} with title {fields.issue_title!r} rather than "
+                    f"the board's {item.get('title')!r}"
+                )
+    return found
+
+
+def gathering_problems(gathering: Gathering, feedback: Path, board: str, run: str) -> list[str]:
+    """Every way a file's own text is not a gathering of ``board``'s comments.
+
+    What it says about itself, read without the board; :func:`gathering_on_board` is what
+    asks whether the comments it names are there.
+    """
+    found: list[str] = []
+    for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
+        missing = [
+            label
+            for label, field in QUOTED_METADATA_FIELDS.items()
+            if getattr(fields, field) is None
+        ]
+        if missing:
+            found.append(
+                f"comment {one.comment} on {one.issue} is missing metadata: "
+                + ", ".join(sorted(missing))
+            )
+    # A file with the gathering's instructions stripped is refused like one with them
+    # rewritten: the recorded boundary lives there, so nothing else says what was gathered.
+    from . import follow_up_comments
+
+    boundary = follow_up_comments.recorded_boundary(gathering.preamble, str(feedback))
+    if (
+        boundary is None
+        or gathering.preamble != follow_up_comments.render(run, board, [], boundary.moment).rstrip()
+    ):
+        found.append("its instructions before the first comment differ from the gathering")
+    found.extend(
+        f"its comment section carries an unexpected line: {line}" for line in gathering.unexpected
+    )
+    if gathering.malformed:
+        found.append(
+            f"it carries {gathering.malformed} anchor line(s) of the quoted-comment grammar "
+            "that are not one, so the comments they were written for are quoted to a reader "
+            "and invisible to this account"
+        )
+    found.extend(gathering.mismatched)
+    found.extend(
+        f"comment {one.comment} on {one.issue} has no quoted text fence"
+        for one, body in zip(gathering.quoted, gathering.texts, strict=True)
+        if body is None
+    )
+    if gathering.unpaired:
+        found.append(
+            f"{gathering.unpaired} of its comment sections carry other than exactly one "
+            "anchor, or an anchor sits above its first section, so a section's comment could "
+            "be answered as another's or go unanswered unseen"
+        )
+    if not gathering.quoted:
+        found.append(
+            "it quotes no comment, so it is not a gathering this dispatch could have been "
+            "given: an account of it would answer nothing and pass"
+        )
+    found.extend(
+        f"it quotes comment {one.comment} on {one.issue} {gathering.quoted.count(one)} times, "
+        "and an account of it could be neither complete nor free of duplicates"
+        for one in dict.fromkeys(gathering.quoted)
+        if gathering.quoted.count(one) > 1
+    )
+    found.extend(
+        f"it quotes comment {one.comment} on {one.issue}, which is not an item of the "
+        f"{board!r} board this is reading"
+        for one in gathering.quoted
+        if not one.issue.startswith(f"{board}:")
+    )
+    return [f"{feedback.name} is not a gathering: {problem}" for problem in found]
+
+
+def draft_ids(root: Path, run: str) -> list[QualifiedDraftId]:
+    """Every draft ``run`` holds under a `drafts` root, as the store qualifies it, sorted.
+
+    The input set the disposition artifact accounts for. It is read once, by the recipe,
+    **before** the dispatch: the agent deletes each draft a ticket consumed, so a set
+    re-derived afterwards would be the drafts nothing happened to.
+    """
+    held = (root / TASKS_DIRECTORY / run / drafts.DRAFTS).glob(f"*{TICKET_SUFFIX}")
+    found = []
+    # A directory named like a draft is not one, and counting it would hand the dispatch a
+    # draft with no file to verify.
+    for path in (one for one in held if one.is_file()):
+        name = QualifiedDraftId(f"{SOURCE}:{run}/{drafts.DRAFTS}/{path.stem}")
+        if DRAFT_ID.fullmatch(name) is None:
+            raise OSError(f"draft file {path.name!r} is not a draft id of run {run}")
+        found.append(name)
+    return sorted(found)
+
+
+def written_tickets(root: Path, run: str) -> dict[str, tuple[QualifiedDraftId, ...] | None]:
+    """Every root cause ``run`` holds a ticket for under a `drafts` root, with its `drafts`.
+
+    ``None`` stands for a ticket the store will not read: `check-run` refuses that ticket
+    in its own words, and nothing here can say which drafts it carries.
+    """
+    held = (root / TASKS_DIRECTORY / run / TICKETS).glob(f"*{TICKET_SUFFIX}")
+    found: dict[str, tuple[QualifiedDraftId, ...] | None] = {}
+    # Only a file is a ticket: a directory named like one would let a `filed` disposition
+    # pass the local-ticket check with nothing written.
+    for path in (one for one in held if one.is_file()):
+        try:
+            found[path.stem] = read_ticket(path).drafts
+        except Refused:
+            found[path.stem] = None
+    return found
+
+
+def filed_board_problems(root: Path, run: str, causes: Collection[str], board: str) -> list[str]:
+    """Filed root causes whose ticket or evidence comment did not reach ``board``.
+
+    An account filing nothing has nothing on the board to check, so the board is not read.
+    """
+    if not causes:
+        return []
+    items = board_items(board)
+    found = []
+    for cause in sorted(causes):
+        ticket = read_ticket(ticket_path(root, run, cause))
+        origin = qualified_id(run, cause)
+        carried = False
+        for item in items:
+            metadata = item.item.metadata or {}
+            if (
+                metadata.get(ORIGIN_KEY) == origin
+                and metadata_owner(metadata) == run
+                and ticket.board_item == _native(item.id.root, board)
+            ):
+                carried = True
+                break
+            held = metadata.get(KEY)
+            if not isinstance(held, Mapping) or held.get("root_cause") != cause:
+                continue
+            comments = plan_store.sdk(plan_store.client().task_comment_list(item.id.root)).comments
+            if any(
+                (owner := comment_owner(comment.body)) is not None
+                and owner.run == run
+                and owner.root_cause == cause
+                and owner.kind is CommentKind.EVIDENCE
+                for comment in comments
+            ):
+                carried = True
+                break
+        if not carried:
+            found.append(
+                f"the filed root cause {cause} has a local ticket but no bound item or "
+                f"evidence comment of run {run} on {board}, so its evidence did not reach the board"
+            )
+    return found
+
+
+def dispositions_path(root: Path, run: str) -> Path:
+    """Where ``run``'s disposition artifact is kept under a `drafts` root."""
+    return root / DISPOSITIONS_DIRECTORY / f"{run}.json"
+
+
+def _drafts_recorded(held: object, run: str) -> tuple[list[QualifiedDraftId], list[str]]:
+    """An artifact's recorded input set, and every way what it holds is not one.
+
+    The set is written by this host and then sits under a root a dispatch can write, so it
+    is read as an input rather than trusted: a name that is not a draft id of this run, or
+    one recorded twice, makes the account's own subject something other than the drafts
+    this dispatch was handed.
+    """
+    if not isinstance(held, list) or any(not isinstance(name, str) for name in held):
+        return [], ["its `drafts` is not a list of draft ids"]
+    recorded = [QualifiedDraftId(str(name)) for name in held]
+    found = []
+    for name in recorded:
+        matched = DRAFT_ID.fullmatch(name)
+        if matched is None or matched["run"] != run:
+            found.append(f"its `drafts` names {name!r}, which is not a draft id of run {run}")
+    found.extend(
+        f"its `drafts` names {name} more than once"
+        for name in dict.fromkeys(recorded)
+        if recorded.count(name) > 1
+    )
+    return recorded, found
+
+
+def open_dispositions(root: Path, run: str) -> Path:
+    """Record the drafts a dispatch is about to be given, and return the artifact's path.
+
+    The input set only ever **grows**: a re-dispatch over a run whose first pass consumed
+    its drafts would otherwise record an empty input set and take the first pass's account
+    with it. Every entry already recorded is left exactly as it stands, so this writes the
+    skeleton and never an answer.
+
+    An artifact already there is read as an input, not resumed blindly: one of another
+    schema or another run, or whose recorded set is not one, is :class:`Refused` here —
+    before the launch, where a person can repair it — rather than rewritten into a
+    skeleton that takes the earlier pass's answers with it.
+    """
+    path = dispositions_path(root, run)
+    existing = path.is_file()
+    document = _artifact(path) if existing else {"schema": ARTIFACT_SCHEMA, "run": run}
+    # The two keys this writes are the two a first pass has yet to hold, so their absence
+    # is what an artifact opened for the first time looks like rather than a refusal.
+    found = _envelope_problems(
+        document,
+        run,
+        DISPOSITION_KEYS,
+        "dispositions",
+        optional=() if existing else ("drafts", "dispositions"),
+    )
+    recorded: list[QualifiedDraftId] = []
+    if "drafts" in document:
+        recorded, problems = _drafts_recorded(document["drafts"], run)
+        found.extend(problems)
+    if found:
+        raise Refused([f"{path} is not this run's account: {problem}" for problem in found])
+    entries = document.get("dispositions")
+    expected = sorted({*recorded, *draft_ids(root, run)})
+    if isinstance(entries, list):
+        for at, entry in enumerate(entries):
+            if problems := _entry_problems(entry, DISPOSITION_ENTRY_KEYS, at):
+                found.extend(problems)
+                continue
+            # The entry-shape check above proves this mapping before `_disposed` checks
+            # its values; the cast states that narrowing across the helper boundary.
+            _, problems = _disposed(cast(Mapping[str, object], entry), expected, at)
+            found.extend(problems)
+    if found:
+        raise Refused([f"{path} is not this run's account: {problem}" for problem in found])
+    written = {
+        "schema": ARTIFACT_SCHEMA,
+        "run": run,
+        "drafts": expected,
+        "dispositions": entries if isinstance(entries, list) else [],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def responses_path(feedback: Path) -> Path:
+    """Where the response artifact answering one gathered feedback file is kept, beside it."""
+    return feedback.with_name(feedback.name.removesuffix(TICKET_SUFFIX) + RESPONSES_SUFFIX)
+
+
+def _text(path: Path) -> str:
+    """``path`` read as UTF-8, with bytes that are not text refused as the file's own fault.
+
+    Every file this reads is written outside this program — an agent's account, a
+    gathering, the tracked template — so a decoding failure is a refusal the command
+    reports rather than a traceback out of it.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as broken:
+        raise OSError(f"{path} is not UTF-8 text: {broken}") from None
+
+
+def _artifact(path: Path) -> Mapping[str, object]:
+    """One artifact's JSON document, or :class:`Refused` saying what it is instead.
+
+    The bytes are an agent's, so text that is not UTF-8 is one more way the document is not
+    one rather than a traceback out of the command that read it.
+    """
+    try:
+        document: object = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as broken:
+        raise Refused([f"{path} is not JSON: {broken}"]) from None
+    if not isinstance(document, Mapping):
+        raise Refused([f"{path} holds {type(document).__name__}, not an object"])
+    return document
+
+
+def _envelope_problems(
+    document: Mapping[str, object],
+    run: str,
+    keys: Sequence[str],
+    entries: str,
+    optional: Sequence[str] = (),
+) -> list[str]:
+    """What is wrong with an artifact's envelope: its schema, its run, and its keys.
+
+    ``optional`` names the keys a caller writes itself, so an account being opened for the
+    first time is read for what it claims — its schema and its run — rather than refused
+    for the two keys that call is about to put there.
+    """
+    found = []
+    if type(document.get("schema")) is not int or document.get("schema") != ARTIFACT_SCHEMA:
+        found.append(
+            f"its `schema` is {document.get('schema')!r}, and this reads schema {ARTIFACT_SCHEMA}"
+        )
+    if document.get("run") != run:
+        found.append(f"its `run` is {document.get('run')!r} rather than {run!r}")
+    if unknown := sorted(set(document) - set(keys)):
+        found.append(f"it carries keys nothing reads: {', '.join(unknown)}")
+    if missing := [key for key in keys if key not in document and key not in optional]:
+        found.append(f"it is missing keys: {', '.join(missing)}")
+    held = document.get(entries)
+    if not isinstance(held, list) and not (entries not in document and entries in optional):
+        found.append(f"its `{entries}` is not a list")
+    return found
+
+
+def _entry_problems(entry: object, keys: Sequence[str], at: int) -> list[str]:
+    """Whether one entry of an artifact is an object carrying exactly the keys it owes."""
+    if not isinstance(entry, Mapping):
+        return [f"entry {at} is {type(entry).__name__}, not an object"]
+    found = []
+    if unknown := sorted(set(entry) - set(keys)):
+        found.append(f"entry {at} carries keys nothing reads: {', '.join(unknown)}")
+    if missing := [key for key in keys if key not in entry]:
+        found.append(f"entry {at} is missing keys: {', '.join(missing)}")
+    return found
+
+
+def _prose(entry: Mapping[str, object], key: str, named: str) -> list[str]:
+    """Whether one field of an entry is a non-empty line of prose."""
+    value = entry.get(key)
+    if not isinstance(value, str) or not value.strip():
+        return [f"{named} states no `{key}`"]
+    return []
+
+
+def _disposed(
+    entry: Mapping[str, object], expected: Sequence[str], at: int
+) -> tuple[Disposed | None, list[str]]:
+    """One entry read as a :class:`Disposed`, or the reasons it is not one.
+
+    Every field is held to its own grammar, because the account is a document an agent
+    wrote and another program reads: a draft nobody handed this dispatch, a word that is no
+    disposition, a root cause that is not a slug, and a disposition linking a draft to
+    nothing where it must are each a way the account stops accounting for the work.
+    """
+    draft = entry.get("draft")
+    named = f"the disposition of {draft!r}"
+    if not isinstance(draft, str) or draft not in expected:
+        return None, [
+            f"entry {at} names {draft!r}, which is not one of the drafts this dispatch was given"
+        ]
+    word = entry.get("disposition")
+    if not isinstance(word, str) or word not in tuple(Disposition):
+        return None, [
+            f"{named} is {word!r}, which is not one of "
+            + ", ".join(f"`{one.value}`" for one in Disposition)
+        ]
+    disposition = Disposition(word)
+    found = _prose(entry, "detail", named)
+    causes = entry.get("root_causes")
+    if not isinstance(causes, list) or any(
+        not isinstance(cause, str) or not SLUG.fullmatch(cause) for cause in causes
+    ):
+        found.append(f"{named} states a `root_causes` that is not a list of slugs")
+    elif disposition.names_root_causes and not causes:
+        found.append(
+            f"{named} is `{word}` and names no root cause, so it links the draft to no "
+            "ticket or issue"
+        )
+    elif not disposition.names_root_causes and causes:
+        found.append(
+            f"{named} is `{word}` and names root causes, which only "
+            f"`{Disposition.FILED.value}` does"
+        )
+    if found:
+        return None, found
+    assert isinstance(causes, list)  # noqa: S101 - every other shape is a reason returned above
+    return Disposed(
+        draft=QualifiedDraftId(draft),
+        disposition=disposition,
+        root_causes=tuple(RootCause(str(cause)) for cause in causes),
+        detail=str(entry["detail"]),
+    ), []
+
+
+def disposition_problems(
+    document: Mapping[str, object],
+    run: str,
+    present: Sequence[QualifiedDraftId] = (),
+    written: Mapping[str, Collection[str] | None] | None = None,
+) -> list[str]:
+    """Every way a disposition artifact fails to account for the run's drafts.
+
+    A draft absent from it, or carrying more than one disposition, is named: those are the
+    two ways an agent's account stops being one, and both were invisible while the account
+    was prose. An entry naming a draft the input set does not hold is named too, since it
+    is either a draft nobody handed this dispatch or a name it invented.
+
+    ``present`` is the drafts still on disk when this is read, which the recorded set has
+    to hold: the set is written before the dispatch and read after one that can write to
+    it, so a draft struck from it would take itself out of the account unseen.
+
+    ``written`` is the root causes this run holds a ticket for, each with the drafts that
+    ticket names. A draft of this run a ticket names was consumed by it, so the recorded
+    set has to hold it too, though its file is gone. A `filed` draft links to one of them
+    or to nothing: a slug alone is only a word, and an account filing a draft under a root
+    cause no ticket carries — or under one whose ticket never names it — says its evidence
+    reached the board when nothing did.
+    """
+    found = _envelope_problems(document, run, DISPOSITION_KEYS, "dispositions")
+    expected, problems = _drafts_recorded(document.get("drafts"), run)
+    found.extend(problems)
+    found.extend(
+        f"the draft {draft} is one this dispatch holds and its `drafts` does not name, so "
+        "the recorded input set is no longer the one this dispatch was given"
+        for draft in present
+        if draft not in expected
+    )
+    held = written or {}
+    # A consumed draft's file is gone, so `present` cannot hold it; the ticket that
+    # consumed it still names it, which is what keeps the set from shrinking unseen.
+    own = f"{SOURCE}:{run}/{drafts.DRAFTS}/"
+    found.extend(
+        f"the draft {draft} is named by this run's ticket for {cause} and its `drafts` does "
+        "not name it, so the recorded input set is no longer the one this dispatch was given"
+        for cause, carried in sorted(held.items())
+        for draft in carried or ()
+        if draft.startswith(own) and draft not in expected
+    )
+    if found:
+        return found
+    entries = document["dispositions"]
+    assert isinstance(entries, list)  # noqa: S101 - the envelope check above just proved it
+    recorded: list[Disposed] = []
+    for at, entry in enumerate(entries):
+        if problems := _entry_problems(entry, DISPOSITION_ENTRY_KEYS, at):
+            found.extend(problems)
+            continue
+        assert isinstance(entry, Mapping)  # noqa: S101 - `_entry_problems` proved it above
+        read, problems = _disposed(entry, expected, at)
+        found.extend(problems)
+        if read is not None:
+            recorded.append(read)
+    found.extend(
+        f"the disposition of {one.draft} files it under the root cause {cause}, and this run "
+        f"holds no ticket for it at {TASKS_DIRECTORY}/{run}/{TICKETS}/{cause}{TICKET_SUFFIX}, "
+        "so nothing carries its evidence to the board"
+        for one in recorded
+        for cause in one.root_causes
+        if cause not in held
+    )
+    found.extend(
+        f"the disposition of {one.draft} files it under the root cause {cause}, and that "
+        "ticket's `drafts` does not name it, so the ticket carries none of its evidence"
+        for one in recorded
+        for cause in one.root_causes
+        if (carried := held.get(cause)) is not None and one.draft not in carried
+    )
+    counted = Counter(one.draft for one in recorded)
+    found.extend(
+        f"the draft {draft} carries {counted[draft]} dispositions, and every draft carries one"
+        for draft in expected
+        if counted[draft] > 1
+    )
+    found.extend(
+        f"the draft {draft} is absent from this account, so nothing says what became of it"
+        for draft in expected
+        if not counted[draft]
+    )
+    return found
+
+
+def _response(
+    entry: Mapping[str, object], quoted: Sequence[Quoted], feedback: Path, at: int
+) -> tuple[Response | None, list[str]]:
+    """One entry read as a :class:`Response`, or the reasons it is not one."""
+    comment, issue = entry.get("comment"), entry.get("issue")
+    named = f"the response to comment {comment!r}"
+    same_id = [one for one in quoted if one.comment == comment]
+    if not isinstance(comment, str) or not same_id:
+        return None, [f"entry {at} names {comment!r}, which {feedback.name} quotes no comment"]
+    held = [one for one in same_id if one.issue == issue]
+    if not held:
+        return None, [
+            f"{named} names the issue {issue!r}, and {feedback.name} quotes that comment on "
+            + ", ".join(one.issue for one in same_id)
+        ]
+    if found := _prose(entry, "action", named) + _prose(entry, "reply", named):
+        return None, found
+    return Response(
+        comment=held[0], action=str(entry["action"]), reply=CommentId(str(entry["reply"]))
+    ), []
+
+
+def response_problems(
+    document: Mapping[str, object], run: str, feedback: Path, quoted: Sequence[Quoted]
+) -> tuple[list[str], list[Response]]:
+    """Every way a response artifact fails to answer one gathering, and what it does answer.
+
+    Order matters, because the feedback's own instruction is to act on each comment in the
+    order it is quoted: an account out of order is an account of a different sequence. The
+    responses come back so the board read below can be asked about the replies they name
+    rather than about the comments alone.
+    """
+    found = _envelope_problems(document, run, RESPONSE_KEYS, "responses")
+    if document.get("feedback") != feedback.name:
+        found.append(
+            f"its `feedback` is {document.get('feedback')!r} rather than {feedback.name!r}, so "
+            "it answers some other gathering"
+        )
+    if found:
+        return found, []
+    entries = document["responses"]
+    assert isinstance(entries, list)  # noqa: S101 - the envelope check above just proved it
+    answered: list[Response] = []
+    for at, entry in enumerate(entries):
+        if problems := _entry_problems(entry, RESPONSE_ENTRY_KEYS, at):
+            found.extend(problems)
+            continue
+        assert isinstance(entry, Mapping)  # noqa: S101 - `_entry_problems` proved it above
+        read, problems = _response(entry, quoted, feedback, at)
+        found.extend(problems)
+        if read is not None:
+            answered.append(read)
+    counted = Counter(one.comment for one in answered)
+    found.extend(
+        f"the comment {one.comment} on {one.issue} carries {counted[one]} responses, and "
+        "every quoted comment carries one"
+        for one in counted
+        if counted[one] > 1
+    )
+    found.extend(
+        f"the comment {one.comment} on {one.issue} is absent from this account, so nothing "
+        "says what was done about it"
+        for one in quoted
+        if not counted[one]
+    )
+    if not found and [one.comment for one in answered] != list(quoted):
+        found.append(
+            "the responses are not in the order the feedback quotes the comments: "
+            f"{', '.join(one.comment.comment for one in answered)} against "
+            f"{', '.join(one.comment for one in quoted)}"
+        )
+    return found, answered
+
+
+def replies_posted(run: str, answered: Sequence[Response]) -> list[str]:
+    """Every response whose reply the board does not hold, as it reads now.
+
+    The artifact says a reply was posted and gives its id; this asks the board for it. A
+    structured account of replies nobody posted is the one failure a shape check cannot
+    see, and an id that is not the reply's is an account nobody can follow back to it.
+    That the comment each reply answers is still there is :func:`gathering_on_board`'s
+    question, which `check-responses` asks first.
+
+    A comment a person edited after this run answered it is gathered again and owed a new
+    reply, so only the replies at or after the comment's last change — the gatherer's own
+    test of whether a reply answers it — are held to exactly one.
+    """
+    from . import follow_up_comments
+
+    replies: dict[str, dict[CommentId, dict[CommentId, datetime]]] = {}
+    changed: dict[str, dict[CommentId, datetime]] = {}
+    for issue in sorted({one.comment.issue for one in answered}):
+        held: dict[CommentId, dict[CommentId, datetime]] = {}
+        dated: dict[CommentId, datetime] = {}
+        for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments:
+            identifier = CommentId(comment.id.model_dump())
+            dated[identifier] = follow_up_comments.moment(
+                comment.updated_at or comment.created_at, f"comment {identifier!r} on {issue}"
+            )
+            owner = comment_owner(comment.body)
+            if owner is not None and owner.run == run and owner.answers is not None:
+                held.setdefault(owner.answers, {})[identifier] = dated[identifier]
+        replies[issue] = held
+        changed[issue] = dated
+    found = []
+    for one in answered:
+        # `gathering_on_board` has proven the comment is on its issue, so it is dated here.
+        since = changed[one.comment.issue][one.comment.comment]
+        every = replies[one.comment.issue].get(one.comment.comment, {})
+        posted = {reply for reply, at in every.items() if at >= since}
+        if not posted:
+            found.append(
+                f"the board holds no reply of run {run} answering comment {one.comment.comment} "
+                f"on {one.comment.issue}"
+            )
+        elif one.reply not in posted:
+            found.append(
+                f"the response to comment {one.comment.comment!r} names the reply {one.reply}, "
+                f"and the board holds run {run}'s reply to it as " + ", ".join(sorted(posted))
+            )
+        elif len(posted) != 1:
+            found.append(
+                f"the board holds {len(posted)} replies of run {run} answering comment "
+                f"{one.comment.comment} on {one.comment.issue}, and it owes exactly one"
+            )
+    return found
+
+
 _HEADING_GUIDANCE = (
     "<a simple explanation of the root cause, naming the paths inside the repository where it "
     "lives>",
@@ -1948,6 +2991,84 @@ def comment_contract(run: str, board: str) -> str:
     )
 
 
+def _keyed(keys: Sequence[str], *values: object) -> dict[str, object]:
+    """``values`` under ``keys``, in order, which is how each contract's example is written.
+
+    The example an agent fills in and the keys the validator reads back are one shape, so
+    the example is written from those keys rather than beside them: a key added to the
+    artifact and not to its example would leave the agent writing a document its own
+    validator refuses, and ``strict`` fails here instead.
+    """
+    return dict(zip(keys, values, strict=True))
+
+
+def disposition_contract(run: str) -> str:
+    """C8, as the initial dispatch is told it: the account it owes for every input draft."""
+    entry = _keyed(
+        DISPOSITION_ENTRY_KEYS,
+        f"{SOURCE}:{run}/{drafts.DRAFTS}/<draft-id>",
+        f"<one of {', '.join(one.value for one in Disposition)}>",
+        ["<root-cause>"],
+        "<one or two sentences: why this draft became this, in your words>",
+    )
+    example = _keyed(
+        DISPOSITION_KEYS,
+        ARTIFACT_SCHEMA,
+        run,
+        ["<written for you; do not add to it, remove from it, or reorder it>"],
+        [entry],
+    )
+    meanings = "".join(f"- **`{one.value}`** — {one.meaning}.\n" for one in Disposition)
+    return (
+        "**Every draft this dispatch was given is accounted for, exactly once.** The account "
+        f"is a JSON document at `@DISPOSITIONS@`, which already exists: its `drafts` is the "
+        "input set, written before you were dispatched, and it is not yours to change. Yours "
+        "is `dispositions`, one entry per draft in `drafts`:\n\n"
+        f"{meanings}\n"
+        f"`root_causes` is a list of kebab-case root-cause slugs, one per ticket or open "
+        f"issue the draft's evidence reached, each the file name of a ticket under "
+        f"`@DRAFTS_ROOT@/{TASKS_DIRECTORY}/{run}/{TICKETS}/`; it is non-empty for "
+        f"`{Disposition.FILED.value}` and empty for every other disposition. `detail` is "
+        "always stated.\n\n"
+        "The shape, with every placeholder to fill:\n\n"
+        f"````json\n{json.dumps(example, indent=2)}\n````\n\n"
+        "**`@CHECK_DISPOSITIONS@` is what says the account is complete.** Run it, correct the "
+        f"document until it reports the account sound, and run it again. It exits {SOUND} "
+        f"when every draft carries exactly one disposition with everything that disposition "
+        f"owes, and {UNSOUND} naming each draft that is absent, that carries more than one, "
+        "or whose disposition links it to no root cause where it must, to one this run "
+        "holds no ticket for, or to a ticket whose `drafts` does not name it. This dispatch "
+        "is not finished while it refuses.\n"
+    )
+
+
+def response_contract(run: str) -> str:
+    """C9, as the feedback dispatch is told it: the account it owes for every quoted comment."""
+    entry = _keyed(
+        RESPONSE_ENTRY_KEYS,
+        "<the comment id, exactly as the comment's section gives it>",
+        "<the issue id, exactly as the comment's section gives it>",
+        "<what this run did about the comment, or why it did nothing>",
+        "<the id `@PLAN_STORE@ task comment add` printed for the reply>",
+    )
+    example = _keyed(RESPONSE_KEYS, ARTIFACT_SCHEMA, run, "@FEEDBACK_FILE@", [entry])
+    return (
+        "**Every comment this feedback quotes is accounted for, exactly once, in the order "
+        "it is quoted.** The account is a JSON document at `@RESPONSES@`, which you write. "
+        "One entry per quoted comment, in that order:\n\n"
+        f"````json\n{json.dumps(example, indent=2)}\n````\n\n"
+        "`action` is what you did before the reply went up, in your words; `reply` is the id "
+        "of the reply you posted for that comment, which is the one the board gave it.\n\n"
+        "**`@CHECK_RESPONSES@` is what says the account is complete.** Run it, correct the "
+        f"document until it reports the account sound, and run it again. It exits {SOUND} "
+        "when every quoted comment carries exactly one response, in order, naming the issue "
+        "the feedback quotes it on, and the board holds a reply of this run answering it; "
+        f"and {UNSOUND} naming each comment that is absent, answered twice, out of order, or "
+        "whose reply the board does not hold. This dispatch is not finished while it "
+        "refuses.\n"
+    )
+
+
 #: The section a re-dispatch adds: when the manager sends feedback, or the run already
 #: holds tickets from a follow-up agent before this one.
 REDISPATCH = """\
@@ -2038,6 +3159,7 @@ def _filled(text: str, values: Mapping[str, str]) -> str:
 def compose(
     template: str,
     *,
+    mode: Mode = Mode.INITIAL,
     run: str,
     board: str,
     drafts_root: Path,
@@ -2048,9 +3170,14 @@ def compose(
     checkout: Path,
     plan_store: str,
     feedback: str | None,
+    feedback_file: Path | None = None,
     redispatch: bool,
+    dispositions: Path | None = None,
+    check_dispositions: str | None = None,
+    responses: Path | None = None,
+    check_responses: str | None = None,
 ) -> str:
-    """The follow-up agent's task: ``template`` with every placeholder filled, once.
+    """One dispatch's task: ``template`` with every placeholder of ``mode`` filled, once.
 
     ``plan_store`` is the plan-store program every store instruction in the task is
     written with, and is refused unless it is an absolute path: the agent reads this task
@@ -2059,25 +3186,42 @@ def compose(
     cost.
 
     The template is filled in a single pass, so what fills a placeholder is never read
-    again for one — which is what brings the manager's feedback into the task verbatim,
-    whatever it quotes. The contracts and sections carry the run and the drafts root
-    themselves, so those are filled into them first.
+    again for one — which is what brings the feedback into the task verbatim, whatever it
+    quotes. The contracts and sections carry the run and the drafts root themselves, so
+    those are filled into them first.
+
+    Which placeholders a template owes is ``mode``'s, and a value a mode's template never
+    names is not required: :data:`Mode.FEEDBACK`'s template names no ticket contract
+    or board-wide listing, which keeps the comment-answering dispatch scoped to the
+    tickets its quoted comments name.
     """
     named = PLACEHOLDER.findall(template)
     found = []
-    if unknown := sorted(set(named) - set(PLACEHOLDERS)):
-        found.append(f"the task template names placeholders nothing fills: {', '.join(unknown)}")
-    if missing := [name for name in PLACEHOLDERS if name not in named]:
-        found.append(f"the task template is missing placeholders: {', '.join(missing)}")
-    if repeated := sorted(name for name in SECTIONS if named.count(name) > 1):
-        found.append(f"the task template names these more than once: {', '.join(repeated)}")
+    if unknown := sorted(set(named) - set(mode.placeholders)):
+        found.append(
+            f"the {mode.value} task template names placeholders nothing fills: {', '.join(unknown)}"
+        )
+    if missing := [name for name in mode.placeholders if name not in named]:
+        found.append(
+            f"the {mode.value} task template is missing placeholders: {', '.join(missing)}"
+        )
+    if repeated := sorted(name for name in mode.sections if named.count(name) > 1):
+        found.append(
+            f"the {mode.value} task template names these more than once: {', '.join(repeated)}"
+        )
     found.extend(_plan_store_problems(plan_store))
+    found.extend(
+        _mode_problems(
+            mode, dispositions, check_dispositions, responses, check_responses, feedback_file
+        )
+    )
     if found:
         raise Refused(found)
     scalars = {
         "RUN": run,
         "BOARD": board,
         "DRAFTS_ROOT": str(drafts_root),
+        "TICKET_METADATA_KEY": KEY,
         "VALIDATE": validate,
         "BOARD_STATUS": board_status,
         "BOARD_ITEMS": board_items,
@@ -2086,18 +3230,68 @@ def compose(
         "PLAN_STORE": plan_store,
         "ACCEPTED_STATUSES": accepted_statuses(),
         "ACCEPTED_FILTER": accepted_filter(),
+        "FEEDBACK_FILE": "" if feedback_file is None else feedback_file.name,
+        "DISPOSITIONS": str(dispositions),
+        "CHECK_DISPOSITIONS": str(check_dispositions),
+        "RESPONSES": str(responses),
+        "CHECK_RESPONSES": str(check_responses),
     }
     values = {
         **scalars,
         "STATUS_VOCABULARY": status_vocabulary(),
         "TICKET_CONTRACT": _filled(ticket_contract(run, board), scalars),
         "COMMENT_CONTRACT": _filled(comment_contract(run, board), scalars),
+        "DISPOSITION_CONTRACT": _filled(disposition_contract(run), scalars),
+        "RESPONSE_CONTRACT": _filled(response_contract(run), scalars),
         "REDISPATCH": _filled(REDISPATCH, scalars) if redispatch else "",
-        "FEEDBACK": (
-            "" if feedback is None else _filled(FEEDBACK, scalars) + feedback.rstrip() + "\n"
-        ),
+        "FEEDBACK": _feedback_section(mode, feedback, scalars),
     }
     return PLACEHOLDER.sub(lambda matched: values[matched[1]], template)
+
+
+def _feedback_section(mode: Mode, feedback: str | None, scalars: Mapping[str, str]) -> str:
+    """What fills `@FEEDBACK@`: the gathering itself in feedback mode, a heading over it in initial.
+
+    A feedback dispatch **is** the gathering, so the file stands as the task's own section
+    and a heading calling it "feedback on the previous run" would read as an aside. An
+    initial dispatch that carries feedback carries it as one, under that heading.
+    """
+    if feedback is None:
+        return ""
+    if mode is Mode.FEEDBACK:
+        return feedback.rstrip() + "\n"
+    return _filled(FEEDBACK, scalars) + feedback.rstrip() + "\n"
+
+
+def _mode_problems(
+    mode: Mode,
+    dispositions: Path | None,
+    check_dispositions: str | None,
+    responses: Path | None,
+    check_responses: str | None,
+    feedback_file: Path | None,
+) -> list[str]:
+    """Every value a mode's own account needs that the caller did not give.
+
+    Each names an artifact the dispatch is held to, so a task composed without one is a
+    task whose acceptance criteria name a document at the word ``None``.
+    """
+    owed = {
+        Mode.INITIAL: (
+            ("--dispositions", dispositions),
+            ("--check-dispositions", check_dispositions),
+        ),
+        Mode.FEEDBACK: (
+            ("--feedback", feedback_file),
+            ("--responses", responses),
+            ("--check-responses", check_responses),
+        ),
+    }[mode]
+    return [
+        f"a task of the {mode.value} mode states its account at {flag}, and none was given"
+        for flag, value in owed
+        if value is None or (isinstance(value, str) and not value.strip())
+    ]
 
 
 def inventory(root: Path, run: str) -> tuple[int, int]:
@@ -2107,6 +3301,16 @@ def inventory(root: Path, run: str) -> tuple[int, int]:
         len(list((base / drafts.DRAFTS).glob(f"*{TICKET_SUFFIX}"))),
         len(list((base / TICKETS).glob(f"*{TICKET_SUFFIX}"))),
     )
+
+
+def _gathering_file(value: str) -> Path:
+    """A `--feedback` path, refused when it names no file for an account to sit beside."""
+    path = Path(value)
+    if not path.name:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} names no file, so no gathering is there and no account sits beside it"
+        )
+    return path
 
 
 class _Parser(argparse.ArgumentParser):
@@ -2167,7 +3371,64 @@ def _parser() -> _Parser:
     count = commands.add_parser("inventory", help="print how many drafts and tickets a run holds")
     count.add_argument("--root", type=Path, required=True, help=root_help)
     count.add_argument("run", metavar="RUN-ID")
-    task = commands.add_parser("compose", help="print the follow-up agent's task")
+    opened = commands.add_parser(
+        "open-dispositions",
+        help="record the drafts a dispatch is given, and print its disposition artifact's path",
+    )
+    opened.add_argument("--root", type=Path, required=True, help=root_help)
+    opened.add_argument("run", metavar="RUN-ID")
+    disposition_location = commands.add_parser(
+        "dispositions-path", help="print a run's disposition artifact path without writing it"
+    )
+    disposition_location.add_argument("--root", type=Path, required=True, help=root_help)
+    disposition_location.add_argument("run", metavar="RUN-ID")
+    accounted = commands.add_parser(
+        "check-dispositions",
+        help="validate that every draft a run was given carries one disposition",
+    )
+    accounted.add_argument("--root", type=Path, required=True, help=root_help)
+    accounted.add_argument(
+        "--board", metavar="SOURCE", help="also verify filed evidence on this board"
+    )
+    accounted.add_argument("run", metavar="RUN-ID")
+    gathered = commands.add_parser(
+        "check-gathering",
+        help="validate that a file quotes comments one board holds, and nothing more",
+    )
+    gathered.add_argument("--board", required=True, metavar="SOURCE")
+    gathered.add_argument("--feedback", type=_gathering_file, required=True, metavar="FILE")
+    gathered.add_argument("run", metavar="RUN-ID")
+    located = commands.add_parser(
+        "responses-path",
+        help="print where the response artifact answering one gathering is kept",
+    )
+    located.add_argument(
+        "--feedback",
+        type=_gathering_file,
+        required=True,
+        metavar="FILE",
+        help="the gathered feedback file",
+    )
+    answered = commands.add_parser(
+        "check-responses",
+        help="validate that every comment one gathering quoted carries one response and a reply",
+    )
+    answered.add_argument("--board", required=True, metavar="SOURCE")
+    answered.add_argument(
+        "--feedback",
+        type=_gathering_file,
+        required=True,
+        metavar="FILE",
+        help="the gathered feedback file",
+    )
+    answered.add_argument("run", metavar="RUN-ID")
+    task = commands.add_parser("compose", help="print one follow-up dispatch's task")
+    task.add_argument(
+        "--mode",
+        default=Mode.INITIAL.value,
+        choices=[one.value for one in Mode],
+        help="which dispatch this task is for; the caller decides it, never the feedback's content",
+    )
     task.add_argument("--template", type=Path, required=True)
     task.add_argument("--root", type=Path, required=True, help=root_help)
     task.add_argument("--run", required=True, metavar="RUN-ID")
@@ -2187,6 +3448,10 @@ def _parser() -> _Parser:
         ),
     )
     task.add_argument("--feedback", type=Path, metavar="FILE")
+    task.add_argument("--dispositions", type=Path, metavar="PATH")
+    task.add_argument("--check-dispositions", metavar="COMMAND")
+    task.add_argument("--responses", type=Path, metavar="PATH")
+    task.add_argument("--check-responses", metavar="COMMAND")
     return parser
 
 
@@ -2205,14 +3470,116 @@ def _validated(paths: Sequence[Path]) -> int:
     return status
 
 
+def _refused(named: str, problems: Sequence[str]) -> int:
+    """Print one artifact's refusals, each on its own line, and answer :data:`UNSOUND`."""
+    print(f"{PROG}: {named} does not account for this dispatch:", file=sys.stderr)
+    for problem in problems:
+        print(f"  - {problem}", file=sys.stderr)
+    return UNSOUND
+
+
+def _accounted(arguments: argparse.Namespace) -> int:
+    """Validate a run's disposition artifact, for the `check-dispositions` command."""
+    path = dispositions_path(arguments.root, arguments.run)
+    try:
+        if not path.is_file():
+            return _refused(
+                str(path),
+                [
+                    "it does not exist, so nothing says what became of the drafts this "
+                    "dispatch was given"
+                ],
+            )
+        document = _artifact(path)
+        problems = disposition_problems(
+            document,
+            arguments.run,
+            draft_ids(arguments.root, arguments.run),
+            written_tickets(arguments.root, arguments.run),
+        )
+        if not problems and arguments.board:
+            # `disposition_problems` proved every entry and every root-causes list above.
+            # JSON starts as objects, so these casts carry that proof into the board read.
+            entries = cast(list[dict[str, object]], document["dispositions"])
+            filed = {cause for entry in entries for cause in cast(list[str], entry["root_causes"])}
+            problems = filed_board_problems(arguments.root, arguments.run, filed, arguments.board)
+    except (OSError, Refused) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    if problems:
+        return _refused(str(path), problems)
+    print(f"{PROG}: {path} accounts for every draft this dispatch was given")
+    return SOUND
+
+
+def _gathered(arguments: argparse.Namespace) -> int:
+    """Validate that a file is a gathering, for the `check-gathering` command.
+
+    The recipe runs it before it composes: a feedback mode task carries that file verbatim
+    and its acceptance criteria rest on an account of the comments it quotes, so a file
+    that is no gathering is one this dispatch should never be launched over.
+    """
+    feedback: Path = arguments.feedback
+    try:
+        gathering = read_gathering(_text(feedback))
+        problems = gathering_problems(gathering, feedback, arguments.board, arguments.run)
+        if not problems:
+            problems = [
+                f"{feedback.name} is not a gathering: {problem}"
+                for problem in gathering_on_board(gathering, arguments.run)
+            ]
+    except OSError as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    if problems:
+        return _refused(str(feedback), problems)
+    print(f"{PROG}: {feedback} quotes {len(gathering.quoted)} comment(s) of {arguments.board}")
+    return SOUND
+
+
+def _answered(arguments: argparse.Namespace) -> int:
+    """Validate a gathering's response artifact, for the `check-responses` command."""
+    feedback: Path = arguments.feedback
+    path = responses_path(feedback)
+    try:
+        gathering = read_gathering(_text(feedback))
+        if problems := gathering_problems(gathering, feedback, arguments.board, arguments.run):
+            return _refused(str(feedback), problems)
+        quoted = gathering.quoted
+        if not path.is_file():
+            return _refused(
+                str(path),
+                [
+                    "it does not exist, so nothing says what was done about the "
+                    f"{len(quoted)} comment(s) {feedback.name} quotes"
+                ],
+            )
+        problems, answered = response_problems(_artifact(path), arguments.run, feedback, quoted)
+        # The gathering is held to the board first, so no issue it names is asked for its
+        # replies until the board says this run may answer there.
+        if not problems:
+            problems = gathering_on_board(gathering, arguments.run, check_issue_title=False)
+        if not problems:
+            problems = replies_posted(arguments.run, answered)
+    except (OSError, Refused) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    if problems:
+        return _refused(str(path), problems)
+    print(f"{PROG}: {path} answers every comment {feedback.name} quotes")
+    return SOUND
+
+
 def _composed(arguments: argparse.Namespace) -> int:
     """Print the follow-up agent's task, for the `compose` command."""
     root: Path = arguments.root
     try:
-        template = arguments.template.read_text(encoding="utf-8")
-        feedback = None if arguments.feedback is None else arguments.feedback.read_text("utf-8")
+        template = _text(arguments.template)
+        feedback = None if arguments.feedback is None else _text(arguments.feedback)
+        mode = Mode(arguments.mode)
         task = compose(
             template,
+            mode=mode,
             run=arguments.run,
             board=arguments.board,
             drafts_root=root,
@@ -2223,7 +3590,14 @@ def _composed(arguments: argparse.Namespace) -> int:
             checkout=arguments.checkout,
             plan_store=arguments.plan_store,
             feedback=feedback,
-            redispatch=feedback is not None or inventory(root, arguments.run)[1] > 0,
+            feedback_file=arguments.feedback,
+            redispatch=mode is Mode.FEEDBACK
+            or feedback is not None
+            or inventory(root, arguments.run)[1] > 0,
+            dispositions=arguments.dispositions,
+            check_dispositions=arguments.check_dispositions,
+            responses=arguments.responses,
+            check_responses=arguments.check_responses,
         )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
@@ -2298,7 +3672,7 @@ def _copied(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate, decide a status, list, copy, count or compose, for the recipe and the agent."""
+    """Validate, account, decide a status, list, copy, count or compose, for every caller."""
     arguments = _parser().parse_args(argv)
     match arguments.command:
         case "validate":
@@ -2312,13 +3686,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         case "statuses":
             sys.stdout.write(status_vocabulary())
             return SOUND
+        case "responses-path":
+            print(responses_path(arguments.feedback))
+            return SOUND
         case _ if not RECORD_COMPONENT.fullmatch(arguments.run):
             print(f"{PROG}: refused: {arguments.run!r} is not a run id", file=sys.stderr)
             return UNRUNNABLE
+        case "check-gathering":
+            return _gathered(arguments)
         case "inventory":
             held_drafts, held_tickets = inventory(arguments.root, arguments.run)
             print(f"{held_drafts} {held_tickets}")
             return SOUND
+        case "dispositions-path":
+            print(dispositions_path(arguments.root, arguments.run))
+            return SOUND
+        case "open-dispositions":
+            try:
+                print(open_dispositions(arguments.root, arguments.run))
+            except (OSError, Refused) as exc:
+                print(f"{PROG}: refused: {exc}", file=sys.stderr)
+                return UNRUNNABLE
+            return SOUND
+        case "check-dispositions":
+            return _accounted(arguments)
+        case "check-responses":
+            return _answered(arguments)
         case "check-run":
             tickets = (arguments.root / TASKS_DIRECTORY / arguments.run / TICKETS).glob("*.md")
             return _validated(sorted(tickets))

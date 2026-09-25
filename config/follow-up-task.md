@@ -58,7 +58,8 @@ there gets this run's evidence rather than a second issue.
 2. **Verify each draft against that basis.** Read what the draft claims, its transcript and
    the tree, and decide whether the claim holds at the basis commit.
 3. **Drop a draft you cannot verify, or one the basis already fixes.** Keep the id of every
-   dropped draft and the reason it was dropped.
+   dropped draft and the reason it was dropped: every draft, dropped or not, is accounted
+   for at step 11 below, and that account is checked.
 4. **Report what should have been surfaced live.** A draft that reads as something that
    should have been raised during the run — a decision fork, a constraint that could not
    be met, something the manager needed to act on then — is a finding in its own right.
@@ -126,18 +127,39 @@ there gets this run's evidence rather than a second issue.
     open item for it was created by another run, copy nothing: add this run's one comment
     to that item, or edit the comment this run already left there, under "Ownership on the
     board" below.
-11. **Report** every issue you created or updated with its URL (its location where the
+11. **Account for every draft this dispatch was given.** Write one disposition per draft
+    into `@DISPOSITIONS@`, to the shape under "The account of every draft" below, then run
+    `@CHECK_DISPOSITIONS@` and correct the account until it reports it sound. It is what
+    stands in for the full re-verification a feedback re-dispatch used to perform by
+    accident, which was the only thing that ever surfaced a sound draft an earlier agent
+    had quietly left out.
+12. **Report** every issue you created or updated with its URL (its location where the
     board reports no URL), every dropped draft with its reason, every ticket dropped or
     withdrawn under an accepted ticket with that ticket's URL, every ticket the board
     refused a status for with what `board-status` printed, every ticket the store refused
     to copy with the refusal it printed, and every finding that should have been surfaced
-    live.
+    live. The account at `@DISPOSITIONS@` is the record of what became of each draft; the
+    report says what the reader needs beyond it.
 
+## The account of every draft
+
+@DISPOSITION_CONTRACT@
 ## The verified ticket
 
 @TICKET_CONTRACT@
 ## Ownership on the board
 
 @COMMENT_CONTRACT@
+## Acceptance criteria
+
+- Every ticket left under `@DRAFTS_ROOT@/tasks/@RUN@/tickets/` is one `@VALIDATE@` reports
+  sound, over the tree as it finally stands.
+- `@CHECK_DISPOSITIONS@` reports the account at `@DISPOSITIONS@` sound: every draft this
+  dispatch was given carries exactly one disposition, with the root causes that
+  disposition owes. Run it last, after the final edit to that account, because a run of it
+  from before that edit says nothing about the account you leave.
+- Every claim the report makes about what reached the board is true of the board as it
+  finally stands: an issue reported created or updated is one the copy printed, and a
+  refusal reported is one a command printed.
 @REDISPATCH@
 @FEEDBACK@

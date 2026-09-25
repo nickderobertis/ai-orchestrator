@@ -842,6 +842,54 @@ re-dispatch answer each comment with a reply under the run's marker. On the `fol
 board a run owns only the issues it created and the comments its marker names
 (`orchestrator/follow_up_tickets.py`).
 
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] Which recipe selects which mode is
+a decision the manager makes before running either, and neither recipe's own help states
+it: `just follow-ups` and `just follow-ups-handle-comments` differ in what the dispatch
+they launch will and will not do, and a manager who picks the wrong one pays a provider
+turn to find out. The disposition words are named because the manager reads the account,
+and each validator is named because the manager runs it when a detached run's own report is
+all there is. `tests/test_follow_up_ticket_docs.py` reads both vocabularies out of
+`orchestrator/follow_up_tickets.py` and fails when this prose stops matching them, so this
+is one statement held to the code rather than a second one. The block runs to the end of
+the paragraph naming where each validator binds. -->
+<!-- llmlint: ignore-block[instruction_layer_localized] This is the manager's own
+operating knowledge — which of its recipes selects which mode, and what each dispatch it
+launches owes — rather than an `orchestrator/` implementation constraint, and
+`orchestrator/AGENTS.md` owns no statement of a recipe's behaviour. It sits inside the
+follow-ups section this document already carries, which `tests/test_follow_up_ticket_docs.py`
+reads from `AGENTS.md` by name and holds to the module's own vocabularies. The block runs to
+the end of the paragraph naming the two places each validator binds. -->
+**A follow-up dispatch is composed in one of two modes, and each owes one checked
+account.** Which mode is the **caller's** to state and is never inferred from a feedback
+file's contents: `just follow-ups-handle-comments` passes `--comments` through, and a bare
+`--feedback` of your own stays the full re-dispatch above, so a manager's feedback that
+happens to quote a board comment does not narrow the dispatch silently.
+
+- **Initial mode**, every launch but a comment gathering, verifies the run's drafts and
+  puts what stands on the board. It accounts for **every input draft with exactly one
+  disposition** — `filed`, linked to the ticket or open issue its evidence reached and
+  naming the root causes it supports; `not-reproducible`; `already-fixed`; or
+  `too-low-impact`. The input set is the drafts the recipe recorded **before** the
+  dispatch, because the agent deletes each draft a ticket consumed, and it only ever grows,
+  so a re-dispatch keeps the first pass's answers. `python -m
+  orchestrator.follow_up_tickets check-dispositions` is what holds an account to that, and
+  its diagnostics name each draft it will not answer for. With `--board`, it also checks
+  that each filed ticket reached its bound item or this run's evidence comment there.
+- **Feedback mode**, what a comment gathering composes, answers **only the comments that
+  gathering quoted**, in the order it quoted them, each with one reply under the run's
+  marker, and changes only the ticket of an issue a quoted comment sits on. It never
+  inventories the drafts, lists the board, reads an accepted item, or touches a ticket,
+  issue or comment no quoted comment names. `python -m orchestrator.follow_up_tickets
+  check-responses` is what holds an account to that, reading each reply it names back off
+  the board. The pre-launch `check-gathering` read also refuses an issue the run neither
+  owns nor marked, and a comment whose marker says a run wrote it.
+
+Both bind in the two places a run can end: each composed task's own acceptance criteria
+require its validator green, and an attached `just follow-ups` re-runs it after the
+dispatch settles.
+<!-- llmlint: ignore-end[instruction_layer_localized] -->
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+
 **Every proposal is written against the board's accepted fixes.** The follow-up agent
 reads the board's accepted tickets — `Todo`, `Queued`, `In Progress`, and `Done` where the
 fix has not reached the basis the ticket was verified at — and writes each ticket it stands

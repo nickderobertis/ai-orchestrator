@@ -224,20 +224,31 @@ def tickets_last_written(root: Path, run: str) -> datetime | None:
 
 def comment_url(issue: Issue, comment: Comment) -> str:
     """The comment's own URL; else a URL into the issue that holds it, fragment its id."""
+    return comment_url_parts(issue.url, issue.location, comment.id, comment.url, str(issue.id))
+
+
+def comment_url_parts(
+    issue_url: str | None,
+    location: str | None,
+    comment_id: str,
+    direct_url: str | None,
+    issue_id: str,
+) -> str:
+    """One comment URL from the board fields the gathering and its validator both read."""
     # Only the hosted `followups` board reports a URL, and reading it needs that board's
     # credential, which every dispatch and journey is denied; the `local-md` stand-in the
     # journey drives reports none. `tests/test_follow_up_comments.py` stands in the store's
     # answer for these two branches, and the journey drives the location branch below.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
-    if comment.url is not None:
-        return comment.url
-    fragment = f"#comment-{comment.id}"
+    if direct_url is not None:
+        return direct_url
+    fragment = f"#comment-{comment_id}"
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
-    if issue.url is not None:
-        return issue.url + fragment
-    if issue.location is not None:
-        return Path(issue.location).absolute().as_uri() + fragment
-    raise OSError(f"the board reports no URL and no location for {issue.id} or its comments")
+    if issue_url is not None:
+        return issue_url + fragment
+    if location is not None:
+        return Path(location).absolute().as_uri() + fragment
+    raise OSError(f"the board reports no URL and no location for {issue_id} or its comments")
 
 
 class Boundary(NamedTuple):
@@ -382,15 +393,19 @@ def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | N
         "2. **Post its one reply**, naming the comment's id, as those rules state.\n"
         "3. **Report** the comment's URL beside what you did about it, or why you did "
         "nothing.\n\n"
-        "**Never change a board item's status.** Before every copy, write the status "
-        "`board-status` prints, which is the one the board holds the item at, so a person's "
-        "move to `Todo`, `Deferred` or `In Progress` stands whenever they made it.\n"
+        "**Never change a board item's status**, and never touch a ticket or an issue no "
+        "comment above names: a person's move to `Todo`, `Deferred` or `In Progress` stands "
+        "whenever they made it, and this dispatch answers these comments and nothing else.\n"
     ]
     for number, selected in enumerate(chosen, start=1):
         issue = selected.issue
         whose = "this run's issue" if issue.owner == run else f"run `{issue.owner}`'s issue"
         sections.append(
-            f"### Comment {number}: on `{issue.id}`, {whose}\n\n"
+            f"{tickets.QUOTED_COMMENT_HEADING}{number}: on `{issue.id}`, {whose}\n\n"
+            # The anchor the response artifact's validator reads this gathering's comments
+            # back out of, in this order. Its grammar is `follow_up_tickets`', beside the
+            # comment markers, because that module's `check-responses` is its one reader.
+            f"{tickets.quoted_comment(str(issue.id), str(selected.id))}\n\n"
             f"- Comment id: {selected.id}\n"
             f"- URL: {selected.url}\n"
             f"- Author: {selected.author}\n"
