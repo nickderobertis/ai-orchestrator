@@ -393,6 +393,23 @@ def test_the_session_target_answers_for_the_named_tokens_and_never_the_orphan(
         seed.closed.token,
         "--session",
         seed.held.token,
+        "--json",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert status == COUNTED, err
+    rows = _rows(out)
+    assert set(rows) == {seed.closed.branch, seed.held.branch}
+    assert rows[seed.closed.branch]["disk"]["run_root"] == str(seed.closed.run_root), (
+        "the disk reading reaches a closed session's run root through its record, by token"
+    )
+
+    # A token no session record names is the adopted filter's refusal, by name: never a
+    # quiet nothing-counted over the tokens it does know.
+    status, out, err = _run(
+        seed.registry,
+        "--session",
+        seed.closed.token,
         "--session",
         "s-0000deadbeef",
         "--json",
@@ -400,9 +417,8 @@ def test_the_session_target_answers_for_the_named_tokens_and_never_the_orphan(
         monkeypatch=monkeypatch,
         state=tmp_path,
     )
-    assert status == COUNTED
-    assert set(_rows(out)) == {seed.closed.branch, seed.held.branch}
-    assert "session s-0000deadbeef: no registered identity records a session by that token" in err
+    assert status == UNANSWERED and out == ""
+    assert "could not answer" in err and "s-0000deadbeef" in err
 
 
 def test_a_retried_session_holding_an_earlier_tokens_branch_is_joined_off_its_record(
@@ -431,22 +447,195 @@ def test_a_retried_session_holding_an_earlier_tokens_branch_is_joined_off_its_re
         assert rows[first.branch]["session"] == retry.token, "the open record names the session"
 
 
+class Labelled(NamedTuple):
+    """A registry whose sessions carry the labels the engine stamps, for two managers."""
+
+    registry: Registry
+    #: MANAGER's run's session, committed and closed: counted.
+    own: Session
+    #: MANAGER's run's session still held by a live owner: in flight.
+    own_held: Session
+    #: OTHER_MANAGER's run's session, closed: never MANAGER's.
+    other: Session
+    #: A session opened with no labels, as one before the labelling engine was adopted.
+    unlabelled: Session
+    owner: subprocess.Popen[bytes]
+
+
+def _labels(run: str, node: str, launcher: str) -> dict[str, str]:
+    return {
+        unpublished.LABEL_RUN: run,
+        unpublished.LABEL_NODE: node,
+        unpublished.LABEL_LAUNCHER: launcher,
+    }
+
+
+@pytest.fixture(scope="module")
+def labelled_registry(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Labelled]:
+    registry = seeded(tmp_path_factory.mktemp("labelled"))
+    own = registry.open_session(labels=_labels("run-a", "node-1", MANAGER))
+    registry.close_session(own)
+    own_held = registry.open_session(labels=_labels("run-a", "node-2", MANAGER))
+    owner = registry.hold(own_held)
+    other = registry.open_session(labels=_labels("run-b", "node-1", OTHER_MANAGER))
+    registry.close_session(other)
+    unlabelled = registry.open_session()
+    registry.close_session(unlabelled)
+    try:
+        yield Labelled(registry, own, own_held, other, unlabelled, owner)
+    finally:
+        owner.kill()
+        owner.wait()
+
+
 @pytest.mark.parametrize(
-    "arguments",
-    [(), ("--own",), ("--session", "0b2c-manager-id"), ("--session", "s-000000000001\n")],
+    ("arguments", "session"),
+    [
+        ((), MANAGER),
+        (("--own",), MANAGER),
+        (("--session", MANAGER), None),
+        (("--own", "--session", MANAGER), OTHER_MANAGER),
+    ],
 )
-def test_the_own_sessions_target_is_refused_naming_the_labels_it_awaits(
-    seeded_registry: Seeded,
+def test_the_own_sessions_target_answers_the_launcher_labels_rows_filled_from_its_labels(
+    labelled_registry: Labelled,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     arguments: tuple[str, ...],
+    session: str | None,
+) -> None:
+    """The default, `--own` and `--session <manager id>` are one filtered read.
+
+    `--session` wins over the environment, because that is how a caller whose own
+    environment names nobody — a hook, whose child has the launcher removed — asks about
+    the session it was handed.
+    """
+    seed = labelled_registry
+    status, out, err = _run(
+        seed.registry,
+        *arguments,
+        "--json",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+        session=session,
+    )
+    assert status == COUNTED, err
+    rows = _rows(out)
+    assert set(rows) == {seed.own.branch, seed.own_held.branch}, (
+        "only the sessions MANAGER's runs opened: never another manager's, never an unlabelled one"
+    )
+    own = rows[seed.own.branch]
+    assert (own["run"], own["node"], own["manager_session"]) == ("run-a", "node-1", MANAGER)
+    assert own["session"] == seed.own.token and own["counted"] is True
+    assert own["disk"]["run_root"] == str(seed.own.run_root)
+    held = rows[seed.own_held.branch]
+    assert held["in_flight"] is True and held["counted"] is False
+    assert (held["run"], held["node"]) == ("run-a", "node-2")
+
+
+def test_the_own_target_of_a_manager_that_launched_nothing_answers_nothing(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     status, out, err = _run(
-        seeded_registry.registry, *arguments, monkeypatch=monkeypatch, state=tmp_path
+        labelled_registry.registry,
+        "--own",
+        "--no-disk",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+        session="a-worker-session-owning-nothing",
     )
-    assert status == REFUSED
+    assert status == NOTHING_COUNTED, err
+    assert out.strip() == "no preserved unpublished branch for this target"
+
+
+def test_an_unlabelled_session_is_host_level_only_and_every_row_carries_its_labels(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seed = labelled_registry
+    status, out, err = _run(
+        seed.registry, "--host", "--json", "--no-disk", monkeypatch=monkeypatch, state=tmp_path
+    )
+    assert status == COUNTED, err
+    rows = _rows(out)
+    unlabelled = rows[seed.unlabelled.branch]
+    assert (unlabelled["run"], unlabelled["node"], unlabelled["manager_session"]) == (
+        None,
+        None,
+        None,
+    )
+    assert rows[seed.other.branch]["manager_session"] == OTHER_MANAGER
+    for manager in (MANAGER, OTHER_MANAGER):
+        _, own, _ = _run(
+            seed.registry,
+            "--own",
+            "--json",
+            "--no-disk",
+            monkeypatch=monkeypatch,
+            state=tmp_path,
+            session=manager,
+        )
+        assert seed.unlabelled.branch not in _rows(own)
+
+
+def test_an_own_target_acknowledgement_is_the_named_managers(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Acknowledged by MANAGER, the branch stops counting when MANAGER is asked about by id."""
+    seed = labelled_registry
+    status, _, err = _run(
+        seed.registry,
+        "--acknowledge",
+        seed.own.branch,
+        "--reason",
+        "asking the user first",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert status == COUNTED, err  # the unlabelled and other branches still count host-wide
+    status, out, err = _run(
+        seed.registry,
+        "--session",
+        MANAGER,
+        "--json",
+        "--no-disk",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+        session=None,
+    )
+    assert status == NOTHING_COUNTED, err
+    row = _rows(out)[seed.own.branch]
+    assert row["counted"] is False and row["acknowledgement"]["reason"] == "asking the user first"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "session", "said"),
+    [
+        ((), None, "no manager session identifies this shell"),
+        (("--own",), None, "no manager session identifies this shell"),
+        (("--session", "s-000000000001\n"), None, "not the shape a session id has"),
+        (("--session", "one-manager", "--session", "two-manager"), None, "name one"),
+        (("--own", "--session", "s-000000000abc"), MANAGER, "two targets"),
+        (("--session", "a-manager", "--session", "s-000000000abc"), MANAGER, "two targets"),
+    ],
+)
+def test_an_own_target_nothing_can_filter_on_is_refused(
+    labelled_registry: Labelled,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    session: str | None,
+    said: str,
+) -> None:
+    status, out, err = _run(
+        labelled_registry.registry,
+        *arguments,
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+        session=session,
+    )
+    assert status == REFUSED, err
     assert out == ""
-    assert "refused" in err and "run, node, launcher" in err and "unfinished-guard" in err
+    assert "refused" in err and said in err
 
 
 def test_two_targets_at_once_are_refused(
@@ -814,6 +1003,8 @@ def test_a_tip_that_cannot_be_read_leaves_no_acknowledgement_standing(
         resume=None,
         held_by=None,
         holder=None,
+        token=None,
+        labels={},
     )
     warnings: list[str] = []
     standing = unpublished._standing(
@@ -854,7 +1045,7 @@ def test_a_registry_onevcs_refuses_is_unanswered_never_a_count(
     assert unpublished.main(["--session", "s-000000000abc"], out=out, err=err) == UNANSWERED
 
 
-def test_an_empty_registry_answers_nothing_for_a_session_target(
+def test_an_empty_registry_answers_nothing_for_the_host_and_refuses_a_token_by_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "empty-home"
@@ -862,15 +1053,11 @@ def test_an_empty_registry_answers_nothing_for_a_session_target(
     monkeypatch.setenv("ONEVCS_HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     out, err = io.StringIO(), io.StringIO()
-    assert (
-        unpublished.main(["--session", "s-000000000abc", "--json"], out=out, err=err)
-        == NOTHING_COUNTED
-    )
+    assert unpublished.main(["--host", "--json"], out=out, err=err) == NOTHING_COUNTED
     assert json.loads(out.getvalue()) == []
-    assert "no registered identity records a session by that token" in err.getvalue()
     out, err = io.StringIO(), io.StringIO()
-    assert unpublished.main(["--session", "s-000000000abc"], out=out, err=err) == NOTHING_COUNTED
-    assert out.getvalue().strip() == "no preserved unpublished branch for this target"
+    assert unpublished.main(["--session", "s-000000000abc"], out=out, err=err) == UNANSWERED
+    assert "no session record on this host names s-000000000abc" in err.getvalue()
 
 
 def test_a_repos_listing_this_view_cannot_read_is_unanswered_not_nothing_held(
@@ -878,9 +1065,9 @@ def test_a_repos_listing_this_view_cannot_read_is_unanswered_not_nothing_held(
 ) -> None:
     """A `onevcs repos` line the view cannot place must never read as an empty host.
 
-    `--session` looks each token up in the identities this listing names, so a listing
-    read short answers *no registered identity records that token* over branches that
-    are really held — a false `NOTHING_COUNTED` a consumer would act on. The real
+    `--host` asks each identity this listing names, so a listing read short answers
+    *nothing preserved* over branches that are really held — a false `NOTHING_COUNTED` a
+    consumer would act on. The real
     `onevcs` is asked here and its real empty listing is what answers; what moves is the
     one line the view accepts as that answer, so the line the tool actually prints
     arrives as the drift a later release would bring.
@@ -891,9 +1078,7 @@ def test_a_repos_listing_this_view_cannot_read_is_unanswered_not_nothing_held(
     monkeypatch.setenv("ONEVCS_HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     out, err = io.StringIO(), io.StringIO()
-    assert (
-        unpublished.main(["--session", "s-000000000abc", "--json"], out=out, err=err) == UNANSWERED
-    )
+    assert unpublished.main(["--host", "--json"], out=out, err=err) == UNANSWERED
     assert out.getvalue() == ""
     assert "cannot read as an identity" in err.getvalue()
     assert "no repositories registered" in err.getvalue()
@@ -1052,29 +1237,31 @@ def test_an_identity_whose_sessions_cannot_be_read_is_a_warning_not_a_status(
     assert warnings and "its sessions could not be read" in warnings[0]
 
 
-def test_a_session_target_whose_sessions_cannot_be_read_is_unanswered_never_nothing(
-    seeded_registry: Seeded, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_a_disk_reading_whose_session_records_cannot_be_read_is_said_and_the_rows_stand(
+    seeded_registry: Seeded, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--session` cannot say a token is held nowhere when an identity went unread.
+    """The record only names a closed session's worktree; the rows are `onevcs`'s own.
 
-    The identity it cannot read may be the one holding the named session, so answering
-    *nothing counted* would be a false answer a consumer acts on. The real `onevcs` is
-    asked and refuses; what moves is the identity listing, to one it has no record of,
-    because the pinned `onevcs` answers `session holders` for every identity its own
-    `repos` lists — a missing checkout, origin or sessions directory included — so no
-    registry this suite can build reaches this through `repos` alone.
+    A filtered row names an identity whose `session holders` the pinned `onevcs` refuses,
+    so the joined read keeps the row, leaves its worktree unknown and says why.
     """
-    monkeypatch.setattr(unpublished, "_identities", lambda: [Identity("/nowhere/registered")])
-    status, out, err = _run(
-        seeded_registry.registry,
-        "--session",
-        seeded_registry.closed.token,
-        "--json",
-        monkeypatch=monkeypatch,
-        state=tmp_path,
-    )
-    assert status == UNANSWERED, err
-    assert out == "" and "could not answer" in err and "session holders" in err
+    monkeypatch.setenv("ONEVCS_HOME", str(seeded_registry.registry.home))
+    warnings: list[str] = []
+    record = {
+        "identity": "/nowhere/registered",
+        "branch": {"branch": "b"},
+        "checkout": "/c",
+        "session": "s-000000000001",
+    }
+    rows = unpublished._joined([record], True, warnings)
+    assert [row.branch for row in rows] == ["b"] and rows[0].holder is None
+    assert any("its sessions could not be read" in warning for warning in warnings)
+
+    # A row the row shape refuses is left out before any identity it names is asked about.
+    warnings = []
+    assert unpublished._joined([{**record, "identity": ""}], True, warnings) == []
+    assert not any("its sessions could not be read" in warning for warning in warnings)
+    assert any("was left out" in warning for warning in warnings)
 
 
 def test_a_row_or_holder_record_missing_its_names_is_left_out_and_said() -> None:
@@ -1382,8 +1569,8 @@ def test_a_malformed_producer_row_is_reported_by_a_complete_session_view(
     seed = seeded_registry
     original = unpublished._onevcs
 
-    def malformed_answer(*arguments: str) -> str:
-        answer = original(*arguments)
+    def malformed_answer(*arguments: str, cwd: Path | None = None) -> str:
+        answer = original(*arguments, cwd=cwd)
         if malformed_source == "holder" and arguments[:2] == ("session", "holders"):
             holders = json.loads(answer)
             for holder in holders:
@@ -1399,19 +1586,28 @@ def test_a_malformed_producer_row_is_reported_by_a_complete_session_view(
         return answer
 
     monkeypatch.setattr(unpublished, "_onevcs", malformed_answer)
+    # The holder record is read only for the disk reading, so that case asks for one.
+    disk = () if malformed_source == "holder" else ("--no-disk",)
     status, out, err = _run(
         seed.registry,
         "--session",
         seed.closed.token,
         "--json",
-        "--no-disk",
+        *disk,
         monkeypatch=monkeypatch,
         state=tmp_path,
     )
-    assert status == NOTHING_COUNTED
-    assert json.loads(out) == []
     assert "was left out" in err
     assert "relative/" in err
+    if malformed_source == "holder":
+        # The row is `onevcs`'s and stands; only the record naming its worktree is dropped.
+        assert status == COUNTED
+        rows = _rows(out)
+        assert set(rows) == {seed.closed.branch}
+        assert rows[seed.closed.branch]["disk"]["run_root"] is None
+    else:
+        assert status == NOTHING_COUNTED
+        assert json.loads(out) == []
 
 
 def test_empty_names_and_a_token_of_another_shape_are_left_out_and_said() -> None:
@@ -1513,6 +1709,8 @@ def test_the_disk_walk_reports_what_it_cannot_read_and_a_run_root_that_is_gone(
         resume=None,
         held_by=None,
         holder=holder,
+        token=None,
+        labels={},
     )
     warnings: list[str] = []
     try:
@@ -1645,3 +1843,100 @@ def test_the_table_names_a_landed_row_and_offers_no_command_it_does_not_have() -
         "1 counted of 2 preserved unpublished branch(es); 0 in flight, 0 acknowledged; "
         "disk not measured (--no-disk)"
     )
+
+
+def test_a_session_token_or_labels_of_another_shape_are_said_and_read_as_none() -> None:
+    """The row's `session` and `labels` are `onevcs`'s, held to the shapes a row reads.
+
+    A token that is not an `s-` token names no session anything can look up, so the row
+    falls back to its holder; a label that is not a string is dropped, and a `labels`
+    that is not an object carries none — each said, never passed into the row unread.
+    """
+    base = {
+        "identity": "i",
+        "branch": {"branch": "b"},
+        "checkout": "/c",
+        "landed": {"state": "no"},
+    }
+    warnings: list[str] = []
+    row = unpublished._row(
+        {**base, "session": "manager-1", "labels": {"run": "r", "node": 7}}, [], warnings
+    )
+    assert row is not None and row.token is None and row.labels == {"run": "r"}
+    assert "is not a session token" in warnings[0]
+    assert "could not be read whole" in warnings[1]
+    warnings = []
+    row = unpublished._row({**base, "labels": ["run=r"]}, [], warnings)
+    assert row is not None and row.labels == {} and "could not be read whole" in warnings[0]
+    warnings = []
+    row = unpublished._row({**base, "session": None, "labels": {}}, [], warnings)
+    assert row is not None and row.token is None and row.labels == {} and warnings == []
+
+
+def test_a_holder_named_by_token_is_used_only_for_its_own_branch() -> None:
+    """A record the row's token names that holds another branch is another branch's worktree."""
+    own = Holder(SessionToken("s-00000000000a"), Identity("i"), Branch("b"), Path("/a/w"), "closed")
+    elsewhere = Holder(
+        SessionToken("s-00000000000b"), Identity("i"), Branch("other"), Path("/b/w"), "open"
+    )
+    holders = [own, elsewhere]
+    assert unpublished._holder_for(holders, Identity("i"), Branch("b"), own.token) == own
+    assert unpublished._holder_for(holders, Identity("i"), Branch("b"), elsewhere.token) == own, (
+        "the token's record holds another branch, so the row's own branch decides"
+    )
+    assert unpublished._holder_for([elsewhere], Identity("i"), Branch("b"), elsewhere.token) is None
+
+
+def test_an_own_read_answering_another_launchers_row_is_unanswered_never_counted(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A row the launcher filter should not have answered is a filter that did not filter.
+
+    The installed `onevcs` filters correctly, so its answer is changed at the subprocess
+    boundary for this one failure case; target selection, the check and the status still
+    run through ``main``.
+    """
+    original = unpublished._onevcs
+
+    def unfiltered(*arguments: str, cwd: Path | None = None) -> str:
+        answer = original(*arguments, cwd=cwd)
+        if arguments[:1] == ("recoverable",):
+            rows = json.loads(answer)
+            for row in rows:
+                row["labels"] = {**row["labels"], unpublished.LABEL_LAUNCHER: OTHER_MANAGER}
+            return json.dumps(rows)
+        return answer
+
+    monkeypatch.setattr(unpublished, "_onevcs", unfiltered)
+    status, out, err = _run(
+        labelled_registry.registry,
+        "--own",
+        "--no-disk",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert status == UNANSWERED and out == ""
+    assert "rather than 'manager-session-1'" in err
+
+
+def test_a_filtered_read_from_inside_a_registered_checkout_answers_for_every_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The own and session reads answer for every identity wherever they are run.
+
+    Run inside a registered checkout, the unscoped `recoverable` answers for that checkout's
+    identity alone, so a filtered read launched from identity `a`'s checkout must still
+    find the branch a labelled session left on identity `b`.
+    """
+    root = tmp_path / "two"
+    here = seeded(root, name="identity-a")
+    there = seeded(root, name="identity-b")
+    session = there.open_session(labels={unpublished.LABEL_LAUNCHER: MANAGER})
+    there.close_session(session)
+    monkeypatch.chdir(here.checkout)
+    for arguments in (("--own",), ("--session", session.token)):
+        status, out, err = _run(
+            here, *arguments, "--json", "--no-disk", monkeypatch=monkeypatch, state=tmp_path
+        )
+        assert status == COUNTED, f"{arguments}: {err}"
+        assert set(_rows(out)) == {session.branch}, arguments

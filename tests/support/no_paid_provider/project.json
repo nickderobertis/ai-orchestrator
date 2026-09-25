@@ -9,7 +9,8 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/e2e/no_paid_provider.py",
-      "{workspaceRoot}/tests/e2e/no-paid-provider/**/*"
+      "{workspaceRoot}/tests/e2e/no-paid-provider/claude",
+      "{workspaceRoot}/tests/e2e/no-paid-provider/codex"
     ]
   },
   "targets": {

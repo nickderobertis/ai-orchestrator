@@ -34,6 +34,16 @@ REQUIRED = (
     # tree or runs root, and changes the guard's count.
     "Bash(just unpublished --host)",
     "Bash(just unpublished --print-surface)",
+    # What this session still owes: the fixed reads for the session the harness names. The
+    # session-targeted read, `--session <ID>`, is approved per use instead of granted: a
+    # dynamic token is grantable only by a prefix wildcard, and the judged lint refuses an
+    # unbounded suffix on this file, so the grant this recipe could safely carry is one
+    # nothing here can spell. `test_no_wildcard_grant_covers_just_unfinished` holds both
+    # halves, and keeps the recipe's option set pinned as what a later grant would be
+    # reviewed against.
+    "Bash(just unfinished)",
+    "Bash(just unfinished --json)",
+    "Bash(just unfinished --print-surface)",
     "Bash(just results:*)",
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",
@@ -73,9 +83,34 @@ def test_allowlist_covers_the_orchestrator_and_planner_command_surface() -> None
     assert not missing, f"allowlist is missing required entries: {missing}"
 
 
+#: Every option `just unfinished` accepts, all of them reads. The recipe carries no wildcard
+#: grant — the session-targeted read is approved per use — so this set is what any future
+#: grant would have to be reviewed against, and a new option fails here until it is.
+UNFINISHED_READ_ONLY_OPTIONS = {"-h", "--help", "--session", "--json", "--print-surface"}
+
+
+def test_no_wildcard_grant_covers_just_unfinished() -> None:
+    """No suffix is granted on this recipe, and its option set stays pinned."""
+    from orchestrator import unfinished
+
+    wildcards = [r for r in _allowed() if r.startswith("Bash(just unfinished") and "*" in r]
+    assert not wildcards, (
+        f"`just unfinished` carries a wildcard grant again: {wildcards}; the session-targeted "
+        "read is approved per use"
+    )
+    options = {
+        option for action in unfinished._parser()._actions for option in action.option_strings
+    }
+    assert options == UNFINISHED_READ_ONLY_OPTIONS, (
+        f"`just unfinished` now accepts {sorted(options - UNFINISHED_READ_ONLY_OPTIONS)}; "
+        "review each before any grant admits a suffix on this recipe"
+    )
+
+
 def test_allowlist_grants_no_blanket_wildcard() -> None:
     assert not BLANKET.intersection(_allowed())
     assert "Bash(just unpublished:*)" not in _allowed()
+    assert not any("*" in rule for rule in _allowed() if rule.startswith("Bash(just unfinished"))
     assert not any(rule.startswith("Bash(just unpublished --acknowledge") for rule in _allowed())
     assert not any(
         "*" in rule for rule in _allowed() if rule.startswith("Bash(just unpublished")

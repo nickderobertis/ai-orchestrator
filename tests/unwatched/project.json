@@ -61,7 +61,9 @@
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/project_store.py",
-      "{workspaceRoot}/tests/unwatched/**/*"
+      "{workspaceRoot}/tests/unwatched/project.json",
+      "{workspaceRoot}/tests/unwatched/test_unwatched_and_stop_hook_e2e.py",
+      "{workspaceRoot}/tests/unwatched/test_unwatched_launch_shapes_e2e.py"
     ]
   },
   "targets": {

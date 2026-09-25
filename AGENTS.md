@@ -113,7 +113,10 @@ that identity **alone** and elsewhere for every identity, so read its first line
 the scope before reading a short result as nothing to recover. It omits a branch that
 already landed — unconditionally for a `local-direct` identity, and for a remote one
 only while this host's record of the landing survives, a `may have landed` row being
-the verb reporting no record rather than an unpublished branch. `just work-status
+the verb reporting no record rather than an unpublished branch. For every identity from
+anywhere, or for the sessions your own runs opened, with what each costs in disk, read
+`just unpublished` instead: `--host` for the host, and its default for your own runs'
+branches, which you land or acknowledge with a reason. `just work-status
 <change-url|session|branch|commit>` reports everything `onevcs` knows about one piece
 of work. `just import-branch <branch> --repo <checkout>` makes a branch finished in a
 session worktree or a run clone reachable from an identity's registered checkouts,
@@ -687,7 +690,8 @@ them reach you; `manager` names the session role and is never a command.
    <source:project>` from the repository root (the graph paths resolve there), arm a
    watch before you turn to anything else, then review each settled node and mid-run
    proposal over the live channel with `add` / `retry` / `drop` / `reparent` edits.
-   Workers propose and never edit.
+   Workers propose and never edit. Before you end a turn, `just unfinished` answers
+   what you still owe: runs `just unwatched` names and branches `just unpublished` counts.
 
 **A node whose record is wrong is corrected rather than re-run.** `settle` moves a
 node's recorded state to what you can see it reached, from evidence the run never
@@ -783,7 +787,7 @@ every other unpublished branch here.
 
 After `just orchestrate`, use **only** `just channel-next`, `just channel-reply`, `just
 stop`, `just shutdown`, `just watch`, and the read-only `just monitor` / `just runs` / `just status` /
-`just unwatched` views. Nothing advances a run; the engine reconciles continuously.
+`just unwatched` / `just unpublished` / `just unfinished` views. Nothing advances a run; the engine reconciles continuously.
 `just channel-next` and `just monitor` read through the `planner` profile — the
 pipeline's decisions and settlements, not every worker's turns; `--filter detailed`
 widens to the whole merged stream and `--all` bypasses profiles. Rendering a surface in
@@ -989,7 +993,10 @@ watching means and what that verb is held to:
    until its watch is up; the `Stop` hook `.claude/settings.json` registers — the
    engine's own `onepipeline stop-guard` — refuses to end a turn while a run this
    session owns has nothing watching it, and the answer is to arm `just watch` on each
-   run it names, never to answer the hook twice.
+   run it names, never to answer the hook twice. That verb reads `unwatched` alone, so
+   the hook does not yet see a branch your runs left unpublished: `just unfinished` does,
+   and a turn ends only once it answers `0` — arm the watch, land the branch, or
+   acknowledge it with `just unpublished --acknowledge <branch> --reason "<why>"`.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.

@@ -96,6 +96,8 @@ from nx_inputs import (
     SESSION_SETUP_PYPI_PROJECT,
     SESSION_SETUP_PYPI_SCOPED,
     SESSION_SETUP_SCOPED,
+    UNFINISHED_PROJECT,
+    UNFINISHED_SCOPED,
     UNPUBLISHED_VIEW_PROJECT,
     UNPUBLISHED_VIEW_SCOPED,
     UNWATCHED_PROJECT,
@@ -682,6 +684,7 @@ SKIPPABLE_TIERS = frozenset(
         (SESSION_SETUP_PROJECT, SESSION_SETUP_SCOPED),
         (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
         (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
+        (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
     }
 )
 
@@ -840,9 +843,22 @@ class Selector(Checkout):
 
         A file already there is changed rather than replaced, by one trailing newline:
         that moves its hash and leaves its content valid, which matters because Nx
-        parses several of these while it answers.
+        parses several of these while it answers. A symlink is changed as git records
+        it, by its target: respelt through `./` it still resolves to the same file,
+        while a newline written through it would change the file it names and leave
+        the link git tracks as it was.
         """
         path = self.root / witness
+        if path.is_symlink():
+            target = os.readlink(path)
+            path.unlink()
+            path.symlink_to(f"./{target}")
+            try:
+                yield witness in self.pending()
+            finally:
+                path.unlink()
+                path.symlink_to(target)
+            return
         original = path.read_bytes() if path.is_file() else None
         if original is None:
             path.parent.mkdir(parents=True, exist_ok=True)

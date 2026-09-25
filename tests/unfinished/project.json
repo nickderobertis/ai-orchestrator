@@ -1,0 +1,54 @@
+{
+  "name": "unfinished",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/unfinished",
+  "tags": [
+    "scope:unfinished",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-nx-workspace",
+    "support-probe-run-root",
+    "support-unpublished-registry",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "unfinishedWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/config/onevcs.version",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/scripts/unfinished.sh",
+      "{workspaceRoot}/scripts/unpublished.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/follow-up-env.sh",
+      "{workspaceRoot}/scripts/plan-root-env.sh",
+      "{workspaceRoot}/orchestrator/unfinished.py",
+      "{workspaceRoot}/orchestrator/unpublished.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/unfinished/project.json",
+      "{workspaceRoot}/tests/unfinished/test_unfinished_e2e.py"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unfinished --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "unfinishedWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

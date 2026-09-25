@@ -2608,6 +2608,33 @@ def test_the_workspaces_overlay_composes_the_keys_the_linked_onevcs_declares() -
     assert _struct_fields(source, "WorkspaceDefault") == workspaces_overlay.RULE_KEYS - {"match"}
 
 
+#: The engine's declaration of one session label: `SESSION_<KEY>_LABEL` and its value.
+SESSION_LABEL_CONSTANT = re.compile(r'pub const SESSION_([A-Z]+)_LABEL: &str = "([^"]*)";')
+
+
+def test_the_session_label_keys_the_view_filters_on_are_the_ones_the_engine_stamps() -> None:
+    """`just unpublished`'s own-sessions target filters on the label the engine stamps.
+
+    `orchestrator/unpublished.py` declares the three keys a row's `run`, `node` and
+    `manager_session` are read under, and `launcher` is the one `recoverable --label`
+    filters on. The engine declares the same three in `src/executor.rs` and stamps them
+    on every session a node opens, so a key renamed there would leave the own target
+    answering nothing, as a manager whose runs left nothing. Read at the adopted pin,
+    because that engine is what opens a dispatch's session.
+    """
+    from orchestrator import unpublished
+
+    declared = dict(SESSION_LABEL_CONSTANT.findall(_source(ONEPIPELINE, "executor.rs")))
+    assert declared == {
+        "RUN": unpublished.LABEL_RUN,
+        "NODE": unpublished.LABEL_NODE,
+        "LAUNCHER": unpublished.LABEL_LAUNCHER,
+    }, (
+        f"onepipeline {ONEPIPELINE.ref}'s executor.rs declares the session labels {declared}, "
+        f"and orchestrator/unpublished.py reads {unpublished.SESSION_LABELS}"
+    )
+
+
 def test_the_task_a_live_edit_is_judged_as_is_composed_as_the_engine_composes_it() -> None:
     """A node an envelope states is judged on the task its dispatch will read, so how the
     engine renders an amendment into a task is restated in `orchestrator/envelope_review.py`,

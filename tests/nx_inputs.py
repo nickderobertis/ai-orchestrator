@@ -95,6 +95,18 @@ UNPUBLISHED_VIEW_WORKSPACE = "unpublishedViewWorkspace"
 #: half of that to this key; the subprocess half is the trace, so a launch path that
 #: starts reading a new file is a re-take of it rather than a glob to widen.
 UNWATCHED_WORKSPACE = "unwatchedWorkspace"
+#: The key `unfinished:test` is memoized on. Files rather than trees, for the reason
+#: `unwatchedWorkspace` names, and measured the same way: the tier traced under `strace -f
+#: -e trace=openat,execve`, each opened path normalized and intersected with what git
+#: tracks. So the key is the justfile, the two wrappers the recipe reaches and the two
+#: modules they run, the helper that establishes the manager session, the pins that decide
+#: which `onevcs` and which engine answer, the registry helper and run-root builder the
+#: journeys seed from, and the suite modules `tests/conftest.py` imports with the files
+#: they read. The trace also shows `uv run` opening the root README as package metadata,
+#: which decides no verdict here and is left out as every sibling key leaves it; and never
+#: `scripts/**` or `tests/unwatched/**`, because an edit this recipe never reaches must not
+#: pay for its real sessions.
+UNFINISHED_WORKSPACE = "unfinishedWorkspace"
 #: The key the `merge-policy` project's one tier is memoized on. Files rather than trees,
 #: for the reason `unwatchedWorkspace` names: every journey there spends a real launch,
 #: so every path in the key they never read makes an unrelated edit pay for it. Measured
@@ -400,6 +412,17 @@ UNPUBLISHED_VIEW_PROJECT = "unpublished-view"
 UNPUBLISHED_VIEW_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 UNPUBLISHED_VIEW_ROOT = "tests/e2e/unpublished_view"
+
+#: The project whose test target owns the journeys over `just unfinished`: the real
+#: recipe, wrappers and modules over a scratch `onevcs` registry of labelled sessions and
+#: a built runs root. A project of its own for the reason `unwatched` is: real `onevcs`
+#: sessions, real `git`, the installed engine and a real `just` per assertion are a cost
+#: `nx affected` can only keep off an unrelated edit where it is a separate project.
+UNFINISHED_PROJECT = "unfinished"
+#: That project's one test target: nothing here reads this repository's prose.
+UNFINISHED_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+UNFINISHED_ROOT = "tests/unfinished"
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

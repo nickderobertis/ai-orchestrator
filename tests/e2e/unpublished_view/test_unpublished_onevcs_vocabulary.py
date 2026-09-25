@@ -6,7 +6,7 @@ and the grammar a session token is minted in (:data:`~orchestrator.unpublished.
 SESSION_TOKEN`). Each is a copy of another repository's declaration, so each is read back
 against that declaration here rather than trusted: a lifecycle state onevcs adds, or a
 token it mints in another shape, fails this before a row is joined to the wrong record or
-a real session is refused as the own-sessions target.
+a real session token is read as a manager session id — the own-sessions target.
 
 The lifecycle is read at `config/onevcs.version`'s tag, because the view spawns the
 `onevcs` CLI this checkout installs at that pin. The token grammar is read there *and* at

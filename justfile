@@ -822,6 +822,15 @@ recoverable *args:
 unpublished *args:
     @./scripts/unpublished.sh "$@"
 
+# What this manager session still owes before its turn can end: `just unfinished
+# [--session ID] [--json]`. Stacks `onepipeline unwatched` and `just unpublished --own
+# --no-disk` for the same session, each half under its own heading. Its exit status is
+# the whole of what a caller branches on: `scripts/unfinished.sh --print-surface` prints
+# that vocabulary, and `orchestrator/unfinished.py` is its one declaration.
+# llmlint: ignore[tool_output_is_signal] the two headed halves are this viewing command's product.
+unfinished *args:
+    @./scripts/unfinished.sh "$@"
+
 # Report everything onevcs knows about one piece of work:
 # `just work-status <change-url|session-token|branch|commit> [--json]`.
 #

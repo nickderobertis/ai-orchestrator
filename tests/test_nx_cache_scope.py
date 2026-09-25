@@ -84,6 +84,8 @@ from nx_inputs import (
     SUPPORT_ROOT,
     TEST_SUPPORT,
     UNCONDITIONAL_TARGETS,
+    UNFINISHED_ROOT,
+    UNFINISHED_SCOPED,
     UNPUBLISHED_VIEW_ROOT,
     UNPUBLISHED_VIEW_SCOPED,
     UNWATCHED_ROOT,
@@ -900,7 +902,8 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: earn in one, the `run-end-hooks` project owns the journey that fires the run-end hooks
 #: through a real launch in one, the `project-store-race` project owns the clock-bounded
 #: replacement race over the record store in one, the `unpublished-view` project owns the
-#: journey over `just unpublished` in one, the `host-views` project owns the journeys
+#: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
+#: `just unfinished` in one, the `host-views` project owns the journeys
 #: over `just status` and `just host` in one, and the orchestrator project owns the rest
 #: in four.
 SUITE_TIERS = (
@@ -916,6 +919,7 @@ SUITE_TIERS = (
     (f"{RUN_END_HOOKS_ROOT}/project.json", RUN_END_HOOKS_SCOPED),
     (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
     (f"{UNPUBLISHED_VIEW_ROOT}/project.json", UNPUBLISHED_VIEW_SCOPED),
+    (f"{UNFINISHED_ROOT}/project.json", UNFINISHED_SCOPED),
     (f"{HOST_VIEWS_ROOT}/project.json", HOST_VIEWS_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),

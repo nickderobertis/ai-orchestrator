@@ -21,24 +21,26 @@ vocabulary from here, and nothing else in the tree restates any of it.
 **Targets.** `--host` answers for every registered identity from any working directory:
 it asks `onevcs recoverable --repo <identity> --json` of each identity `onevcs repos`
 lists, because the unscoped verb answers for one identity when run inside a registered
-checkout. `--session <TOKEN>` (repeatable)
-answers for the branches those `onevcs` sessions hold or held: the join is `onevcs repos`
-for the identities, `onevcs session holders <identity> --json` for the branch each token
-holds — read off the holder record and never derived from the token, because a retried
-session holds a branch named for an earlier one — and `onevcs recoverable --repo
-<identity> --json` filtered to those branches. The **own-sessions** target — the default,
-`--own`, and a `--session` value that is a manager session id rather than an `s-` token
-— is declared here and refused, with :data:`REFUSED`: it is a filter on the session
-labels the engine stamps and the adopted `onevcs` stores, which a later node turns on
-as one filtered read, and this repository joins nothing to imitate it. A session opened
-before that adoption carries no labels, so that target never reaches a branch it
-preserved and nothing backfills them; unlike an orphan, such a branch is still reached by
-an explicit `--session <TOKEN>`, through its holder record.
+checkout. The **own-sessions** target — the default, `--own`, and a `--session` value
+that is a manager session id rather than an `s-` token — is one filtered read,
+`onevcs recoverable --json --label launcher=<manager session>`: the branches of every
+session the engine opened for a run that manager session launched, found by the label
+the engine stamps on the session and the adopted `onevcs` filters on. The manager
+session is the `--session` value, else `ONEPIPELINE_LAUNCHER_SESSION` as
+`scripts/launcher-session.sh` establishes it — the identity `onepipeline unwatched
+--session` is keyed on. `--session <TOKEN>` (repeatable) is `onevcs recoverable --json
+--session <TOKEN>…`, the branches those sessions hold or held. Both filtered reads run
+from the filesystem root, outside every registered checkout, because the unscoped verb
+run inside one answers for that checkout's identity alone. A session opened before the
+labelling engine was adopted carries no labels, so the own target never reaches a
+branch it preserved and nothing backfills them: `--host` does, and so does its
+`--session <TOKEN>`.
 
 **Rows.** Each is what `onevcs` states — identity, branch, base, provenance, its
-`landed` object, the change URL, why it stopped — joined to its session token (`null`
-for a branch no session record names), with `run`, `node` and `manager_session` `null`
-until the later node fills them from the row's labels. A row `onevcs` reports a `held_by`
+`landed` object, the change URL, why it stopped, the session token it names (`null` for
+a branch no session record names) — with `run`, `node` and `manager_session` read off
+the session's labels under :data:`LABEL_RUN`, :data:`LABEL_NODE` and
+:data:`LABEL_LAUNCHER`, `null` where a label is absent. A row `onevcs` reports a `held_by`
 for is **in flight** — shown, marked, never counted — whatever its `holding` value, every
 variant of that enum being a session that has not finished with the branch. Every
 `landed.state` the listing carries counts — `no`, `unknown` (the *may have landed* rows)
@@ -113,9 +115,9 @@ NOTHING_COUNTED = 0
 #: At least one row is counted — preserved, not in flight, not acknowledged at its
 #: current tip. The one status a consumer acts on.
 COUNTED = 7
-#: The invocation was refused: the own-sessions target until the label-carrying
-#: `onevcs` is adopted, an acknowledgement without a reason or of a branch no row names,
-#: a target this cannot make sense of.
+#: The invocation was refused: the own-sessions target with no manager session to filter
+#: on, an acknowledgement without a reason or of a branch no row names, a target this
+#: cannot make sense of.
 REFUSED = 2
 #: The view could not answer — `onevcs` missing, refusing, or past its bound — and
 #: standard error says why. Never `0` or `7`, because neither would be true.
@@ -152,11 +154,10 @@ EXIT_STATUSES: tuple[Status, ...] = (
     Status(UNANSWERED, "unanswered", "the view could not answer; standard error says why"),
 )
 
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These three name the
-# session labels the engine stamps on every session it opens — the engine's own
-# declaration is their source, and node `unfinished-guard` adds the reconciliation that
-# reads them off the adopted `onevcs`. Declared ahead of it so the filter that node turns
-# on reads its keys from here rather than minting a second set.
+# The session labels the engine stamps on every session a node opens. Their source is
+# the engine's own declaration — `SESSION_RUN_LABEL`, `SESSION_NODE_LABEL` and
+# `SESSION_LAUNCHER_LABEL` in `src/executor.rs` — and `tests/test_engine_contracts.py`
+# reads those at `config/onepipeline.version`'s tag and holds these three to them.
 #: The label carrying the run a session was opened for.
 LABEL_RUN = "run"
 #: The label carrying the node the session worked.
@@ -165,7 +166,6 @@ LABEL_NODE = "node"
 LABEL_LAUNCHER = "launcher"
 #: The three, in the order the row's `run`, `node` and `manager_session` fields follow.
 SESSION_LABELS: tuple[str, str, str] = (LABEL_RUN, LABEL_NODE, LABEL_LAUNCHER)
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 #: The build-output directories called out under a run root's worktree, each with its
 #: own bytes: the number a person acts on is the disk, and these are where it is.
@@ -394,6 +394,10 @@ class Row(NamedTuple):
     held_by: dict[str, str] | None
     # llmlint: ignore-end[modern_domain_modeling]
     holder: Holder | None
+    #: The session token `onevcs` names on the row, where it names one.
+    token: SessionToken | None
+    #: The session's labels, each a string `onevcs` stated; empty for an unlabelled one.
+    labels: dict[str, str]
 
     @property
     def in_flight(self) -> bool:
@@ -433,6 +437,8 @@ class Row(NamedTuple):
 
     @property
     def session(self) -> SessionToken | None:
+        if self.token is not None:
+            return self.token
         if self.held_by is not None and isinstance(self.held_by.get("token"), str):
             return SessionToken(self.held_by["token"])
         return None if self.holder is None else self.holder.token
@@ -515,7 +521,7 @@ def _binary(name: str) -> str | None:
     return shutil.which(name)
 
 
-def _onevcs(*arguments: str) -> str:
+def _onevcs(*arguments: str, cwd: Path | None = None) -> str:
     """Run one `onevcs` verb and answer its standard output, or raise :class:`Unanswered`."""
     binary = _binary("onevcs")
     if binary is None:
@@ -532,6 +538,7 @@ def _onevcs(*arguments: str) -> str:
             text=True,
             timeout=ONEVCS_TIMEOUT_SECONDS,
             check=False,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired as expired:
         raise Unanswered(
@@ -715,13 +722,28 @@ def _recoverable(identity: Identity) -> list[dict[str, Any]]:
     return records
 
 
-def _holder_for(holders: Iterable[Holder], identity: Identity, branch: Branch) -> Holder | None:
-    """The session record that holds ``branch``: an open one first, else the first named.
+def _holder_for(
+    holders: Iterable[Holder],
+    identity: Identity,
+    branch: Branch,
+    token: SessionToken | None = None,
+) -> Holder | None:
+    """The session record behind a row: the one `onevcs` names by token, where it names one.
 
+    That record must hold the row's own branch, or it is another branch's worktree and
+    is not used. Otherwise the record holding ``branch``, an open one first, else the
+    first named.
     Several records can name one branch — a retried session holds a branch named for an
     earlier token — which is why the branch is read off the record and never derived
     from the token.
     """
+    holders = list(holders)
+    if token is not None:
+        named = [
+            h for h in holders if h.identity == identity and h.token == token and h.branch == branch
+        ]
+        if named:
+            return named[0]
     matching = [h for h in holders if h.identity == identity and h.branch == branch]
     for holder in matching:
         if holder.state == "open":
@@ -820,6 +842,7 @@ def _row(record: dict[str, Any], holders: Iterable[Holder], warnings: list[str])
     branch = Branch(branch_object["branch"])
     landed = _landed(record.get("landed"), identity, branch, warnings)
     held_by = _held_by(record.get("held_by"), identity, branch, warnings)
+    token = _token(record.get("session"), identity, branch, warnings)
     return Row(
         identity=Identity(identity),
         branch=branch,
@@ -831,8 +854,43 @@ def _row(record: dict[str, Any], holders: Iterable[Holder], warnings: list[str])
         checkout=Path(checkout),
         resume=resume_command(recover) if isinstance(recover, list) else None,
         held_by=held_by,
-        holder=_holder_for(holders, Identity(identity), branch),
+        holder=_holder_for(holders, Identity(identity), branch, token),
+        token=token,
+        labels=_labels(record.get("labels"), identity, branch, warnings),
     )
+
+
+def _token(value: object, identity: str, branch: str, warnings: list[str]) -> SessionToken | None:
+    """The session token `onevcs` names on a row, held to :data:`SESSION_TOKEN`.
+
+    `null` is a branch no session record names; anything else that is not a token is
+    said and read as none, so the row falls back to its holder rather than naming a
+    session nothing can look up.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and SESSION_TOKEN.fullmatch(value):
+        return SessionToken(value)
+    warnings.append(f"{identity} {branch}: its session {json.dumps(value)} is not a session token")
+    return None
+
+
+def _labels(value: object, identity: str, branch: str, warnings: list[str]) -> dict[str, str]:
+    """The session's labels, keeping each key and value that is a string, and saying a drop.
+
+    Absent or `{}` is a session opened before the labelling engine was adopted, which
+    carries none, and is not a fault.
+    """
+    if value is None:
+        return {}
+    fields = value if isinstance(value, dict) else {}
+    kept = {k: v for k, v in fields.items() if isinstance(k, str) and isinstance(v, str)}
+    if not isinstance(value, dict) or len(kept) != len(fields):
+        warnings.append(
+            f"{identity} {branch}: its session labels could not be read whole and only the "
+            f"string ones are used: {json.dumps(value)}"
+        )
+    return kept
 
 
 def _host_rows(warnings: list[str]) -> list[Row]:
@@ -850,34 +908,69 @@ def _host_rows(warnings: list[str]) -> list[Row]:
     return [row for r in records if (row := _row(r, holders, warnings)) is not None]
 
 
-def _session_rows(tokens: Sequence[SessionToken], warnings: list[str]) -> list[Row]:
-    """The preserved branches the named sessions hold or held.
+def _filtered(arguments: Sequence[str]) -> list[dict[str, Any]]:
+    """One filtered `onevcs recoverable --json` read, from outside every registered checkout.
 
-    The join `unfinished-guard` re-points at the adopted `recoverable --session` filter,
-    behind this one function so the swap is local.
+    Unscoped by `--repo` so it answers for every identity at once, which it does only
+    from a directory no registered checkout contains — the filesystem root — because run
+    inside one it answers for that checkout's identity alone.
     """
-    wanted = set(tokens)
-    selected: list[Holder] = []
+    command = ["recoverable", "--json", *arguments]
+    return _json_array(_onevcs(*command, cwd=Path("/")), f"`onevcs {shlex.join(command)}`")
+
+
+def _joined(
+    records: Sequence[dict[str, Any]], with_holders: bool, warnings: list[str]
+) -> list[Row]:
+    """A filtered read's rows, each joined to its session record only when ``with_holders``.
+
+    The record is what names a closed session's worktree, which only the disk reading
+    needs, so a `--no-disk` read asks `onevcs` nothing more than the filtered listing.
+    """
+    rows = [row for r in records if (row := _row(r, [], warnings)) is not None]
+    if not with_holders:
+        return rows
     holders: list[Holder] = []
-    for identity in _identities():
-        # Unanswered rather than a warning: an identity whose records cannot be read may
-        # be the one holding a named session, so "no identity records that token" — and
-        # the nothing-counted status it would answer — could be false.
-        found = _read_holders(identity, warnings)
-        holders.extend(found)
-        selected.extend(h for h in found if h.token in wanted)
-    for token in tokens:
-        if token not in {h.token for h in selected}:
-            warnings.append(
-                f"session {token}: no registered identity records a session by that token"
+    for identity in sorted({row.identity for row in rows}):
+        holders.extend(_holders(identity, warnings))
+    return [
+        row._replace(holder=_holder_for(holders, row.identity, row.branch, row.token))
+        for row in rows
+    ]
+
+
+def _session_rows(
+    tokens: Sequence[SessionToken], with_holders: bool, warnings: list[str]
+) -> list[Row]:
+    """The preserved branches the named sessions hold or held: `recoverable --session`.
+
+    Taken as `onevcs` filtered it: a row names the session holding its branch *now*, which
+    for a retried session is a later token than the one asked about, so nothing on the row
+    states which asked token selected it, and a check against the tokens would drop
+    exactly the retried branches.
+    """
+    arguments = [word for token in tokens for word in ("--session", token)]
+    return _joined(_filtered(arguments), with_holders, warnings)
+
+
+def _own_rows(manager: str, with_holders: bool, warnings: list[str]) -> list[Row]:
+    """The preserved branches of every session a run ``manager`` launched opened.
+
+    The one filtered read `recoverable --label launcher=<manager>`: the engine stamps the
+    launching session on every session a node opens, and `onevcs` filters on it. Every row
+    is held to carrying that label before it is counted for ``manager``: one that does not
+    is a filter that did not filter, and counting it would owe this manager another's
+    branch, so the whole read is :class:`Unanswered`.
+    """
+    arguments = ["--label", f"{LABEL_LAUNCHER}={manager}"]
+    rows = _joined(_filtered(arguments), with_holders, warnings)
+    for row in rows:
+        if row.labels.get(LABEL_LAUNCHER) != manager:
+            raise Unanswered(
+                f"`onevcs recoverable {shlex.join(arguments)}` answered {row.branch} "
+                f"[{row.identity}], whose session is labelled "
+                f"{json.dumps(row.labels.get(LABEL_LAUNCHER))} rather than {manager!r}"
             )
-    rows: list[Row] = []
-    for identity in sorted({h.identity for h in selected}):
-        branches = {h.branch for h in selected if h.identity == identity}
-        for r in _recoverable(identity):
-            row = _row(r, holders, warnings)
-            if row is not None and row.branch in branches:
-                rows.append(row)
     return rows
 
 
@@ -1212,9 +1305,9 @@ def _rendered(
         "change_url": row.change_url,
         "stopped_because": row.stopped_because,
         "session": row.session,
-        "run": None,
-        "node": None,
-        "manager_session": None,
+        "run": row.labels.get(LABEL_RUN),
+        "node": row.labels.get(LABEL_NODE),
+        "manager_session": row.labels.get(LABEL_LAUNCHER),
         "resume_command": row.resume,
         "in_flight": row.in_flight,
         "counted": counted(row, acknowledgement),
@@ -1339,15 +1432,16 @@ def _parser() -> argparse.ArgumentParser:
     target.add_argument(
         "--own",
         action="store_true",
-        help="the sessions this manager session's runs opened (the default; refused until the "
-        "label-carrying onevcs is adopted)",
+        help="the sessions this manager session's runs opened, by their launcher label (the "
+        "default)",
     )
     target.add_argument(
         "--session",
         action="append",
         default=[],
-        metavar="TOKEN",
-        help="an onevcs session token (s-…), repeatable; a manager session id is the own target",
+        metavar="TOKEN|ID",
+        help="an onevcs session token (s-…), repeatable; or one manager session id, whose own "
+        "sessions are the target",
     )
     parser.add_argument("--json", action="store_true", help="emit the rows as a JSON array")
     parser.add_argument("--no-disk", action="store_true", help="skip the disk walk")
@@ -1363,32 +1457,56 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _target(arguments: argparse.Namespace) -> list[SessionToken] | None:
-    """The tokens of a session target, ``None`` for the host target; refuses the own target."""
-    if arguments.own or (not arguments.host and not arguments.session):
-        raise Refused(
-            "the own-sessions target — the default, and `--own` — needs the session labels "
-            f"({', '.join(SESSION_LABELS)}) the adopted onevcs carries on every session the "
-            "engine opens, which node unfinished-guard turns on as one filtered read; until then, "
-            "ask `--host` for every identity or `--session <s-token>` for a named session. A "
-            "session opened before that adoption carries no labels, so only `--host` or its "
-            "`--session <s-token>` reaches what it preserved."
-        )
-    if arguments.host and arguments.session:
-        raise Refused("`--host` and `--session` are two targets; name one")
+class Own(NamedTuple):
+    """The own-sessions target: every session a run this manager session launched opened."""
+
+    manager: str
+
+
+#: What one invocation asks about: every identity (``None``), the named `onevcs`
+#: sessions, or a manager session's own.
+Target = list[SessionToken] | Own | None
+
+
+def _target(arguments: argparse.Namespace, named: str | None) -> Target:
+    """The target an invocation names, ``named`` being the environment's manager session.
+
+    `--session` values are either all `s-` tokens or one manager session id: a mixture, or
+    two ids, would be two targets answered as one.
+    """
+    if arguments.host and (arguments.own or arguments.session):
+        raise Refused("`--host` and `--session`/`--own` are two targets; name one")
     if arguments.host:
         return None
-    tokens: list[SessionToken] = []
-    for value in arguments.session:
-        if not SESSION_TOKEN.fullmatch(value):
-            raise Refused(
-                f"`--session {value}` names a manager session rather than an onevcs token, "
-                "which is the own-sessions target: it needs the session labels "
-                f"({', '.join(SESSION_LABELS)}) the adopted onevcs carries, which node "
-                "unfinished-guard turns on; until then ask `--host`"
-            )
-        tokens.append(SessionToken(value))
-    return tokens
+    tokens = [SessionToken(v) for v in arguments.session if SESSION_TOKEN.fullmatch(v)]
+    managers = [v for v in arguments.session if not SESSION_TOKEN.fullmatch(v)]
+    if tokens and (managers or arguments.own):
+        raise Refused(
+            "`--session <s-token>` names onevcs sessions and `--own`/`--session <manager "
+            "session id>` a manager's own; they are two targets, name one"
+        )
+    if tokens:
+        return tokens
+    if len(managers) > 1:
+        raise Refused(
+            f"`--session` names {len(managers)} manager sessions ({', '.join(managers)}); "
+            "the own-sessions target is one manager's, so name one"
+        )
+    manager = managers[0] if managers else named
+    if not manager:
+        raise Refused(
+            "the own-sessions target — the default, and `--own` — is the sessions a manager "
+            "session's runs opened, and no manager session identifies this shell: name one "
+            f"with `--session <manager session id>`, or ask `--host`; {LAUNCHER_SESSION_ENV} "
+            "is set by the harness this is run under"
+        )
+    if SESSION_ID.fullmatch(manager) is None:
+        raise Refused(
+            f"{manager!r} is not the shape a session id has (1-200 characters of letters, "
+            "digits, dot, underscore or hyphen, starting with a letter or digit), so nothing "
+            f"can carry it as a `{LABEL_LAUNCHER}` label"
+        )
+    return Own(manager)
 
 
 #: The options each mode answers on its own, named so a combination that would silently
@@ -1467,15 +1585,25 @@ def _answer(arguments: argparse.Namespace, warnings: list[str]) -> tuple[int, li
         acknowledged = _read_acknowledgements(session, warnings)
         owed = any(counted(row, _standing(row, acknowledged, warnings)) for row in rows)
         return COUNTED if owed else NOTHING_COUNTED, [receipt]
-    tokens = _target(arguments)
-    try:
-        session = _session(named)
-    except Refused as malformed:
-        # A listing still answers: with no acknowledgement read, every branch counts,
-        # which is the conservative reading, and why is said.
-        warnings.append(f"{malformed}; no acknowledgement is read, so every branch counts")
-        session = None
-    rows = _host_rows(warnings) if tokens is None else _session_rows(tokens, warnings)
+    with_holders = not arguments.no_disk
+    match _target(arguments, named):
+        case Own(manager=manager):
+            # The acknowledgements are the manager's whose branches these are: asked about
+            # by `--session`, that session's rather than the shell's.
+            session = manager
+            rows = _own_rows(manager, with_holders, warnings)
+        case target:
+            try:
+                session = _session(named)
+            except Refused as malformed:
+                # A listing still answers: with no acknowledgement read, every branch
+                # counts, which is the conservative reading, and why is said.
+                warnings.append(f"{malformed}; no acknowledgement is read, so every branch counts")
+                session = None
+            if target is None:
+                rows = _host_rows(warnings)
+            else:
+                rows = _session_rows(target, with_holders, warnings)
     acknowledged = _read_acknowledgements(session, warnings)
     rendered = [
         _rendered(

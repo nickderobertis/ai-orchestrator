@@ -120,6 +120,13 @@ class Seeded(NamedTuple):
     state: Path
 
 
+class Scope(NamedTuple):
+    """A registry and a state home: all an invocation of the recipe reads."""
+
+    registry: Registry
+    state: Path
+
+
 @pytest.fixture(scope="module")
 def seed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Seeded]:
     """One registry carrying every branch state, seeded once with the real verbs.
@@ -159,7 +166,7 @@ def seed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Seeded]:
 
 
 def _unpublished(
-    seed: Seeded,
+    seed: Seeded | Scope,
     *arguments: str,
     state: Path | None = None,
     session: str | None = MANAGER,
@@ -400,25 +407,66 @@ def test_a_session_target_of_the_held_session_counts_nothing(seed: Seeded) -> No
     assert set(view.rows()) == {seed.held.branch}
 
 
-def test_an_unknown_session_token_is_reported_and_counts_nothing(seed: Seeded) -> None:
-    """What could not be resolved goes to standard error and changes no status."""
+def test_an_unknown_session_token_is_refused_by_the_filter_and_never_nothing(seed: Seeded) -> None:
+    """A token no session record names is the adopted filter's refusal, said by name.
+
+    Never `0`: nothing counted over a token nothing records would read as a session that
+    left nothing behind.
+    """
     view = _unpublished(seed, "--session", "s-00000deadbef", "--json", "--no-disk")
-    assert view.status == NOTHING_COUNTED
-    assert view.rows() == {}
+    assert view.status == UNANSWERED, view
+    assert view.stdout == ""
     assert "s-00000deadbef" in view.stderr
 
 
-def test_the_default_invocation_refuses_the_own_sessions_target(seed: Seeded) -> None:
-    """The own target is declared and refused until the label-carrying `onevcs` lands.
+def test_the_own_sessions_target_answers_the_launcher_labelled_branches(tmp_path: Path) -> None:
+    """The default, `--own` and `--session <manager id>` are the one filtered read.
 
-    The default, `--own`, and a `--session` naming a manager session rather than an
-    `s-` token are one target and refuse alike, each naming the labels it awaits.
+    Sessions opened with the labels the engine stamps — one for this manager's run, one
+    for another manager's — and one opened with none: the manager's own target answers
+    its own branch alone, its `run`, `node` and `manager_session` read off the labels, and
+    the unlabelled branch is reached by `--host` only.
     """
-    for arguments in ((), ("--own",), ("--session", MANAGER)):
-        view = _unpublished(seed, *arguments)
-        assert view.status == REFUSED, f"{arguments} was not refused: {view}"
-        assert "label" in view.stderr or "launcher" in view.stderr, view.stderr
-        assert view.stdout.strip() == "", "a refusal answers with nothing on standard output"
+    registry = seeded(tmp_path / "labelled")
+    own = registry.open_session(labels={"run": "run-a", "node": "node-1", "launcher": MANAGER})
+    registry.close_session(own)
+    other = registry.open_session(
+        labels={"run": "run-b", "node": "node-1", "launcher": OTHER_MANAGER}
+    )
+    registry.close_session(other)
+    unlabelled = registry.open_session()
+    registry.close_session(unlabelled)
+    seed = Scope(registry, tmp_path / "state")
+
+    for arguments, session in (
+        ((), MANAGER),
+        (("--own",), MANAGER),
+        (("--session", MANAGER), None),
+    ):
+        view = _unpublished(seed, *arguments, "--json", "--no-disk", session=session)
+        assert view.status == COUNTED, f"{arguments}: {view}"
+        rows = view.rows()
+        assert set(rows) == {own.branch}, f"{arguments} answered {sorted(rows)}"
+        row = rows[own.branch]
+        assert (row["run"], row["node"], row["manager_session"]) == ("run-a", "node-1", MANAGER)
+
+    host = _unpublished(seed, "--host", "--json", "--no-disk").rows()
+    assert unlabelled.branch in host and host[unlabelled.branch]["manager_session"] is None
+
+    human = _unpublished(seed)
+    assert human.status == COUNTED
+    assert f"just unpublished --acknowledge {own.branch}" in human.stdout, (
+        "a counted row names acknowledging with a reason as its way out"
+    )
+    assert "land it:" in human.stdout
+
+    nobody = _unpublished(seed, "--own", session="a-worker-owning-nothing")
+    assert nobody.status == NOTHING_COUNTED, nobody
+
+    unidentified = _unpublished(seed, session=None)
+    assert unidentified.status == REFUSED
+    assert "no manager session identifies this shell" in unidentified.stderr
+    assert unidentified.stdout.strip() == "", "a refusal answers with nothing on standard output"
 
 
 def test_naming_both_targets_is_refused(seed: Seeded) -> None:

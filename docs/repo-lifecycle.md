@@ -1843,12 +1843,12 @@ an order, and for `publish-branch` when there is one.
 branch on* but *what is this host still holding, and what is it costing*. It answers
 for every registered identity under `--host`, from any directory — the gap that
 matters, because `just recoverable` run inside a checkout answers for that identity
-alone — and for named `onevcs` sessions under
-repeated `--session <s-token>`. The own-sessions target, `--own` and the default, is
-refused until the adopted `onevcs` carries the session labels the engine stamps, and a
-session opened before that adoption carries none, so that target never reaches what it
-preserved and nothing backfills it, while an explicit `--session <s-token>` still does,
-through the holder record. A row's `--json` keys are `identity`, `branch`, `base`, `provenance`, `landed`,
+alone — for named `onevcs` sessions under
+repeated `--session <s-token>`, and by default for the sessions your own runs opened,
+found by the `launcher` label the engine stamps on each (`--own`, or `--session <manager
+session id>` for another manager's). A session opened before the labelling engine was
+adopted carries none, so that target never reaches what it preserved and nothing
+backfills it, while `--host` and an explicit `--session <s-token>` still do. A row's `--json` keys are `identity`, `branch`, `base`, `provenance`, `landed`,
 `change_url`, `stopped_because`, `session`, `run`, `node`, `manager_session`,
 `resume_command` (the landing command in its `just` form), `in_flight`, `counted`,
 `acknowledgement` and `disk` — the run root's bytes and each build-output directory under

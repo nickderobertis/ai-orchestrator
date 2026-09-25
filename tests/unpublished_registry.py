@@ -117,11 +117,19 @@ class Registry(NamedTuple):
         assert done.returncode == 0, f"onevcs {' '.join(arguments)}:\n{done.stdout}\n{done.stderr}"
         return done.stdout
 
-    def open_session(self, *, branch: str | None = None) -> Session:
-        """Open a real session, and commit one file on its branch so it is preserved."""
+    def open_session(
+        self, *, branch: str | None = None, labels: dict[str, str] | None = None
+    ) -> Session:
+        """Open a real session, and commit one file on its branch so it is preserved.
+
+        ``labels`` are passed as the `--label KEY=VALUE` the engine passes for every session
+        a node opens, so the session's record carries them exactly as a dispatch's does.
+        """
         arguments = ["session", "open", str(self.checkout)]
         if branch is not None:
             arguments += ["--branch", branch]
+        for key, value in (labels or {}).items():
+            arguments += ["--label", f"{key}={value}"]
         reported = json.loads(self.onevcs(*arguments).strip())
         session = Session(
             token=SessionToken(reported["token"]),
@@ -235,12 +243,13 @@ def process_started(pid: int) -> int:
 def seeded(root: Path, *, name: str = "checkout") -> Registry:
     """Seed a registered identity carrying one orphan branch, under a scratch registry.
 
-    ``name`` is the checkout's directory name, which is the alias `onevcs` gives it. The
+    ``name`` is the checkout's directory name, which is the alias `onevcs` gives it, and a
+    second ``name`` under the same ``root`` is a second identity in the same registry. The
     session states are the caller's to add through :class:`Registry`, so a test says
     which of them it is about.
     """
     home = root / "onevcs-home"
-    home.mkdir(parents=True)
+    home.mkdir(parents=True, exist_ok=True)
     (home / "rules.yml").write_text(RULES, encoding="utf-8")
     (home / "workspaces.yml").write_text(UNPOOLED, encoding="utf-8")
     seed = root / f"{name}-seed"

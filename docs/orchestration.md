@@ -3164,12 +3164,50 @@ block-once memory is the engine's, under its own state root, and
 runs roots holding an unwatched run, a watched one, a continuation and a worker-shaped
 environment.
 
+### Asking what this session still owes
+
+`just unfinished` is one verdict on what a manager session owes before its turn can end:
+the runs it launched that nothing is watching — the engine's `onepipeline unwatched` —
+and the branches those runs left preserved, neither landed nor acknowledged — `just
+unpublished`'s own-sessions target, below. Both are asked about the same session: the
+`--session` value, else the one `scripts/launcher-session.sh` establishes. Both reads are
+live every time.
+
+```sh
+just unfinished                   # this session, from the ownership environment
+just unfinished --session ID      # a session named
+just unfinished --json            # {"unwatched": [<lines>], "unpublished": [<rows>]}
+```
+
+Standard output carries each half under a heading naming its question; everything
+either half could not resolve goes to standard error, where it changes no status. **The
+status is the whole of what a caller branches on**: `0` nothing is owed, `6` a run is
+unwatched and no branch is counted — the engine's own `unwatched` status, kept as the
+word for that half — `7` a branch is counted and no run is unwatched, `8` both, `2` a
+refused invocation, and any other status a half that could not answer, which is never
+`0`. `orchestrator/unfinished.py` is the one declaration of that vocabulary and
+`scripts/unfinished.sh --print-surface` prints it.
+
+**Every counted row names its two ways out**: the `just` command that lands it, and
+`just unpublished --acknowledge <branch> --reason "<why>"`, which drops it out of the
+count for this session until the branch moves past the acknowledged tip. Acknowledging is
+the escape hatch for a branch whose next step is a question to the user rather than a
+landing; it lands nothing. A *may have landed* row is counted until it is landed or
+acknowledged.
+
+**The `Stop` hook does not consult this yet.** The hook is the engine's `stop-guard`, a
+verdict over `unwatched` alone that takes no second source, and nothing of this
+repository's stands between the harness and it. So the unpublished half reaches the end
+of a turn only through a manager reading `just unfinished` before ending one, until the
+engine's guard can consult a second verdict and this host adopts that release.
+
 ### The preserved branches this host is holding onto
 
 `just unpublished` is the inventory beside the listing below: what this host is still
 holding, what each branch costs in disk, and the `just` command that lands it. It is a
 view over `onevcs` verbs — `recoverable --json` for the rows, `repos` for the registered
-identities and `session holders --json` for the sessions each row joins to — and never a
+identities and `session holders --json` for the worktree a closed session's disk
+reading needs — and never a
 re-derivation from `git` or a walk of
 `events.jsonl`; the one `git` it runs is a `rev-parse` that keys an acknowledgement and
 decides nothing about what is unpublished. `orchestrator/unpublished.py` is the one
@@ -3177,6 +3215,8 @@ statement of the contract: the row shape, the counting rule, the exit statuses, 
 acknowledgement file, and the session-label keys.
 
 ```sh
+just unpublished                              # the branches this session's runs left
+just unpublished --session ID                 # the branches a named manager session's runs left
 just unpublished --host                       # every registered identity
 just unpublished --session s-0123456789ab …   # one session token, repeatable
 just unpublished --host --json                # the rows, for something other than a person
@@ -3184,24 +3224,26 @@ just unpublished --host --no-disk             # skip the walk
 just unpublished --acknowledge BRANCH --reason "why it is deliberately left"
 ```
 
-**Two targets answer today, and the third is declared and refused.** `--host` answers
-for every registered identity from any directory, asking each one by name, which is the
-visibility gap: `just recoverable` run inside a checkout answers for that identity alone. `--session <s-token>` answers for the
-branches those sessions hold or held, the branch read off the holder record rather than
-derived from the token, because a retried session holds a branch named for an earlier
-one. The **own-sessions** target — the default, `--own`, and a `--session` naming a
-manager session id rather than an `s-` token — is a filter on the session labels (`run`,
-`node`, `launcher`) the engine stamps and the adopted `onevcs` stores, which a later node
-turns on as one filtered read; until then it refuses, naming what it awaits, and this
-repository joins nothing to imitate it. **A session opened before that adoption carries
-no labels**, so the own-sessions target never reaches a branch it preserved and nothing
-backfills them; unlike a branch no session record names, such a branch is still reached by
-an explicit `--session <s-token>`, through its holder record, as any other is.
+**Three targets.** The **own-sessions** target — the default, `--own`, and a `--session`
+naming a manager session id rather than an `s-` token — is one read of `onevcs
+recoverable` filtered on the label `launcher=<session>`: the branches of every session the engine
+opened for a run that manager session launched, found by the session labels (`run`,
+`node`, `launcher`) the engine stamps and `onevcs` filters on. The session is the
+`--session` value, else the one `scripts/launcher-session.sh` establishes — the identity
+`just unwatched --session` is keyed on — and with neither the target is refused.
+`--host` answers for every registered identity from any directory, asking each one by
+name, which is the visibility gap: `just recoverable` run inside a checkout answers for
+that identity alone. `--session <s-token>` is `onevcs recoverable --json --session
+<s-token>`, the branches those sessions hold or held; a token no session record names is
+refused by name. **A session opened before the labelling engine was adopted carries no
+labels**, so the own-sessions target never reaches a branch it preserved and nothing
+backfills them: `--host` does, and so does its `--session <s-token>`.
 
 **What a row carries** is what `onevcs` states — the identity, the branch and its base,
-the provenance, the `landed` object, the change URL and why the workstream stopped —
-joined to the `onevcs` session token that preserved it (`null` for a branch no session
-record names), with `run`, `node` and `manager_session` `null` until those labels land.
+the provenance, the `landed` object, the change URL, why the workstream stopped, and the
+`onevcs` session token that preserved it (`null` for a branch no session record names) —
+with `run`, `node` and `manager_session` read off that session's labels, `null` for a
+session that carries none.
 Beside that it carries the resume command **in its `just` form**, because the raw
 `onevcs publish-branch` line lands with an empty description; whether the row is in
 flight; whether it is counted; its acknowledgement; and the disk — the run root, clone
