@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -435,6 +436,57 @@ def test_claims_about_an_adopted_sibling_name_the_adopted_release(
             f"re-measure the claim against the adopted {tool} release and update that one "
             "site in the same change"
         )
+
+
+#: The serving journey that holds the reader's answer to the schema numbers the adopted
+#: read-API paragraph of `docs/telemetry.md` states.
+SERVING_JOURNEY = REPO_ROOT / "tests" / "dag_ui" / "test_dag_ui_serving_e2e.py"
+
+
+def _serving_journey_constant(name: str) -> int:
+    """The integer the serving journey assigns to ``name`` at module level."""
+    tree = ast.parse(SERVING_JOURNEY.read_text(encoding="utf-8"))
+    for statement in tree.body:
+        if (
+            isinstance(statement, ast.Assign)
+            and [target.id for target in statement.targets if isinstance(target, ast.Name)]
+            == [name]
+            and isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, int)
+        ):
+            return statement.value.value
+    raise AssertionError(f"{SERVING_JOURNEY.name} assigns no integer {name}")
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(
+    ("field", "constant"),
+    [
+        ("telemetry_schema_version", "TELEMETRY_SCHEMA_VERSION"),
+        ("timeline_schema_version", "TIMELINE_SCHEMA_VERSION"),
+    ],
+)
+def test_the_adopted_read_api_paragraph_states_the_schemas_the_serving_journey_holds(
+    field: str, constant: str
+) -> None:
+    """The paragraph's schema numbers are the ones the reader is held to answering.
+
+    `tests/dag_ui/test_dag_ui_serving_e2e.py` asserts the live reader answers its own
+    constants, and those constants are restated from `docs/telemetry.md`; this closes the
+    other half, so moving the paragraph or the journey alone fails. The first mention of
+    each field after the adopted release's name is the current one — the rest of the
+    paragraph is what earlier releases served.
+    """
+    opening = f"**`onepipeline-api` {_adopted('onepipeline-ui')}**, the release"
+    written = " ".join((REPO_ROOT / "docs" / "telemetry.md").read_text(encoding="utf-8").split())
+    assert opening in written, f"docs/telemetry.md never states {opening!r}"
+    stated = re.search(rf"`{re.escape(field)}` (?P<value>\d+)", written[written.index(opening) :])
+    assert stated is not None, f"docs/telemetry.md's adopted read-API paragraph omits {field}"
+    held = _serving_journey_constant(constant)
+    assert int(stated["value"]) == held, (
+        f"docs/telemetry.md states `{field}` {stated['value']} for the adopted read API, and "
+        f"{SERVING_JOURNEY.name} holds the reader to {held}; re-measure and move both"
+    )
 
 
 @pytest.mark.reads_docs

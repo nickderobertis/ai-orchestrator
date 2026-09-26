@@ -642,23 +642,123 @@ that at the real oneharness boundary.
 
 ### Choosing a harness per side
 
-The two sides are different jobs, and the providers are not equally good at them.
-On the adopted stack an identity choice is a choice of oneharness config ref. Make
-each per-run config declare exactly the intended identity, then override the two
-refs without editing a shared config:
+The two sides are different jobs, and the providers are not equally good at them. An
+identity choice is a choice of oneharness config ref, and a model choice is the side's
+graph-native `model` field. Both reach a dispatch as node-scope graph overrides —
+`PATH=VALUE` entries in oneagentgraph's dotted-path grammar, such as
+`members.worker.agent.oneharness_config=…` — and none of them edits a config file
+another run also reads. The engine's released `docs/contract.md` (onepipeline, at the tag
+`config/onepipeline.version` names) is the one source of every field, edit and precedence
+rule below; `tests/test_engine_contracts.py` reconciles this section's spellings against
+it, and `tests/e2e/test_graph_overrides_dispatch_e2e.py` drives each example here through
+the installed engine.
 
-```sh
-just orchestrate authoring:my-project \
-  --node-set members.worker.agent.oneharness_config=/tmp/worker-codex.toml \
-  --node-set members.worker.judge.oneharness_config=/tmp/judge-claude-alt2.toml
+#### 1. Write a short `extends` child, never a copy
+
+The config a side is pointed at extends the role file it replaces and states only what
+changes. Everything else — each identity's `model`, `env_from` indirection, `unset_env`
+credential mask and harness args — is inherited from the role file's chain, so do not
+hand-copy identity sections into a per-run file: a copy drifts from the identities the
+next routing change edits. For a worker that leads with Codex for one piece of work:
+
+```toml
+# scratch/oneharness/worker-codex-first.toml
+extends = "../../oneharness.toml"
+harnesses = [
+    "codex:primary",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary-backup",
+    "claude-code:primary",
+]
 ```
 
-`onepipeline start` forwards each `--node-set` opaquely to every node-scope
-<!-- llmlint: ignore[changed_behavior_has_e2e] The real node-scope journey proves
-this repository's forwarding path; dag-scope forwarding is owned by onepipeline. -->
-`oneagentgraph run`; use `--set` with the corresponding dag member path for the
-dag-scope conversation instead. oneagentgraph resolves each ref independently and
-invokes oneharness directly with that side's resolved config.
+`extends` resolves against the directory of the file declaring it, not the working
+directory, so this child names the checkout's `oneharness.toml` from
+`scratch/oneharness/` (gitignored). State `harnesses` in the child even when the order
+does not change: the graph layer reads the chain off the child document alone, as
+[Where the identities are stated](#where-the-identities-are-stated-and-what-a-role-file-carries)
+explains. A variant is selectable only if the chain it extends declares it, and an
+undeclared one is not refused until that dispatch starts. Point a side at the child by
+**absolute path**, because the dispatch runs in its own worktree.
+
+#### 2. Point one node at it: `onepipeline.sets`
+
+A node carries its own ordered list, `sets` in a plan (schema version 3), stored as task
+metadata `onepipeline.sets` and defaulting to `[]`:
+
+```yaml
+metadata:
+  "onepipeline.id": "build"
+  "onepipeline.persona": "engineer"
+  "onepipeline.sets": ["members.worker.agent.oneharness_config=/abs/checkout/scratch/oneharness/worker-codex-first.toml"]
+```
+
+A tier change is two entries, a side config and a model, for the reason [Choosing a
+model per side](#choosing-a-model-per-side) gives:
+`members.worker.judge.oneharness_config=/abs/…/judge-claude.toml` — a child of
+`oneharness.judge.toml` whose `harnesses` names Claude identities alone — then
+`members.worker.judge.model=claude-opus-5`. The list reaches **every agent dispatch of
+the node**, each lifecycle step included, composed after the run-wide list, the persona
+and `max_turns`, so the node's last entry for a path wins. A step has no `sets` of its
+own, and a `kind: human` or `expects_no_diff` node refuses a nonempty list. A node or step
+naming a custom `agent_graph` must accept every path in the list: an entry the effective
+graph cannot apply is refused at plan load or at the live edit, naming the node, step,
+graph and entry, rather than reaching a dispatch.
+
+#### 3. Change it on a live run: two channel edits
+
+Each edit replaces a **whole ordered list**, and `[]` clears it. Send it with `just
+channel-reply <run-id>` as an edit envelope, which the engine reads at version 3:
+
+```json
+{"version": 3, "commands": [
+  {"op": "set-node-sets", "id": "build", "sets": ["members.worker.agent.oneharness_config=/abs/checkout/scratch/oneharness/worker-codex-first.toml"]},
+  {"op": "set-run-node-sets", "sets": ["members.worker.judge.oneharness_config=/abs/checkout/scratch/oneharness/judge-claude.toml", "members.worker.judge.model=claude-opus-5"]}
+]}
+```
+
+`set-node-sets` is refused for an unknown or settled node; `set-run-node-sets` is
+validated against every node that can still dispatch. Either takes effect at the **next
+dispatch** — a node's first, a retry, a requeue, or the one an `adopt` makes — and never
+reaches a conversation already running: an in-flight turn keeps the graph it launched
+with. A refused edit changes neither list. `add`, `retry` and a `requeue`'s `amend` carry
+a node's `sets` too.
+
+#### 4. Launch-wide lists: file, environment, flag
+
+The run-wide list every node composes first can be given three ways:
+
+```sh
+# the launch config (YAML or JSON), schema version 10
+printf 'schema_version: 10\nnode_sets: ["members.worker.agent.oneharness_config=/abs/checkout/scratch/oneharness/worker-codex-first.toml"]\n' > launch.yaml
+just orchestrate --launch-config launch.yaml authoring:my-project
+
+# the environment: a JSON array of strings, never a delimited list
+ONEPIPELINE_NODE_SETS='["members.worker.agent.oneharness_config=/abs/checkout/scratch/oneharness/worker-codex-first.toml"]' \
+  just orchestrate authoring:my-project
+
+# the flag, repeatable, in command-line order
+just orchestrate authoring:my-project \
+  --node-set members.worker.agent.oneharness_config=/abs/checkout/scratch/oneharness/worker-codex-first.toml
+```
+
+Precedence is **CLI > environment > file**, per list and wholesale: any `--node-set`
+replaces the environment's list, which replaces the file's, and an explicit
+`ONEPIPELINE_NODE_SETS='[]'` clears the file's. A malformed variable is refused at start,
+naming it. The resolved list is kept in the launch record and replayed by `adopt`, and a
+later `set-run-node-sets` wins over it for every dispatch after. The observer graph's
+list is the separate `--set` / `ONEPIPELINE_DAG_SETS` / `dag_sets` trio under the same
+precedence, applied only to the dag-scope launch and not live-editable.
+
+#### What no node-scope list reaches
+
+- **The dag-scope observer** (`graphs/dag-scope.yaml`) keeps the configuration it was
+  launched with for the life of the run; only the launch's dag-scope list reaches it.
+- **The `pr-author` drafting dispatch** receives none of the node overrides: it runs
+  `graphs/pr-author.yaml` as that graph states.
+- **A turn in flight** keeps its launch configuration, as above.
 
 Do not put `ONEHARNESS_HARNESSES` in the graph's `env`: it is process-wide **and
 beats config**, so using it to move the worker silently moves the judge too.
@@ -669,22 +769,7 @@ $ ONEHARNESS_HARNESSES=codex oneharness run --config /tmp/prec.toml --print-comm
   selected: codex
 ```
 
-The per-run file must preserve the selected identity's section from the target
-repository's own config — its model, `env_from`, `unset_env`, and any harness args
-are part of the identity. A variant is selectable only if that target config
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The external
-repositories remain authoritative; this adoption-time contrast is required
-operator guidance that this repository cannot derive from sibling working trees. -->
-declares it: `onevcs` declares `codex:alternate` and
-`claude-code:alternate2`, while `oneagentgraph` and `onepipeline` declare only
-plain `codex` and `claude-code`. A mismatched ref is resolved at launch, but an
-<!-- llmlint: ignore[changed_behavior_has_e2e] Delayed rejection is upstream
-oneagentgraph/oneharness behavior; this repository's launch boundary only forwards
-the config ref, whose real accepted journey is covered above. -->
-undeclared or unusable variant is not refused until that dispatch starts, so
-inspect the target config before spending a long gate run.
-
-With neither override set nothing changes: each side resolves the config ref in
+With no list set anywhere nothing changes: each side resolves the config ref in
 `graphs/node-scope.yaml`.
 
 #### Choosing a model per side

@@ -3186,3 +3186,168 @@ def test_the_drafter_starts_from_sections_the_pinned_engine_composes() -> None:
             f"the installed onepipeline does not carry {heading!r}, which "
             "graphs/pr-author.yaml tells the drafter to read its starting point from"
         )
+
+
+#: Found by its top-level key, since the contract carries several JSON fixtures.
+GRAPH_OVERRIDES_FIXTURE = re.compile(r'```json\n(\{\n  "graph_overrides".*?)\n```', re.S)
+
+#: Each rule of the released contract the guide restates, paired with the guide's own
+#: words for it, so a rule that moves on either side breaks its pair. Both sides are
+#: compared with their whitespace collapsed, so reflowing a paragraph moves nothing.
+#: What the rules *do* on a real dispatch — precedence, clearing, next-dispatch scope,
+#: in-flight retention — is held separately, against the installed engine, by
+#: `tests/e2e/test_graph_overrides_dispatch_e2e.py`.
+GRAPH_OVERRIDE_RULES = (
+    (
+        "task metadata `onepipeline.sets`",
+        '"onepipeline.sets":',
+    ),
+    (
+        "For every agent dispatch, including each lifecycle step, the engine composes "
+        "effective run-wide node sets, persona, `max_turns`, then the containing node's "
+        "sets, so the last entry for a path wins",
+        "each lifecycle step included, composed after the run-wide list, the persona and "
+        "`max_turns`, so the node's last entry for a path wins",
+    ),
+    (
+        "a step has no `sets`",
+        "A step has no `sets` of its own",
+    ),
+    (
+        "`human` and `expects_no_diff` nodes reject nonempty sets",
+        "a `kind: human` or `expects_no_diff` node refuses a nonempty list",
+    ),
+    (
+        "Plan load and edits refuse malformed entries or values the actual graph cannot "
+        "apply, naming node, step where relevant, graph and entry",
+        "an entry the effective graph cannot apply is refused at plan load or at the live"
+        " edit, naming the node, step, graph and entry",
+    ),
+    (
+        "an edit envelope requires version 3",
+        "which the engine reads at version 3",
+    ),
+    (
+        "Each replaces its entire ordered list, including `[]` to clear it",
+        "Each edit replaces a **whole ordered list**, and `[]` clears it",
+    ),
+    (
+        "A node edit rejects an unknown or settled node; a run edit validates every node "
+        "that can still dispatch",
+        "`set-node-sets` is refused for an unknown or settled node; `set-run-node-sets` "
+        "is validated against every node that can still dispatch",
+    ),
+    (
+        "`add` and `retry` carry whole nodes including `sets`, and `requeue` may replace "
+        'a parked node\'s list with `amend: {"sets": [...]}`',
+        "`add`, `retry` and a `requeue`'s `amend` carry a node's `sets` too",
+    ),
+    (
+        "A refused command changes neither the accepted graph nor either effective list",
+        "A refused edit changes neither list",
+    ),
+    (
+        "An in-flight conversation and a dag-scope observer keep the graph they launched "
+        "with; edits take effect on the next node dispatch, including after `adopt`",
+        "an in-flight turn keeps the graph it launched with",
+    ),
+    (
+        "edits take effect on the next node dispatch, including after `adopt`",
+        "Either takes effect at the **next dispatch**",
+    ),
+    (
+        "`ONEPIPELINE_NODE_SETS` and `ONEPIPELINE_DAG_SETS` carry JSON arrays of strings;"
+        " no delimiter splitting applies",
+        "a JSON array of strings, never a delimited list",
+    ),
+    (
+        "For each list independently, one or more matching CLI flag occurrences replace "
+        "the environment list, which replaces the config list",
+        "Precedence is **CLI > environment > file**, per list and wholesale",
+    ),
+    (
+        "An explicit empty environment array clears the config list, and a malformed "
+        "variable is refused at start naming it",
+        "`ONEPIPELINE_NODE_SETS='[]'` clears the file's. A malformed variable is refused "
+        "at start, naming it",
+    ),
+    (
+        "Both resolved lists — and the pr-author graph — are retained in the immutable "
+        "launch record and replayed by `adopt`; a later journalled run-wide node edit "
+        "takes precedence for future node dispatches",
+        "The resolved list is kept in the launch record and replayed by `adopt`, and a "
+        "later `set-run-node-sets` wins over it for every dispatch after",
+    ),
+    (
+        "The launch config adds ordered `node_sets` and `dag_sets` arrays at schema version 10",
+        "the launch config (YAML or JSON), schema version 10",
+    ),
+    (
+        "Dag sets apply only to the dag-scope launch and are not live-editable",
+        "`--set` / `ONEPIPELINE_DAG_SETS` / `dag_sets` trio under the same precedence, "
+        "applied only to the dag-scope launch and not live-editable",
+    ),
+    (
+        "The `pr-author` drafting dispatch receives none of those node overrides",
+        "**The `pr-author` drafting dispatch** receives none of the node overrides",
+    ),
+)
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
+# this into the uncached `orchestrator:test-checkouts` for the reason the checkpoint gate
+# above states: its subject is the pinned engine's `docs/contract.md`, read at its tag from
+# the checkout `config/onevcs.checkouts` registers, outside this workspace.
+def test_the_graph_override_method_is_spelled_as_the_pinned_engine_publishes_it() -> None:
+    """Every field, op, variable and precedence the host's method names is the engine's.
+
+    `docs/onejudge-integration.md` restates the released contract's graph overrides so a
+    manager can follow them, and `tests/e2e/test_graph_overrides_dispatch_e2e.py` drives
+    its examples through the installed engine. This holds the restatement to its source:
+    a rename or a precedence change at the next engine pin fails here, naming what moved.
+    """
+    contract = _source(ONEPIPELINE_DOCS, "contract.md")
+    guide = ONEJUDGE_INTEGRATION.read_text(encoding="utf-8")
+    fixture = GRAPH_OVERRIDES_FIXTURE.search(contract)
+    assert fixture is not None, (
+        f"onepipeline's docs/contract.md at {ONEPIPELINE_DOCS.ref} no longer carries its "
+        "graph_overrides fixture, which the host's method is reconciled against"
+    )
+    overrides = json.loads(fixture.group(1))["graph_overrides"]
+    contract_words, guide_words = " ".join(contract.split()), " ".join(guide.split())
+    for rule, restated in GRAPH_OVERRIDE_RULES:
+        assert rule in contract_words, (
+            f"the pinned engine's contract no longer says {rule!r}; re-read it and move "
+            f"the restatement {restated!r} in {ONEJUDGE_INTEGRATION.name} with it"
+        )
+        assert restated in guide_words, (
+            f"{ONEJUDGE_INTEGRATION.name} no longer restates the engine's {rule!r} as "
+            f"{restated!r}; restate it, or move this pair with the guide"
+        )
+
+    (envelope,) = [
+        block
+        for block in re.findall(r"^```json\n(.*?)^```$", guide, re.M | re.S)
+        if '"set-run-node-sets"' in block
+    ]
+    documented = json.loads(envelope)
+    assert documented["version"] == 3
+    released_ops = [command["op"] for command in overrides["commands"]]
+    assert [command["op"] for command in documented["commands"]] == released_ops
+    for released, written in zip(overrides["commands"], documented["commands"], strict=True):
+        assert set(written) == set(released), (
+            f"the documented {written['op']} carries {sorted(written)}, and the engine's "
+            f"fixture carries {sorted(released)}"
+        )
+
+    assert "sets" in overrides["node"]
+    assert '"onepipeline.sets":' in guide
+    launch_config = overrides["launch_config"]
+    assert {"node_sets", "dag_sets"} <= set(launch_config)
+    assert f"schema_version: {launch_config['schema_version']}\\nnode_sets:" in guide, (
+        f"the documented launch config does not declare schema_version "
+        f"{launch_config['schema_version']}, where the engine's `node_sets` begins"
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

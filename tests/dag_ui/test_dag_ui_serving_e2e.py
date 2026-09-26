@@ -184,7 +184,7 @@ TURN_USAGE_FIGURES = (
 TIMELINE_SCHEMA_VERSION = 10
 #: The envelope's telemetry schema, restated for the same reason and moved with the same
 #: paragraph.
-TELEMETRY_SCHEMA_VERSION = 20
+TELEMETRY_SCHEMA_VERSION = 21
 
 #: The variable `scripts/launcher-session.sh` resolves the acting session into, and
 #: `scripts/telemetry-server.sh` renders as the server's `--session`.

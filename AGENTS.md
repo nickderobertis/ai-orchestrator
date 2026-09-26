@@ -300,9 +300,9 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
   **this pin can govern a dispatch**, and the two pins are held to linking one engine by
   `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
-  A pair it measures apart is held by its `DECLARED_UI_ENGINE_DIVERGENCE` record, which
-  fails once either pin moves; while one stands a browser adopt drives the reader's own
-  engine rather than the pin, so adopt with `just orchestrate --adopt`.
+  A pair it measures apart would be held by its `DECLARED_UI_ENGINE_DIVERGENCE` record,
+  which fails once either pin moves; while one stands a browser adopt drives the
+  reader's own engine rather than the pin, so adopt with `just orchestrate --adopt`.
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;

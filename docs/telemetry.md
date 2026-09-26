@@ -349,10 +349,10 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.13.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.14.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 20 on the envelope, unmoved
-   across this bump, where
+   what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
+   0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10,
    unmoved across this bump too, where 0.7.3 served
    8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's

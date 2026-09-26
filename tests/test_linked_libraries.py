@@ -766,19 +766,10 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: The engine pin moved past 0.45.0 for `stop-guard --source` (added in onepipeline 0.46.0,
-#: adopted here at 0.47.0), and the newest `onepipeline-api-cli` published, 0.13.0,
-#: declares onepipeline 0.45.0 in its SBOM. Both versions are named, so this fails the
-#: moment either wheel changes, and is deleted rather than re-dated once a read-API
-#: release links the pinned engine.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
-    linked="0.45.0",
-    pinned="0.47.0",
-    because=(
-        "the newest published onepipeline-api-cli, 0.13.0, links onepipeline 0.45.0, and "
-        "no read-API release links 0.47.0"
-    ),
-)
+#: No pair is declared apart: the adopted `onepipeline-api-cli`'s SBOM declares the engine
+#: `config/onepipeline.version` pins, which the test below measures. A future record names
+#: both measured releases, so it fails the moment either wheel changes.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
 
 
 def test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it() -> None:
