@@ -24,6 +24,7 @@
       "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/scripts/unfinished.sh",
       "{workspaceRoot}/scripts/unpublished.sh",
       "{workspaceRoot}/scripts/launcher-session.sh",

@@ -7,7 +7,7 @@ copies from one listing per directory, leaves out every name shaped like a stagi
 and re-reads only the entry that vanished after its listing — never the tree.
 
 `STAGING_NAME` restates the two shapes `src/ledger.rs` writes at the pinned engine
-release, `<record>.tmp.<pid>` and `<record>.tmp.<pid>.<nonce>`, and
+release, `<stem>.tmp.<pid>.ThreadId(<n>)` and `<record>.tmp.<pid>.<nonce>`, and
 `tests/test_engine_contracts.py` holds it to that source.
 """
 
@@ -24,9 +24,10 @@ from typing import NamedTuple
 from waits import timeout
 
 #: What the tail of an atomic writer's staging name looks like, for both of the shapes
-#: the installed engine writes: `<record>.tmp.<pid>` from a rename-into-place, and
+#: the installed engine writes: `<stem>.tmp.<pid>.ThreadId(<n>)` from a rename-into-place,
+#: the writing thread's id rendered as Rust's `Debug` of it, and
 #: `<record>.tmp.<pid>.<nonce>` from a link-into-place.
-STAGING_NAME = re.compile(r"\.tmp\.\d+(?:\.\d+)?$")
+STAGING_NAME = re.compile(r"\.tmp\.\d+\.(?:ThreadId\(\d+\)|\d+)$")
 
 #: How long a vanished entry is given to come back under its name before its absence is
 #: reported, in unscaled seconds; `snapshot_run` scales it like every wall-clock guard in

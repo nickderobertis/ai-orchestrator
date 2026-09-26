@@ -7,9 +7,9 @@
 # acknowledgement file. `--print-surface` prints that vocabulary — one line per status,
 # naming the condition a consumer branches on — for the drift test the guard node writes.
 #
-# Two files because a `Stop` hook a later node registers reaches the same module
-# directly, and what that module does is join `onevcs`'s JSON to session records and
-# compose JSON back — shell is the wrong place for either.
+# Two files because what the module does — join `onevcs`'s JSON to session records and
+# compose JSON back, the `Stop` hook's `--stop-verdict` answer among it — is the wrong
+# work for shell.
 #
 # Not `uv run`: `uv` takes an exclusive lock on the project environment, and a hook
 # reading this view runs at the end of every turn.

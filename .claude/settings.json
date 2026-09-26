@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline\" stop-guard --format claude-code",
+            "command": "\"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline\" stop-guard --format claude-code --source '\"$CLAUDE_PROJECT_DIR/scripts/unpublished.sh\" --stop-verdict' --source-timeout 20",
             "timeout": 30
           }
         ]

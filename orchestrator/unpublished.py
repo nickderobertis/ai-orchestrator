@@ -60,10 +60,21 @@ reason, with `counted` false. A blank reason is refused — an acknowledgement c
 only a branch is indistinguishable downstream from one nobody meant — and so is a
 branch no row of the host-level reading names.
 
+**The stop verdict.** `--stop-verdict` is this view answering one question for the
+`Stop` hook, as the source `.claude/settings.json` declares to the engine's `onepipeline
+stop-guard --source`: it reads that verb's neutral input — one object,
+`{"session": <ID>, "continuation": <bool>}` — on standard input, and answers the own-sessions
+target for that session, without the disk walk, as one neutral verdict on standard
+output at exit `0`: `{"verdict":"block","reason":<the listing>}` where a row is counted,
+`{"verdict":"none"}` where none is. It answers only this half, because the verb asks
+`unwatched` itself. Input it cannot read or that names no session, and a listing it
+cannot produce, are each a `block` whose reason says why, never `none`, since nothing
+owed would not be known; the continuation is the verb's to judge, so it is read and
+set aside.
+
 Stdlib-only, and importable with `PYTHONPATH` at the checkout root and nothing else:
-the `Stop` hook a later node writes reaches this without `uv run`, because `uv` takes an
-exclusive lock on the project environment and a hook reading this view runs at the end
-of every turn.
+the `Stop` hook reaches this without `uv run`, because `uv` takes an exclusive lock on
+the project environment and a hook reading this view runs at the end of every turn.
 """
 
 from __future__ import annotations
@@ -82,7 +93,7 @@ import sys
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, NewType, Protocol, cast, get_args
+from typing import Any, Literal, NamedTuple, NewType, Protocol, TypedDict, cast, get_args
 
 from orchestrator.root import REPO_ROOT
 
@@ -107,6 +118,7 @@ __all__ = [
     "main",
     "print_surface",
     "resume_command",
+    "stop_verdict",
 ]
 
 #: Nothing is counted for the target: every preserved branch is in flight or
@@ -298,6 +310,16 @@ class Writer(Protocol):
 
     def write(self, text: str, /) -> object:
         """Take ``text``; what a stream answers with is its own business."""
+
+
+class Reader(Protocol):
+    """Where `--stop-verdict` reads the stop guard's input: a caller's stream, or stdin.
+
+    The input is one JSON document read whole, so `read` is all that is asked of it.
+    """
+
+    def read(self) -> str:
+        """Everything the stream holds."""
 
 
 Identity = NewType("Identity", str)
@@ -819,6 +841,11 @@ def _held_by(
     return kept
 
 
+#: How a `recoverable` row this view cannot read is said. The stop verdict reads it back,
+#: because a row left out may be a branch the session owes and nothing can tell whose.
+ROW_LEFT_OUT = "a row names no identity, branch or absolute checkout and was left out"
+
+
 def _row(record: dict[str, Any], holders: Iterable[Holder], warnings: list[str]) -> Row | None:
     """One `recoverable` row as this view reads it, or ``None`` with why on ``warnings``."""
     branch_object = record.get("branch")
@@ -833,10 +860,7 @@ def _row(record: dict[str, Any], holders: Iterable[Holder], warnings: list[str])
         and isinstance(checkout, str)
         and os.path.isabs(checkout)
     ):
-        warnings.append(
-            "a row names no identity, branch or absolute checkout and was left out: "
-            f"{json.dumps(record)}"
-        )
+        warnings.append(f"{ROW_LEFT_OUT}: {json.dumps(record)}")
         return None
     recover = record.get("recover_command")
     branch = Branch(branch_object["branch"])
@@ -1454,6 +1478,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--print-surface", action="store_true", help="print the exit-status vocabulary and exit"
     )
+    parser.add_argument(
+        "--stop-verdict",
+        action="store_true",
+        help="read a stop guard's neutral input on standard input and answer the named "
+        "session's own target as one neutral verdict",
+    )
     return parser
 
 
@@ -1514,8 +1544,18 @@ def _target(arguments: argparse.Namespace, named: str | None) -> Target:
 #: that both listed and acknowledged, or asked for `--json` and got a receipt, is one a
 #: caller reads as having done both.
 ALONE: dict[str, tuple[str, ...]] = {
-    "--print-surface": ("host", "own", "session", "json", "no_disk", "acknowledge", "reason"),
-    "--acknowledge": ("host", "own", "session", "json", "no_disk"),
+    "--print-surface": (
+        "host",
+        "own",
+        "session",
+        "json",
+        "no_disk",
+        "acknowledge",
+        "reason",
+        "stop_verdict",
+    ),
+    "--stop-verdict": ("host", "own", "session", "json", "no_disk", "acknowledge", "reason"),
+    "--acknowledge": ("host", "own", "session", "json", "no_disk", "stop_verdict"),
 }
 
 
@@ -1523,6 +1563,7 @@ def _one_mode(arguments: argparse.Namespace) -> None:
     """Refuse an invocation that names two modes, or a `--reason` with nothing to give it."""
     for flag, exclusive in ALONE.items():
         held = flag == "--print-surface" and arguments.print_surface
+        held = held or (flag == "--stop-verdict" and arguments.stop_verdict)
         held = held or (flag == "--acknowledge" and arguments.acknowledge is not None)
         if not held:
             continue
@@ -1544,8 +1585,103 @@ def _one_mode(arguments: argparse.Namespace) -> None:
         )
 
 
+#: The fields a stop guard's neutral input may carry, each with the type it must have.
+#: Read closed, as the verb reads its own: a field it does not name makes the input
+#: unreadable rather than ignored.
+STOP_INPUT_FIELDS: dict[str, type] = {"session": str, "continuation": bool}
+
+
+def _stop_session(text: str) -> str:
+    """The session a stop guard's neutral input names.
+
+    :class:`Refused` for anything but one object carrying only :data:`STOP_INPUT_FIELDS`,
+    and for one naming no session: a verdict about nobody could only permit a stop it was
+    never asked about.
+    """
+    try:
+        document = json.loads(text)
+    except ValueError as malformed:
+        raise Refused(f"the stop input is not one JSON object ({malformed})") from malformed
+    if not isinstance(document, dict):
+        raise Refused(f"the stop input is a JSON {type(document).__name__}, not an object")
+    unknown = sorted(set(document) - set(STOP_INPUT_FIELDS))
+    if unknown:
+        raise Refused(f"the stop input carries fields a stop guard does not send: {unknown}")
+    session = document.get("session")
+    if not session:
+        raise Refused("the stop input names no session, so there is no one to answer about")
+    for field, kind in STOP_INPUT_FIELDS.items():
+        # Checked exactly, `null` included: a JSON number is not a continuation.
+        if field in document and type(document[field]) is not kind:
+            raise Refused(f"the stop input's `{field}` is not a {kind.__name__}")
+    return str(session)
+
+
+class Blocks(TypedDict):
+    """The neutral verdict refusing the stop, and the reason the session is shown."""
+
+    verdict: Literal["block"]
+    reason: str
+
+
+class OwesNothing(TypedDict):
+    """The neutral verdict saying this source finds nothing owed; the verb decides the stop."""
+
+    verdict: Literal["none"]
+
+
+def stop_verdict(stdin: Reader | None, err: Writer | None = None) -> Blocks | OwesNothing:
+    """The neutral verdict for the stop input on ``stdin``: `block` with the listing, or `none`.
+
+    Never raises for what it was handed: input that could not be read or names no session,
+    a refusal, a listing that could not be produced, or one that left out a row it could
+    not read is a `block` saying why, because answering `none` would claim nothing is owed
+    when that was not established. Unresolved rows go to ``err`` as well, as the listing's
+    do, and nothing but the verdict reaches its channel.
+    """
+    err = sys.stderr if err is None else err
+    warnings: list[str] = []
+    try:
+        if stdin is None:
+            # What `sys.stdin` is when the process was started with descriptor 0 closed.
+            raise Refused("the stop input could not be read (this process has no standard input)")
+        try:
+            text = stdin.read()
+        except (OSError, UnicodeDecodeError) as unreadable:
+            raise Refused(f"the stop input could not be read ({unreadable})") from unreadable
+        session = _stop_session(text)
+        # Joined to its flag, so a session beginning with `-` reaches the shape check that
+        # refuses it rather than being read by the parser as an option of its own.
+        arguments = _parser().parse_args([f"--session={session}", "--no-disk"])
+        status, lines = _answer(arguments, warnings)
+    except (Refused, Unanswered) as failure:
+        status, lines = (
+            UNANSWERED,
+            [
+                f"`just unpublished --stop-verdict` could not say which branches this session's "
+                f"runs left preserved: {failure}"
+            ],
+        )
+    for warning in warnings:
+        print(f"unpublished: {warning}", file=err)
+    left_out = [warning for warning in warnings if warning.startswith(ROW_LEFT_OUT)]
+    if left_out:
+        lines = [
+            *lines,
+            "`just unpublished --stop-verdict` could not read every branch `onevcs` reported, "
+            "so it cannot say this session owes none of the ones it left out:",
+            *left_out,
+        ]
+    elif status == NOTHING_COUNTED:
+        return OwesNothing(verdict="none")
+    return Blocks(verdict="block", reason="\n".join(lines))
+
+
 def main(
-    argv: Sequence[str] | None = None, out: Writer | None = None, err: Writer | None = None
+    argv: Sequence[str] | None = None,
+    out: Writer | None = None,
+    err: Writer | None = None,
+    stdin: Reader | None = None,
 ) -> int:
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
@@ -1555,6 +1691,9 @@ def main(
         _one_mode(arguments)
         if arguments.print_surface:
             print_surface(out)
+            return NOTHING_COUNTED
+        if arguments.stop_verdict:
+            print(json.dumps(stop_verdict(sys.stdin if stdin is None else stdin, err)), file=out)
             return NOTHING_COUNTED
         status, lines = _answer(arguments, warnings)
     except Refused as refusal:

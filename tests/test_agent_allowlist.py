@@ -18,7 +18,16 @@ SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 #: Claude Code wiring, named by path out of this checkout's locked install — through
 #: `$CLAUDE_PROJECT_DIR`, which is what makes one registration work from every worktree of
 #: this repository — with nothing of this repository's between the harness and the verb.
-STOP_HOOK = '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard --format claude-code'
+#: Its one declared `--source` sits below the verb, which consults it: the preserved-branch
+#: view's own `--stop-verdict`, answering the question the verb does not ask itself.
+STOP_HOOK = (
+    '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard --format claude-code '
+    """--source '"$CLAUDE_PROJECT_DIR/scripts/unpublished.sh" --stop-verdict' """
+    "--source-timeout 20"
+)
+#: Seconds the declared source has, which the hook's own bound must exceed, or the harness
+#: kills the whole guard before the verb can report a source that ran past its bound.
+SOURCE_TIMEOUT = 20
 REQUIRED = (
     "Bash(just monitor:*)",
     "Bash(just repos:*)",
@@ -123,7 +132,8 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     Registered beside the `SessionStart` hook already there, as exactly the engine's
     documented wiring and nothing more, and with a bound of its own: a killed hook is a
     stop that was never guarded, so the harness's bound is kept as the page keeps it.
-    `tests/unwatched/test_unwatched_and_stop_hook_e2e.py` runs this command.
+    `tests/unwatched/test_unwatched_and_stop_hook_e2e.py` runs this command, and
+    `tests/unfinished/test_unfinished_e2e.py` runs it over its declared source.
     """
     settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
     hooks = settings["hooks"]
@@ -145,6 +155,9 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     bounds = [command.get("timeout") for command in commands]
     assert all(isinstance(bound, int) and bound > 0 for bound in bounds), (
         f"the Stop hook is registered without a bound of its own: {bounds}"
+    )
+    assert all(bound > SOURCE_TIMEOUT for bound in bounds), (
+        f"the Stop hook's bound {bounds} does not outlast its source's {SOURCE_TIMEOUT}s"
     )
 
 

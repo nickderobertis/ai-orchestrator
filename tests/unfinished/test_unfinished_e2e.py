@@ -16,10 +16,13 @@ Nothing is doubled on these paths: the recipe, the wrapper, the interpreter, the
 `ONEPIPELINE_RUNS_DIR` and `XDG_STATE_HOME` each point at a scratch tree — so nothing this
 host has registered, launched or acknowledged is read or moved.
 
-The `Stop` hook is not driven here. The one `.claude/settings.json` registers is the
-engine's own `onepipeline stop-guard`, a verdict over `unwatched` alone, and
-`tests/unwatched/test_unwatched_and_stop_hook_e2e.py` drives it; the unpublished half
-reaches a turn's end only once that verb can consult a second verdict.
+The `Stop` hook is driven here too, because its verdict is this recipe's answer: the one
+command `.claude/settings.json` registers is the engine's own `onepipeline stop-guard`,
+which asks `unwatched` itself and consults the one source it is declared,
+`scripts/unpublished.sh --stop-verdict`, for the other half. The hook journeys run that
+command as the harness does, a Stop payload on standard input, over the same world, and
+hold its verdict to what `just unfinished` says the session owes.
+`tests/unwatched/test_unwatched_and_stop_hook_e2e.py` drives the verb's own half.
 
 These journeys are the `unfinished` project's, behind an Nx edge of their own: each spends
 real `onevcs` sessions, real `git` and a real `just` per assertion, so `unfinishedWorkspace`
@@ -51,6 +54,7 @@ from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from unpublished_registry import Registry, Session, commit_on, seeded
 from waits import timeout as e2e_timeout
 
+from orchestrator import unpublished
 from orchestrator.root import REPO_ROOT
 
 #: The seeding reaches `onevcs` through `uv run`, which waits on this checkout's exclusive
@@ -615,7 +619,8 @@ def test_a_malformed_manager_id_is_refused_by_the_own_sessions_read(
 
 # llmlint: ignore-block[e2e_not_mocked] `onevcs` is a published CLI, which AGENTS.md's
 # realistic-tests invariant doubles at the boundary a recipe delegates to: a row naming a
-# session that is not a token, a label that is not a string, or a session whose record holds
+# session that is not a token, a label that is not a string, a checkout that is not
+# absolute, or a session whose record holds
 # another branch is a row the installed release does not write on demand, and these
 # journeys prove the view's answer to each. The stand-in runs the installed binary for
 # every verb and only lays the malformed field over its `recoverable` rows; `just`, the
@@ -734,6 +739,343 @@ def test_a_session_whose_record_holds_another_branch_is_not_the_rows_holder(
     [row] = json.loads(answer.stdout)
     assert (row["branch"], row["session"]) == (world.branch.branch, world.other.token)
     assert row["disk"]["run_root"] == str(world.branch.run_root), row["disk"]
+
+
+def test_the_source_refuses_the_stop_over_a_row_it_had_to_leave_out(
+    world: World, tmp_path: Path
+) -> None:
+    """A `recoverable` row the view cannot read is named in a `block`, never passed as `none`."""
+    script = _scratch_checkout(tmp_path / "checkout")
+    tools = _search_path(tmp_path)
+    _patched_onevcs(tools, {"checkout": "relative/checkout"})
+    environment = _environment(world, tmp_path / "state", None)
+    environment["PATH"] = str(tools)
+    answered = subprocess.run(  # noqa: S603 - the scratch checkout's source, as the verb runs it
+        [str(script.parent.parent / "scripts" / "unpublished.sh"), "--stop-verdict"],
+        input=json.dumps({"session": OWES_A_BRANCH}),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+        cwd=str(script.parent.parent),
+        timeout=e2e_timeout(300),
+    )
+    verdict = _one_verdict(answered)
+    assert verdict["verdict"] == "block", verdict
+    assert "cannot say this session owes none of the ones it left out" in verdict["reason"]
+    assert "was left out" in verdict["reason"] and "relative/checkout" in answered.stderr
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+
+
+SOURCE = REPO_ROOT / "scripts" / "unpublished.sh"
+
+
+def _source(
+    world: World, state: Path, text: str, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """The declared source run as the verb runs it: its argv, the neutral input on stdin."""
+    return subprocess.run(  # noqa: S603 - the tracked source, run as the stop guard runs it
+        [str(SOURCE), "--stop-verdict", *arguments],
+        input=text,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_environment(world, state, None),
+        cwd=str(REPO_ROOT),
+        timeout=e2e_timeout(60),
+    )
+
+
+def _one_verdict(answered: subprocess.CompletedProcess[str]) -> dict[str, str]:
+    """Exactly one verdict object on standard output, at the status the verb reads as answered.
+
+    Every member of a verdict — `verdict`, and `reason` on a `block` — is a string.
+    """
+    assert answered.returncode == 0, answered
+    [line] = answered.stdout.splitlines()
+    verdict = json.loads(line)
+    assert isinstance(verdict, dict), verdict
+    assert all(isinstance(value, str) for value in verdict.values()), verdict
+    return verdict
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        pytest.param("not json", "is not one JSON object", id="not-json"),
+        pytest.param("[]", "is a JSON list, not an object", id="not-an-object"),
+        pytest.param(
+            json.dumps({"session": OWES_A_BRANCH, "extra": 1}),
+            "carries fields a stop guard does not send",
+            id="unknown-field",
+        ),
+        pytest.param(json.dumps({"session": 7}), "`session` is not a str", id="wrong-type"),
+        pytest.param(
+            json.dumps({"session": OWES_A_BRANCH, "continuation": 1}),
+            "`continuation` is not a bool",
+            id="numeric-continuation",
+        ),
+        pytest.param(
+            json.dumps({"session": OWES_A_BRANCH, "continuation": None}),
+            "`continuation` is not a bool",
+            id="null-continuation",
+        ),
+        pytest.param(json.dumps({"continuation": False}), "names no session", id="no-session"),
+        pytest.param(
+            json.dumps({"session": "-x"}),
+            "is not the shape a session id has",
+            id="session-read-as-a-flag",
+        ),
+    ],
+)
+def test_the_source_refuses_the_stop_over_input_that_is_not_a_well_formed_stop_request(
+    world: World, tmp_path: Path, text: str, said: str
+) -> None:
+    """Input the verb could not have sent is a `block` saying why, never a verdict of nothing."""
+    verdict = _one_verdict(_source(world, tmp_path, text))
+    assert verdict["verdict"] == "block", verdict
+    assert said in verdict["reason"], verdict
+
+
+def test_the_source_refuses_the_stop_when_its_standard_input_cannot_be_read(
+    world: World, tmp_path: Path
+) -> None:
+    """Started with descriptor 0 closed, the source still answers one `block` saying why."""
+    answered = subprocess.run(  # noqa: S603 - the tracked source, started with stdin closed
+        ["bash", "-c", 'exec "$0" --stop-verdict 0<&-', str(SOURCE)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_environment(world, tmp_path, None),
+        cwd=str(REPO_ROOT),
+        timeout=e2e_timeout(60),
+    )
+    verdict = _one_verdict(answered)
+    assert verdict["verdict"] == "block", verdict
+    assert (
+        "the stop input could not be read (this process has no standard input)"
+        in (verdict["reason"])
+    ), verdict
+
+
+def test_the_source_answers_its_own_mode_alone(world: World, tmp_path: Path) -> None:
+    """A second mode beside `--stop-verdict` is refused before any input is read."""
+    answered = _source(world, tmp_path, json.dumps({"session": OWES_A_BRANCH}), "--host")
+    assert answered.returncode == 2, answered
+    assert answered.stdout == "", answered
+    assert "`--stop-verdict` answers on its own and `--host` would be ignored" in answered.stderr
+
+
+def test_what_the_source_could_not_resolve_stays_off_the_verdicts_channel(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A damaged acknowledgement file is said on stderr; stdout stays one verdict."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    damaged = unpublished.acknowledgement_file(OWES_A_BRANCH)
+    damaged.parent.mkdir(parents=True)
+    damaged.write_text("{damaged", encoding="utf-8")
+    answered = _source(world, tmp_path, json.dumps({"session": OWES_A_BRANCH}))
+    verdict = _one_verdict(answered)
+    assert verdict["verdict"] == "block", verdict
+    assert world.branch.branch in verdict["reason"], verdict
+    assert str(damaged) not in verdict["reason"], verdict
+    assert answered.stderr.startswith("unpublished: ") and str(damaged) in answered.stderr
+
+
+SETTINGS = REPO_ROOT / ".claude" / "settings.json"
+
+
+class Registered(NamedTuple):
+    """The one `Stop` command `.claude/settings.json` registers, and its bound."""
+
+    command: str
+    timeout: int
+
+
+def _registered() -> Registered:
+    """The `Stop` entry out of the tracked settings file, which is what the harness runs."""
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    commands = [
+        Registered(str(hook["command"]), int(hook["timeout"]))
+        for matcher in settings["hooks"]["Stop"]
+        for hook in matcher["hooks"]
+        if hook["type"] == "command"
+    ]
+    assert len(commands) == 1, f"{SETTINGS} registers {len(commands)} Stop commands: {commands}"
+    return commands[0]
+
+
+def _stop(
+    world: World,
+    state: Path,
+    session: str,
+    *,
+    again: bool = False,
+    project: Path = REPO_ROOT,
+    **overrides: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run the registered `Stop` command as the harness runs it: a shell, a payload on stdin.
+
+    ``project`` is `CLAUDE_PROJECT_DIR`, what the command resolves its engine and its
+    declared source against. No launcher session is exported, because the payload names
+    the session and the hook must not fall through to whoever the process runs as.
+    """
+    registered = _registered()
+    payload = {
+        "session_id": session,
+        "transcript_path": "/dev/null",
+        "hook_event_name": "Stop",
+        "stop_hook_active": again,
+    }
+    return subprocess.run(  # noqa: S603 - the tracked hook command, run as the harness runs it
+        ["/bin/sh", "-c", registered.command],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**_environment(world, state, None), "CLAUDE_PROJECT_DIR": str(project), **overrides},
+        cwd=str(project),
+        timeout=e2e_timeout(registered.timeout),
+    )
+
+
+def _refused(answered: subprocess.CompletedProcess[str]) -> str:
+    """The reason a hook that refused the turn gave, having held the whole shape first."""
+    assert answered.returncode == 0, f"the hook exited {answered.returncode}: {answered.stderr}"
+    decision = json.loads(answered.stdout)
+    assert decision.get("decision") == "block", f"the hook did not block: {answered.stdout!r}"
+    reason = decision["reason"]
+    assert isinstance(reason, str) and reason.strip()
+    return str(reason)
+
+
+def _let_end(answered: subprocess.CompletedProcess[str]) -> None:
+    """The silent ending: exit `0` and nothing on standard output, so the turn ends."""
+    assert answered.returncode == 0, f"the hook exited {answered.returncode}: {answered.stderr}"
+    assert answered.stdout == "", f"the hook said something: {answered.stdout!r}"
+
+
+class Owed(NamedTuple):
+    """What `just unfinished --json` says one session owes."""
+
+    status: int
+    unwatched: list[str]
+    branches: list[str]
+
+
+def _owed(world: World, state: Path, session: str) -> Owed:
+    answer = _just(world, "unfinished", "--session", session, "--json", state=state)
+    document = answer.document()
+    counted = [row["branch"] for row in document["unpublished"] if row["counted"]]
+    return Owed(answer.status, document["unwatched"], counted)
+
+
+@pytest.mark.parametrize(
+    ("session", "status"),
+    [
+        pytest.param(OWES_A_WATCH, UNWATCHED, id="unwatched-run"),
+        pytest.param(OWES_A_BRANCH, UNPUBLISHED, id="unpublished-branch"),
+        pytest.param(OWES_BOTH, BOTH, id="both"),
+        pytest.param(WORKER, NOTHING_OWED, id="neither"),
+    ],
+)
+def test_the_stop_hook_answers_what_just_unfinished_says_the_session_owes(
+    world: World, tmp_path: Path, session: str, status: int
+) -> None:
+    """One verdict per state, each condition in it once, and the view's own answer beside it."""
+    owed = _owed(world, tmp_path / "view", session)
+    assert owed.status == status, owed
+    unwatched, branches = owed.unwatched, owed.branches
+    answered = _stop(world, tmp_path / "hook", session)
+    if status == NOTHING_OWED:
+        _let_end(answered)
+        return
+    reason = _refused(answered)
+    for line in unwatched:
+        assert reason.count(line) == 1, f"{line!r} is not in the verdict exactly once:\n{reason}"
+    for branch in branches:
+        hint = f"just unpublished --acknowledge {branch} --reason "
+        assert reason.count(hint) == 1, f"{branch} is not owed exactly once:\n{reason}"
+    assert ("onepipeline watch" in reason) == bool(unwatched), reason
+    assert ("just unpublished --acknowledge" in reason) == bool(branches), reason
+
+
+def test_the_stop_hook_follows_a_reasoned_acknowledgement(world: World, tmp_path: Path) -> None:
+    """Acknowledging the one branch owed ends the turn, with nothing else wired."""
+    state = tmp_path / "state"
+    assert world.acknowledged.branch in _refused(_stop(world, state, ACKNOWLEDGES))
+    receipt = _just(
+        world,
+        "unpublished",
+        "--acknowledge",
+        world.acknowledged.branch,
+        "--reason",
+        "asking the user whether to land it",
+        state=state,
+        launcher=ACKNOWLEDGES,
+    )
+    assert "acknowledged" in receipt.stdout, receipt
+    _let_end(_stop(world, state, ACKNOWLEDGES))
+
+
+def test_a_continuation_over_an_unchanged_verdict_stands_aside(
+    world: World, tmp_path: Path
+) -> None:
+    """Told once about both conditions, the manager's continuation ends the turn."""
+    state = tmp_path / "state"
+    first = _refused(_stop(world, state, OWES_BOTH))
+    assert "run-both" in first and world.both.branch in first
+    _let_end(_stop(world, state, OWES_BOTH, again=True))
+
+
+def test_a_view_that_cannot_answer_blocks_saying_why(world: World, tmp_path: Path) -> None:
+    """The real source over a registry `onevcs` cannot read: a refusal naming it, never silence."""
+    broken = tmp_path / "broken-home"
+    broken.mkdir()
+    (broken / "registry.json").write_text("{not json", encoding="utf-8")
+    reason = _refused(_stop(world, tmp_path / "state", WORKER, ONEVCS_HOME=str(broken)))
+    assert "could not be consulted" not in reason, "the view answered, and its answer refuses"
+    assert "could not say which branches this session's runs left preserved" in reason, reason
+
+
+# llmlint: ignore-block[e2e_not_mocked] Each stand-in is the declared source failing in a
+# way the real view does not on demand — exiting non-zero, writing nothing, answering
+# outside the verdict vocabulary, running past its bound — or a checkout missing it, which
+# no interface produces. The registered command, the harness's shell, the payload and the
+# installed engine are all real; only what sits at the declared source's path differs.
+@pytest.mark.parametrize(
+    ("source", "cause"),
+    [
+        pytest.param(None, "it exited with status 127", id="absent"),
+        pytest.param("echo broken >&2; exit 3", "it exited with status 3", id="failing"),
+        pytest.param("cat >/dev/null", "wrote nothing on standard output", id="silent"),
+        pytest.param(
+            'cat >/dev/null; echo \'{"verdict":"maybe"}\'',
+            "it answered outside the vocabulary",
+            id="outside-vocabulary",
+        ),
+        pytest.param(
+            "cat >/dev/null; exec sleep 120", "did not answer within 20 second", id="past-its-bound"
+        ),
+    ],
+)
+def test_a_declared_source_that_cannot_be_consulted_blocks_naming_it(
+    world: World, tmp_path: Path, source: str | None, cause: str
+) -> None:
+    project = tmp_path / "project"
+    (project / ".venv" / "bin").mkdir(parents=True)
+    (project / ".venv" / "bin" / "onepipeline").symlink_to(ONEPIPELINE)
+    (project / "scripts").mkdir()
+    if source is not None:
+        stand_in = project / "scripts" / "unpublished.sh"
+        stand_in.write_text(f"#!/bin/sh\n{source}\n", encoding="utf-8")
+        stand_in.chmod(0o755)
+    reason = _refused(_stop(world, tmp_path / "state", WORKER, project=project))
+    source = '`"$CLAUDE_PROJECT_DIR/scripts/unpublished.sh" --stop-verdict` could not be consulted'
+    assert source in reason, reason
+    assert cause in reason, reason
 
 
 # llmlint: ignore-end[e2e_not_mocked]

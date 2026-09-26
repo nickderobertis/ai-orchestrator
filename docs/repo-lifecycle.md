@@ -13,19 +13,19 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.45.0**
+that source on every `just check` rather than restated: **`onepipeline` v0.47.0**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.32.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.32.2** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through — and the copy `just publish-branch` and `just
 repo-recover` land through, since both run the engine's own landing verbs. The other
 manager verbs — `just recoverable`, `just work-status`, `just integrate` — run the
-`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.32.0** as well at this
+`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.32.2** as well at this
 pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.45.0
-and 0.32.0. The habit that ambiguity taught is worth keeping rather than retiring
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.47.0
+and 0.32.2. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -672,7 +672,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.45.0 and is refused **by its own name**, at every schema version and on a live
+v0.47.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1324,7 +1324,7 @@ verbatim, so among several registered checkouts of one identity the origin form 
 the one whose alias sorts first; `tests/test_registry_resolution.py` holds this host's
 checkouts to that order. The `Node` schema is
 `deny_unknown_fields`, so what it may carry is a closed list —
-`id`, `kind`, `task`, `amendment`, `persona`, `deps`, `max_turns`, `expects_no_diff`,
+`id`, `kind`, `task`, `amendment`, `persona`, `deps`, `max_turns`, `sets`, `expects_no_diff`,
 `context`, `parked`, `executor`, `agent_graph`, `repo`, `repo_type`, `workflow`,
 `merge_policy`, `base_branch`, `branch`, `title`, `body`, `draft`,
 `execution_checkout`, `steps`, `resume`, `adoption`, `consumes`, `delivers`, `pool`,
@@ -1518,7 +1518,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.45.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.47.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1594,8 +1594,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.32.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.45.0 settles the node that
+`onevcs` 0.32.2 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.47.0 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached once the last step has settled and the publication
 starts, because a release the node adopted early has not happened yet or because the
@@ -1701,6 +1701,7 @@ Publication closeout is executed by the engine, not the planner. The resulting
 branch, PR, gate, and publication-checkout state reach the planner over the live
 channel; the planner accepts completion only after reviewing that evidence.
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This listing is drift-gated: the "onepipeline run ledger layout" vocabulary in `tests/test_engine_contracts.py` reads every `self.dir.join("…")` in the engine's `RunPaths` at the pinned tag and fails when an entry here and there differ, `ended.jsonl` among them. -->
 Every run is recorded, and the ledger is flat:
 
 ```
@@ -1717,7 +1718,9 @@ runs/<run-id>/channel/       the planner channel's transport state
 runs/<run-id>/dispatches/    per-dispatch records
 runs/<run-id>/reports/       per-node raw reports
 runs/<run-id>/watchers/      one record per process watching this run
+runs/<run-id>/ended.jsonl    every process a teardown of this run signalled and then saw end
 ```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 `launch.json` is what a run is *discovered* by, so a runs root without one is
 invisible to every read verb. `result.json` appears when a driver closes out, which
@@ -2316,7 +2319,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.45.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.47.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

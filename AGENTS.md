@@ -300,6 +300,9 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
   **this pin can govern a dispatch**, and the two pins are held to linking one engine by
   `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
+  A pair it measures apart is held by its `DECLARED_UI_ENGINE_DIVERGENCE` record, which
+  fails once either pin moves; while one stands a browser adopt drives the reader's own
+  engine rather than the pin, so adopt with `just orchestrate --adopt`.
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
@@ -988,12 +991,12 @@ watching means and what that verb is held to:
 
 1. **A watch is armed before you turn to anything else.** A launch is not finished
    until its watch is up; the `Stop` hook `.claude/settings.json` registers — the
-   engine's own `onepipeline stop-guard` — refuses to end a turn while a run this
-   session owns has nothing watching it, and the answer is to arm `just watch` on each
-   run it names, never to answer the hook twice. That verb reads `unwatched` alone, so
-   the hook does not yet see a branch your runs left unpublished: `just unfinished` does,
-   and a turn ends only once it answers `0` — arm the watch, land the branch, or
-   acknowledge it with `just unpublished --acknowledge <branch> --reason "<why>"`.
+   engine's own `onepipeline stop-guard` — refuses to end a turn while this session owes
+   what `just unfinished` names: an unwatched run of its own, or a branch its runs left
+   preserved and unpublished, the second asked of the verdict source that registration
+   declares. Never answer the hook twice: arm `just watch` on each run, land the branch,
+   or acknowledge it with `just unpublished --acknowledge <branch> --reason "<why>"`,
+   until `just unfinished` answers `0`.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.

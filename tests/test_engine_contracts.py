@@ -310,7 +310,8 @@ class Vocabulary(NamedTuple):
     #: assumed. One `re.DOTALL` match, so the variants below cannot come from
     #: anywhere else in the file.
     region: re.Pattern[str]
-    #: A pattern capturing each variant inside that declaration.
+    #: A pattern capturing each variant inside that declaration: one group, or two where
+    #: the first is the variant's own `rename`, which wins when present.
     variant: re.Pattern[str]
     #: The document that enumerates it.
     document: Path
@@ -402,13 +403,18 @@ VOCABULARIES = (
         ONEPIPELINE,
         "channel.rs",
         re.compile(r"(?:#\[[^\]]*\]\s*)*pub enum Command \{.*?\n\}", re.DOTALL),
-        re.compile(r"^\s{4}([A-Z][A-Za-z]*) \{", re.MULTILINE),
+        # A variant's own `#[serde(rename = "…")]` is its wire spelling and beats the
+        # enum's `rename_all`: onepipeline 0.47.0's `set-node-sets` is spelled that way.
+        re.compile(
+            r'^\s{4}(?:#\[serde\(rename = "([a-z-]+)"\)\]\n\s{4})?([A-Z][A-Za-z]*) \{',
+            re.MULTILINE,
+        ),
         ORCHESTRATION,
         re.compile(
             r"The accepted commands are:\n\n\|[^\n]*\n\|[^\n]*\n((?:\|[^\n]*\n)+)",
             re.DOTALL,
         ),
-        re.compile(r"^\| `([a-z]+)` \|", re.MULTILINE),
+        re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE),
     ),
     Vocabulary(
         "onepipeline Node fields",
@@ -1542,10 +1548,14 @@ def test_every_enumerated_vocabulary_is_the_engines_own(vocabulary: Vocabulary) 
     )
     renamed = RENAME_ALL.search(declaration.group(0))
     declared = {
-        _wire_spelling(
+        own
+        or _wire_spelling(
             re.sub(r'["\s,]+', " ", variant).strip(), renamed.group(1) if renamed else None
         )
-        for variant in vocabulary.variant.findall(declaration.group(0))
+        for own, variant in (
+            found if isinstance(found, tuple) else ("", found)
+            for found in vocabulary.variant.findall(declaration.group(0))
+        )
     }
     assert declared, f"{vocabulary.label} declares no variant this gate can read"
 
@@ -2397,17 +2407,33 @@ def test_the_checkpoint_a_reader_writes_is_named_what_the_engine_names_it(
 
 #: The two staging names the engine's atomic writers create beside a record and never
 #: leave behind, each read as the format string `src/ledger.rs` composes it from:
-#: `write_atomic` swaps the record's extension for `tmp.<pid>` and renames the result
-#: over the record, and `create_exclusively_filled` appends `.tmp.<pid>.<nonce>` to the
-#: record's name and links the result to it. The captured group is the format string,
-#: whose `{}` placeholders are the integers the engine fills in.
+#: `write_atomic` swaps the record's extension for `tmp.<pid>.<thread>` in its
+#: `temporary` and renames the result over the record, and `create_exclusively_filled`
+#: appends `.tmp.<pid>.<nonce>` to the record's name and links the result to it. The
+#: captured group is the format string, whose `{}` placeholders are the integers the
+#: engine fills in and whose `{:?}` is the writing thread's `ThreadId`, which Rust's
+#: `Debug` renders as :data:`THREAD_ID_RENDERING`.
 STAGING_DECLARATIONS = {
-    "write_atomic": re.compile(r'path\.with_extension\(format!\("(tmp\.\{\})", sys::pid\(\)\)\)'),
+    "write_atomic": re.compile(
+        r"fn temporary\(path: &Path\) -> PathBuf \{\s*path\.with_extension\(format!\(\s*"
+        r'"(tmp\.\{\}\.\{:\?\})",\s*sys::pid\(\),\s*std::thread::current\(\)\.id\(\)',
+        re.MULTILINE,
+    ),
     "create_exclusively_filled": re.compile(
         r'name\.push\(format!\(\s*"(\.tmp\.\{\}\.\{\})",\s*sys::pid\(\),\s*NONCE\.fetch_add',
         re.MULTILINE,
     ),
 }
+
+#: How Rust's `Debug` renders a `std::thread::ThreadId`, the one `{:?}` a staging name's
+#: format string carries, with its integer left as a `{}` placeholder.
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The producer of this
+# rendering is Rust's standard library (`ThreadId` derives `Debug` over one integer field),
+# not the engine, and no checkout registered here carries that source to read; the engine
+# side — that its staging name formats the thread id with `{:?}` — is read at the pinned
+# tag by `STAGING_DECLARATIONS` above.
+THREAD_ID_RENDERING = "ThreadId({})"
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 #: Where `tests/e2e/test_run_snapshot.py` performs each shape itself, to race the
 #: snapshot against a real writer: the suffix its `rename_into_place` swaps in with
@@ -2415,7 +2441,9 @@ STAGING_DECLARATIONS = {
 #: `link_into_place` appends to the record's name. Each is read back to the engine's
 #: format string by replacing the Python expressions it fills in with `{}`.
 STAGING_WRITERS = {
-    "write_atomic": re.compile(r'record\.with_suffix\(f"(\.tmp\.\{os\.getpid\(\)\})"\)'),
+    "write_atomic": re.compile(
+        r'record\.with_suffix\(f"(\.tmp\.\{os\.getpid\(\)\}\.ThreadId\(\{threading\.get_ident\(\)\}\))"\)'
+    ),
     "create_exclusively_filled": re.compile(
         r'record\.with_name\(f"\{record\.name\}(\.tmp\.\{os\.getpid\(\)\}\.\{nonce\})"\)'
     ),
@@ -2445,7 +2473,7 @@ def test_the_staging_names_a_snapshot_leaves_out_are_the_ones_the_engine_writes(
             "where this gate reads it, so the snapshot's grammar is reconciled against "
             "nothing; re-read `ledger.rs` and correct `run_snapshot.STAGING_NAME`"
         )
-        format_string = declared.group(1)
+        format_string = declared.group(1).replace("{:?}", THREAD_ID_RENDERING)
         # `with_extension` supplies the dot the pushed tail already carries.
         tail = format_string if format_string.startswith(".") else f".{format_string}"
         for record in ("summary.json", "events.jsonl", "owner.lock", "launch.json"):

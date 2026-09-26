@@ -1,7 +1,7 @@
 """What `run_snapshot.snapshot_run` does that `shutil.copytree` did not, under a live writer.
 
 A real thread performs the engine's own two shapes against the directory for the whole
-of each test — write `summary.tmp.<pid>` and rename it over `summary.json`; write
+of each test — write `summary.tmp.<pid>.ThreadId(<n>)` and rename it over `summary.json`; write
 `owner.lock.tmp.<pid>.<n>`, link it exclusively to `owner.lock`, unlink it — and
 `copytree` is shown to fail the way
 https://github.com/nickderobertis/ai-orchestrator/issues/1138 records before the
@@ -70,8 +70,8 @@ def concurrent(work: Callable[[threading.Event], None]) -> Iterator[None]:
 
 
 def rename_into_place(record: Path, body: str) -> None:
-    """The engine's `write_atomic`: stage at `<stem>.tmp.<pid>`, then rename over the record."""
-    staging = record.with_suffix(f".tmp.{os.getpid()}")
+    """The engine's `write_atomic`: stage at `<stem>.tmp.<pid>.ThreadId(<n>)`, then rename it in."""
+    staging = record.with_suffix(f".tmp.{os.getpid()}.ThreadId({threading.get_ident()})")
     staging.write_text(body, encoding="utf-8")
     time.sleep(STAGING_LINGER)
     os.replace(staging, record)

@@ -56,11 +56,13 @@
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/unpublished.sh",
       "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/orchestrator/follow_up_tickets.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/unpublished.py",
       "{workspaceRoot}/tests/unwatched/project.json",
       "{workspaceRoot}/tests/unwatched/test_unwatched_and_stop_hook_e2e.py",
       "{workspaceRoot}/tests/unwatched/test_unwatched_launch_shapes_e2e.py"

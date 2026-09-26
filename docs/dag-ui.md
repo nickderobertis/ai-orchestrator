@@ -203,18 +203,22 @@ about what a dispatch ran. An adoption made from the browser is not a read: `POS
 revives is driven by the engine **this reader** links, and `config/onepipeline-ui.version`
 is from then on a pin that can govern a dispatch on this host. So the two are held
 level, and **not by an operator remembering to check**:
-`tests/test_linked_libraries.py::test_the_ui_api_links_the_engine_this_host_pins`
+`tests/test_linked_libraries.py::test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it`
 reads the engine out of the adopted read-API wheel's own bill of materials and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than at whatever a browser adoption then drives.
 
-**They are level today.** `config/onepipeline.version` reads 0.45.0, and the adopted
-`onepipeline-ui` 0.13.0 links onepipeline 0.45.0, so a run adopted from the browser is
-driven by the engine every other dispatch on this host runs. `DECLARED_UI_ENGINE_DIVERGENCE`
-in the same module is `None`; an adoption that ever has to hold the reader behind the
-engine declares the measured pair there, and until it retires, adopt through the launcher,
-`just orchestrate --adopt <run-id>`, rather than from the browser. What `/healthz` is for
-from here is the question that gate cannot answer — which release is answering **on this port right now**, since both pieces load
+**They are not level today, by one declared exception.** `config/onepipeline.version`
+reads 0.47.0, and the adopted `onepipeline-ui` 0.13.0 — the newest release there is —
+links onepipeline 0.45.0. The engine pin moved anyway, because `stop-guard` consults the
+source this host's `Stop` hook declares only from 0.46.0 on; the gate reads the pair
+through `DECLARED_UI_ENGINE_DIVERGENCE` in the same module, which is satisfied only while
+the two are exactly 0.45.0 and 0.47.0 and fails, naming itself, the moment either moves —
+and that failure is what removes the record, deleted rather than re-dated once a reader
+linking 0.47.0 is adopted. **Until then, do not adopt a run from the browser**: the adopt
+would drive that run with the reader's own 0.45.0, an engine this host did not pin, while
+every other dispatch on this host runs 0.47.0. Adopt through the launcher, `just
+orchestrate --adopt <run-id>`. What `/healthz` is for from here is the question that gate cannot answer — which release is answering **on this port right now**, since both pieces load
 once at start and a server left running from before a bump goes on serving what it
 loaded.
 

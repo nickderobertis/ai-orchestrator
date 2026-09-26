@@ -173,6 +173,7 @@ NODE_FIELDS = frozenset(
         "persona",
         "deps",
         "max_turns",
+        "sets",
         "expects_no_diff",
         "context",
         "amendment",

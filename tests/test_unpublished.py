@@ -533,6 +533,209 @@ def test_the_own_sessions_target_answers_the_launcher_labels_rows_filled_from_it
     assert (held["run"], held["node"]) == ("run-a", "node-2")
 
 
+def _stop_verdict(
+    registry: Registry, text: str, *, monkeypatch: pytest.MonkeyPatch, state: Path
+) -> tuple[dict[str, str], str]:
+    """`--stop-verdict` in process with ``text`` on its standard input: the one object, stderr.
+
+    The launcher session is removed, because the input names the session and the verdict
+    must never fall through to whoever the process runs as.
+    """
+    monkeypatch.setenv("ONEVCS_HOME", str(registry.home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.delenv(unpublished.LAUNCHER_SESSION_ENV, raising=False)
+    out, err = io.StringIO(), io.StringIO()
+    status = unpublished.main(["--stop-verdict"], out=out, err=err, stdin=io.StringIO(text))
+    assert status == NOTHING_COUNTED, "every verdict, a refusal included, is an answered exit"
+    [line] = out.getvalue().splitlines()
+    verdict = json.loads(line)
+    assert isinstance(verdict, dict)
+    return verdict, err.getvalue()
+
+
+def test_the_stop_verdict_refuses_a_stop_owing_a_branch_and_names_the_acknowledgement(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seed = labelled_registry
+    verdict, _ = _stop_verdict(
+        seed.registry,
+        json.dumps({"session": MANAGER, "continuation": False}),
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert set(verdict) == {"verdict", "reason"} and verdict["verdict"] == "block", verdict
+    reason = verdict["reason"]
+    assert seed.own.branch in reason and seed.other.branch not in reason, reason
+    assert (
+        f"just unpublished --acknowledge {seed.own.branch} "
+        '--reason "<why it is deliberately left>"' in reason
+    ), reason
+    assert f"--acknowledge {seed.own_held.branch}" not in reason, "in flight is never owed"
+
+
+def test_the_stop_verdict_owes_nothing_whichever_continuation_it_is_handed(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for text in (
+        json.dumps({"session": "a-worker-session-owning-nothing", "continuation": True}),
+        json.dumps({"session": "a-worker-session-owning-nothing"}),
+    ):
+        verdict, _ = _stop_verdict(
+            labelled_registry.registry, text, monkeypatch=monkeypatch, state=tmp_path
+        )
+        assert verdict == {"verdict": "none"}, (text, verdict)
+
+
+def test_a_row_the_stop_verdict_cannot_read_refuses_the_stop_naming_it(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A left-out row may be the session's own, so the verdict never answers `none` past it."""
+    original = unpublished._onevcs
+
+    def unreadable_rows(*arguments: str, cwd: Path | None = None) -> str:
+        answer = original(*arguments, cwd=cwd)
+        if arguments[:1] != ("recoverable",):
+            return answer
+        rows = json.loads(answer)
+        for row in rows:
+            row["checkout"] = "relative/checkout"
+        return json.dumps(rows)
+
+    monkeypatch.setattr(unpublished, "_onevcs", unreadable_rows)
+    verdict, err = _stop_verdict(
+        labelled_registry.registry,
+        json.dumps({"session": MANAGER}),
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert verdict["verdict"] == "block", verdict
+    assert "cannot say this session owes none of the ones it left out" in verdict["reason"]
+    assert unpublished.ROW_LEFT_OUT in verdict["reason"] and "relative/checkout" in err
+
+
+def test_the_stop_verdict_follows_a_reasoned_acknowledgement(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seed = labelled_registry
+    status, out, err = _run(
+        seed.registry,
+        "--acknowledge",
+        seed.own.branch,
+        "--reason",
+        "asking the user first",
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert "acknowledged" in out, (status, err)
+    verdict, _ = _stop_verdict(
+        seed.registry, json.dumps({"session": MANAGER}), monkeypatch=monkeypatch, state=tmp_path
+    )
+    assert verdict == {"verdict": "none"}, verdict
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        pytest.param("not json", "is not one JSON object", id="not-json"),
+        pytest.param("[]", "is a JSON list, not an object", id="array"),
+        pytest.param(
+            json.dumps({"session": MANAGER, "extra": 1}),
+            "carries fields a stop guard does not send: ['extra']",
+            id="unknown-field",
+        ),
+        pytest.param(json.dumps({"session": 5}), "`session` is not a str", id="session-number"),
+        pytest.param(
+            json.dumps({"session": MANAGER, "continuation": 1}),
+            "`continuation` is not a bool",
+            id="continuation-number",
+        ),
+        pytest.param(json.dumps({"session": ""}), "names no session", id="blank-session"),
+        pytest.param(json.dumps({"continuation": True}), "names no session", id="no-session"),
+        pytest.param(json.dumps({"session": None}), "names no session", id="null-session"),
+        pytest.param(
+            json.dumps({"session": "not a session!"}),
+            "is not the shape a session id has",
+            id="malformed-session",
+        ),
+        pytest.param(
+            json.dumps({"session": "-x"}),
+            "is not the shape a session id has",
+            id="session-read-as-a-flag",
+        ),
+    ],
+)
+def test_stop_input_that_is_not_a_well_formed_stop_request_refuses_the_stop(
+    labelled_registry: Labelled,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    text: str,
+    said: str,
+) -> None:
+    verdict, _ = _stop_verdict(
+        labelled_registry.registry, text, monkeypatch=monkeypatch, state=tmp_path
+    )
+    assert verdict["verdict"] == "block", verdict
+    assert said in verdict["reason"], verdict
+    assert "could not say which branches this session's runs left preserved" in verdict["reason"]
+
+
+class _Unreadable:
+    """A stop input stream whose read fails, as a closed or undecodable stdin does."""
+
+    def read(self) -> str:
+        raise OSError("the stream was closed")
+
+
+def test_a_stop_input_that_cannot_be_read_refuses_the_stop_saying_why() -> None:
+    out, err = io.StringIO(), io.StringIO()
+    status = unpublished.main(["--stop-verdict"], out=out, err=err, stdin=_Unreadable())
+    assert status == NOTHING_COUNTED, "every verdict, a refusal included, is an answered exit"
+    [line] = out.getvalue().splitlines()
+    verdict = json.loads(line)
+    assert verdict["verdict"] == "block", verdict
+    assert "the stop input could not be read (the stream was closed)" in verdict["reason"]
+    assert "could not say which branches this session's runs left preserved" in verdict["reason"]
+
+
+def test_a_process_with_no_standard_input_refuses_the_stop_saying_why() -> None:
+    verdict = unpublished.stop_verdict(None, io.StringIO())
+    assert verdict["verdict"] == "block", verdict
+    assert "this process has no standard input" in verdict["reason"], verdict
+
+
+def test_a_stop_verdict_onevcs_cannot_answer_refuses_the_stop_saying_why(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    broken = tmp_path / "broken-home"
+    broken.mkdir()
+    (broken / "registry.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("ONEVCS_HOME", str(broken))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    err = io.StringIO()
+    verdict = unpublished.stop_verdict(io.StringIO(json.dumps({"session": MANAGER})), err)
+    assert verdict["verdict"] == "block", verdict
+    assert "could not say which branches" in verdict["reason"], verdict
+
+
+def test_what_the_stop_verdict_could_not_resolve_stays_off_its_channel(
+    labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An acknowledgement file that cannot be read is said on standard error, not in the verdict."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    record = unpublished.acknowledgement_file(MANAGER)
+    record.parent.mkdir(parents=True)
+    record.write_text("{damaged", encoding="utf-8")
+    verdict, err = _stop_verdict(
+        labelled_registry.registry,
+        json.dumps({"session": MANAGER}),
+        monkeypatch=monkeypatch,
+        state=tmp_path,
+    )
+    assert verdict["verdict"] == "block", verdict
+    assert err.startswith("unpublished: ") and str(record) in err, err
+    assert str(record) not in verdict["reason"]
+
+
 def test_the_own_target_of_a_manager_that_launched_nothing_answers_nothing(
     labelled_registry: Labelled, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1398,6 +1601,7 @@ def test_special_modes_exclude_every_other_declared_option() -> None:
     """A new parser flag cannot silently pass through a mode that ignores it."""
     options = {action.dest for action in unpublished._parser()._actions if action.dest != "help"}
     assert set(unpublished.ALONE["--print-surface"]) == options - {"print_surface"}
+    assert set(unpublished.ALONE["--stop-verdict"]) == options - {"print_surface", "stop_verdict"}
     assert set(unpublished.ALONE["--acknowledge"]) == options - {
         "print_surface",
         "acknowledge",
@@ -1419,6 +1623,9 @@ def test_an_invocation_naming_two_modes_is_refused_rather_than_ranked(
         (["--acknowledge", "b", "--reason", "why", "--host"], "--host"),
         (["--acknowledge", "b", "--reason", "why", "--json"], "--json"),
         (["--acknowledge", "b", "--reason", "why", "--no-disk"], "--no-disk"),
+        (["--stop-verdict", "--json"], "--json"),
+        (["--stop-verdict", "--session", MANAGER], "--session"),
+        (["--print-surface", "--stop-verdict"], "--stop-verdict"),
     ):
         out, err = io.StringIO(), io.StringIO()
         assert unpublished.main(arguments, out=out, err=err) == REFUSED, arguments
