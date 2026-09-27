@@ -274,16 +274,17 @@ ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 
 
 class _BoardField(StrEnum):
-    """The two board fields a copy writes, as the ids GitHub answers them under.
+    """The board fields a copy writes, as the ids GitHub answers them under.
 
-    An enum rather than two constants because what a write *means* is decided by which
+    An enum rather than bare constants because what a write *means* is decided by which
     field it names, and that is one dispatch: `_Board.set_field` matches on it once. A bare
     constant cannot say so, because an undotted name in a `case` pattern captures rather
-    than compares — so two constants force the repeated conditional this replaces.
+    than compares — so constants would force a repeated conditional in its place.
     """
 
     STATUS = "FIELD_status"
     ORIGIN = "FIELD_origin"
+    PRIORITY = "FIELD_priority"
 
 
 @dataclass(frozen=True)
@@ -293,6 +294,10 @@ class _StatusOption:
 
     def rendered(self) -> dict[str, str]:
         return {"id": self.id, "name": self.name}
+
+    def rendered_in_full(self) -> dict[str, str]:
+        """The option as the guarded field setup reads it, colour and description included."""
+        return self.rendered() | {"color": "GRAY", "description": ""}
 
 
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The stand-in board answers
@@ -414,6 +419,10 @@ class _Issue:
     #: relation alone: a fixture that took the write and then answered the read empty would
     #: hand the engine a plan whose nodes all run at once.
     blocked_by: list[_IssueNodeId] = field(default_factory=list)
+    #: The `Priority` option this row holds, `None` for no value, as the last write left it.
+    priority: str | None = None
+    #: The comments on this issue, oldest first, as GitHub lists an issue's `comments`.
+    comments: list[dict[str, object]] = field(default_factory=list)
     #: The board holding this issue, set by that board as it takes the issue on. Two boards
     #: are served at once for the launch journey — this repository's `plans` and its
     #: `followups` — and both the Status options a row answers with and the project number
@@ -445,6 +454,20 @@ class _Issue:
                 }
             ]
         )
+        priority = (
+            []
+            if self.priority is None
+            else [
+                {
+                    "name": self.priority,
+                    "field": {
+                        "id": _BoardField.PRIORITY,
+                        "name": "Priority",
+                        "options": [option.rendered() for option in self.held_by.priorities],
+                    },
+                }
+            ]
+        )
         return {
             "nodes": [
                 {
@@ -455,6 +478,7 @@ class _Issue:
                         "options": [option.rendered() for option in self.held_by.options],
                     },
                 },
+                *priority,
                 *origin,
             ],
             "pageInfo": {"hasNextPage": False},
@@ -473,7 +497,7 @@ class _Issue:
             # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
             "title": self.title,
             "body": self.body,
-            "url": f"https://github.com/{self.repository}/issues/{self.item_id}",
+            "url": f"https://github.com/{self.repository}/issues/{self.number}",
             "createdAt": "2026-08-26T00:00:00Z",
             "updatedAt": "2026-08-26T00:00:00Z",
             "state": self.state,
@@ -506,7 +530,7 @@ class _Issue:
                 "nodes": [
                     {
                         "id": self.item_id,
-                        "project": {"number": self.held_by.number},
+                        "project": {"id": self.held_by.node_id, "number": self.held_by.number},
                         "fieldValues": self.field_values(),
                     }
                 ],
@@ -566,6 +590,11 @@ class _Board:
         self.options: tuple[_StatusOption, ...] = STATUS_OPTIONS
         #: The number of the board being served, which an issue's membership is filed under.
         self.number: int = CONFIGURED_PROJECT_NUMBER
+        #: The options of the board's `Priority` field, which it carries none of when empty:
+        #: what `sources fields --apply` creates, and nothing else puts there.
+        self.priorities: tuple[_StatusOption, ...] = ()
+        #: How many comments this board has taken, which numbers the next one.
+        self.commented = 0
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -604,6 +633,18 @@ class _Board:
                     "id": _BoardField.ORIGIN,
                     "name": ORIGIN_FIELD_NAME,
                 },
+                *(
+                    [
+                        {
+                            "__typename": "ProjectV2SingleSelectField",
+                            "id": _BoardField.PRIORITY,
+                            "name": "Priority",
+                            "options": [option.rendered() for option in self.priorities],
+                        }
+                    ]
+                    if self.priorities
+                    else []
+                ),
             ],
             "pageInfo": {"hasNextPage": False},
         }
@@ -737,7 +778,17 @@ class _Board:
         created.board = self
         self.created.append(created)
         self.issues.append(created)
-        return {"data": {"createIssue": {"issue": {"id": created.content_id}}}}
+        return {
+            "data": {
+                "createIssue": {
+                    "issue": {
+                        "id": created.content_id,
+                        "number": created.number,
+                        "url": created.content()["url"],
+                    }
+                }
+            }
+        }
 
     def _issue(self, content_id: object) -> _Issue:
         for issue in self.issues:
@@ -784,14 +835,137 @@ class _Board:
                 self._row(item_id).status = self._option_named(value)
             case _BoardField.ORIGIN:
                 self._row(item_id).origin = self._text(value)
+            case _BoardField.PRIORITY:
+                self._row(item_id).priority = self._option_named(value, self.priorities)
         return {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
 
-    def _option_named(self, value: object) -> str:
-        """The Status option a write names, refused when this board carries no such option."""
+    def snapshot_response(self) -> dict[str, object]:
+        """The board's single-select fields in full and every row's value of each.
+
+        What the guarded field setup reads before and after it writes, to plan what is
+        missing and to verify that nothing it did not create moved.
+        """
+        fields = [("Status", _BoardField.STATUS, self.options)]
+        if self.priorities:
+            fields.append(("Priority", _BoardField.PRIORITY, self.priorities))
+
+        def values(issue: _Issue) -> list[dict[str, object]]:
+            held = [("Status", _BoardField.STATUS, self.options, issue.status)]
+            if issue.priority is not None:
+                held.append(("Priority", _BoardField.PRIORITY, self.priorities, issue.priority))
+            return [
+                {
+                    "name": value,
+                    "optionId": next(option.id for option in options if option.name == value),
+                    "field": {"id": field_id, "name": name},
+                }
+                for name, field_id, options, value in held
+            ]
+
+        return {
+            "data": {
+                "owner": {
+                    "projectV2": {
+                        "id": self.node_id,
+                        "fields": {
+                            "nodes": [
+                                {
+                                    "id": field_id,
+                                    "name": name,
+                                    "options": [option.rendered_in_full() for option in options],
+                                }
+                                for name, field_id, options in fields
+                            ],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                        "items": {
+                            "nodes": [
+                                {
+                                    "id": issue.item_id,
+                                    "fieldValues": {
+                                        "nodes": values(issue),
+                                        "pageInfo": {"hasNextPage": False},
+                                    },
+                                }
+                                for issue in self.issues
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        },
+                    }
+                }
+            }
+        }
+
+    def create_field(self, variables: dict[str, object]) -> dict[str, object]:
+        """Create the board's `Priority` field with the options the setup sends, in its order."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict) or payload.get("name") != "Priority":
+            raise ValueError(f"only the Priority field is created here, not {payload!r}")
+        options = payload.get("singleSelectOptions")
+        if not isinstance(options, list) or self.priorities:
+            raise ValueError(f"a Priority field is created once, with options: {payload!r}")
+        self.priorities = tuple(
+            _StatusOption(id=_FieldOptionId(f"OPT_priority_{at}"), name=str(option["name"]))
+            for at, option in enumerate(options)
+        )
+        created = {
+            "id": _BoardField.PRIORITY,
+            "name": "Priority",
+            "options": [option.rendered_in_full() for option in self.priorities],
+        }
+        return {"data": {"createProjectV2Field": {"projectV2Field": created}}}
+
+    def clear_field(self, variables: dict[str, object]) -> dict[str, object]:
+        """Clear one field value on a row, which is how a priority of `none` is written."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict):
+            raise ValueError("clearProjectV2ItemFieldValue requires an input object")
+        item_id = payload.get("itemId")
+        if payload.get("fieldId") != _BoardField.PRIORITY:
+            raise ValueError(f"only the Priority field is cleared here, not {payload!r}")
+        self._row(item_id).priority = None
+        return {"data": {"clearProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
+
+    def comments_response(self, node_id: object) -> dict[str, object]:
+        """One issue's comments, oldest first, as its `comments` connection lists them."""
+        listed = {
+            "nodes": self._issue(node_id).comments,
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
+        return {"data": {"node": {"__typename": "Issue", "comments": listed}}}
+
+    def add_comment(self, variables: dict[str, object]) -> dict[str, object]:
+        """Add one comment to an issue, signed as the fixture's token account."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict) or not isinstance(payload.get("body"), str):
+            raise ValueError("addComment requires an input object with a body")
+        issue = self._issue(payload.get("subjectId"))
+        self.commented += 1
+        moment = f"2026-08-26T00:{self.commented // 60:02d}:{self.commented % 60:02d}Z"
+        comment: dict[str, object] = {
+            "id": f"IC_fixture_{self.commented}",
+            "author": {"login": "fixture-token-account"},
+            "createdAt": moment,
+            "updatedAt": moment,
+            "body": payload["body"],
+            "url": f"{issue.content()['url']}#issuecomment-{self.commented}",
+        }
+        issue.comments.append(comment)
+        return {
+            "data": {
+                "addComment": {
+                    "subject": {"id": issue.content_id},
+                    "commentEdge": {"node": comment},
+                }
+            }
+        }
+
+    def _option_named(self, value: object, options: tuple[_StatusOption, ...] | None = None) -> str:
+        """The option a write names, refused when this board's field carries no such option."""
         option = value.get("singleSelectOptionId") if isinstance(value, dict) else None
-        named = {held.id: held.name for held in self.options}
+        named = {held.id: held.name for held in (self.options if options is None else options)}
         if option not in named:
-            raise ValueError(f"this board carries no Status option {option!r}")
+            raise ValueError(f"this board carries no option {option!r} for that field")
         return named[_FieldOptionId(str(option))]
 
     @staticmethod
@@ -920,6 +1094,8 @@ class _GraphQLRequest:
 class _Operation(StrEnum):
     BOARD = "board"
     BOARD_FIELDS = "boardFields"
+    FIELD_SNAPSHOT = "fieldSnapshot"
+    CREATE_FIELD = "createField"
     SEARCH = "search"
     ISSUE = "issue"
     SUB_ISSUES = "subIssues"
@@ -929,6 +1105,8 @@ class _Operation(StrEnum):
     CREATE_ISSUE = "createIssue"
     ADD_TO_BOARD = "addToBoard"
     UPDATE_FIELD = "updateField"
+    CLEAR_FIELD = "clearField"
+    ADD_COMMENT = "addComment"
     ADD_SUB_ISSUE = "addSubIssue"
     ADD_BLOCKED_BY = "addBlockedBy"
     UPDATE_ISSUE = "updateIssue"
@@ -941,6 +1119,8 @@ class _Operation(StrEnum):
 _OPERATIONS: dict[str, _Operation] = {
     # Before the board read's own marker, which this aliased root also contains.
     "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
+    "optionId field{": _Operation.FIELD_SNAPSHOT,
+    "createProjectV2Field(": _Operation.CREATE_FIELD,
     "repositoryOwner": _Operation.BOARD,
     "search(query:": _Operation.SEARCH,
     "subIssues(first:": _Operation.SUB_ISSUES,
@@ -951,6 +1131,8 @@ _OPERATIONS: dict[str, _Operation] = {
     "createIssue(": _Operation.CREATE_ISSUE,
     "addProjectV2ItemById(": _Operation.ADD_TO_BOARD,
     "updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELD,
+    "clearProjectV2ItemFieldValue(": _Operation.CLEAR_FIELD,
+    "addComment(": _Operation.ADD_COMMENT,
     "addSubIssue(": _Operation.ADD_SUB_ISSUE,
     "addBlockedBy(": _Operation.ADD_BLOCKED_BY,
     "updateIssue(": _Operation.UPDATE_ISSUE,
@@ -1041,6 +1223,12 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     requests: ClassVar[list[_GraphQLRequest]]
     #: What every request is refused with, or `None` to answer the board normally.
     refusal: ClassVar[_Refusal | None] = None
+    #: One operation answered with a GraphQL error while every other is served, or `None`:
+    #: a write the store makes that GitHub refuses between two it accepted.
+    refused_operation: ClassVar[_Operation | None] = None
+    #: How many of `refused_operation` are served before the one refused, so a refusal can
+    #: land on a later write of the same kind — the record's, after the body's.
+    refused_after: ClassVar[int] = 0
     #: The board this handler answers for. A class attribute rather than an argument
     #: because the stdlib constructs a handler per request; a second board is served by
     #: a subclass of this one carrying its own board and its own request log, which is
@@ -1076,11 +1264,19 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             operation = request.operation
         except ValueError as unknown:
             return {"errors": [{"message": str(unknown)}]}
+        if operation is self.refused_operation:
+            if _GitHubFixture.refused_after == 0:
+                return {"errors": [{"message": f"{operation} refused by the fixture"}]}
+            _GitHubFixture.refused_after -= 1
         match operation:
             case _Operation.BOARD:
                 return self.board.board_response()
             case _Operation.BOARD_FIELDS:
                 return self.board.board_fields_response()
+            case _Operation.FIELD_SNAPSHOT:
+                return self.board.snapshot_response()
+            case _Operation.CREATE_FIELD:
+                return self.board.create_field(request.variables)
             case _Operation.SEARCH:
                 return self.board.search_response(request.string("search"))
             case _Operation.ISSUE:
@@ -1088,10 +1284,11 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.SUB_ISSUES:
                 return self.board.sub_issues_response(request.variables.get("id"))
             case _Operation.COMMENTS:
-                # A `task show` of one item reads its comments too; nothing here comments,
-                # so every issue answers with none.
-                empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
-                return {"data": {"node": {"__typename": "Issue", "comments": empty}}}
+                return self.board.comments_response(request.variables.get("id"))
+            case _Operation.ADD_COMMENT:
+                return self.board.add_comment(request.variables)
+            case _Operation.CLEAR_FIELD:
+                return self.board.clear_field(request.variables)
             case _Operation.REPOSITORY:
                 return self._repository(request.repository)
             case _Operation.DEPENDENCIES:
@@ -1158,6 +1355,8 @@ def _serving_board(
             }
     finally:
         _GitHubFixture.refusal = None
+        _GitHubFixture.refused_operation = None
+        _GitHubFixture.refused_after = 0
 
 
 @contextmanager
@@ -2377,23 +2576,25 @@ def _follow_up_ticket(
     repository: _Repository,
     status: follow_up_tickets.Status = follow_up_tickets.Status.PROPOSED,
     evidence: str = "",
+    cause: str = PROPOSED_CAUSE,
+    frequency: follow_up_tickets.Frequency = follow_up_tickets.Frequency.INTERMITTENT,
 ) -> follow_up_tickets.Ticket:
     """One ticket about ``repository`` as the agent writes it, new and `backlog` by default.
 
-    ``evidence`` is added to its `## Evidence` section, the way a later run adds its own.
+    ``evidence`` is added to its `## Evidence` section, the way a later run adds its own, and
+    ``frequency`` is the agent's judgment of the root cause. Its estimate, estimate line and
+    priority are `board-status`'s to write, so the ticket carries none of them yet.
     """
     host = follow_up_tickets.Host("verifier.example")
     origin = follow_up_tickets.Origin(_hosted(repository))
+    medium = follow_up_tickets.Severity.MEDIUM
     impact = follow_up_tickets.impact_section(
-        "Readers of the board miss the ticket's status.",
-        follow_up_tickets.Severity.MEDIUM,
-        "none",
-        follow_up_tickets.Severity.MEDIUM,
+        "Readers of the board miss the ticket's status.", medium, "none", medium
     )
     return follow_up_tickets.Ticket(
-        title=f"{repository.name}: a ticket lands as a proposal",
+        title=f"{repository.name}: {cause.replace('-', ' ')}",
         status=status,
-        root_cause=follow_up_tickets.RootCause(PROPOSED_CAUSE),
+        root_cause=follow_up_tickets.RootCause(cause),
         repository=origin,
         created_by_run=follow_up_tickets.RunId(PROPOSED_RUN),
         owning_runs=(follow_up_tickets.RunId(PROPOSED_RUN),),
@@ -2411,12 +2612,13 @@ def _follow_up_ticket(
             + (f" {evidence}" if evidence and heading == follow_up_tickets.EVIDENCE else "")
             for heading in follow_up_tickets.HEADINGS
         ),
+        frequency=frequency,
     )
 
 
 def _written_ticket(root: Path, ticket: follow_up_tickets.Ticket, text: str | None = None) -> Path:
     """Write ``ticket`` under a drafts root at ``root``, rendered unless ``text`` says otherwise."""
-    path = follow_up_tickets.ticket_path(root, PROPOSED_RUN, PROPOSED_CAUSE)
+    path = follow_up_tickets.ticket_path(root, ticket.created_by_run, ticket.root_cause)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(follow_up_tickets.render(ticket) if text is None else text, encoding="utf-8")
     return path
@@ -2446,14 +2648,46 @@ def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
 # CLI, `board-status` and the committed configuration are real.
 @contextmanager
 def _serving_followups(
-    environment: dict[str, str], options: tuple[_StatusOption, ...] = FOLLOWUPS_OPTIONS
+    environment: dict[str, str],
+    options: tuple[_StatusOption, ...] = FOLLOWUPS_OPTIONS,
+    *,
+    fields: bool = False,
 ) -> Iterator[None]:
-    """Serve the board fixture as `followups`, carrying ``options``, for ``environment``."""
+    """Serve the board fixture as `followups`, carrying ``options``, for ``environment``.
+
+    With ``fields``, the board is first set up the way the operator sets up the live one —
+    `just plans sources fields followups --apply`, the command `AGENTS.md` names — which
+    creates the `Priority` field from the source's `priority_mapping`.
+    """
     with _serving_board(options=options, number=FOLLOWUPS_PROJECT_NUMBER) as remote:
         environment.update(remote)
         environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = (
             "0"
         )
+        if fields:
+            set_up = _followups_command(
+                environment,
+                ["just", "plans", "sources", "fields", follow_up_tickets.BOARD, "--apply"],
+            )
+            assert set_up.returncode == 0, set_up.stdout + set_up.stderr
+            # Read back through the same verb's read-only plan, as the operator checks it.
+            planned = _followups_command(
+                environment,
+                [str(ONETASKGRAPH_BIN), "sources", "fields", follow_up_tickets.BOARD, "--json"],
+            )
+            assert planned.returncode == 0, planned.stdout + planned.stderr
+            (priority,) = [
+                field
+                for field in json.loads(planned.stdout)["fields"]
+                if field["field"] == "Priority"
+            ]
+            assert (priority["exists"], priority["missing"]) == (True, []), priority
+            assert [option["name"] for option in priority["existing"]] == [
+                "Urgent",
+                "High",
+                "Medium",
+                "Low",
+            ], "the field setup did not create the Priority field the source maps"
         yield
 
 
@@ -2599,7 +2833,10 @@ def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_de
     environment, drafts_root = _followups_environment(tmp_path)
     ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
 
-    with _serving_followups(environment):
+    with _serving_followups(environment, fields=True):
+        # `board-status` before every copy, as the task sequences them: it writes the
+        # estimate and the priority the copy carries.
+        assert _board_status(environment, ticket).returncode == 0
         first = _copied_ticket(environment, "--json")
         assert first.returncode == 0, first.stdout + first.stderr
         assert _status_writes(_GitHubFixture.requests) == [{"singleSelectOptionId": PROPOSAL.id}]
@@ -2624,6 +2861,8 @@ def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_de
                 "A later run hit it again.",
             ),
         )
+        # The ticket rewritten with the new evidence is decided again before its copy.
+        assert _board_status(environment, ticket).stdout == decided.stdout
         already = len(_GitHubFixture.requests)
         again = _copied_ticket(environment, "--json")
         recopied = _GitHubFixture.requests[already:]
@@ -2641,6 +2880,259 @@ def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_de
         f"a re-copy of a deferred ticket has to keep the {DEFERRED.name!r} option; it wrote "
         f"{written}"
     )
+
+
+def _follow_up_module(
+    environment: dict[str, str], *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """One of this checkout's follow-up ticket commands, run as the composed task runs it."""
+    return _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
+        + list(arguments),
+    )
+
+
+def _followups_item(environment: dict[str, str], qualified: str) -> dict[str, object]:
+    """One `followups` item as the installed store reads it back: `task show`."""
+    shown = _followups_command(
+        environment, [str(ONETASKGRAPH_BIN), "task", "show", qualified, "--json"]
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    (read,) = json.loads(shown.stdout)["items"]
+    item = read["item"]
+    assert isinstance(item, dict), item
+    return item
+
+
+def _estimate_record(item: dict[str, object]) -> dict[str, object]:
+    metadata = item["metadata"]
+    assert isinstance(metadata, dict), item
+    record = metadata[follow_up_tickets.KEY]
+    assert isinstance(record, dict), metadata
+    return record
+
+
+def _estimate_line_of(item: dict[str, object]) -> str:
+    content = item["content"]
+    assert isinstance(content, str), item
+    (line,) = re.findall(r"^- Priority estimate:[^\n]*$", content, flags=re.MULTILINE)
+    return line
+
+
+def _decided_and_copied(environment: dict[str, str], ticket: Path) -> str:
+    """`board-status`, `validate` and the follow-up `copy`, as the task sequences them: the id."""
+    decided = _board_status(environment, ticket)
+    assert decided.returncode == 0, decided.stderr
+    validated = _follow_up_module(environment, "validate", str(ticket))
+    assert validated.returncode == 0, validated.stdout + validated.stderr
+    copied = _follow_up_module(environment, "copy", "--board", follow_up_tickets.BOARD, str(ticket))
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    return str(json.loads(copied.stdout)["destination"])
+
+
+def _priority_writes(requests: list[_GraphQLRequest], item_id: object = None) -> list[object]:
+    """Every write of the `Priority` field among ``requests``, to ``item_id`` when named."""
+    selected = [
+        request.input_value("value")
+        for request in _sent(_Operation.UPDATE_FIELD, requests)
+        if request.input_value("fieldId") == _BoardField.PRIORITY
+        and item_id in (None, request.input_value("itemId"))
+    ]
+    cleared = [
+        None
+        for request in _sent(_Operation.CLEAR_FIELD, requests)
+        if item_id in (None, request.input_value("itemId"))
+    ]
+    return selected + cleared
+
+
+def test_a_follow_up_copy_carries_the_decided_priority_onto_the_boards_priority_field(
+    tmp_path: Path,
+) -> None:
+    """`board-status` decides the ticket's priority, and the follow-up `copy` writes it there.
+
+    A consistent root cause at `medium` with the workaround estimates at `high`; a ticket the
+    board holds no item for takes its estimate, so the copy selects the `High` option.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    consistent = follow_up_tickets.Frequency.CONSISTENT
+    ticket = _written_ticket(
+        drafts_root, _follow_up_ticket(SIBLING_REPOSITORY, frequency=consistent)
+    )
+
+    with _serving_followups(environment, fields=True):
+        destination = _decided_and_copied(environment, ticket)
+        shown = _followups_item(environment, destination)
+
+    assert shown["priority"] == "high"
+    assert _estimate_record(shown)[follow_up_tickets.ESTIMATE_FIELD] == "high"
+    assert _estimate_line_of(shown) == follow_up_tickets.estimate_line(
+        follow_up_tickets.Severity.MEDIUM, consistent, 1
+    )
+
+
+#: The run whose evidence comment reaches the tickets below, and the root cause of the second.
+LATER_RUN = "a-later-run"
+HELD_CAUSE = "a-priority-a-person-holds"
+
+
+def _commented(environment: dict[str, str], qualified: str, body: str, scratch: Path) -> str:
+    """Post ``body`` on ``qualified`` through the store's own verb, as a run posts one: its id."""
+    scratch.write_text(body, encoding="utf-8")
+    added = _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN), "task", "comment", "add", qualified]
+        + ["--body-file", str(scratch), "--json"],
+    )
+    assert added.returncode == 0, added.stdout + added.stderr
+    return str(json.loads(added.stdout)["id"])
+
+
+def _re_estimated(environment: dict[str, str], qualified: str) -> dict[str, object]:
+    ran = _follow_up_module(
+        environment, "re-estimate", "--board", follow_up_tickets.BOARD, qualified
+    )
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    printed = json.loads(ran.stdout)
+    assert isinstance(printed, dict), printed
+    return printed
+
+
+def test_a_re_estimate_after_evidence_and_after_a_confirming_reply_reads_back_through_the_store(
+    tmp_path: Path,
+) -> None:
+    """The GitHub Projects half of the narrow re-estimate, read back through `task show`.
+
+    Record and content share one issue body there, so what is held is what the store reports:
+    after a later run's evidence comment and its re-estimate, and again after a confirming
+    reply and its re-estimate, each ticket's stored estimate is the recount's, its visible
+    estimate line states that level and count, the rest of its content is as it was, and its
+    status never moves. The first ticket's priority follows the estimate; the second's, which a
+    person set through `task priority set`, is never written, while its estimate still moves.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    medium = follow_up_tickets.Severity.MEDIUM
+    intermittent = follow_up_tickets.Frequency.INTERMITTENT
+    scratch = tmp_path / "comment.md"
+    following_ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+    held_ticket = _written_ticket(
+        drafts_root, _follow_up_ticket(SIBLING_REPOSITORY, cause=HELD_CAUSE)
+    )
+
+    with _serving_followups(environment, fields=True):
+        following = _decided_and_copied(environment, following_ticket)
+        held = _decided_and_copied(environment, held_ticket)
+        set_by_a_person = _followups_command(
+            environment, [str(ONETASKGRAPH_BIN), "task", "priority", "set", held, "low", "--json"]
+        )
+        assert set_by_a_person.returncode == 0, set_by_a_person.stdout + set_by_a_person.stderr
+        # llmlint: ignore-block[tests_mirror_real_usage] "No priority write was made" is a
+        # property of the wire alone: a rewrite of the same value reads back through `task show`
+        # exactly as no write does, so the held row's id and the requests GitHub received are the
+        # only place the property is observable. Every read of the item's state is `task show`.
+        (held_row,) = [issue for issue in BOARD.created if issue.title.endswith("person holds")]
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        causes = {following: PROPOSED_CAUSE, held: HELD_CAUSE}
+        before = {item: _followups_item(environment, item) for item in causes}
+        readings: list[dict[str, dict[str, object]]] = []
+        # A later run's evidence comment, then a comment-handling run's reply to a person's
+        # comment it judged confirming, each followed by the re-estimate the task prescribes.
+        for step in ("evidence", "reply"):
+            # llmlint: ignore-block[tests_mirror_real_usage] Where this step's requests begin in
+            # the log, for the no-write read below; the reason is the held row's, above.
+            already = len(_GitHubFixture.requests)
+            # llmlint: ignore-end[tests_mirror_real_usage]
+            for item, cause in causes.items():
+                if step == "evidence":
+                    body = follow_up_tickets.render_comment(LATER_RUN, cause, "Seen again.")
+                else:
+                    asked = _commented(environment, item, "I hit this too.\n", scratch)
+                    body = follow_up_tickets.render_reply(
+                        PROPOSED_RUN,
+                        cause,
+                        answers=asked,
+                        url="https://example.invalid/c",
+                        author=None,
+                        response="It confirms the root cause.",
+                        verdict=follow_up_tickets.Verdict.CONFIRMS,
+                    )
+                _commented(environment, item, body, scratch)
+                _re_estimated(environment, item)
+            # llmlint: ignore-block[tests_mirror_real_usage] The no-write half of the property
+            # above, read where it is observable; the held priority itself is read back below.
+            written = _GitHubFixture.requests[already:]
+            assert _priority_writes(written, held_row.item_id) == [], "a person's priority moved"
+            # llmlint: ignore-end[tests_mirror_real_usage]
+            readings.append({item: _followups_item(environment, item) for item in causes})
+
+    for occurrences, reading in zip((2, 3), readings, strict=True):
+        estimated = follow_up_tickets.estimate(medium, intermittent, occurrences)
+        line = follow_up_tickets.estimate_line(medium, intermittent, occurrences)
+        for item, after in reading.items():
+            assert _estimate_record(after)[follow_up_tickets.ESTIMATE_FIELD] == estimated
+            assert _estimate_record(after)["schema"] == follow_up_tickets.SCHEMA
+            assert f"- Priority estimate: {estimated} (" in _estimate_line_of(after)
+            assert f"; {occurrences} occurrences;" in _estimate_line_of(after)
+            content = before[item]["content"]
+            assert isinstance(content, str)
+            assert after["content"] == content.replace(_estimate_line_of(before[item]), line)
+            assert after["status"] == before[item]["status"]
+        assert reading[held]["priority"] == "low"
+        assert reading[following]["priority"] == estimated
+    assert readings[-1][following]["priority"] == "high", "the following priority did not rise"
+
+
+@pytest.mark.parametrize(
+    ("refused", "served_before"),
+    [(_Operation.UPDATE_FIELD, 0), (_Operation.UPDATE_ISSUE, 0), (_Operation.UPDATE_ISSUE, 1)],
+    ids=["priority-write-refused", "body-write-refused", "record-write-refused"],
+)
+def test_a_re_estimate_refused_part_way_is_retried_into_a_following_priority(
+    tmp_path: Path, refused: _Operation, served_before: int
+) -> None:
+    """A re-estimate GitHub refuses between its writes leaves a retry able to finish it.
+
+    The stored estimate is what the next re-estimate compares the board's priority to, so a
+    refusal that left a new estimate stored beside the old priority would read that priority
+    as a person's from then on and never raise it. Whichever write is refused — the priority,
+    the content carrying the estimate line, or the record after that content was written (both
+    are the issue's body there, so the record's is the second body write) — the retry leaves
+    the following priority at the recount's estimate, with its record and its visible line
+    agreeing.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    medium = follow_up_tickets.Severity.MEDIUM
+    intermittent = follow_up_tickets.Frequency.INTERMITTENT
+    scratch = tmp_path / "comment.md"
+    ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+
+    with _serving_followups(environment, fields=True):
+        item = _decided_and_copied(environment, ticket)
+        assert _followups_item(environment, item)["priority"] == "medium"
+        for run in (LATER_RUN, "a-third-run"):
+            body = follow_up_tickets.render_comment(run, PROPOSED_CAUSE, "Seen again.")
+            _commented(environment, item, body, scratch)
+        # llmlint: ignore-block[tests_mirror_real_usage] GitHub refusing one write between two
+        # it accepted is a failure of the remote, which no verb of the store can ask for; the
+        # loopback board is the one place it can be induced. The re-estimate that meets it and
+        # the retry after it are the real subcommand, read back through `task show`.
+        _GitHubFixture.refused_operation = refused
+        _GitHubFixture.refused_after = served_before
+        failed = _follow_up_module(
+            environment, "re-estimate", "--board", follow_up_tickets.BOARD, item
+        )
+        _GitHubFixture.refused_operation = None
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        assert failed.returncode != 0, failed.stdout + failed.stderr
+        _re_estimated(environment, item)
+        after = _followups_item(environment, item)
+
+    estimated = follow_up_tickets.estimate(medium, intermittent, 3)
+    assert estimated == "high"
+    assert after["priority"] == estimated, "the retry read a following priority as a person's"
+    assert _estimate_record(after)[follow_up_tickets.ESTIMATE_FIELD] == estimated
+    assert _estimate_line_of(after) == follow_up_tickets.estimate_line(medium, intermittent, 3)
 
 
 #: The qualified id of the plan node standing in for the deliverer that claimed the ticket.
@@ -2683,7 +3175,10 @@ def test_a_queued_followups_item_reads_back_claimed_and_a_re_copy_keeps_it_queue
     environment, drafts_root = _followups_environment(tmp_path)
     ticket = _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
 
-    with _serving_followups(environment):
+    with _serving_followups(environment, fields=True):
+        # `board-status` before every copy, as the task sequences them: it writes the
+        # estimate and the priority the copy carries.
+        assert _board_status(environment, ticket).returncode == 0
         first = _copied_ticket(environment, "--json")
         assert first.returncode == 0, first.stdout + first.stderr
         (entry,) = json.loads(first.stdout)["items"]
@@ -2707,6 +3202,8 @@ def test_a_queued_followups_item_reads_back_claimed_and_a_re_copy_keeps_it_queue
                 "A later run hit it again.",
             ),
         )
+        # The ticket rewritten with the new evidence is decided again before its copy.
+        assert _board_status(environment, ticket).stdout == decided.stdout
         before = _followups_items(environment)
         again = _copied_ticket(environment, "--json")
         kept = _read_item(environment, str(entry["destination"]))

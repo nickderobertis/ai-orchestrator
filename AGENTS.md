@@ -521,11 +521,12 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
-**A `Status` option is added to either board through the plan-store verb, never by a
-hand-written mutation.** Read the plan with `just plans sources status-options <source>`,
-which writes nothing, then add only what it names with `just plans sources
-status-options <source> --apply`. A hand-written `updateProjectV2Field` mutation re-mints
-every option id, which clears every item's status.
+**A board field — a `Status` option, or the `Priority` field a source's
+`priority_mapping` names — is set up through the plan-store verb, never by a
+hand-written mutation.** Read the plan with `just plans sources fields <source>`, which
+writes nothing, then add only what it names with `just plans sources fields <source>
+--apply`. A hand-written `updateProjectV2Field` mutation re-mints every option id, which
+clears every item's status.
 
 <!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
 **It is not authored there.** A plan is drafted in the `authoring` source — the
@@ -976,6 +977,22 @@ else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and ne
 closed one.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+
+<!-- llmlint: ignore-block[instruction_layer_localized] The node that added the priority estimate requires this section to state it tersely, because the manager is who briefs follow-up runs and reads the board, and has to tell a person's priority from the estimate's without reading the module; no nested instruction file is one the manager reads, and `tests/test_follow_up_ticket_docs.py` holds every record key named here to `orchestrator/follow_up_tickets.py`. -->
+**A ticket's priority is estimated from its facts, and a person's override stands.** A
+follow-up agent records facts and never a priority: the `## Impact` severity with the
+workaround, and whether the root cause fires consistently as the record's `frequency`. The
+estimate is that severity one level for one level, raised one level, capped at urgent, when
+it fires consistently or has 3 or more occurrences — the ticket's own evidence, plus each
+other run's evidence comment and each reply marked as confirming, recounted off the issue's
+comments every time and stored nowhere. `board-status` writes it before every copy, as the
+record's `priority_estimate`, the `## Impact` estimate line and the ticket's priority; a run
+that comments on another run's issue, or replies confirming one, runs `re-estimate` on it.
+The item's priority follows the estimate only while the board holds the estimate its record
+stored, or none for a record without one, so a person's priority is never rewritten, and
+setting it back to the estimate hands it back. `check-dispositions` and `check-responses`
+hold the board to the recount.
+<!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 **A brief for a run that works accepted tickets has each node's task record name its
 ticket** in the store's `delivers` field, as a qualified `followups:<native-id>`, one

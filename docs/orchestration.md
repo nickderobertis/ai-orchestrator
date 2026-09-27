@@ -1851,6 +1851,20 @@ the record's keys and the board's options are stated in `orchestrator/follow_up_
 and `onetaskgraph.yaml` alone, and `tests/test_follow_up_ticket_docs.py` holds this
 paragraph to them.
 
+**A ticket's priority is estimated from its facts, and a person's override stands.** A
+follow-up agent records facts and never a priority: the `## Impact` severity with the
+workaround, and whether the root cause fires consistently as the record's `frequency`. The
+estimate is that severity one level for one level, raised one level, capped at urgent, when
+it fires consistently or has 3 or more occurrences — the ticket's own evidence, plus each
+other run's evidence comment and each reply marked as confirming, recounted off the issue's
+comments every time and stored nowhere. `board-status` writes it before every copy, as the
+record's `priority_estimate`, the `## Impact` estimate line and the ticket's priority; a run
+that comments on another run's issue, or replies confirming one, runs `re-estimate` on it.
+The item's priority follows the estimate only while the board holds the estimate its record
+stored, or none for a record without one, so a person's priority is never rewritten, and
+setting it back to the estimate hands it back. `check-dispositions` and `check-responses`
+hold the board to the recount.
+
 **A person may defer a ticket instead of accepting it.** The store word `draft` is written
 to the board's `Deferred` option: a deferred ticket is not accepted and no agent picks it
 up, but a later run verifying the same root cause still comments on it, a re-copy keeps it

@@ -53,10 +53,17 @@ For each comment quoted below, in the order it is quoted:
 
    When any of those refuses, copy nothing for that ticket, keep what it printed for your
    report and for the account, and go on to the next comment.
-2. **Post its one reply**, naming the comment's id, as those rules state. Keep the id the
-   store prints for it.
-3. **Record it** in the account at `@RESPONSES@`, to the shape under "The account of every
-   comment" below.
+2. **Judge whether it confirms the root cause, and post its one reply**, naming the
+   comment's id and carrying that verdict in its marker, as those rules state: `confirms`
+   when the comment is a new sighting of the issue's root cause or evidence that it is more
+   prevalent, `does-not-confirm` otherwise. Keep the id the store prints for it.
+3. **After every `confirms` reply, re-estimate the issue it sits on** with
+   `@RE_ESTIMATE@ --board @BOARD@ <the issue's id>`: the confirmation is one more
+   occurrence, and that command recounts them, stores the estimate and rewrites the
+   estimate line. It moves the issue's priority only where the board still holds the
+   estimate, so a priority a person set stays.
+4. **Record it** in the account at `@RESPONSES@`, with its verdict, to the shape under "The
+   account of every comment" below.
 
 Then run `@CHECK_RESPONSES@` and correct the account until it reports it sound.
 
@@ -78,7 +85,9 @@ verification dispatch's, not this one's.
 
 - `@CHECK_RESPONSES@` reports the account at `@RESPONSES@` sound: every comment quoted
   below carries exactly one response, in the order it is quoted, naming the issue the
-  comment is quoted on, and the board holds a reply of run `@RUN@` answering it. Run it
+  comment is quoted on and its verdict, the board holds a reply of run `@RUN@` answering it
+  whose marker carries that verdict, and every issue a `confirms` reply sits on stores the
+  estimate its comments recount to. Run it
   last, after the final reply is posted and the final edit to that account, because a run
   of it from before either says nothing about what you leave.
 - No issue, comment or ticket that no comment below names was created, edited, copied or

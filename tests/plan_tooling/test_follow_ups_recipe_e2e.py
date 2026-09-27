@@ -233,6 +233,10 @@ FEEDBACK = "Tighten the cursor ticket's examples & keep @RUN@ and @TICKET_CONTRA
 #: How long a detached run's one turn is held in flight, so the run is still being driven
 #: when the next command asks. Far longer than the launch may take to return.
 HOLD_SECONDS = 300
+#: The priority a person sets the earlier run's issue to, which no estimate may rewrite.
+HELD_PRIORITY = tickets.Priority.URGENT.value
+#: The two later runs that find the main run's new root cause again, one after the other.
+LATER_RUNS = ("fu-later-one", "fu-later-two")
 
 #: What `just follow-ups` exits with: a launch that settled with sound tickets, a ticket
 #: that failed the shape, and a refusal before anything was launched.
@@ -404,6 +408,8 @@ def _ticket(
     root_cause_note: str = "",
     suggested_fix: str | None = None,
     repository: str = REPOSITORY,
+    frequency: tickets.Frequency | None = tickets.Frequency.INTERMITTENT,
+    estimated: bool = False,
 ) -> tickets.Ticket:
     """A `backlog` ticket, naming ``host`` in its record and in its `## Evidence` section.
 
@@ -413,8 +419,14 @@ def _ticket(
     that section's severity with no workaround and with it, ``root_cause_note`` is what
     `## Root cause` says once an accepted fix narrowed where the cause bites, and
     ``suggested_fix`` the one fix `## Suggested fix` states in place of the plain one. The
-    ticket is of ``repository``, its title and its basis alike.
+    ticket is of ``repository``, its title and its basis alike. ``frequency`` is the agent's
+    judgment of whether the root cause fires consistently. The estimate, its line and the
+    priority are `board-status`'s to write, so a ticket an agent writes carries none;
+    ``estimated`` writes them as `board-status` would for one occurrence, which is what an
+    item an earlier run copied onto the board carries.
     """
+    line = tickets.estimate_line(severity[1], frequency, 1) + "\n" if estimated else ""
+    level = tickets.estimate(severity[1], frequency, 1) if estimated else None
     return tickets.Ticket(
         title=title,
         status=tickets.Status.PROPOSED,
@@ -436,6 +448,7 @@ def _ticket(
                     "readers request the last page by its number",
                     severity[1],
                 )
+                + line
                 if heading == tickets.IMPACT
                 else (
                     suggested_fix
@@ -453,6 +466,9 @@ def _ticket(
             for heading in tickets.HEADINGS
         ),
         depends_on=tuple(tickets.QualifiedBoardId(held) for held in depends_on),
+        priority_estimate=level,
+        frequency=frequency,
+        priority=tickets.Priority.NONE if level is None else level,
     )
 
 
@@ -481,6 +497,7 @@ def _board_item(
         f"{tickets.repository_name(repository)}: {cause}",
         fix,
         repository=repository,
+        estimated=True,
     )
     path = tickets.ticket_path(bench.drafts_root, run, cause)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -626,6 +643,26 @@ def _decided_and_copied(python: str, ticket: Path, *extra: str) -> list[str]:
     ]
 
 
+def _estimated_and_validated(python: str, *written: Path) -> list[str]:
+    """The task's step validating each ticket: `board-status`, which writes the estimate, then
+    `validate`, which refuses a ticket until it is sound."""
+    module = f"{python} -m orchestrator.follow_up_tickets"
+    lines = [f"set -euo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"]
+    for ticket in written:
+        lines.append(
+            f"{module} board-status --board {BOARD} {shlex.quote(str(ticket))} > /dev/null\n"
+            f"{module} validate {shlex.quote(str(ticket))}\n"
+        )
+    return ["bash", "-c", "".join(lines)]
+
+
+def _re_estimate(python: str, issue: str) -> list[str]:
+    """The re-estimate the task prescribes after each evidence comment on another run's issue."""
+    return _from_checkout(
+        python, "-m", "orchestrator.follow_up_tickets", "re-estimate", "--board", BOARD, issue
+    )
+
+
 def _refused_shapes(python: str, witness: Path, shaped: dict[str, Path]) -> list[str]:
     """The agent's commands over the three shapes the tooling refuses, and their removal.
 
@@ -677,6 +714,41 @@ def _refused_then_kept(python: str, witness: Path, ticket: Path) -> list[str]:
         f'  echo "refused $?" >> {quoted}\n'
         f"fi\n",
     ]
+
+
+def _record(item: dict[str, object]) -> dict[str, object]:
+    """The `orchestrator.follow-up` record an item carries."""
+    metadata = item["metadata"]
+    assert isinstance(metadata, dict), item
+    record = metadata[tickets.KEY]
+    assert isinstance(record, dict), metadata
+    return record
+
+
+def _metadata_but_the_record(item: dict[str, object]) -> dict[str, object]:
+    metadata = item["metadata"]
+    assert isinstance(metadata, dict), item
+    return {key: value for key, value in metadata.items() if key != tickets.KEY}
+
+
+def _estimate_line(item: dict[str, object]) -> str:
+    """The one `## Impact` estimate line an item's content carries."""
+    content = item["content"]
+    assert isinstance(content, str), item
+    (line,) = re.findall(r"^- Priority estimate:[^\n]*$", content, flags=re.MULTILINE)
+    return line
+
+
+def _with_first_estimate(body: str) -> str:
+    """``body`` as `board-status` writes it for a `medium`, intermittent, first occurrence.
+
+    What a ticket the agent wrote with :data:`FULL_SEVERITY` reaches the board as, its host
+    read from `hostname`.
+    """
+    medium, intermittent = tickets.Severity.MEDIUM, tickets.Frequency.INTERMITTENT
+    return tickets.with_estimate_line(
+        body.replace(READ_FROM_HOSTNAME, HOST), tickets.estimate_line(medium, intermittent, 1)
+    )
 
 
 def _category(item: dict[str, object]) -> object:
@@ -879,6 +951,9 @@ class Followed(NamedTuple):
     duplicate_after_second: dict[str, object]
     duplicate_comments_after_second: list[dict[str, object]]
     new_ticket_after_second: str
+    later_passes: list[Pass]
+    later_after: list[dict[str, object]]
+    new_ticket_after_later: str
     edited_body: str
     edited_comment: str
     unsound: subprocess.CompletedProcess[str]
@@ -1000,6 +1075,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             "some-service: the sweep trailer omits a family it never examined",
             "Filed by the earlier run",
             HOST,
+            estimated=True,
         )
         earlier_path = tickets.ticket_path(bench.drafts_root, other, SHARED_CAUSE)
         earlier_path.parent.mkdir(parents=True)
@@ -1011,6 +1087,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         other_issue = f"{BOARD}:{other}/tickets/{SHARED_CAUSE}"
         # A person deferred the earlier run's ticket: it is still open, and takes evidence.
         _moved(bench, other_issue, tickets.Status.DEFERRED.value)
+        # And set its priority by hand, which no later estimate may rewrite.
+        _store(bench, "task", "priority", "set", other_issue, HELD_PRIORITY)
         other_before = _item(bench, other_issue)
         # Three items of other root causes, as the board reports them: two a person
         # accepted, whose fixes bear on this run's drafts, and one still a proposal.
@@ -1101,6 +1179,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     (_draft_id(main, new_draft),),
                     f"some-service: {REFUSED_RELATED_KIND}",
                     "Refused",
+                    estimated=True,
                     depends_on=(narrowing_item,),
                     impact_note=ASSUMED,
                 )
@@ -1112,6 +1191,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     (_draft_id(main, new_draft),),
                     f"some-service: {REFUSED_TWO_SOURCES}",
                     "Refused",
+                    estimated=True,
                     depends_on=(narrowing_item, f"elsewhere:{other}/tickets/{NARROWING_CAUSE}"),
                     impact_note=ASSUMED,
                 )
@@ -1123,6 +1203,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     (_draft_id(main, new_draft),),
                     f"some-service: {REFUSED_URL_ABSENT}",
                     "Refused",
+                    estimated=True,
                     depends_on=(narrowing_item,),
                 )
             ),
@@ -1138,7 +1219,6 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12`."
         )
-        validate = [python, "-m", "orchestrator.follow_up_tickets", "validate"]
         _script(
             bench,
             main,
@@ -1192,7 +1272,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
                 _placed(_staged(bench, "related.md", tickets.render(related)), related_ticket),
-                [*validate, str(new_ticket), str(shared_ticket), str(related_ticket)],
+                _estimated_and_validated(python, new_ticket, shared_ticket, related_ticket),
                 # The draft the accepted removing fix evaporates: no ticket, the draft gone.
                 ["rm", str(evaporated_draft)],
                 # The three refused shapes, written, refused, and removed.
@@ -1217,6 +1297,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--body-file",
                     str(_staged(bench, "comment.md", comment)),
                 ),
+                # The re-estimate the task prescribes after every evidence comment.
+                _re_estimate(python, other_issue),
                 # Where the turn runs its commands, written down there by the programs
                 # themselves: `pwd` says which directory, git whether a repository holds it.
                 ["sh", "-c", f"pwd -P > {TURN_DIRECTORY_WITNESS}"],
@@ -1382,6 +1464,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 _decided_and_copied(python, related_ticket, "--withdraw"),
                 _decided_and_copied(python, new_ticket),
                 ["bash", "-c", edit],
+                _re_estimate(python, other_issue),
             ],
         )
         second = _pass(bench, "second", main, "--feedback", str(feedback))
@@ -1398,6 +1481,63 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         duplicate_after_second = _item(bench, duplicate_issue)
         duplicate_comments_after_second = _comments(bench, duplicate_issue)
         new_ticket_after_second = new_ticket.read_text(encoding="utf-8")
+
+        # Two later runs find the new ticket's root cause again. Each files its evidence as a
+        # comment on the main run's open item — its own ticket stays local, since that item
+        # already carries the root cause — and re-estimates the item, as its task prescribes.
+        # The main run copies nothing in between.
+        later_passes: list[Pass] = []
+        later_after: list[dict[str, object]] = []
+        for at, name in enumerate(LATER_RUNS):
+            later = f"{name}-{pid}"
+            later_draft = _draft(bench, later, "The listing cursor skips the last page")
+            later_ticket = tickets.ticket_path(bench.drafts_root, later, NEW_CAUSE)
+            found_again = _ticket(
+                later, NEW_CAUSE, (_draft_id(later, later_draft),), title, "Seen again"
+            )
+            later_comment = tickets.render_comment(later, NEW_CAUSE, f"Run {later} hit it too.")
+            _script(
+                bench,
+                later,
+                [
+                    ["mkdir", "-p", str(later_ticket.parent)],
+                    _placed(
+                        _staged(bench, f"later-{at}.md", tickets.render(found_again)), later_ticket
+                    ),
+                    _estimated_and_validated(python, later_ticket),
+                    ["rm", str(later_draft)],
+                    _from_checkout(
+                        store,
+                        "task",
+                        "comment",
+                        "add",
+                        new_issue,
+                        "--body-file",
+                        str(_staged(bench, f"later-{at}-comment.md", later_comment)),
+                    ),
+                    _re_estimate(python, new_issue),
+                    _accounting(
+                        bench,
+                        python,
+                        later,
+                        [
+                            _disposed(
+                                later_draft,
+                                later,
+                                tickets.Disposition.FILED,
+                                (NEW_CAUSE,),
+                                "The main run's open issue took this run's evidence.",
+                            )
+                        ],
+                        name=f"later-{at}-account.py",
+                    ),
+                ],
+            )
+            later_pass = _pass(bench, f"later-{at}", later)
+            started.append(later_pass.run)
+            later_passes.append(later_pass)
+            later_after.append(_item(bench, new_issue))
+        new_ticket_after_later = new_ticket.read_text(encoding="utf-8")
 
         # A run whose agent leaves a ticket that fails the shape, unvalidated.
         unsound_run = f"fu-unsound-{pid}"
@@ -1623,6 +1763,9 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             duplicate_after_second=duplicate_after_second,
             duplicate_comments_after_second=duplicate_comments_after_second,
             new_ticket_after_second=new_ticket_after_second,
+            later_passes=later_passes,
+            later_after=later_after,
+            new_ticket_after_later=new_ticket_after_later,
             edited_body=edited.body,
             edited_comment=edited_comment,
             unsound=unsound,
@@ -1638,7 +1781,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             legacy_before=legacy_before,
             legacy_local=legacy_local,
             legacy_after=legacy_after,
-            legacy_body=rewritten.body.replace(READ_FROM_HOSTNAME, HOST),
+            legacy_body=_with_first_estimate(rewritten.body),
             rewritten_ticket=rewritten_ticket,
             left_ticket=left_ticket,
             detached=detached,
@@ -1685,7 +1828,12 @@ def test_a_consumed_runs_incomplete_account_is_refused_even_without_remaining_dr
     missing = f"drafts:{run}/drafts/consumed"
     account.write_text(
         json.dumps(
-            {"schema": tickets.ARTIFACT_SCHEMA, "run": run, "drafts": [missing], "dispositions": []}
+            {
+                "schema": tickets.DISPOSITIONS_SCHEMA,
+                "run": run,
+                "drafts": [missing],
+                "dispositions": [],
+            }
         ),
         encoding="utf-8",
     )
@@ -1721,7 +1869,7 @@ def test_a_consumed_runs_account_disposing_of_a_draft_twice_is_refused_naming_it
     account.write_text(
         json.dumps(
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.DISPOSITIONS_SCHEMA,
                 "run": run,
                 "drafts": [twice],
                 "dispositions": [entry, {**entry, "disposition": "too-low-impact"}],
@@ -1754,7 +1902,7 @@ def test_a_consumed_runs_complete_account_exits_without_launching(
     account.write_text(
         json.dumps(
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.DISPOSITIONS_SCHEMA,
                 "run": run,
                 "drafts": [missing],
                 "dispositions": [
@@ -1802,7 +1950,7 @@ def test_a_retry_refuses_a_malformed_existing_account_without_rewriting_it(
     account = tickets.dispositions_path(followed.bench.drafts_root, run)
     account.parent.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {
-        "schema": tickets.ARTIFACT_SCHEMA,
+        "schema": tickets.DISPOSITIONS_SCHEMA,
         "run": run,
         "dispositions": None if kind == "null" else [{"draft": _draft_id(run, draft)}],
     }
@@ -1845,7 +1993,7 @@ def test_a_retry_keeps_consumed_drafts_in_its_input_set_as_new_drafts_arrive(
     account.write_text(
         json.dumps(
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.DISPOSITIONS_SCHEMA,
                 "run": run,
                 "drafts": [old_id],
                 "dispositions": [prior],
@@ -1907,7 +2055,14 @@ def test_a_filed_account_with_only_a_local_ticket_is_refused_after_the_dispatch(
     cause = "ticket-left-local"
     ticket = tickets.ticket_path(bench.drafts_root, run, cause)
     rendered = tickets.render(
-        _ticket(run, cause, (_draft_id(run, draft),), "some-service: ticket left local", "Local")
+        _ticket(
+            run,
+            cause,
+            (_draft_id(run, draft),),
+            "some-service: ticket left local",
+            "Local",
+            estimated=True,
+        )
     )
     _script(
         bench,
@@ -2078,6 +2233,8 @@ def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
         f"{written} board-items",
         "--copy",
         f"{written} copy",
+        "--re-estimate",
+        f"{written} re-estimate",
         "--checkout",
         str(REPO_ROOT),
         "--plan-store",
@@ -2362,6 +2519,11 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
         "every finding that should have been surfaced live",
         "**Decide each ticket's status from the board, before every copy.**",
         f"-m orchestrator.follow_up_tickets board-status --board {BOARD} <path of the ticket>`",
+        "**judge from the original evidence whether the root cause fires consistently**",
+        "record that as the ticket's `frequency`",
+        "the estimate and the priority themselves are never yours to write",
+        "**after every such comment, re-estimate that item**",
+        f"-m orchestrator.follow_up_tickets re-estimate --board {BOARD} <that item's id>`",
         "Run `hostname` on the machine you run on and write exactly what it prints, both as "
         "`host` and in the `## Evidence` section, never a value you type or recall",
     ):
@@ -2376,6 +2538,8 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
     assert listed is not None, task
     copied = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets copy) --board", task)
     assert copied is not None, task
+    estimated = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets re-estimate) --board", task)
+    assert estimated is not None, task
     contract = (
         tickets.ticket_contract(main, BOARD)
         .replace("@DRAFTS_ROOT@", str(root))
@@ -2386,7 +2550,11 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
         .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
     )
     assert contract in task, "the ticket shape is not the one the module renders"
-    ownership = tickets.comment_contract(main, BOARD).replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
+    ownership = (
+        tickets.comment_contract(main, BOARD)
+        .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
+        .replace("@RE_ESTIMATE@", estimated[1])
+    )
     assert ownership in task, "board ownership is not the module's"
     assert task.count(tickets.status_vocabulary()) == 1, "the status vocabulary is not there once"
     assert "## This is a re-dispatch" not in task
@@ -2410,7 +2578,14 @@ def test_a_verified_ticket_lands_on_the_board_with_its_shape_its_one_repository_
     metadata = landed["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["onetaskgraph.origin"] == tickets.qualified_id(followed.main, NEW_CAUSE)
-    assert set(metadata[tickets.KEY]) == set(tickets.RECORD_KEYS)
+    assert set(metadata[tickets.KEY]) == {*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD}
+    # Its estimate, read back off the board: the narrowed severity with the workaround, `low`,
+    # an intermittent root cause and its one occurrence; the board held no item, so the
+    # priority is the estimate.
+    low, intermittent = tickets.Severity.LOW, tickets.Frequency.INTERMITTENT
+    assert metadata[tickets.KEY][tickets.ESTIMATE_FIELD] == "low"
+    assert landed["priority"] == "low"
+    assert _estimate_line(landed) == tickets.estimate_line(low, intermittent, 1)
     assert not any(path.exists() for path in followed.consumed), "a consumed draft was left"
     assert f"{BOARD}:{followed.main}/tickets/{SHARED_CAUSE}" not in followed.board_after_first, (
         "a root cause another run already filed was copied onto the board a second time"
@@ -2424,12 +2599,68 @@ def test_another_runs_open_issue_gets_one_marked_comment_and_is_otherwise_untouc
     before, after = followed.other_before, followed.other_after_first
 
     assert _category(before) == tickets.Status.DEFERRED, "the other run's item was not deferred"
-    for field in ("title", "content", "status", "metadata", "project", "repositories"):
+    for field in ("title", "status", "project", "repositories"):
         assert after[field] == before[field], field
+    # The one write this run makes on it: its re-estimate after the comment, which moves its
+    # stored estimate and its estimate line to the two occurrences it now has, and leaves the
+    # priority a person set, the rest of its content and every other metadata key alone.
+    medium, intermittent = tickets.Severity.MEDIUM, tickets.Frequency.INTERMITTENT
+    line = tickets.estimate_line(medium, intermittent, 2)
+    assert after["content"] == str(before["content"]).replace(_estimate_line(before), line)
+    assert _record(after) == _record(before) | {tickets.ESTIMATE_FIELD: "medium"}
+    assert _metadata_but_the_record(after) == _metadata_but_the_record(before)
+    assert before["priority"] == after["priority"] == HELD_PRIORITY
     (comment,) = followed.comments_after_first
     body = str(comment["body"])
     assert body.splitlines()[0] == f"Additional evidence from follow-up run `{followed.main}`."
     assert tickets.comment_owner(body) == tickets.CommentOwner(followed.main, SHARED_CAUSE)
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_two_later_runs_evidence_raises_the_following_priority_of_an_issue_they_do_not_own(
+    followed: Followed,
+) -> None:
+    """Each later run comments on the main run's item and re-estimates it; its owner copies nothing.
+
+    After the first, the item's two occurrences leave an intermittent `medium` at `medium`;
+    after the second, its three raise it to `high`, and the priority, which was following the
+    estimate, rises with it. Read back off the board after the run, with the main run's own
+    ticket exactly as its last copy left it.
+    """
+    for later in followed.later_passes:
+        assert later.result.returncode == OK, later.result.stdout + later.result.stderr
+        (task,) = later.prompts
+        flat = " ".join(task.split())
+        assert "re-estimate that item" in flat and "re-estimate --board" in flat
+    first, second = followed.later_after
+    medium, intermittent = tickets.Severity.MEDIUM, tickets.Frequency.INTERMITTENT
+    before = followed.new_after_second
+    assert before["priority"] == _record(before)[tickets.ESTIMATE_FIELD] == "medium"
+
+    assert _record(first)[tickets.ESTIMATE_FIELD] == "medium"
+    assert _estimate_line(first) == tickets.estimate_line(medium, intermittent, 2)
+    assert first["priority"] == "medium"
+
+    raised = tickets.estimate(medium, intermittent, 3)
+    assert raised == tickets.Priority.HIGH
+    assert _record(second)[tickets.ESTIMATE_FIELD] == raised
+    assert _estimate_line(second) == tickets.estimate_line(medium, intermittent, 3)
+    assert "- Priority estimate: high (" in _estimate_line(second)
+    assert "; 3 occurrences;" in _estimate_line(second)
+    assert second["priority"] == "high", "the priority, which was following, did not rise"
+    assert second["status"] == before["status"]
+    assert second["content"] == str(before["content"]).replace(
+        _estimate_line(before), _estimate_line(second)
+    )
+    assert followed.new_ticket_after_later == followed.new_ticket_after_second, (
+        "the owning run's ticket changed between the later runs"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_adding_any(
@@ -2454,10 +2685,9 @@ def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_add
     assert followed.board_after_second == followed.board_before_second, (
         "a re-dispatch added an item"
     )
-    assert followed.new_after_second["content"] == followed.edited_body.replace(
-        READ_FROM_HOSTNAME, HOST
-    )
+    assert followed.new_after_second["content"] == _with_first_estimate(followed.edited_body)
     assert followed.new_after_second["content"] != followed.new_after_first["content"]
+    assert followed.other_after_second["priority"] == HELD_PRIORITY, "a person's priority moved"
 
 
 def test_a_re_copy_keeps_the_status_a_person_moved_the_board_item_to(
@@ -2478,8 +2708,16 @@ def test_a_re_copy_keeps_the_status_a_person_moved_the_board_item_to(
     (comment,) = followed.comments_after_second
     assert comment["id"] == followed.comments_after_first[0]["id"]
     assert str(comment["body"]).strip() == followed.edited_comment.strip()
-    for field in ("title", "content", "status", "metadata"):
-        assert followed.other_after_second[field] == followed.other_before[field], field
+    # The earlier run's issue moved only in what this run's two re-estimates write, and its
+    # comment's edit counted no second occurrence.
+    other, before = followed.other_after_second, followed.other_before
+    for field in ("title", "status", "priority"):
+        assert other[field] == before[field], field
+    assert _estimate_line(other) == _estimate_line(followed.other_after_first)
+    assert other["content"] == str(before["content"]).replace(
+        _estimate_line(before), _estimate_line(other)
+    )
+    assert _metadata_but_the_record(other) == _metadata_but_the_record(before)
 
 
 def test_an_attached_run_names_every_ticket_that_fails_the_shape(followed: Followed) -> None:
@@ -2548,7 +2786,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 6
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 7
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -2562,7 +2800,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
 
     assert legacy.result.returncode == UNSOUND, legacy.result.stdout + legacy.result.stderr
     assert f"{followed.left_ticket} is not a sound ticket" in legacy.result.stderr
-    assert "the record is schema 4, and this reads schema 6" in legacy.result.stderr
+    assert "the record is schema 4, and this reads schema 7" in legacy.result.stderr
     assert "carries `## Repository` and `## Suggested fixes`" in " ".join(
         legacy.result.stderr.split()
     )
@@ -2908,9 +3146,7 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     assert _severity_lines(impact) == FULL_SEVERITY, "the narrowed severity outlived the entry"
     assert REPLACEMENT_FIX not in edited.body, "the replacement fix outlived the entry"
     assert f"## {tickets.REJECTED_FIXES}" not in edited.body, "the displaced fix outlived the entry"
-    assert followed.new_after_second["content"] == followed.edited_body.replace(
-        READ_FROM_HOSTNAME, HOST
-    )
+    assert followed.new_after_second["content"] == _with_first_estimate(followed.edited_body)
     assert followed.board_after_second == followed.board_before_second
     assert _deps(followed.bench, tickets.qualified_id(followed.main, NEW_CAUSE)) == []
 
@@ -3071,7 +3307,7 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     account.write_text(
         json.dumps(
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.DISPOSITIONS_SCHEMA,
                 "run": "run-1",
                 "drafts": tickets.draft_ids(checkout / ".follow-ups", "run-1"),
                 "dispositions": [

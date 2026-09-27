@@ -191,48 +191,46 @@ def test_the_installed_plan_store_cli_ships_none_of_the_live_crate() -> None:
     )
 
 
-#: The plan-store verb that adds a board's missing `Status` options, and the flag that
-#: turns its read-only plan into the write. Named as literals because they are the
-#: contract the prose and the binary are both held to: the verb preserves every existing
-#: option id where a hand-written `updateProjectV2Field` mutation re-mints them all,
-#: which is what once cleared every item's status on the `followups` board.
+#: The plan-store verb that sets up a board's fields — its missing `Status` options and the
+#: `Priority` field a source's `priority_mapping` names — and the flag that turns its
+#: read-only plan into the write; it supersedes `sources status-options` from 0.2.45. Named
+#: as literals because they are the contract the prose and the binary are both held to:
+#: the verb preserves every existing option id where a hand-written `updateProjectV2Field`
+#: mutation re-mints them all, which is what once cleared every item's status on the
+#: `followups` board.
 #: onetaskgraph https://github.com/nickderobertis/onetaskgraph/issues/1312.
-STATUS_OPTIONS_VERB = ("sources", "status-options")
+FIELDS_VERB = ("sources", "fields")
 APPLY_FLAG = "--apply"
 #: How the manager's document is told to run it: through this repository's plan-store
 #: recipe, which is what establishes the board credential, and with `--apply` only after
 #: the plan a bare invocation prints has been read.
-STATUS_OPTIONS_RECIPE = "just plans " + " ".join(STATUS_OPTIONS_VERB) + " <source>"
+FIELDS_RECIPE = "just plans " + " ".join(FIELDS_VERB) + " <source>"
 
 
 def _paragraphs(name: str) -> list[str]:
     return [_flat(paragraph) for paragraph in _document(name).split("\n\n")]
 
 
-def test_the_manager_states_once_that_a_status_option_is_added_through_the_verb() -> None:
+def test_the_manager_states_once_that_a_board_field_is_set_up_through_the_verb() -> None:
     """One paragraph names the verb, its `--apply` flag, and the mutation it replaces.
 
     Stated once because a second statement is where the two drift apart: the operator
     reads whichever one they found, and a copy that still says to mutate by hand is the
     one that wipes a board.
     """
-    naming = [
-        paragraph
-        for paragraph in _paragraphs(MANAGER)
-        if " ".join(STATUS_OPTIONS_VERB) in paragraph
-    ]
+    naming = [paragraph for paragraph in _paragraphs(MANAGER) if " ".join(FIELDS_VERB) in paragraph]
     assert len(naming) == 1, (
-        f"{MANAGER} has to state how a board Status option is added exactly once, in the "
+        f"{MANAGER} has to state how a board field is set up exactly once, in the "
         f"paragraph describing the boards; found {len(naming)} paragraphs naming "
-        f"`{' '.join(STATUS_OPTIONS_VERB)}`"
+        f"`{' '.join(FIELDS_VERB)}`"
     )
     (rule,) = naming
-    assert f"`{STATUS_OPTIONS_RECIPE}`" in rule, (
+    assert f"`{FIELDS_RECIPE}`" in rule, (
         f"{MANAGER} has to send an operator through the plan-store recipe, as "
-        f"`{STATUS_OPTIONS_RECIPE}`, so the board credential is established the way every "
+        f"`{FIELDS_RECIPE}`, so the board credential is established the way every "
         "other board read establishes it"
     )
-    assert f"`{STATUS_OPTIONS_RECIPE} {APPLY_FLAG}`" in rule, (
+    assert f"`{FIELDS_RECIPE} {APPLY_FLAG}`" in rule, (
         f"{MANAGER} has to name the `{APPLY_FLAG}` form as the one that writes, after the "
         "bare invocation's plan has been read"
     )
@@ -242,32 +240,32 @@ def test_the_manager_states_once_that_a_status_option_is_added_through_the_verb(
     )
 
 
-def test_the_installed_plan_store_cli_carries_the_status_options_verb_and_its_apply_flag() -> None:
+def test_the_installed_plan_store_cli_carries_the_fields_verb_and_its_apply_flag() -> None:
     """The verb the rule names, and its `--apply` flag, run on this checkout's own binary.
 
     Read off `--help` rather than off a live board: the rule says nothing a board has to
-    be touched to check, and a `--help` that refuses is exactly what the release before
-    the fix answers (`onetaskgraph sources` had no such subcommand, exit 2).
+    be touched to check, and a `--help` that refuses is exactly what a release
+    before the verb answers (`onetaskgraph sources` had no such subcommand, exit 2).
     """
     assert ONETASKGRAPH_BIN.is_file(), (
         f"this checkout's own onetaskgraph is missing at {ONETASKGRAPH_BIN} — run 'just bootstrap'"
     )
     shown = subprocess.run(
-        [str(ONETASKGRAPH_BIN), *STATUS_OPTIONS_VERB, "--help"],
+        [str(ONETASKGRAPH_BIN), *FIELDS_VERB, "--help"],
         capture_output=True,
         text=True,
         check=False,
     )
     assert shown.returncode == 0, (
-        f"the installed plan-store CLI has no `{' '.join(STATUS_OPTIONS_VERB)}` verb "
-        f"(exit {shown.returncode}): {shown.stderr}\n{MANAGER} tells an operator to add a "
-        "board Status option with it, so the pin has to be on a release that carries it"
+        f"the installed plan-store CLI has no `{' '.join(FIELDS_VERB)}` verb "
+        f"(exit {shown.returncode}): {shown.stderr}\n{MANAGER} tells an operator to set up a "
+        "board field with it, so the pin has to be on a release that carries it"
     )
     options = [
         line.strip().split()[0] for line in shown.stdout.splitlines() if line.startswith("      --")
     ]
     assert APPLY_FLAG in options, (
-        f"`{' '.join(STATUS_OPTIONS_VERB)} --help` lists {options} and no `{APPLY_FLAG}`, "
+        f"`{' '.join(FIELDS_VERB)} --help` lists {options} and no `{APPLY_FLAG}`, "
         f"the flag {MANAGER} names as the one that writes"
     )
 

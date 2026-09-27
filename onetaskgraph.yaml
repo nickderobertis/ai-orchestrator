@@ -79,3 +79,14 @@ sources:
         done: Done
         cancelled: Cancelled
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+      # The one source of the `Priority` options a follow-up ticket's priority is written to,
+      # which `sources fields` creates the live board's field from. Every level is stated,
+      # though each is the shipped default, for the reason `status_mapping` states its
+      # defaults: a default that moved upstream would move this board without a change here
+      # saying so. `tests/test_plan_source_roots.py` holds it to the CLI's resolved config and
+      # its keys to the levels `orchestrator/follow_up_tickets.py` estimates.
+      priority_mapping:
+        urgent: Urgent
+        high: High
+        medium: Medium
+        low: Low

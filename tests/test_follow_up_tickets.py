@@ -58,6 +58,8 @@ def test_board_category_refuses_a_copy_report_naming_no_outcome(
 
 IMPACT_PROSE = "Every reader of a listing misses its last page, and the export built on it too."
 WORKAROUND = "readers request the last page by its number"
+#: The frequency the sound ticket records, which its estimate line states.
+FREQUENCY = tickets.Frequency.INTERMITTENT
 
 
 def _impact(
@@ -66,7 +68,12 @@ def _impact(
     workaround: str = WORKAROUND,
     with_workaround: str = tickets.Severity.MEDIUM,
 ) -> str:
-    return tickets.impact_section(prose, severity, workaround, with_workaround)
+    """An `## Impact` section, closed by the estimate line its facts render where they can."""
+    section = tickets.impact_section(prose, severity, workaround, with_workaround)
+    if with_workaround not in tuple(tickets.Severity):
+        return section
+    estimated = tickets.estimate_line(tickets.Severity(with_workaround), FREQUENCY, 1)
+    return f"{section}{estimated}\n"
 
 
 IMPACT_TEXT = _impact()
@@ -191,6 +198,8 @@ SOUND_TICKET = tickets.Ticket(
     verified_at=tickets.Timestamp("2026-01-01T00:00:00Z"),
     host=tickets.Host(HOST),
     body=BODY,
+    priority_estimate=tickets.Priority.MEDIUM,
+    frequency=FREQUENCY,
 )
 
 
@@ -206,6 +215,7 @@ def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
         "title": held.title,
         "content": held.body,
         "status": {"category": held.status.value, "name": held.status.value},
+        "priority": held.priority.value,
         "labels": [],
         "project": None,
         "repositories": [held.repository],
@@ -229,9 +239,11 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 6
+    assert held["schema"] == tickets.SCHEMA == 7
     keys = list(held)
-    assert keys == list(tickets.RECORD_KEYS)
+    assert keys == [*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD]
+    assert held[tickets.ESTIMATE_FIELD] == "medium"
+    assert held[tickets.FREQUENCY_FIELD] == "intermittent"
     assert keys.index("host") == keys.index("verified_at") + 1
     assert held["host"] == HOST
 
@@ -295,10 +307,65 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 6"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 6"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 6"),
-        (_set_record("schema", 4), "is schema 4, and this reads schema 6"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 7"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 7"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 7"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 7"),
+        (_set_record("schema", 6), "is schema 6, and this reads schema 7"),
+        (_drop_record("priority_estimate"), "record is missing priority_estimate; `priority"),
+        (_set_record("priority_estimate", "critical"), "`priority_estimate` 'critical' is not"),
+        (_set_record("priority_estimate", "none"), "`priority_estimate` 'none' is not one of"),
+        (_set_record("priority_estimate", 2), "`priority_estimate` 2 is not one of"),
+        (_set_record("frequency", "often"), "`frequency` 'often' is not one of"),
+        (_set_record("frequency", True), "`frequency` True is not one of"),
+        (_set("priority", "someday"), "the `priority` is 'someday', which is not one of"),
+        (
+            _set_record("priority_estimate", "high"),
+            "estimate line states `medium`, where the record's `priority_estimate` is `high`",
+        ),
+        (
+            _set_record("frequency", "consistent"),
+            "estimate line states the frequency as 'fires intermittently', where the record's "
+            "`frequency` is 'consistent'",
+        ),
+        (
+            _drop_record("frequency"),
+            "estimate line states the frequency as 'fires intermittently', where the record's "
+            "`frequency` is None",
+        ),
+        (
+            _set("content", BODY.replace("(severity with the workaround medium", "(sev medium")),
+            "`- Priority estimate:` line is not as `board-status` renders it",
+        ),
+        (
+            _set("content", BODY.replace("1 occurrence; not raised", "3 occurrences; not raised")),
+            "`- Priority estimate:` line is not as `board-status` renders it",
+        ),
+        (
+            _set(
+                "content",
+                _body(
+                    impact=tickets.impact_section(
+                        IMPACT_PROSE, tickets.Severity.HIGH, WORKAROUND, tickets.Severity.MEDIUM
+                    )
+                ),
+            ),
+            "carries its `- Priority estimate:` line 0 times, not once; `board-status` writes it",
+        ),
+        (
+            _set(
+                "content",
+                _body(
+                    impact=tickets.impact_section(
+                        IMPACT_PROSE, tickets.Severity.HIGH, WORKAROUND, tickets.Severity.LOW
+                    )
+                    + tickets.estimate_line(tickets.Severity.MEDIUM, FREQUENCY, 1)
+                    + "\n"
+                ),
+            ),
+            "estimate line names the severity with the workaround `medium`, where the section "
+            "states `low`",
+        ),
         (_set_record("schema", True), "is schema True"),
         (_set_record("root_cause", "Not A Slug"), "is not a kebab-case slug"),
         (_set_record("root_cause", "another-cause"), "is not the file's root cause"),
@@ -375,7 +442,7 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 4, and this reads schema 6"), found
+    assert found[0].startswith("the record is schema 4, and this reads schema 7"), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
         "ticket to the current shape" in problem
@@ -410,7 +477,11 @@ def test_a_body_with_one_fix_and_rejected_fixes_once_after_it_or_none_is_sound(b
     ],
 )
 def test_an_impact_section_of_prose_and_one_of_each_line_is_accepted(impact: str) -> None:
-    ticket = _ticket(body=_body(impact=impact))
+    body = _body(impact=impact)
+    with_workaround = tickets.stated_with_workaround(body)
+    assert with_workaround is not None
+    estimated = tickets.estimate(with_workaround, FREQUENCY, 1)
+    ticket = _ticket(body=body, priority_estimate=estimated)
 
     assert tickets.problems(_item(ticket), run=RUN, root_cause=CAUSE) == []
 
@@ -420,8 +491,9 @@ def test_an_impact_section_is_told_every_problem_it_has_at_once() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert len(found) == 4, found
+    assert len(found) == 5, found
     assert "carries no prose before its lines" in found[0]
+    assert "carries its `- Priority estimate:` line 0 times" in found[-1]
 
 
 def test_the_severity_vocabulary_is_ordered_and_means_what_the_contract_states() -> None:
@@ -547,7 +619,7 @@ def test_an_evidence_comment_is_owned_by_the_run_its_last_line_names() -> None:
     assert comment.rstrip("\n").splitlines()[-1] == EVIDENCE_MARKER
     owner = tickets.comment_owner(comment)
     assert owner == tickets.CommentOwner(RUN, CAUSE)
-    assert owner == (RUN, CAUSE, tickets.CommentKind.EVIDENCE, None)
+    assert owner == (RUN, CAUSE, tickets.CommentKind.EVIDENCE, None, None)
     # The store keeps a body with trailing blank lines; the marker is still the last line.
     assert tickets.comment_owner(comment + "\n\n") == tickets.CommentOwner(RUN, CAUSE)
 
@@ -561,19 +633,27 @@ def test_an_evidence_comment_already_on_the_board_still_reads_as_its_runs_eviden
     assert tickets.render_comment(RUN, CAUSE, "Page 9 again.") == written_before
     assert tickets.comment_marker(RUN, CAUSE) == EVIDENCE_MARKER
     assert tickets.comment_owner(written_before) == tickets.CommentOwner(
-        tickets.RunId(RUN), tickets.RootCause(CAUSE), tickets.CommentKind.EVIDENCE, None
+        tickets.RunId(RUN), tickets.RootCause(CAUSE), tickets.CommentKind.EVIDENCE, None, None
     )
 
 
 @pytest.mark.parametrize(
-    ("author", "opening"),
+    ("author", "opening", "verdict"),
     [
-        ("a-reviewer", f"Reply from follow-up run `{RUN}` to @a-reviewer's comment: "),
-        (None, f"Reply from follow-up run `{RUN}` to the comment: "),
+        (
+            "a-reviewer",
+            f"Reply from follow-up run `{RUN}` to @a-reviewer's comment: ",
+            tickets.Verdict.CONFIRMS,
+        ),
+        (
+            None,
+            f"Reply from follow-up run `{RUN}` to the comment: ",
+            tickets.Verdict.DOES_NOT_CONFIRM,
+        ),
     ],
 )
 def test_a_reply_opens_naming_the_comment_and_ends_with_a_marker_naming_its_id(
-    author: str | None, opening: str
+    author: str | None, opening: str, verdict: tickets.Verdict
 ) -> None:
     reply = tickets.render_reply(
         RUN,
@@ -582,22 +662,24 @@ def test_a_reply_opens_naming_the_comment_and_ends_with_a_marker_naming_its_id(
         url=COMMENT_URL,
         author=author,
         response="\nCopied the ticket again with page 9 in its examples.\n",
+        verdict=verdict,
     )
 
     marker = (
         f'<!-- orchestrator:follow-up-comment run="{RUN}" root_cause="{CAUSE}" kind="reply" '
-        f'answers="{COMMENT_ID}" -->'
+        f'answers="{COMMENT_ID}" verdict="{verdict}" -->'
     )
     assert reply == (
         f"{opening}{COMMENT_URL}\n\nCopied the ticket again with page 9 in its examples.\n\n"
         f"{marker}\n"
     )
-    assert tickets.reply_marker(RUN, CAUSE, COMMENT_ID) == marker
+    assert tickets.reply_marker(RUN, CAUSE, COMMENT_ID, verdict) == marker
     assert tickets.comment_owner(reply) == tickets.CommentOwner(
         tickets.RunId(RUN),
         tickets.RootCause(CAUSE),
         tickets.CommentKind.REPLY,
         tickets.CommentId(COMMENT_ID),
+        verdict,
     )
     assert tickets.may_change_comment(RUN, reply)
     assert not tickets.may_change_comment(OTHER_RUN, reply)
@@ -607,7 +689,13 @@ def test_a_reply_opens_naming_the_comment_and_ends_with_a_marker_naming_its_id(
 def test_a_reply_to_an_id_outside_the_grammar_is_refused(answers: str) -> None:
     with pytest.raises(tickets.Refused, match="is not one a reply's marker can carry"):
         tickets.render_reply(
-            RUN, CAUSE, answers=answers, url=COMMENT_URL, author=None, response="Done."
+            RUN,
+            CAUSE,
+            answers=answers,
+            url=COMMENT_URL,
+            author=None,
+            response="Done.",
+            verdict=tickets.Verdict.DOES_NOT_CONFIRM,
         )
 
 
@@ -632,6 +720,10 @@ def _marker(attributes: str) -> str:
         _marker(' answers="c-1"'),
         _marker(' kind="evidence" answers="c-1"'),
         _marker(' answers="c-1" kind="reply"'),
+        _marker(' kind="reply" answers="c-1" verdict="maybe"'),
+        _marker(' kind="reply" answers="c-1" verdict=""'),
+        _marker(' verdict="confirms"'),
+        _marker(' kind="reply" verdict="confirms" answers="c-1"'),
     ],
 )
 def test_a_comment_whose_last_line_is_no_marker_belongs_to_no_run(body: str) -> None:
@@ -657,7 +749,13 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_o
     assert tickets.may_change_comment(RUN, tickets.render_comment(RUN, CAUSE, "x"))
     assert not tickets.may_change_comment(RUN, tickets.render_comment(OTHER_RUN, CAUSE, "x"))
     others_reply = tickets.render_reply(
-        OTHER_RUN, CAUSE, answers=COMMENT_ID, url=COMMENT_URL, author=None, response="x"
+        OTHER_RUN,
+        CAUSE,
+        answers=COMMENT_ID,
+        url=COMMENT_URL,
+        author=None,
+        response="x",
+        verdict=tickets.Verdict.CONFIRMS,
     )
     assert not tickets.may_change_comment(RUN, others_reply)
 
@@ -665,7 +763,7 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_o
 TEMPLATE = (
     "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
     "Decide each status with @BOARD_STATUS@, list the board with @BOARD_ITEMS@, copy with "
-    "@COPY@, and read the store with @PLAN_STORE@.\n"
+    "@COPY@, re-estimate with @RE_ESTIMATE@, and read the store with @PLAN_STORE@.\n"
     "Assume the fixes at @ACCEPTED_STATUSES@, listed with @ACCEPTED_FILTER@.\n"
     "Account for every draft at @DISPOSITIONS@, checked with @CHECK_DISPOSITIONS@.\n"
     "@STATUS_VOCABULARY@\n"
@@ -676,7 +774,8 @@ FEEDBACK_TEMPLATE = (
     "Answer run @RUN@'s comments on @BOARD@ from @CHECKOUT@, reading the store with "
     "@PLAN_STORE@.\n"
     "A ticket a comment names is under @DRAFTS_ROOT@: decide with @BOARD_STATUS@, check "
-    "with @VALIDATE@, copy with @COPY@; its @TICKET_METADATA_KEY@ record names it.\n"
+    "with @VALIDATE@, copy with @COPY@, re-estimate with @RE_ESTIMATE@; its "
+    "@TICKET_METADATA_KEY@ record names it.\n"
     "Gathered into @FEEDBACK_FILE@; account at @RESPONSES@, checked with @CHECK_RESPONSES@.\n"
     "@COMMENT_CONTRACT@\n@RESPONSE_CONTRACT@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
@@ -688,6 +787,7 @@ FEEDBACK_FILE = Path("/drafts-root/feedback/listing-run/20260101T000000Z.md")
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
 BOARD_ITEMS = "python -m orchestrator.follow_up_tickets board-items"
 COPY = "python -m orchestrator.follow_up_tickets copy"
+RE_ESTIMATE = "python -m orchestrator.follow_up_tickets re-estimate"
 VALIDATE = "python -m orchestrator.follow_up_tickets validate"
 
 #: The plan-store program a composed task carries, spelled in full the way the recipe
@@ -711,8 +811,12 @@ def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-roo
 
 
 def _ownership(run: str = RUN, board: str = "followups") -> str:
-    """Board ownership as a composed task carries it, its one value filled."""
-    return tickets.comment_contract(run, board).replace("@PLAN_STORE@", PLAN_STORE)
+    """Board ownership as a composed task carries it, its two values filled."""
+    return (
+        tickets.comment_contract(run, board)
+        .replace("@PLAN_STORE@", PLAN_STORE)
+        .replace("@RE_ESTIMATE@", RE_ESTIMATE)
+    )
 
 
 #: Everything a `compose` call takes that neither mode decides, so a test names only what
@@ -725,6 +829,7 @@ COMMON: dict[str, object] = {
     "board_status": BOARD_STATUS,
     "board_items": BOARD_ITEMS,
     "copy": COPY,
+    "re_estimate": RE_ESTIMATE,
     "checkout": Path("/checkout"),
     "plan_store": PLAN_STORE,
 }
@@ -822,7 +927,9 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
     assert "## This is a re-dispatch" in task
     assert "Merge the two cursor tickets." in task
     steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
-    decided = steps.index(f"`{BOARD_STATUS} --board followups <path of the ticket>`")
+    decided = steps.index("**Decide each ticket's status from the board, before every copy.**")
+    asked = f"`{BOARD_STATUS} --board followups <path of the ticket>`"
+    assert decided < steps.index(asked, decided), steps
     assert decided < steps.index("**Put each ticket on the board.**"), steps
     searched = steps.index("**Search the board for the same root cause**")
     assumed = steps.index("**Write each ticket as if the board's accepted fixes were already in.**")
@@ -910,9 +1017,11 @@ def test_the_composed_task_states_the_reply_rules_once_and_every_other_text_poin
     ownership = task.split("## Ownership on the board\n", 1)[1].split("## This is a re-dispatch")[0]
     flat_ownership = " ".join(ownership.split())
 
-    reply = tickets.reply_marker(RUN, "<root-cause>", "<comment id>")
+    reply = tickets.reply_marker(
+        RUN, "<root-cause>", "<comment id>", "<confirms or does-not-confirm>"
+    )
     assert f"`{reply}`" in ownership
-    assert 'kind="reply" answers="<comment id>"' in reply
+    assert 'kind="reply" answers="<comment id>" verdict="<confirms or does-not-confirm>"' in reply
     for rule in (
         "A comment belongs to the run named in its **last line**, whichever of the two kinds "
         "below it is",
@@ -1394,7 +1503,11 @@ def test_a_binding_is_written_only_once_set_and_reads_back_with_the_origin_it_de
     assert tickets.BINDING_FIELD not in tickets.record(_ticket())
     assert tickets.ORIGIN_KEY not in tickets.render(_ticket(), board=BOARD)
     bound = _bound(_ticket(), f"{BOARD}:{RUN}/tickets/{CAUSE}")
-    assert list(tickets.record(bound)) == [*tickets.RECORD_KEYS, tickets.BINDING_FIELD]
+    assert list(tickets.record(bound)) == [
+        *tickets.RECORD_KEYS,
+        tickets.BINDING_FIELD,
+        tickets.FREQUENCY_FIELD,
+    ]
 
     path = _write(drafts_root, bound, tickets.render(bound, board=BOARD))
 
@@ -1896,6 +2009,8 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         "i",
         "--copy",
         "c",
+        "--re-estimate",
+        "r",
         "--checkout",
         "/checkout",
         "--plan-store",
@@ -1920,7 +2035,7 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         (
             ["compose", "--template", "/no/such/template", "--root", "/r", "--run", RUN]
             + ["--board", "b", "--validate", "v", "--board-status", "s", "--board-items", "i"]
-            + ["--copy", "c"]
+            + ["--copy", "c", "--re-estimate", "r"]
             + ["--checkout", "/c"]
             + ["--plan-store", PLAN_STORE]
             + ["--dispositions", DISPOSITIONS, "--check-dispositions", CHECK_DISPOSITIONS],
@@ -1953,7 +2068,7 @@ def test_a_template_the_compose_command_refuses_is_unrunnable(
     status = tickets.main(
         ["compose", "--template", str(template), "--root", str(tmp_path), "--run", RUN]
         + ["--board", "b", "--validate", "v", "--board-status", "s", "--board-items", "i"]
-        + ["--copy", "c", "--checkout", "/c", "--plan-store", PLAN_STORE]
+        + ["--copy", "c", "--re-estimate", "r", "--checkout", "/c", "--plan-store", PLAN_STORE]
         + ["--dispositions", DISPOSITIONS, "--check-dispositions", CHECK_DISPOSITIONS]
     )
 
@@ -2699,7 +2814,7 @@ def _account(
 ) -> dict[str, object]:
     """A disposition artifact's document, its input set the drafts its entries name."""
     return {
-        "schema": tickets.ARTIFACT_SCHEMA,
+        "schema": tickets.DISPOSITIONS_SCHEMA,
         "run": RUN,
         "drafts": [str(one["draft"]) for one in dispositions] if drafts is None else drafts,
         "dispositions": list(dispositions),
@@ -2738,7 +2853,7 @@ def test_open_dispositions_records_the_input_set_before_the_dispatch_and_only_ev
 
     assert path == drafts_root / "dispositions" / f"{RUN}.json"
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "schema": tickets.ARTIFACT_SCHEMA,
+        "schema": tickets.DISPOSITIONS_SCHEMA,
         "run": RUN,
         "drafts": [first, second],
         "dispositions": [],
@@ -2867,6 +2982,19 @@ def test_a_filed_drafts_evidence_comment_on_a_matching_issue_satisfies_its_accou
     assert "has a local ticket but no bound item or evidence comment" in capsys.readouterr().err
     comment = tickets.render_comment(RUN, CAUSE, "This run reproduced the same cause.")
     plan_store.sdk(plan_store.client().task_comment_add(issue, body=comment))
+
+    unestimated = tickets.main(
+        ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+    )
+    assert unestimated == tickets.UNSOUND
+    refused = " ".join(capsys.readouterr().err.split())
+    # Two occurrences leave an intermittent medium at medium, so the record still agrees and
+    # only the line, which states the count, is behind.
+    assert f"{issue}'s record stores the estimate" not in refused
+    assert f"{issue}'s `## Impact` estimate line reads" in refused
+    assert "2 occurrences; not raised" in refused
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.SOUND
+    capsys.readouterr()
 
     status = tickets.main(["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN])
 
@@ -3173,7 +3301,7 @@ def test_a_second_text_fence_does_not_replace_the_comment_the_first_one_quotes()
 
 def _answered(*responses: dict[str, object], feedback: str = GATHERED) -> dict[str, object]:
     return {
-        "schema": tickets.ARTIFACT_SCHEMA,
+        "schema": tickets.RESPONSES_SCHEMA,
         "run": RUN,
         "feedback": feedback,
         "responses": list(responses),
@@ -3186,6 +3314,7 @@ def _response(issue: str, comment: str, **departures: object) -> dict[str, objec
         "issue": issue,
         "action": "Added the missing example to the ticket and copied it again.",
         "reply": "a-reply",
+        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
     } | departures
 
 
@@ -3197,7 +3326,13 @@ def _person_said(issue: str, body: str) -> str:
     return str(added.id.model_dump())
 
 
-def _run_replied(issue: str, answers: str, cause: str = CAUSE, run: str = RUN) -> str:
+def _run_replied(
+    issue: str,
+    answers: str,
+    cause: str = CAUSE,
+    run: str = RUN,
+    verdict: tickets.Verdict = tickets.Verdict.DOES_NOT_CONFIRM,
+) -> str:
     """``run``'s reply to one comment, posted the way the agent posts it; its id."""
     body = tickets.render_reply(
         run,
@@ -3206,6 +3341,7 @@ def _run_replied(issue: str, answers: str, cause: str = CAUSE, run: str = RUN) -
         url="https://example.invalid/c",
         author="a-person",
         response="Added the example.",
+        verdict=verdict,
     )
     added = plan_store.sdk(plan_store.client().task_comment_add(issue, body=body))
     return str(added.id.model_dump())
@@ -3572,6 +3708,54 @@ def test_each_modes_tracked_template_composes_and_names_its_own_validator() -> N
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
+@pytest.mark.reads_docs
+def test_each_tracked_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority() -> None:
+    """The prose each mode's agent is held to, as the recipe composes it from the tracked file.
+
+    The initial task asks for the frequency judgment and a re-estimate after every evidence
+    comment on another run's item; the feedback task asks for a verdict on every reply and a
+    re-estimate after each confirming one; and both carry the contracts that say so.
+    """
+    initial = " ".join(_tracked_task(redispatch=True).split())
+    feedback_template = (REPO_ROOT / "config" / "follow-up-feedback-task.md").read_text("utf-8")
+    feedback = " ".join(
+        tickets.compose(
+            feedback_template,
+            mode=tickets.Mode.FEEDBACK,
+            **COMMON,
+            **FEEDBACK_ACCOUNT,
+            feedback="### Comment 1\n\nAdd page 9.\n",
+            redispatch=True,
+        ).split()
+    )
+    re_estimate = f"`{RE_ESTIMATE} --board followups"
+    for required in (
+        "**judge from the original evidence whether the root cause fires consistently**",
+        "record that as the ticket's `frequency`",
+        "the estimate and the priority themselves are never yours to write",
+        f"`{BOARD_STATUS} --board followups <path of the ticket>`, which writes the ticket's "
+        "priority estimate, its estimate line and its priority, then",
+        f"**after every such comment, re-estimate that item** with {re_estimate} <that item's id>`",
+        "**Its priority is estimated from facts, never chosen.**",
+        f"`{VALIDATE}` refuses a ticket without it",
+        "Run it on the issue each time this run adds or edits an evidence comment there",
+        "a schema-6 ticket of this run is brought to schema 7 by recording its `frequency`",
+    ):
+        assert required in initial, required
+    for required in (
+        "carrying that verdict in its marker",
+        "**After every `confirms` reply, re-estimate the issue it sits on** with "
+        f"{re_estimate} <the issue's id>`",
+        'verdict="<confirms or does-not-confirm>"',
+        "`verdict` is this run's judgment of the comment: `confirms` when it confirms",
+        "`verdict` is the verdict that reply's marker carries",
+        '"verdict": "<confirms or does-not-confirm: the verdict the reply\'s marker carries>"',
+        "and every issue a `confirms` reply sits on stores the estimate its comments recount to",
+        'each time it posts a reply marked `verdict="confirms"` there',
+    ):
+        assert required in feedback, required
+
+
 def test_a_response_naming_a_reply_that_is_not_the_boards_is_refused_naming_both(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3656,11 +3840,17 @@ def test_a_recorded_input_set_that_is_not_this_dispatchs_is_refused(
     [
         ({"schema": 99, "run": RUN}, "this reads schema"),
         ({"schema": True, "run": RUN}, "this reads schema"),
-        ({"schema": tickets.ARTIFACT_SCHEMA, "run": "another-run"}, "rather than 'listing-run'"),
-        ({"schema": tickets.ARTIFACT_SCHEMA, "run": RUN}, "is missing keys: drafts, dispositions"),
+        (
+            {"schema": tickets.DISPOSITIONS_SCHEMA, "run": "another-run"},
+            "rather than 'listing-run'",
+        ),
+        (
+            {"schema": tickets.DISPOSITIONS_SCHEMA, "run": RUN},
+            "is missing keys: drafts, dispositions",
+        ),
         (
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.DISPOSITIONS_SCHEMA,
                 "run": RUN,
                 "drafts": [],
                 "dispositions": None,
@@ -3669,7 +3859,7 @@ def test_a_recorded_input_set_that_is_not_this_dispatchs_is_refused(
         ),
         (
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.DISPOSITIONS_SCHEMA,
                 "run": RUN,
                 "drafts": [DRAFT],
                 "dispositions": [{"draft": DRAFT}],
@@ -3677,7 +3867,7 @@ def test_a_recorded_input_set_that_is_not_this_dispatchs_is_refused(
             "entry 0 is missing keys",
         ),
         (
-            {"schema": tickets.ARTIFACT_SCHEMA, "run": RUN, "drafts": ["a-bare-name"]},
+            {"schema": tickets.DISPOSITIONS_SCHEMA, "run": RUN, "drafts": ["a-bare-name"]},
             "is not a draft id of run listing-run",
         ),
     ],
@@ -4129,7 +4319,7 @@ def test_a_file_that_is_not_text_is_refused_by_every_command_that_reads_one(
         (
             ["compose", "--template", str(template), "--root", str(drafts_root), "--run", RUN]
             + ["--board", BOARD, "--validate", "v", "--board-status", "s", "--board-items", "i"]
-            + ["--copy", "c", "--checkout", "/c", "--plan-store", PLAN_STORE]
+            + ["--copy", "c", "--re-estimate", "r", "--checkout", "/c", "--plan-store", PLAN_STORE]
             + ["--dispositions", DISPOSITIONS, "--check-dispositions", CHECK_DISPOSITIONS],
             "is not UTF-8 text",
         ),

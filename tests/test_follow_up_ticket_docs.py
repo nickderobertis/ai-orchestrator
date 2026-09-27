@@ -91,14 +91,14 @@ def unheld(prose: str, categories: frozenset[str]) -> set[str]:
             found.add(f"`{name}` is a board option the `followups` source does not name")
         elif (
             SNAKE_CASE.fullmatch(name)
-            and name not in (*tickets.RECORD_KEYS, tickets.BINDING_FIELD)
+            and name not in (*tickets.RECORD_KEYS, *tickets.OPTIONAL_KEYS)
             and name != tickets.DEPENDENCY_FIELD
             and not re.search(rf"^\s*{re.escape(name)}:", configuration, re.MULTILINE)
         ):
             found.add(f"`{name}` is a record key the ticket does not carry")
     for matched in KEY.finditer(prose):
         name = matched["held"] or matched["keyed"]
-        if name not in (*tickets.RECORD_KEYS, tickets.BINDING_FIELD):
+        if name not in (*tickets.RECORD_KEYS, *tickets.OPTIONAL_KEYS):
             found.add(f"`{name}` is a record key the ticket does not carry")
     return found
 
@@ -210,6 +210,55 @@ def test_each_follow_up_section_writes_every_ticket_against_the_boards_accepted_
     assert f"record's `{tickets.DEPENDENCY_FIELD}`" not in flat, (
         f"{document}'s section {heading!r} calls the store's edge a record key"
     )
+
+
+#: The prose's statement of the estimate, word for word, with every value it names read out
+#: of the module: the level a raise is capped at, the frequency judgment that raises, and
+#: the occurrence count that does.
+ESTIMATE_RULE = (
+    "The estimate is that severity one level for one level, raised one level, capped at "
+    f"{tickets.ESTIMATES[0]}, when it fires {tickets.Frequency.CONSISTENT}ly or has "
+    f"{tickets.RAISE_AT} or more occurrences"
+)
+
+
+@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+def test_each_follow_up_section_states_the_estimate_the_module_computes(
+    document: str, heading: str
+) -> None:
+    """Each section states :data:`ESTIMATE_RULE`, and no other occurrence count for a raise.
+
+    The prose restates the rule for a reader who never opens the module, so a threshold, a
+    cap or a raising judgment moved in the module fails here rather than leaving the manager
+    reading the old one; that `estimate` computes what the rule says is held below.
+    """
+    flat = " ".join(section(document, heading).split())
+    stated = {int(number) for number in re.findall(r"(\d+) or more occurrences", flat)}
+
+    assert ESTIMATE_RULE in flat, f"{document}'s section {heading!r} does not say {ESTIMATE_RULE!r}"
+    assert stated == {tickets.RAISE_AT}, (
+        f"{document}'s section {heading!r} states the raise at {sorted(stated)} occurrences, "
+        f"where the module raises at {tickets.RAISE_AT}"
+    )
+
+
+@pytest.mark.parametrize("severity", list(tickets.Severity))
+def test_the_estimate_is_what_the_stated_rule_says(severity: tickets.Severity) -> None:
+    """`estimate` maps each severity to the level at its own rank, and raises as the rule says.
+
+    One level for one level: the severities, most severe first, take the estimate levels in
+    order. Raised one level, capped at the first level, by a consistent judgment or by
+    :data:`~orchestrator.follow_up_tickets.RAISE_AT` occurrences, and by nothing short of
+    either.
+    """
+    rank = list(tickets.Severity).index(severity)
+    base, raised = tickets.ESTIMATES[rank], tickets.ESTIMATES[max(rank - 1, 0)]
+    below = tickets.RAISE_AT - 1
+
+    for frequency in (tickets.Frequency.INTERMITTENT, None):
+        assert tickets.estimate(severity, frequency, below) is base, (severity, frequency)
+        assert tickets.estimate(severity, frequency, tickets.RAISE_AT) is raised, severity
+    assert tickets.estimate(severity, tickets.Frequency.CONSISTENT, 1) is raised, severity
 
 
 def test_the_manager_document_describes_both_modes_and_their_validators() -> None:

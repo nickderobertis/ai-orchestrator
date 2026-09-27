@@ -364,6 +364,7 @@ compose=(compose --mode "$mode" --template "$checkout/$template" --root "$drafts
     --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status"
     --board-items "\"$python\" -m orchestrator.follow_up_tickets board-items"
     --copy "\"$python\" -m orchestrator.follow_up_tickets copy" --checkout "$checkout"
+    --re-estimate "\"$python\" -m orchestrator.follow_up_tickets re-estimate"
     --plan-store "$store_cli")
 [ -z "$feedback" ] || compose+=(--feedback "$feedback")
 if [ "$comments" -eq 1 ]; then

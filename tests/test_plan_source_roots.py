@@ -23,7 +23,7 @@ import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import follow_up_drafts, plan_copy, plan_review
+from orchestrator import follow_up_drafts, follow_up_tickets, plan_copy, plan_review
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -258,6 +258,40 @@ def test_each_board_source_resolves_queued_to_an_option_of_its_own(source: str) 
         f"`queued` resolves to {mapped['queued']!r} on `{source}`, which is where "
         f"{UNMAPPED_OPTIONS} already sends a category: a claimed item would be "
         "indistinguishable from one nobody has taken"
+    )
+
+
+#: The `Priority` option each priority a follow-up ticket carries is written to on the
+#: `followups` board. Stated here for the reason :data:`MAPPED_OPTIONS` is: the other party
+#: is the live board, so what is held is the mapping the installed CLI resolves.
+FOLLOWUPS_PRIORITIES = {"urgent": "Urgent", "high": "High", "medium": "Medium", "low": "Low"}
+
+
+@pytest.mark.reads_checkouts
+def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none() -> None:
+    """`followups` resolves all four priorities to their options, and `plans` carries none.
+
+    Read through the installed CLI's own resolution, as the status mappings above are,
+    because a mapping the store does not resolve is one no copy writes. `plans` is held to
+    carrying none: its items are plan tasks, whose priority this host decides nothing about.
+    """
+    resolved = _resolved_configuration()
+
+    def mapped(source: str) -> dict[str, object]:
+        prefix = f"sources.{source}.config.priority_mapping."
+        return {
+            key[len(prefix) :]: value for key, value in resolved.items() if key.startswith(prefix)
+        }
+
+    assert mapped("followups") == FOLLOWUPS_PRIORITIES, (
+        "onetaskgraph.yaml's `followups` source resolves the priority mapping "
+        f"{mapped('followups')}, and this host states {FOLLOWUPS_PRIORITIES}"
+    )
+    assert mapped("plans") == {}, "the `plans` source maps priorities, which it never did"
+    estimated = {level.value for level in follow_up_tickets.ESTIMATES}
+    assert set(mapped("followups")) == estimated, (
+        f"the `followups` source maps the priorities {sorted(mapped('followups'))}, and a "
+        f"follow-up ticket's estimate is one of {sorted(estimated)}"
     )
 
 

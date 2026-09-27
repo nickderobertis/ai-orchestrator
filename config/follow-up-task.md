@@ -66,11 +66,16 @@ there gets this run's evidence rather than a second issue.
    Report it, naming the draft, its author and why it was blocking, rather than filing it
    quietly as a ticket.
 5. **Group what stands by root cause**, and write one ticket per root cause, to the shape
-   under "The verified ticket" below.
+   under "The verified ticket" below. For each, **judge from the original evidence whether
+   the root cause fires consistently** — every time its conditions hold — or only
+   intermittently or in certain situations, and record that as the ticket's `frequency`.
+   That judgment and the severities are the facts its priority is estimated from; the
+   estimate and the priority themselves are never yours to write.
 6. **Validate each ticket, then delete the drafts it consumed.** Run
-   `@VALIDATE@ <path of the ticket>` and correct the ticket until that command reports it
-   sound. Then delete the draft files that ticket consumed, under
-   `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`.
+   `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>`, which writes the ticket's
+   priority estimate, its estimate line and its priority, then `@VALIDATE@ <path of the
+   ticket>`, and correct the ticket until that command reports it sound. Then delete the
+   draft files that ticket consumed, under `@DRAFTS_ROOT@/tasks/@RUN@/drafts/`.
 7. **Search the board for the same root cause** among its open items: first by the
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
    text (`@BOARD_ITEMS@ --board @BOARD@ --search <text>`). Both read the whole board,
@@ -126,7 +131,9 @@ there gets this run's evidence rather than a second issue.
     report. Where an
     open item for it was created by another run, copy nothing: add this run's one comment
     to that item, or edit the comment this run already left there, under "Ownership on the
-    board" below.
+    board" below, and **after every such comment, re-estimate that item** with
+    `@RE_ESTIMATE@ --board @BOARD@ <that item's id>`, which recounts its occurrences, stores
+    its estimate and rewrites its estimate line. Keep what it printed for your report.
 11. **Account for every draft this dispatch was given.** Write one disposition per draft
     into `@DISPOSITIONS@`, to the shape under "The account of every draft" below, then run
     `@CHECK_DISPOSITIONS@` and correct the account until it reports it sound. It is what

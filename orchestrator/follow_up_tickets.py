@@ -48,6 +48,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -86,8 +87,18 @@ BOARD = "followups"
 #: A dependency on an accepted ticket moved no schema: it lives in the store's own
 #: :data:`DEPENDENCY_FIELD`, outside this record, so no ticket on the board is of an older
 #: shape for it and there is nothing to bring forward. Schema 6 added the optional
-#: :data:`BINDING_FIELD`, the board item a ticket corresponds to.
-SCHEMA = 6
+#: :data:`BINDING_FIELD`, the board item a ticket corresponds to. Schema 7 added the required
+#: :data:`ESTIMATE_FIELD`, the priority :func:`estimate` computes, the optional
+#: :data:`FREQUENCY_FIELD`, and the `## Impact` line stating the estimate and its reason.
+SCHEMA = 7
+#: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
+#: admitted by range, so a record declaring any other schema — zero, negative, a later one or
+#: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
+#: board item's record of one of these as storing no estimate.
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6)
+#: The schema just before, which `re-estimate` also reads as carrying no stored estimate and
+#: no frequency judgment, bringing it to :data:`SCHEMA` as it writes.
+PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -292,7 +303,16 @@ RECORD_KEYS = (
     "basis",
     "verified_at",
     "host",
+    "priority_estimate",
 )
+#: The required key holding the estimate :func:`estimate` computed when the ticket was last
+#: written. Only `board-status` and `re-estimate` write it: an agent supplies facts, never a
+#: priority, so every priority on the board can be explained from the ticket it sits on.
+ESTIMATE_FIELD = "priority_estimate"
+#: **Whether the root cause fires consistently.** Optional: absent means no judgment is
+#: recorded, which a board item brought forward from schema 6 carries; a ticket about to be
+#: copied carries one, judged from its original evidence.
+FREQUENCY_FIELD = "frequency"
 
 #: **Which board item a ticket corresponds to.** The one optional key of the record: the
 #: native id of the board item the ticket is copied onto, as the store reports it after the
@@ -307,6 +327,11 @@ RECORD_KEYS = (
 #: the store's first rule, so every later copy reaches the bound item directly. Both commands
 #: refuse, naming both ids, when the store reports any other destination.
 BINDING_FIELD = "board_item"
+#: The keys a record may carry beside :data:`RECORD_KEYS`.
+OPTIONAL_KEYS = (BINDING_FIELD, FREQUENCY_FIELD)
+#: The front-matter key the store reads a `local-md` task's priority from, which a copy
+#: carries onto the board item's `Priority` field.
+PRIORITY_FIELD = "priority"
 #: The store's reserved key a copy records the id it was copied from under, and which it
 #: follows directly when it names the destination; the plan-store client's one spelling.
 ORIGIN_KEY = plan_store.ORIGIN_KEY
@@ -401,9 +426,14 @@ MITIGATED_LINE = "Severity with the workaround"
 IMPACT_LINES = (SEVERITY_LINE, WORKAROUND_LINE, MITIGATED_LINE)
 NO_WORKAROUND = "none"
 IMPACT_LINE = re.compile(r"^- (?P<label>[^:\n]+):(?P<value>[^\n]*)$", re.MULTILINE)
-#: What a section holds from its first line on: the three lines in order, and nothing else.
+#: The fourth line of a schema-7 `## Impact` section, after the three above: the priority
+#: :func:`estimate` computed and why, as :func:`estimate_line` renders it.
+ESTIMATE_LINE = "Priority estimate"
+#: What a section holds from its first line on: the three lines in order, then the estimate
+#: line when there is one, and nothing else.
 IMPACT_TAIL = re.compile(
-    "\n".join(rf"- {re.escape(label)}:[^\n]*" for label in IMPACT_LINES) + r"\s*"
+    "\n".join(rf"- {re.escape(label)}:[^\n]*" for label in IMPACT_LINES)
+    + rf"(?:\n- {re.escape(ESTIMATE_LINE)}:[^\n]*)?\s*"
 )
 
 
@@ -418,6 +448,194 @@ def impact_section(prose: str, severity: str, workaround: str, with_workaround: 
         f"- {label}: {value}\n" for label, value in zip(IMPACT_LINES, values, strict=True)
     )
     return f"{prose.strip()}\n\n{lines}"
+
+
+class Priority(StrEnum):
+    """A board item's priority as the store reports it, most urgent first; `none` is no value.
+
+    The store's own vocabulary (onetaskgraph's `Priority`), which a `local-md` ticket carries
+    in its front matter and a copy carries onto the board's `Priority` field. An estimate is
+    always one of the four levels; `none` is only ever what a board item holds.
+    """
+
+    URGENT = "urgent"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    NONE = "none"
+
+
+#: The level each severity with the workaround estimates at before any raise.
+_BASE_PRIORITY = {
+    Severity.CRITICAL: Priority.URGENT,
+    Severity.HIGH: Priority.HIGH,
+    Severity.MEDIUM: Priority.MEDIUM,
+    Severity.LOW: Priority.LOW,
+}
+#: The four levels an estimate takes, most urgent first.
+ESTIMATES = tuple(_BASE_PRIORITY.values())
+
+
+class Frequency(StrEnum):
+    """Whether a root cause fires every time its conditions hold, or only sometimes."""
+
+    CONSISTENT = "consistent"
+    INTERMITTENT = "intermittent"
+
+
+#: How many occurrences raise an estimate one level. An occurrence is the ticket's own
+#: evidence, plus each comment :func:`counts_as_occurrence` admits.
+RAISE_AT = 3
+
+
+def estimate(with_workaround: Severity, frequency: Frequency | None, occurrences: int) -> Priority:
+    """The priority a ticket's facts estimate, which is the only way one is decided.
+
+    The base is the severity with the workaround, one level for one level. It is raised one
+    level, capped at `urgent`, when the root cause fires consistently or has been seen
+    :data:`RAISE_AT` or more times, and in no other case.
+    """
+    base = ESTIMATES.index(_BASE_PRIORITY[with_workaround])
+    raised = frequency is Frequency.CONSISTENT or occurrences >= RAISE_AT
+    return ESTIMATES[max(base - 1, 0) if raised else base]
+
+
+def _occurrence_words(occurrences: int) -> str:
+    return f"{occurrences} occurrence" + ("" if occurrences == 1 else "s")
+
+
+#: How each frequency judgment, or its absence, reads in the estimate line.
+_FREQUENCY_WORDS = {
+    Frequency.CONSISTENT: "fires consistently",
+    Frequency.INTERMITTENT: "fires intermittently",
+    None: "frequency not judged",
+}
+
+
+def estimate_line(with_workaround: Severity, frequency: Frequency | None, occurrences: int) -> str:
+    """The `## Impact` estimate line for these facts: the level, then why.
+
+    The one rendering, which every writer uses and :func:`parse_estimate_line` reads back: it
+    names the severity with the workaround, the frequency judgment, the recounted occurrences,
+    and whether the raise applied and why.
+    """
+    level = estimate(with_workaround, frequency, occurrences)
+    causes = []
+    if frequency is Frequency.CONSISTENT:
+        causes.append("it fires consistently")
+    if occurrences >= RAISE_AT:
+        causes.append(f"it has {RAISE_AT} or more occurrences")
+    if not causes:
+        raise_words = "not raised"
+    elif _BASE_PRIORITY[with_workaround] is Priority.URGENT:
+        raise_words = f"already {Priority.URGENT}, so not raised though " + " and ".join(causes)
+    else:
+        raise_words = "raised one level because " + " and ".join(causes)
+    return (
+        f"- {ESTIMATE_LINE}: {level} (severity with the workaround {with_workaround}; "
+        f"{_FREQUENCY_WORDS[frequency]}; {_occurrence_words(occurrences)}; {raise_words})"
+    )
+
+
+#: An estimate line's facts, read back so :func:`parse_estimate_line` can render it again.
+#: The count is bounded so a digit run no recount reaches is no estimate line, rather than a
+#: conversion Python refuses past its integer-string limit.
+_ESTIMATE_VALUE = re.compile(
+    rf"- {re.escape(ESTIMATE_LINE)}: (?P<level>[a-z]+) \(severity with the workaround "
+    r"(?P<severity>[a-z]+); (?P<frequency>[a-z ]+); (?P<occurrences>[0-9]{1,6}) occurrences?; "
+    r"[^\n]*\)"
+)
+
+
+class EstimateFacts(NamedTuple):
+    """What an estimate line states: its level and the three facts it was computed from."""
+
+    level: Priority
+    with_workaround: Severity
+    frequency: Frequency | None
+    occurrences: int
+
+
+def parse_estimate_line(line: str) -> EstimateFacts | None:
+    """The facts ``line`` states, or `None` when it is not what :func:`estimate_line` renders.
+
+    Read back by rendering again: a line is accepted only when it is byte for byte the line
+    its own facts render, so a hand-edited level, count or reason is not an estimate line.
+    """
+    matched = _ESTIMATE_VALUE.fullmatch(line.strip())
+    if matched is None or matched["severity"] not in tuple(Severity):
+        return None
+    judged = {words: frequency for frequency, words in _FREQUENCY_WORDS.items()}
+    if matched["frequency"] not in judged:
+        return None
+    severity, frequency = Severity(matched["severity"]), judged[matched["frequency"]]
+    occurrences = int(matched["occurrences"])
+    if estimate_line(severity, frequency, occurrences) != line.strip():
+        return None
+    return EstimateFacts(
+        estimate(severity, frequency, occurrences), severity, frequency, occurrences
+    )
+
+
+#: The `## Impact` heading and the lines a body's estimate line is placed among.
+_IMPACT_HEADING = re.compile(rf"^## {re.escape(IMPACT)}[ \t]*$", re.MULTILINE)
+_NEXT_HEADING = re.compile(r"^## ", re.MULTILINE)
+_ESTIMATE_AT = re.compile(rf"^- {re.escape(ESTIMATE_LINE)}:[^\n]*$", re.MULTILINE)
+_MITIGATED_AT = re.compile(rf"^- {re.escape(MITIGATED_LINE)}:(?P<value>[^\n]*)$", re.MULTILINE)
+
+
+def _impact_span(body: str) -> tuple[int, int] | None:
+    """Where ``body``'s `## Impact` section's content starts and ends, or `None` without one."""
+    heading = _IMPACT_HEADING.search(body)
+    if heading is None:
+        return None
+    following = _NEXT_HEADING.search(body, heading.end())
+    return heading.end(), following.start() if following else len(body)
+
+
+def stated_with_workaround(body: str) -> Severity | None:
+    """The severity with the workaround ``body``'s `## Impact` section states, if it states one."""
+    span = _impact_span(body)
+    matched = _MITIGATED_AT.search(body, *span) if span else None
+    value = matched["value"].strip() if matched else None
+    return Severity(value) if value in tuple(Severity) else None
+
+
+def with_estimate_line(body: str, line: str) -> str:
+    """``body`` with its `## Impact` estimate line replaced by ``line``, and nothing else changed.
+
+    A body carrying no estimate line — a schema-6 body — takes ``line`` directly after its
+    `- Severity with the workaround:` line. :class:`Refused` for a body with neither.
+    """
+    span = _impact_span(body)
+    if span is not None and (held := _ESTIMATE_AT.search(body, *span)) is not None:
+        return body[: held.start()] + line + body[held.end() :]
+    mitigated = _MITIGATED_AT.search(body, *span) if span else None
+    if mitigated is None:
+        raise Refused(
+            [
+                f"the body carries no `## {IMPACT}` section with a `- {MITIGATED_LINE}:` line, "
+                "so there is no severity to estimate a priority from"
+            ]
+        )
+    return body[: mitigated.end()] + "\n" + line + body[mitigated.end() :]
+
+
+def follows_estimate(
+    held: Priority | None, stored: Priority | None, estimated: Priority
+) -> Priority:
+    """**The lockstep rule**: the priority a ticket's board item is to carry.
+
+    ``held`` is the priority the board item holds, `None` when there is no item yet;
+    ``stored`` the estimate its record stored when it was last written, `None` for a schema-6
+    record. The priority follows the new estimate while the board holds the stored one — or,
+    with nothing stored, while it holds none — and is otherwise left as a person set it: a
+    person who puts it back to the estimate hands it back to the estimate.
+    """
+    if held is None:
+        return estimated
+    following = held is (Priority.NONE if stored is None else stored)
+    return estimated if following else held
 
 
 #: A root cause's slug, which names the ticket's file.
@@ -440,21 +658,23 @@ DRAFT_ID = re.compile(rf"{re.escape(SOURCE)}:(?P<run>[^/\s]+)/{re.escape(drafts.
 COMMENT_MARKER = '<!-- orchestrator:follow-up-comment run="{run}" root_cause="{root_cause}" -->'
 COMMENT_OPENING = "Additional evidence from follow-up run `{run}`."
 
-#: The last line of a reply a follow-up run owns, naming the one comment it answers, and the
-#: visible line it opens with when the board reports the answered comment's author, or not.
+#: The last line of a reply a follow-up run owns, naming the one comment it answers and
+#: whether it judged that comment to confirm the root cause, and the visible line it opens
+#: with when the board reports the answered comment's author, or not.
 REPLY_MARKER = (
     '<!-- orchestrator:follow-up-comment run="{run}" root_cause="{root_cause}"'
-    ' kind="{kind}" answers="{answers}" -->'
+    ' kind="{kind}" answers="{answers}" verdict="{verdict}" -->'
 )
 REPLY_OPENING = "Reply from follow-up run `{run}` to @{author}'s comment: {url}"
 REPLY_OPENING_UNATTRIBUTED = "Reply from follow-up run `{run}` to the comment: {url}"
 
-#: Either marker, as a last line: `kind` and `answers` are read, then held to the grammar
-#: :func:`comment_owner` states.
+#: Either marker, as a last line: `kind`, `answers` and `verdict` are read, then held to the
+#: grammar :func:`comment_owner` states.
 COMMENT_MARKER_LINE = re.compile(
     r"<!-- orchestrator:follow-up-comment"
     r' run="(?P<run>[^"\s]+)" root_cause="(?P<root_cause>[^"\s]+)"'
-    r'(?: kind="(?P<kind>[^"\s]*)")?(?: answers="(?P<answers>[^"]*)")? -->'
+    r'(?: kind="(?P<kind>[^"\s]*)")?(?: answers="(?P<answers>[^"]*)")?'
+    r'(?: verdict="(?P<verdict>[^"]*)")? -->'
 )
 
 #: A comment's id as the board lists it: one or more characters, none of them whitespace,
@@ -509,6 +729,7 @@ INITIAL_VALUES = (
     "BOARD_STATUS",
     "BOARD_ITEMS",
     "COPY",
+    "RE_ESTIMATE",
     "CHECKOUT",
     "PLAN_STORE",
     "ACCEPTED_STATUSES",
@@ -536,6 +757,7 @@ FEEDBACK_VALUES = (
     "VALIDATE",
     "BOARD_STATUS",
     "COPY",
+    "RE_ESTIMATE",
     "FEEDBACK_FILE",
     "RESPONSES",
     "CHECK_RESPONSES",
@@ -616,6 +838,9 @@ class Ticket:
     ``depends_on`` names every accepted ticket whose fix this one is written against, as
     the board addresses each, sorted; empty when no accepted fix changed the ticket.
     ``board_item`` is the :data:`BINDING_FIELD`, `None` until a command writes it.
+    ``priority_estimate`` is the :data:`ESTIMATE_FIELD`, `None` only on a ticket read before
+    `board-status` first writes it; ``frequency`` the :data:`FREQUENCY_FIELD`, `None` when no
+    judgment is recorded; and ``priority`` the front matter's :data:`PRIORITY_FIELD`.
     """
 
     title: str
@@ -631,6 +856,9 @@ class Ticket:
     body: str
     depends_on: tuple[QualifiedBoardId, ...] = ()
     board_item: BoardItemId | None = None
+    priority_estimate: Priority | None = None
+    frequency: Frequency | None = None
+    priority: Priority = Priority.NONE
 
 
 class Edge(NamedTuple):
@@ -655,13 +883,25 @@ class CommentKind(StrEnum):
     REPLY = "reply"
 
 
+class Verdict(StrEnum):
+    """Whether a reply's run judged the comment it answers to confirm the ticket's root cause.
+
+    A confirming comment is one more occurrence of the root cause, which :func:`estimate`
+    counts; a reply whose marker carries no verdict counts as not confirming.
+    """
+
+    CONFIRMS = "confirms"
+    DOES_NOT_CONFIRM = "does-not-confirm"
+
+
 class CommentOwner(NamedTuple):
-    """What a follow-up run's comment marker names; ``answers`` is a reply's alone."""
+    """What a follow-up run's comment marker names; ``answers`` and ``verdict`` are a reply's."""
 
     run: RunId
     root_cause: RootCause
     kind: CommentKind = CommentKind.EVIDENCE
     answers: CommentId | None = None
+    verdict: Verdict | None = None
 
 
 def qualified_id(run: str, root_cause: str) -> str:
@@ -675,7 +915,7 @@ def ticket_path(root: Path, run: str, root_cause: str) -> Path:
 
 
 def record(ticket: Ticket) -> dict[str, object]:
-    """The metadata a ticket is stored under: every key present, the binding once it is written."""
+    """The metadata a ticket is stored under: every key present, each optional one once set."""
     held: dict[str, object] = {
         "schema": SCHEMA,
         "root_cause": ticket.root_cause,
@@ -687,8 +927,12 @@ def record(ticket: Ticket) -> dict[str, object]:
         "verified_at": ticket.verified_at,
         "host": ticket.host,
     }
+    if ticket.priority_estimate is not None:
+        held[ESTIMATE_FIELD] = str(ticket.priority_estimate)
     if ticket.board_item is not None:
         held[BINDING_FIELD] = ticket.board_item
+    if ticket.frequency is not None:
+        held[FREQUENCY_FIELD] = str(ticket.frequency)
     return held
 
 
@@ -709,6 +953,7 @@ def render(ticket: Ticket, *, board: str | None = None) -> str:
     fields: dict[str, object] = {
         "title": ticket.title,
         "status": ticket.status.value,
+        PRIORITY_FIELD: str(ticket.priority),
         "repositories": [ticket.repository],
     }
     if ticket.depends_on:
@@ -728,6 +973,10 @@ def repository_name(origin: str) -> str:
 
 def _is_run(value: object) -> bool:
     return isinstance(value, str) and RECORD_COMPONENT.fullmatch(value) is not None
+
+
+def _is_slug(value: object) -> bool:
+    return isinstance(value, str) and SLUG.fullmatch(value) is not None
 
 
 def _is_origin(value: object) -> bool:
@@ -819,22 +1068,58 @@ def is_host(value: object) -> bool:
 
 
 def _record_problems(
-    held: Mapping[str, object], *, run: str | None, root_cause: str | None
+    held: Mapping[str, object],
+    *,
+    run: str | None,
+    root_cause: str | None,
+    pending: bool = False,
+    for_copy: bool = False,
 ) -> list[str]:
+    """Every way a record is not the current one.
+
+    ``pending`` reads it as `board-status` does before writing the estimate: a schema-6
+    record, and one with no :data:`ESTIMATE_FIELD` yet, are both what it is about to bring
+    forward. ``for_copy`` holds a ticket about to be copied to carrying a frequency judgment.
+    """
     found = []
+    readable = (SCHEMA, PRIOR_SCHEMA) if pending else (SCHEMA,)
     # Named before the missing keys, because a ticket of an older schema lacks the keys its
     # successor added, and the schema is what says why.
-    if "schema" in held and (type(held["schema"]) is not int or held["schema"] != SCHEMA):
+    if "schema" in held and (type(held["schema"]) is not int or held["schema"] not in readable):
         found.append(
             f"the record is schema {held['schema']!r}, and this reads schema {SCHEMA}; bring "
             "the ticket to the current shape"
         )
-    missing = [key for key in RECORD_KEYS if key not in held]
+    owed = [key for key in RECORD_KEYS if not (pending and key == ESTIMATE_FIELD)]
+    missing = [key for key in owed if key not in held]
     if missing:
-        return [*found, f"the `{KEY}` record is missing {', '.join(missing)}"]
-    if unexpected := sorted(key for key in held if key not in (*RECORD_KEYS, BINDING_FIELD)):
+        written = (
+            f"; `{ESTIMATE_FIELD}` is written by `board-status`, which reads the ticket without it"
+            if ESTIMATE_FIELD in missing
+            else ""
+        )
+        return [*found, f"the `{KEY}` record is missing {', '.join(missing)}{written}"]
+    if unexpected := sorted(key for key in held if key not in (*RECORD_KEYS, *OPTIONAL_KEYS)):
         found.append(
             f"the `{KEY}` record carries keys this does not write: {', '.join(unexpected)}"
+        )
+    if ESTIMATE_FIELD in held and held[ESTIMATE_FIELD] not in ESTIMATES:
+        found.append(
+            f"`{ESTIMATE_FIELD}` {held[ESTIMATE_FIELD]!r} is not one of "
+            + ", ".join(f"`{level}`" for level in ESTIMATES)
+            + "; leave it as `board-status` wrote it"
+        )
+    if FREQUENCY_FIELD in held and held[FREQUENCY_FIELD] not in tuple(Frequency):
+        found.append(
+            f"`{FREQUENCY_FIELD}` {held[FREQUENCY_FIELD]!r} is not one of "
+            + ", ".join(f"`{one}`" for one in Frequency)
+        )
+    elif for_copy and FREQUENCY_FIELD not in held:
+        found.append(
+            f"the `{KEY}` record carries no `{FREQUENCY_FIELD}`, and a ticket about to be copied "
+            f"carries one: `{Frequency.CONSISTENT}` when the root cause fires every time its "
+            f"conditions hold, `{Frequency.INTERMITTENT}` when it fires only sometimes or in "
+            "certain situations, judged from the original evidence"
         )
     stated = held["root_cause"]
     if not isinstance(stated, str) or not SLUG.fullmatch(stated):
@@ -932,8 +1217,14 @@ def _repositories_problems(repositories: object, repository: object) -> list[str
             ]
 
 
-def _impact_problems(text: str) -> list[str]:
-    """Every way an `## Impact` section's content is not prose followed by its three lines."""
+def _impact_problems(text: str, held: Mapping[str, object] | None) -> list[str]:
+    """Every way an `## Impact` section's content is not prose followed by its lines.
+
+    ``held`` is the record the estimate line is held to — present exactly once after the three
+    severity lines, rendered as :func:`estimate_line` renders it, and stating the record's
+    estimate from the severity with the workaround and the record's frequency. `None` reads
+    the section as `board-status` does before writing that line, leaving it unchecked.
+    """
     where = f"the body's `## {IMPACT}` section"
     lines = [line for line in IMPACT_LINE.finditer(text) if line["label"] in IMPACT_LINES]
     found = []
@@ -975,6 +1266,8 @@ def _impact_problems(text: str) -> list[str]:
             f"{where}'s `- {WORKAROUND_LINE}:` line is empty; name the workaround in place and "
             f"how it is applied, or write `{NO_WORKAROUND}`"
         )
+    if held is not None:
+        found.extend(_estimate_problems(text, held, severities.get(MITIGATED_LINE)))
     if len(severities) == len((SEVERITY_LINE, MITIGATED_LINE)):
         severity, mitigated = severities[SEVERITY_LINE], severities[MITIGATED_LINE]
         if mitigated.above(severity):
@@ -990,7 +1283,46 @@ def _impact_problems(text: str) -> list[str]:
     return found
 
 
-def _body_problems(body: object, host: object) -> list[str]:
+def _estimate_problems(
+    text: str, held: Mapping[str, object], mitigated: Severity | None
+) -> list[str]:
+    """How an `## Impact` section's estimate line disagrees with the record it sits beside."""
+    where = f"the body's `## {IMPACT}` section"
+    written = [line[0] for line in _ESTIMATE_AT.finditer(text)]
+    if len(written) != 1:
+        return [
+            f"{where} carries its `- {ESTIMATE_LINE}:` line {len(written)} times, not once; "
+            "`board-status` writes it"
+        ]
+    facts = parse_estimate_line(written[0])
+    if facts is None:
+        return [
+            f"{where}'s `- {ESTIMATE_LINE}:` line is not as `board-status` renders it; leave it "
+            "as that command wrote it"
+        ]
+    found = []
+    stored = held.get(ESTIMATE_FIELD)
+    if stored in ESTIMATES and facts.level != stored:
+        found.append(
+            f"{where}'s estimate line states `{facts.level}`, where the record's "
+            f"`{ESTIMATE_FIELD}` is `{stored}`"
+        )
+    if mitigated is not None and facts.with_workaround is not mitigated:
+        found.append(
+            f"{where}'s estimate line names the severity with the workaround "
+            f"`{facts.with_workaround}`, where the section states `{mitigated}`"
+        )
+    frequency = held.get(FREQUENCY_FIELD)
+    if frequency in (None, *Frequency) and facts.frequency != frequency:
+        found.append(
+            f"{where}'s estimate line states the frequency as "
+            f"{_FREQUENCY_WORDS[facts.frequency]!r}, where the record's `{FREQUENCY_FIELD}` is "
+            f"{frequency!r}"
+        )
+    return found
+
+
+def _body_problems(body: object, host: object, held: Mapping[str, object] | None) -> list[str]:
     if not isinstance(body, str):
         return ["the ticket has no body"]
     found = drafts.sections(body)
@@ -1014,7 +1346,7 @@ def _body_problems(body: object, host: object) -> list[str]:
             ]
         if not found[at][1].strip():
             return [f"the body's `## {required}` section is empty"]
-        if required == IMPACT and (impact := _impact_problems(found[at][1])):
+        if required == IMPACT and (impact := _impact_problems(found[at][1], held)):
             return impact
         if required == EVIDENCE and is_host(host) and str(host) not in found[at][1]:
             return [
@@ -1097,26 +1429,33 @@ def edge_problems(edges: Sequence[Edge]) -> list[str]:
     return found
 
 
-def problems(
+def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
     item: Mapping[str, object],
     *,
     run: str | None = None,
     root_cause: str | None = None,
     edges: Sequence[Edge] = (),
+    pending: bool = False,
+    for_copy: bool = False,
 ) -> list[str]:
     """Every way a store item, as `onetaskgraph task show --json` reports it, is not a ticket.
 
     ``run`` and ``root_cause`` are what the ticket's path says, when it was read from one,
     and ``edges`` what the store's dependency walk reports for it — none for a board item
     read without one. The record's problems come first, so a ticket of an older schema is
-    named for its schema before anything its successor added.
+    named for its schema before anything its successor added. ``pending`` and ``for_copy``
+    are :func:`_record_problems`'s: ``pending`` also leaves the estimate line unchecked.
     """
     found = []
     metadata = item.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
     held = metadata.get(KEY)
     if isinstance(held, Mapping):
-        found.extend(_record_problems(held, run=run, root_cause=root_cause))
+        found.extend(
+            _record_problems(
+                held, run=run, root_cause=root_cause, pending=pending, for_copy=for_copy
+            )
+        )
         found.extend(_origin_problems(metadata.get(ORIGIN_KEY), held))
         repository, host = held.get("repository"), held.get("host")
     else:
@@ -1135,8 +1474,15 @@ def problems(
             + "; ".join(f"`{status}`, {status.meaning}" for status in Status)
             + " — write the one `board-status` prints"
         )
+    if (priority := item.get(PRIORITY_FIELD, Priority.NONE)) not in tuple(Priority):
+        found.append(
+            f"the `{PRIORITY_FIELD}` is {priority!r}, which is not one of "
+            + ", ".join(f"`{one}`" for one in Priority)
+            + "; leave it as `board-status` wrote it"
+        )
     found.extend(_title_problems(item.get("title"), repository))
-    found.extend(_body_problems(item.get("content"), host))
+    checked = None if pending or not isinstance(held, Mapping) else held
+    found.extend(_body_problems(item.get("content"), host, checked))
     found.extend(edge_problems(edges))
     return found
 
@@ -1146,19 +1492,24 @@ def _category(status: object) -> object:
     return status.get("category") if isinstance(status, Mapping) else status
 
 
-def from_store_item(
+def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keyword
     item: Mapping[str, object],
     *,
     run: str | None = None,
     root_cause: str | None = None,
     edges: Sequence[Edge] = (),
+    pending: bool = False,
+    for_copy: bool = False,
 ) -> Ticket:
     """The ticket a store item holds, or :class:`Refused` naming every problem.
 
     ``edges`` is what the store's dependency walk reports for the item; a board item read
-    with none reads back depending on nothing, which is what such a read is.
+    with none reads back depending on nothing, which is what such a read is. ``pending`` and
+    ``for_copy`` are :func:`problems`'s.
     """
-    found = problems(item, run=run, root_cause=root_cause, edges=edges)
+    found = problems(
+        item, run=run, root_cause=root_cause, edges=edges, pending=pending, for_copy=for_copy
+    )
     if found:
         raise Refused(found)
     metadata = item["metadata"]
@@ -1186,6 +1537,9 @@ def from_store_item(
         body=str(item["content"]).strip(),
         depends_on=tuple(sorted(QualifiedBoardId(edge.to) for edge in edges)),
         board_item=BoardItemId(str(held[BINDING_FIELD])) if BINDING_FIELD in held else None,
+        priority_estimate=(Priority(str(held[ESTIMATE_FIELD])) if ESTIMATE_FIELD in held else None),
+        frequency=Frequency(str(held[FREQUENCY_FIELD])) if FREQUENCY_FIELD in held else None,
+        priority=Priority(str(item.get(PRIORITY_FIELD, Priority.NONE))),
     )
 
 
@@ -1230,8 +1584,11 @@ def located_path(path: Path) -> tuple[str, str]:
     return run, root_cause
 
 
-def read_ticket(path: Path) -> Ticket:
-    """The ticket at ``path``, read through the installed store; :class:`Refused` otherwise."""
+def read_ticket(path: Path, *, pending: bool = False, for_copy: bool = False) -> Ticket:
+    """The ticket at ``path``, read through the installed store; :class:`Refused` otherwise.
+
+    ``pending`` and ``for_copy`` are :func:`problems`'s readings of it.
+    """
     resolved = path.absolute()
     run, root_cause = located_path(resolved)
     ticket = qualified_id(run, root_cause)
@@ -1254,7 +1611,9 @@ def read_ticket(path: Path) -> Ticket:
                 "a ticket under the drafts root the follow-ups launch exported"
             ]
         )
-    return from_store_item(item, run=run, root_cause=root_cause, edges=edges)
+    return from_store_item(
+        item, run=run, root_cause=root_cause, edges=edges, pending=pending, for_copy=for_copy
+    )
 
 
 class Misbound(ValueError):
@@ -1459,13 +1818,16 @@ def _native(qualified: str, board: str) -> BoardItemId:
 
 
 class Placement(NamedTuple):
-    """The board item a ticket's copy reaches and the category the board holds it at.
+    """The board item a ticket's copy reaches, the category the board holds it at, and the item.
 
-    Both `None` for a ticket the board holds no item for, which a copy would create.
+    All `None` for a ticket the board holds no item for, which a copy would create.
+    ``record`` is the item as the store shows it — its priority, record and content — read
+    in the same step, so the priority decision reads the item the status was read off.
     """
 
     item: BoardItemId | None
     category: str | None
+    record: Mapping[str, object] | None = None
 
 
 #: What one ticket's copy did to its item: the store's copy actions but `orphaned`, which a
@@ -1500,7 +1862,7 @@ def _planned(ticket: str, board: str) -> Placement:
             "a new item nor an existing one"
         )
     item = plan_store.task_record(destination)
-    return Placement(_native(destination, board), str(_category(item.get("status"))))
+    return Placement(_native(destination, board), str(_category(item.get("status"))), item)
 
 
 def board_category(ticket: str, board: str) -> str | None:
@@ -1567,19 +1929,20 @@ def _note_duplicate(duplicate: QualifiedTask, survivor: QualifiedTask, run: str)
     plan_store.sdk(plan_store.client().task_comment_add(duplicate.id.root, body=body))
 
 
-def bind(path: Path, board: str, item: BoardItemId) -> Ticket:
+def bind(path: Path, board: str, item: BoardItemId, *, pending: bool = False) -> Ticket:
     """Write ``item`` as the ticket's binding, and the store's origin naming it, into ``path``.
 
     Nothing is written when the ticket already carries both as they would be written.
+    ``pending`` reads the ticket as `board-status` does, before it writes the estimate.
     """
-    ticket = dataclasses.replace(read_ticket(path), board_item=item)
+    ticket = dataclasses.replace(read_ticket(path, pending=pending), board_item=item)
     rendered = render(ticket, board=board)
     if path.read_text(encoding="utf-8") != rendered:
         path.write_text(rendered, encoding="utf-8")
     return ticket
 
 
-def correspond(path: Path, board: str) -> Placement:
+def correspond(path: Path, board: str, *, pending: bool = False) -> Placement:
     """Establish the item ``board`` holds for the ticket at ``path``, and the category it holds.
 
     The board is read for every item
@@ -1588,8 +1951,10 @@ def correspond(path: Path, board: str) -> Placement:
     ticket not yet bound, becomes the binding. A binding is written only to an item that
     carries the ticket's origin. Then the store's dry-run copy is asked where the copy goes,
     and :class:`Misbound` refuses any destination that is not the binding, naming both.
+    ``pending`` reads the ticket as `board-status` does; every other caller reads it as one
+    about to be copied.
     """
-    ticket = read_ticket(path)
+    ticket = read_ticket(path, pending=pending, for_copy=not pending)
     run, root_cause = located_path(path.absolute())
     identifier = qualified_id(run, root_cause)
     carriers = _carriers(identifier, board)
@@ -1604,8 +1969,8 @@ def correspond(path: Path, board: str) -> Placement:
     elif bound is None and carriers:
         bound = next(iter(held))
     if bound is not None and bound in held:
-        bind(path, board, bound)
-    destination, category = _planned(identifier, board)
+        bind(path, board, bound, pending=pending)
+    destination, category, record = _planned(identifier, board)
     if bound is not None and (destination != bound or bound not in held):
         reported = (
             f"reports {board}:{destination} as where this ticket is copied"
@@ -1617,7 +1982,7 @@ def correspond(path: Path, board: str) -> Placement:
             f"the store {reported}, where its `{BINDING_FIELD}` binding is {board}:{bound}"
             f"{carried}: copy nothing and report it"
         )
-    return Placement(bound, category)
+    return Placement(bound, category, record)
 
 
 def copy_ticket(path: Path, board: str) -> Copied:
@@ -1664,6 +2029,212 @@ def copied_to(report: CopyReport, board: str, bound: BoardItemId | None) -> Copi
     return copied
 
 
+def stored_estimate(item: Mapping[str, object]) -> Priority | None:
+    """The estimate a board item's record stored, or `None` for a :data:`PRIOR_SCHEMAS` record.
+
+    :class:`Refused` for a record of any schema neither those nor :data:`SCHEMA`, and for a
+    schema-7 record storing none, or no level: every schema-7 record is written by
+    `board-status` or `re-estimate` with one, so such a record is one edited by hand, and
+    reading either as an older record would hand a person's priority back to the estimate.
+    """
+    held = _held_record(item)
+    schema = held.get("schema")
+    if type(schema) is int and schema in PRIOR_SCHEMAS:
+        return None
+    if type(schema) is not int or schema != SCHEMA:
+        raise Refused(
+            [
+                f"the board item {item.get('id')!r} carries a `{KEY}` record of schema "
+                f"{schema!r}, which no follow-up tool reads; report it rather than copying over it"
+            ]
+        )
+    stored = held.get(ESTIMATE_FIELD)
+    if stored not in ESTIMATES:
+        raise Refused(
+            [
+                f"the board item {item.get('id')!r} carries a schema-{SCHEMA} `{KEY}` record "
+                f"storing the `{ESTIMATE_FIELD}` {stored!r}, which is no estimate `board-status` "
+                "or `re-estimate` writes; report it rather than copying over it"
+            ]
+        )
+    return Priority(str(stored))
+
+
+# llmlint: ignore[changed_behavior_has_e2e] No board can reach this refusal: the store's
+# typed SDK refuses an answer whose priority is outside its vocabulary before this reads the
+# item, so the guard stands for a reader handed a mapping by hand, and a unit test drives it.
+def held_priority(item: Mapping[str, object]) -> Priority:
+    """The priority the store reports a board item at; :class:`OSError` for any other word."""
+    priority = item.get(PRIORITY_FIELD, Priority.NONE)
+    if priority not in tuple(Priority):
+        raise OSError(f"the store reported the priority {priority!r}, which is no priority")
+    return Priority(str(priority))
+
+
+def _record_frequency(held: Mapping[str, object], issue: str) -> Frequency | None:
+    """The frequency judgment ``issue``'s record carries, `None` when it carries none.
+
+    :class:`Refused` for a value that is no judgment, which is never read as its absence: a
+    record anybody with the board's credential can edit would otherwise lose its raise.
+    """
+    if FREQUENCY_FIELD not in held:
+        return None
+    frequency = held[FREQUENCY_FIELD]
+    if frequency not in tuple(Frequency):
+        raise Refused(
+            [
+                f"{issue}'s `{KEY}` record carries the `{FREQUENCY_FIELD}` {frequency!r}, which is "
+                "not one of " + ", ".join(f"`{one}`" for one in Frequency)
+            ]
+        )
+    return Frequency(str(frequency))
+
+
+def estimate_before_copy(path: Path, board: str, placement: Placement) -> Ticket:
+    """Write the ticket's estimate, its `## Impact` estimate line and its priority into ``path``.
+
+    The estimate is :func:`estimate` over the ticket's severity with the workaround, its
+    frequency, and the occurrences recounted off the item ``placement`` names; the priority
+    is :func:`follows_estimate` over what that item holds and what its record stored. The
+    ticket is read as it was before this wrote anything, and written only when it changes.
+    """
+    ticket = read_ticket(path, pending=True)
+    with_workaround = stated_with_workaround(ticket.body)
+    # `read_ticket` has just held the `## Impact` section to its lines, and says so otherwise.
+    assert with_workaround is not None  # noqa: S101
+    item = placement.record
+    issue = None if item is None else f"{board}:{item.get('id')}"
+    count = occurrences(issue, ticket.created_by_run, ticket.root_cause)
+    estimated = estimate(with_workaround, ticket.frequency, count)
+    priority = (
+        estimated
+        if item is None
+        else follows_estimate(held_priority(item), stored_estimate(item), estimated)
+    )
+    decided = dataclasses.replace(
+        ticket,
+        priority_estimate=estimated,
+        body=with_estimate_line(
+            ticket.body, estimate_line(with_workaround, ticket.frequency, count)
+        ),
+        priority=priority,
+    )
+    rendered = render(decided, board=board)
+    if path.read_text(encoding="utf-8") != rendered:
+        path.write_text(rendered, encoding="utf-8")
+    return decided
+
+
+class ReEstimated(NamedTuple):
+    """What one `re-estimate` decided for a board item: its estimate, count and priority."""
+
+    item: str
+    priority_estimate: Priority
+    occurrences: int
+    priority: Priority
+
+
+def re_estimate(board: str, issue: str) -> ReEstimated:
+    """Recompute one board item's estimate, and persist it and the lockstep rule's decision.
+
+    The narrow write a run makes on an item another run owns, after it comments there: the
+    item is read as the board holds it, its occurrences recounted off its comments, and the
+    estimate recomputed from its body's severity with the workaround and its record's
+    frequency. The priority is written with `task priority set` only when
+    :func:`follows_estimate` has it follow to a new value, so a priority a person holds is
+    never rewritten; then the content just read, with its estimate line replaced — or added
+    after the severity lines where a schema-6 content has none — with `task content set`; and
+    last the record, brought to :data:`SCHEMA`, with `task metadata set`. Nothing else about
+    the item, its status included, is written. :class:`Refused` for an item that is no
+    follow-up ticket this reads.
+    """
+    matched = QUALIFIED_ID.fullmatch(issue)
+    if matched is None or matched["source"] != board:
+        raise Refused([f"{issue!r} is not an item of the board {board!r}, as `<board>:<id>`"])
+    item = plan_store.task_record(issue)
+    held = _held_record(item)
+    creator = held.get("created_by_run")
+    schema = held.get("schema")
+    if type(schema) is not int or schema not in (SCHEMA, PRIOR_SCHEMA):
+        raise Refused(
+            [
+                f"{issue} carries a `{KEY}` record of schema {schema!r}, and this reads schema "
+                f"{PRIOR_SCHEMA} or {SCHEMA}; report it rather than estimating over it"
+            ]
+        )
+    if not _is_run(creator):
+        raise Refused(
+            [
+                f"{issue} carries no `{KEY}` record naming the run that created it, so it is "
+                "no follow-up ticket this can estimate"
+            ]
+        )
+    # The whole record is held to its shape before anything is written from it, as
+    # `board-status` reads a ticket: a schema-6 record, or one storing no estimate yet, is
+    # what this brings forward, and nothing else about it may be unsound.
+    if unsound := _record_problems(held, run=None, root_cause=None, pending=True):
+        raise Refused([f"{issue}'s `{KEY}` record is not sound: {problem}" for problem in unsound])
+    # The item is written below as the ticket its record describes, so it has to be the item
+    # copied from that ticket: the store's origin names it in the drafts source, and nothing
+    # else identifies it. An origin on another source is a ticket's own, never a board item's.
+    metadata = item.get("metadata")
+    origin = metadata.get(ORIGIN_KEY) if isinstance(metadata, Mapping) else None
+    matched = QUALIFIED_ID.fullmatch(origin) if isinstance(origin, str) else None
+    if matched is not None and matched["source"] != SOURCE:
+        raise Refused(
+            [
+                f"{issue} is not the item copied from the ticket its `{KEY}` record describes: "
+                f"`{ORIGIN_KEY}` names {origin!r}, which is no `{SOURCE}` ticket"
+            ]
+        )
+    if origin is None or (unsound := _origin_problems(origin, held)):
+        raise Refused(
+            [
+                f"{issue} is not the item copied from the ticket its `{KEY}` record describes: "
+                + ("it carries no `" + ORIGIN_KEY + "`" if origin is None else unsound[0])
+            ]
+        )
+    content = item.get("content")
+    text = content if isinstance(content, str) else ""
+    with_workaround = stated_with_workaround(text)
+    span = _impact_span(text)
+    if with_workaround is None or span is None:
+        raise Refused(
+            [
+                f"{issue}'s content states no `- {MITIGATED_LINE}:` severity in its "
+                f"`## {IMPACT}` section, so there is nothing to estimate from"
+            ]
+        )
+    # The whole body is written back below, so it is held to a ticket's shape first — every
+    # section in its place with content, and the `## Impact` section to its lines: prose, the
+    # three severity lines once each and in order, and at most one estimate line after them —
+    # and a malformed one is refused rather than written back.
+    if unsound := _body_problems(text, held.get("host"), None):
+        raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
+    frequency = _record_frequency(held, issue)
+    count = occurrences(issue, str(creator), str(held["root_cause"]))
+    estimated = estimate(with_workaround, frequency, count)
+    board_priority = held_priority(item)
+    priority = follows_estimate(board_priority, stored_estimate(item), estimated)
+    client = plan_store.client()
+    # The stored estimate is written last, because it is what the next re-estimate compares
+    # the board's priority to: stored first, a refused priority write would leave it beside
+    # the old priority, which every later touch would read as a person's and never raise.
+    # Written last, a refusal leaves either the old priority beside the old estimate, still
+    # following, or the priority already at the new estimate, which a retry leaves as it is.
+    if priority is not board_priority:
+        plan_store.sdk(client.task_priority_set(issue, priority.value))
+    rewritten = with_estimate_line(text, estimate_line(with_workaround, frequency, count))
+    if rewritten != text:
+        with tempfile.TemporaryDirectory(prefix="re-estimate-") as scratch:
+            written = Path(scratch) / "content.md"
+            written.write_text(rewritten, encoding="utf-8")
+            plan_store.sdk(client.task_content_set(issue, file=str(written)))
+    record = {**held, "schema": SCHEMA, ESTIMATE_FIELD: estimated.value}
+    plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(record)))
+    return ReEstimated(issue, estimated, count, priority)
+
+
 def status_before_copy(held: str | None, *, withdraw: bool) -> Status:
     """The status a ticket is copied with, given the category the board holds its item at.
 
@@ -1697,13 +2268,14 @@ def render_comment(run: str, root_cause: str, evidence: str) -> str:
     return f"{comment_opening(run)}\n\n{evidence.strip()}\n\n{comment_marker(run, root_cause)}\n"
 
 
-def reply_marker(run: str, root_cause: str, answers: str) -> str:
+def reply_marker(run: str, root_cause: str, answers: str, verdict: str) -> str:
     """The exact last line of ``run``'s reply to the comment whose id is ``answers``.
 
-    ``root_cause`` is the one in the ticket record of the issue the reply is posted on.
+    ``root_cause`` is the one in the ticket record of the issue the reply is posted on, and
+    ``verdict`` whether ``run`` judged that comment to confirm it.
     """
     return REPLY_MARKER.format(
-        run=run, root_cause=root_cause, kind=CommentKind.REPLY, answers=answers
+        run=run, root_cause=root_cause, kind=CommentKind.REPLY, answers=answers, verdict=verdict
     )
 
 
@@ -1714,8 +2286,15 @@ def reply_opening(run: str, url: str, author: str | None) -> str:
     return REPLY_OPENING.format(run=run, author=author, url=url)
 
 
-def render_reply(
-    run: str, root_cause: str, *, answers: str, url: str, author: str | None, response: str
+def render_reply(  # noqa: PLR0913 - every part of a reply is its own keyword
+    run: str,
+    root_cause: str,
+    *,
+    answers: str,
+    url: str,
+    author: str | None,
+    response: str,
+    verdict: Verdict,
 ) -> str:
     """A whole reply ``run`` posts to one comment: opening, response, marker.
 
@@ -1730,7 +2309,7 @@ def render_reply(
             ]
         )
     opening = reply_opening(run, url, author)
-    marker = reply_marker(run, root_cause, answers)
+    marker = reply_marker(run, root_cause, answers, verdict)
     return f"{opening}\n\n{response.strip()}\n\n{marker}\n"
 
 
@@ -1739,9 +2318,10 @@ def comment_owner(body: str) -> CommentOwner | None:
 
     Every part is held to its grammar, because the marker is stored text anybody with the
     board's credential can write: a value that is not a run id or a root-cause slug, a `kind`
-    other than `reply`, a reply naming no id or one outside :data:`COMMENT_ID`, or an
-    evidence marker naming an id, names no run's comment. A marker with no `kind` is an
-    evidence comment, which is every comment written before replies existed.
+    other than `reply`, a reply naming no id or one outside :data:`COMMENT_ID`, a verdict
+    outside :class:`Verdict`, or an evidence marker naming an id or a verdict, names no run's
+    comment. A marker with no `kind` is an evidence comment, which is every comment written
+    before replies existed; a reply with no verdict is one written before verdicts existed.
     """
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     matched = COMMENT_MARKER_LINE.fullmatch(lines[-1]) if lines else None
@@ -1752,13 +2332,54 @@ def comment_owner(body: str) -> CommentOwner | None:
     ):
         return None
     owner = CommentOwner(RunId(matched["run"]), RootCause(matched["root_cause"]))
+    verdict = matched["verdict"]
     match matched["kind"], matched["answers"]:
-        case None, None:
+        case None, None if verdict is None:
             return owner
-        case CommentKind.REPLY, str(answers) if COMMENT_ID.fullmatch(answers):
-            return owner._replace(kind=CommentKind.REPLY, answers=CommentId(answers))
+        case CommentKind.REPLY, str(answers) if COMMENT_ID.fullmatch(answers) and (
+            verdict is None or verdict in tuple(Verdict)
+        ):
+            return owner._replace(
+                kind=CommentKind.REPLY,
+                answers=CommentId(answers),
+                verdict=None if verdict is None else Verdict(verdict),
+            )
         case _:
             return None
+
+
+def counts_as_occurrence(body: str, created_by_run: str, root_cause: str) -> bool:
+    """Whether a comment on a ticket's issue counts toward the occurrences of ``root_cause``.
+
+    Decided by what the comment's marker states: an evidence comment of any run but the one
+    that created the issue counts, and so does a reply whose verdict is `confirms`, each only
+    while its marker names the issue's own root cause. Nothing else does: the creating run's
+    own evidence is the ticket's, a reply without a verdict or one not confirming is no
+    occurrence, a marker naming another root cause is evidence about that one, and a comment
+    no run's marker names — a person's, or a duplicate note — is not a run's judgment.
+    """
+    owner = comment_owner(body)
+    if owner is None or owner.root_cause != root_cause:
+        return False
+    if owner.kind is CommentKind.REPLY:
+        return owner.verdict is Verdict.CONFIRMS
+    return owner.run != created_by_run
+
+
+def occurrences(issue: str | None, created_by_run: str, root_cause: str) -> int:
+    """How many times the root cause of the ticket at ``issue`` has been seen, recounted now.
+
+    One for the ticket's own evidence, plus each comment :func:`counts_as_occurrence` admits,
+    read off the board issue's comments at the moment of asking: nothing stores the count,
+    so a comment added directly to the board is counted by the next computation. A ticket
+    with no board item yet counts one.
+    """
+    if issue is None:
+        return 1
+    listed = plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
+    return 1 + sum(
+        counts_as_occurrence(comment.body, created_by_run, root_cause) for comment in listed
+    )
 
 
 def issue_owner(item: Mapping[str, object]) -> RunId | None:
@@ -1857,14 +2478,16 @@ _DISPOSITION_MEANINGS = {
 #: way a gathering's feedback is, so nothing here reaches the board as an item.
 DISPOSITIONS_DIRECTORY = "dispositions"
 
-#: The version of both artifacts below. A reader refuses any other, since each is a stored
-#: shape another program reads.
-ARTIFACT_SCHEMA = 1
+#: The version of each artifact below. A reader refuses any other, since each is a stored
+#: shape another program reads. The response artifact's schema 2 added each entry's
+#: `verdict`, the one its reply's marker carries.
+DISPOSITIONS_SCHEMA = 1
+RESPONSES_SCHEMA = 2
 
 DISPOSITION_KEYS = ("schema", "run", "drafts", "dispositions")
 DISPOSITION_ENTRY_KEYS = ("draft", "disposition", "root_causes", "detail")
 RESPONSE_KEYS = ("schema", "run", "feedback", "responses")
-RESPONSE_ENTRY_KEYS = ("comment", "issue", "action", "reply")
+RESPONSE_ENTRY_KEYS = ("comment", "issue", "action", "reply", "verdict")
 
 RESPONSES_SUFFIX = ".responses.json"
 
@@ -1898,6 +2521,7 @@ class Response:
     comment: Quoted
     action: str
     reply: CommentId
+    verdict: Verdict
 
 
 def quoted_comment(issue: str, comment: str) -> str:
@@ -2289,9 +2913,13 @@ def written_tickets(root: Path, run: str) -> dict[str, tuple[QualifiedDraftId, .
 
 
 def filed_board_problems(root: Path, run: str, causes: Collection[str], board: str) -> list[str]:
-    """Filed root causes whose ticket or evidence comment did not reach ``board``.
+    """Filed root causes whose ticket or evidence comment did not reach ``board`` as it should.
 
-    An account filing nothing has nothing on the board to check, so the board is not read.
+    Each filed root cause's evidence reached either this run's own bound item or another
+    run's open issue carrying this run's evidence comment, and either one carries the
+    estimate its comments recount to now (:func:`board_estimate_problems`). A ticket this run
+    copied also carries the priority its ticket file does, which is what the copy wrote. An
+    account filing nothing has nothing on the board to check, so the board is not read.
     """
     if not causes:
         return []
@@ -2300,7 +2928,8 @@ def filed_board_problems(root: Path, run: str, causes: Collection[str], board: s
     for cause in sorted(causes):
         ticket = read_ticket(ticket_path(root, run, cause))
         origin = qualified_id(run, cause)
-        carried = False
+        carrier: str | None = None
+        copied = False
         for item in items:
             metadata = item.item.metadata or {}
             if (
@@ -2308,7 +2937,7 @@ def filed_board_problems(root: Path, run: str, causes: Collection[str], board: s
                 and metadata_owner(metadata) == run
                 and ticket.board_item == _native(item.id.root, board)
             ):
-                carried = True
+                carrier, copied = item.id.root, True
                 break
             held = metadata.get(KEY)
             if not isinstance(held, Mapping) or held.get("root_cause") != cause:
@@ -2321,12 +2950,19 @@ def filed_board_problems(root: Path, run: str, causes: Collection[str], board: s
                 and owner.kind is CommentKind.EVIDENCE
                 for comment in comments
             ):
-                carried = True
+                carrier = item.id.root
                 break
-        if not carried:
+        if carrier is None:
             found.append(
                 f"the filed root cause {cause} has a local ticket but no bound item or "
                 f"evidence comment of run {run} on {board}, so its evidence did not reach the board"
+            )
+            continue
+        found.extend(board_estimate_problems(carrier))
+        if copied and (held := held_priority(plan_store.task_record(carrier))) != ticket.priority:
+            found.append(
+                f"{carrier} holds the priority `{held}`, where the ticket this run copied onto it "
+                f"carries `{ticket.priority}`; copy the ticket again after `board-status`"
             )
     return found
 
@@ -2375,7 +3011,7 @@ def open_dispositions(root: Path, run: str) -> Path:
     """
     path = dispositions_path(root, run)
     existing = path.is_file()
-    document = _artifact(path) if existing else {"schema": ARTIFACT_SCHEMA, "run": run}
+    document = _artifact(path) if existing else {"schema": DISPOSITIONS_SCHEMA, "run": run}
     # The two keys this writes are the two a first pass has yet to hold, so their absence
     # is what an artifact opened for the first time looks like rather than a refusal.
     found = _envelope_problems(
@@ -2383,6 +3019,7 @@ def open_dispositions(root: Path, run: str) -> Path:
         run,
         DISPOSITION_KEYS,
         "dispositions",
+        DISPOSITIONS_SCHEMA,
         optional=() if existing else ("drafts", "dispositions"),
     )
     recorded: list[QualifiedDraftId] = []
@@ -2405,7 +3042,7 @@ def open_dispositions(root: Path, run: str) -> Path:
     if found:
         raise Refused([f"{path} is not this run's account: {problem}" for problem in found])
     written = {
-        "schema": ARTIFACT_SCHEMA,
+        "schema": DISPOSITIONS_SCHEMA,
         "run": run,
         "drafts": expected,
         "dispositions": entries if isinstance(entries, list) else [],
@@ -2453,6 +3090,7 @@ def _envelope_problems(
     run: str,
     keys: Sequence[str],
     entries: str,
+    schema: int,
     optional: Sequence[str] = (),
 ) -> list[str]:
     """What is wrong with an artifact's envelope: its schema, its run, and its keys.
@@ -2462,10 +3100,8 @@ def _envelope_problems(
     for the two keys that call is about to put there.
     """
     found = []
-    if type(document.get("schema")) is not int or document.get("schema") != ARTIFACT_SCHEMA:
-        found.append(
-            f"its `schema` is {document.get('schema')!r}, and this reads schema {ARTIFACT_SCHEMA}"
-        )
+    if type(document.get("schema")) is not int or document.get("schema") != schema:
+        found.append(f"its `schema` is {document.get('schema')!r}, and this reads schema {schema}")
     if document.get("run") != run:
         found.append(f"its `run` is {document.get('run')!r} rather than {run!r}")
     if unknown := sorted(set(document) - set(keys)):
@@ -2572,7 +3208,7 @@ def disposition_problems(
     cause no ticket carries — or under one whose ticket never names it — says its evidence
     reached the board when nothing did.
     """
-    found = _envelope_problems(document, run, DISPOSITION_KEYS, "dispositions")
+    found = _envelope_problems(document, run, DISPOSITION_KEYS, "dispositions", DISPOSITIONS_SCHEMA)
     expected, problems = _drafts_recorded(document.get("drafts"), run)
     found.extend(problems)
     found.extend(
@@ -2650,10 +3286,20 @@ def _response(
             f"{named} names the issue {issue!r}, and {feedback.name} quotes that comment on "
             + ", ".join(one.issue for one in same_id)
         ]
-    if found := _prose(entry, "action", named) + _prose(entry, "reply", named):
+    found = _prose(entry, "action", named) + _prose(entry, "reply", named)
+    verdict = entry.get("verdict")
+    if verdict not in tuple(Verdict):
+        found.append(
+            f"{named} states the verdict {verdict!r}, where every response states one of "
+            + ", ".join(f"`{one}`" for one in Verdict)
+        )
+    if found:
         return None, found
     return Response(
-        comment=held[0], action=str(entry["action"]), reply=CommentId(str(entry["reply"]))
+        comment=held[0],
+        action=str(entry["action"]),
+        reply=CommentId(str(entry["reply"])),
+        verdict=Verdict(str(verdict)),
     ), []
 
 
@@ -2667,7 +3313,7 @@ def response_problems(
     responses come back so the board read below can be asked about the replies they name
     rather than about the comments alone.
     """
-    found = _envelope_problems(document, run, RESPONSE_KEYS, "responses")
+    found = _envelope_problems(document, run, RESPONSE_KEYS, "responses", RESPONSES_SCHEMA)
     if document.get("feedback") != feedback.name:
         found.append(
             f"its `feedback` is {document.get('feedback')!r} rather than {feedback.name!r}, so "
@@ -2720,12 +3366,17 @@ def replies_posted(run: str, answered: Sequence[Response]) -> list[str]:
 
     A comment a person edited after this run answered it is gathered again and owed a new
     reply, so only the replies at or after the comment's last change — the gatherer's own
-    test of whether a reply answers it — are held to exactly one.
+    test of whether a reply answers it — are held to exactly one. That reply's marker states
+    the verdict its response states, and each issue a `confirms` reply sits on carries the
+    estimate its comments, that reply included, recount to (:func:`board_estimate_problems`).
     """
     from . import follow_up_comments
 
     replies: dict[str, dict[CommentId, dict[CommentId, datetime]]] = {}
     changed: dict[str, dict[CommentId, datetime]] = {}
+    # Keyed by issue as well as id: a board's comment ids may be unique within an issue alone.
+    verdicts: dict[tuple[str, CommentId], Verdict | None] = {}
+    causes: dict[tuple[str, CommentId], RootCause] = {}
     for issue in sorted({one.comment.issue for one in answered}):
         held: dict[CommentId, dict[CommentId, datetime]] = {}
         dated: dict[CommentId, datetime] = {}
@@ -2737,6 +3388,8 @@ def replies_posted(run: str, answered: Sequence[Response]) -> list[str]:
             owner = comment_owner(comment.body)
             if owner is not None and owner.run == run and owner.answers is not None:
                 held.setdefault(owner.answers, {})[identifier] = dated[identifier]
+                verdicts[issue, identifier] = owner.verdict
+                causes[issue, identifier] = owner.root_cause
         replies[issue] = held
         changed[issue] = dated
     found = []
@@ -2760,6 +3413,80 @@ def replies_posted(run: str, answered: Sequence[Response]) -> list[str]:
                 f"the board holds {len(posted)} replies of run {run} answering comment "
                 f"{one.comment.comment} on {one.comment.issue}, and it owes exactly one"
             )
+        elif (marked := verdicts[one.comment.issue, one.reply]) is not one.verdict:
+            found.append(
+                f"the response to comment {one.comment.comment!r} states the verdict "
+                f"`{one.verdict}`, and its reply {one.reply}'s marker states "
+                + ("none" if marked is None else f"`{marked}`")
+            )
+    if found:
+        return found
+    confirmed = sorted({one.comment.issue for one in answered if one.verdict is Verdict.CONFIRMS})
+    # A confirmation counts toward its issue's recount only when its marker names the root
+    # cause the issue's record describes, so one naming any other confirms nothing there.
+    cause = {
+        issue: _held_record(plan_store.task_record(issue)).get("root_cause") for issue in confirmed
+    }
+    for one in answered:
+        if (
+            one.verdict is Verdict.CONFIRMS
+            and (named := causes[one.comment.issue, one.reply]) != cause[one.comment.issue]
+        ):
+            found.append(
+                f"the response to comment {one.comment.comment!r} confirms, and its reply "
+                f"{one.reply}'s marker names the root cause `{named}`, where {one.comment.issue}'s "
+                f"record describes {cause[one.comment.issue]!r}; it confirms nothing there"
+            )
+    if found:
+        return found
+    return [problem for issue in confirmed for problem in board_estimate_problems(issue)]
+
+
+def board_estimate_problems(issue: str) -> list[str]:
+    """How the board item ``issue`` carries an estimate other than its comments recount to now.
+
+    Its record's :data:`ESTIMATE_FIELD` has to be :func:`estimate` over its body's severity
+    with the workaround, its record's frequency and the occurrences recounted off its
+    comments at this moment; and its `## Impact` estimate line has to be that estimate's line.
+    """
+    item = plan_store.task_record(issue)
+    held = _held_record(item)
+    content = item.get("content")
+    text = content if isinstance(content, str) else ""
+    with_workaround = stated_with_workaround(text)
+    creator = held.get("created_by_run")
+    schema = held.get("schema")
+    if type(schema) is not int or schema != SCHEMA:
+        return [
+            f"{issue} carries no schema-{SCHEMA} `{KEY}` record: it declares schema "
+            f"{schema!r}; run `re-estimate` on it"
+        ]
+    cause = held.get("root_cause")
+    if with_workaround is None or not _is_run(creator) or not _is_slug(cause):
+        return [
+            f"{issue} carries no schema-{SCHEMA} `{KEY}` record with a severity to estimate "
+            "from; run `re-estimate` on it"
+        ]
+    try:
+        frequency = _record_frequency(held, issue)
+    except Refused as refusal:
+        return list(refusal.problems)
+    count = occurrences(issue, str(creator), str(cause))
+    estimated = estimate(with_workaround, frequency, count)
+    found = []
+    if held.get(ESTIMATE_FIELD) != estimated:
+        found.append(
+            f"{issue}'s record stores the estimate {held.get(ESTIMATE_FIELD)!r}, where its "
+            f"{_occurrence_words(count)} recount to `{estimated}`; run `re-estimate` on it"
+        )
+    span = _impact_span(text)
+    written = [line[0] for line in _ESTIMATE_AT.finditer(text, *span)] if span else []
+    line = estimate_line(with_workaround, frequency, count)
+    if written != [line]:
+        found.append(
+            f"{issue}'s `## {IMPACT}` estimate line reads {written!r}, where its record and "
+            f"its {_occurrence_words(count)} render {line!r}; run `re-estimate` on it"
+        )
     return found
 
 
@@ -2772,13 +3499,15 @@ _HEADING_GUIDANCE = (
     "words, most severe first: "
     + "; ".join(f"`{severity}`, {severity.meaning}" for severity in Severity)
     + ". The severity with the workaround is never above the severity, and a workaround of "
-    f"exactly `{NO_WORKAROUND}` leaves the two the same>\n\n"
+    f"exactly `{NO_WORKAROUND}` leaves the two the same. The fourth line, the priority "
+    "estimate and why, is written by `board-status` and never by you>\n\n"
     + impact_section(
         "",
         "<the severity with no workaround applied>",
         "<the workaround in place and how it is applied, or none>",
         "<the severity that remains once the workaround is accounted for>",
-    ).strip(),
+    )
+    + f"- {ESTIMATE_LINE}: <written by `board-status`: the estimate and why>",
     "<one or more examples of it>",
     "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
     "the qualified draft id, its run and node, the verified claim with `path:line` at the "
@@ -2839,6 +3568,13 @@ def ticket_contract(run: str, board: str) -> str:
         board_item=BoardItemId(
             "<written by `board-status` or `copy`, never by you; absent until one writes it>"
         ),
+        # Placeholders where the record holds a word of a vocabulary: `record` and `render`
+        # write each through `str`, which is the word for a member and the text for these.
+        priority_estimate=cast(Priority, "<written by `board-status`, never by you>"),
+        frequency=cast(
+            Frequency, f"<`{Frequency.CONSISTENT}` or `{Frequency.INTERMITTENT}`: your judgment>"
+        ),
+        priority=cast(Priority, "<written by `board-status`, never by you>"),
     )
     ticket = qualified_id(run, "<root-cause>")
     headings = ", ".join(f"`## {heading}`" for heading in HEADINGS)
@@ -2868,6 +3604,10 @@ def ticket_contract(run: str, board: str) -> str:
         f"- **Before every copy, run `@BOARD_STATUS@ --board {board} <path of the ticket>`** "
         "(adding `--withdraw` for a ticket this run withdraws, before you change that ticket), "
         "write the word it prints as the ticket's `status`, and validate the ticket again. It "
+        f"reads the board item's `{PRIORITY_FIELD}`, its record's `{ESTIMATE_FIELD}` and its "
+        f"comments in the same step, and writes the ticket's `{ESTIMATE_FIELD}`, its estimate "
+        f"line and its `{PRIORITY_FIELD}` as the rule above decides, which the copy carries onto "
+        "the board. It "
         f"exits {SOUND} with that word; {UNPLACED} when the board holds the item at a status "
         f"no ticket carries; {PROTECTED} for a withdrawal of an item the board shows as "
         f"accepted or deferred; {OUTSIDE_OWNER} when the ticket's repository is not one of "
@@ -2885,6 +3625,24 @@ def ticket_contract(run: str, board: str) -> str:
         f"- Its front matter carries the `{KEY}` record with every key present, and its body "
         f"the headings {headings}, in that order, each with content. `created_by_run` is "
         "this run, and `owning_runs` includes it.\n"
+        f"- **Its priority is estimated from facts, never chosen.** Judge from the original "
+        f"evidence whether the root cause fires consistently, and record it as the `{KEY}` "
+        f"record's `{FREQUENCY_FIELD}`: `{Frequency.CONSISTENT}` when it fires every time its "
+        f"conditions hold, `{Frequency.INTERMITTENT}` when it fires only sometimes or only in "
+        f"certain situations. `@VALIDATE@` refuses a ticket without it. The record's "
+        f"`{ESTIMATE_FIELD}`, the `## {IMPACT}` section's `- {ESTIMATE_LINE}:` line and the front "
+        f"matter's `{PRIORITY_FIELD}` are `@BOARD_STATUS@`'s to write and never yours; when "
+        "you rewrite a ticket, keep them as it wrote them. The estimate is the severity with "
+        + "the workaround, one level for one level ("
+        + ", ".join(f"`{severity}` is `{level}`" for severity, level in _BASE_PRIORITY.items())
+        + f"), raised one level, capped at `{Priority.URGENT}`, when `{FREQUENCY_FIELD}` is "
+        f"`{Frequency.CONSISTENT}` or the root cause has {RAISE_AT} or more occurrences: the "
+        "ticket's own evidence, plus each evidence comment another run left on its board "
+        f'issue and each reply whose marker carries `verdict="{Verdict.CONFIRMS}"`, recounted '
+        "off the issue's comments every time and stored nowhere. The board item's priority "
+        "follows the estimate while it holds the estimate its record stored — or holds none, "
+        "where its record stored none — and is otherwise a person's decision, which every copy "
+        "keeps: a person who sets it back to the estimate hands it back to the estimate.\n"
         f"- **`## {SUGGESTED_FIX}` states one concrete fix**: a single change, or a single set "
         "of changes that together remove the root cause, never a list of options or "
         f"alternatives to choose between. `## {REJECTED_FIXES}` is optional: when another fix "
@@ -2950,7 +3708,10 @@ def ticket_contract(run: str, board: str) -> str:
 def comment_contract(run: str, board: str) -> str:
     """C6, as the follow-up agent is told it: who owns what on the board."""
     evidence = comment_marker(run, "<root-cause>")
-    reply = reply_marker(run, "<root-cause>", "<comment id>")
+    reply = reply_marker(
+        run, "<root-cause>", "<comment id>", f"<{Verdict.CONFIRMS} or {Verdict.DOES_NOT_CONFIRM}>"
+    )
+    re_estimate = f"`@RE_ESTIMATE@ --board {board} <the issue's id, as `{board}:<id>`>`"
     return (
         f"- **Ownership is by run.** An issue on `{board}` belongs to the run its `{KEY}` "
         "record's `created_by_run` names. A comment belongs to the run named in its **last "
@@ -2958,7 +3719,16 @@ def comment_contract(run: str, board: str) -> str:
         f"`{run}`, may create, edit (by copying its ticket again) or close as not planned only "
         f"issues whose `created_by_run` is `{run}`, and may edit or delete only comments whose "
         f"marker names `{run}`. It never changes an issue or a comment belonging to another "
-        "run.\n"
+        f"run, but for the one write below: {re_estimate}.\n"
+        f"- **{re_estimate} re-estimates an issue's priority after this run comments on it.** "
+        "It recounts the issue's occurrences off its comments, stores the estimate in its "
+        f"`{KEY}` record — bringing a schema-{PRIOR_SCHEMA} record to schema {SCHEMA} — "
+        f"rewrites the `- {ESTIMATE_LINE}:` line of its `## {IMPACT}` section, and moves its "
+        "priority only while the board holds the estimate its record stored (or holds none, "
+        "where it stored none), so a priority a person set stays. It changes nothing else about "
+        "the issue, its status included. Run it on the issue each time this run adds or edits "
+        "an evidence comment there, and each time it posts a reply marked "
+        f'`verdict="{Verdict.CONFIRMS}"` there; never on any other occasion.\n'
         "- **An evidence comment** carries this run's evidence on another run's issue. Its last "
         "line is exactly\n\n"
         f"  `{evidence}`\n\n"
@@ -2976,7 +3746,12 @@ def comment_contract(run: str, board: str) -> str:
         f"  `{reply}`\n\n"
         "  where `<root-cause>` is the `root_cause` in the ticket record of the issue the reply "
         "is posted on, and `answers` is the id of the comment it answers, exactly as the "
-        "feedback gives it. Its first line is visible to a reader: "
+        "feedback gives it. `verdict` is this run's judgment of the comment: "
+        f"`{Verdict.CONFIRMS}` when it confirms the issue's root cause occurs — a new sighting "
+        "of it, or evidence that it is more prevalent than the ticket says — and "
+        f"`{Verdict.DOES_NOT_CONFIRM}` for anything else: a question, a correction, a "
+        "disagreement. A confirming reply counts as one more occurrence of the root cause. "
+        "Its first line is visible to a reader: "
         f"`{reply_opening(run, '<comment URL>', '<author>')}`, or "
         f"`{reply_opening(run, '<comment URL>', None)}` when the feedback reports no author. "
         "After a blank line comes the response: what this run did about the comment and why, "
@@ -3013,7 +3788,7 @@ def disposition_contract(run: str) -> str:
     )
     example = _keyed(
         DISPOSITION_KEYS,
-        ARTIFACT_SCHEMA,
+        DISPOSITIONS_SCHEMA,
         run,
         ["<written for you; do not add to it, remove from it, or reorder it>"],
         [entry],
@@ -3037,8 +3812,10 @@ def disposition_contract(run: str) -> str:
         f"when every draft carries exactly one disposition with everything that disposition "
         f"owes, and {UNSOUND} naming each draft that is absent, that carries more than one, "
         "or whose disposition links it to no root cause where it must, to one this run "
-        "holds no ticket for, or to a ticket whose `drafts` does not name it. This dispatch "
-        "is not finished while it refuses.\n"
+        "holds no ticket for, or to a ticket whose `drafts` does not name it; and each filed "
+        "root cause whose board item does not store the estimate its comments recount to or "
+        "state it on its estimate line, or whose item this run copied and does not hold the "
+        "priority its ticket carries. This dispatch is not finished while it refuses.\n"
     )
 
 
@@ -3050,22 +3827,28 @@ def response_contract(run: str) -> str:
         "<the issue id, exactly as the comment's section gives it>",
         "<what this run did about the comment, or why it did nothing>",
         "<the id `@PLAN_STORE@ task comment add` printed for the reply>",
+        f"<{Verdict.CONFIRMS} or {Verdict.DOES_NOT_CONFIRM}: the verdict the reply's marker "
+        "carries>",
     )
-    example = _keyed(RESPONSE_KEYS, ARTIFACT_SCHEMA, run, "@FEEDBACK_FILE@", [entry])
+    example = _keyed(RESPONSE_KEYS, RESPONSES_SCHEMA, run, "@FEEDBACK_FILE@", [entry])
     return (
         "**Every comment this feedback quotes is accounted for, exactly once, in the order "
         "it is quoted.** The account is a JSON document at `@RESPONSES@`, which you write. "
         "One entry per quoted comment, in that order:\n\n"
         f"````json\n{json.dumps(example, indent=2)}\n````\n\n"
         "`action` is what you did before the reply went up, in your words; `reply` is the id "
-        "of the reply you posted for that comment, which is the one the board gave it.\n\n"
+        "of the reply you posted for that comment, which is the one the board gave it; and "
+        "`verdict` is the verdict that reply's marker carries.\n\n"
         "**`@CHECK_RESPONSES@` is what says the account is complete.** Run it, correct the "
         f"document until it reports the account sound, and run it again. It exits {SOUND} "
         "when every quoted comment carries exactly one response, in order, naming the issue "
-        "the feedback quotes it on, and the board holds a reply of this run answering it; "
-        f"and {UNSOUND} naming each comment that is absent, answered twice, out of order, or "
-        "whose reply the board does not hold. This dispatch is not finished while it "
-        "refuses.\n"
+        "the feedback quotes it on and its verdict, the board holds a reply of this run "
+        "answering it whose marker carries that verdict, and every issue a "
+        f"`{Verdict.CONFIRMS}` reply sits on stores the estimate its comments recount to and "
+        f"states it on its estimate line; and {UNSOUND} naming each comment that is absent, "
+        "answered twice, out of order, or whose reply the board does not hold or marks with "
+        "another verdict, and each issue whose estimate or estimate line disagrees — run "
+        "`@RE_ESTIMATE@` on that issue. This dispatch is not finished while it refuses.\n"
     )
 
 
@@ -3099,6 +3882,12 @@ comments of this run may already exist. "Ownership on the board" above binds eve
   `## Rejected fixes` re-derived to match, and `@BOARD_STATUS@ --board @BOARD@ <path of
   the ticket>` refusing an entry is the signal to re-derive that ticket before copying it;
   nothing else about an older ticket moves.
+- a schema-6 ticket of this run is brought to schema 7 by recording its `frequency` from
+  the evidence it already carries, then running `@BOARD_STATUS@ --board @BOARD@ <path of
+  the ticket>`, which writes its `priority_estimate`, its `## Impact` estimate line and its
+  `priority` and reads its schema-6 board item as storing no estimate; validate it and copy
+  it. Another run's schema-6 item is brought forward by `@RE_ESTIMATE@ --board @BOARD@ <its
+  id>` alone, and only after this run comments on it.
 """
 
 #: The heading the manager's feedback goes under, above the feedback itself.
@@ -3167,6 +3956,7 @@ def compose(
     board_status: str,
     board_items: str,
     copy: str,
+    re_estimate: str,
     checkout: Path,
     plan_store: str,
     feedback: str | None,
@@ -3226,6 +4016,7 @@ def compose(
         "BOARD_STATUS": board_status,
         "BOARD_ITEMS": board_items,
         "COPY": copy,
+        "RE_ESTIMATE": re_estimate,
         "CHECKOUT": str(checkout),
         "PLAN_STORE": plan_store,
         "ACCEPTED_STATUSES": accepted_statuses(),
@@ -3353,6 +4144,15 @@ def _parser() -> _Parser:
     )
     copied.add_argument("--board", required=True, metavar="SOURCE")
     copied.add_argument("path", type=Path, metavar="PATH")
+    estimated = commands.add_parser(
+        "re-estimate",
+        help=(
+            "recompute one board item's priority estimate from its comments, and write its "
+            "record, its estimate line, and its priority where the lockstep rule has it follow"
+        ),
+    )
+    estimated.add_argument("--board", required=True, metavar="SOURCE")
+    estimated.add_argument("item", metavar="ITEM", help="the board item, as `<board>:<id>`")
     listing = commands.add_parser(
         "board-items",
         help="print every item of a board one query selects, every page, as one JSON result",
@@ -3437,6 +4237,7 @@ def _parser() -> _Parser:
     task.add_argument("--board-status", required=True, metavar="COMMAND")
     task.add_argument("--board-items", required=True, metavar="COMMAND")
     task.add_argument("--copy", required=True, metavar="COMMAND")
+    task.add_argument("--re-estimate", required=True, metavar="COMMAND")
     task.add_argument("--checkout", type=Path, required=True, help="the launching checkout")
     task.add_argument(
         "--plan-store",
@@ -3459,7 +4260,7 @@ def _validated(paths: Sequence[Path]) -> int:
     status = SOUND
     for path in paths:
         try:
-            read_ticket(path)
+            read_ticket(path, for_copy=True)
         except Refused as refusal:
             status = UNSOUND
             print(f"{PROG}: {path} is not a sound ticket:", file=sys.stderr)
@@ -3587,6 +4388,7 @@ def _composed(arguments: argparse.Namespace) -> int:
             board_status=arguments.board_status,
             board_items=arguments.board_items,
             copy=arguments.copy,
+            re_estimate=arguments.re_estimate,
             checkout=arguments.checkout,
             plan_store=arguments.plan_store,
             feedback=feedback,
@@ -3631,8 +4433,9 @@ def _placed(arguments: argparse.Namespace) -> int:
             raise OutsideOwner(repository, owner)
         if unheld := dependency_problems(ticket, item, arguments.board):
             raise NotAccepted(unheld)
-        held = correspond(arguments.path, arguments.board).category
-        status = status_before_copy(held, withdraw=arguments.withdraw)
+        placement = correspond(arguments.path, arguments.board, pending=True)
+        status = status_before_copy(placement.category, withdraw=arguments.withdraw)
+        estimate_before_copy(arguments.path, arguments.board, placement)
     except OutsideOwner as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return OUTSIDE_OWNER
@@ -3652,6 +4455,29 @@ def _placed(arguments: argparse.Namespace) -> int:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
     print(status.value)
+    return SOUND
+
+
+def _re_estimated(arguments: argparse.Namespace) -> int:
+    """Recompute and persist one board item's estimate, for the `re-estimate` command."""
+    try:
+        decided = re_estimate(arguments.board, arguments.item)
+    except Refused as refusal:
+        print(f"{PROG}: {arguments.item}: {refusal}", file=sys.stderr)
+        return UNSOUND
+    except OSError as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    json.dump(
+        {
+            "item": decided.item,
+            ESTIMATE_FIELD: decided.priority_estimate.value,
+            "occurrences": decided.occurrences,
+            PRIORITY_FIELD: decided.priority.value,
+        },
+        sys.stdout,
+    )
+    sys.stdout.write("\n")
     return SOUND
 
 
@@ -3683,6 +4509,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _listed(arguments)
         case "copy":
             return _copied(arguments)
+        case "re-estimate":
+            return _re_estimated(arguments)
         case "statuses":
             sys.stdout.write(status_vocabulary())
             return SOUND

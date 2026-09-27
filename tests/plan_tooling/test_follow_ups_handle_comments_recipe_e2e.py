@@ -59,6 +59,7 @@ from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_recipe_e2e import (
     BOARD,
+    HELD_PRIORITY,
     HOST,
     NODE,
     OK,
@@ -69,12 +70,14 @@ from test_follow_ups_recipe_e2e import (
     _category,
     _comments,
     _decided_and_copied,
+    _estimate_line,
     _from_checkout,
     _item,
     _launched_node,
     _moved,
     _prompts,
     _ran,
+    _record,
     _run,
     _script,
     _store,
@@ -122,24 +125,38 @@ DURING = "Written while the dispatch worked: the monthly export too.\n"
 #: What every reply the answering agent posts says it did.
 RESPONSE = "Copied this run's ticket again with that in its examples."
 
+#: The comments the answering agent judges to confirm their issue's root cause: a person
+#: seeing it again. Every other comment it answers is judged not to confirm it, which is the
+#: judgment the paid model makes and this journey doubles.
+CONFIRMING = (ON_OWN,)
+
 #: The answering agent's own program: read the feedback its task quotes, and post one reply
-#: to each comment there, on the issue that holds it, naming the comment's id. Run in the turn
-#: with the task's prompt log, from the launching checkout, through the installed store.
+#: to each comment there, on the issue that holds it, naming the comment's id and carrying
+#: its verdict — re-estimating the issue after each reply that confirms its root cause, as
+#: the task says. Run in the turn with the task's prompt log, from the launching checkout,
+#: through the installed store.
 REPLY_TO_FEEDBACK = """\
 import json, re, subprocess, sys, tempfile
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 
-log, run, store, accounts = sys.argv[1:5]
+log, run, store, accounts, board, confirming = sys.argv[1:7]
+confirming = [text.rstrip() for text in json.loads(confirming)]
 with open(log, encoding="utf-8") as stream:
     task = json.loads(stream.read().splitlines()[-1])["prompt"]
 # Where this dispatch's account goes and which gathering it answers, read out of the task
 # the way the agent is told to: the composer fills both into it and nowhere else.
 account = re.search(r"account is a JSON document at `([^`]+)`", task)[1]
 gathered = re.search(r'"feedback": "([^"]+)"', task)[1]
-quoted = tickets.quoted_comments(task.split("## The comments to answer", 1)[1])
+gathering = tickets.read_gathering(task.split("## The comments to answer", 1)[1])
+quoted = gathering.quoted
 responses = []
-for section, one in zip(task.split("### Comment ")[1:], quoted, strict=True):
+for section, one, text in zip(
+    task.split("### Comment ")[1:], quoted, gathering.texts, strict=True
+):
+    verdict = (
+        tickets.Verdict.CONFIRMS if text in confirming else tickets.Verdict.DOES_NOT_CONFIRM
+    )
     fields = dict(
         line[2:].split(": ", 1) for line in section.splitlines() if line.startswith("- ")
     )
@@ -153,6 +170,7 @@ for section, one in zip(task.split("### Comment ")[1:], quoted, strict=True):
         run, cause, answers=one.comment, url=fields["URL"],
         author=None if author == comments.UNKNOWN_AUTHOR else author,
         response=@RESPONSE@,
+        verdict=verdict,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as body:
         body.write(reply)
@@ -167,13 +185,16 @@ for section, one in zip(task.split("### Comment ")[1:], quoted, strict=True):
         if (owner := tickets.comment_owner(held["body"])) is not None
         and owner.run == run and owner.answers == one.comment
     ]
+    if verdict is tickets.Verdict.CONFIRMS:
+        subprocess.run([sys.executable, "-m", "orchestrator.follow_up_tickets", "re-estimate",
+                        "--board", board, one.issue], check=True)
     responses.append({
         "comment": one.comment, "issue": one.issue,
-        "action": @RESPONSE@, "reply": posted[-1],
+        "action": @RESPONSE@, "reply": posted[-1], "verdict": verdict.value,
     })
 if accounts == "account":
     with open(account, "w", encoding="utf-8") as stream:
-        json.dump({"schema": tickets.ARTIFACT_SCHEMA, "run": run, "feedback": gathered,
+        json.dump({"schema": tickets.RESPONSES_SCHEMA, "run": run, "feedback": gathered,
                    "responses": responses}, stream, indent=2)
 """.replace("@RESPONSE@", repr(RESPONSE))
 
@@ -212,6 +233,8 @@ class Handled(NamedTuple):
     prompts: list[str]
     statuses_after: dict[str, object]
     comments_after_first: dict[str, list[dict[str, object]]]
+    #: The main run's issue as the first dispatch left it, its confirming reply re-estimated.
+    own_after_first: dict[str, object]
     first_copy_mtime: float
     again: subprocess.CompletedProcess[str]
     again_prompts: list[str]
@@ -259,6 +282,7 @@ def _filed(bench: Bench, run: str, cause: str) -> QualifiedTaskId:
         f"some-service: {cause.replace('-', ' ')}",
         "Verified",
         HOST,
+        estimated=True,
     )
     path.write_text(tickets.render(ticket), encoding="utf-8")
     copied = _run(
@@ -306,7 +330,7 @@ def _replying(
     return [
         "bash",
         "-c",
-        'cd "$1" && exec "$2" "$3" "$4" "$5" "$6" "$7"',
+        'cd "$1" && exec "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"',
         "_",
         str(REPO_ROOT),
         python,
@@ -315,6 +339,8 @@ def _replying(
         run,
         str(ONETASKGRAPH_BIN),
         "account" if accounts else "no-account",
+        BOARD,
+        json.dumps(CONFIRMING),
     ]
 
 
@@ -389,8 +415,10 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         _commented(bench, shared_issue, ON_SHARED, MAINTAINER)
         owned = tickets.render_comment(earlier, OWN_CAUSE, "The earlier run's evidence.")
         _commented(bench, own_issue, owned, None)
-        # A person accepts the main run's ticket after the run last touched it.
+        # A person accepts the main run's ticket after the run last touched it, and sets its
+        # priority by hand, which neither the copy nor the re-estimate below may rewrite.
         _moved(bench, own_issue, tickets.Status.ACCEPTED.value)
+        _store(bench, "task", "priority", "set", own_issue, HELD_PRIORITY)
         first_page = _first_page(bench)
         statuses_before = _statuses(bench)
 
@@ -443,6 +471,7 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         launched = sorted(path.name for path in bench.runs.glob(f"{main}{SUFFIX}*"))
         statuses_after = _statuses(bench)
         comments_after_first = _board_comments(bench, own_issue, shared_issue)
+        own_after_first = _item(bench, own_issue)
         first_copy_mtime = own_ticket.stat().st_mtime
 
         # Gathered again right after it settles: the comment written during the dispatch,
@@ -547,6 +576,7 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
             prompts=_prompts(log),
             statuses_after=statuses_after,
             comments_after_first=comments_after_first,
+            own_after_first=own_after_first,
             first_copy_mtime=first_copy_mtime,
             again=again,
             again_prompts=_prompts(again_log),
@@ -726,16 +756,22 @@ def test_each_quoted_comment_gets_one_reply_on_its_issue_naming_it_and_its_autho
     ran = _ran(handled.bench)
     after = handled.comments_after_first
 
-    for issue, body, author, cause in (
-        (handled.own_issue, ON_OWN, REVIEWER, OWN_CAUSE),
-        (handled.shared_issue, ON_SHARED, MAINTAINER, SHARED_CAUSE),
+    for issue, body, author, cause, verdict in (
+        (handled.own_issue, ON_OWN, REVIEWER, OWN_CAUSE, tickets.Verdict.CONFIRMS),
+        (
+            handled.shared_issue,
+            ON_SHARED,
+            MAINTAINER,
+            SHARED_CAUSE,
+            tickets.Verdict.DOES_NOT_CONFIRM,
+        ),
     ):
         identifier = _comment_id(after[issue], body)
         replies = _replies(after[issue], handled.main)
         assert set(replies) == {identifier}, (after, ran)
         owner, reply = replies[identifier]
         assert owner == tickets.CommentOwner(
-            handled.main, tickets.RootCause(cause), tickets.CommentKind.REPLY, identifier
+            handled.main, tickets.RootCause(cause), tickets.CommentKind.REPLY, identifier, verdict
         )
         url = _comment_url(handled, issue, body)
         text = str(reply["body"])
@@ -759,6 +795,51 @@ def test_each_quoted_comment_gets_one_reply_on_its_issue_naming_it_and_its_autho
         tickets.render_comment(handled.main, SHARED_CAUSE, "This run hit it too.")
     ], "the run's one evidence comment is not still its only one"
     assert f"orchestrator.follow_up_tickets copy --board {BOARD}" in ran
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the task module and
+# the store configuration this test runs, and its turns are the provider's stand-in.
+def test_a_confirming_reply_is_re_estimated_in_the_same_run_and_a_persons_priority_stands(
+    handled: Handled,
+) -> None:
+    """The dispatch judged the person's sighting confirming and the question not, and said so.
+
+    Each reply's marker carries its verdict, and the account records the same. The issue the
+    confirming reply sits on was re-estimated within the dispatch — its own ticket's evidence,
+    the earlier run's evidence comment and that reply are three occurrences, which raise an
+    intermittent `medium` to `high` — and its visible estimate line agrees; the priority a
+    person set on it stood through the copy and the re-estimate alike.
+    """
+    own, shared = handled.own_issue, handled.shared_issue
+    verdicts = {
+        (issue, owner.answers): owner.verdict
+        for issue in (own, shared)
+        for one in handled.comments_after_first[issue]
+        if (owner := tickets.comment_owner(str(one["body"]))) is not None
+        and owner.run == handled.main
+        and owner.answers is not None
+    }
+    listed = handled.comments_after_first
+    assert verdicts[own, _comment_id(listed[own], ON_OWN)] is tickets.Verdict.CONFIRMS
+    shared_verdict = verdicts[shared, _comment_id(listed[shared], ON_SHARED)]
+    assert shared_verdict is tickets.Verdict.DOES_NOT_CONFIRM
+    account = json.loads(handled.account.read_text(encoding="utf-8"))
+    assert {one["issue"]: one["verdict"] for one in account["responses"]} == {
+        own: "confirms",
+        shared: "does-not-confirm",
+    }
+
+    after = handled.own_after_first
+    medium, intermittent = tickets.Severity.MEDIUM, tickets.Frequency.INTERMITTENT
+    assert _record(after)[tickets.ESTIMATE_FIELD] == tickets.estimate(medium, intermittent, 3)
+    assert _record(after)[tickets.ESTIMATE_FIELD] == "high"
+    assert _estimate_line(after) == tickets.estimate_line(medium, intermittent, 3)
+    assert after["priority"] == HELD_PRIORITY, "a person's priority was rewritten"
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_gathering_again_quotes_only_the_comment_written_during_the_dispatch(
@@ -1420,7 +1501,7 @@ def test_a_dispatch_that_leaves_no_account_fails_the_recipe_naming_it(
     account.write_text(
         json.dumps(
             {
-                "schema": tickets.ARTIFACT_SCHEMA,
+                "schema": tickets.RESPONSES_SCHEMA,
                 "run": handled.main,
                 "feedback": handled.unaccounted_gathering.name,
                 "responses": [
@@ -1429,6 +1510,7 @@ def test_a_dispatch_that_leaves_no_account_fails_the_recipe_naming_it(
                         "issue": handled.shared_issue,
                         "action": "The reply was already posted in this dispatch.",
                         "reply": str(replies[identifier][1]["id"]),
+                        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
                     }
                 ],
             }
@@ -1710,6 +1792,7 @@ def test_the_attached_feedback_recipe_refuses_wrong_and_duplicate_replies(
             url="https://example.invalid/comment",
             author=MAINTAINER,
             response="Another reply to the same comment.",
+            verdict=tickets.Verdict.DOES_NOT_CONFIRM,
         ),
         None,
     )

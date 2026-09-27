@@ -206,6 +206,7 @@ def _replied(issue: str, answers: str, cause: str = CAUSE, run: str = RUN) -> st
         url=f"{issue}#comment-{answers}",
         author=answered["author"],
         response="Copied the ticket again with that in its examples.",
+        verdict=tickets.Verdict.DOES_NOT_CONFIRM,
     )
     return _commented(issue, reply, None)
 
@@ -219,10 +220,22 @@ def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
     for body in (
         tickets.render_comment(OTHER_RUN, CAUSE, "Another run's evidence."),
         tickets.render_reply(
-            OTHER_RUN, CAUSE, answers=person, url="u", author=PERSON, response="Theirs."
+            OTHER_RUN,
+            CAUSE,
+            answers=person,
+            url="u",
+            author=PERSON,
+            response="Theirs.",
+            verdict=tickets.Verdict.CONFIRMS,
         ),
         tickets.render_reply(
-            RUN, CAUSE, answers="a-comment-gone", url="u", author=None, response="Ours."
+            RUN,
+            CAUSE,
+            answers="a-comment-gone",
+            url="u",
+            author=None,
+            response="Ours.",
+            verdict=tickets.Verdict.DOES_NOT_CONFIRM,
         ),
     ):
         _commented(own, body, None)
