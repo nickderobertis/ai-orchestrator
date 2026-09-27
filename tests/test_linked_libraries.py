@@ -622,7 +622,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.2", core="0.18.0"),
     LinkedCore(dependent="onejudge", dependent_version="0.14.0", core="0.18.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.47.0", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.48.1", core="0.18.0"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -766,10 +766,20 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: No pair is declared apart: the adopted `onepipeline-api-cli`'s SBOM declares the engine
-#: `config/onepipeline.version` pins, which the test below measures. A future record names
-#: both measured releases, so it fails the moment either wheel changes.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
+#: One pair is declared apart, and it names both measured releases so it fails the moment
+#: either wheel changes. `onepipeline-api-cli` 0.15.0, the newest release, was built
+#: against engine 0.48.0, and the engine pin is 0.48.1 — the release the branch-name
+#: adoption waited on. Between the two tags `src/` differs by one deleted doc comment in
+#: `src/branchname.rs`; the rest is a test and the release's own manifest, so a browser
+#: adopt drives the same behaviour. The record stands until a reader linking 0.48.1 ships.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
+    linked="0.48.0",
+    pinned="0.48.1",
+    because=(
+        "the newest onepipeline-api-cli links engine 0.48.0, whose source differs from "
+        "0.48.1 only by a doc comment"
+    ),
+)
 
 
 def test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it() -> None:

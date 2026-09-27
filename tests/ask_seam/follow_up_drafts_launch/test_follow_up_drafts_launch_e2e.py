@@ -347,7 +347,9 @@ def test_the_draft_is_stamped_with_the_run_the_dispatch_and_the_node_it_came_fro
     worktree = {turn["cwd"] for turn in launched.worker}
     assert draft.dispatch.cwd in worktree, (draft.dispatch.cwd, worktree)
     assert Path(draft.dispatch.cwd).is_relative_to(launched.scratch), draft.dispatch.cwd
-    assert draft.dispatch.branch == f"onevcs/{session}"
+    # The engine names the branch from its template over the plan and the node — the
+    # plan's name here is the run's — under a scratch `ONEVCS_HOME` that sets no prefix.
+    assert draft.dispatch.branch == f"{launched.run}/{NODE}"
     assert draft.dispatch.head is not None and re.fullmatch(r"[0-9a-f]{40}", draft.dispatch.head)
     assert draft.transcript == f"onepipeline transcript {launched.run} {NODE}"
 

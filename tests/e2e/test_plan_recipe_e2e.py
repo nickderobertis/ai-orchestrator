@@ -225,6 +225,11 @@ PLANNER_NODE = "plan"
 #: what the recipe would write.
 AGENT_GRAPH_FIELD = "agent_graph"
 
+#: The field the loader records a node's store task in — its native id and title — when
+#: it reads a plan from a store. The store supplies it rather than any document, so a
+#: shipped example cannot carry it, and it is checked against the stored task instead.
+TASK_RECORD_FIELD = "task_record"
+
 #: The turn budget this launch states, so the flag that carries it is proven to reach
 #: the generated node rather than only to be accepted.
 TURN_BUDGET = 40
@@ -940,7 +945,8 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
     the loader resolves it against that directory before writing `plan.json` — so the
     run's copy is an absolute path into whichever checkout launched it, and an example
     carrying one would be a committed record of this machine. The example keeps the
-    relative ref, and the resolution is undone here.
+    relative ref, and the resolution is undone here. `task_record` is the store's
+    rather than the document's, so it is held to the stored task and then set aside.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -963,6 +969,10 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
             named = node.get(AGENT_GRAPH_FIELD)
             if named is not None:
                 node[AGENT_GRAPH_FIELD] = str(Path(named).relative_to(REPO_ROOT))
+            assert node.pop(TASK_RECORD_FIELD) == {
+                "id": f"{shipped['name']}/{node['id']}",
+                "title": node["title"],
+            }, f"node {node['id']} does not record the stored task it was read from"
         assert generated_plan == shipped, (
             f"{SHIPPED_PROJECT} is not what `just plan {SHIPPED_BRIEF}` writes; "
             f"regenerate it from the brief rather than editing it by hand"

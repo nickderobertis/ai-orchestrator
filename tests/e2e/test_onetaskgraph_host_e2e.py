@@ -377,6 +377,10 @@ class _Issue:
 
     item_id: _BoardItemId
     content_id: _IssueNodeId
+    #: The issue's number in its repository, which GitHub answers on every issue and the
+    #: adopted plan store reads as a board task's `key`: an issue answering none is data
+    #: the source refuses to represent, so each one here carries its own.
+    number: int
     title: str
     body: str
     parent_id: _IssueNodeId | None = None
@@ -461,6 +465,12 @@ class _Issue:
         return {
             "__typename": "Issue",
             "id": self.content_id,
+            # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] GitHub's schema
+            # has no machine-readable copy here. The installed plan store is what this is
+            # reconciled against on every journey — it refuses an issue answering no number —
+            # and its producer holds the document to a pinned schema in its `tests/schema.rs`.
+            "number": self.number,
+            # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
             "title": self.title,
             "body": self.body,
             "url": f"https://github.com/{self.repository}/issues/{self.item_id}",
@@ -535,6 +545,7 @@ class _Board:
         parent = _Issue(
             item_id=_BoardItemId("PVTI_board_plan"),
             content_id=_IssueNodeId("I_board_plan"),
+            number=1,
             title=BOARD_PROJECT_TITLE,
             body="A plan an operator wrote on the board itself.",
             sub_issues=1,
@@ -542,6 +553,7 @@ class _Board:
         child = _Issue(
             item_id=_BoardItemId("PVTI_board_task"),
             content_id=_IssueNodeId("I_board_task"),
+            number=2,
             title=BOARD_TASK_TITLE,
             body="Its one sub-issue, which is what makes the issue above a project.",
             parent_id=parent.content_id,
@@ -558,6 +570,44 @@ class _Board:
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
 
+    def board_fields_response(self) -> dict[str, object]:
+        """The board's id and field definitions alone, under the root alias the read names.
+
+        What the adopted source asks before a write whose item does not say which board
+        field to address: it selects no items, so it answers none.
+        """
+        # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] No test is added
+        # here: this existing double answers the read the adopted plan store now makes, so the
+        # journeys already in this module keep running; their project is not this change's.
+        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The read is the
+        # installed plan store's own, reconciled on every journey: an answer under any other
+        # root is a board it reports as not found. GitHub's schema has no machine-readable
+        # copy here; the producer holds the query to a pinned schema in its `tests/schema.rs`.
+        return {
+            "data": {"boardFields": {"projectV2": {"id": self.node_id, "fields": self._fields()}}}
+        }
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+        # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+    def _fields(self) -> dict[str, object]:
+        """Shared, so the board read and the board-fields read cannot disagree on a field."""
+        return {
+            "nodes": [
+                {
+                    "__typename": "ProjectV2SingleSelectField",
+                    "id": _BoardField.STATUS,
+                    "name": "Status",
+                    "options": [option.rendered() for option in self.options],
+                },
+                {
+                    "__typename": "ProjectV2Field",
+                    "id": _BoardField.ORIGIN,
+                    "name": ORIGIN_FIELD_NAME,
+                },
+            ],
+            "pageInfo": {"hasNextPage": False},
+        }
+
     def board_response(self) -> dict[str, object]:
         return {
             "data": {
@@ -565,22 +615,7 @@ class _Board:
                     "projectV2": {
                         "id": self.node_id,
                         "title": self.title,
-                        "fields": {
-                            "nodes": [
-                                {
-                                    "__typename": "ProjectV2SingleSelectField",
-                                    "id": _BoardField.STATUS,
-                                    "name": "Status",
-                                    "options": [option.rendered() for option in self.options],
-                                },
-                                {
-                                    "__typename": "ProjectV2Field",
-                                    "id": _BoardField.ORIGIN,
-                                    "name": ORIGIN_FIELD_NAME,
-                                },
-                            ],
-                            "pageInfo": {"hasNextPage": False},
-                        },
+                        "fields": self._fields(),
                         "items": {
                             "nodes": [issue.item() for issue in self.issues],
                             "pageInfo": {"hasNextPage": False, "endCursor": None},
@@ -694,6 +729,7 @@ class _Board:
         created = _Issue(
             item_id=_BoardItemId(f"PVTI_created_{len(self.created)}"),
             content_id=_IssueNodeId(f"I_created_{len(self.created)}"),
+            number=3 + len(self.created),
             title=title,
             body=body,
             repository=_repository_of(payload.get("repositoryId")),
@@ -883,6 +919,7 @@ class _GraphQLRequest:
 
 class _Operation(StrEnum):
     BOARD = "board"
+    BOARD_FIELDS = "boardFields"
     SEARCH = "search"
     ISSUE = "issue"
     SUB_ISSUES = "subIssues"
@@ -902,6 +939,8 @@ class _Operation(StrEnum):
 #: tried. The source ships its queries as constants, so the root field is a stable
 #: substring of each one and is what tells a board read from the writes that follow it.
 _OPERATIONS: dict[str, _Operation] = {
+    # Before the board read's own marker, which this aliased root also contains.
+    "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
     "repositoryOwner": _Operation.BOARD,
     "search(query:": _Operation.SEARCH,
     "subIssues(first:": _Operation.SUB_ISSUES,
@@ -1040,6 +1079,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         match operation:
             case _Operation.BOARD:
                 return self.board.board_response()
+            case _Operation.BOARD_FIELDS:
+                return self.board.board_fields_response()
             case _Operation.SEARCH:
                 return self.board.search_response(request.string("search"))
             case _Operation.ISSUE:

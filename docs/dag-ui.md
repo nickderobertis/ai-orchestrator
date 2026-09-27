@@ -208,8 +208,10 @@ reads the engine out of the adopted read-API wheel's own bill of materials and f
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than at whatever a browser adoption then drives.
 
-**They are level today**: no divergence is declared, so the adopted read-API wheel's
-bill of materials names the very engine `config/onepipeline.version` pins. A pair the gate measures apart may be
+**They are one patch apart today, and declared so**: the adopted read-API wheel links
+engine 0.48.0 while `config/onepipeline.version` pins 0.48.1, whose source differs from
+it by one doc comment, and no read-API release linking 0.48.1 exists yet — so until one
+does, adopt through the launcher as below. A pair the gate measures apart may be
 held only by `DECLARED_UI_ENGINE_DIVERGENCE` in the same module, naming both measured
 releases so it fails, naming itself, the moment either moves; while such a record
 stands, adopt through the launcher, `just orchestrate --adopt <run-id>`, never from the
@@ -235,7 +237,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.14.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.15.0**, the release `config/onepipeline-ui.version` pins, carries
 what made this a supervising surface: the project list and per-project page are the
 landing view, the run page carries the channel with its byte-for-byte reply composer,
 `attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its

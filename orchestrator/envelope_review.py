@@ -197,6 +197,7 @@ NODE_FIELDS = frozenset(
         "delivers",
         "pool",
         "overflow",
+        "task_record",
     }
 )
 

@@ -225,6 +225,13 @@ believing the event stream. Session close refuses to reap a worktree holding com
 branch does not carry, which catches only a worker that committed, so the brief rule
 stands regardless.
 
+**What a cut branch is called.** Its prefix is this host's, set in
+`$ONEVCS_HOME/branches.yml` — host state outside every checkout, which no tracked file
+here writes — and the rest is the name `onepipeline` renders from its branch-name
+template. This host configures no template because it takes the default, which
+`tests/e2e/test_human_readable_branch_e2e.py` drives for a plan whose tasks carry no key:
+the plan's name, then the node's id.
+
 **Where a session is placed, and what a close returns.** A session worktree is cut on a
 **pooled slot** — a warm worktree that survives its session's close — or on a
 disposable run root, and the workspaces file `just repos-apply` installs beside the
