@@ -46,6 +46,7 @@
     "support-registered-checkouts",
     "support-run-snapshot",
     "support-scratch-identity",
+    "support-served-recipe",
     "support-shared-dispatch-bar",
     "support-short-state",
     "support-stub-onetaskgraph",

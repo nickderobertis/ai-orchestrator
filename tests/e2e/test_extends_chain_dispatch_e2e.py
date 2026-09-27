@@ -62,6 +62,7 @@ import pytest
 from fake_backend import AGENT_DELAY_ENV
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import project_from_plan
+from served_recipe import serve, stop
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from waits import timeout as e2e_timeout
@@ -354,7 +355,7 @@ def read_api(stopped: Launch) -> Iterator[str]:
     """
     port = _free_port()
     serving = {**stopped.environment, "ONEPIPELINE_RUNS_DIR": str(stopped.runs_root)}
-    started = subprocess.Popen(  # noqa: S603 - this repository's own recipe
+    started = serve(
         [
             "just",
             "telemetry-server",
@@ -363,11 +364,7 @@ def read_api(stopped: Launch) -> Iterator[str]:
             "--bind",
             f"127.0.0.1:{port}",
         ],
-        cwd=REPO_ROOT,
-        env=serving,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        serving,
     )
     base = f"http://127.0.0.1:{port}"
     try:
@@ -380,8 +377,7 @@ def read_api(stopped: Launch) -> Iterator[str]:
         )
         yield base
     finally:
-        started.terminate()
-        started.wait(timeout=e2e_timeout(30))
+        stop(started)
 
 
 def _answers(url: str) -> bool:

@@ -27,7 +27,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import time
@@ -42,6 +41,7 @@ from typing import NamedTuple, NewType
 import pytest
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import PUBLISHED_TOOLS
+from served_recipe import serve, stop
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -204,46 +204,6 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _serve(command: list[str], environment: dict[str, str] | None = None) -> subprocess.Popen[str]:
-    """Start one server, in a session of its own so the whole tree can be stopped.
-
-    A server started here is never the process this returns: `just` runs the recipe
-    in a shell, the wrapper script `exec`s the published CLI, and `uv run` starts the
-    server under itself. `just` also does not exit on `SIGTERM` — it keeps waiting on
-    the recipe — so signalling this process alone leaves the server bound to its port
-    and holding these pipes open, which is a teardown that hangs until its timeout
-    and a port that is still answering when the next journey binds one. A session of
-    its own makes the whole tree one process group, which `_stop` signals as a whole.
-    """
-    return subprocess.Popen(
-        command,
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-
-
-def _stop(*processes: subprocess.Popen[str]) -> None:
-    """Stop each server's process group, and reap what it started."""
-
-    def signalled(process: subprocess.Popen[str], number: int) -> None:
-        # A group already gone is one that exited on its own, and is reaped below.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, number)
-
-    for process in processes:
-        signalled(process, signal.SIGTERM)
-    for process in processes:
-        try:
-            process.communicate(timeout=e2e_timeout(30))
-        except subprocess.TimeoutExpired:
-            signalled(process, signal.SIGKILL)
-            process.communicate()
-
-
 class Answer(NamedTuple):
     """One HTTP answer, in the three fields every assertion here reads off it.
 
@@ -342,7 +302,7 @@ def _the_recipe(
     serving.pop("CODEX_SESSION_ID", None)
     if acting_session is not None:
         serving["CLAUDE_CODE_SESSION_ID"] = acting_session
-    recipe = _serve(
+    recipe = serve(
         ["just", "dag-ui", "--runs-root", str(runs_root), "--bind", f"127.0.0.1:{port}"],
         serving,
     )
@@ -351,7 +311,7 @@ def _the_recipe(
         _await_ready(f"{base}/healthz", recipe, "the DAG Observatory")
         yield Served(base=base)
     finally:
-        _stop(recipe)
+        stop(recipe)
 
 
 @pytest.fixture
