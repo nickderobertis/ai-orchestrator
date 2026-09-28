@@ -65,7 +65,6 @@ from test_follow_ups_recipe_e2e import (
     _draft,
     _item,
     _moved,
-    _placed,
     _prompts,
     _ran,
     _run,
@@ -98,7 +97,6 @@ CORRECTING = (
     "The suggested fix is wrong: page the export by cursor in `src/export.py` instead, "
     "as the listing already does.\n"
 )
-#: The fix the comment asks for, as the corrected ticket states it.
 REQUESTED_FIX = "Page the export by cursor in `src/export.py`, as the listing already does."
 
 #: What the answering agent records it did about each comment, keyed by the comment's text.
@@ -109,8 +107,32 @@ KEPT_DEFERRED = (
 CORRECTED = "Brought the ticket to the current schema with the corrected fix, and copied it."
 ACTIONS = {RETIRING: WITHDREW, CORRECTING: CORRECTED}
 
-#: The witness of the withdrawal the board refused for the deferred item.
 DEFERRED_WITNESS = "deferred-withdrawal.witness"
+#: What `validate` said of the schema-5 ticket before the agent brought it forward.
+LEGACY_WITNESS = "legacy-validate.witness"
+
+#: The agent bringing the schema-5 ticket on disk forward in place, as the rule the task
+#: composes says: its record to the current schema, carrying the `frequency` judgment its
+#: evidence supports, and its `## Suggested fix` to the fix the comment asks for. Everything
+#: else stays as it stands; `board-status` then writes the estimate, its line and the priority.
+BRING_FORWARD = """\
+import json, pathlib, re, sys
+from orchestrator import follow_up_tickets as tickets
+
+path, fix = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text(encoding="utf-8")
+prefix = f'  "{tickets.KEY}": '
+(line,) = [held for held in text.splitlines() if held.startswith(prefix)]
+record = json.loads(line.removeprefix(prefix))
+record["schema"] = tickets.SCHEMA
+record[tickets.FREQUENCY_FIELD] = str(tickets.Frequency.INTERMITTENT)
+text = text.replace(line, prefix + json.dumps(record), 1)
+text = re.sub(
+    rf"(## {tickets.SUGGESTED_FIX}\\n\\n).*?(\\n\\n## )", lambda held: held[1] + fix + held[2],
+    text, count=1, flags=re.DOTALL,
+)
+path.write_text(text, encoding="utf-8")
+"""
 
 #: The answering agent's own program: read the gathering its task quotes, and post one reply
 #: to each comment there, naming the comment's id, then write the account the task is held
@@ -180,6 +202,7 @@ class Answered(NamedTuple):
     result: subprocess.CompletedProcess[str]
     prompts: list[str]
     witness: str
+    legacy_witness: str
     proposed_after: dict[str, object]
     deferred_after: dict[str, object]
     legacy_after: dict[str, object]
@@ -247,6 +270,25 @@ def _withdrawal_refused(python: str, witness: Path, ticket: Path) -> list[str]:
         f"else\n"
         f'  echo "refused $?" >> {quoted}\n'
         f"fi\n",
+    ]
+
+
+def _brought_forward(bench: Bench, python: str, witness: Path, ticket: Path) -> list[str]:
+    """The agent's step over the schema-5 ticket: `validate` first, then bring it forward.
+
+    What `validate` printed and exited with goes to ``witness`` — the refusal naming the older
+    schema the task keys its rule on — and the ticket is then edited in place.
+    """
+    helper = _staged(bench, "bring-forward.py", BRING_FORWARD)
+    validate = shlex.join([python, "-m", "orchestrator.follow_up_tickets", "validate", str(ticket)])
+    quoted = shlex.quote(str(witness))
+    return [
+        "bash",
+        "-c",
+        f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
+        f"{validate} >> {quoted} 2>&1\n"
+        f'echo "exit $?" >> {quoted}\n'
+        f"{shlex.join([python, str(helper), str(ticket), REQUESTED_FIX])}\n",
     ]
 
 
@@ -319,15 +361,8 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
 
         # The answer: withdraw the proposal, try the same on the deferred item, bring the
         # legacy ticket forward carrying the requested fix, then reply to each comment.
-        corrected = _ticket(
-            run,
-            LEGACY_CAUSE,
-            (f"drafts:{run}/drafts/a-consumed-draft",),
-            f"some-service: {LEGACY_CAUSE.replace('-', ' ')}",
-            "Filed at schema 5",
-            suggested_fix=REQUESTED_FIX,
-        )
         witness = tmp / DEFERRED_WITNESS
+        legacy_witness = tmp / LEGACY_WITNESS
         log = tmp / "prompts.jsonl"
         _script(
             bench,
@@ -341,7 +376,7 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
                 _withdrawal_refused(
                     python, witness, tickets.ticket_path(bench.drafts_root, run, DEFERRED_CAUSE)
                 ),
-                _placed(_staged(bench, "corrected.md", tickets.render(corrected)), legacy_ticket),
+                _brought_forward(bench, python, legacy_witness, legacy_ticket),
                 _decided_and_copied(python, legacy_ticket),
                 _answering(bench, python, log, run),
             ],
@@ -372,6 +407,9 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
             result=result,
             prompts=_prompts(log),
             witness=witness.read_text(encoding="utf-8") if witness.is_file() else "",
+            legacy_witness=(
+                legacy_witness.read_text(encoding="utf-8") if legacy_witness.is_file() else ""
+            ),
             proposed_after=_item(bench, proposed_issue),
             deferred_after=_item(bench, deferred_issue),
             legacy_after=_item(bench, legacy_issue),
@@ -447,6 +485,11 @@ def test_a_comment_correcting_a_schema_5_ticket_brings_it_to_the_current_schema_
     before = answered.legacy_before["metadata"]
     assert isinstance(before, dict)
     assert before[tickets.KEY]["schema"] == LEGACY_SCHEMA
+    assert (
+        f"the record is schema {LEGACY_SCHEMA}, and this reads schema {tickets.SCHEMA}; bring "
+        "the ticket to the current shape"
+    ) in answered.legacy_witness, answered.legacy_witness
+    assert f"exit {tickets.UNSOUND}" in answered.legacy_witness, answered.legacy_witness
 
     after = answered.legacy_after
     metadata = after["metadata"]
@@ -455,6 +498,9 @@ def test_a_comment_correcting_a_schema_5_ticket_brings_it_to_the_current_schema_
     ticket = tickets.from_store_item(after)
     fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert fix == REQUESTED_FIX, ticket.body
+    assert "Filed at schema 5 (Examples)." in ticket.body, "the rest of the ticket moved"
+    assert ticket.frequency is tickets.Frequency.INTERMITTENT
+    assert ticket.priority_estimate is not None, "board-status wrote no estimate"
     assert ticket.host == HOST
     assert after["repositories"] == [REPOSITORY]
     assert answered.validated.returncode == OK, (
@@ -478,10 +524,6 @@ def test_the_dispatched_task_carries_the_investigation_bound_the_exception_and_t
     assert "a ticket of an older schema is brought to the current shape before it is copied" in (
         flat
     )
-
-
-# The credential: `scripts/follow-ups.sh` establishes this checkout's board credential itself,
-# in both modes, the way `scripts/follow-ups-handle-comments.sh` does.
 
 
 def _follow_ups_from(

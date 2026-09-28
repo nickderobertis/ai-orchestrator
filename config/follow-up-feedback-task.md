@@ -50,6 +50,7 @@ two tickets' reading rather than a re-verification of the run.
 
 ## Investigating what a comment asks
 
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether a comment asks what only an investigation answers, and what that investigation finds, is the agent's reading of a tree, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling decides is that the dispatch is handed this bound whole, which `tests/test_follow_up_tickets.py` holds over the composed task and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py` over the task a real dispatch was given. -->
 Where a quoted comment asks something about the ticket of the issue it sits on that only an
 investigation answers — whether the problem still holds after later fixes, why something
 fails, whether a failure is retryable — you may investigate **that one ticket**, and no
@@ -69,6 +70,7 @@ item, or edit any repository. A comment that asks nothing an investigation answe
 investigated. Where running something is not enough to settle the question, the reply says
 exactly what would settle it — what to run, where, and with what access — rather than that
 it needs a separate verification.
+<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 
 ## What to do, in order
 
