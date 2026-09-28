@@ -225,6 +225,15 @@ if [ "$comments" -eq 1 ] && [ -z "$feedback" ]; then
         "gather the board's comments with 'just follow-ups-handle-comments', which names both"
 fi
 
+# This checkout's board credential, established before anything below reads the board —
+# `check-gathering` and `check-responses` in feedback mode, `check-dispositions` in
+# initial — in both modes, from the gitignored root `.env`, never overriding a name this
+# process already defines. Without it, a manager running `just follow-ups … --comments`
+# directly was refused for a missing `GH_PROJECTS_TOKEN` while the token sat in that file.
+# shellcheck source=scripts/credentials-env.sh
+load credentials-env.sh
+export_host_credentials follow-ups || exit "$?"
+
 runs_root="${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}"
 if [ -e "$runs_root" ] && { [ ! -d "$runs_root" ] || [ ! -r "$runs_root" ] || [ ! -x "$runs_root" ]; }; then
     fail "the run ledger at $runs_root cannot be searched, so whether run '$run' is still driven, and which follow-up run id is free, cannot be told" \
