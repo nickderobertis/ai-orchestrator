@@ -1,8 +1,10 @@
 """Which plan-store release this host runs, and the floor its journeys are written to.
 
 `config/onetaskgraph.version` names the standalone CLI this checkout installs and
-spawns — the program a copy runs in and the one `onepipeline`'s settlement write-back
-shells out to.
+spawns — the program `just copy-plan`, `just plans` and the follow-up tooling run in. The
+engine spawns no such program: `onepipeline` reads a plan and projects its settlements
+through the `onetaskgraph-*` crates it links, and `tests/test_linked_libraries.py` holds
+this pin to the one release those crates carry, so the two readers are one release.
 
 Declared here so the pin decides what the journeys in
 `tests/e2e/test_onetaskgraph_host_e2e.py` assert instead of a reader deciding it: at or

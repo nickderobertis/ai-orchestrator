@@ -343,15 +343,18 @@ the other half of that pressure.
 
 **A projection carries only the nodes that changed.** Since
 https://github.com/nickderobertis/onepipeline/pull/287, in force on the adopted engine, an
-attempt names to `project copy --member` only the nodes whose shadow task changed since the
+attempt names to the store's member copy only the nodes whose shadow task changed since the
 last projection that landed, and neither reads nor rewrites a node it does not name — so a
 person's edit on an unnamed item stands until that node next changes. A projection is
-**whole**, every node as before, for one of three reasons, recorded as its `whole_because`:
+**whole**, every node as before, for one of two reasons, recorded as its `whole_because`:
 `first`, where nothing has landed in this driver yet, a driver `just orchestrate --adopt`
-started included; `after-failure`, where the attempt before it failed; and
-`store-lacks-members`, where the store predates the first onetaskgraph release offering
-`--member`. onepipeline's `tests/e2e/writeback_projections.rs` drives all three against the
-real store.
+started included; and `after-failure`, where the attempt before it failed. A record an
+older run wrote may also read `store-lacks-members`, where the spawned store predated the
+first onetaskgraph release offering `--member`; the adopted engine links the store and
+never writes it, though it still reads it. onepipeline's
+`tests/e2e/writeback_projections.rs` drives both against the real store, and
+`tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` drives them on
+this host's own launch path.
 
 **A copy is allowed the deadline its items earn.** Every store command the write-back
 runs used to be killed at one fixed minute, and a large enough plan outgrew it: a run could
@@ -371,8 +374,11 @@ per item is less)` where the floor governed — on the driver's stderr line belo
 finding the run raises, which names the items the copy was carrying, and in the attempt's
 projection record.
 onepipeline's own suite holds it — `the_copy_deadline_is_the_budget_times_the_items_and_never_below_the_floor`
-in `src/writeback.rs` — because the engine reads and projects the plan store in process
-through the onetaskgraph crates it links, so no host seam can hold a copy open any more.
+in `src/writeback.rs`, and the `tests/e2e/writeback_budget.rs` journeys
+`a_copy_held_past_the_floor_still_lands_when_the_item_count_lifts_its_deadline` and
+`a_copy_held_past_a_tiny_budget_is_cancelled_and_the_refusal_names_the_arithmetic` — because
+the engine reads and projects the plan store in process through the onetaskgraph crates it
+links, so no host seam can hold a copy open any more.
 
 **Every attempt is recorded on the run.** The engine appends one JSON line per projection
 attempt, landed or failed, to `writeback-projections.jsonl` in the run's own directory under

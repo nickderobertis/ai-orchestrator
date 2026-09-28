@@ -808,23 +808,9 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: One pair is declared apart, and it names both measured releases so it fails the moment
-#: either wheel changes. `onepipeline-api-cli` 0.15.0, the newest release, was built
-#: against engine 0.48.0, and the engine pin is 0.51.0 — the release carrying the
-#: supersession record and the idle retirement pass. Between the two tags the engine gained
-#: those, refuses a task without acceptance criteria, and reads plans through the linked
-#: onetaskgraph crates, none of which a run adopted from the browser would have — which is
-#: why, while this stands, a run is adopted through `just orchestrate --adopt`. The record
-#: stands until a reader linking 0.51.0 ships.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
-    linked="0.48.0",
-    pinned="0.51.0",
-    because=(
-        "the newest onepipeline-api-cli links engine 0.48.0, which lacks the supersession "
-        "record and idle retirement pass 0.51.0 carries, so a run is adopted through the "
-        "launcher rather than the browser"
-    ),
-)
+#: A pair declared apart, naming both measured releases so it fails the moment either
+#: wheel changes; `None` while the adopted reader links the pinned engine.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
 
 
 def test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it() -> None:

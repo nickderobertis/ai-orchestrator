@@ -86,6 +86,11 @@ ORCHESTRATION = REPO_ROOT / "docs" / "orchestration.md"
 #: would mean writing synthetic records into a recorded journal, which is a producer
 #: this repository does not have standing in for one it does.
 MANAGER = REPO_ROOT / "AGENTS.md"
+#: The journey that watches a refused projection past the write-back's retry ceiling, and
+#: so has to wait longer than the ceiling the engine declares.
+INCREMENTAL_JOURNEY = (
+    REPO_ROOT / "tests" / "writeback_budget" / "test_adopted_engine_projects_incrementally_e2e.py"
+)
 
 #: The heading the outcome table sits under. A heading rather than a line number, so
 #: a reflow above it cannot silently move this gate onto some other table.
@@ -525,6 +530,14 @@ def _wire_spelling(variant: str, rename_all: str | None) -> str:
 
 
 CONSTANTS = (
+    Constant(
+        "write-back retry ceiling",
+        ONEPIPELINE,
+        "writeback.rs",
+        re.compile(r"const RETRY_CEILING: Duration = Duration::from_secs\((\d+)\);"),
+        INCREMENTAL_JOURNEY,
+        "RETRY_CEILING_SECONDS = {value}",
+    ),
     # The reply envelope's own version, which is a serialized contract rather than a
     # number in prose: the engine bumped it to 2 when it removed `context` and left one
     # manager-note op, and a document still telling a manager to send version 1 is

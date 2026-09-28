@@ -17,7 +17,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple, NewType
@@ -269,6 +269,11 @@ def _environment(tmp_path: Path, oneharness_bin: str, caller: str, session: str)
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment.update(established_indirections(caller))
     environment[AGENT_DELAY_ENV] = str(TURN_HELD_SECONDS)
+    # A registry of the run's own, holding no identity. A settled driver's idle pass
+    # retires finished branches across every identity the registry it reads names, and the
+    # suite's copy of this host's names real checkouts and their origins; these plans
+    # publish nothing, so the pass has nothing of theirs to walk.
+    environment["ONEVCS_HOME"] = str(tmp_path / "onevcs-home")
     return environment
 
 
@@ -286,13 +291,15 @@ def launched(
     waiting_nodes: Sequence[NodeId],
     independent_nodes: Sequence[NodeId] = (),
     cancel_grace_seconds: int | None = None,
+    extra_environment: Mapping[str, str] | None = None,
 ) -> Iterator[DrivenRun]:
     """Launch a held node with `waiting_nodes` behind it, and stop the run however it ends.
 
     `independent_nodes` are roots of their own, dispatched and held beside `held_node`, so
     a journey that cancels or retries the held node keeps a driver alive through it.
     `cancel_grace_seconds` names the run's own cancel grace, for a journey that has to wait
-    a cancelled dispatch out.
+    a cancelled dispatch out. `extra_environment` is laid over the launch's environment
+    last, for a journey that hands the engine a variable of its own.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -302,6 +309,7 @@ def launched(
     named = re.sub(r"[^A-Za-z0-9]+", "-", request.node.name)[-30:].strip("-")
     run = RunId(f"{prefix}-{os.getpid()}-{named}")
     environment = _environment(tmp_path, oneharness_bin, caller, session)
+    environment.update(extra_environment or {})
     if cancel_grace_seconds is not None:
         environment[CANCEL_GRACE_ENV] = str(cancel_grace_seconds)
     plan = tmp_path / "plan.json"

@@ -275,7 +275,9 @@ What each tool is *for here*. How to use it is the tool's own to say — in
 
 - **`onepipeline`** — the engine: scheduling, dispatch, reconciliation, publication
   closeout, and the planner channel. Every launch, channel and view recipe wraps it,
-  and the crates it links are what a dispatched node runs. Governed by
+  and the crates it links are what a dispatched node runs — the plan store a run reads
+  its plan from and projects its settlements onto among them, linked rather than
+  spawned. Governed by
   `config/onepipeline.version`. `onepipeline --help`;
   https://github.com/nickderobertis/onepipeline.
 - **`onevcs`** — repository identity, sessions and worktrees, publication, and landing:
@@ -299,7 +301,10 @@ What each tool is *for here*. How to use it is the tool's own to say — in
 <!-- llmlint: ignore-block[instruction_layer_localized] Which `onetaskgraph` answers is a host-wide fact rather than an `orchestrator/` implementation constraint: every board command a manager runs — `just plans`, `just check-plan`, `just approve-design`, `just follow-ups` — reads through that resolution, and the reader diagnosing a read about the wrong release is the manager, whose document this is. It sits in the roster beside the pin that governs the release, and `orchestrator/AGENTS.md` owns no statement of tool selection; `tests/test_plan_store_guidance.py` holds this one copy to the code. The block runs to the end of this bullet. -->
 - **`onetaskgraph`** — the plan store, installed with its SDK from the project lock: the `authoring` source a plan is drafted in and
   the `plans` board it is approved and launched from, as `onetaskgraph.yaml`
-  configures them. `config/onetaskgraph.version` governs the standalone CLI. Every
+  configures them. `config/onetaskgraph.version` governs the standalone CLI this host's
+  own reads spawn, and is held to the release of the `onetaskgraph-*` crates the engine
+  links, so the store a run reads through — which `config/onepipeline.version`
+  governs — and the one a manager reads are one release. Every
   plan-store read in `orchestrator/` runs the locked install beside the interpreter —
   `.venv/bin/onetaskgraph` — never a `onetaskgraph` a shell's `PATH` offers or
   `ONETASKGRAPH_SDK_BINARY` names, and `orchestrator/plan_store.py` says why.

@@ -211,6 +211,11 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
                 REGISTERED_CHECKOUTS_OVERRIDE: str(listing),
                 RELEASE_VARIABLE: str(release),
                 "XDG_CACHE_HOME": str(cache),
+                # A registry of the journey's own: it registers its stand-ins through the
+                # checkout list above and nothing in onevcs, so setup's workspace sweep has
+                # no identity to walk. The suite's copy of this host's registry names every
+                # real checkout, and sweeping their origins outlasts the held job's release.
+                "ONEVCS_HOME": str(tmp_path / "onevcs-home"),
             },
         )
 

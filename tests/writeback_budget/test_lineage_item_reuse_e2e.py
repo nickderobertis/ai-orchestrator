@@ -133,11 +133,9 @@ def driven(
     # in that key are the launch's own machinery, which is what this journey exercises,
     # so an edit outside it does not pay for the launch and an edit inside it should.
     # llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is faked, at the
-    # `oneharness` seam, and the plan store is recorded by a wrapper that hands every call
-    # to the real published `onetaskgraph` — the two boundaries this repository's
-    # realistic-tests invariant permits doubling, and the shape this journey's task
-    # requires. The recipe, the engine, its driver and write-back worker, and the store
-    # on disk are all real.
+    # `oneharness` seam, which this repository's realistic-tests invariant permits
+    # doubling. The recipe, the engine, its driver and write-back worker, the plan store
+    # it links and the store on disk are all real.
     with launched(
         tmp_path,
         request,

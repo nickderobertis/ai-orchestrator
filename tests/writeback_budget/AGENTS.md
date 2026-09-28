@@ -1,6 +1,11 @@
 <!-- llmlint: ignore-file[instruction_layer_localized] Ownership of this subtree is routed: `.github/CODEOWNERS` is `* @nickderobertis`, which matches every path here as it does every sibling tier project under `tests/`, none of which carries an entry of its own; a per-directory line would restate that match rather than route anything. -->
 # `tests/writeback_budget`
 
+- **A journey here observes the run's record and the destination, never a store call.**
+  The engine links the plan store, so what a journey can read is the run's
+  `writeback-projections.jsonl` and the destination's records on disk, and a fault is a
+  real condition of that destination. No stdio source this host may configure can hold a
+  store call open, so a copy's deadline is proven in onepipeline's own suite.
 - **A cancel settles on the journal, not in the views.** `just status` and `just results`
   render a cancelled running node `parked`, because the park outranks the settlement; the
   `node-settled cancelled` a journey waits for before it retries that node is on
