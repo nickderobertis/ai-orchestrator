@@ -55,8 +55,9 @@
 #     heading of its own, for a re-dispatch over the same run's drafts, tickets and board;
 #   * `--comments` says that file is a gathering of the board's own comments rather than a
 #     manager's prose, and composes the **feedback** mode instead — the narrow
-#     comment-answering task, with no inventory, no verification, no accepted-fix
-#     comparison, no status decision and no copy. It is refused without `--feedback`, and
+#     comment-answering task, with no inventory, no run-wide verification and no
+#     accepted-fix comparison, and no status decision or copy but for a ticket a quoted
+#     comment names. It is refused without `--feedback`, and
 #     `scripts/follow-ups-handle-comments.sh` is its one caller.
 #
 # **Which mode is the caller's to say, never the file's.** Sniffing a feedback file for
@@ -71,8 +72,8 @@
 # this recipe exits non-zero with. In initial mode that is every ticket left under
 # `tasks/<run-id>/tickets/` validated and each one that fails named, then the disposition
 # artifact checked for a disposition per input draft; in feedback mode it is the response
-# artifact alone, because a run answering comments touches no ticket and reading the
-# tickets would refuse it for somebody else's unfinished work. The task's own steps name
+# artifact alone, because a run answering comments touches only the tickets its quoted
+# comments name, and reading the rest would refuse it for somebody else's unfinished work. The task's own steps name
 # the same validator, which is what binds the detached path the success hook launches.
 #
 # **`--detach` returns once the launch record exists**, printing

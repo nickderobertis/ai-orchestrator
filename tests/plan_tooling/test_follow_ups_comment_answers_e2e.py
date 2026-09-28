@@ -82,14 +82,12 @@ from orchestrator.root import REPO_ROOT
 #: A real launch holds this checkout's toolchain for as long as it runs.
 pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 
-#: The run's three items: a proposal a comment retires, a deferred item the same comment sits
-#: on, and a ticket filed at record schema 5 that a comment asks to correct.
+#: The run's items: a proposal a comment retires, a deferred item the same comment sits on,
+#: and a ticket at each older record schema the feedback task brings forward, keyed by that
+#: schema — 5, which the onepipeline#438 ticket carried, and 6, the one just before.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
-LEGACY_CAUSE = "export-drops-a-column"
-
-#: The record schema the legacy ticket was filed at: the one the onepipeline#438 ticket carried.
-LEGACY_SCHEMA = 5
+OLDER_CAUSES = {5: "export-drops-a-column", 6: "retry-loop-never-backs-off"}
 
 REVIEWER = "a-reviewer"
 RETIRING = "Handled elsewhere: the listing rewrite removes this, so this ticket won't be needed.\n"
@@ -99,22 +97,18 @@ CORRECTING = (
 )
 REQUESTED_FIX = "Page the export by cursor in `src/export.py`, as the listing already does."
 
-#: What the answering agent records it did about each comment, keyed by the comment's text.
 WITHDREW = "Withdrew this run's proposal: the comment says the listing rewrite handles it."
 KEPT_DEFERRED = (
     "Left the item as it is: a person deferred it, and `board-status --withdraw` refused."
 )
 CORRECTED = "Brought the ticket to the current schema with the corrected fix, and copied it."
-ACTIONS = {RETIRING: WITHDREW, CORRECTING: CORRECTED}
 
 DEFERRED_WITNESS = "deferred-withdrawal.witness"
-#: What `validate` said of the schema-5 ticket before the agent brought it forward.
-LEGACY_WITNESS = "legacy-validate.witness"
 
-#: The agent bringing the schema-5 ticket on disk forward in place, as the rule the task
-#: composes says: its record to the current schema, carrying the `frequency` judgment its
-#: evidence supports, and its `## Suggested fix` to the fix the comment asks for. Everything
-#: else stays as it stands; `board-status` then writes the estimate, its line and the priority.
+#: The agent bringing an older ticket on disk forward in place, as the rule the task composes
+#: says: its record to the current schema, carrying the `frequency` judgment its evidence
+#: supports, and its `## Suggested fix` to the fix the comment asks for. Everything else stays
+#: as it stands; `board-status` then writes the estimate, its line and the priority.
 BRING_FORWARD = """\
 import json, pathlib, re, sys
 from orchestrator import follow_up_tickets as tickets
@@ -134,24 +128,21 @@ text = re.sub(
 path.write_text(text, encoding="utf-8")
 """
 
-#: The answering agent's own program: read the gathering its task quotes, and post one reply
-#: to each comment there, naming the comment's id, then write the account the task is held
-#: to, each entry saying what was done about that comment. Run from the launching checkout.
+#: The answering agent's own program: post one reply to each comment its task quotes, then
+#: write the account the task is held to, from the action it took on each comment's issue.
 ANSWER_EACH_COMMENT = """\
 import json, re, subprocess, sys, tempfile
 from orchestrator import follow_up_tickets as tickets
 
-log, run, store, actions, fallback = sys.argv[1:6]
-actions = {text.rstrip(): action for text, action in json.loads(actions).items()}
+log, run, store, actions = sys.argv[1:5]
+actions = json.loads(actions)
 with open(log, encoding="utf-8") as stream:
     task = json.loads(stream.read().splitlines()[-1])["prompt"]
 account = re.search(r"account is a JSON document at `([^`]+)`", task)[1]
 gathered = re.search(r'"feedback": "([^"]+)"', task)[1]
 gathering = tickets.read_gathering(task.split("## The comments to answer", 1)[1])
 responses = []
-for section, one, text in zip(
-    task.split("### Comment ")[1:], gathering.quoted, gathering.texts, strict=True
-):
+for section, one in zip(task.split("### Comment ")[1:], gathering.quoted, strict=True):
     fields = dict(
         line[2:].split(": ", 1) for line in section.splitlines() if line.startswith("- ")
     )
@@ -160,7 +151,7 @@ for section, one, text in zip(
                        capture_output=True, text=True).stdout
     )
     cause = shown["items"][0]["item"]["metadata"][tickets.KEY]["root_cause"]
-    action = actions.get(text.rstrip(), fallback)
+    action = actions[one.issue]
     reply = tickets.render_reply(
         run, cause, answers=one.comment, url=fields["URL"], author=fields["Author"],
         response=action, verdict=tickets.Verdict.DOES_NOT_CONFIRM,
@@ -188,6 +179,18 @@ with open(account, "w", encoding="utf-8") as stream:
 """
 
 
+class Older(NamedTuple):
+    """One ticket filed at an older record schema, before and after the dispatch."""
+
+    issue: QualifiedTaskId
+    ticket: Path
+    before: dict[str, object]
+    #: What `validate` printed of it, and exited with, before the agent brought it forward.
+    witness: str
+    after: dict[str, object]
+    validated: subprocess.CompletedProcess[str]
+
+
 class Answered(NamedTuple):
     """The one dispatch's journey, read back before anything is torn down."""
 
@@ -195,20 +198,16 @@ class Answered(NamedTuple):
     run: tickets.RunId
     proposed_issue: QualifiedTaskId
     deferred_issue: QualifiedTaskId
-    legacy_issue: QualifiedTaskId
-    legacy_ticket: Path
-    legacy_before: dict[str, object]
     gathering: Path
     result: subprocess.CompletedProcess[str]
     prompts: list[str]
     witness: str
-    legacy_witness: str
     proposed_after: dict[str, object]
     deferred_after: dict[str, object]
-    legacy_after: dict[str, object]
     comments_after: dict[str, list[dict[str, object]]]
     checked: subprocess.CompletedProcess[str]
-    validated: subprocess.CompletedProcess[str]
+    #: Each older ticket by the schema it was filed at.
+    older: dict[int, Older]
 
 
 def _gathered(bench: Bench, run: str, board: str = BOARD) -> Path:
@@ -231,8 +230,8 @@ def _gathered(bench: Bench, run: str, board: str = BOARD) -> Path:
     return Path(written.stdout.strip())
 
 
-def _schema_5(ticket: tickets.Ticket) -> str:
-    """``ticket`` as schema 5 stored it: today's headings, and no estimate or frequency anywhere."""
+def _older(ticket: tickets.Ticket, schema: int) -> str:
+    """``ticket`` as ``schema`` 5 or 6 stored it: today's headings, no estimate or frequency."""
     record = {
         key: value
         for key, value in tickets.record(ticket).items()
@@ -243,7 +242,7 @@ def _schema_5(ticket: tickets.Ticket) -> str:
             "title": ticket.title,
             "status": ticket.status.value,
             "repositories": [ticket.repository],
-            "metadata": {tickets.KEY: record | {"schema": LEGACY_SCHEMA}},
+            "metadata": {tickets.KEY: record | {"schema": schema}},
         },
         ticket.body,
     )
@@ -274,7 +273,7 @@ def _withdrawal_refused(python: str, witness: Path, ticket: Path) -> list[str]:
 
 
 def _brought_forward(bench: Bench, python: str, witness: Path, ticket: Path) -> list[str]:
-    """The agent's step over the schema-5 ticket: `validate` first, then bring it forward.
+    """The agent's step over an older ticket: `validate` first, then bring it forward.
 
     What `validate` printed and exited with goes to ``witness`` — the refusal naming the older
     schema the task keys its rule on — and the ticket is then edited in place.
@@ -292,13 +291,15 @@ def _brought_forward(bench: Bench, python: str, witness: Path, ticket: Path) -> 
     ]
 
 
-def _answering(bench: Bench, python: str, log: Path, run: str) -> list[str]:
-    """The agent's command replying to each quoted comment and writing the account."""
+def _answering(
+    bench: Bench, python: str, log: Path, run: str, actions: dict[str, str]
+) -> list[str]:
+    """The agent's command replying to each quoted comment, recording ``actions`` by issue."""
     helper = _staged(bench, "answer-each-comment.py", ANSWER_EACH_COMMENT)
     return [
         "bash",
         "-c",
-        'cd "$1" && exec "$2" "$3" "$4" "$5" "$6" "$7" "$8"',
+        'cd "$1" && exec "$2" "$3" "$4" "$5" "$6" "$7"',
         "_",
         str(REPO_ROOT),
         python,
@@ -306,8 +307,7 @@ def _answering(bench: Bench, python: str, log: Path, run: str) -> list[str]:
         str(log),
         run,
         str(ONETASKGRAPH_BIN),
-        json.dumps(ACTIONS),
-        KEPT_DEFERRED,
+        json.dumps(actions),
     ]
 
 
@@ -327,60 +327,57 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
     python = str(REPO_ROOT / ".venv" / "bin" / "python3")
     follow_up_run = f"{run}{SUFFIX}"
     try:
-        # The run's own items as its follow-up agent left them: two proposals, one of which a
-        # person has since deferred, and one ticket filed at schema 5.
         proposed_issue = _filed(bench, run, PROPOSED_CAUSE)
         deferred_issue = _filed(bench, run, DEFERRED_CAUSE)
         _moved(bench, deferred_issue, tickets.Status.DEFERRED.value)
-        legacy_ticket = tickets.ticket_path(bench.drafts_root, run, LEGACY_CAUSE)
-        legacy = _ticket(
-            run,
-            LEGACY_CAUSE,
-            (f"drafts:{run}/drafts/a-consumed-draft",),
-            f"some-service: {LEGACY_CAUSE.replace('-', ' ')}",
-            "Filed at schema 5",
-            HOST,
-            frequency=None,
-        )
-        legacy_ticket.write_text(_schema_5(legacy), encoding="utf-8")
-        copied = _run(
-            [str(ONETASKGRAPH_BIN), "task", "copy", tickets.qualified_id(run, LEGACY_CAUSE)]
-            + ["--to", BOARD],
-            bench,
-        )
-        assert copied.returncode == 0, copied.stdout + copied.stderr
-        legacy_issue = QualifiedTaskId(f"{BOARD}:{run}/tickets/{LEGACY_CAUSE}")
-        legacy_before = _item(bench, legacy_issue)
+        older: dict[int, tuple[QualifiedTaskId, Path, dict[str, object]]] = {}
+        for schema, cause in OLDER_CAUSES.items():
+            path = tickets.ticket_path(bench.drafts_root, run, cause)
+            filed = _ticket(
+                run,
+                cause,
+                (f"drafts:{run}/drafts/a-consumed-draft",),
+                f"some-service: {cause.replace('-', ' ')}",
+                f"Filed at schema {schema}",
+                HOST,
+                frequency=None,
+            )
+            path.write_text(_older(filed, schema), encoding="utf-8")
+            copied = _run(
+                [str(ONETASKGRAPH_BIN), "task", "copy", tickets.qualified_id(run, cause)]
+                + ["--to", BOARD],
+                bench,
+            )
+            assert copied.returncode == 0, copied.stdout + copied.stderr
+            issue = QualifiedTaskId(f"{BOARD}:{run}/tickets/{cause}")
+            older[schema] = (issue, path, _item(bench, issue))
 
-        # What a person wrote after the run last responded.
+        # After the run last responded, so the gathering quotes each of these.
         _next_second()
         _commented(bench, proposed_issue, RETIRING, REVIEWER)
         _commented(bench, deferred_issue, RETIRING, REVIEWER)
-        _commented(bench, legacy_issue, CORRECTING, REVIEWER)
+        for issue, _, _ in older.values():
+            _commented(bench, issue, CORRECTING, REVIEWER)
         gathering = _gathered(bench, run)
 
-        # The answer: withdraw the proposal, try the same on the deferred item, bring the
-        # legacy ticket forward carrying the requested fix, then reply to each comment.
         witness = tmp / DEFERRED_WITNESS
-        legacy_witness = tmp / LEGACY_WITNESS
         log = tmp / "prompts.jsonl"
-        _script(
-            bench,
-            run,
-            [
-                _decided_and_copied(
-                    python,
-                    tickets.ticket_path(bench.drafts_root, run, PROPOSED_CAUSE),
-                    "--withdraw",
-                ),
-                _withdrawal_refused(
-                    python, witness, tickets.ticket_path(bench.drafts_root, run, DEFERRED_CAUSE)
-                ),
-                _brought_forward(bench, python, legacy_witness, legacy_ticket),
-                _decided_and_copied(python, legacy_ticket),
-                _answering(bench, python, log, run),
-            ],
-        )
+        actions = {proposed_issue: WITHDREW, deferred_issue: KEPT_DEFERRED}
+        commands = [
+            _decided_and_copied(
+                python, tickets.ticket_path(bench.drafts_root, run, PROPOSED_CAUSE), "--withdraw"
+            ),
+            _withdrawal_refused(
+                python, witness, tickets.ticket_path(bench.drafts_root, run, DEFERRED_CAUSE)
+            ),
+        ]
+        for schema, (issue, path, _) in older.items():
+            commands += [
+                _brought_forward(bench, python, tmp / f"schema-{schema}.witness", path),
+                _decided_and_copied(python, path),
+            ]
+            actions[issue] = CORRECTED
+        _script(bench, run, [*commands, _answering(bench, python, log, run, actions)])
         result = _run(
             ["just", "follow-ups", run, "--feedback", str(gathering), "--comments", "--to", BOARD],
             bench,
@@ -391,34 +388,40 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
             + ["--board", BOARD, "--feedback", str(gathering), run],
             bench,
         )
-        validated = _run(
-            [python, "-m", "orchestrator.follow_up_tickets", "validate", str(legacy_ticket)],
-            bench,
-        )
         return Answered(
             bench=bench,
             run=run,
             proposed_issue=proposed_issue,
             deferred_issue=deferred_issue,
-            legacy_issue=legacy_issue,
-            legacy_ticket=legacy_ticket,
-            legacy_before=legacy_before,
             gathering=gathering,
             result=result,
             prompts=_prompts(log),
             witness=witness.read_text(encoding="utf-8") if witness.is_file() else "",
-            legacy_witness=(
-                legacy_witness.read_text(encoding="utf-8") if legacy_witness.is_file() else ""
-            ),
             proposed_after=_item(bench, proposed_issue),
             deferred_after=_item(bench, deferred_issue),
-            legacy_after=_item(bench, legacy_issue),
             comments_after={
                 issue: _comments(bench, issue)
-                for issue in (proposed_issue, deferred_issue, legacy_issue)
+                for issue in (proposed_issue, deferred_issue, *(held[0] for held in older.values()))
             },
             checked=checked,
-            validated=validated,
+            older={
+                schema: Older(
+                    issue=issue,
+                    ticket=path,
+                    before=before,
+                    witness=(
+                        (tmp / f"schema-{schema}.witness").read_text(encoding="utf-8")
+                        if (tmp / f"schema-{schema}.witness").is_file()
+                        else ""
+                    ),
+                    after=_item(bench, issue),
+                    validated=_run(
+                        [python, "-m", "orchestrator.follow_up_tickets", "validate", str(path)],
+                        bench,
+                    ),
+                )
+                for schema, (issue, path, before) in older.items()
+            },
         )
     finally:
         if (bench.runs / follow_up_run).exists():
@@ -449,6 +452,11 @@ def _reply_to(answered: Answered, issue: str, text: str) -> tickets.CommentOwner
     return replies[0]
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These journeys read the
+# one launch the module fixture spends, in the plan_tooling Nx project: the dedicated tier for
+# journeys that drive the installed engine, whose planToolingWorkspace input covers the
+# recipe, the task modules and the store configuration they run, and whose turns are the
+# provider's stand-in.
 def test_a_comment_clearly_retiring_the_runs_own_proposal_withdraws_it_and_is_answered(
     answered: Answered,
 ) -> None:
@@ -475,39 +483,42 @@ def test_the_same_comment_on_a_deferred_item_leaves_its_status_as_a_person_set_i
     assert f"refused {tickets.PROTECTED}" in answered.witness, answered.witness
     assert "copied" not in answered.witness, answered.witness
     assert _reply_to(answered, answered.deferred_issue, RETIRING).kind is tickets.CommentKind.REPLY
+    account = json.loads(tickets.responses_path(answered.gathering).read_text(encoding="utf-8"))
+    kept = [entry for entry in account["responses"] if entry["issue"] == answered.deferred_issue]
+    assert [entry["action"] for entry in kept] == [KEPT_DEFERRED], account
 
 
-def test_a_comment_correcting_a_schema_5_ticket_brings_it_to_the_current_schema_with_the_change(
-    answered: Answered,
+@pytest.mark.parametrize("schema", sorted(OLDER_CAUSES))
+def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_with_the_change(
+    answered: Answered, schema: int
 ) -> None:
     """Brought forward before it is decided, validated and copied, rather than left stale."""
     _settled(answered)
-    before = answered.legacy_before["metadata"]
+    older = answered.older[schema]
+    before = older.before["metadata"]
     assert isinstance(before, dict)
-    assert before[tickets.KEY]["schema"] == LEGACY_SCHEMA
+    assert before[tickets.KEY]["schema"] == schema
     assert (
-        f"the record is schema {LEGACY_SCHEMA}, and this reads schema {tickets.SCHEMA}; bring "
+        f"the record is schema {schema}, and this reads schema {tickets.SCHEMA}; bring "
         "the ticket to the current shape"
-    ) in answered.legacy_witness, answered.legacy_witness
-    assert f"exit {tickets.UNSOUND}" in answered.legacy_witness, answered.legacy_witness
+    ) in older.witness, older.witness
+    assert f"exit {tickets.UNSOUND}" in older.witness, older.witness
 
-    after = answered.legacy_after
+    after = older.after
     metadata = after["metadata"]
     assert isinstance(metadata, dict)
     assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
     ticket = tickets.from_store_item(after)
     fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert fix == REQUESTED_FIX, ticket.body
-    assert "Filed at schema 5 (Examples)." in ticket.body, "the rest of the ticket moved"
+    assert f"Filed at schema {schema} (Examples)." in ticket.body, "the rest of the ticket moved"
     assert ticket.frequency is tickets.Frequency.INTERMITTENT
     assert ticket.priority_estimate is not None, "board-status wrote no estimate"
     assert ticket.host == HOST
     assert after["repositories"] == [REPOSITORY]
-    assert answered.validated.returncode == OK, (
-        answered.validated.stdout + answered.validated.stderr
-    )
-    assert "is a sound ticket" in answered.validated.stdout + answered.validated.stderr
-    assert _reply_to(answered, answered.legacy_issue, CORRECTING).kind is tickets.CommentKind.REPLY
+    assert older.validated.returncode == OK, older.validated.stdout + older.validated.stderr
+    assert "is a sound ticket" in older.validated.stdout + older.validated.stderr
+    assert _reply_to(answered, older.issue, CORRECTING).kind is tickets.CommentKind.REPLY
     assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
 
 
@@ -524,6 +535,9 @@ def test_the_dispatched_task_carries_the_investigation_bound_the_exception_and_t
     assert "a ticket of an older schema is brought to the current shape before it is copied" in (
         flat
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _follow_ups_from(
