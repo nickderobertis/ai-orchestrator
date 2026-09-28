@@ -327,7 +327,9 @@ def _project(tmp: Path, name: str) -> str:
                     {
                         "id": NODE,
                         "persona": "engineer",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                     }
                 ],
             }

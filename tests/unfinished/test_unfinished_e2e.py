@@ -51,7 +51,7 @@ from typing import Any, NamedTuple
 import probe_run_root
 import pytest
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
-from unpublished_registry import Registry, Session, commit_on, seeded
+from unpublished_registry import BASE, Registry, Session, commit_on, git, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import unpublished
@@ -75,6 +75,7 @@ OWES_A_WATCH = "manager-owes-a-watch"
 ACKNOWLEDGES = "manager-acknowledges"
 IN_FLIGHT_ONLY = "manager-in-flight-only"
 OTHER_MANAGER = "manager-somebody-else"
+OWES_A_SUPERSEDED_BRANCH = "manager-owes-a-superseded-branch"
 WORKER = "worker-owning-nothing"
 
 #: Every name `scripts/launcher-session.sh` reads an identity from or exports one as, read
@@ -106,6 +107,8 @@ class World(NamedTuple):
     held: Session
     other: Session
     owner: subprocess.Popen[bytes]
+    #: A branch a landed retry replaced, which still differs from the base.
+    superseded: Session
 
 
 def _labels(run: str, launcher: str) -> dict[str, str]:
@@ -115,6 +118,34 @@ def _labels(run: str, launcher: str) -> dict[str, str]:
 def _closed(registry: Registry, run: str, launcher: str) -> Session:
     session = registry.open_session(labels=_labels(run, launcher))
     registry.close_session(session)
+    return session
+
+
+def _superseded(registry: Registry, run: str, launcher: str) -> Session:
+    """A closed session whose branch a retry replaced and landed, recorded as onevcs records it.
+
+    The retry's version of the session's one file lands on the base, so the branch still
+    differs there, and `onevcs supersede` — the verb the engine calls when a retry lands —
+    records the pair.
+    """
+    session = _closed(registry, run, launcher)
+    name = f"work-{session.token}.txt"
+    git("checkout", "-q", BASE, cwd=registry.checkout)
+    (registry.checkout / name).write_text("the retry's version\n", encoding="utf-8")
+    git("add", "-A", cwd=registry.checkout)
+    git("commit", "-q", "-m", f"feat: land the retry of {name}", cwd=registry.checkout)
+    git("push", "-q", "origin", BASE, cwd=registry.checkout)
+    landing = git("rev-parse", "HEAD", cwd=registry.checkout).strip()
+    registry.onevcs(
+        "supersede",
+        session.branch,
+        "--repo",
+        str(registry.checkout),
+        "--by",
+        "claude/the-retry",
+        "--landing",
+        landing,
+    )
     return session
 
 
@@ -144,6 +175,7 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> Iterator[World]:
     both = _closed(registry, "run-both", OWES_BOTH)
     acknowledged = _closed(registry, "run-ack", ACKNOWLEDGES)
     other = _closed(registry, "run-other", OTHER_MANAGER)
+    superseded = _superseded(registry, "run-superseded", OWES_A_SUPERSEDED_BRANCH)
     held = registry.open_session(labels=_labels("run-held", IN_FLIGHT_ONLY))
     owner = registry.hold(held)
     runs = root / "runs"
@@ -151,7 +183,7 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> Iterator[World]:
     _unwatched_run(runs, "run-both", OWES_BOTH)
     _unwatched_run(runs, "run-watch", OWES_A_WATCH)
     try:
-        yield World(registry, runs, branch, both, acknowledged, held, other, owner)
+        yield World(registry, runs, branch, both, acknowledged, held, other, owner, superseded)
     finally:
         owner.kill()
         owner.wait()
@@ -239,6 +271,29 @@ def test_a_preserved_branch_of_an_own_run_is_owed_with_both_ways_out(
     assert "land it:" in published and "just publish-branch" in published
     assert f"just unpublished --acknowledge {world.branch.branch}" in published
     assert '--reason "<why it is deliberately left>"' in published
+
+
+def _reclaim_lines(world: World) -> str:
+    """The ways out a superseded row is listed with, as `just unpublished` renders them."""
+    branch = world.superseded.branch
+    return (
+        f"    reclaim it:      just reclaim-branch {branch} --repo {world.registry.checkout}\n"
+        f"    or acknowledge:  just unpublished --acknowledge {branch} "
+        '--reason "<why it is deliberately kept>"'
+    )
+
+
+def test_a_superseded_branch_of_an_own_run_is_owed_with_reclaim_first(
+    world: World, tmp_path: Path
+) -> None:
+    """Still owed — the counting rule is unchanged — but offered the reclaim, not a landing."""
+    answer = _just(world, "unfinished", "--session", OWES_A_SUPERSEDED_BRANCH, state=tmp_path)
+    assert answer.status == UNPUBLISHED, answer
+    _, published = answer.halves()
+    assert "    superseded by:   claude/the-retry, landed at " in published, published
+    assert f"    differs in:      work-{world.superseded.token}.txt" in published, published
+    assert _reclaim_lines(world) in published, published
+    assert "land it:" not in published, published
 
 
 def test_another_sessions_preserved_branch_is_not_owed(world: World, tmp_path: Path) -> None:
@@ -1000,6 +1055,15 @@ def test_the_stop_hook_answers_what_just_unfinished_says_the_session_owes(
         assert reason.count(hint) == 1, f"{branch} is not owed exactly once:\n{reason}"
     assert ("onepipeline watch" in reason) == bool(unwatched), reason
     assert ("just unpublished --acknowledge" in reason) == bool(branches), reason
+
+
+def test_the_stop_hook_offers_the_reclaim_for_a_superseded_branch(
+    world: World, tmp_path: Path
+) -> None:
+    """The registered command refuses the turn with the same reclaim line the recipe prints."""
+    reason = _refused(_stop(world, tmp_path / "state", OWES_A_SUPERSEDED_BRANCH))
+    assert _reclaim_lines(world) in reason, reason
+    assert "land it:" not in reason, reason
 
 
 def test_the_stop_hook_follows_a_reasoned_acknowledgement(world: World, tmp_path: Path) -> None:

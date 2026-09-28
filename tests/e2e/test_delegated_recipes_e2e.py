@@ -534,6 +534,13 @@ DELEGATIONS = (
         "uv run onevcs integrate claude/a claude/b --push",
     ),
     Delegation("sync", ("main",), "uv run onevcs sync main"),
+    # The line `just unpublished` prints for a superseded branch; every argument, the
+    # refusal and its exit status are the published verb's.
+    Delegation(
+        "reclaim-branch",
+        ("claude/first-try", "--repo", "/checkout", "--dry-run"),
+        "uv run onevcs reclaim claude/first-try --repo /checkout --dry-run",
+    ),
 )
 
 

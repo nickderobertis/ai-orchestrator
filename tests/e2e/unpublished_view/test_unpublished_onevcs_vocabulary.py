@@ -113,3 +113,55 @@ def test_the_session_token_grammar_is_exactly_what_onevcs_mints(onevcs: Engine) 
 
 
 # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+#: onevcs's published contract at the release the view spawns: the one source of the
+#: retirement classes and the `retirement` object's fields, which the view restates.
+ONEVCS_CONTRACT = Engine("onevcs", _pinned_tag("onevcs"), "docs")
+RETIREMENT_CLASS = re.compile(r"pub enum RetirementClass \{(?P<body>[^}]*)\}")
+RETIREMENT_STRUCT = re.compile(r"pub struct Retirement \{(?P<body>.*?)\}", re.S)
+SUPERSEDED_BY_STRUCT = re.compile(r"pub struct SupersededBy \{(?P<body>.*?)\}", re.S)
+RECOVERABLE_GAINS = re.compile(r"Recoverable\s+pub retirement: Option<Retirement>")
+FIELD = re.compile(r"pub (\w+):")
+ENUM_VARIANT = re.compile(r"[A-Z]\w*")
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] A drift gate for copied wire vocabulary
+# reads the producer's pinned declaration; `test_superseded_branches_e2e.py` beside this
+# drives the same words through the real CLI and the recipe.
+def test_the_retirement_words_the_view_reads_are_onevcs_s_contract() -> None:
+    """The class the view acts on and every field it reads, against onevcs's contract.
+
+    Read at `config/onevcs.version`'s tag, the CLI the view spawns. A class onevcs renames,
+    or a field it moves, fails here rather than leaving every superseded row printed with
+    today's `land it:` line and no evidence.
+    """
+    contract = _source(ONEVCS_CONTRACT, "contract.md")
+    classes = RETIREMENT_CLASS.search(contract)
+    retirement = RETIREMENT_STRUCT.search(contract)
+    superseded_by = SUPERSEDED_BY_STRUCT.search(contract)
+    assert classes and retirement and superseded_by, (
+        f"onevcs {ONEVCS_CONTRACT.ref}'s contract no longer declares `RetirementClass`, "
+        "`Retirement` and `SupersededBy`"
+    )
+    wire = {_kebab(variant) for variant in ENUM_VARIANT.findall(classes.group("body"))}
+    assert unpublished.SUPERSEDED_WITH_CHANGES in wire, (
+        f"onevcs {ONEVCS_CONTRACT.ref} spells its retirement classes {sorted(wire)}"
+    )
+    assert wire == set(unpublished.RETIREMENT_CLASSES), (
+        f"onevcs {ONEVCS_CONTRACT.ref} spells its retirement classes {sorted(wire)}"
+    )
+    fields = set(FIELD.findall(retirement.group("body")))
+    assert set(unpublished.RETIREMENT_FIELDS_READ) <= fields, (
+        f"onevcs {ONEVCS_CONTRACT.ref}'s `Retirement` declares {sorted(fields)}"
+    )
+    by = set(FIELD.findall(superseded_by.group("body")))
+    assert set(unpublished.SUPERSEDED_BY_FIELDS_READ) <= by, (
+        f"onevcs {ONEVCS_CONTRACT.ref}'s `SupersededBy` declares {sorted(by)}"
+    )
+    assert RECOVERABLE_GAINS.search(contract) and "retirement" in unpublished.ROW_FIELDS, (
+        "the `recoverable --json` row field the view carries whole is no longer `retirement`"
+    )
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]

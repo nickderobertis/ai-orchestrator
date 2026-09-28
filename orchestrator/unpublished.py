@@ -52,6 +52,14 @@ publish-branch` line lands with an empty description. The disk reading is the ru
 each build-output directory under its worktree called out on its own; the walk never
 follows a symbolic link, and `--no-disk` skips it.
 
+**Retirement.** Each row carries `onevcs`'s own `retirement` object as `recoverable
+--json` states it, `null` where that release wrote none. A counted row whose class is
+:data:`SUPERSEDED_WITH_CHANGES` — a retry replaced it and landed, and it still differs
+from its base — is listed with its evidence, what superseded it and where that landed and
+which paths differ, and its ways out, `just reclaim-branch` first. The class, the evidence
+and the verb are `onevcs`'s; this view detects nothing, and the counting rule is unchanged,
+so such a row counts until it is reclaimed or acknowledged.
+
 **The acknowledgement** records that the calling manager session has seen and
 deliberately left a branch. It is keyed on that session and on the branch's tip, so a
 branch that moves past the recorded tip counts again, and it is invisible to every
@@ -110,13 +118,17 @@ __all__ = [
     "NOTHING_COUNTED",
     "RECIPES",
     "REFUSED",
+    "RETIREMENT_FIELDS_READ",
     "ROW_FIELDS",
     "SESSION_LABELS",
+    "SUPERSEDED_BY_FIELDS_READ",
+    "SUPERSEDED_WITH_CHANGES",
     "UNANSWERED",
     "acknowledgement_file",
     "counted",
     "main",
     "print_surface",
+    "reclaim_command",
     "resume_command",
     "stop_verdict",
 ]
@@ -222,7 +234,22 @@ RECIPES: dict[str, str] = {
     "publish-branch": "publish-branch",
     "recover": "repo-recover",
     "integrate": "integrate",
+    "reclaim": "reclaim-branch",
 }
+
+#: The `retirement.class` onevcs gives a branch a landed retry replaced that still differs
+#: from its base: the one class this view lists evidence and a reclaim line for. onevcs's
+#: `docs/contract.md` is the source, and
+#: `tests/e2e/unpublished_view/test_unpublished_onevcs_vocabulary.py` reads it there at
+#: `config/onevcs.version`'s tag and holds this copy to it.
+SUPERSEDED_WITH_CHANGES = "superseded-with-changes"
+#: Every `retirement.class` onevcs states, held to the same document by the same test. A
+#: class outside it is one this view cannot say what it means, so it is read as none.
+RETIREMENT_CLASSES: tuple[str, ...] = ("retirable", SUPERSEDED_WITH_CHANGES, "keep")
+#: The `retirement` fields this view reads, and the `superseded_by` fields within it, held
+#: to the same document by the same test. Every other field reaches `--json` untouched.
+RETIREMENT_FIELDS_READ: tuple[str, ...] = ("class", "superseded_by", "differing_paths")
+SUPERSEDED_BY_FIELDS_READ: tuple[str, ...] = ("branch", "landing", "labels")
 
 #: The row shape, in the order `--json` emits it. Exactly these fields, no more: a
 #: consumer of the row reads them by name, and a field added here is a change to a
@@ -240,6 +267,7 @@ ROW_FIELDS: tuple[str, ...] = (
     "node",
     "manager_session",
     "resume_command",
+    "retirement",
     "in_flight",
     "counted",
     "acknowledgement",
@@ -414,6 +442,8 @@ class Row(NamedTuple):
     checkout: Path
     resume: str | None
     held_by: dict[str, str] | None
+    #: `onevcs`'s `retirement` object, carried whole as `landed` is.
+    retirement: dict[str, Any] | None
     # llmlint: ignore-end[modern_domain_modeling]
     holder: Holder | None
     #: The session token `onevcs` names on the row, where it names one.
@@ -497,6 +527,27 @@ def resume_command(recover_command: Sequence[str]) -> str | None:
     if recipe is None:
         return None
     return shlex.join(["just", recipe, *recover_command[2:]])
+
+
+def _superseded(retirement: dict[str, Any] | None) -> bool:
+    """Whether `onevcs` classed the branch :data:`SUPERSEDED_WITH_CHANGES`."""
+    return retirement is not None and retirement.get("class") == SUPERSEDED_WITH_CHANGES
+
+
+def reclaim_command(row: Row) -> str | None:
+    """The `onevcs reclaim` line `recoverable` prints for a superseded row, in `just` form.
+
+    `None` for every other class: `onevcs reclaim` refuses them, so offering it would be
+    offering a refusal.
+    """
+    if not _superseded(row.retirement):
+        return None
+    # llmlint: ignore[changed_behavior_has_e2e] The quoting is `resume_command`'s
+    # `shlex.join`, the same rendering every `land it:` line has; the superseded journey runs
+    # the printed line through `shlex.split`, and `tests/test_unpublished.py` holds a branch
+    # and checkout that need quoting, which no scratch registry can name without renaming
+    # the checkout's alias with it.
+    return resume_command(["onevcs", "reclaim", row.branch, "--repo", str(row.checkout)])
 
 
 def acknowledgement_file(session: str) -> Path:
@@ -807,6 +858,70 @@ def _landed(value: object, identity: str, branch: str, warnings: list[str]) -> d
     return {"state": "unknown"}
 
 
+def _printable(value: object) -> bool:
+    """Whether ``value`` is a non-empty string: a branch, a landing or a path it can print."""
+    return isinstance(value, str) and bool(value)
+
+
+def _printables(value: object) -> bool:
+    """Whether ``value`` is a non-empty list of non-empty strings, as `differing_paths` is."""
+    return isinstance(value, list) and bool(value) and all(_printable(item) for item in value)
+
+
+def _readable_supersession(value: dict[str, Any]) -> bool:
+    """Whether a superseded row carries every field the view prints, in its contract shape.
+
+    onevcs writes `superseded_by`, naming a branch and a landing, and a non-empty
+    `differing_paths` for exactly this class, so a document without them is one the view
+    cannot vouch for, rather than less evidence.
+    """
+    by = value.get("superseded_by")
+    labels = by.get("labels") if isinstance(by, dict) else None
+    return (
+        isinstance(by, dict)
+        and _printable(by.get("branch"))
+        and _printable(by.get("landing"))
+        and isinstance(labels, dict)
+        and all(isinstance(label, str) for label in labels.values())
+        and _printables(value.get("differing_paths"))
+    )
+
+
+# llmlint: ignore-block[changed_behavior_has_e2e] The refused shapes are ones the real
+# producer cannot emit: onevcs's contract states that a `retirement` whose fields
+# contradict its class does not deserialize, so no journey over the installed CLI can hand
+# the view one. `tests/test_unpublished.py` drives each refusal in process, and
+# `tests/e2e/unpublished_view/test_superseded_branches_e2e.py` drives the accepted shape
+# through the real recipe.
+def _retirement(
+    value: object, identity: str, branch: str, warnings: list[str]
+) -> dict[str, Any] | None:
+    """`onevcs`'s `retirement` object, carried whole once the fields the view reads hold.
+
+    `null` or absent is a release, or an implementation, that classifies nothing. The view
+    reads the `class` of every row, one of :data:`RETIREMENT_CLASSES`, and for
+    :data:`SUPERSEDED_WITH_CHANGES` the evidence it prints too; one that does not hold them
+    is said and read as none, so the row keeps today's ways out rather than offering a
+    reclaim nothing established.
+    """
+    if value is None:
+        return None
+    if (
+        isinstance(value, dict)
+        and value.get("class") in RETIREMENT_CLASSES
+        and (value["class"] != SUPERSEDED_WITH_CHANGES or _readable_supersession(value))
+    ):
+        return value
+    warnings.append(
+        f"{identity} {branch}: its retirement could not be read and is shown as none: "
+        f"{json.dumps(value)}"
+    )
+    return None
+
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
+
 def _held_by(
     value: object, identity: str, branch: str, warnings: list[str]
 ) -> dict[str, str] | None:
@@ -878,6 +993,7 @@ def _row(record: dict[str, Any], holders: Iterable[Holder], warnings: list[str])
         checkout=Path(checkout),
         resume=resume_command(recover) if isinstance(recover, list) else None,
         held_by=held_by,
+        retirement=_retirement(record.get("retirement"), identity, branch, warnings),
         holder=_holder_for(holders, Identity(identity), branch, token),
         token=token,
         labels=_labels(record.get("labels"), identity, branch, warnings),
@@ -1333,6 +1449,7 @@ def _rendered(
         "node": row.labels.get(LABEL_NODE),
         "manager_session": row.labels.get(LABEL_LAUNCHER),
         "resume_command": row.resume,
+        "retirement": row.retirement,
         "in_flight": row.in_flight,
         "counted": counted(row, acknowledgement),
         "acknowledgement": None if acknowledgement is None else acknowledgement.entry(),
@@ -1355,8 +1472,30 @@ def _human_bytes(count: int | None) -> str:
     return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
 
 
-def _table(rows: Sequence[dict[str, Any]], out: Writer) -> None:
-    """The human rendering: a table, the ways out beside each counted row, a trailer."""
+def _evidence(retirement: dict[str, Any]) -> list[str]:
+    """What `onevcs` says superseded a branch and where it still differs, as listed lines.
+
+    Only a row :func:`_retirement` accepted as superseded reaches this, so every field it
+    prints is already in its contract shape; the node is named where the retry carried one.
+    Both forms are driven through the real recipes: `test_superseded_branches_e2e.py`
+    records its supersession with a node label, and `tests/unfinished/test_unfinished_e2e.py`
+    records one without, reading `superseded by:   <branch>, landed at` back.
+    """
+    by = retirement["superseded_by"]
+    node = by["labels"].get(LABEL_NODE)
+    named = by["branch"] if node is None else f"{by['branch']} (node {node})"
+    return [
+        f"    superseded by:   {named}, landed at {by['landing']}",
+        f"    differs in:      {', '.join(retirement['differing_paths'])}",
+    ]
+
+
+def _table(rows: Sequence[dict[str, Any]], out: Writer, reclaims: Sequence[str | None]) -> None:
+    """The human rendering: a table, the ways out beside each counted row, a trailer.
+
+    ``reclaims`` is each row's :func:`reclaim_command`, by position: a superseded row is
+    listed with its evidence and reclaim first, and every other keeps `land it:`.
+    """
     if not rows:
         print("no preserved unpublished branch for this target", file=out)
         return
@@ -1409,15 +1548,25 @@ def _table(rows: Sequence[dict[str, Any]], out: Writer) -> None:
             file=out,
         )
     print(file=out)
-    for row in rows:
+    for index, row in enumerate(rows):
         if not row["counted"]:
             continue
         print(f"{row['branch']} [{row['identity']}] — {row['stopped_because']}", file=out)
+        reclaim = reclaims[index]
+        acknowledge = f"just unpublished --acknowledge {shlex.quote(row['branch'])}"
+        if reclaim is not None:
+            for evidence in _evidence(row["retirement"]):
+                print(evidence, file=out)
+            print(f"    reclaim it:      {reclaim}", file=out)
+            print(
+                f'    or acknowledge:  {acknowledge} --reason "<why it is deliberately kept>"',
+                file=out,
+            )
+            continue
         if row["resume_command"]:
             print(f"    land it:         {row['resume_command']}", file=out)
         print(
-            f"    or acknowledge:  just unpublished --acknowledge {shlex.quote(row['branch'])} "
-            '--reason "<why it is deliberately left>"',
+            f'    or acknowledge:  {acknowledge} --reason "<why it is deliberately left>"',
             file=out,
         )
     total = sum(1 for row in rows if row["counted"])
@@ -1756,7 +1905,7 @@ def _answer(arguments: argparse.Namespace, warnings: list[str]) -> tuple[int, li
     if arguments.json:
         return status, [json.dumps(rendered, indent=2)]
     listing = io.StringIO()
-    _table(rendered, listing)
+    _table(rendered, listing, [reclaim_command(row) for row in rows])
     return status, listing.getvalue().splitlines()
 
 

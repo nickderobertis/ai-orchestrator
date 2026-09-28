@@ -517,7 +517,11 @@ def test_a_section_whose_heading_merely_starts_with_the_criteria_heading_is_acce
 
 def test_a_task_with_no_acceptance_criteria_at_all_is_refused(tmp_path: Path) -> None:
     """A node with no criteria has no bar of its own, so it is judged entirely on the
-    role's — which is the whole failure this guard exists to catch, at its extreme."""
+    role's — which is the whole failure this guard exists to catch, at its extreme.
+
+    The engine's loader refuses it before `scripts/plan-check.sh` is reached, so the
+    refusal is the engine's, attributed to it and naming the node.
+    """
     plan = _plan(tmp_path, STATES_ITS_BAR)
     document = json.loads(plan.read_text(encoding="utf-8"))
     node = document["tasks"][0]
@@ -527,7 +531,8 @@ def test_a_task_with_no_acceptance_criteria_at_all_is_refused(tmp_path: Path) ->
     refused = _check_plan(plan)
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "Acceptance criteria" in refused.stderr, refused.stderr
+    assert "check-plan: engine: route:" in refused.stderr, refused.stderr
+    assert "node 'route': no criteria section" in refused.stderr, refused.stderr
 
 
 def test_a_plan_of_human_actions_alone_is_accepted_and_says_it_checked_nothing(
@@ -935,7 +940,8 @@ def test_a_task_that_opens_the_criteria_heading_twice_is_refused_by_name(
     The judge is handed the whole task and reads both, so a reader here that picked either
     would be checking one while the dispatch is judged against the other — and naming the
     ambiguity is the same answer this repository's plan store gives a record that opens
-    `metadata` twice.
+    `metadata` twice. The engine's loader names it before `scripts/plan-check.sh` is
+    reached, so the refusal is the engine's, attributed to it and naming the node.
     """
     plan = _plan(tmp_path, STATES_ITS_BAR)
     document = json.loads(plan.read_text(encoding="utf-8"))
@@ -945,8 +951,8 @@ def test_a_task_that_opens_the_criteria_heading_twice_is_refused_by_name(
     refused = _check_plan(plan)
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "opens '## Acceptance criteria' 2 times" in refused.stderr, refused.stderr
-    assert "Leave one block of criteria" in refused.stderr, refused.stderr
+    assert "check-plan: engine: route:" in refused.stderr, refused.stderr
+    assert "node 'route': criteria section repeated" in refused.stderr, refused.stderr
 
 
 @pytest.mark.parametrize(

@@ -528,11 +528,15 @@ def routed_persona_run(
                     {
                         "id": "named",
                         "persona": "docs-writer",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                     },
                     {
                         "id": "default",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                         "expects_no_diff": True,
                         "deps": ["named"],
                     },
@@ -1607,7 +1611,11 @@ MONITOR_OPS_ON_A_SETTLED_NODE = (
         {
             "op": "retry",
             "id": "research",
-            "node": {"id": "redo", "task": "x", "expects_no_diff": True},
+            "node": {
+                "id": "redo",
+                "task": "x\n\n## Acceptance criteria\n- Reported.",
+                "expects_no_diff": True,
+            },
         },
         "not running, failed, or cancelled",
     ),
@@ -1937,7 +1945,14 @@ def graph_with_a_settled_node(
         tmp_path_factory.mktemp("settled-node"),
         oneharness_bin,
         RunId("monitor-ops-e2e"),
-        [{"id": "research", "task": "Report.", "expects_no_diff": True}, _node(id="held")],
+        [
+            {
+                "id": "research",
+                "task": "Report.\n\n## Acceptance criteria\n- Reported.",
+                "expects_no_diff": True,
+            },
+            _node(id="held"),
+        ],
     )
 
 
@@ -2004,7 +2019,11 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
             "commands": [
                 {
                     "op": "add",
-                    "node": {"id": "monitor-added", "task": "Report.", "expects_no_diff": True},
+                    "node": {
+                        "id": "monitor-added",
+                        "task": "Report.\n\n## Acceptance criteria\n- Reported.",
+                        "expects_no_diff": True,
+                    },
                 }
             ],
         },
@@ -2412,7 +2431,13 @@ def _settling_project(tmp_path: Path, run: str) -> str:
     settling: CandidatePlan = {
         "schema_version": 2,
         "name": run,
-        "tasks": [{"id": "settled", "task": "Report.", "expects_no_diff": True}],
+        "tasks": [
+            {
+                "id": "settled",
+                "task": "Report.\n\n## Acceptance criteria\n- Reported.",
+                "expects_no_diff": True,
+            }
+        ],
     }
     plan.write_text(json.dumps(settling), encoding="utf-8")
     return project_from_plan(plan)
@@ -2584,7 +2609,7 @@ HANDBACK_SECONDS = 180.0
 OBSERVED_DISPATCHED_NODE: PlanNode = {
     "id": "watched",
     "persona": "docs-writer",
-    "task": "Report without changing files.",
+    "task": ("Report without changing files.\n\n## Acceptance criteria\n- Reported."),
 }
 # llmlint: ignore-end[e2e_not_mocked]
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -2680,7 +2705,9 @@ def observed_launch(
                     OBSERVED_DISPATCHED_NODE,
                     {
                         "id": "watched-again",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                         "expects_no_diff": True,
                         "deps": ["watched"],
                     },
@@ -3862,7 +3889,7 @@ def test_a_graph_edit_is_accepted_while_a_node_is_still_running(live_run: LiveRu
     # from `_node`, whose default is an agent node.
     settles_without_dispatch: PlanNode = {
         "id": "added-mid-run",
-        "task": "Report.",
+        "task": "Report.\n\n## Acceptance criteria\n- Reported.",
         "expects_no_diff": True,
     }
     add: EditCommand = {"op": "add", "node": settles_without_dispatch}

@@ -7,14 +7,14 @@ requires-python = ">=3.13"
 # classifier is the truthful statement of that, and the one PyPI refuses an upload over.
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "onetaskgraph-sdk==0.2.45",
+    "onetaskgraph-sdk==0.2.46",
     "oneagentgraph-cli==0.5.2",
     "oneharness-cli==0.16.2",
     "onejudge==0.14.0",
     "onemessagebus-cli==0.9.0",
     "onepipeline-api-cli==0.15.0",
-    "onepipeline-cli==0.48.1",
-    "onevcs-cli==0.33.0",
+    "onepipeline-cli==0.51.0",
+    "onevcs-cli==0.34.1",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like
     # the wheels so the lock and this list agree; `tests/test_host_installs.py` states

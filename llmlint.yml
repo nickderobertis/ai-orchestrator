@@ -118,6 +118,26 @@ rules:
         - "scripts/check-dag-state-contract.py"
         - "scripts/check-nx-cache.sh"
         - "scripts/check-oneharness-ui-contract.sh"
+  # One grant is exempt, and only that one. `Bash(just reclaim-branch:*)` in
+  # `.claude/settings.json` is decision 5 of the branch-retirement design the user
+  # approved: reclaiming a superseded branch is the manager's call to make without
+  # approving each use. What bounds it is the verb, not the grant's suffix — `onevcs
+  # reclaim` refuses a branch it classes `keep` and anything a live session holds, with
+  # exit 4, which `tests/e2e/unpublished_view/test_superseded_branches_e2e.py` drives
+  # through the recipe. The plugin's text is restated whole and every other grant, every
+  # other wildcard included, is held to it. JSON carries no inline directive, and a
+  # `files` exclude would lift the rule from the whole allowlist.
+  - name: least_privilege_grants
+    override: true
+    # llmlint: ignore-block[description_and_relevance_are_concise] The description is the base plugin's least_privilege_grants text verbatim plus the one exception clause, so every other grant stays judged by exactly the upstream bar; shortening it would narrow the rule for them.
+    description: >-
+      when every access grant in the target files (a CI token's `permissions:`, an agent
+      command allowlist, a cloud IAM policy, a database role, an OAuth scope) is scoped to
+      the minimum the work needs — no write access where read suffices, no wildcard
+      permission, no unbounded allowlist — except the one agent allowlist entry
+      `Bash(just reclaim-branch:*)` in `.claude/settings.json`.
+    # llmlint: ignore-end[description_and_relevance_are_concise]
+    require_line_attribution: true
   # `session-setup-pypi`'s one target is deliberately not named `test`: `just check`
   # fans out over `nx affected -t ...,test,...`, and a target of that name would put
   # a suite that syncs from PyPI back into the affected tier, which

@@ -25,6 +25,10 @@ SECTION_HEADING = "### The preserved branches this host is holding onto"
 LIFECYCLE_OPENING = "`just unpublished` asks the same question from the other end"
 
 OPTION = re.compile(r"(?<![\w-])--[a-z][a-z-]*")
+#: A command line of the reclaim recipe a superseded row offers beside the view's own ways
+#: out, whose flags are that verb's rather than this view's, so they are not read as the
+#: view's.
+OTHER_VERB = re.compile(r"just reclaim-branch[^`\n]*")
 EXIT_PARAGRAPH = re.compile(
     r"\*\*The exit status is the whole of what a consumer branches on\*\*.*?(?:\n\n|\Z)", re.S
 )
@@ -56,7 +60,7 @@ def test_every_flag_the_documents_name_is_one_the_view_accepts() -> None:
         ("orchestration", _orchestration_section()),
         ("lifecycle", _lifecycle_paragraph()),
     ):
-        named = set(OPTION.findall(prose))
+        named = set(OPTION.findall(OTHER_VERB.sub("", prose)))
         assert named, f"the {name} prose names no flag to reconcile"
         assert named <= accepted, f"the {name} prose names {sorted(named - accepted)}"
 

@@ -28,7 +28,6 @@ from plan_store_pin import (
 )
 from published_tools import ONETASKGRAPH_BIN
 from registered_checkouts import registered_checkouts
-from stub_onetaskgraph import LOG_ENV, PASS_SHOWS_ENV, REAL_ENV, STUBBED
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
@@ -37,10 +36,6 @@ from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, writ
 from orchestrator.root import REPO_ROOT
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
-#: The fault injector this journey points `onepipeline` at. Its marker and its three
-#: steering variables are imported from that module rather than restated, so the log
-#: these assertions read cannot drift from the log that file writes.
-STUB_ONETASKGRAPH = Path(__file__).resolve().parent / "stub_onetaskgraph.py"
 _NodeId = NewType("_NodeId", str)
 _PipelineId = NewType("_PipelineId", str)
 #: A project's native id inside one source — the `<native>` half of a qualified
@@ -3919,7 +3914,10 @@ def test_run_settlements_and_live_edits_reach_the_plan_store(
                 "op": "add",
                 "node": {
                     "id": _NodeId("record-follow-up"),
-                    "task": "Record this follow-up without dispatching.",
+                    "task": (
+                        "Record this follow-up without dispatching.\n\n"
+                        "## Acceptance criteria\n- Reported."
+                    ),
                     "expects_no_diff": True,
                 },
             }
@@ -4484,126 +4482,4 @@ def test_settlement_write_back_preserves_the_authored_project_description(
         f"the settlement rewrote the project description its operator authored to "
         f"{after!r}; the write-back owns the node projection and nothing else on that "
         "record"
-    )
-
-
-#: The `project show` invocations that pass through the fault injector untouched. One:
-#: the launch's own read of the plan it is about to run, which has to succeed or there
-#: is no settlement to measure. Every read after it belongs to the write-back worker.
-LAUNCH_PLAN_READS = 1
-
-
-# llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] A partial read is a
-# real condition of the real surface — the sibling journey above asserts one that a
-# missing `GH_PROJECTS_TOKEN` produces — but it cannot be arranged *at the write-back's
-# own read and not at the launch's*, because the two are the same command against the
-# same source and a store broken for real breaks the run being measured. So this
-# substitutes the one delegated published CLI at `ONETASKGRAPH_BIN`, the seam
-# `onepipeline` spawns it through, and nothing above it: the recipe, the wrapper, the
-# engine, its write-back worker and the store on disk all stay real, `just plans` reads
-# the result through the installed binary because that recipe never consults this
-# variable, and the injector runs the real CLI for every call and adds one `errors`
-# entry to the answer it actually returned.
-def _injected_partial_read(log: Path) -> dict[str, str]:
-    """Point `onepipeline`'s plan-store calls at the fault injector, and log them."""
-    assert ONETASKGRAPH_BIN.is_file(), (
-        f"this checkout's own onetaskgraph is missing at {ONETASKGRAPH_BIN} — run 'just bootstrap'"
-    )
-    return {
-        "ONETASKGRAPH_BIN": str(STUB_ONETASKGRAPH),
-        REAL_ENV: str(ONETASKGRAPH_BIN),
-        LOG_ENV: str(log),
-        PASS_SHOWS_ENV: str(LAUNCH_PLAN_READS),
-    }
-
-
-# llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
-
-
-def _stub_invocations(log: Path) -> list[str]:
-    """Every plan-store call the engine made, in order, as the injector saw them."""
-    return log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
-
-
-def test_a_refused_destination_read_settles_the_run_and_writes_nothing(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    """A destination read the store cannot answer stops the projection and nothing else.
-
-    The recovery path beside
-    `test_settlement_write_back_preserves_the_authored_project_description`, and the
-    half that says why the preservation is worth anything: the write-back reads its
-    destination before it builds the shadow it copies over, and a read it cannot trust
-    has to end the projection rather than fall back to a default. A read that defaulted
-    would be a read that deletes — the shadow would carry an empty description and the
-    copy is a total replacement by contract — so this is the same defect arriving
-    through the other door.
-
-    Both halves are asserted, because either alone passes for the wrong reason. That
-    the record is untouched is not evidence on its own: a run that never projected at
-    all leaves exactly that. So the injector's own log is read for what the engine
-    *did* — that the launch's plan read went through, that the write-back's read was
-    the one refused, and that no `project copy` was ever reached — and the record is
-    compared byte for byte beside it.
-
-    Below the refusal this fails three times over, each for its own reason:
-    onepipeline 0.16.2 performs no destination read at all, so nothing is injected
-    into, `project copy` runs, and the record comes back rewritten with an empty body.
-    """
-    _write_local_project(tmp_path)
-    _author_project_body(tmp_path, LOCAL_PROJECT, AUTHORED_PROJECT_BODY)
-    record = tmp_path / "projects" / f"{LOCAL_PROJECT}.md"
-    before = record.read_bytes()
-
-    log = tmp_path / "plan-store-calls.log"
-    environment = _launch_environment(tmp_path / "execution", oneharness_bin)
-    environment.update(_prepare_plan_sources(tmp_path))
-    environment.update(_injected_partial_read(log))
-    environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
-
-    launched = subprocess.run(
-        ["just", "orchestrate", LOCAL_QUALIFIED, "--dag-graph", "off"],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert launched.returncode == 0, launched.stdout + launched.stderr
-    # Asserted before the run id, because the run id is what a lost isolation shows up
-    # as and the name alone cannot say why. `ONEPIPELINE_RUNS_DIR` is relative and this
-    # repository's own dispatches export it, so a launch that took the ambient value ran
-    # into the checkout's shared runs root, where a sibling journey of this module has
-    # already taken the name and this one is handed `launch-2` or `launch-3` instead.
-    assert (tmp_path / "execution" / "runs" / LOCAL_PROJECT).is_dir(), (
-        "this launch did not run in its own runs root, so the run id below is whatever "
-        "was free in a root it shares with every other launch on this checkout"
-    )
-    assert json.loads(launched.stdout.splitlines()[-1]) == {
-        "run_id": LOCAL_PROJECT,
-        "settlement": "complete",
-    }, (
-        "a store that cannot answer the write-back's read must not decide the run; "
-        f"this one settled as {launched.stdout.splitlines()[-1]!r}"
-    )
-
-    invocations = _stub_invocations(log)
-    passed_through = [line for line in invocations if line.startswith("project show")]
-    refused = [line for line in invocations if line.startswith(f"{STUBBED} project show")]
-    assert len(passed_through) == LAUNCH_PLAN_READS, (
-        "the launch's own plan read has to go through for there to be a run at all; "
-        f"the injector saw {invocations}"
-    )
-    assert refused, (
-        "the write-back has to have read its destination for its refusal to be the "
-        f"thing under test; the injector saw {invocations}"
-    )
-    assert not [line for line in invocations if "project copy" in line], (
-        "a refused destination read must end the projection before anything is "
-        f"written, and this run reached a copy: {invocations}"
-    )
-
-    assert record.read_bytes() == before, (
-        "the refused projection rewrote the record anyway; a destination read it "
-        "cannot trust has to leave the store exactly as it found it"
     )

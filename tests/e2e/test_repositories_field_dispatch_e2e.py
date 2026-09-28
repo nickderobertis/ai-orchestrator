@@ -28,8 +28,10 @@ wrote for it, and nothing but that record says.
 
 **Each session also carries the labels the engine stamps on it** — `run`, `node` and
 `launcher`, the run's id, the node's id and the launching session the launch was given.
-That is read through `onevcs session holders --json`, the verb a
-caller reads labels from, which lists a closed session's record as well as an open one's.
+That is read off the same record. `onevcs session holders --json` reported them until
+onevcs 0.34.1, which retires a landed branch at session close — returning its slot and
+removing its run root — so a session whose work landed holds no workspace any more and
+`holders` lists nothing for it; the record keeps its labels, and no verb reports them.
 
 The identity is a scratch one under a **hosted** origin — a bare origin served through a
 fake `ssh`, registered as `github.com/scratchowner/scratchname` — because the origin
@@ -160,13 +162,14 @@ class JournalEvent(TypedDict):
 class SessionRecord(TypedDict):
     """The fields of a session's own record this journey reads.
 
-    `onevcs` owns the record and writes more than this; these are the three fields the
+    `onevcs` owns the record and writes more than this; these are the four fields the
     question needs, stated rather than restated from its schema.
     """
 
     publication_checkout: str
     execution_checkout: str
     clone: str
+    labels: dict[str, str]
 
 
 class Placement(NamedTuple):
@@ -181,6 +184,8 @@ class Placement(NamedTuple):
     lender: Path
     #: The worktree the journal says the session cut.
     worktree: Path
+    #: The labels the session's own record carries, as the engine stamped them.
+    labels: dict[str, str]
 
 
 class Launched(NamedTuple):
@@ -188,17 +193,6 @@ class Launched(NamedTuple):
 
     identity: Identity
     placements: dict[str, Placement]
-
-
-class Holder(TypedDict):
-    """The fields of one `session holders --json` entry this journey reads.
-
-    `onevcs` owns the listing and reports more than this; these are the two fields the
-    question needs, stated rather than restated from its schema.
-    """
-
-    token: SessionToken
-    labels: dict[str, str]
 
 
 def _plan(root: Path) -> Path:
@@ -279,6 +273,12 @@ def _placement(event: JournalEvent, home: Path) -> Placement:
         execution=Path(record["execution_checkout"]).resolve(),
         lender=_lender(Path(record["clone"])),
         worktree=Path(event["payload"]["worktree"]).resolve(),
+        # llmlint: ignore-block[tests_mirror_real_usage] From onevcs 0.34.1 no verb reports
+        # a retired session's labels: `session holders` lists only sessions holding a
+        # workspace and `status` carries none, so the record the engine's labels reached is
+        # the one place left to read them. A follow-up asks onevcs for a verb.
+        labels=record.get("labels", {}),
+        # llmlint: ignore-end[tests_mirror_real_usage]
     )
 
 
@@ -415,40 +415,21 @@ def test_the_origin_form_executes_in_a_clone_of_the_checkout_the_alias_form_does
 def test_every_session_a_node_opened_carries_its_run_node_and_launcher(
     launched: Launched,
 ) -> None:
-    """`session holders --json` names each node's session with the labels the engine stamped.
+    """Each node's session record carries the labels the engine stamped.
 
     The run id, the node id and the launching session the launch was given — the
     `CLAUDE_CODE_SESSION_ID` this journey states, which `scripts/launcher-session.sh`
     exports as `ONEPIPELINE_LAUNCHER_SESSION`. Below the engine release that stamps them
-    each session carries no labels at all, which is the failure this reads.
+    each session carries no labels at all, which is the failure this reads. Read off the
+    record for the reason the module docstring gives: both nodes land, and a landed
+    session is one `session holders` no longer lists.
     """
-    listed = subprocess.run(
-        ["uv", "run", "onevcs", "session", "holders", ORIGIN, "--json"],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "ONEVCS_HOME": str(launched.identity.home),
-            **launched.identity.environment,
-        },
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-    assert listed.returncode == 0, f"session holders failed:\n{listed.stdout}\n{listed.stderr}"
-    holders = cast(list[Holder], json.loads(listed.stdout))
     for node in (BY_ORIGIN, BY_ALIAS):
-        matching = [
-            holder
-            for holder in holders
-            if holder["labels"].get("run") == RUN_NAME and holder["labels"].get("node") == node
-        ]
-        assert len(matching) == 1, f"node {node} has {len(matching)} holders in {holders}"
-        assert matching[0]["labels"] == {
+        assert launched.placements[node].labels == {
             "run": RUN_NAME,
             "node": node,
             "launcher": LAUNCHING_SESSION,
-        }, f"node {node}'s holder is listed as {matching[0]}"
+        }, f"node {node}'s session record carries {launched.placements[node].labels}"
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

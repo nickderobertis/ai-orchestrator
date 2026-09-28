@@ -52,14 +52,15 @@ python="$root/.venv/bin/python3"
 # `integrate` is mapped although `recoverable` prints only the two landing verbs a
 # preserved branch can earn: the recipe name differs from the published verb for
 # `recover` alone, so mapping the third costs one row and leaves nothing to notice if
-# a release starts pointing at the train.
+# a release starts pointing at the train. `reclaim` is the `Reclaim:` line a superseded
+# branch that still differs from its base carries beside its `Resume:` line.
 # The single quotes are the point rather than an oversight: this is a Python program,
 # and the `$` in its own strings is Python's, not the shell's.
 # shellcheck disable=SC2016
-REWRITE_RESUME_COMMANDS='
+REWRITE_RECOVERY_COMMANDS='
 import re, sys
 
-RECIPES = {"publish-branch": "publish-branch", "recover": "repo-recover", "integrate": "integrate"}
+RECIPES = {"publish-branch": "publish-branch", "recover": "repo-recover", "integrate": "integrate", "reclaim": "reclaim-branch"}
 
 # Not preceded by a character that would make this part of some longer word or path —
 # a `/usr/local/bin/onevcs publish-branch` is somebody naming a binary, not this
@@ -72,4 +73,4 @@ for line in sys.stdin:
     sys.stdout.flush()
 '
 
-uv run onevcs recoverable "$@" | "$python" -c "$REWRITE_RESUME_COMMANDS"
+uv run onevcs recoverable "$@" | "$python" -c "$REWRITE_RECOVERY_COMMANDS"

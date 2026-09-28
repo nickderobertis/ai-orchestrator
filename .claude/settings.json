@@ -49,6 +49,7 @@
       "Bash(just monitor:*)",
       "Bash(just status:*)",
       "Bash(just recoverable:*)",
+      "Bash(just reclaim-branch:*)",
       "Bash(just unpublished --host)",
       "Bash(just unpublished --print-surface)",
       "Bash(just unfinished)",

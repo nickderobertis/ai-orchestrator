@@ -229,7 +229,9 @@ def _project(bench: Bench, name: str, **node: object) -> str:
                     {
                         "id": NODE,
                         "persona": "engineer",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                         **node,
                     }
                 ],
@@ -490,7 +492,9 @@ def test_a_failed_run_retried_to_completion_launches_follow_up_verification(
                     "id": NODE,
                     "node": {
                         "id": f"{NODE}-2",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                         "expects_no_diff": True,
                     },
                 }

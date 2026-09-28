@@ -353,7 +353,7 @@ def _live_edit(sequence: int) -> str:
                     "op": "add",
                     "node": {
                         "id": f"{EDITED_NODE}{sequence}",
-                        "task": "Report.",
+                        "task": "Report.\n\n## Acceptance criteria\n- Reported.",
                         "expects_no_diff": True,
                     },
                 }

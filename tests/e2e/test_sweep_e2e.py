@@ -66,7 +66,8 @@ REPORT_FIELDS = frozenset(
 #: beyond it. Held by equality, so a field either release adds or drops fails here by
 #: name rather than passing through a restatement nobody re-reads.
 VERB_FIELDS = {
-    "onevcs": REPORT_FIELDS | {"reclaimed", "retained", "root", "session_records"},
+    "onevcs": REPORT_FIELDS
+    | {"reclaimed", "retained", "root", "session_records", "finished_branches"},
     "oneagentgraph": REPORT_FIELDS | {"reclaimed", "retained"},
 }
 

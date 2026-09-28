@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.48.1. The whole of that reasoning —
+onepipeline 0.51.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -296,7 +296,7 @@ It is a projection rather than a rewrite: before it builds anything it reads the
 destination with `project show <project> --json`, and the shadow project it then
 copies over carries **that read's own description** — so a body somebody authored on
 the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.48.1. Below the 0.16.3 that fixed it, it did not: the shadow
+adopted onepipeline 0.51.0. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -314,18 +314,13 @@ duplicate project ends the projection there: nothing is written, and the destina
 is left exactly as it was. A read that could fall back to a default is a read that can
 delete — the shadow would carry an empty description and the copy is a total
 replacement — so this is the property that makes the preservation above worth
-anything, and it is held here rather than described.
-`tests/e2e/test_onetaskgraph_host_e2e.py` launches a real run through `just
-orchestrate` with `ONETASKGRAPH_BIN` pointed at `tests/e2e/stub_onetaskgraph.py`,
-which hands every call to the real store CLI and injects one `errors` entry into the
-write-back's own destination read. The run settles `complete`, and the injector's log
-is what says the rest: the launch's plan read went through, the write-back's read was
-refused, **no `project copy` was ever reached**, and the project record is byte-for-byte
-what it was. Both halves are asserted because either alone passes for the wrong
-reason — an untouched record is exactly what a run that never projected at all leaves
-behind. Re-read on the adopted onepipeline 0.48.1; below the 0.16.3 that added that
-read, all three fail at once — the release beneath it performs no destination read at
-all, copies three times, and leaves the record with an empty body.
+anything. It is held in onepipeline's own suite rather than here: since
+https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted
+onepipeline 0.51.0 among them — reads and projects plans through the linked onetaskgraph
+crates and ignores `ONETASKGRAPH_BIN`, so no host
+seam can inject a refused read into the store in process any more, and
+`store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
+there is the test that fails when a refused read reaches a copy.
 
 **A projection the store refuses is reported once and waits for the graph; any other
 failure is spaced out.** onepipeline https://github.com/nickderobertis/onepipeline/pull/176
@@ -333,7 +328,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.48.1, that schedule answers only the failures a retry can change. A projection the store
+0.51.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -375,13 +370,9 @@ outlasts its deadline is refused with the arithmetic that set it — `project-co
 per item is less)` where the floor governed — on the driver's stderr line below and on the
 finding the run raises, which names the items the copy was carrying, and in the attempt's
 projection record.
-`tests/writeback_budget/test_adopted_engine_bounds_the_writeback_copy_e2e.py` holds it on
-a real launch of a ten-item plan with one node's turn held open by the suite's stand-in
-backend, so the driver stays alive to enforce a deadline: a whole copy held past the floor
-lands with nothing reported, a copy carrying one parked node is killed at the floor, and the
-whole attempt after that failure, held past a hundred seconds, is killed with exactly that
-arithmetic. The same journey fails on the release before the landing, whose driver kills the
-first copy at sixty seconds.
+onepipeline's own suite holds it — `the_copy_deadline_is_the_budget_times_the_items_and_never_below_the_floor`
+in `src/writeback.rs` — because the engine reads and projects the plan store in process
+through the onetaskgraph crates it links, so no host seam can hold a copy open any more.
 
 **Every attempt is recorded on the run.** The engine appends one JSON line per projection
 attempt, landed or failed, to `writeback-projections.jsonl` in the run's own directory under
@@ -400,14 +391,11 @@ recurring (a run repeating `after-failure` is failing), whether a failure is `re
 waiting on the graph rather than on a timer, how long each attempt took, and on the `plans`
 board the GraphQL points `spent` names. onepipeline's `docs/contract-divergences.md` entry 73
 is the source of that shape.
-`tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` holds all three
-paragraphs above on a real launch, reading that record beside a log of every command the
-engine handed the store and the destination's own records: a whole first projection whose
-copy names no `--member`; one settled node copied alone, its destination record gaining its
-status and settlement while every unnamed record — one a person had retitled included —
-stays byte for byte what it was; and a store refusal recorded once, with no further copy
-across a window longer than the one-minute ceiling until the graph changes, and exactly one
-when it does.
+onepipeline's own suite holds the three paragraphs above, for the same reason the copy
+deadline is held there: `tests/e2e/store.rs`'s
+`a_projection_the_store_refuses_is_reported_once_and_attempted_again_when_the_graph_changes`,
+`closeout_attempts_what_changed_after_a_refusal_and_never_a_refused_snapshot_again` and
+`a_projection_the_real_store_refuses_is_not_asked_again_until_the_graph_changes`.
 
 **One board item per lineage, reused for the life of the work.** A node's item is keyed on
 its **lineage root** — `onepipeline.id` is the id the plan authored or an `add` stated — and
@@ -599,7 +587,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.48.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.51.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -727,7 +715,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.48.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.51.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -1107,7 +1095,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.48.1 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.51.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1279,7 +1267,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.48.1**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.51.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -3253,6 +3241,7 @@ just unpublished --session s-0123456789ab …   # one session token, repeatable
 just unpublished --host --json                # the rows, for something other than a person
 just unpublished --host --no-disk             # skip the walk
 just unpublished --acknowledge BRANCH --reason "why it is deliberately left"
+just reclaim-branch BRANCH --repo CHECKOUT    # the way out a superseded row names first
 ```
 
 **Three targets.** The **own-sessions** target — the default, `--own`, and a `--session`
@@ -3291,6 +3280,28 @@ must not refuse a turn over. It is the presence of `held_by` that decides it rat
 which `holding` value it carries: every variant of that enum is a session that has not
 finished with the branch, so one `onevcs` adds is in flight without anything here moving. Every `landed.state` the listing carries counts: `no`, `unknown`
 (the *may have landed* rows) and `in-part`.
+
+**A superseded row is the manager's call, with its evidence beside it.** Every row
+carries `onevcs`'s own `retirement` object as `recoverable --json` states it. A branch
+that provably holds no work beyond its base never reaches the listing: `recoverable`
+omits it, and `onevcs session close`, `just sweep` and the engine's idle maintenance
+delete it. A counted row `onevcs` classes `superseded-with-changes` — a retry replaced it
+and landed, and it still differs from its base — is listed with what superseded it (its
+branch and node) and where that landed, the paths that still differ, and then its ways
+out, reclaim first:
+
+```text
+    reclaim it:      just reclaim-branch <branch> --repo <checkout>
+    or acknowledge:  just unpublished --acknowledge <branch> --reason "<why it is deliberately kept>"
+```
+
+`just reclaim-branch` is `onevcs reclaim`, which deletes the branch from every checkout,
+run clone and origin holding it, returns any pool slot rather than removing it, and
+refuses with exit `4` a branch it classes `keep` or that anything live holds. The
+acknowledgement is for work deliberately kept. The counting rule is unchanged: such a row
+counts until it is reclaimed or acknowledged, and `just unfinished` and the `Stop` hook
+print the same lines, because they render the same table. The class, the evidence and
+the verb are `onevcs`'s; this view detects nothing and runs no `git` of its own for it.
 
 **Acknowledging is never landing.** `--acknowledge <branch> --reason "<text>"` records
 that the calling manager session has seen and deliberately left that branch; the row
@@ -3581,7 +3592,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.48.1 rather than restating it independently.
+declaration as it stands in onepipeline 0.51.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

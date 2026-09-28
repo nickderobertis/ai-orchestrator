@@ -352,7 +352,9 @@ def test_the_adopted_engine_reports_a_claude_login_refusal_as_authentication(
                     {
                         "id": "work",
                         "persona": "engineer",
-                        "task": "Report without changing files.",
+                        "task": (
+                            "Report without changing files.\n\n## Acceptance criteria\n- Reported."
+                        ),
                     }
                 ],
             }

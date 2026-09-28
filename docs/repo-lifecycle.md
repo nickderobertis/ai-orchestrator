@@ -13,19 +13,19 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.48.1**
+that source on every `just check` rather than restated: **`onepipeline` v0.51.0**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.33.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.34.1** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through — and the copy `just publish-branch` and `just
 repo-recover` land through, since both run the engine's own landing verbs. The other
 manager verbs — `just recoverable`, `just work-status`, `just integrate` — run the
-`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.33.0** as well at this
+`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.34.1** as well at this
 pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.48.1
-and 0.33.0. The habit that ambiguity taught is worth keeping rather than retiring
+`config/onevcs.version` carrying one number, and this pair of pins has them at 0.51.0
+and 0.34.1. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -672,7 +672,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.48.1 and is refused **by its own name**, at every schema version and on a live
+v0.51.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1518,7 +1518,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.48.1.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.51.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1594,8 +1594,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.33.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.48.1 settles the node that
+`onevcs` 0.34.1 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.51.0 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached once the last step has settled and the publication
 starts, because a release the node adopted early has not happened yet or because the
@@ -1816,8 +1816,10 @@ adopted `onevcs` rather than restated from memory.
 | carrying unattested incomplete provenance | [`just repo-recover <branch> --repo <checkout>`](#what-the-base-branch-carries-for-a-recovered-incomplete-step) | Attests the incomplete-step marker, verifies, and publishes |
 | complete, and the identity's **resolved publication policy** is `local-direct` — `onevcs rules check` answers it, whatever the origin's host | [`just integrate <branch>… --push`](#integrating-completed-workstreams) | Merge train: merges the named branches into the base locally, in order, then pushes; refused by name for the three change-request policies |
 | any unlanded state, and you want it **kept** rather than landed | `onevcs preserve --repo <checkout> <branch>` — what `just shutdown` runs for every branch its runs name | Pushes the branch to its identity's origin under its own name and lands nothing: no change request, no merge path, no base touched, no force-push. The branch stays on whichever row above it was on, now also on its origin |
+| provably holding no work beyond its base — its change request merged, its landing recorded, or every path it changed identical on the base | `onevcs retire <branch> --repo <checkout>`, which nobody need run: `onevcs session close`, `just sweep` and the engine's idle maintenance retire such a branch themselves | Deletes it from every registered checkout, run clone and pool slot clone that holds it, and its origin copy with `--no-verify`, because a deletion lands nothing; returns a slot rather than removing it; refuses anything else with exit `4` |
+| superseded — a retry replaced it and landed — and still differing from its base | `just reclaim-branch <branch> --repo <checkout>`, the manager's call | The same deletion as `retire`, discarding what it still differs in; refuses a branch `onevcs` classes `keep` and anything a live session holds, with exit `4` |
 
-That last row's condition is stated as the policy because the verb now gates on
+The `integrate` row's condition is stated as the policy because the verb now gates on
 nothing else. Through onevcs 0.19.3 it gated on two stored identity fields that
 `register` inferred from whether the origin had a host — every `github.com` identity
 was recorded `remote` / `team`, and the train refused it as `(repo_type: team)` — so
@@ -1853,11 +1855,15 @@ session id>` for another manager's). A session opened before the labelling engin
 adopted carries none, so that target never reaches what it preserved and nothing
 backfills it, while `--host` and an explicit `--session <s-token>` still do. A row's `--json` keys are `identity`, `branch`, `base`, `provenance`, `landed`,
 `change_url`, `stopped_because`, `session`, `run`, `node`, `manager_session`,
-`resume_command` (the landing command in its `just` form), `in_flight`, `counted`,
+`resume_command` (the landing command in its `just` form), `retirement` (`onevcs`'s own
+classification, as `recoverable --json` states it), `in_flight`, `counted`,
 `acknowledgement` and `disk` — the run root's bytes and each build-output directory under
 its worktree on its own, which is the reason to reach for it, because the number a person
-acts on is the disk rather than the branch count. It reclaims nothing, lands nothing and
-closes nothing; the verbs above stay where they are. `--acknowledge <branch> --reason
+acts on is the disk rather than the branch count. A counted row `onevcs` classes
+`superseded-with-changes` is listed with what superseded it, where that landed and which
+paths still differ, and offers `just reclaim-branch` before the acknowledgement. It
+reclaims nothing, lands nothing and closes nothing itself; the verbs above stay where
+they are. `--acknowledge <branch> --reason
 "<why>"` drops a branch out of the count without landing it — acknowledging is never
 landing.
 
@@ -2319,7 +2325,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.48.1 — so every number in it was a
+journey it named are absent from `onepipeline` v0.51.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

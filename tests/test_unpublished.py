@@ -1205,6 +1205,7 @@ def test_a_tip_that_cannot_be_read_leaves_no_acknowledgement_standing(
         checkout=tmp_path / "not-a-checkout",
         resume=None,
         held_by=None,
+        retirement=None,
         holder=None,
         token=None,
         labels={},
@@ -1915,6 +1916,7 @@ def test_the_disk_walk_reports_what_it_cannot_read_and_a_run_root_that_is_gone(
         checkout=tmp_path,
         resume=None,
         held_by=None,
+        retirement=None,
         holder=holder,
         token=None,
         labels={},
@@ -2001,7 +2003,7 @@ def test_bytes_render_as_a_person_reads_them() -> None:
 
 def test_an_empty_listing_says_so() -> None:
     out = io.StringIO()
-    unpublished._table([], out)
+    unpublished._table([], out, [])
     assert out.getvalue().strip() == "no preserved unpublished branch for this target"
 
 
@@ -2033,7 +2035,7 @@ def test_the_table_names_a_landed_row_and_offers_no_command_it_does_not_have() -
         "counted": True,
     }
     out = io.StringIO()
-    unpublished._table([landed, commandless], out)
+    unpublished._table([landed, commandless], out, [None, None])
     lines = out.getvalue().splitlines()
     # Split rather than `startswith`: every column is padded to its header's width, so a
     # literal prefix would assert on the width of `IDENTITY` rather than on the row.
@@ -2147,3 +2149,165 @@ def test_a_filtered_read_from_inside_a_registered_checkout_answers_for_every_ide
         )
         assert status == COUNTED, f"{arguments}: {err}"
         assert set(_rows(out)) == {session.branch}, arguments
+
+
+#: A `retirement` object as `onevcs recoverable --json` writes one for a branch a landed
+#: retry replaced: the contract's own example, cut to the fields this view reads.
+SUPERSEDED_RETIREMENT = {
+    "class": unpublished.SUPERSEDED_WITH_CHANGES,
+    "reason": None,
+    "superseded_by": {
+        "branch": "claude/second-try",
+        "landing": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+        "labels": {"node": "build-2"},
+    },
+    "differing_paths": ["src/lib.rs", "src/main.rs"],
+}
+
+
+def test_a_row_carries_onevcs_s_retirement_whole_and_says_one_it_cannot_read() -> None:
+    """The object reaches the row as `onevcs` stated it; one naming no class it states is none."""
+    record = {"identity": "x", "branch": {"branch": "b"}, "checkout": "/c"}
+    warnings: list[str] = []
+
+    carried = unpublished._row({**record, "retirement": SUPERSEDED_RETIREMENT}, [], warnings)
+    absent = unpublished._row(record, [], warnings)
+    unreadable = unpublished._row({**record, "retirement": {"class": 3}}, [], warnings)
+    unknown = unpublished._row({**record, "retirement": {"class": "gone"}}, [], warnings)
+
+    assert carried is not None and carried.retirement == SUPERSEDED_RETIREMENT
+    assert absent is not None and absent.retirement is None
+    assert [warning for warning in warnings if "retirement" in warning] == [
+        'x b: its retirement could not be read and is shown as none: {"class": 3}',
+        'x b: its retirement could not be read and is shown as none: {"class": "gone"}',
+    ]
+    assert unreadable is not None and unreadable.retirement is None
+    assert unknown is not None and unknown.retirement is None
+
+
+def test_only_a_superseded_row_is_offered_the_reclaim_recipe() -> None:
+    """The `Reclaim:` line onevcs prints, in the recipe's form; no other class gets one."""
+    record = {"identity": "x", "branch": {"branch": "b w"}, "checkout": "/c d"}
+    superseded = unpublished._row({**record, "retirement": SUPERSEDED_RETIREMENT}, [], [])
+    kept = unpublished._row(
+        {**record, "retirement": {"class": "keep", "reason": "unmerged-unique-commits"}}, [], []
+    )
+    assert superseded is not None and kept is not None
+    assert unpublished.reclaim_command(superseded) == "just reclaim-branch 'b w' --repo '/c d'"
+    assert unpublished.reclaim_command(kept) is None
+    assert unpublished.reclaim_command(kept._replace(retirement=None)) is None
+
+
+def test_a_superseded_row_lists_its_evidence_and_reclaim_before_the_acknowledgement() -> None:
+    """Evidence, then `reclaim it:`, then `or acknowledge:` — and no `land it:` line.
+
+    A second superseded row whose evidence is partial prints what it has, and a counted
+    row of any other class keeps today's pair.
+    """
+    base = dict.fromkeys(ROW_FIELDS)
+    row = {
+        **base,
+        "identity": "i",
+        "branch": "first-try",
+        "base": "main",
+        "landed": {"state": "no"},
+        "stopped_because": "why",
+        "resume_command": "just publish-branch first-try --repo /c",
+        "retirement": SUPERSEDED_RETIREMENT,
+        "in_flight": False,
+        "counted": True,
+    }
+    unnamed = {
+        **row,
+        "branch": "unnamed",
+        "retirement": {
+            **SUPERSEDED_RETIREMENT,
+            "superseded_by": {"branch": "later", "landing": "abc", "labels": {}},
+            "differing_paths": ["x"],
+        },
+    }
+    unlandable = {**row, "branch": "orphan", "retirement": {"class": "keep"}}
+    out = io.StringIO()
+    unpublished._table(
+        [row, unnamed, unlandable],
+        out,
+        [
+            "just reclaim-branch first-try --repo /c",
+            "just reclaim-branch unnamed --repo /c",
+            None,
+        ],
+    )
+    text = out.getvalue()
+    assert (
+        "first-try [i] — why\n"
+        "    superseded by:   claude/second-try (node build-2), landed at "
+        "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c\n"
+        "    differs in:      src/lib.rs, src/main.rs\n"
+        "    reclaim it:      just reclaim-branch first-try --repo /c\n"
+        "    or acknowledge:  just unpublished --acknowledge first-try "
+        '--reason "<why it is deliberately kept>"\n'
+    ) in text
+    assert (
+        "unnamed [i] — why\n"
+        "    superseded by:   later, landed at abc\n"
+        "    differs in:      x\n"
+        "    reclaim it:      just reclaim-branch unnamed --repo /c\n"
+    ) in text
+    assert (
+        "orphan [i] — why\n"
+        "    land it:         just publish-branch first-try --repo /c\n"
+        "    or acknowledge:  just unpublished --acknowledge orphan "
+        '--reason "<why it is deliberately left>"\n'
+    ) in text
+    assert text.count("land it:") == 1
+
+
+@pytest.mark.parametrize(
+    "retirement",
+    [
+        pytest.param({**SUPERSEDED_RETIREMENT, "superseded_by": None}, id="no-supersession"),
+        pytest.param(
+            {**SUPERSEDED_RETIREMENT, "superseded_by": {"branch": "later", "labels": {}}},
+            id="no-landing",
+        ),
+        pytest.param(
+            {
+                **SUPERSEDED_RETIREMENT,
+                "superseded_by": {"branch": "later", "landing": "abc", "labels": {"node": 1}},
+            },
+            id="label-not-a-string",
+        ),
+        pytest.param({**SUPERSEDED_RETIREMENT, "differing_paths": []}, id="no-paths"),
+        pytest.param(
+            {**SUPERSEDED_RETIREMENT, "differing_paths": ["a", 2]}, id="path-not-a-string"
+        ),
+        pytest.param({**SUPERSEDED_RETIREMENT, "differing_paths": ["a", ""]}, id="empty-path"),
+        pytest.param(
+            {
+                **SUPERSEDED_RETIREMENT,
+                "superseded_by": {"branch": "", "landing": "abc", "labels": {}},
+            },
+            id="empty-branch",
+        ),
+        pytest.param(
+            {
+                **SUPERSEDED_RETIREMENT,
+                "superseded_by": {"branch": "later", "landing": "", "labels": {}},
+            },
+            id="empty-landing",
+        ),
+    ],
+)
+def test_a_superseded_retirement_missing_its_evidence_is_said_and_read_as_none(
+    retirement: dict[str, object],
+) -> None:
+    """The view offers a reclaim only on evidence it can print in its contract shape."""
+    warnings: list[str] = []
+    row = unpublished._row(
+        {"identity": "x", "branch": {"branch": "b"}, "checkout": "/c", "retirement": retirement},
+        [],
+        warnings,
+    )
+    assert row is not None and row.retirement is None
+    assert unpublished.reclaim_command(row) is None
+    assert any("its retirement could not be read" in warning for warning in warnings)

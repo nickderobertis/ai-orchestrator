@@ -1,11 +1,6 @@
 <!-- llmlint: ignore-file[instruction_layer_localized] Ownership of this subtree is routed: `.github/CODEOWNERS` is `* @nickderobertis`, which matches every path here as it does every sibling tier project under `tests/`, none of which carries an entry of its own; a per-directory line would restate that match rather than route anything. -->
 # `tests/writeback_budget`
 
-- **A copy is only killed by a live driver.** A journey here keeps a node's turn in flight
-  for as long as it measures a copy; a run whose remaining nodes are parked or waiting on a
-  person settles, and a held copy then lands however the deadline is set.
-- **Prove it against the release before the landing, not just the adopted one.** This
-  journey is evidence only while it fails there, at the fixed sixty-second floor.
 - **A cancel settles on the journal, not in the views.** `just status` and `just results`
   render a cancelled running node `parked`, because the park outranks the settlement; the
   `node-settled cancelled` a journey waits for before it retries that node is on

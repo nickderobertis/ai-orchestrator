@@ -565,6 +565,17 @@ RECONCILED_PINS = {
 }
 
 
+#: A pin whose release no crate of its own name carries, but a family of crates released
+#: beside it at one workspace version does: pin → the crate prefix. `onetaskgraph` is one
+#: Cargo workspace whose `[workspace.package] version` is every crate's and the CLI's, so
+#: the `onetaskgraph-cli` release `config/onetaskgraph.version` names is the release of
+#: every `onetaskgraph-*` crate the engine links — from onepipeline 0.50.0, which reads
+#: and projects plans through them rather than through the spawned CLI alone. Held as a
+#: family rather than one crate, because a build resolving two releases of it has no one
+#: release for the pin to be.
+RECONCILED_FAMILIES = {"onetaskgraph": "onetaskgraph-"}
+
+
 class UnreconcilablePin(NamedTuple):
     """A CLI pin here whose adopted release no linked crate can be compared against.
 
@@ -622,7 +633,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.2", core="0.18.0"),
     LinkedCore(dependent="onejudge", dependent_version="0.14.0", core="0.18.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.48.1", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.51.0", core="0.18.0"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -687,7 +698,10 @@ def test_every_cli_pin_beside_a_linked_crate_is_reconciled_or_declared_unreconci
     unreconciled = {
         pin: crates
         for pin, crates in covered.items()
-        if crates and pin not in RECONCILED_PINS and pin != UNRECONCILABLE_PIN.pin
+        if crates
+        and pin not in RECONCILED_PINS
+        and pin not in RECONCILED_FAMILIES
+        and pin != UNRECONCILABLE_PIN.pin
     }
     assert not unreconciled, (
         f"{ENGINE_DISTRIBUTION} links {unreconciled} and nothing here holds those pins to "
@@ -738,6 +752,34 @@ def test_the_cli_pin_names_the_release_the_engine_linked(crate: str, version_fil
     )
 
 
+@pytest.mark.parametrize(("pin", "prefix"), sorted(RECONCILED_FAMILIES.items()))
+def test_a_workspace_pin_names_the_one_release_its_linked_family_resolved(
+    pin: str, prefix: str
+) -> None:
+    """`config/<pin>.version` is the one release every linked crate of its family carries.
+
+    The same question the per-crate reconciliation above asks — which release of this
+    tool does a dispatch run — asked of a tool the engine links as several crates, so
+    that the plan store a dispatch's write-back projects through and the CLI a manager's
+    `just plans` spawns are one release rather than two.
+    """
+    family = {
+        crate: sorted(versions)
+        for crate, versions in _linked_versions().items()
+        if crate.startswith(prefix)
+    }
+    pinned = _pinned_cli(f"{pin}.version")
+
+    assert family, (
+        f"{ENGINE_DISTRIBUTION} links no {prefix}* crate any more; remove {pin} from "
+        "RECONCILED_FAMILIES, since the pin now names a separately spawned executable only"
+    )
+    assert {version for versions in family.values() for version in versions} == {pinned}, (
+        f"config/{pin}.version adopts {pinned} while the adopted engine links {family}. "
+        f"Move the pin to the one release the family resolves"
+    )
+
+
 #: The distribution behind `just telemetry-server` — the Observatory's API, which from the
 #: adopted release mutates as well as reads — and the pin that names its release.
 #: It links `onepipeline` on its own account the way the engine wheel links its
@@ -768,16 +810,19 @@ def _ui_api_linked_engine() -> str:
 
 #: One pair is declared apart, and it names both measured releases so it fails the moment
 #: either wheel changes. `onepipeline-api-cli` 0.15.0, the newest release, was built
-#: against engine 0.48.0, and the engine pin is 0.48.1 — the release the branch-name
-#: adoption waited on. Between the two tags `src/` differs by one deleted doc comment in
-#: `src/branchname.rs`; the rest is a test and the release's own manifest, so a browser
-#: adopt drives the same behaviour. The record stands until a reader linking 0.48.1 ships.
+#: against engine 0.48.0, and the engine pin is 0.51.0 — the release carrying the
+#: supersession record and the idle retirement pass. Between the two tags the engine gained
+#: those, refuses a task without acceptance criteria, and reads plans through the linked
+#: onetaskgraph crates, none of which a run adopted from the browser would have — which is
+#: why, while this stands, a run is adopted through `just orchestrate --adopt`. The record
+#: stands until a reader linking 0.51.0 ships.
 DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = Divergence(
     linked="0.48.0",
-    pinned="0.48.1",
+    pinned="0.51.0",
     because=(
-        "the newest onepipeline-api-cli links engine 0.48.0, whose source differs from "
-        "0.48.1 only by a doc comment"
+        "the newest onepipeline-api-cli links engine 0.48.0, which lacks the supersession "
+        "record and idle retirement pass 0.51.0 carries, so a run is adopted through the "
+        "launcher rather than the browser"
     ),
 )
 

@@ -192,8 +192,8 @@ NOTE_PROVENANCE_LANDINGS = (
 #: writes rather than a fixed minute. `root-causes-539-fixes` settled 18/18 with its board
 #: behind it because a 34-item copy outgrew that minute, and a pin naming a release without
 #: this landing leaves every larger plan's board to the same end.
-#: `tests/writeback_budget/test_adopted_engine_bounds_the_writeback_copy_e2e.py` observes
-#: the installed engine doing it.
+#: onepipeline's `the_copy_deadline_is_the_budget_times_the_items_and_never_below_the_floor`
+#: holds the behaviour, since the engine reads the plan store in process.
 WRITEBACK_BUDGET_LANDINGS = (
     Landing(
         node="op-writeback-budget",
@@ -208,8 +208,8 @@ WRITEBACK_BUDGET_LANDINGS = (
 #: and copying every node of the plan to change one. `op-incremental-projection`'s work was
 #: delivered by its retry, `op-incremental-projection-2`, on the same branch, and is recorded
 #: under the node id for the reason `Landing.node` gives.
-#: `tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` observes the
-#: installed engine doing both.
+#: onepipeline's `tests/e2e/store.rs` holds both, since the engine reads the plan store in
+#: process and no host seam can record its calls.
 WRITEBACK_QUOTA_LANDINGS = (
     Landing(
         node="op-refusal-not-retried",
@@ -473,6 +473,25 @@ UNPUBLISHED_UNFINISHED_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the branch-retirement plan: a landed retry records the branches
+#: it superseded through `onevcs supersede`, and the driver's idle maintenance runs
+#: `onevcs`'s retirement pass. It landed as #543 (`cb8228d`) and then #553, which kept a
+#: branch a node names mid-sweep out of the pass and locked the supersession record; the row
+#: names the later landing, whose history carries both.
+#: `tests/e2e/unpublished_view/test_superseded_branches_e2e.py` drives the host half those
+#: records feed.
+BRANCH_RETIREMENT_LANDINGS = (
+    Landing(
+        node="op-supersession-and-retirement-pass",
+        change_request=553,
+        commit="a6bfb1704e1038b0803bb1bbbe3f1e144b432afe",
+        did=(
+            "record the branches a landed retry superseded, and retire finished branches "
+            "when idle, keeping any a node names mid-sweep"
+        ),
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -489,6 +508,7 @@ LANDINGS = (
     *CHANNEL_AND_RECORDS_LANDINGS,
     *SCRIPTS_AUDIT_LANDINGS,
     *UNPUBLISHED_UNFINISHED_LANDINGS,
+    *BRANCH_RETIREMENT_LANDINGS,
 )
 
 

@@ -116,7 +116,15 @@ only while this host's record of the landing survives, a `may have landed` row b
 the verb reporting no record rather than an unpublished branch. For every identity from
 anywhere, or for the sessions your own runs opened, with what each costs in disk, read
 `just unpublished` instead: `--host` for the host, and its default for your own runs'
-branches, which you land or acknowledge with a reason. `just work-status
+branches, which you land or acknowledge with a reason.
+**A branch that provably holds no work beyond its base retires itself** — at session
+close, in `just sweep`, and on the engine's idle maintenance — and a pool slot is never
+removed, only returned. A superseded branch that still differs from its base is your
+call, printed with its evidence and answered with `just reclaim-branch <branch> --repo
+<checkout>`; `just unpublished --acknowledge` is for work deliberately kept. For a run
+that settled before this host's engine recorded supersessions, `uv run onepipeline
+supersessions <run-id> --record`, run once by hand, records its retries' superseded
+branches. `just work-status
 <change-url|session|branch|commit>` reports everything `onevcs` knows about one piece
 of work. `just import-branch <branch> --repo <checkout>` makes a branch finished in a
 session worktree or a run clone reachable from an identity's registered checkouts,
@@ -362,7 +370,7 @@ pin bump is publishable only once its tag is there; read that tier's `invalid ob
 name 'v<pin>'` as the checkout sitting behind its origin, never as a release the engine
 did not publish.
 
-Two pins sit outside that reconciliation because of what each names.
+One pin sits outside that reconciliation because of what it names.
 `config/oneharness.version` is the `oneharness` **CLI**, a different artifact from the
 `oneharness-core` library the engine links on its own account; both are published from
 one repository on their own cadences, so comparing the pin's number with the linked
@@ -372,8 +380,9 @@ dispatch runs spawns whatever `oneharness` is on its PATH, which the CLI pin ins
 so the engine may adopt an onejudge release that sends `--format json` only once the
 CLI pin is at or past the release that accepts `--format` — the CLI pin is past it, and
 the order holds as long as `config/onepipeline.version` is not moved first onto such an
-engine over an older CLI pin. `config/onetaskgraph.version` names a separately spawned
-executable the engine wheel's bill of materials does not contain. The read API
+engine over an older CLI pin. `config/onetaskgraph.version` is reconciled as a family:
+the engine links the `onetaskgraph-*` crates one workspace version releases beside the
+CLI, so the pin must name the one release they resolve. The read API
 (`config/onepipeline-ui.version`) statically links its own engine, and governs no
 dispatch **except one adopted from the browser**, which its own binary then drives — so
 `tests/test_linked_libraries.py` holds the two pins to one engine rather than letting
@@ -1019,8 +1028,9 @@ watching means and what that verb is held to:
    what `just unfinished` names: an unwatched run of its own, or a branch its runs left
    preserved and unpublished, the second asked of the verdict source that registration
    declares. Never answer the hook twice: arm `just watch` on each run, land the branch,
-   or acknowledge it with `just unpublished --acknowledge <branch> --reason "<why>"`,
-   until `just unfinished` answers `0`.
+   reclaim a superseded one with the `just reclaim-branch <branch> --repo <checkout>` its
+   row prints, or acknowledge work deliberately kept with `just unpublished --acknowledge
+   <branch> --reason "<why>"`, until `just unfinished` answers `0`.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.
@@ -1569,7 +1579,9 @@ own findings before committing. The one exception is `onevcs preserve`, the only
 that may push without the hook: it puts an unproven **branch ref, never a base**, on the
 origin, opens no change request, and nothing can merge that ref without a publication
 that does run the merge path — the words `just shutdown`'s report prints about every
-branch it pushes are *on its origin unproven*. Local-first is not local-only: keep the registered base
+branch it pushes are *on its origin unproven*. A deletion is not such a push: `onevcs retire`
+and `onevcs reclaim` remove a branch's origin copy with `--no-verify`, because a deletion
+puts no work on the origin for a merge path to rule on. Local-first is not local-only: keep the registered base
 in sync with its origin and push every change that reaches it immediately (`just sync`
 fast-forwards a publication checkout). Never force-push or rewrite history on the
 registered base. Keep the `.claude/settings.json` allowlist current with routine

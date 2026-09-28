@@ -139,7 +139,7 @@ STORE_WITNESS = "orchestrator/project_store.py"
 #: The wrapper `just unpublished` runs, which only the view's own tier reads; and a script
 #: in the recipe tier's `scripts/**` the view never reaches, the control.
 UNPUBLISHED_WITNESS = "scripts/unpublished.sh"
-UNREACHED_SCRIPT_WITNESS = "scripts/recoverable.sh"
+UNREACHED_SCRIPT_WITNESS = "scripts/new-persona.sh"
 #: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
 FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
 #: The project every Python tier belongs to, and the tier the code suite runs in.

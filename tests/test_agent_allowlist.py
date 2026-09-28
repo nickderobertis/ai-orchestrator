@@ -43,6 +43,10 @@ REQUIRED = (
     # tree or runs root, and changes the guard's count.
     "Bash(just unpublished --host)",
     "Bash(just unpublished --print-surface)",
+    # The user's ruling: reclaiming a superseded branch is the manager's decision to make
+    # without approving each use. What bounds the grant is the verb — `onevcs reclaim`
+    # refuses a branch classified `keep` and anything a live session holds.
+    "Bash(just reclaim-branch:*)",
     # What this session still owes: the fixed reads for the session the harness names. The
     # session-targeted read, `--session <ID>`, is approved per use instead of granted: a
     # dynamic token is grantable only by a prefix wildcard, and the judged lint refuses an

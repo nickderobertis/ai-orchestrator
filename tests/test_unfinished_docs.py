@@ -76,3 +76,6 @@ def test_the_watch_rule_names_the_read_a_turn_ends_on_and_its_ways_out() -> None
     assert "`just unfinished`" in first
     assert f"answers `{unfinished.NOTHING_OWED}`" in first
     assert "just unpublished --acknowledge" in first and "--reason" in first
+    # The way out a superseded row prints first, as the recipe `unpublished.RECIPES` renders
+    # onevcs's `reclaim` in, beside the acknowledgement for work deliberately kept.
+    assert f"`just {unpublished.RECIPES['reclaim']} <branch> --repo <checkout>`" in first

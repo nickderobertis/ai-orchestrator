@@ -58,7 +58,7 @@ from driven_run import (
     just,
     launched,
     projections,
-    quiescent,
+    quiet_projections,
     waited_for,
 )
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
@@ -295,7 +295,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     assert (first.scope, first.whole_because, first.outcome) == ("whole", "first", "projected"), (
         first
     )
-    recorded = quiescent(driven)
+    recorded = quiet_projections(driven)
     (before,) = _lineage(driven, ROOT)
     assert SUPERSEDES_KEY not in before.metadata and SECOND_TASK not in before.body, before
 
@@ -306,7 +306,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         lambda: _new_projections(driven, len(recorded)),
         PATIENCE_SECONDS,
     )
-    retried = _carried(quiescent(driven)[len(recorded) :], ROOT, SECOND)
+    retried = _carried(quiet_projections(driven)[len(recorded) :], ROOT, SECOND)
     assert sum(attempt.actions["reopened"] for attempt in retried if attempt.actions) == 0, retried
     minted = [item for item in _destination(driven) if item.metadata.get(ID_KEY) == SECOND]
     assert not minted, f"the retry minted a destination item of its own: {minted}"
@@ -318,12 +318,12 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     assert after_retry.metadata.get(NODE_KEY) == SECOND, after_retry.metadata
     assert after_retry.metadata.get(SUPERSEDES_KEY) == [ROOT], after_retry.metadata
     assert SECOND_TASK in after_retry.body, after_retry.body
-    recorded = quiescent(driven)
+    recorded = quiet_projections(driven)
 
     _cancel_and_settle(
         driven, SECOND, "cancelled so the lineage's record can be closed and reopened"
     )
-    parked = quiescent(driven)[len(recorded) :]
+    parked = quiet_projections(driven)[len(recorded) :]
     (after_cancel,) = _lineage(driven, ROOT)
     assert after_cancel.identifier == before.identifier, after_cancel
     # The engine's contract: a cancelled running node's item reads the open park word, so
@@ -337,7 +337,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     assert closed.returncode == 0, closed.stdout + closed.stderr
     (person_closed,) = _lineage(driven, ROOT)
     assert "cancelled" in json.dumps(person_closed.status), person_closed
-    recorded = quiescent(driven)
+    recorded = quiet_projections(driven)
 
     _retry(driven, SECOND, THIRD, THIRD_TASK)
     waited_for(
@@ -345,7 +345,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         lambda: _new_projections(driven, len(recorded)),
         PATIENCE_SECONDS,
     )
-    reopened = _carried(quiescent(driven)[len(recorded) :], ROOT, THIRD)
+    reopened = _carried(quiet_projections(driven)[len(recorded) :], ROOT, THIRD)
     # The first attempt after the retry is the one that wrote the open word over the
     # closed card, and it alone counts the reopen.
     assert [attempt.actions["reopened"] for attempt in reopened if attempt.actions][0] == 1, (
@@ -365,7 +365,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     # Park everything still running, so the run settles and its driver lets go.
     _cancel_and_settle(driven, THIRD, "parked so the run settles for an adoption")
     _cancel_and_settle(driven, KEEPER, "parked so the run settles for an adoption")
-    recorded = quiescent(driven)
+    recorded = quiet_projections(driven)
     _adopt(driven)
     adopted = waited_for(
         "the adopted driver's first projection",
