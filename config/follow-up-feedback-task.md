@@ -5,8 +5,10 @@ The comments are quoted verbatim below, and they are the whole of this dispatch:
 each one in the order it is quoted, post its one reply, and account for what you did.
 
 Nothing else on the board or in this run's drafts is yours here. Do not inventory the
-drafts, do not verify a claim, do not list the board, do not read its accepted items, and
-do not touch a ticket, an issue or a comment that no comment below names.
+drafts, do not list the board, do not read its accepted items, and do not touch a ticket,
+an issue or a comment that no comment below names. The one thing you may look into beyond
+the comments themselves is what a comment asks about its own ticket, within the bound
+"Investigating what a comment asks" below sets.
 
 ## Why
 
@@ -15,6 +17,15 @@ comments spent the rest of its paid turn re-reading and re-copying every unrelat
 **after** its replies were already posted, and reached the provider's deadline with the
 work it was dispatched for long done. The comments a person wrote are what is waiting on
 an answer, so they are what this task carries.
+
+The same dispatch was then told not to verify any claim at all, and its answers were not
+worth reading: asked whether a problem still held after later fixes, one reply said that
+"needs a separate verification"; asked why a tool failed and whether the failure was
+retryable, another said it could not infer that from the evidence. So a comment that asks
+something only an investigation answers is investigated, and that keeps the protection
+above: the investigation reaches the one ticket the quoted comment sits on and nothing
+else, never another ticket or board item, so a gathering of two comments pays for at most
+two tickets' reading rather than a re-verification of the run.
 
 ## Where everything is
 
@@ -37,15 +48,43 @@ an answer, so they are what this task carries.
   `@TICKET_METADATA_KEY@` record names. Only a ticket of an issue a comment below sits on
   is yours to change here, and only in what that comment asks for.
 
+## Investigating what a comment asks
+
+Where a quoted comment asks something about the ticket of the issue it sits on that only an
+investigation answers — whether the problem still holds after later fixes, why something
+fails, whether a failure is retryable — you may investigate **that one ticket**, and no
+other, before you reply. For that ticket you may:
+
+- read its evidence paths, and the code and docs they name, at the current tip of the
+  repositories its record names;
+- read the releases, changelogs and tags, and the state of the issues or change requests,
+  that the ticket or the comment cites;
+- run read-only commands, such as `git log`, `git show`, `git grep` and `git blame`, and a
+  tool's `--help` or `--version`;
+- run the targeted test suites and builds needed to reproduce, or check, the claim the
+  comment questions.
+
+You may not install anything, launch or dispatch anything, read any other ticket or board
+item, or edit any repository. A comment that asks nothing an investigation answers is not
+investigated. Where running something is not enough to settle the question, the reply says
+exactly what would settle it — what to run, where, and with what access — rather than that
+it needs a separate verification.
+
 ## What to do, in order
 
 For each comment quoted below, in the order it is quoted:
 
 1. **Act on it** under "Ownership on the board" below: perform whatever the comment calls
-   for, within what this run owns, or nothing where nothing is called for. Where it asks
-   for a change to the ticket behind the issue it sits on, and that issue is this run's,
-   edit that ticket's file — changing what the comment asks for and leaving the rest of it
-   exactly as it stands — then, **for that one ticket**:
+   for, within what this run owns, or nothing where nothing is called for, investigating
+   first where "Investigating what a comment asks" above permits. Where it asks for a
+   change to the ticket behind the issue it sits on, and that issue is this run's, edit
+   that ticket's file — changing what the comment asks for and leaving the rest of it
+   exactly as it stands, but for bringing it to the current record schema. A ticket whose
+   record carries an older `schema` — which `@VALIDATE@` refuses, naming it — is brought
+   forward first, by the rule the re-dispatch states for it:
+
+@OLDER_SCHEMA@
+   Then, **for that one ticket**:
    - run `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` and write the word it prints
      as the ticket's `status`, so a person's move of that item stands;
    - run `@VALIDATE@ <path of the ticket>` and correct the ticket until it reports it sound;
@@ -70,10 +109,14 @@ Then run `@CHECK_RESPONSES@` and correct the account until it reports it sound.
 Finally, **report** each comment's URL beside what you did about it or why you did
 nothing, and the reply you posted for it.
 
-**Never change a board item's status**, and never touch an issue, a comment or a ticket no
-comment below names: a person's move of an item to `Todo`, `Deferred` or `In Progress`
-stands whenever they made it, and a ticket this run left unfinished is the next
-verification dispatch's, not this one's.
+@WITHDRAWAL@
+
+Never touch an issue, a comment or a ticket no comment below names: a person's move of an
+item to `Todo`, `Deferred` or `In Progress` stands whenever they made it, and a ticket this
+run left unfinished is the next verification dispatch's, not this one's. The withdrawal
+above is step 1's change to that comment's ticket: run
+`@BOARD_STATUS@ --board @BOARD@ --withdraw <path of the ticket>`, then validate and copy
+it as step 1 says.
 
 ## Ownership on the board
 
@@ -91,7 +134,13 @@ verification dispatch's, not this one's.
   last, after the final reply is posted and the final edit to that account, because a run
   of it from before either says nothing about what you leave.
 - No issue, comment or ticket that no comment below names was created, edited, copied or
-  closed by this dispatch.
+  closed by this dispatch, and no ticket or board item a quoted comment does not sit on
+  was read.
+- No board item's status was changed but by withdrawing this run's own item at `Proposal`
+  where a quoted comment clearly says its ticket is not needed, and that comment's account
+  entry says the item was withdrawn.
+- Every reply to a comment asking something only an investigation answers states what the
+  investigation found, or what exactly would settle the question.
 - Every claim the report makes is true of the board as it finally stands.
 
 ## The comments to answer

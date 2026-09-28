@@ -49,6 +49,7 @@ import os
 import re
 import sys
 import tempfile
+import textwrap
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -762,7 +763,13 @@ FEEDBACK_VALUES = (
     "RESPONSES",
     "CHECK_RESPONSES",
 )
-FEEDBACK_SECTIONS = ("COMMENT_CONTRACT", "RESPONSE_CONTRACT", "FEEDBACK")
+FEEDBACK_SECTIONS = (
+    "OLDER_SCHEMA",
+    "WITHDRAWAL",
+    "COMMENT_CONTRACT",
+    "RESPONSE_CONTRACT",
+    "FEEDBACK",
+)
 FEEDBACK_PLACEHOLDERS = (*FEEDBACK_VALUES, *FEEDBACK_SECTIONS)
 
 _MODE_VALUES = {Mode.INITIAL: INITIAL_VALUES, Mode.FEEDBACK: FEEDBACK_VALUES}
@@ -3852,9 +3859,48 @@ def response_contract(run: str) -> str:
     )
 
 
+#: **How a ticket of an older record schema is brought to the current one**, stated once and
+#: composed into both tasks that may copy such a ticket: the re-dispatch section below, and the
+#: feedback task at the step that edits the ticket a quoted comment asks to change. A comment
+#: asking for a change to a schema-5 ticket once ended at `board-status`'s schema refusal, its
+#: reply posted and its issue left stale, because only the re-dispatch carried this rule.
+OLDER_SCHEMA = """\
+- a ticket of an older schema is brought to the current shape before it is copied, its
+  `repositories` naming its record's `repository`, its `host` read from this machine
+  with `hostname`, and its `## Impact` section written from the evidence the ticket
+  already carries, re-verifying only a claim that no longer holds; its `## Repository`
+  section removed, any path the ticket still needs moved into `## Root cause`; its
+  `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's
+  evidence supports; and every other option it offered moved into `## Rejected fixes`,
+  with why each was not chosen; then it is validated again.
+- a schema-6 ticket of this run is brought to schema 7 by recording its `frequency` from
+  the evidence it already carries, then running `@BOARD_STATUS@ --board @BOARD@ <path of
+  the ticket>`, which writes its `priority_estimate`, its `## Impact` estimate line and its
+  `priority` and reads its schema-6 board item as storing no estimate; validate it and copy
+  it. Another run's schema-6 item is brought forward by `@RE_ESTIMATE@ --board @BOARD@ <its
+  id>` alone, and only after this run comments on it.
+"""
+
+#: **The one status change a comment dispatch makes**, stated once: the feedback task carries
+#: it where it says which board changes are forbidden, and so does the preamble every
+#: gathering opens with (`follow_up_comments.render`). It names no placeholder, because a
+#: gathering reaches the task verbatim and a placeholder there is never filled.
+WITHDRAWAL_EXCEPTION = (
+    "**Never change a board item's status except by one withdrawal.** Where a quoted comment "
+    "clearly says the ticket of the issue it sits on is not needed — that it is handled "
+    "elsewhere, say, or will not be needed — and that issue is this run's own item at "
+    "`Proposal`, withdraw it: run `board-status` with `--withdraw` on its ticket, write the "
+    "word it prints as the ticket's `status`, validate the ticket and copy it, and say in that "
+    "comment's account entry that the item was withdrawn. A comment that does not clearly say "
+    "so is replied to and changes nothing. No item at `Todo`, `Deferred`, `Queued` or "
+    "`In Progress`, and no closed one, is ever withdrawn, and `board-status --withdraw` "
+    "refuses the ones a person decided on."
+)
+
 #: The section a re-dispatch adds: when the manager sends feedback, or the run already
 #: holds tickets from a follow-up agent before this one.
-REDISPATCH = """\
+REDISPATCH = (
+    """\
 ## This is a re-dispatch
 
 A follow-up agent has already worked run `@RUN@`'s drafts, so tickets, board issues and
@@ -3867,14 +3913,9 @@ comments of this run may already exist. "Ownership on the board" above binds eve
 - an existing ticket of run `@RUN@` is copied again carrying the board's status, which
   `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` prints, never the status the ticket
   held before — the board may have been moved since the last copy;
-- a ticket of an older schema is brought to the current shape before it is copied, its
-  `repositories` naming its record's `repository`, its `host` read from this machine
-  with `hostname`, and its `## Impact` section written from the evidence the ticket
-  already carries, re-verifying only a claim that no longer holds; its `## Repository`
-  section removed, any path the ticket still needs moved into `## Root cause`; its
-  `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's
-  evidence supports; and every other option it offered moved into `## Rejected fixes`,
-  with why each was not chosen; then it is validated again.
+"""
+    + OLDER_SCHEMA
+    + """\
 - a ticket's dependencies on accepted tickets, and the claims written against their fixes,
   are re-derived from the board as it now is on every pass — an accepted ticket may have
   appeared, moved or been un-accepted since the last pass, so `depends_on` entries are
@@ -3882,13 +3923,8 @@ comments of this run may already exist. "Ownership on the board" above binds eve
   `## Rejected fixes` re-derived to match, and `@BOARD_STATUS@ --board @BOARD@ <path of
   the ticket>` refusing an entry is the signal to re-derive that ticket before copying it;
   nothing else about an older ticket moves.
-- a schema-6 ticket of this run is brought to schema 7 by recording its `frequency` from
-  the evidence it already carries, then running `@BOARD_STATUS@ --board @BOARD@ <path of
-  the ticket>`, which writes its `priority_estimate`, its `## Impact` estimate line and its
-  `priority` and reads its schema-6 board item as storing no estimate; validate it and copy
-  it. Another run's schema-6 item is brought forward by `@RE_ESTIMATE@ --board @BOARD@ <its
-  id>` alone, and only after this run comments on it.
 """
+)
 
 #: The heading the manager's feedback goes under, above the feedback itself.
 FEEDBACK = """\
@@ -4035,6 +4071,9 @@ def compose(
         "DISPOSITION_CONTRACT": _filled(disposition_contract(run), scalars),
         "RESPONSE_CONTRACT": _filled(response_contract(run), scalars),
         "REDISPATCH": _filled(REDISPATCH, scalars) if redispatch else "",
+        # Indented to sit inside the numbered step that edits the ticket a comment names.
+        "OLDER_SCHEMA": textwrap.indent(_filled(OLDER_SCHEMA, scalars), "   "),
+        "WITHDRAWAL": WITHDRAWAL_EXCEPTION,
         "FEEDBACK": _feedback_section(mode, feedback, scalars),
     }
     return PLACEHOLDER.sub(lambda matched: values[matched[1]], template)

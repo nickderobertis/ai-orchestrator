@@ -777,6 +777,7 @@ FEEDBACK_TEMPLATE = (
     "with @VALIDATE@, copy with @COPY@, re-estimate with @RE_ESTIMATE@; its "
     "@TICKET_METADATA_KEY@ record names it.\n"
     "Gathered into @FEEDBACK_FILE@; account at @RESPONSES@, checked with @CHECK_RESPONSES@.\n"
+    "An older ticket is brought forward:\n\n@OLDER_SCHEMA@\n@WITHDRAWAL@\n"
     "@COMMENT_CONTRACT@\n@RESPONSE_CONTRACT@\n@FEEDBACK@\nAgain, @RUN@.\n"
 )
 DISPOSITIONS = "/drafts-root/dispositions/listing-run.json"
@@ -3754,6 +3755,144 @@ def test_each_tracked_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_p
         'each time it posts a reply marked `verdict="confirms"` there',
     ):
         assert required in feedback, required
+
+
+def _tracked_feedback_task(feedback: str = "### Comment 1\n\nAdd page 9.\n") -> str:
+    """The feedback mode's task as `scripts/follow-ups.sh --comments` composes it."""
+    template = (REPO_ROOT / "config" / "follow-up-feedback-task.md").read_text("utf-8")
+    return tickets.compose(
+        template,
+        mode=tickets.Mode.FEEDBACK,
+        **COMMON,
+        **FEEDBACK_ACCOUNT,
+        feedback=feedback,
+        redispatch=True,
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_feedback_task_investigates_only_the_ticket_a_comment_asks_about() -> None:
+    """The user's bound, as the comment dispatch reads it: one ticket, read-only but for tests.
+
+    A reply saying a question "needs a separate verification" answers nothing a person asked,
+    and a dispatch re-verifying every ticket runs into the provider's deadline, so what the
+    dispatch may and may not do is stated, and what reaches it is only the ticket a quoted
+    comment sits on.
+    """
+    task = _tracked_feedback_task()
+    flat = " ".join(task.split())
+    bound = " ".join(
+        task.split("## Investigating what a comment asks\n", 1)[1].split("\n## ", 1)[0].split()
+    )
+
+    assert "do not verify a claim" not in flat
+    for said in (
+        "Where a quoted comment asks something about the ticket of the issue it sits on that "
+        "only an investigation answers",
+        "you may investigate **that one ticket**, and no other, before you reply",
+        "read its evidence paths, and the code and docs they name, at the current tip of the "
+        "repositories its record names;",
+        "read the releases, changelogs and tags, and the state of the issues or change "
+        "requests, that the ticket or the comment cites;",
+        "run read-only commands, such as `git log`, `git show`, `git grep` and `git blame`, "
+        "and a tool's `--help` or `--version`;",
+        "run the targeted test suites and builds needed to reproduce, or check, the claim the "
+        "comment questions.",
+        "You may not install anything, launch or dispatch anything, read any other ticket or "
+        "board item, or edit any repository.",
+        "A comment that asks nothing an investigation answers is not investigated.",
+        "Where running something is not enough to settle the question, the reply says exactly "
+        "what would settle it",
+    ):
+        assert said in bound, said
+    why = " ".join(task.split("## Why\n", 1)[1].split("\n## ", 1)[0].split())
+    assert (
+        "the investigation reaches the one ticket the quoted comment sits on and nothing else, "
+        "never another ticket or board item"
+    ) in why, why
+    criteria = " ".join(task.split("## Acceptance criteria\n", 1)[1].split("\n## ", 1)[0].split())
+    assert "no ticket or board item a quoted comment does not sit on was read" in criteria
+    assert "states what the investigation found, or what exactly would settle the question" in (
+        criteria
+    )
+
+
+@pytest.mark.reads_docs
+def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_agents_md() -> None:
+    """Withdrawing this run's own proposal a comment clearly retires, and nothing else.
+
+    The task and the gathering's preamble carry one wording, the module's; AGENTS.md states
+    the same bound for a manager.
+    """
+    task = _tracked_feedback_task()
+    flat = " ".join(task.split())
+    exception = " ".join(tickets.WITHDRAWAL_EXCEPTION.split())
+
+    assert flat.count(exception) == 1, flat
+    for said in (
+        "**Never change a board item's status except by one withdrawal.**",
+        "clearly says the ticket of the issue it sits on is not needed",
+        "that issue is this run's own item at `Proposal`, withdraw it",
+        "run `board-status` with `--withdraw` on its ticket, write the word it prints as the "
+        "ticket's `status`, validate the ticket and copy it",
+        "say in that comment's account entry that the item was withdrawn",
+        "A comment that does not clearly say so is replied to and changes nothing.",
+        "No item at `Todo`, `Deferred`, `Queued` or `In Progress`, and no closed one, is ever "
+        "withdrawn",
+    ):
+        assert said in exception, said
+    assert f"`{BOARD_STATUS} --board followups --withdraw <path of the ticket>`" in flat
+    assert "**Never change a board item's status**," not in flat, "the old rule still stands"
+    preamble = comments.render(RUN, "followups", [], None)
+    assert tickets.WITHDRAWAL_EXCEPTION in preamble
+    agents = " ".join((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8").split())
+    assert (
+        "It never changes a board item's status except by one withdrawal: this run's own item "
+        "at `Proposal`, when a quoted comment clearly says its ticket is not needed."
+    ) in agents
+
+
+def _source_texts() -> dict[str, str]:
+    """Every module and template a composed task is written from, case and whitespace folded."""
+    return {
+        str(path.relative_to(REPO_ROOT)): " ".join(path.read_text(encoding="utf-8").split()).lower()
+        for pattern in ("orchestrator/*.py", "config/*.md")
+        for path in sorted(REPO_ROOT.glob(pattern))
+    }
+
+
+@pytest.mark.reads_docs
+def test_the_older_schema_rule_is_one_constant_composed_into_both_tasks() -> None:
+    """How a ticket of an older schema is brought forward is stated once, and both tasks carry it.
+
+    A comment asking to change a schema-5 ticket ended at `board-status`'s schema refusal
+    because only the re-dispatch carried the rule, so the feedback task now composes the same
+    constant, at the step that edits the ticket, before that ticket's status, validation and copy.
+    """
+    rule = " ".join(
+        tickets.OLDER_SCHEMA.replace("@BOARD_STATUS@", BOARD_STATUS)
+        .replace("@RE_ESTIMATE@", RE_ESTIMATE)
+        .replace("@BOARD@", "followups")
+        .split()
+    )
+    redispatch = _tracked_task()
+    feedback = _tracked_feedback_task()
+
+    assert rule in " ".join(redispatch.split("## This is a re-dispatch", 1)[1].split())
+    step = feedback.split("1. **Act on it**", 1)[1].split("\n2. ", 1)[0]
+    flat_step = " ".join(step.split())
+    assert rule in flat_step, flat_step
+    assert flat_step.index(rule) < flat_step.index(f"run `{BOARD_STATUS} --board followups"), step
+    assert flat_step.index(rule) < flat_step.index(f"run `{COPY} --board followups"), step
+    # One wording: each of the rule's clauses opens exactly once across everything a task
+    # is composed from, which is the constant itself.
+    openings = [bullet.split(",", 1)[0].lower() for bullet in rule.removeprefix("- ").split(" - ")]
+    assert len(openings) == 2, openings
+    for opening in openings:
+        found = {
+            name: text.count(opening) for name, text in _source_texts().items() if opening in text
+        }
+        assert found == {"orchestrator/follow_up_tickets.py": 1}, (opening, found)
 
 
 def test_a_response_naming_a_reply_that_is_not_the_boards_is_refused_naming_both(

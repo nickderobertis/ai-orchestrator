@@ -899,11 +899,16 @@ happens to quote a board comment does not narrow the dispatch silently.
   that each filed ticket reached its bound item or this run's evidence comment there.
 - **Feedback mode**, what a comment gathering composes, answers **only the comments that
   gathering quoted**, in the order it quoted them, each with one reply under the run's
-  marker, and changes only the ticket of an issue a quoted comment sits on. It never
-  inventories the drafts, lists the board, reads an accepted item, or touches a ticket,
-  issue or comment no quoted comment names. `python -m orchestrator.follow_up_tickets
-  check-responses` is what holds an account to that, reading each reply it names back off
-  the board. The pre-launch `check-gathering` read also refuses an issue the run neither
+  marker, and changes only the ticket of an issue a quoted comment sits on, bringing one of
+  an older record schema forward by the rule the re-dispatch states. It never inventories
+  the drafts, lists the board, reads an accepted item, or touches a ticket, issue or
+  comment no quoted comment names. Where a comment asks what only an investigation answers,
+  it investigates that one ticket, read-only but for targeted tests and builds, and says
+  what would settle a question it cannot. It never changes a board item's status except
+  by one withdrawal: this run's own item at `Proposal`, when a quoted comment clearly says
+  its ticket is not needed. `config/follow-up-feedback-task.md` states both bounds.
+  `python -m orchestrator.follow_up_tickets check-responses` is what holds an account to
+  that, reading each reply it names back off the board. The pre-launch `check-gathering` read also refuses an issue the run neither
   owns nor marked, and a comment whose marker says a run wrote it.
 
 Both bind in the two places a run can end: each composed task's own acceptance criteria
