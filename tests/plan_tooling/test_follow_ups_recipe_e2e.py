@@ -49,6 +49,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -3363,6 +3364,80 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert trace.read_text().splitlines() == [*launched, *launched]
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "run-1-follow-ups-2"' in project
+
+
+def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
+    tmp_path: Path,
+) -> None:
+    """`just follow-ups Run-1` launches `authoring:run-1-follow-ups`, the id the store holds.
+
+    The store slugs a project id lower-case while a board plan's run id keeps its title's
+    capitals, so a launch naming the id it asked for named a project nothing held and the
+    success hook of every such run launched no follow-up run. The run id itself — the
+    project's `name` — keeps its case.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    (checkout / FOLLOW_UPS_TEMPLATE).write_text(FOLLOW_UPS_TEMPLATE_TEXT, encoding="utf-8")
+    store = checkout / ".venv" / "bin" / "onetaskgraph"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.symlink_to(ONETASKGRAPH_BIN)
+    run = "Run-1"
+    drafts = checkout / ".follow-ups" / "tasks" / run / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+    account = tickets.dispositions_path(checkout / ".follow-ups", run)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    account.write_text(
+        json.dumps(
+            {
+                "schema": tickets.DISPOSITIONS_SCHEMA,
+                "run": run,
+                "drafts": tickets.draft_ids(checkout / ".follow-ups", run),
+                "dispositions": [
+                    {
+                        "draft": draft,
+                        "disposition": tickets.Disposition.NOT_REPRODUCIBLE.value,
+                        "root_causes": [],
+                        "detail": "nothing in the tree bears the draft out",
+                    }
+                    for draft in tickets.draft_ids(checkout / ".follow-ups", run)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    launched = delegation_checkout.run_recipe(checkout, trace, "follow-ups", run)
+
+    assert launched.returncode == 0, launched.stderr
+    traced = trace.read_text().splitlines()
+    assert traced == [
+        delegation_checkout.at(checkout, line)
+        for line in (
+            "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+            delegation_checkout.ENGINE_VERSION,
+            f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
+            "authoring:run-1-follow-ups --dag-graph off",
+        )
+    ]
+    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    assert 'title: "Run-1-follow-ups"' in project
+    # The launch above is traced, so the id it named is handed to the real launch gate over
+    # the real store, which is the read that refused the capitalised id before; the store's
+    # configuration is what makes `authoring` a source the gate reads at all.
+    shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", checkout / "onetaskgraph.yaml")
+    gated = subprocess.run(
+        [
+            Path(sys.executable).with_name("orchestrator-launch-gate"),
+            *shlex.split(traced[0].split("orchestrator-launch-gate", 1)[1]),
+        ],
+        cwd=checkout,
+        env=os.environ | {plan_root_variable.name(): str(checkout / ".plans")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert gated.returncode == 0, gated.stderr
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line

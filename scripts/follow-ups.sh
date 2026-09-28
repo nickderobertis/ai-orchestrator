@@ -114,8 +114,8 @@ WATCH_ELAPSED=5
 #: What one count the inventory answers with is: a non-negative whole number.
 COUNT='^[0-9]+$'
 
-#: Writes the one-node project. The composed task is embedded verbatim, and the placement
-#: note is appended after it rather than woven in.
+#: Writes the one-node project and prints the id the store wrote it under. The composed
+#: task is embedded verbatim, and the placement note is appended after it rather than woven in.
 PROJECT_PROGRAM='
 import json, pathlib, sys
 
@@ -141,7 +141,7 @@ plan = {
         }
     ],
 }
-write_plan_project(pathlib.Path(root), plan, native_id=native, project_metadata=json.loads(metadata))
+print(write_plan_project(pathlib.Path(root), plan, native_id=native, project_metadata=json.loads(metadata)))
 '
 
 usage="just follow-ups <run-id> [--feedback FILE] [--comments] [--detach] [--to SOURCE]"
@@ -386,12 +386,21 @@ fi
     fail "the follow-up agent's task could not be composed from $template" \
         "restore the tracked template with 'git restore $template' and the toolchain with 'just bootstrap', then retry"
 
-"$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follow_up_run" "$run" "$NODE_ID" \
-    "$PERSONA" "$GRAPH" "$scratch" "$PLAN_DIRECT_PLACEMENT_NOTE" "$FOLLOW_UPS_METADATA" "$mode" ||
+# The store slugs the id it is handed, lower-casing it, so the project is launched by the
+# id it answers with: a run id carrying a capital is otherwise one the store never holds.
+written=$("$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follow_up_run" "$run" "$NODE_ID" \
+    "$PERSONA" "$GRAPH" "$scratch" "$PLAN_DIRECT_PLACEMENT_NOTE" "$FOLLOW_UPS_METADATA" "$mode") ||
     fail "the follow-ups project for run '$run' could not be written under $plan_root" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 
-project="$PLAN_SOURCE:$project_native"
+# The answer is `write_plan_project`'s own return, whose shape `project_store._slug` is the
+# one definition of, so an empty answer is the one thing left for this launch to refuse.
+# llmlint: ignore[boundary_inputs_validated] The value is this repository's own writer's return, taken in the process that wrote it; restating its slug shape here is the second source `contracts_have_one_source_or_a_drift_gate` forbids.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned toolchain's writer returns without naming the project it wrote; no journey can produce that without doubling the writer, which the suite never does.
+[ -n "$written" ] ||
+    fail "the plan store named no project for the follow-ups of run '$run'" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+project="$PLAN_SOURCE:$written"
 
 if [ "$detached" -eq 1 ]; then
     launched=0
