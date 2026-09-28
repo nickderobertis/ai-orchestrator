@@ -27,6 +27,7 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import onevcs_state_snapshot
 import pytest
 from registered_checkouts import registered_checkouts
 
@@ -319,6 +320,9 @@ def _producer_declaration(row: Installed) -> tuple[dict[str, str], str]:
     asked = subprocess.run(
         ["uv", "run", "onevcs", "release", "targets", row.producer, "--json"],
         cwd=REPO_ROOT,
+        # The producer is one this host registers, which only the suite's registry copy
+        # names: `tests/onevcs_state_snapshot.py`.
+        env=onevcs_state_snapshot.host_registry_environment(),
         text=True,
         capture_output=True,
         check=False,

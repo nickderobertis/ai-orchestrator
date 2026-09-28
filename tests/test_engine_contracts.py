@@ -2501,6 +2501,52 @@ def test_the_staging_names_a_snapshot_leaves_out_are_the_ones_the_engine_writes(
         )
 
 
+#: Where the engine names each in-progress marker a live driver keeps in its run
+#: directory, and where it takes that marker back: `RunPaths::maintenance` in
+#: `src/ledger.rs`, and the sweep's `join` in `src/maintenance.rs`, which removes it
+#: when the pool-maintenance thread ends.
+MARKER_DECLARATIONS = {
+    "maintenance": (
+        re.compile(r'fn maintenance\(&self\) -> PathBuf \{\s*self\.dir\.join\("([^"]+)"\)'),
+        re.compile(
+            r"fn join\(&mut self\) \{.*?"
+            r"std::fs::remove_file\(self\.paths\.maintenance\(\)\)",
+            re.DOTALL,
+        ),
+    ),
+}
+
+
+def test_the_markers_a_snapshot_withdraws_are_the_ones_the_engine_takes_back() -> None:
+    """`run_snapshot.MARKERS` leaves a vanished name out without waiting for it,
+    which is right only for a record the engine removes when its work ends. Restated
+    here, it goes stale both ways: a renamed marker is waited on again, and a name the
+    engine stops taking back is one whose vanishing now means a lost file. So each is
+    held to the path the engine declares and to the removal that makes it transient.
+    """
+    import run_snapshot
+
+    ledger = _source(ONEPIPELINE, "ledger.rs")
+    maintenance = _source(ONEPIPELINE, "maintenance.rs")
+    declared = set()
+    for marker, (named, taken_back) in MARKER_DECLARATIONS.items():
+        found = named.search(ledger)
+        assert found is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer names its `{marker}` marker where "
+            "this gate reads it; re-read `ledger.rs` and correct `run_snapshot.MARKERS`"
+        )
+        assert taken_back.search(maintenance) is not None, (
+            f"onepipeline {ONEPIPELINE.ref} no longer removes its `{marker}` marker when "
+            "the sweep is joined, so its vanishing may be a lost record rather than a "
+            "finished sweep; re-read `maintenance.rs` and correct `run_snapshot.MARKERS`"
+        )
+        declared.add(found.group(1))
+    assert declared == run_snapshot.MARKERS, (
+        f"`run_snapshot.MARKERS` is {sorted(run_snapshot.MARKERS)} while "
+        f"onepipeline {ONEPIPELINE.ref} keeps {sorted(declared)}"
+    )
+
+
 #: The four strings the engine composes an amendment into a task with, and where each
 #: is declared in `src/plan.rs`: the heading it renders under, the sentence stating its
 #: authority, the criteria heading it renders into, and the notes heading a task stating

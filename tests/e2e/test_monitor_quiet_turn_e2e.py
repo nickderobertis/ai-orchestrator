@@ -980,7 +980,16 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         f"the `{PACEMAKER_MEMBER}` member's own verb was refused on a run whose monitor "
         f"prose raised nothing: {raised.stderr}"
     )
-    paced = _surfaces(environment, LAUNCHED_RUN)
+    # Without the completion question: a run that settles ends its monitor's conversation,
+    # the binding puts that conversation's bar to the planner as a `monitor-completion`
+    # (driven on its own above), and whether it is queued before this read is the
+    # observer's shutdown racing the journey. It is the binding's score, not the monitor's
+    # prose, and now that a settled driver lets go promptly it arrives in some runs.
+    paced = [
+        one
+        for one in _surfaces(environment, LAUNCHED_RUN)
+        if one.get("kind") != SURFACE_KIND_OF_A_COMPLETION_SCORE
+    ]
     assert [one for one in paced if one.get("message", "").strip() == PACEMAKER_REPORT] == paced, (
         f"the `{PACEMAKER_MEMBER}` member's update did not reach the planner's queue, or "
         f"did not reach it alone, in a run whose monitor prose raised nothing: {paced}"

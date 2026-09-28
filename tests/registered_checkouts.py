@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import onevcs_state_snapshot
+
 from orchestrator.root import REPO_ROOT
 
 #: `host/owner/name`, the identity `onevcs` files a repository under. It is the
@@ -127,8 +129,12 @@ class Resolutions(NamedTuple):
 
 def _resolved_publication_checkout(repo: str, home: Path | None) -> Path | None:
     """The publication checkout `onevcs resolve` answers for ``repo``, or ``None``."""
+    # The host's identities are only in the registry copy, which the suite exports to no
+    # process: `tests/onevcs_state_snapshot.py` says why.
     environment: Mapping[str, str] = (
-        os.environ if home is None else {**os.environ, "ONEVCS_HOME": str(home)}
+        onevcs_state_snapshot.host_registry_environment()
+        if home is None
+        else {**os.environ, "ONEVCS_HOME": str(home)}
     )
     asked = subprocess.run(
         ["onevcs", "resolve", repo],
@@ -164,8 +170,8 @@ def publication_resolutions(
     `ai-orchestrator-isolated` — and this is what notices a checkout registered later
     under a name that sorts earlier, before a publication is redirected into it. The
     live answer is read rather than the rule restated: both spellings are asked of the
-    installed `onevcs`, under ``home`` when one is named and the ambient registry
-    otherwise. The alias is the checkout's directory name, which is what `onevcs
+    installed `onevcs`, under ``home`` when one is named and the suite's copy of this
+    host's registry otherwise. The alias is the checkout's directory name, which is what `onevcs
     register` derives it from.
     """
     agreeing: list[RepoIdentity] = []

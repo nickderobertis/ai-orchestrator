@@ -85,7 +85,9 @@ install_default_bounds()
 # above are, and for a sharper one: the adopted `onevcs` rewrites a registry on first
 # contact and an older release cannot read what it writes, so the first `onevcs resolve`
 # or `onepipeline runs` any fixture ran against the real root would flip the host for
-# every process still on the older release. `tests/onevcs_state_snapshot.py` is the
+# every process still on the older release. The copy exported registers none of the
+# host's identities, because a launched driver or a sweep walks every identity it names
+# against that identity's real origin. `tests/onevcs_state_snapshot.py` is the
 # measurement and the rule.
 onevcs_state_snapshot.snapshot()
 

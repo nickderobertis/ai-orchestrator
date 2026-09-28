@@ -545,16 +545,28 @@ def _stub(directory: Path, name: str, body: str) -> Path:
     return directory
 
 
-def _run_target(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
-    """Invoke the Nx target the way someone who skipped the recipe would."""
-    return subprocess.run(
+def _run_target(
+    workspace: Workspace, **overrides: str
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Invoke the Nx target the way someone who skipped the recipe would.
+
+    Returns the run and every refusal the tier said, wherever it arrived. Nx can drop a
+    refusal from its terminal output (`scripts/llmlint-judge.sh` says when), so the tier
+    also appends each one to the file `LLMLINT_DIFF_REFUSALS` names, which is how `just
+    lint-llm-diff` still relays it; this reads both, as the recipe does.
+    """
+    refusals = workspace.root.parent / "lint-llm-diff-refusals.log"
+    refusals.unlink(missing_ok=True)
+    result = subprocess.run(
         ["./scripts/nx.sh", "run", "workspace:lint-llm-diff"],
         cwd=workspace.root,
-        env={**workspace.env, **overrides},
+        env={**workspace.env, "LLMLINT_DIFF_REFUSALS": str(refusals), **overrides},
         check=False,
         text=True,
         capture_output=True,
     )
+    said = result.stderr + (refusals.read_text(encoding="utf-8") if refusals.exists() else "")
+    return result, said
 
 
 @pytest.mark.parametrize(
@@ -572,10 +584,10 @@ def _run_target(workspace: Workspace, **overrides: str) -> subprocess.CompletedP
 def test_the_target_refuses_a_base_it_cannot_judge(
     workspace: Workspace, base_sha: str, expected: str
 ) -> None:
-    result = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=base_sha)
+    result, said = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=base_sha)
 
     assert result.returncode != 0
-    assert expected in result.stderr
+    assert expected in said
     assert workspace.judge_runs() == 0
 
 
@@ -608,14 +620,15 @@ def test_a_missing_pinned_runtime_helper_is_actionable(
 
     if entrypoint == "fingerprint":
         result = _run_fingerprint(workspace)
+        said = result.stderr
         expected = "llmlint fingerprint: could not load the pinned runtime environment"
     else:
-        result = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=workspace.head())
+        result, said = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=workspace.head())
         expected = "lint-llm-diff: could not load the pinned runtime environment"
 
     assert result.returncode != 0
-    assert expected in result.stderr
-    assert "restore scripts/llmlint-runtime-env.sh and retry" in result.stderr
+    assert expected in said
+    assert "restore scripts/llmlint-runtime-env.sh and retry" in said
     assert workspace.judge_runs() == 0
 
 

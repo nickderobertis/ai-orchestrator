@@ -46,6 +46,12 @@ Conventions for this repository's tests.
 - **A test must not leave a background daemon behind.** `NX_DAEMON=false` is set
   session-wide; a test that signals a process group starts that process in one of its
   own.
+- **No process a test starts is handed this host's registered identities.** The
+  `ONEVCS_HOME` every process inherits registers nothing, because a launched driver's idle
+  pass and `onevcs sweep` walk every identity a registry names against its real origin
+  and can retire branches there. A read of a repository this host registers names
+  `onevcs_state_snapshot.host_registry()` for that one call, never for a launch or a
+  sweep; `tests/e2e/test_launch_walks_no_host_identity_e2e.py` holds it.
 - **The environment a test runs in is the test's to state.** The autouse fixtures in
   `conftest.py` drop the dispatch's comparison base, ownership stamp, and per-side
   harness selection; a test that means to exercise one sets it itself.

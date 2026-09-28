@@ -62,7 +62,7 @@ from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
 import pytest
-from onevcs_state_snapshot import host_root
+from onevcs_state_snapshot import host_registry_environment, host_root
 from project_fixtures import local_project
 from registered_checkouts import registered_checkouts
 from test_linked_libraries import LINKED_IN_BINARY, Release
@@ -251,9 +251,16 @@ class ReleaseTargets(TypedDict):
 
 
 def _onevcs(*arguments: str) -> subprocess.CompletedProcess[str]:
+    """One read of the installed `onevcs`, under the suite's copy of this host's registry.
+
+    The reads that name a repository name one this host registers, which only that copy
+    holds; no call here starts a driver or a sweep, which is what the copy is kept from,
+    and none reaches an origin.
+    """
     return subprocess.run(
         [*ONEVCS, *arguments],
         cwd=REPO_ROOT,
+        env=host_registry_environment(),
         text=True,
         capture_output=True,
         timeout=e2e_timeout(120),

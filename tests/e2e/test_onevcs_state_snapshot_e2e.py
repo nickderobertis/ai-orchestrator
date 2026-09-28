@@ -7,12 +7,15 @@ journey here takes that measurement again against the installed CLI, on a regist
 the older shape planted under a scratch root, so the day a release stops migrating on
 read this module's reason fails rather than going on describing a hazard nobody has.
 The second holds the isolation itself: what this process exports as `ONEVCS_HOME` is a
-copy, it carries the host's identities and its pool configuration, and it carries
-neither the host's sessions nor its live pool slots. The third asks the installed CLI
-for a capacity the way an operator does, against a copy taken from a planted root: the
-workspaces file is what `onevcs pool status` resolves an identity's pool out of, so a
-copy without it answers `pool: 0` — pooling off — for a source that pools, and every
-check reading pool state under the snapshot would be reading some other host.
+copy carrying the host's configuration and none of its registered identities, which only
+the registry copy a read names for itself carries, and neither copy carries the host's
+sessions or its live pool slots; `tests/e2e/test_launch_walks_no_host_identity_e2e.py`
+drives a launch under that export to prove what leaving the identities out is for. The
+third asks the installed CLI for a capacity the way an operator does, against a copy
+taken from a planted root: the workspaces file is what `onevcs pool status` resolves an
+identity's pool out of, so a copy without it answers `pool: 0` — pooling off — for a
+source that pools, and every check reading pool state under the snapshot would be
+reading some other host.
 
 Nothing here reads the host's root through `onevcs`. The host's registry is read as a
 file, once, to compare identities — that is the one read of it this suite makes.
@@ -34,12 +37,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import sys
 from pathlib import Path
 
 import onevcs_state_snapshot
 import pytest
 from waits import timeout as e2e_timeout
+
+from orchestrator.root import REPO_ROOT
 
 #: The owner every identity planted here is filed under: one no real host registers, so
 #: a document naming it is legible on its own and reaches nothing of this host's.
@@ -178,56 +185,68 @@ def test_the_installed_onevcs_rewrites_an_older_registry_on_a_read(tmp_path: Pat
 
 
 def test_every_process_of_this_suite_reads_a_copy_of_the_hosts_root() -> None:
-    """What `ONEVCS_HOME` names here is a copy: same identities, no sessions, not the host."""
+    """`ONEVCS_HOME` names a copy of the host's configuration that registers nothing.
+
+    The host's identities are in the registry copy a read names for itself, and nowhere a
+    process inherits: a registry exported to every process is one every launched driver
+    and every sweep walks against each identity's real origin.
+    """
     exported = os.environ.get(onevcs_state_snapshot.ONEVCS_HOME)
     assert exported, "the suite exports no ONEVCS_HOME, so every read below reaches the host"
     host = onevcs_state_snapshot.host_root()
     copy = Path(exported)
+    with_registry = onevcs_state_snapshot.host_registry()
 
-    assert copy.resolve() != host.resolve(), (
-        f"ONEVCS_HOME names the host's own root {host}, which the installed onevcs would "
-        "rewrite on the first read any test makes of it"
+    for taken in (copy, with_registry):
+        assert taken.resolve() != host.resolve(), (
+            f"a suite copy is the host's own root {host}, which the installed onevcs would "
+            "rewrite on the first read any test makes of it"
+        )
+    assert not (copy / onevcs_state_snapshot.REGISTRY).exists(), (
+        "the root every process of this suite inherits carries a registry, so a driver a "
+        "journey launches, or a sweep it runs, walks those identities against their origins"
     )
-    if not (host / "registry.json").is_file():
-        # A host with no registry has nothing to be isolated from and nothing to compare;
-        # the export above is still the copy, of nothing.
-        assert not (copy / "registry.json").exists()
-        return
-    assert _identities(copy) == _identities(host), (
-        "the copy holds different identities from the host, so a check asking it which "
-        "repositories are registered here is asking about some other host"
-    )
-    # The release override is part of what a read answers from: with it missing from the
-    # copy, every `release targets` read here would report the global rung and no
-    # default target for a host `just repos-apply` had configured with both.
-    if (host / "releases.yml").is_file():
-        assert (copy / "releases.yml").read_bytes() == (host / "releases.yml").read_bytes(), (
-            "the host holds a release override the copy does not carry byte for byte, so "
-            "a check asking what a producer's default target is would answer for a host "
-            "without one"
+    if (host / onevcs_state_snapshot.REGISTRY).is_file():
+        assert _identities(with_registry) == _identities(host), (
+            "the registry copy holds different identities from the host, so a check asking "
+            "it which repositories are registered here is asking about some other host"
         )
     else:
-        assert not (copy / "releases.yml").exists()
-    # The pool configuration is the other half of what `just repos-apply` installs, and
-    # the same argument holds: with it missing from the copy, every `pool status` read
-    # here would report pooling disabled for a host that pools, so a check asking what an
-    # identity's capacity is would be asking about a host nobody has.
-    if (host / "workspaces.yml").is_file():
-        assert (copy / "workspaces.yml").read_bytes() == (host / "workspaces.yml").read_bytes(), (
-            "the host holds a workspaces file the copy does not carry byte for byte, so "
-            "a check asking what an identity's pool capacity is would answer for a host "
-            "with pooling off"
+        # A host with no registry has nothing to be isolated from and nothing to compare.
+        assert not (with_registry / onevcs_state_snapshot.REGISTRY).exists()
+    for taken in (copy, with_registry):
+        # The release override is part of what a read answers from: with it missing, every
+        # `release targets` read here would report the global rung and no default target
+        # for a host `just repos-apply` had configured with both.
+        if (host / "releases.yml").is_file():
+            assert (taken / "releases.yml").read_bytes() == (host / "releases.yml").read_bytes(), (
+                f"{taken} does not carry the host's release override byte for byte, so a "
+                "check asking what a producer's default target is would answer for a host "
+                "without one"
+            )
+        else:
+            assert not (taken / "releases.yml").exists()
+        # The pool configuration is the other half of what `just repos-apply` installs:
+        # with it missing, every `pool status` read here would report pooling disabled for
+        # a host that pools.
+        if (host / "workspaces.yml").is_file():
+            assert (taken / "workspaces.yml").read_bytes() == (
+                host / "workspaces.yml"
+            ).read_bytes(), (
+                f"{taken} does not carry the host's workspaces file byte for byte, so a "
+                "check asking what an identity's pool capacity is would answer for a host "
+                "with pooling off"
+            )
+        else:
+            assert not (taken / "workspaces.yml").exists()
+        assert not (taken / "sessions").exists(), (
+            f"{taken} carries the host's session records, which are live claims about "
+            "dispatches somebody else is driving"
         )
-    else:
-        assert not (copy / "workspaces.yml").exists()
-    assert not (copy / "sessions").exists(), (
-        "the copy carries the host's session records, which are live claims about "
-        "dispatches somebody else is driving"
-    )
-    assert not (copy / "workspaces").exists(), (
-        "the copy carries the host's pool slots, which are worktrees other dispatches "
-        "are working in; only the workspaces.yml that configures them is copied"
-    )
+        assert not (taken / "workspaces").exists(), (
+            f"{taken} carries the host's pool slots, which are worktrees other dispatches "
+            "are working in; only the workspaces.yml that configures them is copied"
+        )
 
 
 def test_a_capacity_read_under_the_copy_answers_from_the_copied_workspaces_file(
@@ -254,13 +273,17 @@ def test_a_capacity_read_under_the_copy_answers_from_the_copied_workspaces_file(
     monkeypatch.setenv(
         onevcs_state_snapshot.ONEVCS_HOME, os.environ[onevcs_state_snapshot.ONEVCS_HOME]
     )
-    copy = onevcs_state_snapshot.snapshot(source)
+    taken = onevcs_state_snapshot.snapshot(source)
+    # The identity is only in the registry copy, which is the one a read names for itself.
+    copy = taken.with_registry
 
-    assert (copy / "workspaces.yml").read_bytes() == (source / "workspaces.yml").read_bytes()
-    assert not (copy / "workspaces").exists(), (
-        "the copy carries the source's pool slots, which are live worktrees; only the "
-        "workspaces.yml that configures them is copied"
-    )
+    for held in taken:
+        assert (held / "workspaces.yml").read_bytes() == (source / "workspaces.yml").read_bytes()
+        assert not (held / "workspaces").exists(), (
+            "the copy carries the source's pool slots, which are live worktrees; only the "
+            "workspaces.yml that configures them is copied"
+        )
+    assert not (taken.exported / onevcs_state_snapshot.REGISTRY).exists()
     pooled = _capacity(copy, POOLED_IDENTITY)
     assert (pooled["pool"], pooled["overflow"]) == (POOL, OVERFLOW), (
         "the installed onevcs read the copy and reported a capacity the source's "
@@ -272,7 +295,9 @@ def test_a_capacity_read_under_the_copy_answers_from_the_copied_workspaces_file(
     # file afterwards: a source holding no workspaces file leaves the copy holding none,
     # which is the same answer, and that answer is the one every capacity read here got
     # before the copy carried the file at all.
-    unconfigured = onevcs_state_snapshot.snapshot(_plant(tmp_path / "unconfigured", POOLED))
+    unconfigured = onevcs_state_snapshot.snapshot(
+        _plant(tmp_path / "unconfigured", POOLED)
+    ).with_registry
     assert not (unconfigured / "workspaces.yml").exists(), (
         "the copy invented a workspaces file its source does not hold, so a check would "
         "read a capacity this host never configured"
@@ -281,4 +306,156 @@ def test_a_capacity_read_under_the_copy_answers_from_the_copied_workspaces_file(
     assert {field: unpooled[field] for field in POOLING_OFF} == POOLING_OFF, (
         f"a root carrying no workspaces file no longer answers {POOLING_OFF}: {unpooled}; "
         "re-read what the copy leaving that file out would cost a check reading pool state"
+    )
+
+
+#: The script `just repos-apply` runs, which is what puts configuration in a state root:
+#: every file it installs there is one a read under the copy answers from.
+APPLY_REPO_REGISTRY = REPO_ROOT / "scripts" / "apply-repo-registry.sh"
+INSTALLED_MEMBER = re.compile(r'^installed_\w+="\$onevcs_home/([^"/]+)"$', re.MULTILINE)
+
+
+def test_the_copy_carries_every_file_repos_apply_installs_in_the_root() -> None:
+    """Each configuration file `just repos-apply` installs is one the exported copy carries.
+
+    The copy is configuration only, so a file the recipe starts installing that the copy
+    left out would have every read here answer for a host without it — as every pool read
+    did before the copy carried `workspaces.yml`.
+    """
+    installed = set(INSTALLED_MEMBER.findall(APPLY_REPO_REGISTRY.read_text(encoding="utf-8")))
+
+    assert installed, f"{APPLY_REPO_REGISTRY} names no file it installs; re-read its shape"
+    left_out = installed - set(onevcs_state_snapshot.CONFIGURATION)
+    assert not left_out, (
+        f"`just repos-apply` installs {sorted(left_out)} into the state root and the "
+        "suite's copy does not carry it"
+    )
+
+
+def _git(*arguments: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> str:
+    done = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Snapshot",
+            "-c",
+            "user.email=snapshot@example.invalid",
+            *arguments,
+        ],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert done.returncode == 0, (
+        f"git {' '.join(arguments)} exited {done.returncode}: {done.stderr}"
+    )
+    return done.stdout
+
+
+#: A configuration entry a caller's environment already carries through git's own
+#: environment configuration, which the refusal has to add to rather than replace.
+CALLER_ENTRY = ("core.abbrev", "12")
+
+
+@pytest.mark.parametrize("carried", [False, True], ids=["bare", "caller-entries"])
+@pytest.mark.parametrize(
+    "origin", ["https://example.invalid/host.git", "ssh://example.invalid/host.git"]
+)
+def test_the_host_registry_environment_refuses_every_git_transport_but_file(
+    tmp_path: Path, origin: str, carried: bool
+) -> None:
+    """Under `host_registry_environment()`, git reaches a `file` origin and refuses a network one.
+
+    `onevcs release targets` resolves a checkout's default branch with `git ls-remote
+    origin` wherever the checkout records none, which is what a read of a host
+    repository did to that repository's real origin. The same environment still reaches
+    a `file` origin, which is this host's disk, so the refusal is of the network and not
+    of git — and it holds beside an entry the caller's environment already carried
+    through git's own environment configuration, without dropping that entry.
+    """
+    bare = tmp_path / "local-origin.git"
+    _git("init", "-q", "--bare", "-b", "main", str(bare))
+    local = tmp_path / "local"
+    _git("clone", "-q", str(bare), str(local))
+    (local / "README.md").write_text("local\n", encoding="utf-8")
+    _git("add", "-A", cwd=local)
+    _git("commit", "-qm", "chore: seed", cwd=local)
+    _git("push", "-q", "origin", "main", cwd=local)
+    base = dict(os.environ)
+    key, value = CALLER_ENTRY
+    if carried:
+        base.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=key, GIT_CONFIG_VALUE_0=value)
+    environment = onevcs_state_snapshot.host_registry_environment(base)
+
+    assert "refs/heads/main" in _git("ls-remote", "origin", cwd=local, env=environment)
+    if carried:
+        assert _git("config", "--get", key, cwd=local, env=environment).strip() == value
+
+    _git("remote", "set-url", "origin", origin, cwd=local)
+    asked = subprocess.run(
+        ["git", "ls-remote", "origin"],
+        cwd=local,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    scheme = origin.split(":", 1)[0]
+    assert asked.returncode != 0
+    assert f"transport '{scheme}' not allowed" in asked.stderr, (
+        f"git under the registry copy's environment tried {origin} rather than refusing "
+        f"its transport: {asked.stderr}"
+    )
+
+
+#: What a process the suite starts runs to take its own snapshot, as an xdist worker does
+#: on importing `tests/conftest.py`: the module's entry point, and then what it recorded —
+#: read inside the child, whose copies are removed when it exits.
+CHILD_SNAPSHOT = """
+import json, os
+from pathlib import Path
+import onevcs_state_snapshot as snapshot
+snapshot.snapshot()
+registry = snapshot.host_registry() / snapshot.REGISTRY
+exported = Path(os.environ[snapshot.ONEVCS_HOME])
+print(json.dumps({
+    "host_root": str(snapshot.host_root()),
+    "exported_registers": (exported / snapshot.REGISTRY).exists(),
+    "identities": (
+        sorted(json.loads(registry.read_text())["identities"]) if registry.is_file() else None
+    ),
+}))
+"""
+
+
+def test_a_process_the_suite_starts_copies_the_hosts_registry_from_the_suites_copy() -> None:
+    """A child's own snapshot registers the host's identities where this one does.
+
+    The child inherits the exported `ONEVCS_HOME`, which registers nothing; taken for the
+    host's root, it would leave the child's registry copy empty, and every read of a host
+    repository in an xdist worker would answer "not registered".
+    """
+    child = subprocess.run(
+        [sys.executable, "-c", CHILD_SNAPSHOT],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "tests")},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    taken = json.loads(child.stdout)
+
+    assert Path(taken["host_root"]) == onevcs_state_snapshot.host_registry()
+    assert taken["exported_registers"] is False
+    host = onevcs_state_snapshot.host_root() / onevcs_state_snapshot.REGISTRY
+    expected = sorted(_identities(host.parent)) if host.is_file() else None
+    assert taken["identities"] == expected, (
+        "the child's registry copy holds different identities from the host's, so a read "
+        f"of a host repository in an xdist worker answers for another host: {taken}"
     )

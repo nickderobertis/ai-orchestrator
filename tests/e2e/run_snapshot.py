@@ -9,6 +9,11 @@ and re-reads only the entry that vanished after its listing — never the tree.
 `STAGING_NAME` restates the two shapes `src/ledger.rs` writes at the pinned engine
 release, `<stem>.tmp.<pid>.ThreadId(<n>)` and `<record>.tmp.<pid>.<nonce>`, and
 `tests/test_engine_contracts.py` holds it to that source.
+
+`MARKERS` are the other exception: a record a live driver keeps in the run directory
+only while some work is in progress and takes back when it ends, so a listed marker that
+vanishes is a finished sweep rather than a lost file, and is left out without a wait. The same gate
+holds it to the engine's `RunPaths`.
 """
 
 from __future__ import annotations
@@ -36,6 +41,15 @@ STAGING_NAME = re.compile(r"\.tmp\.\d+\.(?:ThreadId\(\d+\)|\d+)$")
 #: grace blames the file for the host. Only a copy that is already failing spends it.
 VANISH_GRACE = 10.0
 
+#: The records a live driver writes when some work starts and removes when it ends, each
+#: relative to the run directory it keeps them in, at the pinned engine release:
+#: `maintenance.json`, which `RunPaths::maintenance` names and the driver takes back when
+#: its pool-maintenance sweep is joined. A sweep over a registry holding nothing ends
+#: within moments, so its marker is routinely listed and gone by its copy's turn, and
+#: waiting for it to come back waits for the next sweep. A file of the same name deeper
+#: in the tree is nothing the driver takes back, and is waited for like any record.
+MARKERS = frozenset({"maintenance.json"})
+
 RE_READ_INTERVAL = 0.001
 
 
@@ -44,6 +58,7 @@ class Snapshot(NamedTuple):
 
     excluded: tuple[str, ...]
     re_read: tuple[str, ...]
+    withdrawn: tuple[str, ...] = ()
 
 
 def is_staging_name(name: str) -> bool:
@@ -68,14 +83,16 @@ def snapshot_run(source: Path, destination: Path, *, vanish_grace: float | None 
     the call site rather than behind a scale factor.
 
     `destination` is created here and must not exist beforehand, the way `copytree`'s
-    must not. The report says which staging names were left out and which entries were
-    re-read, so a journey can say what its copy did.
+    must not. The report says which staging names were left out, which entries were
+    re-read, and which markers were withdrawn between the listing and their copy, so a
+    journey can say what its copy did.
     """
     grace = timeout(VANISH_GRACE) if vanish_grace is None else vanish_grace
     excluded: list[str] = []
     re_read: list[str] = []
-    _snapshot_directory(source, destination, source, grace, excluded, re_read)
-    return Snapshot(excluded=tuple(excluded), re_read=tuple(re_read))
+    withdrawn: list[str] = []
+    _snapshot_directory(source, destination, source, grace, excluded, re_read, withdrawn)
+    return Snapshot(excluded=tuple(excluded), re_read=tuple(re_read), withdrawn=tuple(withdrawn))
 
 
 def _snapshot_directory(
@@ -85,6 +102,7 @@ def _snapshot_directory(
     grace: float,
     excluded: list[str],
     re_read: list[str],
+    withdrawn: list[str],
 ) -> None:
     """One directory of the snapshot, recursing into the directories its listing holds."""
     with os.scandir(source) as listing:
@@ -98,10 +116,16 @@ def _snapshot_directory(
     destination.mkdir(parents=True)
     for entry in stable:
         target = destination / entry.name
+        relative = str(Path(entry.path).relative_to(root))
         if entry.is_dir(follow_symlinks=False):
-            _snapshot_directory(Path(entry.path), target, root, grace, excluded, re_read)
+            _snapshot_directory(Path(entry.path), target, root, grace, excluded, re_read, withdrawn)
+        elif relative in MARKERS:
+            try:
+                shutil.copy2(entry.path, target, follow_symlinks=False)
+            except FileNotFoundError:
+                withdrawn.append(relative)
         elif _copy_entry(Path(entry.path), target, grace):
-            re_read.append(str(Path(entry.path).relative_to(root)))
+            re_read.append(relative)
 
 
 def _copy_entry(entry: Path, target: Path, grace: float) -> bool:

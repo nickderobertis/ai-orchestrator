@@ -5,7 +5,9 @@
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [],
+  "implicitDependencies": [
+    "support-onevcs-state-snapshot"
+  ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/registered_checkouts.py",
