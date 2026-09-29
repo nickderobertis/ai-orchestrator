@@ -534,11 +534,13 @@ def test_a_failed_sweep_is_named_with_its_log_by_the_next_start_and_never_fails_
     assert again.returncode == 0, again.stderr
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]
-# This journey takes about 1.4 s over a `tmp_path` state root (`pytest --durations`), in
-# a project whose own journey already runs this checkout's real session setup; the verbs
-# it runs are the ones every journey here doubles, so a project of its own would split
-# one subject in two to save nothing.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] It is not expensive:
+# about 1.4 s over a `tmp_path` state root (`pytest --durations`), spending no launch, no
+# harness turn and no network.
+# llmlint: ignore-block[shell_test_tiers_stay_split] It already has a project of its own:
+# `session-setup`, whose own journey runs this checkout's real session setup; the verbs
+# it runs are the ones every journey here doubles, so another project would split one
+# subject in two to save nothing.
 def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
     tmp_path: Path,
 ) -> None:
@@ -578,7 +580,8 @@ def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
     assert "rehearsal" not in log, log
 
 
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _host_sweep(
