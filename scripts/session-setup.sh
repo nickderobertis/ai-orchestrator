@@ -31,7 +31,13 @@
 #      names for every Rust identity's warm worktree slots, and a command the host lacks
 #      would fail on every idle tick the engine sweeps the pool on. Optional — a host
 #      without `cargo` pools nothing Rust — so it never changes the exit status.
-#  10. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
+#  10. The host sweep — `just sweep`, `onevcs sweep` then `oneagentgraph sweep` over the
+#      dead workspaces, session records and scratch nothing else here reclaims — started
+#      by `scripts/host-sweep.sh --detach` as a job detached from this hook, which is
+#      that script's own job and not an engine process. It never waits: a sweep already
+#      holding the host-wide lock, or one completed within the hour, starts nothing, and
+#      a last sweep that failed is named with its log and never changes the exit status.
+#  11. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
 #      `just bootstrap`, memoized per checkout, started as a job detached from this
 #      hook so the gate a dispatch publishes through gets its tools however long they
 #      take to fetch. Last because it is the one step about other repositories, and a
@@ -455,11 +461,13 @@ fi
 toolchain_failed=0
 install_project_dependencies || toolchain_failed=1
 create_plan_root || toolchain_failed=1
+# The host sweep, detached (step 10 above): never waited on, and a report from it — the
+# last sweep having failed — never touches `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
-  just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" sweep >&2 \
-    || log "workspace sweep failed; continuing session setup"
+  bash "$SCRIPT_DIR/host-sweep.sh" --detach \
+    || log "the host sweep reported a failure or could not start (its line above names it); continuing session setup"
 else
-  log "workspace sweep unavailable; continuing session setup"
+  log "host sweep unavailable; continuing session setup"
 fi
 install_bun || toolchain_failed=1
 # Optional, and reported rather than counted: the pool's maintenance command for a
@@ -497,7 +505,7 @@ if ! verify_bun; then
   log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1
 fi
-# The sibling gates, detached (step 10 above). A non-zero exit is a report to relay,
+# The sibling gates, detached (step 11 above). A non-zero exit is a report to relay,
 # never a reason for this session to be without a toolchain: it never touches
 # `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then

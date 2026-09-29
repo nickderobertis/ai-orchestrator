@@ -152,6 +152,9 @@ class Host:
             "ONEAGENTGRAPH_STATE_DIR": str(self.runs),
             "TMPDIR": str(self.temp),
             "ONEVCS_HOME": str(self.onevcs_home),
+            # The recipe takes the host sweep lock under the cache home; a journey's own
+            # keeps it off this host's, which a real sweep may be holding.
+            "XDG_CACHE_HOME": str(self.root / "cache"),
         }
 
     def onevcs(self, *arguments: str) -> subprocess.CompletedProcess[str]:
