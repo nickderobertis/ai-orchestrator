@@ -786,6 +786,13 @@ def test_a_workspace_pin_names_the_one_release_its_linked_family_resolved(
 #: siblings, which is why it is read here rather than beside the recipes.
 UI_API_DISTRIBUTION = "onepipeline-api-cli"
 
+#: The read API's engine held apart from `config/onepipeline.version`, which is nothing:
+#: the adopted read-API release links the adopted engine, so a browser adopt and `just
+#: orchestrate --adopt` drive a run with the same engine. Kept as a named `None` rather
+#: than deleted so the gate below states its own escape hatch is shut — a `Divergence`
+#: written here fails that gate rather than excusing a pair measured apart.
+DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
+
 
 def _ui_api_linked_engine() -> str:
     """The `onepipeline` release the adopted Observatory API wheel was built against."""
@@ -833,6 +840,11 @@ def test_the_ui_api_links_the_pinned_engine() -> None:
     There is no escape hatch: a pair measured apart fails, and the remedy is to hold the
     engine pin until a reader linking it ships.
     """
+    assert DECLARED_UI_ENGINE_DIVERGENCE is None, (
+        f"DECLARED_UI_ENGINE_DIVERGENCE declares {DECLARED_UI_ENGINE_DIVERGENCE}, and no "
+        "divergence of the read API's engine is admitted: hold the engine pin until a "
+        f"{UI_API_DISTRIBUTION} release linking it exists"
+    )
     linked = _ui_api_linked_engine()
     pinned = _pinned_cli("onepipeline.version")
     assert linked == pinned, (

@@ -24,8 +24,8 @@ pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
 consecutive adoptions before it had `config/onepipeline.version` and
-`config/onevcs.version` carrying one number, and this pair of pins has them at 0.53.1
-and 0.34.1. The habit that ambiguity taught is worth keeping rather than retiring
+`config/onevcs.version` carrying one number, and this pair of pins names two different
+numbers. The habit that ambiguity taught is worth keeping rather than retiring
 with it — read a version here **with the tool beside it and never
 on its own**, because the next coincidence will arrive without announcing itself and a
 bare number says nothing about which of the two CLIs a sentence is about. Re-read the source before trusting a claim
@@ -148,7 +148,16 @@ for exactly the endings no continuation follows from.
 A preserving failure whose branch `onevcs` handed back is **not settled at all on
 the first attempt**: the node is dispatched again onto that same branch, carrying
 the failure's reason and pointers to `onevcs`'s own evidence, so the worker meets
-the thing that rejected it rather than a fresh worktree cut from the base. The
+the thing that rejected it rather than a fresh worktree cut from the base. It is also
+told where the branch stands on its remote, and the rule that follows: the repair goes
+on as new commits on top of that commit, never as an amend, a rebase, a squash or a
+force-push of commits already there. The commit is named by hash when the previous
+attempt's session recorded it — `onevcs` committing, at close, a worktree the worker left
+dirty — while a worker that committed its own work is told the branch was published at a
+commit the engine does not know; after a refused push it is the commit the remote still
+holds, never the one that push failed to deliver.
+`tests/e2e/test_redispatch_names_the_published_tip_e2e.py` drives both kinds of worker
+through `just orchestrate`. The
 budget is `ONEPIPELINE_PUBLICATION_ATTEMPTS`, **3** by default and the whole budget
 rather than the retries beside it. Only when it is spent does the node settle
 `failed` under the last failure's word, with a roll-up of every attempt in the

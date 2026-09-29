@@ -335,8 +335,8 @@ def _report(report: CopyReport) -> None:
     """Render the SDK copy report one record per line."""
     for item in report.items:
         print(item.model_dump_json(exclude_none=True))
-    rewritten = report.references_rewritten or 0
-    unresolved = report.references_unresolved or 0
-    ambiguous = report.references_ambiguous or 0
+    rewritten = report.references_rewritten
+    unresolved = report.references_unresolved
+    ambiguous = report.references_ambiguous
     if rewritten or unresolved or ambiguous:
         print(f"references: {rewritten} rewritten, {unresolved} unresolved ({ambiguous} ambiguous)")

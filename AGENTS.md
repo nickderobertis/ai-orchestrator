@@ -169,8 +169,9 @@ re-running that work duplicates a change already waiting to be read. The retryab
 failure words — `checks-failed` and its siblings in the outcome vocabulary
 `tests/test_engine_contracts.py` holds to the engine — say the publication reached the
 merge path and got no verdict it could act on, and they arrive already retried, the
-engine having re-dispatched onto the *same* branch with the reason and `onevcs`'s
-evidence until its budget was spent. Read a refusal among them as a branch that exists,
+engine having re-dispatched onto the *same* branch with the reason, `onevcs`'s
+evidence and where the branch stands on its remote, to be grown with new commits on top,
+until its budget was spent. Read a refusal among them as a branch that exists,
 carries a tree the merge path would not pass, and has been worked several times — never
 as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
 committed work with the refusal still standing. A `push-rejected` whose merge path

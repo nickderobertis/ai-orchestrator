@@ -517,6 +517,34 @@ GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
     ),
 )
 
+#: The three engine-side nodes of the plan adopting the live-note, re-dispatch-tip and
+#: copy-id fixes. `op-live-note` was delivered by its retry, `op-live-note-r5`, and is
+#: recorded under the node id for the reason `Landing.node` gives.
+#: `tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py` and
+#: `tests/e2e/test_redispatch_names_the_published_tip_e2e.py` drive the first two through
+#: `just orchestrate`, and `tests/plan_tooling/test_plan_copy_destination_ids_e2e.py` the
+#: copy the third relinks.
+LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS = (
+    Landing(
+        node="op-redispatch-tip",
+        change_request=569,
+        commit="f4bfd253b7986b9a7e0bbef3bbbfd1db667f8a9e",
+        did=("name the published tip in a re-dispatch and require commits on top of it"),
+    ),
+    Landing(
+        node="op-live-note",
+        change_request=573,
+        commit="a72e88e2055d47881d7af3a7e17d639068b77e78",
+        did="deliver live manager notes off the run's single writer",
+    ),
+    Landing(
+        node="op-relink-onetaskgraph",
+        change_request=580,
+        commit="cb2777e7cea01ad3b525b063b65ae1c8bb5b064b",
+        did="link the onetaskgraph release that gives copied tasks destination-scoped ids",
+    ),
+)
+
 #: The follow-up comment flow plan's engine-side node, which relinked the plan store so a
 #: dispatch's linked store answers the narrowed comment query `just
 #: follow-ups-answer-comments` asks;
@@ -549,6 +577,7 @@ LANDINGS = (
     *UNPUBLISHED_UNFINISHED_LANDINGS,
     *BRANCH_RETIREMENT_LANDINGS,
     *GRAPHQL_WRITEBACK_QUOTA_LANDINGS,
+    *LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS,
     *COMMENT_FLOW_LANDINGS,
 )
 

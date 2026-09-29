@@ -757,3 +757,89 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     )
     with pytest.raises(OSError, match="outside itself"):
         plan_store.read_documents("sdksource:demo")
+
+
+#: The published plan-store CLI, doubled at its boundary and nowhere above it: every
+#: invocation is the locked install's, and only its JSON answer is rewritten on the way
+#: out, so the SDK's decode and this package's reading path run as they do on a real read.
+#: `REWRITTEN_FIELD` names a field of every task a listing answers, and `REWRITTEN_AS`
+#: says what that task carries in its place: `absent`, an explicit JSON `null`, or —
+#: for any other word — the store's own value, untouched.
+REWRITING_PLAN_STORE = """\
+#!/usr/bin/env bash
+set -uo pipefail
+answer=$("$REAL_PLAN_STORE" "$@")
+status=$?
+printf '%s' "$answer" | "$(dirname "$0")/python3" -c '
+import json, os, sys
+text = sys.stdin.read()
+field, mode = os.environ["REWRITTEN_FIELD"], os.environ["REWRITTEN_AS"]
+try:
+    answer = json.loads(text)
+except ValueError:
+    sys.stdout.write(text)
+    raise SystemExit
+for held in answer.get("items", []) if isinstance(answer, dict) else []:
+    task = held.get("item") if isinstance(held, dict) else None
+    if isinstance(task, dict) and "delivers" in task:
+        if mode == "absent":
+            task.pop(field, None)
+        elif mode == "null":
+            task[field] = None
+json.dump(answer, sys.stdout)
+'
+exit "$status"
+"""
+
+
+@pytest.mark.parametrize("field", ["repositories", "delivers"])
+def test_a_defaulted_task_field_decodes_to_its_default_and_an_explicit_null_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    """The adopted SDK's decode, through `read_tasks` over a real local-md store.
+
+    A task's `repositories` and `delivers` are defaulted and never null: a store answer
+    that omits one reads as its default, the same answer carrying `null` is refused as
+    outside the store's schema rather than read as `None`, and a value the store answers
+    reads unchanged. The interpreter is a real bare one with the stand-in beside it,
+    because the package runs the CLI beside its interpreter and no other.
+    """
+    root = tmp_path / "source"
+    write_plan_project(
+        root,
+        {
+            "name": "demo",
+            "tasks": [
+                PlanNode(
+                    id="task",
+                    title="Task",
+                    task="Body",
+                    repo="github.com/acme/service",
+                    delivers=["followups:I_1"],
+                )
+            ],
+        },
+    )
+    _source(monkeypatch, "sdksource", root)
+    bare = tmp_path / "bare"
+    venv.create(bare, with_pip=False)
+    stand_in = bare / "bin" / "onetaskgraph"
+    stand_in.write_text(REWRITING_PLAN_STORE, encoding="utf-8")
+    stand_in.chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(bare / "bin" / "python3"))
+    monkeypatch.setenv("REAL_PLAN_STORE", str(ONETASKGRAPH_BIN))
+    monkeypatch.setenv("REWRITTEN_FIELD", field)
+
+    monkeypatch.setenv("REWRITTEN_AS", "absent")
+    [defaulted] = plan_store.read_tasks("sdksource:demo")
+    assert getattr(defaulted, field) in ([], ()), defaulted
+
+    monkeypatch.setenv("REWRITTEN_AS", "null")
+    with pytest.raises(OSError, match="outside its emitted schema") as refused:
+        plan_store.read_tasks("sdksource:demo")
+    assert field in str(refused.value)
+
+    monkeypatch.setenv("REWRITTEN_AS", "untouched")
+    [held] = plan_store.read_tasks("sdksource:demo")
+    assert held.repositories == ["github.com/acme/service"]
+    assert held.delivers == ("followups:I_1",)

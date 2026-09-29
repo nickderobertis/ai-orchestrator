@@ -168,6 +168,14 @@ recorded *after* the copy rather than before it. What the copy has to carry is t
 **document**: the store's own `project copy` carries none, and a plan copied without its
 design document arrives on the board with nothing for a person to read and so nothing to
 approve.
+
+A copy between local Markdown projects files every task under the project it landed as.
+A task of a plan written here has an id scoped to its project — `demo/first` — and a
+project copied beside itself lands as `demo-2` with its tasks at `demo-2/first` in that
+project's own folder and their dependencies pointing inside the copy, so re-planning by
+copying an `authoring` project to its successor leaves nothing to repair.
+`tests/plan_tooling/test_plan_copy_destination_ids_e2e.py` drives it through `just plans
+project copy`. A board copy is untouched by this: GitHub assigns a copied issue its id.
 `tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the copy itself for real —
 drafting, clearing, a trial run that writes nothing, the copy, the record read back off
 what landed, and the check over it — against a second local store rather than the live
@@ -3753,6 +3761,14 @@ judge decides against. That is what `context` could never do, and it is the inci
 this collapse was made from: a manager's approval sent as a `context` note rendered
 into the worker's task alone, the judge never saw it, and the node was failed for
 omitting what the manager had approved.
+
+**While a note waits on a busy turn, the run goes on recording.** A harness that cannot
+be steered mid-turn takes a live note only as its current turn ends, and the engine
+delivers it off the run's single writer: heartbeats and turn activity keep reaching the
+journal and `just status` keeps reporting the run live for as long as the turn runs, and
+once it ends the run records the delivery — the note's `edit-committed` — and then its
+`note-shown`. `tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py` drives it
+through `just channel-reply`.
 
 **What it deliberately cannot do.** Reaching the running turn and being carried into
 the next dispatch are mutually exclusive under `persist`'s biconditional, so there is

@@ -77,7 +77,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 #: The real CLI every invocation is delegated to. Named rather than discovered:
 #: this file *is* `oneharness` as far as the run is concerned, so resolving the
@@ -381,6 +381,32 @@ AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 #: A gate rather than a delay because what it replaces is a race: a delay lets a turn be
 #: recorded and then waits, so a journey polling for "no turn yet" can only ever lose. The
 #: judge side is never held, and once released the gate stays open for every later turn.
+#: Optionally have a dispatched worker's turn work for a while before it answers, when its
+#: prompt carries `AGENT_ACTIVITY_MARKER_ENV`'s text: this many tool calls, each reported
+#: through the real `oneharness` as the provider's own event line,
+#: `AGENT_ACTIVITY_INTERVAL_ENV` milliseconds apart. What it gives a journey is a turn that
+#: is visibly busy — its tool calls reaching the run as they happen — and not finished,
+#: which is the window a live note waits in: the stand-in takes a note only when its turn
+#: ends, as a harness that cannot be steered mid-turn does. The pacing is the shipped mock
+#: provider's own `MOCK_STREAM_DELAY_MS`, so the lines cross the real oneharness stream one
+#: at a time rather than being written here on a clock. Keyed on a marker rather than on
+#: the turn's number because a later turn of the same conversation opens on its new
+#: message alone — a delivered note, say — so a task's marker is on its first turn only.
+AGENT_ACTIVITY_ENV = "FAKE_BACKEND_AGENT_ACTIVITY_CALLS"
+AGENT_ACTIVITY_INTERVAL_ENV = "FAKE_BACKEND_AGENT_ACTIVITY_INTERVAL_MS"
+AGENT_ACTIVITY_MARKER_ENV = "FAKE_BACKEND_AGENT_ACTIVITY_MARKER"
+AGENT_ACTIVITY_COMMAND = "the stand-in worker is still working"
+
+
+class BusyTurn(NamedTuple):
+    """How much work a busy worker turn reports before it answers, and how slowly."""
+
+    #: How many tool calls the turn reports.
+    calls: int
+    #: The milliseconds between one reported line and the next.
+    interval_ms: int
+
+
 TURN_GATE_ENV = "FAKE_BACKEND_TURN_GATE"
 TURN_GATE_REACHED = "reached"
 TURN_GATE_RELEASED = "released"
@@ -588,10 +614,14 @@ def _run_on_marker(config: str | None, prompt: str, cwd: str | None) -> None:
                 )
 
 
-def _answer(argv: list[str], text: str, *, lost: bool = False) -> int:
+def _answer(
+    argv: list[str], text: str, *, lost: bool = False, activity: BusyTurn | None = None
+) -> int:
     """Run the real CLI for this turn, with `text` as the provider's answer.
 
-    `lost` has the provider process fail instead, which is how a turn is lost.
+    `lost` has the provider process fail instead, which is how a turn is lost. `activity`
+    has the provider report that
+    many tool calls before its answer, in codex's own event lines, streamed one at a time.
     """
     real = os.environ.get(REAL_BINARY_ENV)
     if not real:
@@ -599,6 +629,31 @@ def _answer(argv: list[str], text: str, *, lost: bool = False) -> int:
         return 2
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
+    if activity is not None:
+        lines: list[dict[str, object]] = [
+            {"type": "thread.started", "thread_id": "stand-in-thread"}
+        ]
+        lines += [
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": f"call-{call}",
+                    "type": "command_execution",
+                    "command": AGENT_ACTIVITY_COMMAND,
+                    "aggregated_output": f"call {call}",
+                },
+            }
+            for call in range(1, activity.calls + 1)
+        ]
+        lines += [
+            {
+                "type": "item.completed",
+                "item": {"id": "reply", "type": "agent_message", "text": text},
+            },
+            {"type": "turn.completed", "usage": {}},
+        ]
+        environment[MOCK_STDOUT_ENV] = "".join(json.dumps(line) + "\n" for line in lines)
+        environment["MOCK_STREAM_DELAY_MS"] = str(activity.interval_ms)
     if lost:
         environment[MOCK_EXIT_ENV] = "1"
     # `--mock-harness ID` replaces the selected harness's *provider process* and
@@ -641,6 +696,18 @@ def _await_turn_gate(config: str | None) -> None:
         if time.monotonic() > deadline:
             raise SystemExit("fake_backend: the turn gate was never released")
         time.sleep(0.05)
+
+
+def _busy_turn(config: str | None, prompt: str) -> BusyTurn | None:
+    """The tool calls `AGENT_ACTIVITY_ENV` asks this dispatched worker turn to report."""
+    calls = os.environ.get(AGENT_ACTIVITY_ENV)
+    marker = os.environ.get(AGENT_ACTIVITY_MARKER_ENV)
+    member = MEMBER_OF_CONFIG.search(config or "")
+    if not calls or not marker or member is None or member.group(1) != DISPATCHED_MEMBER:
+        return None
+    if marker not in prompt:
+        return None
+    return BusyTurn(int(calls), int(os.environ.get(AGENT_ACTIVITY_INTERVAL_ENV, "1000")))
 
 
 def main(argv: list[str]) -> int:
@@ -714,7 +781,7 @@ def main(argv: list[str]) -> int:
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
     if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
-    return _answer(argv, WORKER_REPLY)
+    return _answer(argv, WORKER_REPLY, activity=_busy_turn(config, prompt))
 
 
 if __name__ == "__main__":

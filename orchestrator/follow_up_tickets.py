@@ -1848,9 +1848,7 @@ def board_category(ticket: str, board: str) -> str | None:
 
 def _carriers(ticket: str, board: str) -> list[QualifiedTask]:
     """Every item of ``board`` whose store origin is ``ticket``, in listing order."""
-    return [
-        held for held in board_items(board) if (held.item.metadata or {}).get(ORIGIN_KEY) == ticket
-    ]
+    return [held for held in board_items(board) if held.item.metadata.get(ORIGIN_KEY) == ticket]
 
 
 def _survivor(ticket: Ticket, carriers: Sequence[QualifiedTask], board: str) -> QualifiedTask:
@@ -1865,7 +1863,7 @@ def _survivor(ticket: Ticket, carriers: Sequence[QualifiedTask], board: str) -> 
         held
         for held in carriers
         if held.item.status.category.value not in closed
-        and metadata_owner(held.item.metadata or {}) == ticket.created_by_run
+        and metadata_owner(held.item.metadata) == ticket.created_by_run
     ]
     if len(open_own) != 1:
         raise Misbound(
@@ -2876,7 +2874,7 @@ def filed_board_problems(root: Path, run: str, causes: Collection[str], board: s
         carrier: str | None = None
         copied = False
         for item in items:
-            metadata = item.item.metadata or {}
+            metadata = item.item.metadata
             if (
                 metadata.get(ORIGIN_KEY) == origin
                 and metadata_owner(metadata) == run

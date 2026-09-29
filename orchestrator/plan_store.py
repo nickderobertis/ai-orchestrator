@@ -263,11 +263,11 @@ def read_tasks(project: str) -> list[StoreTask]:
         if not held_id.startswith(f"{source}:") or filed != native:
             raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
         # llmlint: ignore-end[changed_behavior_has_e2e]
-        item, metadata = held.item, held.item.metadata or {}
+        item, metadata = held.item, held.item.metadata
         node_id = metadata.get("onepipeline.id")
         if not isinstance(node_id, str):
             raise OSError(f"task {held.id} has no string onepipeline.id")
-        repositories = [repository.model_dump() for repository in item.repositories or []]
+        repositories = [repository.model_dump() for repository in item.repositories]
         if len(repositories) > 1:
             raise OSError(f"task {held.id} has more than one repository")
         records.append(
@@ -279,7 +279,7 @@ def read_tasks(project: str) -> list[StoreTask]:
                 metadata,
                 repositories,
                 (),
-                tuple(x.model_dump() for x in item.delivers or []),
+                tuple(x.model_dump() for x in item.delivers),
                 native,
             )
         )
@@ -380,8 +380,8 @@ def read_documents(project: str) -> list[StoreDocument]:
                 item.content or "",
                 item_project,
                 [label.name for label in item.labels],
-                [x.model_dump() for x in item.repositories or []],
-                item.metadata or {},
+                [x.model_dump() for x in item.repositories],
+                item.metadata,
                 location,
             )
         )
@@ -393,7 +393,7 @@ def read_projects(source: str) -> list[StoreProject]:
         StoreProject(
             QualifiedProjectId(x.id.model_dump()),
             x.item.title,
-            x.item.metadata or {},
+            x.item.metadata,
             x.item.location.model_dump(mode="python") if x.item.location else None,
         )
         for page in every_page(

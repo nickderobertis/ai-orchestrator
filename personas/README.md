@@ -63,8 +63,9 @@ naming either as a plan node's `persona` fails the same way `crozier/…` does.
 request drafting under it, so a plan node's own worker may not run as it.
 
 That the shipped set is those five and no more is measured two ways — once against
-the pinned oneagentgraph 0.5.3 CLI, and once against the oneagentgraph the adopted
-`onepipeline` links, which is the one a dispatch reads and is 0.5.3 as well. `tests/e2e/test_shipped_persona_catalog_e2e.py`
+the oneagentgraph CLI `config/oneagentgraph.version` pins, and once against the
+oneagentgraph the adopted `onepipeline` links, which is the one a dispatch reads and is
+the same release. `tests/e2e/test_shipped_persona_catalog_e2e.py`
 runs each:
 
 - A graph carrying its own `personas` catalog is refused when one of its files
@@ -79,7 +80,7 @@ runs each:
   config validation, before a harness is launched.
 
 Three consequences, the first two re-measured against onepipeline 0.53.1 and the
-oneagentgraph 0.5.3 it links, by launching a plan whose two nodes name `engineer` and
+oneagentgraph it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -199,7 +200,7 @@ not evidence of what a dispatch reads. The installed wheel is the source and
 `tests/test_linked_libraries.py` is what reads it: `onepipeline-cli` ships a
 CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
-numbers agree today and do not have to: the pin is 0.5.3 and the linked reader is
+numbers agree today and do not have to: the pin names the same release, and the linked reader is
 0.5.3. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
 separated them is how long a cancelled process tree is left before Windows ends its
 job, that a member whose tree cannot be found is not a member proven idle, and — in

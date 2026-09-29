@@ -1730,15 +1730,16 @@ def test_the_merge_queue_bound_is_floored_at_the_default_onevcs_declares() -> No
 #: thin wrapper over `onepipeline status`, so the boundary `AGENTS.md` tells a watch to
 #: cut at is this function's own formatting and nothing on this side of the seam.
 #:
-#: Read from `status_of`, which composes **one run's** block — its run lines, its node
+#: Read from the function that composes **one run's** block — its run lines, its node
 #: lines, and the health report under them — rather than from `status`, which since
 #: https://github.com/nickderobertis/onepipeline/pull/402 only concatenates that block per
 #: surveyed run and adds the
 #: skipped-runs trailer. Anchoring on the outer function is how these gates came to
 #: report the health opener as gone from a view that still prints it: the composition
-#: moved down one function while the entry point kept its name. From onepipeline 0.53.0,
-#: whose `status --no-providers` leaves the health report out, `status_of` is one call to
-#: `status_reporting` asking for it, and that is where the block is composed.
+#: moved down one function while the entry point kept its name. It moved down once more
+#: in https://github.com/nickderobertis/onepipeline/pull/574, which added `status
+#: --no-providers`: `status_of` now only calls `status_reporting` with the report on,
+#: and the block is composed there.
 STATUS_VIEW = re.compile(r"pub\(crate\) fn status_reporting\(.*?\n\}\n", re.DOTALL)
 
 #: The helper that view writes a run's own block through, and the call by which it does.
