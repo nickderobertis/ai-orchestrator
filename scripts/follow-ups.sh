@@ -7,26 +7,39 @@
 # launches the one agent that reads them afterwards: it verifies each draft against the
 # trees it names, groups what stands by root cause, writes one verified ticket per root
 # cause beside the drafts, and copies each onto the `followups` board — commenting on
-# another run's open issue for the same root cause instead of duplicating it. The ticket's
-# shape and who owns what on the board are `orchestrator/follow_up_tickets.py`'s, which
-# renders both into the task this composes from `config/follow-up-task.md`. A re-dispatch
-# over the board's own comments composes the narrower `config/follow-up-feedback-task.md`
-# instead, as `--comments` below says.
+# another run's open issue for the same root cause instead of duplicating it. The agent's
+# task is this host's `follow-up-task` template, `templates/follow-up-task.md.j2`, rendered
+# by the pinned plan store: the ticket's shape and who owns what on the board are
+# `orchestrator/follow_up_tickets.py`'s, whose `answers` command states every value and
+# every example the template's prose names, and the template's own `mode` is `initial`
+# here, or `feedback` for a re-dispatch over the board's own comments, as `--comments`
+# below says.
 #
 # `scripts/plan.sh` is the precedent for everything about the launch, and each departure
 # from it is named:
 #
-#   * **One direct node, `follow-ups`, in project `authoring:<run-id>-follow-ups`**, carrying
-#     `PLAN_DIRECT_PLACEMENT_NOTE`: a direct node works in the launching checkout and
-#     commits nothing, which is exactly what this agent's deliverable is — records under the
-#     gitignored draft root and items on a board, never a branch.
-#   * **Every plan-store instruction in the composed task names this checkout's own CLI**,
+#   * **One direct node, `follow-ups`, in project `authoring:<run-id>-follow-ups`**, whose
+#     task the template renders ending in `PLAN_DIRECT_PLACEMENT_NOTE`: a direct node works
+#     in the launching checkout and commits nothing, which is exactly what this agent's
+#     deliverable is — records under the gitignored draft root and items on a board, never
+#     a branch.
+#   * **The node's task is created by the store from the template, never written here.**
+#     `onepipeline template resolve follow-up-task --json` states the template through its
+#     layers — a repository's `.onepipeline/templates/` in the working directory this was
+#     run from, then this host's `templates/` — and `onetaskgraph task create
+#     --template-loader -` renders it from the answers and records its
+#     `onepipeline:follow-up-task` provenance, so the body is exactly the rendering. A
+#     rendering is validated only once it is stored, so `onepipeline template check
+#     follow-up-task --item` holds the created task to the criteria rule and to its
+#     provenance, and a refusal launches nothing. A re-dispatch first retires the task the
+#     project already holds, so the project keeps one node.
+#   * **Every plan-store instruction in the task names this checkout's own CLI**,
 #     resolved here and spelled in full, rather than the bare `onetaskgraph` a dispatch
 #     would resolve from its own search path. Two real runs resolved another release that
 #     way: one filed its tickets as issues of the wrong repository, and one had every
 #     sound ticket refused by a validator reading an older record schema.
 #   * **It names the per-node agent graph `graphs/follow-up.yaml`**, a single-sided member
-#     with no judge, so the task composed here is the only copy of its instructions it is
+#     with no judge, so the task created here is the only copy of its instructions it is
 #     given. The node still names `../personas/follow-up.yaml`, because the engine refuses a
 #     direct agent node that names no persona; the graph's member layers none.
 #   * **Its run id is guaranteed free rather than refused when taken.** A planning flow's
@@ -51,10 +64,10 @@
 #     and launches nothing (exit 0);
 #   * `--to` names the board the tickets are copied onto, for a journey standing a local
 #     store in for the live board, and is refused unless it names a configured source;
-#   * `--feedback FILE` puts that file's text into the composed task verbatim, under a
+#   * `--feedback FILE` puts that file's text into the task verbatim, under a
 #     heading of its own, for a re-dispatch over the same run's drafts, tickets and board;
 #   * `--comments` says that file is a gathering of the board's own comments rather than a
-#     manager's prose, and composes the **feedback** mode instead — the narrow
+#     manager's prose, and renders the **feedback** mode instead — the narrow
 #     comment-answering task, with no inventory, no verification, no accepted-fix
 #     comparison, no status decision and no copy. It is refused without `--feedback`, and
 #     `scripts/follow-ups-handle-comments.sh` is its one caller.
@@ -93,10 +106,9 @@ NODE_ID="follow-ups"
 PERSONA="../personas/follow-up.yaml"
 GRAPH="graphs/follow-up.yaml"
 
-#: The task template of each mode, relative to this checkout, and their one statement:
-#: `tests/test_follow_up_tickets.py` reads these two lines to compose each template.
-TEMPLATE="config/follow-up-task.md"
-FEEDBACK_TEMPLATE="config/follow-up-feedback-task.md"
+#: The registered template the node's task is rendered from, `templates/follow-up-task.md.j2`
+#: at this host's layer, which `templates/templates.yaml` registers.
+TEMPLATE_NAME="follow-up-task"
 
 #: The source the project is written into, and what its native id and run id append.
 PLAN_SOURCE="authoring"
@@ -114,34 +126,31 @@ WATCH_ELAPSED=5
 #: What one count the inventory answers with is: a non-negative whole number.
 COUNT='^[0-9]+$'
 
-#: Writes the one-node project and prints the id the store wrote it under. The composed
-#: task is embedded verbatim, and the placement note is appended after it rather than woven in.
+#: Writes the project with no task yet and prints the id the store wrote it under, after
+#: retiring every task the project already held: the store files a created task by its
+#: title rather than under the project, so a re-dispatch would otherwise launch the
+#: previous pass's node beside the one created next. The writer sweeps the layout it wrote
+#: itself; the store's own records are named by the ids it answers, one per file.
 PROJECT_PROGRAM='
 import json, pathlib, sys
 
-from orchestrator.project_store import write_plan_project
+from orchestrator import plan_store
+from orchestrator.project_store import TASKS_DIRECTORY, write_plan_project
 
-(root, native, name, run, node_id, persona, graph, task_file, direct_note, metadata, mode) = sys.argv[1:12]
-task = pathlib.Path(task_file).read_text(encoding="utf-8").rstrip()
+(root, native, name, run, source, metadata, mode) = sys.argv[1:8]
 goal = (
     f"Answer the quoted comments on follow-up tickets for run {run}"
     if mode == "feedback"
     else f"Verify the follow-up drafts run {run} left, and put the verified tickets on the board"
 )
-plan = {
-    "schema_version": 3,
-    "goal": {"text": goal},
-    "name": name,
-    "tasks": [
-        {
-            "id": node_id,
-            "persona": persona,
-            "agent_graph": graph,
-            "task": task + "\n\n" + direct_note.strip() + "\n",
-        }
-    ],
-}
-print(write_plan_project(pathlib.Path(root), plan, native_id=native, project_metadata=json.loads(metadata)))
+plan = {"schema_version": 3, "goal": {"text": goal}, "name": name, "tasks": []}
+root = pathlib.Path(root)
+project = write_plan_project(root, plan, native_id=native, project_metadata=json.loads(metadata))
+for held in plan_store.read_tasks(f"{source}:{project}"):
+    record = (root / TASKS_DIRECTORY / held.qualified_id.split(":", 1)[1]).with_suffix(".md")
+    if record.resolve().is_relative_to((root / TASKS_DIRECTORY).resolve()):
+        record.unlink(missing_ok=True)
+print(project)
 '
 
 usage="just follow-ups <run-id> [--feedback FILE] [--comments] [--detach] [--to SOURCE]"
@@ -311,27 +320,30 @@ load plan-root-env.sh
 export_plan_authoring_root follow-ups || exit "$?"
 plan_root=${!PLAN_AUTHORING_ROOT_ENV}
 
-scratch=$(mktemp) || fail "a scratch file for the composed task could not be created" "free disk space and retry"
+# The repository layer `onepipeline template resolve` reads is the working directory this
+# was run from, which `just` makes this checkout: taken before anything below changes one.
+repository_layer=$PWD
+
+scratch=$(mktemp) || fail "a scratch file for the task's answers could not be created" "free disk space and retry"
 trap 'rm -f "$scratch" || echo "follow-ups: the scratch file $scratch could not be removed; delete it by hand" >&2' EXIT
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own checkout stops being enterable between its first line and this one; no journey can produce that without racing the filesystem the test itself runs on.
 checkout=$(CDPATH='' cd -- "$script_dir/.." && pwd) || fail "this recipe's checkout could not be resolved" \
     "run it from a readable checkout, then retry"
 
-# The plan-store CLI the composed task writes every store instruction with: this
+# The plan-store CLI the task writes every store instruction with: this
 # checkout's own, spelled from the resolved checkout so the task carries one canonical
 # path. Nothing stands in for it. `config/onetaskgraph.version` is per checkout, so a copy
 # the search path happens to offer answers about whichever checkout provisioned *it* —
 # which is the resolution the header says cost two real runs, and letting it through here
 # would put it back with the task's own authority behind it. A checkout nobody has
-# bootstrapped is refused instead.
+# bootstrapped is refused instead. It is also the store the task is created in.
 store_cli="$checkout/.venv/bin/onetaskgraph"
 [ -x "$store_cli" ] || fail "this checkout has no plan-store CLI at $store_cli, and a task's store instructions may name no other" \
     "provision this checkout with 'just bootstrap', then retry"
 tickets_module=("$python" -m orchestrator.follow_up_tickets)
 if [ "$comments" -eq 1 ]; then
     mode=feedback
-    template="$FEEDBACK_TEMPLATE"
     # The file is embedded in the dispatched task verbatim and its acceptance criteria rest
     # on an account of the comments it quotes, so a file that is no gathering of this board
     # is one nothing should be launched over.
@@ -348,7 +360,6 @@ if [ "$comments" -eq 1 ]; then
     validator=("${tickets_module[@]}" check-responses --board "$board" --feedback "$feedback" "$run")
 else
     mode=initial
-    template="$TEMPLATE"
     # Written before the launch, never by the dispatch: the agent deletes each draft a
     # ticket consumed, so an input set derived afterwards would be the drafts nothing
     # happened to. The artifact only grows, so a re-dispatch keeps the first pass's account.
@@ -358,7 +369,16 @@ else
     validator=("${tickets_module[@]}" check-dispositions --root "$drafts_root" --board "$board" "$run")
 fi
 
-compose=(compose --mode "$mode" --template "$checkout/$template" --root "$drafts_root" --run "$run"
+# The engine that states the template and checks the task created from it: this checkout's
+# installed one, run directly as a launch runs it, under this host's template root.
+engine="$checkout/.venv/bin/onepipeline"
+[ -x "$engine" ] || fail "this checkout has no engine at $engine to state the $TEMPLATE_NAME template with" \
+    "provision this checkout with 'just bootstrap', then retry"
+# shellcheck source=scripts/template-env.sh
+load template-env.sh
+export_template_root follow-ups || exit "$?"
+
+answering=(answers --mode "$mode" --root "$drafts_root" --run "$run"
     --board "$board"
     --validate "\"$python\" -m orchestrator.follow_up_tickets validate"
     --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status"
@@ -366,30 +386,30 @@ compose=(compose --mode "$mode" --template "$checkout/$template" --root "$drafts
     --copy "\"$python\" -m orchestrator.follow_up_tickets copy" --checkout "$checkout"
     --re-estimate "\"$python\" -m orchestrator.follow_up_tickets re-estimate"
     --plan-store "$store_cli")
-[ -z "$feedback" ] || compose+=(--feedback "$feedback")
+[ -z "$feedback" ] || answering+=(--feedback "$feedback")
 if [ "$comments" -eq 1 ]; then
     printf -v quoted_python '%q' "$python"
     printf -v quoted_board '%q' "$board"
     printf -v quoted_feedback '%q' "$feedback"
     printf -v quoted_run '%q' "$run"
-    compose+=(--responses "$account"
+    answering+=(--responses "$account"
         --check-responses "$quoted_python -m orchestrator.follow_up_tickets check-responses --board $quoted_board --feedback $quoted_feedback $quoted_run")
 else
     printf -v quoted_python '%q' "$python"
     printf -v quoted_root '%q' "$drafts_root"
     printf -v quoted_board '%q' "$board"
     printf -v quoted_run '%q' "$run"
-    compose+=(--dispositions "$account"
+    answering+=(--dispositions "$account"
         --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root --board $quoted_board $quoted_run")
 fi
-"${tickets_module[@]}" "${compose[@]}" >"$scratch" ||
-    fail "the follow-up agent's task could not be composed from $template" \
-        "restore the tracked template with 'git restore $template' and the toolchain with 'just bootstrap', then retry"
+"${tickets_module[@]}" "${answering[@]}" >"$scratch" ||
+    fail "the follow-up agent's task could not be answered for run '$run'" \
+        "repair what the refusal above names, or restore the toolchain with 'just bootstrap', then retry"
 
 # The store slugs the id it is handed, lower-casing it, so the project is launched by the
 # id it answers with: a run id carrying a capital is otherwise one the store never holds.
-written=$("$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follow_up_run" "$run" "$NODE_ID" \
-    "$PERSONA" "$GRAPH" "$scratch" "$PLAN_DIRECT_PLACEMENT_NOTE" "$FOLLOW_UPS_METADATA" "$mode") ||
+written=$("$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follow_up_run" "$run" \
+    "$PLAN_SOURCE" "$FOLLOW_UPS_METADATA" "$mode") ||
     fail "the follow-ups project for run '$run' could not be written under $plan_root" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 
@@ -401,6 +421,35 @@ written=$("$python" -c "$PROJECT_PROGRAM" "$plan_root" "$project_native" "$follo
     fail "the plan store named no project for the follow-ups of run '$run'" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 project="$PLAN_SOURCE:$written"
+
+# The one node, created by the store from the template the engine states, in this
+# checkout's store configuration. The placement note is answered here, beside the answers
+# the module computes, because it is this host's direct-node note that `just plan` hands its
+# own nodes too.
+task=$(cd "$checkout" &&
+    "$engine" template resolve "$TEMPLATE_NAME" --repo "$repository_layer" --json |
+    "$store_cli" task create "$PLAN_SOURCE" --template-loader - --no-interactive \
+        --project "$written" --title "$run follow-ups" --answers "$scratch" \
+        --var "placement_note=$PLAN_DIRECT_PLACEMENT_NOTE" \
+        --metadata "onepipeline.id=\"$NODE_ID\"" \
+        --metadata "onepipeline.persona=\"$PERSONA\"" \
+        --metadata "onepipeline.agent_graph=\"$GRAPH\"") ||
+    fail "the follow-ups task for run '$run' could not be created in $project from the $TEMPLATE_NAME template" \
+        "repair what the diagnostic above names, then retry"
+# The store's answer is an item reference the check below and a person reading this
+# recipe's refusals both act on, so it is held to one task of the source it was created in.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned store creates a task and names none, or one outside the source it was asked to create in; no journey can produce that without doubling the store, which the suite never does.
+[[ "$task" == "$PLAN_SOURCE:"?* && "$task" != *[[:space:]]* ]] ||
+    fail "the plan store named '$task' for the follow-ups of run '$run', which is not one task of '$PLAN_SOURCE'" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+
+# A rendering is validated only once it is stored: the engine holds the created task to
+# the criteria rule and to being the rendering its provenance records, and a task it
+# refuses is one nothing launches. Its own line on success is dropped, so standard output
+# stays what `--detach` promises; a refusal reaches standard error as the engine wrote it.
+(cd "$checkout" && "$engine" template check "$TEMPLATE_NAME" --repo "$repository_layer" --item "$task" >/dev/null) ||
+    fail "the engine refused the follow-ups task $task above, so no follow-up run was launched" \
+        "correct the $TEMPLATE_NAME template the refusal names, then retry"
 
 if [ "$detached" -eq 1 ]; then
     launched=0

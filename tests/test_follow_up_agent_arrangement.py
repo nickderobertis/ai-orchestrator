@@ -1,8 +1,9 @@
-"""The follow-up agent is single-sided, so the task `just follow-ups` composes is all it is given.
+"""The follow-up agent is single-sided, so the task `just follow-ups` creates is all it is given.
 
 `graphs/follow-up.yaml`'s `worker` is a `kind: oneharness` member with no judge side. Two
-things about that member make the composed task — rendered from `config/follow-up-task.md`
-and `orchestrator/follow_up_tickets.py` — the one copy of the agent's instructions, and each
+things about that member make the task — rendered from `templates/follow-up-task.md.j2`
+with the answers `orchestrator/follow_up_tickets.py` states — the one copy of the agent's
+instructions, and each
 would silently stop being true if the graph moved:
 
 * **it claims no `task` of its own.** `oneagentgraph` hands the node's composed task to every
@@ -126,7 +127,7 @@ def test_the_persona_records_that_nothing_layers_it() -> None:
 
     assert header.startswith("# llmlint: ignore-file[changed_behavior_has_e2e]"), header
     assert GRAPH in header, f"{PERSONA}'s directive no longer names {GRAPH}"
-    assert "config/follow-up-task.md" in header, (
+    assert "templates/follow-up-task.md.j2" in header, (
         f"{PERSONA}'s directive no longer names the template the agent's instructions live in"
     )
     assert "tests/test_follow_up_agent_arrangement.py" in header

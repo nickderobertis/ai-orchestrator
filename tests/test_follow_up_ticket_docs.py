@@ -20,9 +20,10 @@ classified by what they look like, and every name of each kind has to be one its
   module names once as `DEPENDENCY_FIELD` and which is deliberately no record key. The
   record's one optional key, its binding to a board item (`BINDING_FIELD`), is a key too.
 
-That the task the recipe composes carries the module's rendered contract is
-`tests/test_follow_up_tickets.py`'s, which composes the tracked `config/follow-up-task.md`
-and fails when the contract stops reaching it.
+That the task the recipe creates carries the contracts the module's validators read is
+`tests/test_follow_up_tickets.py`'s, which renders the tracked
+`templates/follow-up-task.md.j2` through the pinned engine and store and fails when a
+contract stops reaching it.
 """
 
 from __future__ import annotations
@@ -280,7 +281,8 @@ def test_the_manager_document_describes_both_modes_and_their_validators() -> Non
         "file's contents",
         "every input draft with exactly one disposition",
         "only the comments that gathering quoted",
-        "each composed task's own acceptance criteria require its validator green",
+        "each rendered task's own acceptance criteria require its validator green",
+        "`templates/follow-up-task.md.j2`",
         "an attached `just follow-ups` re-runs it after the dispatch settles",
     ):
         assert said in flat, said

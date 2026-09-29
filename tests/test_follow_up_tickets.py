@@ -3,21 +3,25 @@
 `tests/plan_tooling/test_follow_ups_recipe_e2e.py` drives the recipe and a scripted agent
 through the real store and a real launch. What is proven here is what that journey reaches
 only one shape at a time: every way a store item can fail the ticket shape, the ownership
-predicates in both directions, and the single-pass fill that brings the manager's feedback
-into the task verbatim. The `validate`, `check-run` and `board-status` commands are driven
-against the installed `onetaskgraph`, over a drafts root this test names through the helper
-that composes that name, and — for `board-status` — a second local store standing in for the
-board, whose item is moved the way a person moves it.
+predicates in both directions, and the answers the follow-up agent's task is rendered from —
+through the pinned engine and store, from the tracked `templates/follow-up-task.md.j2` —
+which bring the manager's feedback into the task verbatim. The `validate`, `check-run` and
+`board-status` commands are driven against the installed `onetaskgraph`, over a drafts root
+this test names through the helper that composes that name, and — for `board-status` — a
+second local store standing in for the board, whose item is moved the way a person moves it.
 """
 
 from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -522,8 +526,8 @@ ORCHESTRATION_WORDS = re.compile(r"\b(?:runs?|nodes?|dispatch\w*|managers?)\b", 
 
 
 def test_the_impact_guidance_and_severities_speak_of_the_repository_not_of_orchestration() -> None:
-    contract = tickets.ticket_contract(RUN, "followups")
-    guidance = contract.split("## Impact\n", 1)[1].split("\n## Examples\n", 1)[0]
+    guidance = tickets.ticket_example(RUN, "followups").split("## Impact\n", 1)[1]
+    guidance = guidance.split("\n## Examples\n", 1)[0]
 
     assert ORCHESTRATION_WORDS.findall(guidance) == [], guidance
     for severity in tickets.Severity:
@@ -760,25 +764,6 @@ def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_o
     assert not tickets.may_change_comment(RUN, others_reply)
 
 
-TEMPLATE = (
-    "Run @RUN@ onto @BOARD@ under @DRAFTS_ROOT@, validating with @VALIDATE@ in @CHECKOUT@.\n"
-    "Decide each status with @BOARD_STATUS@, list the board with @BOARD_ITEMS@, copy with "
-    "@COPY@, re-estimate with @RE_ESTIMATE@, and read the store with @PLAN_STORE@.\n"
-    "Assume the fixes at @ACCEPTED_STATUSES@, listed with @ACCEPTED_FILTER@.\n"
-    "Account for every draft at @DISPOSITIONS@, checked with @CHECK_DISPOSITIONS@.\n"
-    "@STATUS_VOCABULARY@\n"
-    "@TICKET_CONTRACT@\n@COMMENT_CONTRACT@\n@DISPOSITION_CONTRACT@\n@REDISPATCH@\n"
-    "@FEEDBACK@\nAgain, @RUN@.\n"
-)
-FEEDBACK_TEMPLATE = (
-    "Answer run @RUN@'s comments on @BOARD@ from @CHECKOUT@, reading the store with "
-    "@PLAN_STORE@.\n"
-    "A ticket a comment names is under @DRAFTS_ROOT@: decide with @BOARD_STATUS@, check "
-    "with @VALIDATE@, copy with @COPY@, re-estimate with @RE_ESTIMATE@; its "
-    "@TICKET_METADATA_KEY@ record names it.\n"
-    "Gathered into @FEEDBACK_FILE@; account at @RESPONSES@, checked with @CHECK_RESPONSES@.\n"
-    "@COMMENT_CONTRACT@\n@RESPONSE_CONTRACT@\n@FEEDBACK@\nAgain, @RUN@.\n"
-)
 DISPOSITIONS = "/drafts-root/dispositions/listing-run.json"
 CHECK_DISPOSITIONS = "python -m orchestrator.follow_up_tickets check-dispositions"
 RESPONSES = "/drafts-root/feedback/listing-run/20260101T000000Z.responses.json"
@@ -790,36 +775,13 @@ COPY = "python -m orchestrator.follow_up_tickets copy"
 RE_ESTIMATE = "python -m orchestrator.follow_up_tickets re-estimate"
 VALIDATE = "python -m orchestrator.follow_up_tickets validate"
 
-#: The plan-store program a composed task carries, spelled in full the way the recipe
-#: resolves it. This checkout's own installed CLI rather than a path written down here,
-#: because the composer refuses anything that is not an executable file: what the task
-#: names has to be a program the dispatch can run.
+#: The plan-store program a task carries, spelled in full the way the recipe resolves it.
+#: This checkout's own installed CLI rather than a path written down here, because
+#: `answers` refuses anything that is not an executable file: what the task names has to be
+#: a program the dispatch can run.
 PLAN_STORE = str(ONETASKGRAPH_BIN)
 
-
-def _contract(run: str = RUN, board: str = "followups", root: str = "/drafts-root") -> str:
-    """The ticket contract as a composed task carries it, its values filled."""
-    return (
-        tickets.ticket_contract(run, board)
-        .replace("@DRAFTS_ROOT@", root)
-        .replace("@VALIDATE@", VALIDATE)
-        .replace("@BOARD_STATUS@", BOARD_STATUS)
-        .replace("@BOARD_ITEMS@", BOARD_ITEMS)
-        .replace("@COPY@", COPY)
-        .replace("@PLAN_STORE@", PLAN_STORE)
-    )
-
-
-def _ownership(run: str = RUN, board: str = "followups") -> str:
-    """Board ownership as a composed task carries it, its two values filled."""
-    return (
-        tickets.comment_contract(run, board)
-        .replace("@PLAN_STORE@", PLAN_STORE)
-        .replace("@RE_ESTIMATE@", RE_ESTIMATE)
-    )
-
-
-#: Everything a `compose` call takes that neither mode decides, so a test names only what
+#: Everything an `answers` call takes that neither mode decides, so a test names only what
 #: it is about.
 COMMON: dict[str, object] = {
     "run": RUN,
@@ -844,89 +806,364 @@ FEEDBACK_ACCOUNT: dict[str, object] = {
     "check_responses": CHECK_RESPONSES,
 }
 
+#: The pinned engine, which states this host's `follow-up-task` template through its layers
+#: as the loader document the store renders; the host root `scripts/template-env.sh`
+#: exports for every launch; and the name `templates/templates.yaml` registers.
+ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+TEMPLATE_ROOT = REPO_ROOT / "templates"
+TEMPLATE_NAME = "follow-up-task"
+#: What the recipe answers `placement_note` with is `scripts/plan-brief.sh`'s; a note of
+#: this test's own stands in, so a rendering is read for what the template does with it.
+PLACEMENT_NOTE = "\n## Additional info\n\nThis stands in for the direct-node placement note.\n"
+#: A gathering, as `just follow-ups-handle-comments` writes one, cut to what a task carries.
+GATHERING = "### Comment 1: on `followups:x`\n\nPlease add page 9.\n"
 
-def _compose(*, feedback: str | None = None, redispatch: bool = False) -> str:
-    return tickets.compose(
-        TEMPLATE, feedback=feedback, redispatch=redispatch, **COMMON, **INITIAL_ACCOUNT
+
+def _answers(
+    mode: tickets.Mode = tickets.Mode.INITIAL,
+    *,
+    feedback: str | None = None,
+    redispatch: bool = False,
+    **overrides: object,
+) -> dict[str, object]:
+    """One dispatch's answers, as `python -m orchestrator.follow_up_tickets answers` states them."""
+    account = INITIAL_ACCOUNT if mode is tickets.Mode.INITIAL else FEEDBACK_ACCOUNT
+    given: dict[str, object] = {**COMMON, **account, **overrides}
+    return tickets.answers(mode=mode, feedback=feedback, redispatch=redispatch, **given)
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] No marker tiers these: every
+# test that renders runs in `orchestrator:test` with the rest of this module, keyed on the
+# template the render reads (`.md.j2` is in `codeWorkspace`). Each render is two local calls
+# of the pinned CLIs this module already drives for `validate` and `board-status`, with no
+# network, and `_task` memoizes each rendering, so there is no slow tier to split out.
+def _rendered(answered: Mapping[str, object]) -> subprocess.CompletedProcess[str]:
+    """``answered`` rendered the way the recipe creates the node's task from it.
+
+    The pinned engine's `template resolve` piped into the pinned store's renderer, answered
+    from a file and with the placement note as its own variable, non-interactively: the
+    same two programs and flags `scripts/follow-ups.sh` hands `task create`, with the store
+    write left out because what is read here is the rendering.
+    """
+    loader = subprocess.run(  # noqa: S603 - the pinned engine this checkout installs
+        [str(ENGINE), "template", "resolve", TEMPLATE_NAME, "--json"],
+        env={**os.environ, "ONEPIPELINE_TEMPLATE_ROOT": str(TEMPLATE_ROOT)},
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
     )
+    assert loader.returncode == 0, loader.stderr
+    with tempfile.TemporaryDirectory() as scratch:
+        answers_file = Path(scratch) / "answers.json"
+        answers_file.write_text(json.dumps(answered), encoding="utf-8")
+        return subprocess.run(  # noqa: S603 - the pinned store this checkout installs
+            [
+                str(ONETASKGRAPH_BIN),
+                "template",
+                "render",
+                "--template-loader",
+                "-",
+                "--answers",
+                str(answers_file),
+                "--var",
+                f"placement_note={PLACEMENT_NOTE}",
+                "--no-interactive",
+            ],
+            input=loader.stdout,
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
 
 
-def _compose_feedback(feedback: str) -> str:
-    """The feedback mode's task, composed the way `scripts/follow-ups.sh --comments` does."""
-    return tickets.compose(
-        FEEDBACK_TEMPLATE,
-        mode=tickets.Mode.FEEDBACK,
-        feedback=feedback,
-        redispatch=True,
-        **COMMON,
-        **FEEDBACK_ACCOUNT,
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+@functools.cache
+def _task(
+    mode: tickets.Mode = tickets.Mode.INITIAL,
+    *,
+    feedback: str | None = None,
+    redispatch: bool = False,
+) -> str:
+    """The task a dispatch of ``mode`` is given, rendered from the tracked template."""
+    rendered = _rendered(_answers(mode, feedback=feedback, redispatch=redispatch))
+    assert rendered.returncode == 0, rendered.stderr
+    return rendered.stdout
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _section(task: str, heading: str, until: str | None = None) -> str:
+    """What ``task`` says under `## heading`, up to `## until` or the next heading."""
+    body = (
+        task.split(f"\n## {heading}\n", 1)[1]
+        if not task.startswith(f"## {heading}\n")
+        else (task.split("\n", 1)[1])
     )
+    if until is not None:
+        return body.split(f"\n## {until}\n", 1)[0]
+    return re.split(r"(?m)^## ", body, maxsplit=1)[0]
 
 
-def test_the_composed_task_fills_every_placeholder_and_renders_both_contracts() -> None:
-    task = _compose()
+#: The top-level sections each mode's task carries, in order — the ones each mode's own task
+#: file composed before this template replaced both, with the example ticket's own headings
+#: inside "The verified ticket" and the placement note's `## Additional info` last, which the
+#: recipe used to append and the template renders.
+INITIAL_SECTIONS = (
+    "What",
+    "Why",
+    "Where everything is",
+    "What each board status means",
+    "What to do, in order",
+    "The account of every draft",
+    "The verified ticket",
+    *tickets.HEADINGS[: tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1],
+    tickets.REJECTED_FIXES,
+    *tickets.HEADINGS[tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 :],
+    "Ownership on the board",
+    "Acceptance criteria",
+)
+REDISPATCH_SECTION = "This is a re-dispatch"
+FEEDBACK_SECTION = "Feedback on the previous follow-up run"
+FEEDBACK_SECTIONS = (
+    "What",
+    "Why",
+    "Where everything is",
+    "What to do, in order",
+    "Ownership on the board",
+    "The account of every comment",
+    "Acceptance criteria",
+    "The comments to answer",
+)
+#: The criteria each deleted file carried, with this test's values in place of its own.
+INITIAL_CRITERIA = (
+    f"Every ticket left under `/drafts-root/tasks/{RUN}/tickets/` is one `{VALIDATE}` reports "
+    "sound, over the tree as it finally stands.",
+    f"`{CHECK_DISPOSITIONS}` reports the account at `{DISPOSITIONS}` sound: every draft this "
+    "dispatch was given carries exactly one disposition, with the root causes that "
+    "disposition owes. Run it last, after the final edit to that account, because a run of it "
+    "from before that edit says nothing about the account you leave.",
+    "Every claim the report makes about what reached the board is true of the board as it "
+    "finally stands: an issue reported created or updated is one the copy printed, and a "
+    "refusal reported is one a command printed.",
+)
+FEEDBACK_CRITERIA = (
+    f"`{CHECK_RESPONSES}` reports the account at `{RESPONSES}` sound: every comment quoted "
+    "below carries exactly one response, in the order it is quoted, naming the issue the "
+    f"comment is quoted on and its verdict, the board holds a reply of run `{RUN}` answering it "
+    "whose marker carries that verdict, and every issue a `confirms` reply sits on stores the "
+    "estimate its comments recount to. Run it last, after the final reply is posted and the "
+    "final edit to that account, because a run of it from before either says nothing about "
+    "what you leave.",
+    "No issue, comment or ticket that no comment below names was created, edited, copied or "
+    "closed by this dispatch.",
+    "Every claim the report makes is true of the board as it finally stands.",
+)
 
-    assert tickets.PLACEHOLDER.search(task) is None, task
+
+def _headings(task: str) -> list[str]:
+    return re.findall(r"(?m)^## (.+)$", task)
+
+
+def _criteria(task: str) -> tuple[str, ...]:
+    listed = _section(task, "Acceptance criteria")
+    return tuple(_flat(item) for item in re.split(r"(?m)^- ", listed) if item.strip())
+
+
+@pytest.mark.parametrize(
+    ("mode", "feedback", "redispatch", "sections", "criteria"),
+    [
+        (tickets.Mode.INITIAL, None, False, INITIAL_SECTIONS, INITIAL_CRITERIA),
+        (
+            tickets.Mode.INITIAL,
+            None,
+            True,
+            (*INITIAL_SECTIONS, REDISPATCH_SECTION),
+            INITIAL_CRITERIA,
+        ),
+        (
+            tickets.Mode.INITIAL,
+            "Merge the two cursor tickets.\n",
+            True,
+            (*INITIAL_SECTIONS, REDISPATCH_SECTION, FEEDBACK_SECTION),
+            INITIAL_CRITERIA,
+        ),
+        (tickets.Mode.FEEDBACK, GATHERING, True, FEEDBACK_SECTIONS, FEEDBACK_CRITERIA),
+    ],
+    ids=["initial", "initial-re-dispatch", "initial-with-feedback", "feedback"],
+)
+def test_each_mode_renders_the_sections_and_criteria_its_deleted_file_carried(
+    mode: tickets.Mode,
+    feedback: str | None,
+    redispatch: bool,  # noqa: FBT001 - a parametrized case, not a caller's flag
+    sections: tuple[str, ...],
+    criteria: tuple[str, ...],
+) -> None:
+    """Each mode's rendering, section for section and criterion for criterion.
+
+    The two task files this template replaced composed exactly these top-level sections in
+    this order and exactly these criteria; the template renders the same ones, then the
+    placement note the recipe used to append, so a body is its rendering and nothing more.
+    """
+    task = _task(mode, feedback=feedback, redispatch=redispatch)
+
+    assert _headings(task) == [*sections, "Additional info"], _headings(task)
+    assert _criteria(task) == criteria, _criteria(task)
+    assert task.rstrip().endswith(_flat(PLACEMENT_NOTE).split("## Additional info ", 1)[1])
+    assert "{{" not in task and "{%" not in task, task
+
+
+def test_the_initial_task_fills_every_value_and_carries_both_contracts() -> None:
+    task = _task()
+    flat = _flat(task)
+
     assert task.startswith(
-        "Run listing-run onto followups under /drafts-root, validating with python -m "
-    )
-    assert task.rstrip().endswith("Again, listing-run.")
-    assert _contract() in task
-    assert _ownership() in task
+        f"## What\n\nVerify the follow-up drafts run `{RUN}` left behind, group what stands"
+    ), task
     assert f"{COPY} --board followups <path of the ticket>" in task
     assert (
-        "Assume the fixes at `Todo` (`todo`), `Queued` (`queued`), `In Progress` "
-        "(`in-progress`) and `Done` (`done`), listed with --status todo --status queued "
-        "--status in-progress --status done."
-    ) in task
+        "List the board's accepted items — those at `Todo` (`todo`), `Queued` (`queued`), "
+        "`In Progress` (`in-progress`) and `Done` (`done`) — with "
+        f"`{BOARD_ITEMS} --board followups --status todo --status queued --status in-progress "
+        "--status done`"
+    ) in flat
     assert "`onetaskgraph " not in task, (
-        "a composed task names the plan store in full, never a bare program name a "
-        "dispatch would resolve from its own search path"
+        "a task names the plan store in full, never a bare program name a dispatch would "
+        "resolve from its own search path"
     )
     assert tickets.comment_marker(RUN, "<root-cause>") in task
-    assert "This is a re-dispatch" not in task
-    assert "Feedback on the previous follow-up run" not in task
+    assert f"````markdown\n{tickets.ticket_example(RUN, 'followups')}````" in task
+    assert f"````json\n{tickets.disposition_example(RUN)}\n````" in task
+    assert REDISPATCH_SECTION not in task
+    assert FEEDBACK_SECTION not in task
 
 
-def test_a_value_the_template_names_more_than_once_is_filled_everywhere() -> None:
-    task = tickets.compose(
-        TEMPLATE + "Copy onto @BOARD@ from @DRAFTS_ROOT@ with @VALIDATE@.\n",
-        **{**COMMON, "validate": "v", "board_status": "s", "board_items": "i", "copy": "c"},
-        **INITIAL_ACCOUNT,
-        feedback=None,
-        redispatch=False,
-    )
+def test_the_status_vocabulary_the_template_states_is_the_modules() -> None:
+    """The template states the vocabulary as its own text; it has to say what `statuses` says.
 
-    assert task.rstrip().endswith("Copy onto followups from /drafts-root with v.")
-
-
-@pytest.mark.reads_docs
-def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contract() -> None:
-    """The template the recipe composes from carries the module's contract whole.
-
-    And it names the status decision as a step of its own, before the step that copies.
+    `python -m orchestrator.follow_up_tickets statuses` prints the one statement every agent
+    and document reads, and the task restates it in its own prose, so the two are held to
+    one text here, line wrapping aside.
     """
-    template = (REPO_ROOT / "config" / "follow-up-task.md").read_text(encoding="utf-8")
+    section = _section(_task(), "What each board status means")
 
-    task = tickets.compose(
-        template,
-        **COMMON,
-        **INITIAL_ACCOUNT,
-        feedback="Merge the two cursor tickets.\n",
-        redispatch=True,
+    assert _flat(section) == _flat(tickets.status_vocabulary())
+
+
+#: Prose the template states and no answer may carry: each is the opening of a text that
+#: `orchestrator/follow_up_tickets.py` used to render and hand the template whole.
+TEMPLATE_PROSE = (
+    "## This is a re-dispatch",
+    "## Feedback on the previous follow-up run",
+    "## The comments to answer",
+    "## Ownership on the board",
+    "**Ownership is by run.**",
+    "A ticket is a local Markdown task in the",
+    "**Every draft this dispatch was given is accounted for, exactly once.**",
+    "**Every comment this feedback quotes is accounted for, exactly once",
+    "- **Board status `Proposal`**",
+    'A brief to pick up "accepted" follow-up tickets',
+    "a proposal awaiting the user's decision",
+    "its claim holds, and its evidence reached the board",
+)
+
+
+def _strings(value: object) -> list[str]:
+    """Every string ``value`` holds, however deeply, as a JSON answer carries them."""
+    match value:
+        case str():
+            return [value]
+        case Mapping():
+            return [text for held in value.values() for text in _strings(held)]
+        case list() | tuple():
+            return [text for held in value for text in _strings(held)]
+        case _:
+            return []
+
+
+@pytest.mark.parametrize(
+    ("mode", "feedback", "redispatch"),
+    [
+        (tickets.Mode.INITIAL, "Merge the two cursor tickets.\n", True),
+        (tickets.Mode.FEEDBACK, GATHERING, True),
+    ],
+    ids=["initial", "feedback"],
+)
+def test_the_answers_carry_values_and_computed_data_never_the_templates_prose(
+    mode: tickets.Mode,
+    feedback: str,
+    redispatch: bool,  # noqa: FBT001 - a parametrized case, not a caller's flag
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The status vocabulary, the four contracts and the section headings are template text.
+
+    Read off the command the recipe runs, whose answers are values and the data computed
+    here — the examples, markers and shape words the validators read back — and each piece of
+    prose is then found in the rendering, so the check is about where the prose lives rather
+    than whether it exists.
+    """
+    account = INITIAL_ACCOUNT if mode is tickets.Mode.INITIAL else FEEDBACK_ACCOUNT
+    arguments = ["answers", "--mode", mode.value]
+    for name, value in {**COMMON, **account}.items():
+        flag = "--feedback" if name == "feedback_file" else f"--{name.replace('_', '-')}"
+        if name == "drafts_root":
+            flag = "--root"
+        arguments += [flag, str(value)]
+    with tempfile.TemporaryDirectory() as scratch:
+        if mode is tickets.Mode.INITIAL:
+            given = Path(scratch) / "feedback.md"
+            given.write_text(feedback, encoding="utf-8")
+            arguments += ["--feedback", str(given)]
+        else:
+            arguments[arguments.index(str(FEEDBACK_FILE))] = str(Path(scratch) / FEEDBACK_FILE.name)
+            (Path(scratch) / FEEDBACK_FILE.name).write_text(feedback, encoding="utf-8")
+        assert tickets.main(arguments) == tickets.SOUND
+    answered = json.loads(capsys.readouterr().out)
+    held = _strings(answered)
+    task = _task(mode, feedback=feedback, redispatch=redispatch)
+
+    rendered = _task(redispatch=True, feedback="Merge the two cursor tickets.\n") + _task(
+        tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True
     )
+    assert task in rendered
+    assert [prose for prose in TEMPLATE_PROSE if prose not in rendered] == [], (
+        "prose this test looks for is rendered by neither mode, so its absence proves nothing"
+    )
+    for prose in TEMPLATE_PROSE:
+        assert not [text for text in held if prose in text], prose
+    vocabulary_lines = [line for line in tickets.status_vocabulary().splitlines() if line]
+    for line in vocabulary_lines:
+        assert not [text for text in held if _flat(line) in _flat(text)], line
+    assert answered["mode"] == mode.value
+    assert answered["feedback"] == feedback.rstrip()
 
-    assert tickets.PLACEHOLDER.search(task) is None
-    assert _contract() in task
-    assert _ownership() in task
-    # Every store instruction names the program the recipe resolved, in full: a bare name
-    # is answered by the dispatch's own search path.
+
+def test_a_render_with_any_other_mode_is_refused_naming_the_value() -> None:
+    answered = {**_answers(), "mode": "verify-everything"}
+
+    rendered = _rendered(answered)
+
+    assert rendered.returncode != 0, rendered.stdout
+    assert "`verify-everything`" in rendered.stderr, rendered.stderr
+    assert "neither `initial` nor `feedback`" in rendered.stderr, rendered.stderr
+    assert rendered.stdout == ""
+
+
+def test_the_tracked_template_carries_the_ticket_sequence_in_order() -> None:
+    """It names the status decision as a step of its own, before the step that copies."""
+    task = _task(feedback="Merge the two cursor tickets.\n", redispatch=True)
+
     assert PLAN_STORE in task
     bare = [line for line in task.splitlines() if "`onetaskgraph " in line]
     assert not bare, f"the tracked template still names a bare plan-store invocation: {bare}"
     assert "## This is a re-dispatch" in task
     assert "Merge the two cursor tickets." in task
-    steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
+    steps = _section(task, "What to do, in order")
     decided = steps.index("**Decide each ticket's status from the board, before every copy.**")
     asked = f"`{BOARD_STATUS} --board followups <path of the ticket>`"
     assert decided < steps.index(asked, decided), steps
@@ -935,10 +1172,10 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
     assumed = steps.index("**Write each ticket as if the board's accepted fixes were already in.**")
     assert searched < assumed < decided, steps
 
-    vocabulary = tickets.status_vocabulary()
-    assert task.count(vocabulary) == 1, "the task does not carry the status vocabulary once"
-    assert f"## What each board status means\n\n{vocabulary}" in task
-    flat = " ".join(task.split())
+    flat = _flat(task)
+    assert flat.count(_flat(tickets.status_vocabulary())) == 1, (
+        "the task does not carry the status vocabulary once"
+    )
     for rule in (
         "a ticket the board holds at `Deferred` is copied carrying `draft`",
         "this run never withdraws a deferred item",
@@ -949,18 +1186,9 @@ def test_the_tracked_template_composes_into_a_task_carrying_the_rendered_contrac
         assert rule in flat, rule
 
 
-def _tracked_task(*, feedback: str | None = None, redispatch: bool = True) -> str:
-    """The task the recipe composes from the tracked template, its whitespace collapsed."""
-    template = (REPO_ROOT / "config" / "follow-up-task.md").read_text(encoding="utf-8")
-    return tickets.compose(
-        template, **COMMON, **INITIAL_ACCOUNT, feedback=feedback, redispatch=redispatch
-    )
-
-
-@pytest.mark.reads_docs
-def test_the_composed_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> None:
-    task = _tracked_task(redispatch=False)
-    flat = " ".join(task.split())
+def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> None:
+    task = _task()
+    flat = _flat(task)
     example = task.split("````markdown\n", 1)[1].split("````", 1)[0]
 
     for said in (
@@ -992,9 +1220,8 @@ def test_the_composed_task_asks_for_one_concrete_fix_and_optional_rejected_fixes
     assert "each fix that was considered and not chosen, and why it was rejected" in rejected
 
 
-@pytest.mark.reads_docs
-def test_the_composed_re_dispatch_brings_an_older_ticket_to_one_fix_and_no_repository() -> None:
-    flat = " ".join(_tracked_task().split())
+def test_the_re_dispatch_brings_an_older_ticket_to_one_fix_and_no_repository() -> None:
+    flat = _flat(_task(redispatch=True))
 
     assert (
         "a ticket of an older schema is brought to the current shape before it is copied, its "
@@ -1008,14 +1235,11 @@ def test_the_composed_re_dispatch_brings_an_older_ticket_to_one_fix_and_no_repos
     ) in flat
 
 
-@pytest.mark.reads_docs
-def test_the_composed_task_states_the_reply_rules_once_and_every_other_text_points_to_them() -> (
-    None
-):
-    task = _tracked_task(feedback="Merge the two cursor tickets.\n")
-    flat = " ".join(task.split())
-    ownership = task.split("## Ownership on the board\n", 1)[1].split("## This is a re-dispatch")[0]
-    flat_ownership = " ".join(ownership.split())
+def test_the_task_states_the_reply_rules_once_and_every_other_text_points_to_them() -> None:
+    task = _task(feedback="Merge the two cursor tickets.\n", redispatch=True)
+    flat = _flat(task)
+    ownership = _section(task, "Ownership on the board", "Acceptance criteria")
+    flat_ownership = _flat(ownership)
 
     reply = tickets.reply_marker(
         RUN, "<root-cause>", "<comment id>", "<confirms or does-not-confirm>"
@@ -1049,24 +1273,27 @@ def test_the_composed_task_states_the_reply_rules_once_and_every_other_text_poin
     ):
         assert rule in flat_ownership, rule
     assert flat.count("new reply") == 1, "the reply rule is stated more than once"
-    redispatch = " ".join(
-        task.split("## This is a re-dispatch", 1)[1].split("## Feedback")[0].split()
-    )
+    redispatch = _flat(_section(task, REDISPATCH_SECTION))
     assert '"Ownership on the board" above binds every change' in redispatch
     assert "as those rules say" in redispatch
     assert "never commented on" not in redispatch and "joined by a second" not in redispatch
     assert not re.search(r"never comments? on an issue (?:it|this run) created", flat), flat
 
 
+def _verified_ticket() -> str:
+    """The initial task's ticket contract: "The verified ticket", up to board ownership."""
+    return _section(_task(), "The verified ticket", "Ownership on the board")
+
+
 def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule() -> None:
-    contract = tickets.ticket_contract(RUN, "followups")
+    contract = _verified_ticket()
 
     for key in tickets.RECORD_KEYS:
         assert f'"{key}"' in contract, key
     for heading in tickets.HEADINGS:
         assert f"## {heading}" in contract, heading
     assert "no `project`" in contract
-    flat = " ".join(contract.split())
+    flat = _flat(contract)
     assert (
         "**Its `repositories` names exactly one normalized origin, its record's `repository`**"
     ) in flat
@@ -1076,23 +1303,23 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     ) in flat
     assert f"{tickets.OUTSIDE_OWNER} when the ticket's repository is not one of the board's" in flat
     assert (
-        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `@COPY@` refuses the ticket"
+        f"When `board-status` exits {tickets.OUTSIDE_OWNER}, or `{COPY}` refuses the ticket"
     ) in flat
     assert (
         "copy nothing for that ticket, never retry it with `repositories` removed or changed to "
         "get it filed, and report what was printed"
     ) in flat
     assert '\nrepositories: ["<normalized origin the root cause lives in' in contract
-    assert f"A new ticket is `{tickets.Status.PROPOSED}`" in contract
-    assert "A ticket the board already holds carries the status the board holds it at" in contract
+    assert f"A new ticket is `{tickets.Status.PROPOSED}`" in flat
+    assert "A ticket the board already holds carries the status the board holds it at" in flat
     assert f"withdraws is `{tickets.Status.WITHDRAWN}`" in flat
     assert (
         "unless the board shows it as accepted or deferred: this run never withdraws a deferred "
         "item or an accepted one, so copy nothing, leave the local"
     ) in flat
     assert "report that you would have withdrawn it and why" in flat
-    assert "Run `hostname` on the machine you run on and write exactly what it prints" in contract
-    assert "@BOARD_STATUS@ --board followups <path of the ticket>" in contract
+    assert "Run `hostname` on the machine you run on and write exactly what it prints" in flat
+    assert f"{BOARD_STATUS} --board followups <path of the ticket>" in flat
 
     impact = contract.split("\n## Impact\n\n", 1)[1].split("\n## Examples\n", 1)[0]
     assert contract.index("\n## Root cause\n") < contract.index("\n## Impact\n"), contract
@@ -1103,7 +1330,7 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     )
     for label in ("Severity", "Workaround", "Severity with the workaround"):
         assert re.search(rf"^- {label}: <", impact, re.MULTILINE), label
-    flat_impact = " ".join(impact.split())
+    flat_impact = _flat(impact)
     assert "the negative outcome when the root cause fires, and what it affects" in flat_impact
     assert (
         "Then the three lines below, each exactly once, in this order, with nothing between or "
@@ -1117,16 +1344,19 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
 
 
 def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
-    feedback = "Merge @RUN@'s two cursor tickets & drop `\\1`; keep @TICKET_CONTRACT@ literal.\n"
+    """Whatever the feedback quotes — template syntax included — reaches the task as written."""
+    feedback = (
+        "Merge the run's two cursor tickets & drop `\\1`; keep {{ run }} and {% raw %} literal.\n"
+    )
 
-    task = _compose(feedback=feedback, redispatch=True)
+    task = _task(feedback=feedback, redispatch=True)
 
-    heading = "## Feedback on the previous follow-up run"
+    heading = f"## {FEEDBACK_SECTION}"
     assert heading in task
     assert feedback.rstrip() in task.split(heading, 1)[1]
     assert "## This is a re-dispatch" in task
     assert "an issue run `listing-run` created is **edited**" in task
-    flat = " ".join(task.split())
+    flat = _flat(task)
     assert (
         f"an existing ticket of run `listing-run` is copied again carrying the board's status, "
         f"which `{BOARD_STATUS} --board followups <path of the ticket>` prints"
@@ -1139,28 +1369,11 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     ) in flat
 
 
-@pytest.mark.parametrize(
-    ("template", "reason"),
-    [
-        (TEMPLATE + "@UNKNOWN@", "placeholders nothing fills: UNKNOWN"),
-        (TEMPLATE.replace("@FEEDBACK@", ""), "missing placeholders: FEEDBACK"),
-        (TEMPLATE.replace("@BOARD_STATUS@", ""), "missing placeholders: BOARD_STATUS"),
-        (TEMPLATE + "@COMMENT_CONTRACT@", "more than once: COMMENT_CONTRACT"),
-        (TEMPLATE + "@STATUS_VOCABULARY@", "more than once: STATUS_VOCABULARY"),
-        (TEMPLATE.replace("@STATUS_VOCABULARY@", ""), "missing placeholders: STATUS_VOCABULARY"),
-    ],
-)
-def test_a_template_that_does_not_name_each_placeholder_once_is_refused(
-    template: str, reason: str
-) -> None:
-    with pytest.raises(tickets.Refused, match=reason):
-        tickets.compose(
-            template,
-            **{**COMMON, "drafts_root": Path("/r"), "validate": "v"},
-            **INITIAL_ACCOUNT,
-            feedback=None,
-            redispatch=False,
-        )
+def test_an_empty_feedback_file_still_renders_its_heading() -> None:
+    """A feedback file that says nothing is still feedback the manager sent, as it was."""
+    task = _task(feedback="", redispatch=True)
+
+    assert f"## {FEEDBACK_SECTION}" in task
 
 
 @pytest.mark.parametrize(
@@ -1182,13 +1395,7 @@ def test_a_plan_store_the_dispatch_could_not_run_as_written_is_refused(
     after the launch, with the task already written.
     """
     with pytest.raises(tickets.Refused, match=refusal):
-        tickets.compose(
-            TEMPLATE,
-            **{**COMMON, "plan_store": plan_store},
-            **INITIAL_ACCOUNT,
-            feedback=None,
-            redispatch=False,
-        )
+        _answers(plan_store=plan_store)
 
 
 def test_a_plan_store_the_shell_would_not_read_as_one_word_is_refused(tmp_path: Path) -> None:
@@ -1207,13 +1414,98 @@ def test_a_plan_store_the_shell_would_not_read_as_one_word_is_refused(tmp_path: 
     program.chmod(0o755)
 
     with pytest.raises(tickets.Refused, match="does not read as part of one word"):
-        tickets.compose(
-            TEMPLATE,
-            **{**COMMON, "plan_store": str(program)},
-            **INITIAL_ACCOUNT,
-            feedback=None,
-            redispatch=False,
+        _answers(plan_store=str(program))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "refusal"),
+    [
+        ({"drafts_root": Path("follow-ups")}, "the drafts root follow-ups is not an absolute path"),
+        ({"checkout": Path("checkout")}, "the checkout checkout is not an absolute path"),
+        ({"board": ""}, "the board '' is not one word"),
+        ({"board": "followups extra"}, "the board 'followups extra' is not one word"),
+        ({"board": "followups`"}, "the board 'followups`' is not one word"),
+        ({"validate": " "}, "the validate command is blank"),
+        ({"re_estimate": ""}, "the re-estimate command is blank"),
+    ],
+    ids=[
+        "a-relative-drafts-root",
+        "a-relative-checkout",
+        "no-board",
+        "a-board-the-shell-splits",
+        "a-board-carrying-shell-syntax",
+        "a-blank-validator",
+        "a-blank-re-estimate",
+    ],
+)
+def test_a_value_the_tasks_instructions_could_not_run_as_written_is_refused(
+    overrides: dict[str, object], refusal: str
+) -> None:
+    """Each value the task embeds in an instruction is one the dispatch can run as written."""
+    with pytest.raises(tickets.Refused, match=re.escape(refusal)):
+        _answers(**overrides)
+
+
+#: The store's own fields a ticket's contract names beside the ticket's record: its item's
+#: `project`, `repositories` and `status`, a dependency entry's `kind`, and the `url` the
+#: board reports for an item — the store's to define, and none of them a key of the record.
+STORE_FIELDS = ("project", "repositories", "status", "kind", "url")
+
+
+def test_every_key_a_contract_names_is_one_its_validator_reads() -> None:
+    """The contracts' prose is the template's, and names no key the module does not hold.
+
+    Each backticked lower-case name in a contract section is a key of the artifact that
+    section describes, as this module declares it, or a word of one of its vocabularies —
+    so a key renamed here and not in the template is a task telling the agent to write a
+    field its own validator reads under another name.
+    """
+    initial = _task()
+    feedback = _task(tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True)
+    vocabularies = {
+        str(word)
+        for vocabulary in (
+            tickets.Status,
+            tickets.Severity,
+            tickets.Priority,
+            tickets.Frequency,
+            tickets.Verdict,
+            tickets.Disposition,
         )
+        for word in vocabulary
+    }
+    marker_attributes = set(re.findall(r'(\w+)="\{', tickets.REPLY_MARKER + tickets.COMMENT_MARKER))
+    record = {*tickets.RECORD_KEYS, *tickets.OPTIONAL_KEYS}
+    sections = {
+        "The account of every draft": (
+            _section(initial, "The account of every draft", "The verified ticket"),
+            {*tickets.DISPOSITION_KEYS, *tickets.DISPOSITION_ENTRY_KEYS},
+        ),
+        "The verified ticket": (
+            _verified_ticket().split("````markdown", 1)[0],
+            {
+                *record,
+                tickets.PRIORITY_FIELD,
+                tickets.DEPENDENCY_FIELD,
+                tickets.DEPENDENCY_ITEM,
+                tickets.DEPENDENCY_KIND,
+                *STORE_FIELDS,
+                "hostname",
+            },
+        ),
+        "Ownership on the board": (
+            _section(feedback, "Ownership on the board", "The account of every comment"),
+            {*record, *marker_attributes},
+        ),
+        "The account of every comment": (
+            _section(feedback, "The account of every comment", "Acceptance criteria"),
+            {*tickets.RESPONSE_KEYS, *tickets.RESPONSE_ENTRY_KEYS},
+        ),
+    }
+    for heading, (text, keys) in sections.items():
+        named = set(re.findall(r"`([a-z][a-z0-9_]*)`", text)) - {str(COMMON["board"])}
+        assert named, f"{heading} names no key, so this check reads nothing there"
+        assert named <= keys | vocabularies, (heading, sorted(named - keys - vocabularies))
 
 
 @pytest.fixture
@@ -1986,17 +2278,12 @@ def test_inventory_counts_a_runs_drafts_and_tickets(
     assert tickets.inventory(drafts_root, "nothing-here") == (0, 0)
 
 
-def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
-    drafts_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    template = tmp_path / "template.md"
-    template.write_text(TEMPLATE, encoding="utf-8")
-    arguments = [
-        "compose",
-        "--template",
-        str(template),
+#: The `answers` command line the recipe runs, for the initial mode over ``root``.
+def _answers_command(root: Path, *extra: str) -> list[str]:
+    return [
+        "answers",
         "--root",
-        str(drafts_root),
+        str(root),
         "--run",
         RUN,
         "--board",
@@ -2019,29 +2306,31 @@ def test_compose_marks_a_run_holding_tickets_as_a_re_dispatch(
         DISPOSITIONS,
         "--check-dispositions",
         CHECK_DISPOSITIONS,
+        *extra,
     ]
 
+
+def test_answers_marks_a_run_holding_tickets_as_a_re_dispatch(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = _answers_command(drafts_root)
+
     assert tickets.main(arguments) == tickets.SOUND
-    assert "This is a re-dispatch" not in capsys.readouterr().out
+    assert json.loads(capsys.readouterr().out)["redispatch"] is False
     _write(drafts_root, _ticket())
     assert tickets.main(arguments) == tickets.SOUND
-    assert "This is a re-dispatch" in capsys.readouterr().out
+    answered = json.loads(capsys.readouterr().out)
+    assert answered["redispatch"] is True
+    assert "## This is a re-dispatch" in _rendered(answered).stdout
 
 
 @pytest.mark.parametrize(
     ("arguments", "reason"),
     [
         (["inventory", "--root", "/r", "../escape"], "is not a run id"),
-        (
-            ["compose", "--template", "/no/such/template", "--root", "/r", "--run", RUN]
-            + ["--board", "b", "--validate", "v", "--board-status", "s", "--board-items", "i"]
-            + ["--copy", "c", "--re-estimate", "r"]
-            + ["--checkout", "/c"]
-            + ["--plan-store", PLAN_STORE]
-            + ["--dispositions", DISPOSITIONS, "--check-dispositions", CHECK_DISPOSITIONS],
-            "No such file",
-        ),
+        (_answers_command(Path("/r"), "--feedback", "/no/such/feedback.md"), "No such file"),
     ],
+    ids=["an-invalid-run-id", "a-feedback-file-that-is-not-there"],
 )
 def test_an_invocation_that_cannot_run_is_its_own_status(
     arguments: list[str], reason: str, capsys: pytest.CaptureFixture[str]
@@ -2059,21 +2348,25 @@ def test_a_command_line_the_parser_refuses_exits_unrunnable_saying_what_to_do(
     assert "run it with --help for the contract" in capsys.readouterr().err
 
 
-def test_a_template_the_compose_command_refuses_is_unrunnable(
+def test_answers_the_command_refuses_print_nothing_and_are_unrunnable(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    template = tmp_path / "template.md"
-    template.write_text("@RUN@ only", encoding="utf-8")
-
+    """A value `answers` refuses leaves standard output empty, so the recipe creates no task."""
     status = tickets.main(
-        ["compose", "--template", str(template), "--root", str(tmp_path), "--run", RUN]
-        + ["--board", "b", "--validate", "v", "--board-status", "s", "--board-items", "i"]
-        + ["--copy", "c", "--re-estimate", "r", "--checkout", "/c", "--plan-store", PLAN_STORE]
-        + ["--dispositions", DISPOSITIONS, "--check-dispositions", CHECK_DISPOSITIONS]
+        [
+            *_answers_command(tmp_path)[: _answers_command(tmp_path).index("--plan-store")],
+            "--plan-store",
+            "onetaskgraph",
+            "--dispositions",
+            DISPOSITIONS,
+        ]
     )
 
     assert status == tickets.UNRUNNABLE
-    assert "missing placeholders" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "is not an absolute path" in captured.err
+    assert "the initial mode states its account at --check-dispositions" in captured.err
 
 
 def _listed(capsys: pytest.CaptureFixture[str], *arguments: str) -> tuple[int, list[str], str]:
@@ -2657,16 +2950,11 @@ def test_board_status_that_cannot_show_a_dependency_is_unrunnable(
     assert NARROWING.split(":", 1)[1] in reported
 
 
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Every reading of the tracked
-# template in this module carries `reads_docs`, the marker `orchestrator:test` deselects and
-# the docs tier selects, because the template is this repository's prose; a new reading of
-# the same template joins its neighbours rather than founding a project for one test.
-@pytest.mark.reads_docs
-def test_the_composed_task_writes_each_ticket_against_the_boards_accepted_fixes() -> None:
-    """The new step, between the same-root-cause search and the status decision, whole."""
-    task = _tracked_task()
+def test_the_task_writes_each_ticket_against_the_boards_accepted_fixes() -> None:
+    """The step between the same-root-cause search and the status decision, whole."""
+    task = _task(redispatch=True)
     flat = " ".join(task.split())
-    steps = task.split("## What to do, in order", 1)[1].split("## The verified ticket", 1)[0]
+    steps = _section(task, "What to do, in order")
     step = steps.split(
         "**Write each ticket as if the board's accepted fixes were already in.**", 1
     )[1].split("**Decide each ticket's status from the board", 1)[0]
@@ -2715,15 +3003,13 @@ def test_the_composed_task_writes_each_ticket_against_the_boards_accepted_fixes(
     assert " ".join(same_cause.split()) == " ".join(
         """among its open items: first by the
    `orchestrator.follow-up` metadata's `root_cause` and `repository`, then by titles and
-   text (`@BOARD_ITEMS@ --board @BOARD@ --search <text>`). Both read the whole board,
+   text (`BOARD_ITEMS --board followups --search <text>`). Both read the whole board,
    every page of it, whichever repository an item's issue lives in, so narrow neither to a
    repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
    searched like any other open item and still takes this run's evidence.
-8. """.replace("@BOARD_ITEMS@", BOARD_ITEMS)
-        .replace("@BOARD@", "followups")
-        .split()
+8. """.replace("BOARD_ITEMS", BOARD_ITEMS).split()
     ), "the same-root-cause step's text moved"
-    redispatch = " ".join(task.split("## This is a re-dispatch", 1)[1].split())
+    redispatch = _flat(_section(task, REDISPATCH_SECTION))
     assert (
         "a ticket's dependencies on accepted tickets, and the claims written against their "
         "fixes, are re-derived from the board as it now is on every pass — an accepted ticket "
@@ -2736,11 +3022,8 @@ def test_the_composed_task_writes_each_ticket_against_the_boards_accepted_fixes(
     ) in redispatch
 
 
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-
-
 def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry() -> None:
-    contract = tickets.ticket_contract(RUN, "followups")
+    contract = _verified_ticket()
     flat = " ".join(contract.split())
 
     assert (
@@ -2760,11 +3043,11 @@ def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry()
         '("assuming the fix in <URL> lands, …"; "chosen because <URL> already …")',
         "A `Proposal` or `Deferred` item for a clearly related root cause may be named as "
         "related, by URL, with **no** `depends_on` entry and no change to the ticket's claims.",
-        "**`@VALIDATE@` holds the entries' shape and reads no board**: it refuses a ticket any "
+        f"**`{VALIDATE}` holds the entries' shape and reads no board**: it refuses a ticket any "
         "of whose entries is not a `task`, is not of the `blocks` kind, is not "
         "`<source>:<native id>` with both parts non-empty, names the `drafts` source, names "
         "a second source beside the others', or names a far end another entry already names.",
-        "**`@BOARD_STATUS@` resolves every entry against the board** before every copy and "
+        f"**`{BOARD_STATUS}` resolves every entry against the board** before every copy and "
         f"exits {tickets.NOT_ACCEPTED} when an entry names a source other than `followups`; "
         "names an item the board holds outside the accepted statuses (`todo`, `queued`, "
         "`in-progress`, `done`); names an item whose record carries this ticket's own "
@@ -2847,7 +3130,7 @@ def test_open_dispositions_records_the_input_set_before_the_dispatch_and_only_ev
     first, second = _drafted(drafts_root, RUN, "a-cursor-draft", "a-sweep-draft")
 
     # Through the command line, because that is where `scripts/follow-ups.sh` reads the
-    # path it fills `@DISPOSITIONS@` with.
+    # path it answers the template's `dispositions` with.
     assert tickets.main(["open-dispositions", "--root", str(drafts_root), RUN]) == tickets.SOUND
     path = Path(capsys.readouterr().out.strip())
 
@@ -3579,36 +3862,50 @@ def test_the_feedback_mode_task_carries_the_gathering_and_none_of_the_ticket_seq
 
     The ticket contract, the accepted-fix listing, the status decision and the copy are
     what a comment-only re-dispatch used to spend its turn on after its replies were
-    already posted, so a template that could still name them would compose them back.
+    already posted, so its answers carry none of them and its rendering names none.
     """
-    task = _compose_feedback("### Comment 1: on `followups:x`\n\nPlease add page 9.\n")
+    task = _task(tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True)
+    answered = _answers(tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True)
 
-    assert tickets.PLACEHOLDER.search(task) is None, task
-    assert task.endswith("Please add page 9.\n\nAgain, listing-run.\n")
-    assert "Feedback on the previous follow-up run" not in task, (
+    gathered = _section(task, "The comments to answer")
+    assert gathered.rstrip().endswith(GATHERING.rstrip()), gathered
+    assert f"Gathered into `{FEEDBACK_FILE.name}`" in gathered
+    assert FEEDBACK_SECTION not in task, (
         "the narrow dispatch is the gathering, not an aside to a verification pass"
     )
-    assert _ownership() in task
+    ownership = _section(task, "Ownership on the board", "The account of every comment")
+    assert _flat(ownership) == _flat(
+        _section(_task(), "Ownership on the board", "Acceptance criteria")
+    ), "the two modes state board ownership differently"
     assert RESPONSES in task and CHECK_RESPONSES in task
+    assert f"````json\n{tickets.response_example(RUN, FEEDBACK_FILE.name, PLAN_STORE)}\n````" in (
+        task
+    )
     # The three commands that change **one** ticket stay, because a quoted comment may ask
     # for a change to the ticket behind the issue it sits on.
     for named in (BOARD_STATUS, VALIDATE, COPY):
         assert named in task, named
-    for absent in (BOARD_ITEMS, "This is a re-dispatch", "Record the basis first"):
+    for absent in (
+        BOARD_ITEMS,
+        "This is a re-dispatch",
+        "Record the basis first",
+        "A ticket is a local Markdown task",
+        "What each board status means",
+        "The account of every draft",
+        "--status todo",
+    ):
         assert absent not in task, absent
-    # And nothing that ranges over the board or the drafts: the whole of what a
-    # comment-only re-dispatch used to spend its turn on after its replies were posted.
-    assert set(tickets.Mode.FEEDBACK.placeholders).isdisjoint(
-        {
-            "TICKET_CONTRACT",
-            "DISPOSITION_CONTRACT",
-            "STATUS_VOCABULARY",
-            "BOARD_ITEMS",
-            "ACCEPTED_STATUSES",
-            "ACCEPTED_FILTER",
-            "REDISPATCH",
-        }
-    )
+    # And nothing that ranges over the board or the drafts reaches its answers: the whole of
+    # what a comment-only re-dispatch used to spend its turn on after its replies were posted.
+    assert {
+        "ticket_example",
+        "disposition_example",
+        "accepted_statuses",
+        "accepted_filter",
+        "dispositions",
+        "check_dispositions",
+        "redispatch",
+    }.isdisjoint(answered)
 
 
 @pytest.mark.parametrize(
@@ -3656,78 +3953,43 @@ def test_the_feedback_mode_task_carries_the_gathering_and_none_of_the_ticket_seq
         "feedback-with-blank-validator",
     ],
 )
-def test_a_task_composed_without_its_modes_own_account_is_refused(
+def test_answers_without_the_modes_own_account_are_refused(
     mode: tickets.Mode, given: dict[str, object], refusal: str
 ) -> None:
     """A task whose criteria name a document at the word `None` is no bar at all."""
-    template = TEMPLATE if mode is tickets.Mode.INITIAL else FEEDBACK_TEMPLATE
     with pytest.raises(tickets.Refused, match=refusal):
-        tickets.compose(
-            template, mode=mode, **COMMON, **given, feedback="Feedback.\n", redispatch=False
-        )
+        tickets.answers(mode=mode, **COMMON, **given, feedback="Feedback.\n", redispatch=False)
 
 
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This checks the two
-# tracked templates against `compose` in the module that owns that API. `reads_docs` moves
-# this one test to the orchestrator project's document target, whose workspace input
-# includes both templates; it does not create a second project boundary.
-@pytest.mark.reads_docs
-def test_each_modes_tracked_template_composes_and_names_its_own_validator() -> None:
-    """The two templates the recipe names, read as the recipe reads them.
+def test_the_recipe_renders_the_registered_template_and_each_mode_names_its_validator() -> None:
+    """The template the recipe names is the one this host registers, as a task template.
 
-    `scripts/follow-ups.sh` names one file per mode, so each is composed as the file the
-    recipe names: a template renamed without the recipe is a launch that composes nothing.
+    `scripts/follow-ups.sh` names it once, `templates/templates.yaml` registers it with the
+    `task` role the engine holds to the criteria rule, and each mode's rendering names the
+    validator its account is checked with.
     """
     recipe = (REPO_ROOT / "scripts" / "follow-ups.sh").read_text(encoding="utf-8")
-    named = {
-        tickets.Mode.INITIAL: re.search(r'(?m)^TEMPLATE="([^"]+)"$', recipe),
-        tickets.Mode.FEEDBACK: re.search(r'(?m)^FEEDBACK_TEMPLATE="([^"]+)"$', recipe),
-    }
-    composed = {}
-    for mode in tickets.Mode:
-        path = named[mode]
-        assert path is not None, f"scripts/follow-ups.sh names no template for {mode}"
-        template = (REPO_ROOT / path[1]).read_text(encoding="utf-8")
-        account = INITIAL_ACCOUNT if mode is tickets.Mode.INITIAL else FEEDBACK_ACCOUNT
-        composed[mode] = tickets.compose(
-            template,
-            mode=mode,
-            **COMMON,
-            **account,
-            feedback=None if mode is tickets.Mode.INITIAL else "### Comment 1\n\nAdd page 9.\n",
-            redispatch=False,
-        )
-        assert tickets.PLACEHOLDER.search(composed[mode]) is None, composed[mode]
-    assert CHECK_DISPOSITIONS in composed[tickets.Mode.INITIAL]
-    assert CHECK_RESPONSES in composed[tickets.Mode.FEEDBACK]
-    assert f"`{tickets.KEY}` record" in composed[tickets.Mode.FEEDBACK]
-    assert "## Acceptance criteria" in composed[tickets.Mode.INITIAL]
-    assert "## Acceptance criteria" in composed[tickets.Mode.FEEDBACK]
+    named = re.search(r'(?m)^TEMPLATE_NAME="([^"]+)"$', recipe)
+    assert named is not None and named[1] == TEMPLATE_NAME, "the recipe names no template"
+    registration = (TEMPLATE_ROOT / "templates.yaml").read_text(encoding="utf-8")
+    assert re.search(rf"(?m)^  {TEMPLATE_NAME}:\n    role: task$", registration), registration
+
+    initial = _task()
+    feedback = _task(tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True)
+    assert CHECK_DISPOSITIONS in initial
+    assert CHECK_RESPONSES in feedback
+    assert f"`{tickets.KEY}` record" in feedback
 
 
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-
-
-@pytest.mark.reads_docs
-def test_each_tracked_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority() -> None:
-    """The prose each mode's agent is held to, as the recipe composes it from the tracked file.
+def test_each_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority() -> None:
+    """The prose each mode's agent is held to, as the recipe renders it from the template.
 
     The initial task asks for the frequency judgment and a re-estimate after every evidence
     comment on another run's item; the feedback task asks for a verdict on every reply and a
     re-estimate after each confirming one; and both carry the contracts that say so.
     """
-    initial = " ".join(_tracked_task(redispatch=True).split())
-    feedback_template = (REPO_ROOT / "config" / "follow-up-feedback-task.md").read_text("utf-8")
-    feedback = " ".join(
-        tickets.compose(
-            feedback_template,
-            mode=tickets.Mode.FEEDBACK,
-            **COMMON,
-            **FEEDBACK_ACCOUNT,
-            feedback="### Comment 1\n\nAdd page 9.\n",
-            redispatch=True,
-        ).split()
-    )
+    initial = _flat(_task(redispatch=True))
+    feedback = _flat(_task(tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True))
     re_estimate = f"`{RE_ESTIMATE} --board followups"
     for required in (
         "**judge from the original evidence whether the root cause fires consistently**",
@@ -4293,8 +4555,9 @@ def test_a_file_that_is_not_text_is_refused_by_every_command_that_reads_one(
     """Each of these files is written outside this program, so bytes that are not text refuse.
 
     An agent writes its account, a gathering is written by the comment-handling recipe, and
-    a template is tracked — none of them is this program's to trust, and a decoding failure
-    out of one used to leave the command with a traceback rather than a diagnostic.
+    a manager writes the feedback a task is answered with — none of them is this program's
+    to trust, and a decoding failure out of one used to leave the command with a traceback
+    rather than a diagnostic.
     """
     not_text = drafts_root / "dispositions" / f"{RUN}.json"
     not_text.parent.mkdir(parents=True)
@@ -4302,8 +4565,6 @@ def test_a_file_that_is_not_text_is_refused_by_every_command_that_reads_one(
     feedback = drafts_root / "feedback" / RUN / GATHERED
     feedback.parent.mkdir(parents=True)
     feedback.write_bytes(b"\xff\xfe not text")
-    template = tmp_path / "template.md"
-    template.write_bytes(b"\xff\xfe not text")
 
     for arguments, refusal in (
         (["check-dispositions", "--root", str(drafts_root), RUN], "is not JSON"),
@@ -4316,13 +4577,7 @@ def test_a_file_that_is_not_text_is_refused_by_every_command_that_reads_one(
             ["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN],
             "is not UTF-8 text",
         ),
-        (
-            ["compose", "--template", str(template), "--root", str(drafts_root), "--run", RUN]
-            + ["--board", BOARD, "--validate", "v", "--board-status", "s", "--board-items", "i"]
-            + ["--copy", "c", "--re-estimate", "r", "--checkout", "/c", "--plan-store", PLAN_STORE]
-            + ["--dispositions", DISPOSITIONS, "--check-dispositions", CHECK_DISPOSITIONS],
-            "is not UTF-8 text",
-        ),
+        (_answers_command(drafts_root, "--feedback", str(feedback)), "is not UTF-8 text"),
     ):
         status = tickets.main(arguments)
 

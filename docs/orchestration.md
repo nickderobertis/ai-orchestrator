@@ -1799,7 +1799,8 @@ of them.
 
 After the run, `just follow-ups <run-id>` dispatches the follow-up agent over its drafts:
 one direct node under `graphs/follow-up.yaml`, a single-sided member with no judge on
-`oneharness.follow-up.toml`, given the task `config/follow-up-task.md` composes. Its turn
+`oneharness.follow-up.toml`, given the task the store renders from this host's
+`follow-up-task` template, `templates/follow-up-task.md.j2`. Its turn
 runs in `bypass` mode: the member works in its agent graph's scratch directory, which is
 not a repository, and a `default`-mode turn there is refused by codex as an untrusted
 directory and denied its tools by Claude Code. The mode is declared in that harness config
@@ -1823,16 +1824,23 @@ once an attached run settles. `--feedback FILE` re-dispatches over the same run 
 manager's words in the task, `--detach` returns at the launch record printing the follow-up
 run and its watch command, and `--to SOURCE` copies onto another configured source.
 
-**A dispatch is composed in one of two modes, and the caller states which.** Initial
-mode — every launch but a comment gathering — is the task above, and owes a disposition
+**A dispatch is rendered in one of two modes, and the caller states which.** The template
+takes the mode as its `mode` variable and refuses any other value; everything else it is
+answered with comes from `python -m orchestrator.follow_up_tickets answers`, which states
+the values and the examples its validators read back, while the prose is the template's
+own. The recipe creates the one node's task with the pinned `onetaskgraph task create
+--template-loader -`, fed `onepipeline template resolve follow-up-task --json`, so its body
+is exactly the rendering and records `onepipeline:follow-up-task` as its provenance, then
+holds it to `onepipeline template check follow-up-task --item` and launches nothing on a
+refusal. Initial mode — every launch but a comment gathering — is the task above, and owes a disposition
 artifact giving each of the drafts the recipe recorded before the dispatch exactly one
 of `filed`, `not-reproducible`, `already-fixed` or `too-low-impact`, which
 `python -m orchestrator.follow_up_tickets check-dispositions` reads back. Feedback mode —
-what `just follow-ups-handle-comments` composes, passing `--comments` through — is the far
-shorter `config/follow-up-feedback-task.md`: it answers only the comments that gathering
+what `just follow-ups-handle-comments` launches, passing `--comments` through — is the far
+shorter task the template's `feedback` branch renders: it answers only the comments that gathering
 quoted, in order, changes only the ticket of an issue a quoted comment sits on, and owes a
 response artifact `python -m orchestrator.follow_up_tickets check-responses` reads back
-against the board's own replies. Each composed task's own acceptance criteria name its
+against the board's own replies. Each rendered task's own acceptance criteria name its
 validator, which is what binds the detached run the success hook launches, and an attached
 run has the recipe re-run it. Before the split there was one task, and a comment-only
 re-dispatch spent its paid turn re-reading and re-copying every unrelated ticket after its

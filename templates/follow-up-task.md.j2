@@ -1,0 +1,677 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The follow-up agent's task, one of two modes: verify a finished run's drafted follow-ups
+  and put the verified tickets on the followups board, or answer the board comments one
+  gathering quoted.
+variables:
+  mode:
+    description: >-
+      Which dispatch this task is for: `initial` verifies the run's drafts and files what
+      stands; `feedback` answers the board comments one gathering quoted and nothing else.
+      The caller decides it, never the feedback's content; any other value refuses the render.
+    type: string
+    required: true
+  acceptance_criteria:
+    description: >-
+      Criteria beyond each mode's own, which this template states as fixed items after these;
+      empty unless a caller adds one.
+    type: list
+    items: string
+    default: []
+  run:
+    description: The run whose follow-ups this dispatch works, as `just runs` lists it.
+    type: string
+    required: true
+  board:
+    description: The plan source verified tickets are copied onto — `followups`, or the one `--to` named.
+    type: string
+    required: true
+  drafts_root:
+    description: The absolute root of the `drafts` plan source the launch exported, which holds the run's drafts and tickets.
+    type: string
+    required: true
+  checkout:
+    description: The absolute path of the checkout that launched this dispatch, where every store command is run.
+    type: string
+    required: true
+  plan_store:
+    description: The absolute path of this checkout's pinned plan-store program, which every store instruction names in full.
+    type: string
+    required: true
+  validate:
+    description: The command that validates one ticket file through the store.
+    type: string
+    required: true
+  board_status:
+    description: The command that decides the status a ticket is copied with, and writes its binding and priority estimate.
+    type: string
+    required: true
+  board_items:
+    description: The command that lists every item of a board, every page, as one JSON result.
+    type: string
+    required: true
+  copy:
+    description: The command that copies a ticket onto the board item it is bound to.
+    type: string
+    required: true
+  re_estimate:
+    description: The command that recomputes one board item's priority estimate from its comments.
+    type: string
+    required: true
+  shape:
+    description: >-
+      The identifiers and numbers of a ticket's stored shape, as the validators hold them —
+      its source, paths, record fields, headings, vocabularies and the exit statuses — so the
+      prose names the words the validators read rather than a copy of them.
+    type: object
+    required: true
+  evidence_marker:
+    description: The exact last line of this run's evidence comment on another run's issue, with a `<root-cause>` placeholder.
+    type: string
+    required: true
+  evidence_opening:
+    description: The visible first line of this run's evidence comment.
+    type: string
+    required: true
+  reply_marker:
+    description: The exact last line of this run's reply to a person's comment, with its placeholders.
+    type: string
+    required: true
+  reply_opening:
+    description: The visible first line of this run's reply to an attributed comment, with its placeholders.
+    type: string
+    required: true
+  reply_opening_unattributed:
+    description: The visible first line of this run's reply to a comment the feedback reports no author for.
+    type: string
+    required: true
+  placement_note:
+    description: >-
+      The note every direct node of this host carries, saying the dispatch works in the
+      launching checkout and commits nothing.
+    type: text
+    required: true
+  feedback:
+    description: >-
+      The feedback file's text, verbatim: in `feedback` mode the gathering of board comments
+      this dispatch answers; in `initial` mode a manager's feedback on the previous follow-up
+      run, or no answer when there is none.
+    type: text
+    required: false
+  redispatch:
+    description: >-
+      Whether an earlier follow-up agent already worked this run, so its tickets, issues and
+      comments may already exist. `initial` mode only.
+    type: boolean
+    default: false
+  accepted_statuses:
+    description: The accepted board statuses as prose, each as its board option and store word. `initial` mode only.
+    type: string
+    default: ""
+  accepted_filter:
+    description: The listing flags selecting the accepted statuses, one `--status` per status. `initial` mode only.
+    type: string
+    default: ""
+  dispositions:
+    description: The path of the disposition account the launch opened for this run's drafts. `initial` mode only.
+    type: string
+    default: ""
+  check_dispositions:
+    description: The command that checks the disposition account. `initial` mode only.
+    type: string
+    default: ""
+  ticket_example:
+    description: The example ticket, every placeholder in it, as the stored record renders. `initial` mode only.
+    type: text
+    default: ""
+  disposition_example:
+    description: The example disposition account, written from the keys its validator reads. `initial` mode only.
+    type: text
+    default: ""
+  responses:
+    description: The path of the response account answering the gathering. `feedback` mode only.
+    type: string
+    default: ""
+  check_responses:
+    description: The command that checks the response account. `feedback` mode only.
+    type: string
+    default: ""
+  feedback_file:
+    description: The gathering's file name, which the response account records. `feedback` mode only.
+    type: string
+    default: ""
+  response_example:
+    description: The example response account, written from the keys its validator reads. `feedback` mode only.
+    type: text
+    default: ""
+---
+{% extends "onepipeline/plan-task.md.j2" %}
+{% block before_criteria %}
+{#- The syntax has no statement that fails a render, and including a template that does
+    not exist is the one that fails it naming an expression: its name carries the value. #}
+{% if mode not in ["initial", "feedback"] %}
+{% include "follow-up-task: mode `" ~ mode ~ "` is neither `initial` nor `feedback`" %}
+{% endif %}
+{% if mode == "initial" %}
+## What
+
+Verify the follow-up drafts run `{{ run }}` left behind, group what stands by root cause, and
+put one verified ticket per root cause on the `{{ board }}` board. Where another run already
+has an open issue for the same root cause, add this run's evidence to it as a comment
+instead of filing a duplicate.
+
+## Why
+
+During a run, workers, the monitor, the pacemaker and the manager draft what they noticed
+outside their own scope as unverified follow-ups, and nobody has checked them. This
+dispatch checks them. A draft is worth a ticket only once its claim holds in the tree it
+names. Every session's tickets accumulate on one board, so a root cause already filed
+there gets this run's evidence rather than a second issue.
+
+## Where everything is
+
+- **Where to run commands.** Your own working directory is the agent graph's scratch
+  directory, which configures no plan source. Run every `{{ plan_store }}`, `onepipeline` and
+  `onevcs` command from the checkout that launched you, `{{ checkout }}` (`cd` there first).
+  That checkout's configuration is what names the `{{ board }}` board and every other source a
+  command here reads.
+- **The plan store.** `{{ plan_store }}` is the plan-store program every command below names,
+  spelled in full. Run it exactly as written and never as a bare `onetaskgraph`: a bare
+  name is answered by whatever your search path offers first, which on two real runs was
+  another release — one filed its tickets as issues of the wrong repository, and one had
+  every sound ticket refused by a validator reading an older record schema.
+- **The drafts.** Run `{{ run }}`'s drafts are local Markdown tasks in the `{{ shape.drafts_source }}` plan
+  source, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`. From that checkout, list them with
+  `{{ plan_store }} task list --source {{ shape.drafts_source }} --project {{ run }} --json` — one page, so while it
+  answers a `next` cursor, list again with `--page <cursor>` until it answers none — and
+  read one with `{{ plan_store }} task show <qualified draft id> --json`.
+- **Each draft's transcript.** A draft's `orchestrator.follow-up-draft` record carries a
+  `transcript` command, `onepipeline transcript …` or `onepipeline monitor …`. Run it from
+  that checkout to read the turns the draft was written from. A manager's draft carries
+  none.
+- **Other repositories' trees.** Read them in the registered checkouts `onevcs repos`
+  lists. In the checkout of a draft's repository, run `git fetch origin`, then read
+  `origin/<base>` with `git show origin/<base>:<path>` and
+  `git grep <pattern> origin/<base>`. Never check out, commit to, or otherwise modify any
+  checkout, and never clone. A repository with no registered checkout cannot be verified.
+- **The board.** `{{ board }}` is the plan source verified tickets are copied onto. List it with
+  `{{ board_items }} --board {{ board }}`, which reads every page the store answers and prints the
+  whole board as one JSON result — never with a bare `{{ plan_store }} task list`, which
+  answers one page of it and a `next` cursor. Read one item with
+  `{{ plan_store }} task show <id> --json`, and comment with
+  `{{ plan_store }} task comment add|list|edit|delete`.
+
+## What each board status means
+
+- **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
+  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by
+  an agent sent to pick up accepted tickets.
+- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an
+  item there: only a person, which is what accepting a ticket is. **Selected** by an agent
+  sent to pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, written `draft`: deferred for later by a person: not
+  accepted, picked up by no agent, and still taking new evidence. Who moves an item there:
+  only a person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Queued`**, written `queued`: accepted, and claimed by a launched DAG
+  whose node has not started, so it returns to `Todo` if that work does not happen. Who
+  moves an item there: no person — a launched run's first projection, over the store's
+  `delivers` relation. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
+  an item there: a person, or a dispatch whose own task says to. Not selected by an agent
+  sent to pick up accepted tickets.
+- **Closed as completed at Status `Done`**, written `done`: accepted and finished. Who
+  moves an item there: a person, or a dispatch whose own task says to. Not selected by an
+  agent sent to pick up accepted tickets.
+- **Closed as not planned at Status `Cancelled`**, written `cancelled`: withdrawn. Who
+  moves an item there: a follow-up run withdrawing its own ticket that nobody accepted or
+  deferred, or a person. Not selected by an agent sent to pick up accepted tickets.
+
+A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
+else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
+closed one.
+
+## What to do, in order
+
+1. **Record the basis first.** Before verifying anything, fetch `origin` in the registered
+   checkout of every repository a draft names, and record `git rev-parse origin/<base>`.
+   That commit is the basis every claim about that repository is verified at, and it is
+   what the ticket's `basis` records.
+2. **Verify each draft against that basis.** Read what the draft claims, its transcript and
+   the tree, and decide whether the claim holds at the basis commit.
+3. **Drop a draft you cannot verify, or one the basis already fixes.** Keep the id of every
+   dropped draft and the reason it was dropped: every draft, dropped or not, is accounted
+   for at step 11 below, and that account is checked.
+4. **Report what should have been surfaced live.** A draft that reads as something that
+   should have been raised during the run — a decision fork, a constraint that could not
+   be met, something the manager needed to act on then — is a finding in its own right.
+   Report it, naming the draft, its author and why it was blocking, rather than filing it
+   quietly as a ticket.
+5. **Group what stands by root cause**, and write one ticket per root cause, to the shape
+   under "The verified ticket" below. For each, **judge from the original evidence whether
+   the root cause fires consistently** — every time its conditions hold — or only
+   intermittently or in certain situations, and record that as the ticket's `{{ shape.frequency_field }}`.
+   That judgment and the severities are the facts its priority is estimated from; the
+   estimate and the priority themselves are never yours to write.
+6. **Validate each ticket, then delete the drafts it consumed.** Run
+   `{{ board_status }} --board {{ board }} <path of the ticket>`, which writes the ticket's
+   priority estimate, its estimate line and its priority, then `{{ validate }} <path of the
+   ticket>`, and correct the ticket until that command reports it sound. Then delete the
+   draft files that ticket consumed, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`.
+7. **Search the board for the same root cause** among its open items: first by the
+   `{{ shape.record_key }}` metadata's `root_cause` and `repository`, then by titles and
+   text (`{{ board_items }} --board {{ board }} --search <text>`). Both read the whole board,
+   every page of it, whichever repository an item's issue lives in, so narrow neither to a
+   repository. An item at `Deferred` is open: no agent picks it up to work on, but it is
+   searched like any other open item and still takes this run's evidence.
+8. **Write each ticket as if the board's accepted fixes were already in.** List the
+   board's accepted items — those at {{ accepted_statuses }} — with
+   `{{ board_items }} --board {{ board }} {{ accepted_filter }}`, which answers every page, the
+   whole board, whichever repository an item's issue lives in: an accepted fix in another
+   repository can change a ticket here. Read each item's `## Suggested fix`. This is **not**
+   the search of the step before: an accepted item carrying the same root cause as a
+   ticket is that step's — this run's evidence goes to it as a comment, and this step does
+   not touch that ticket. This step is for accepted tickets of *other* root causes whose
+   fixes bear on a ticket this run will copy. For each such ticket, decide against each
+   accepted fix as if it were in:
+   - **unchanged** — the fix does not bear on it: nothing changes;
+   - **evaporates** — the fix removes this root cause too: the ticket is not filed. Delete
+     its file and the drafts it consumed, and report those drafts as dropped, naming the
+     accepted item's URL. On a re-dispatch where the board already holds this run's own
+     item for it, withdraw that item instead, under the withdrawal rules of "The verified
+     ticket", with the reason in its text naming the accepted item;
+   - **shrinks** — the fix removes part of the impact or narrows where the root cause
+     bites: write `## Impact` (its prose and its severity lines) and, where the scope
+     narrows, `## Root cause` to what remains;
+   - **needs a different fix** — the fix the evidence would otherwise support conflicts
+     with, duplicates or is superseded by the accepted one: `## Suggested fix` states what
+     remains right once the accepted fix is in, and the fix it would otherwise have
+     proposed goes under `## Rejected fixes` with the accepted item as the reason.
+
+   <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether a `Done` fix has reached the basis is the agent's reading of a tree, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling holds for a `Done` item — that the accepted listing selects it and `board-status` admits it as a far end — is driven in `tests/test_follow_up_tickets.py` over every accepted status. -->
+   A `Done` item's fix is assumed only where it has not reached the basis recorded in
+   step 1 — read the tree; where it has, the verification at the basis already accounts
+   for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; a
+   clearly related one may be mentioned as related, as "The verified ticket" states.
+   <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+
+   For every fate but unchanged, add the item's `{{ shape.dependency_field }}` entry, say in the text where
+   and how its fix changed the ticket with the item's URL, then validate the ticket again. On a
+   re-dispatch, re-derive all of this from the board as it now is, exactly as a first pass
+   does: an accepted ticket may have appeared, moved or been un-accepted since the last
+   pass, so entries are added and removed and the ticket's claims re-derived to match, and
+   this run's own item is edited by copying its ticket again.
+9. **Decide each ticket's status from the board, before every copy.** Run
+   `{{ board_status }} --board {{ board }} <path of the ticket>`, adding `--withdraw` for a ticket
+   this run withdraws, and write the word it prints as the ticket's `status`, then validate
+   the ticket again. When it refuses, copy nothing for that ticket and keep what it printed
+   for your report.
+10. **Put each ticket on the board.** Where no open item carries the root cause, or the
+    item that does is this run's own, copy the ticket with
+    `{{ copy }} --board {{ board }} <path of the ticket>`, as "The verified ticket" states. When
+    that copy refuses, copy nothing more for that ticket and keep what it printed for your
+    report. Where an
+    open item for it was created by another run, copy nothing: add this run's one comment
+    to that item, or edit the comment this run already left there, under "Ownership on the
+    board" below, and **after every such comment, re-estimate that item** with
+    `{{ re_estimate }} --board {{ board }} <that item's id>`, which recounts its occurrences, stores
+    its estimate and rewrites its estimate line. Keep what it printed for your report.
+11. **Account for every draft this dispatch was given.** Write one disposition per draft
+    into `{{ dispositions }}`, to the shape under "The account of every draft" below, then run
+    `{{ check_dispositions }}` and correct the account until it reports it sound. It is what
+    stands in for the full re-verification a feedback re-dispatch used to perform by
+    accident, which was the only thing that ever surfaced a sound draft an earlier agent
+    had quietly left out.
+12. **Report** every issue you created or updated with its URL (its location where the
+    board reports no URL), every dropped draft with its reason, every ticket dropped or
+    withdrawn under an accepted ticket with that ticket's URL, every ticket the board
+    refused a status for with what `board-status` printed, every ticket the store refused
+    to copy with the refusal it printed, and every finding that should have been surfaced
+    live. The account at `{{ dispositions }}` is the record of what became of each draft; the
+    report says what the reader needs beyond it.
+
+## The account of every draft
+
+**Every draft this dispatch was given is accounted for, exactly once.** The account is a
+JSON document at `{{ dispositions }}`, which already exists: its `drafts` is the input set,
+written before you were dispatched, and it is not yours to change. Yours is
+`dispositions`, one entry per draft in `drafts`:
+
+- **`{{ shape.filed }}`** — its claim holds, and its evidence reached the board: as a ticket this
+  run wrote, or as this run's evidence comment on another run's open issue for the same
+  root cause. `root_causes` names every root cause it supports, each the root cause of a
+  ticket this run holds under its `{{ shape.tickets_directory }}/` whose `drafts` names this draft — which it
+  keeps in both cases.
+- **`{{ shape.not_reproducible }}`** — its claim does not hold at the basis commit, or nothing in
+  the tree or the transcript bears it out.
+- **`{{ shape.already_fixed }}`** — the basis already carries the fix, or an accepted ticket's fix
+  removes the root cause too, in which case `detail` names that item by URL.
+- **`{{ shape.too_low_impact }}`** — its claim holds and nothing follows from it worth a ticket;
+  `detail` says what the impact is and why it is below the bar.
+
+`root_causes` is a list of kebab-case root-cause slugs, one per ticket or open issue the
+draft's evidence reached, each the file name of a ticket under
+`{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.tickets_directory }}/`; it is non-empty for `{{ shape.filed }}` and empty for
+every other disposition. `detail` is always stated.
+
+The shape, with every placeholder to fill:
+
+````json
+{{ disposition_example }}
+````
+
+**`{{ check_dispositions }}` is what says the account is complete.** Run it, correct the document
+until it reports the account sound, and run it again. It exits {{ shape.exits.sound }} when every draft
+carries exactly one disposition with everything that disposition owes, and {{ shape.exits.unsound }} naming
+each draft that is absent, that carries more than one, or whose disposition links it to no
+root cause where it must, to one this run holds no ticket for, or to a ticket whose
+`drafts` does not name it; and each filed root cause whose board item does not store the
+estimate its comments recount to or state it on its estimate line, or whose item this run
+copied and does not hold the priority its ticket carries. This dispatch is not finished
+while it refuses.
+
+## The verified ticket
+
+A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, written to
+`{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.tickets_directory }}/<root-cause>{{ shape.ticket_suffix }}` — qualified id
+`{{ shape.ticket_id }}` — where `<root-cause>` is a kebab-case slug.
+
+- It carries **no `project`**, so it lands on the board as a standalone item.
+- **Its `repositories` names exactly one normalized origin, its record's `repository`**:
+  the repository the root cause lives in. Its issue is created in that one repository and
+  added to the board as an item, and that repository must belong to the board's owner, as
+  `github.com/<owner>/<name>`.
+- Its title is `<repository name>: <the root cause in one line>`, at most
+  {{ shape.title_limit }} characters, where the repository name is the last segment of `repository`.
+- **Its status is the board's to decide.** A new ticket is `{{ shape.proposed }}`, a proposal
+  awaiting the user's decision, which the board shows as `Proposal`; a person moving it to
+  `Todo` is what accepts it. A ticket the board already holds carries the status the board
+  holds it at, so a copy never undoes that decision: a ticket the board holds at
+  `Deferred` is copied carrying `{{ shape.deferred }}`. A ticket this run withdraws is
+  `{{ shape.withdrawn }}`, which the board holds as closed as not planned, unless the board shows it
+  as accepted or deferred: this run never withdraws a deferred item or an accepted one, so
+  copy nothing, leave the local ticket as it is, and report that you would have withdrawn
+  it and why. No issue is ever deleted.
+- **Before every copy, run `{{ board_status }} --board {{ board }} <path of the ticket>`** (adding
+  `--withdraw` for a ticket this run withdraws, before you change that ticket), write the
+  word it prints as the ticket's `status`, and validate the ticket again. It reads the
+  board item's `{{ shape.priority_field }}`, its record's `{{ shape.estimate_field }}` and its comments in the
+  same step, and writes the ticket's `{{ shape.estimate_field }}`, its estimate line and its
+  `{{ shape.priority_field }}` as the rule above decides, which the copy carries onto the board. It exits
+  {{ shape.exits.sound }} with that word; {{ shape.exits.unplaced }} when the board holds the item at a status no ticket carries;
+  {{ shape.exits.protected }} for a withdrawal of an item the board shows as accepted or deferred; {{ shape.exits.outside_owner }} when
+  the ticket's repository is not one of the board's owner, before anything is asked of the
+  board; {{ shape.exits.not_accepted }} when a `{{ shape.dependency_field }}` entry does not resolve on the board as the
+  dependency rule below states, naming every such entry and what the board holds; and
+  {{ shape.exits.misbound }} when the ticket's board item cannot be established as its binding, as the binding
+  rule below states. On any of these refusals, copy nothing and report what it printed.
+- **A refusal is reported, never worked around.** When `board-status` exits {{ shape.exits.outside_owner }}, or
+  `{{ copy }}` refuses the ticket — for a repository the token cannot see, or one GitHub will
+  not create an issue in — copy nothing for that ticket, never retry it with
+  `repositories` removed or changed to get it filed, and report what was printed.
+- Its front matter carries the `{{ shape.record_key }}` record with every key present, and its body
+  the headings {{ shape.headings }}, in that order, each with content. `created_by_run` is this
+  run, and `owning_runs` includes it.
+- **Its priority is estimated from facts, never chosen.** Judge from the original evidence
+  whether the root cause fires consistently, and record it as the `{{ shape.record_key }}` record's
+  `{{ shape.frequency_field }}`: `{{ shape.consistent }}` when it fires every time its conditions hold,
+  `{{ shape.intermittent }}` when it fires only sometimes or only in certain situations. `{{ validate }}`
+  refuses a ticket without it. The record's `{{ shape.estimate_field }}`, the `## {{ shape.impact }}` section's
+  `- {{ shape.estimate_line }}:` line and the front matter's `{{ shape.priority_field }}` are `{{ board_status }}`'s to
+  write and never yours; when you rewrite a ticket, keep them as it wrote them. The
+  estimate is the severity with the workaround, one level for one level
+  ({{ shape.estimate_levels }}), raised one level, capped at `{{ shape.urgent }}`, when `{{ shape.frequency_field }}` is
+  `{{ shape.consistent }}` or the root cause has {{ shape.raise_at }} or more occurrences: the ticket's own
+  evidence, plus each evidence comment another run left on its board issue and each reply
+  whose marker carries `verdict="{{ shape.confirms }}"`, recounted off the issue's comments every time
+  and stored nowhere. The board item's priority follows the estimate while it holds the
+  estimate its record stored — or holds none, where its record stored none — and is
+  otherwise a person's decision, which every copy keeps: a person who sets it back to the
+  estimate hands it back to the estimate.
+- **`## {{ shape.suggested_fix }}` states one concrete fix**: a single change, or a single set of changes
+  that together remove the root cause, never a list of options or alternatives to choose
+  between. `## {{ shape.rejected_fixes }}` is optional: when another fix was considered, it comes directly
+  after `## {{ shape.suggested_fix }}` and gives each rejected fix with why it was rejected; otherwise it
+  is left out.
+- **`host` is read, never typed.** Run `hostname` on the machine you run on and write
+  exactly what it prints, both as `host` and in the `## {{ shape.evidence }}` section, never a value you
+  type or recall.
+- **A ticket written against an accepted ticket's fix depends on it, as the store's own
+  top-level `{{ shape.dependency_field }}`** — one entry per accepted ticket whose fix changed this
+  ticket, as `{id: {{ board }}:<native id>, item: {{ shape.dependency_item }}}` and nothing else, its `kind` left to
+  its default; no entry, and no `{{ shape.dependency_field }}` at all, when no accepted fix changed it.
+  `<native id>` is the accepted item's id as `{{ board_items }} --board {{ board }}` reports it, after
+  the `{{ board }}:`. The copy carries the entry onto the board as the board's own item
+  dependency, which `{{ plan_store }} task deps` walks from either end, and the edge is the one
+  record of it: nothing in the `{{ shape.record_key }}` record repeats it.
+- **Where the accepted fix changed the ticket, the text says so with the item's URL** — the
+  `url` the board reports for the accepted item. In `## {{ shape.impact }}` or `## Root cause` for a
+  ticket the fix narrowed, in `## {{ shape.suggested_fix }}` for one it re-fixed, and in
+  `## {{ shape.rejected_fixes }}` beside the fix it displaced, stating what is assumed ("assuming the fix
+  in <URL> lands, …"; "chosen because <URL> already …"). A `Proposal` or `Deferred` item
+  for a clearly related root cause may be named as related, by URL, with **no**
+  `{{ shape.dependency_field }}` entry and no change to the ticket's claims.
+- **`{{ validate }}` holds the entries' shape and reads no board**: it refuses a ticket any
+  of whose entries is not a `{{ shape.dependency_item }}`, is not of the `{{ shape.dependency_kind }}` kind, is not
+  `<source>:<native id>` with both parts non-empty, names the `{{ shape.drafts_source }}` source, names a
+  second source beside the others', or names a far end another entry already names.
+  **`{{ board_status }}` resolves every entry against the board** before every copy and exits
+  {{ shape.exits.not_accepted }} when an entry names a source other than `{{ board }}`; names an item the board holds
+  outside the accepted statuses ({{ shape.accepted }}); names an item whose record carries this
+  ticket's own `root_cause` — an accepted item for the *same* root cause is the
+  same-root-cause path's, which takes this run's evidence as a comment, and never this
+  rule's; names an item the board reports no `url` for; or names an item whose URL the
+  ticket's body does not carry. On that refusal copy nothing for the ticket, re-derive it
+  against the board as it now is — removing the entry and the assumption from the text
+  where the item is no longer accepted — validate it again, and report what was printed.
+- **`{{ shape.binding_field }}` binds the ticket to its board item**: the native id of the item it is
+  copied onto, as `{{ board_items }} --board {{ board }}` reports it after the `{{ board }}:`, in the
+  `{{ shape.record_key }}` record. `{{ board_status }}` and `{{ copy }}` write it and nothing else does — when this
+  run creates its item or first reaches it, and again when two board items carry the
+  ticket's origin, naming this run's own open item, the one survivor; each withdrawn
+  duplicate is then left a comment naming the survivor. They write the store's
+  `{{ shape.origin_key }}` naming `{{ board }}:<that id>` into the ticket's metadata beside it, which makes
+  every later copy reach that item directly. When you rewrite a ticket, keep both exactly
+  as they stand. Both commands exit {{ shape.exits.misbound }}, naming both ids, when the store reports a
+  destination other than the binding, or the binding names an item that does not carry the
+  ticket's origin; and when two or more items carry it but not exactly one is this run's
+  own open item beside only withdrawn ones.
+- It reaches the board only as `{{ copy }} --board {{ board }} <path of the ticket>`, which copies
+  `{{ shape.ticket_id }}` onto its bound item and prints the action and the item it reached; never as a
+  bare `{{ plan_store }} task copy`, which follows whichever item the store finds first. That copy
+  is the only way an issue is edited.
+
+The shape, with every placeholder to fill:
+
+````markdown
+{{ ticket_example }}````
+
+{% include "follow-up-task/ownership.md.j2" %}
+
+{% else %}
+## What
+
+Answer the board comments people wrote on run `{{ run }}`'s follow-ups on the `{{ board }}` board.
+The comments are quoted verbatim below, and they are the whole of this dispatch: act on
+each one in the order it is quoted, post its one reply, and account for what you did.
+
+Nothing else on the board or in this run's drafts is yours here. Do not inventory the
+drafts, do not verify a claim, do not list the board, do not read its accepted items, and
+do not touch a ticket, an issue or a comment that no comment below names.
+
+## Why
+
+This dispatch used to be composed from the full verification task, so a run answering two
+comments spent the rest of its paid turn re-reading and re-copying every unrelated ticket
+**after** its replies were already posted, and reached the provider's deadline with the
+work it was dispatched for long done. The comments a person wrote are what is waiting on
+an answer, so they are what this task carries.
+
+## Where everything is
+
+- **Where to run commands.** Your own working directory is the agent graph's scratch
+  directory, which configures no plan source. Run every `{{ plan_store }}` command from the
+  checkout that launched you, `{{ checkout }}` (`cd` there first). That checkout's
+  configuration is what names the `{{ board }}` board.
+- **The plan store.** `{{ plan_store }}` is the plan-store program every command below names,
+  spelled in full. Run it exactly as written and never as a bare `onetaskgraph`: a bare
+  name is answered by whatever your search path offers first, which on two real runs was
+  another release — one filed its tickets as issues of the wrong repository, and one had
+  every sound ticket refused by a validator reading an older record schema.
+- **The board.** Read the issue one comment sits on with
+  `{{ plan_store }} task show <id> --json`, read its comments with
+  `{{ plan_store }} task comment list <id>`, and add, edit or delete a comment with
+  `{{ plan_store }} task comment add|edit|delete`. Read only the issues the comments below
+  name, one at a time, and never list the board.
+- **A ticket a comment asks you to change.** The ticket behind an issue is at
+  `{{ drafts_root }}/{{ shape.tasks_directory }}/<its run>/{{ shape.tickets_directory }}/<its root cause>{{ shape.ticket_suffix }}`, which the issue's
+  `{{ shape.record_key }}` record names. Only a ticket of an issue a comment below sits on
+  is yours to change here, and only in what that comment asks for.
+
+## What to do, in order
+
+For each comment quoted below, in the order it is quoted:
+
+1. **Act on it** under "Ownership on the board" below: perform whatever the comment calls
+   for, within what this run owns, or nothing where nothing is called for. Where it asks
+   for a change to the ticket behind the issue it sits on, and that issue is this run's,
+   edit that ticket's file — changing what the comment asks for and leaving the rest of it
+   exactly as it stands — then, **for that one ticket**:
+   - run `{{ board_status }} --board {{ board }} <path of the ticket>` and write the word it prints
+     as the ticket's `status`, so a person's move of that item stands;
+   - run `{{ validate }} <path of the ticket>` and correct the ticket until it reports it sound;
+   - run `{{ copy }} --board {{ board }} <path of the ticket>`.
+
+   When any of those refuses, copy nothing for that ticket, keep what it printed for your
+   report and for the account, and go on to the next comment.
+2. **Judge whether it confirms the root cause, and post its one reply**, naming the
+   comment's id and carrying that verdict in its marker, as those rules state: `{{ shape.confirms }}`
+   when the comment is a new sighting of the issue's root cause or evidence that it is more
+   prevalent, `{{ shape.does_not_confirm }}` otherwise. Keep the id the store prints for it.
+3. **After every `{{ shape.confirms }}` reply, re-estimate the issue it sits on** with
+   `{{ re_estimate }} --board {{ board }} <the issue's id>`: the confirmation is one more
+   occurrence, and that command recounts them, stores the estimate and rewrites the
+   estimate line. It moves the issue's priority only where the board still holds the
+   estimate, so a priority a person set stays.
+4. **Record it** in the account at `{{ responses }}`, with its verdict, to the shape under "The
+   account of every comment" below.
+
+Then run `{{ check_responses }}` and correct the account until it reports it sound.
+
+Finally, **report** each comment's URL beside what you did about it or why you did
+nothing, and the reply you posted for it.
+
+**Never change a board item's status**, and never touch an issue, a comment or a ticket no
+comment below names: a person's move of an item to `Todo`, `Deferred` or `In Progress`
+stands whenever they made it, and a ticket this run left unfinished is the next
+verification dispatch's, not this one's.
+
+{% include "follow-up-task/ownership.md.j2" %}
+
+## The account of every comment
+
+**Every comment this feedback quotes is accounted for, exactly once, in the order it is
+quoted.** The account is a JSON document at `{{ responses }}`, which you write. One entry per
+quoted comment, in that order:
+
+````json
+{{ response_example }}
+````
+
+`action` is what you did before the reply went up, in your words; `reply` is the id of the
+reply you posted for that comment, which is the one the board gave it; and `verdict` is the
+verdict that reply's marker carries.
+
+**`{{ check_responses }}` is what says the account is complete.** Run it, correct the document
+until it reports the account sound, and run it again. It exits {{ shape.exits.sound }} when every quoted
+comment carries exactly one response, in order, naming the issue the feedback quotes it on
+and its verdict, the board holds a reply of this run answering it whose marker carries that
+verdict, and every issue a `{{ shape.confirms }}` reply sits on stores the estimate its comments recount
+to and states it on its estimate line; and {{ shape.exits.unsound }} naming each comment that is absent,
+answered twice, out of order, or whose reply the board does not hold or marks with another
+verdict, and each issue whose estimate or estimate line disagrees — run `{{ re_estimate }}` on
+that issue. This dispatch is not finished while it refuses.
+
+{% endif %}
+{% endblock %}
+{% block more_criteria %}
+{% if mode == "initial" %}
+- Every ticket left under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.tickets_directory }}/` is one `{{ validate }}` reports
+  sound, over the tree as it finally stands.
+- `{{ check_dispositions }}` reports the account at `{{ dispositions }}` sound: every draft this
+  dispatch was given carries exactly one disposition, with the root causes that
+  disposition owes. Run it last, after the final edit to that account, because a run of it
+  from before that edit says nothing about the account you leave.
+- Every claim the report makes about what reached the board is true of the board as it
+  finally stands: an issue reported created or updated is one the copy printed, and a
+  refusal reported is one a command printed.
+{% else %}
+- `{{ check_responses }}` reports the account at `{{ responses }}` sound: every comment quoted
+  below carries exactly one response, in the order it is quoted, naming the issue the
+  comment is quoted on and its verdict, the board holds a reply of run `{{ run }}` answering it
+  whose marker carries that verdict, and every issue a `{{ shape.confirms }}` reply sits on stores the
+  estimate its comments recount to. Run it
+  last, after the final reply is posted and the final edit to that account, because a run
+  of it from before either says nothing about what you leave.
+- No issue, comment or ticket that no comment below names was created, edited, copied or
+  closed by this dispatch.
+- Every claim the report makes is true of the board as it finally stands.
+{% endif %}
+{% endblock %}
+{% block after_criteria %}
+{% if mode == "initial" and redispatch %}
+
+## This is a re-dispatch
+
+A follow-up agent has already worked run `{{ run }}`'s drafts, so tickets, board issues and
+comments of this run may already exist. "Ownership on the board" above binds every change:
+
+- change only what belongs to run `{{ run }}`, as those rules say, and nothing belonging to any
+  other run;
+- an issue run `{{ run }}` created is **edited** — change its ticket and copy the ticket again —
+  and every comment of run `{{ run }}` is added, edited or left as those rules say;
+- an existing ticket of run `{{ run }}` is copied again carrying the board's status, which
+  `{{ board_status }} --board {{ board }} <path of the ticket>` prints, never the status the ticket
+  held before — the board may have been moved since the last copy;
+- a ticket of an older schema is brought to the current shape before it is copied, its
+  `repositories` naming its record's `repository`, its `host` read from this machine
+  with `hostname`, and its `## Impact` section written from the evidence the ticket
+  already carries, re-verifying only a claim that no longer holds; its `## Repository`
+  section removed, any path the ticket still needs moved into `## Root cause`; its
+  `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's
+  evidence supports; and every other option it offered moved into `## Rejected fixes`,
+  with why each was not chosen; then it is validated again.
+- a ticket's dependencies on accepted tickets, and the claims written against their fixes,
+  are re-derived from the board as it now is on every pass — an accepted ticket may have
+  appeared, moved or been un-accepted since the last pass, so `{{ shape.dependency_field }}` entries are
+  added and removed and the ticket's `## Impact`, `## Root cause`, `## Suggested fix` and
+  `## Rejected fixes` re-derived to match, and `{{ board_status }} --board {{ board }} <path of
+  the ticket>` refusing an entry is the signal to re-derive that ticket before copying it;
+  nothing else about an older ticket moves.
+- a schema-{{ shape.prior_schema }} ticket of this run is brought to schema {{ shape.schema }} by recording its `{{ shape.frequency_field }}` from
+  the evidence it already carries, then running `{{ board_status }} --board {{ board }} <path of
+  the ticket>`, which writes its `{{ shape.estimate_field }}`, its `## {{ shape.impact }}` estimate line and its
+  `{{ shape.priority_field }}` and reads its schema-{{ shape.prior_schema }} board item as storing no estimate; validate it and copy
+  it. Another run's schema-{{ shape.prior_schema }} item is brought forward by `{{ re_estimate }} --board {{ board }} <its
+  id>` alone, and only after this run comments on it.
+{% endif %}
+{% if mode == "initial" and feedback is not none %}
+
+## Feedback on the previous follow-up run
+
+The manager's feedback on what the previous follow-up agent of run `{{ run }}` produced,
+verbatim. Act on it within the rules above.
+
+{{ feedback }}
+{% endif %}
+{% if mode == "feedback" %}
+
+## The comments to answer
+
+Gathered into `{{ feedback_file }}`, which is the name the account at `{{ responses }}` records.
+
+{{ feedback }}
+{% endif %}
+
+{{ placement_note | trim }}
+{% endblock %}

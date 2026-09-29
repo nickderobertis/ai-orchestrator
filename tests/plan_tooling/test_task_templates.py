@@ -1,8 +1,9 @@
 """This host's task templates, as the pinned engine and plan store read them.
 
 `templates/` is the host root: `templates.yaml` registers this host's own names,
-`plan-task.md.j2` overrides the engine's built-in `plan-task`, and `dispatch-appendix.md`
-is the operational notes that template includes. Every check here runs the pinned
+`plan-task.md.j2` overrides the engine's built-in `plan-task`, `follow-up-task.md.j2`
+supplies the follow-up agent's task, and `dispatch-appendix.md` is the operational notes
+the plan-task template includes. Every check here runs the pinned
 `onepipeline template` and `onetaskgraph` verbs for real, in the environment
 `scripts/dispatch-env.sh` establishes for a launch — the one a dispatch is handed — so
 what is asserted is what a planner's `resolve | task create` would meet.
@@ -33,6 +34,8 @@ from orchestrator.root import REPO_ROOT
 ROOT = REPO_ROOT / "templates"
 REGISTRATION = ROOT / "templates.yaml"
 PLAN_TASK = ROOT / "plan-task.md.j2"
+#: The follow-up agent's task, which this host registers and supplies at its own layer.
+FOLLOW_UP = ROOT / "follow-up-task.md.j2"
 APPENDIX = ROOT / "dispatch-appendix.md"
 ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 PLAN_STORE = REPO_ROOT / ".venv" / "bin" / "onetaskgraph"
@@ -166,17 +169,46 @@ def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
         assert by_name[name]["description"].strip(), by_name[name]
 
 
-def test_the_engine_passes_plan_task_and_refuses_a_name_no_layer_supplies(
-    launch_environment: dict[str, str],
+@pytest.mark.parametrize(
+    ("name", "path"), [("plan-task", PLAN_TASK), ("follow-up-task", FOLLOW_UP)]
+)
+def test_the_engine_resolves_and_passes_each_host_template_through_the_launch_environment(
+    launch_environment: dict[str, str], name: str, path: Path
 ) -> None:
-    """The host's template is valid, and a registered name with no file says so by name."""
-    checked = _run([str(ENGINE), "template", "check", "plan-task"], launch_environment)
+    """Each task template this host supplies answers from the host layer, and is valid."""
+    resolved = _run([str(ENGINE), "template", "resolve", name, "--json"], launch_environment)
+    assert resolved.returncode == 0, resolved.stderr
+    loader = json.loads(resolved.stdout)
+    assert (loader["layer"], loader["reference"], loader["path"]) == (
+        "host",
+        f"onepipeline:{name}",
+        str(path),
+    )
+
+    checked = _run([str(ENGINE), "template", "check", name], launch_environment)
     assert checked.returncode == 0, checked.stderr
     assert "host layer" in checked.stdout, checked.stdout
 
-    refused = _run([str(ENGINE), "template", "resolve", "follow-up-task"], launch_environment)
+
+def test_a_registered_name_no_layer_supplies_is_refused_by_name(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    """A root registering a name it holds no file for says so, naming it, rather than guessing."""
+    root = tmp_path / "templates"
+    root.mkdir()
+    (root / REGISTRATION.name).write_text(
+        "onepipeline_templates: 1\ntemplates:\n  unfilled-task:\n    role: task\n"
+        "    description: A name registered with no file under this root.\n",
+        encoding="utf-8",
+    )
+
+    refused = _run(
+        [str(ENGINE), "template", "resolve", "unfilled-task", "--template-root", str(root)],
+        launch_environment,
+    )
+
     assert refused.returncode == 2, refused.stdout
-    assert "no template for follow-up-task" in refused.stderr, refused.stderr
+    assert "no template for unfilled-task" in refused.stderr, refused.stderr
 
 
 def test_the_template_extends_the_engines_base_and_opens_no_criteria_heading_itself() -> None:

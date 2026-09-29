@@ -34,9 +34,12 @@ drafts, tickets and board. The refusals ride beside it on runs of their own.
 
 One journey doubles the engine instead, in `delegation_checkout`'s throwaway checkout: what
 the recipe writes and the command lines it delegates, which is `just follow-ups`' row of
-the delegation table. It is here rather than in `tests/e2e/test_delegated_recipes_e2e.py`
-because its answer moves with `orchestrator/follow_up_tickets.py`, which this project's key
-carries and the recipe tier's does not.
+the delegation table. Its double traces every engine call and hands the two `template`
+verbs — no launch, and what the node's task is created from and checked by — to the pinned
+engine, so the task it reads back is the real rendering. It is here rather than in
+`tests/e2e/test_delegated_recipes_e2e.py` because its answer moves with
+`orchestrator/follow_up_tickets.py`, which this project's key carries and the recipe tier's
+does not.
 """
 
 from __future__ import annotations
@@ -59,6 +62,7 @@ import follow_up_variables
 import plan_root_variable
 import pytest
 import short_state
+import yaml
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
@@ -150,8 +154,13 @@ NODE = "follow-ups"
 GRAPH = "graphs/follow-up.yaml"
 PERSONA = "../personas/follow-up.yaml"
 
-#: The tracked template the recipe composes the agent's task from, relative to this checkout.
-TEMPLATE = "config/follow-up-task.md"
+#: The registered template the recipe creates the node's task from, the pinned engine that
+#: states it and checks the created task, the provenance key the store records a rendering
+#: under, and the reference a registered name records.
+TEMPLATE_NAME = "follow-up-task"
+ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+PROVENANCE = "onetaskgraph.template"
+REFERENCE = f"onepipeline:{TEMPLATE_NAME}"
 
 #: The repository every draft here is about, and the commit its claims were verified at;
 #: and a second repository of the board's owner, which the accepted fix that narrows a ticket
@@ -900,6 +909,75 @@ def _launched_plan(bench: Bench, follow_up_run: str) -> dict[str, object]:
     return plan
 
 
+class Stored(NamedTuple):
+    """The follow-ups project's node as the store holds it once a pass has launched.
+
+    Read right after the pass, because the next pass over the same run retires this task and
+    creates its own: `tasks` is every task the project holds, `content` and `metadata` are
+    the one node's, `rerendered` is what the store's own `task render --dry-run` regenerates
+    from the answers it kept beside it, and `checked` is the engine's own check of the item.
+    """
+
+    tasks: list[str]
+    content: str
+    metadata: dict[str, object]
+    rerendered: str
+    checked: subprocess.CompletedProcess[str]
+
+
+def _template_environment(bench: Bench) -> dict[str, str]:
+    """This bench's environment with this host's template root, as every launch exports it."""
+    return bench.environment | {"ONEPIPELINE_TEMPLATE_ROOT": str(REPO_ROOT / "templates")}
+
+
+def _stored(bench: Bench, project: str) -> Stored:
+    """The node's task read back out of the store, and checked and re-rendered by the pins."""
+    listed = _store(bench, "task", "list", "--source", "authoring", "--project", project)
+    items = listed["items"]
+    assert isinstance(items, list), listed
+    tasks = [str(held["id"]) for held in items]
+    assert tasks, f"the store holds no task for authoring:{project}"
+    item = _item(bench, tasks[0])
+    metadata = item["metadata"]
+    assert isinstance(metadata, dict), item
+    environment = _template_environment(bench)
+    loader = _run(
+        [str(ENGINE), "template", "resolve", TEMPLATE_NAME, "--json"],
+        bench,
+        environment=environment,
+    )
+    assert loader.returncode == OK, loader.stderr
+    # The store's own regeneration, from the answers it kept beside the task, writing nothing.
+    regenerated = subprocess.run(  # noqa: S603 - the pinned store this checkout installs
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "render",
+            tasks[0],
+            "--template-loader",
+            "-",
+            "--dry-run",
+            "--no-interactive",
+            "--json",
+        ],
+        input=loader.stdout,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert regenerated.returncode == OK, regenerated.stderr
+    report = json.loads(regenerated.stdout)
+    assert report["changed"] is False, report
+    checked = _run(
+        [str(ENGINE), "template", "check", TEMPLATE_NAME, "--item", tasks[0]],
+        bench,
+        environment=environment,
+    )
+    return Stored(tasks, str(item["content"]), metadata, str(report["body"]), checked)
+
+
 class Pass(NamedTuple):
     """One `just follow-ups` over the main run, and what its turn was given."""
 
@@ -920,6 +998,7 @@ class Followed(NamedTuple):
     empty_run: str
     first: Pass
     first_turn: Turn
+    first_stored: Stored
     new_after_first: dict[str, object]
     other_after_first: dict[str, object]
     comments_after_first: list[dict[str, object]]
@@ -937,6 +1016,7 @@ class Followed(NamedTuple):
     new_after_move: dict[str, object]
     narrowing_after_move: dict[str, object]
     second: Pass
+    second_stored: Stored
     rederive_witness: str
     new_deps_after_second: list[tuple[str, str, str]]
     new_after_second: dict[str, object]
@@ -1366,6 +1446,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             f"{first.result.stdout}{first.result.stderr}{first_turn}"
         )
         assert first_turn is not None, "the transcript names no turn report for the member"
+        first_stored = _stored(bench, f"{main}{SUFFIX}")
         new_issue = f"{BOARD}:{main}/tickets/{NEW_CAUSE}"
         assert new_issue in _board_ids(bench), _ran(bench)
         new_after_first = _item(bench, new_issue)
@@ -1471,6 +1552,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         second = _pass(bench, "second", main, "--feedback", str(feedback))
         started.append(second.run)
         assert second.result.returncode == OK, second.result.stdout + second.result.stderr
+        second_stored = _stored(bench, f"{main}{SUFFIX}")
         new_deps_after_second = _deps(bench, new_issue)
         new_after_second = _item(bench, new_issue)
         related_after_second = _item(bench, related_issue)
@@ -1732,6 +1814,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             empty_run=empty_run,
             first=first,
             first_turn=first_turn,
+            first_stored=first_stored,
             new_after_first=new_after_first,
             other_after_first=other_after_first,
             comments_after_first=comments_after_first,
@@ -1749,6 +1832,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             new_after_move=new_after_move,
             narrowing_after_move=narrowing_after_move,
             second=second,
+            second_stored=second_stored,
             rederive_witness=rederive_witness.read_text(encoding="utf-8"),
             new_deps_after_second=new_deps_after_second,
             new_after_second=new_after_second,
@@ -2184,7 +2268,7 @@ def test_the_members_scratch_stays_under_this_journeys_own_bench(followed: Follo
     ), f"the turn ran its commands outside {bench_state}"
 
 
-def test_the_composed_task_names_the_plan_store_in_full_and_never_bare(
+def test_the_task_names_the_plan_store_in_full_and_never_bare(
     followed: Followed,
 ) -> None:
     """Every store instruction the agent is given resolves to one program, not to a name.
@@ -2196,20 +2280,19 @@ def test_the_composed_task_names_the_plan_store_in_full_and_never_bare(
     (task,) = followed.first.prompts
 
     assert str(ONETASKGRAPH_BIN) in task, (
-        f"the composed task never names {ONETASKGRAPH_BIN}, so what a store command there "
+        f"the task never names {ONETASKGRAPH_BIN}, so what a store command there "
         "resolves to is the dispatch's search path's to decide"
     )
     bare = [line for line in task.splitlines() if "`onetaskgraph " in line]
-    assert not bare, f"the composed task still names a bare plan-store invocation: {bare}"
+    assert not bare, f"the task still names a bare plan-store invocation: {bare}"
 
 
-def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
-    """The compose command `scripts/follow-ups.sh` runs, with ``plan_store`` in its place.
+def _answers_command(bench: Bench, run: str, plan_store: str) -> list[str]:
+    """The `answers` command `scripts/follow-ups.sh` runs, with ``plan_store`` in its place.
 
-    Every other word is the recipe's own — this checkout's interpreter, the tracked
-    template, the run's real drafts root, the board this journey stands in, and the two
-    commands the task is written with — so what a refusal below answers is the one value
-    that differs.
+    Every other word is the recipe's own — this checkout's interpreter, the run's real drafts
+    root, the board this journey stands in, and the commands the task is written with — so
+    what a refusal below answers is the one value that differs.
     """
     python = str(REPO_ROOT / ".venv" / "bin" / "python3")
     written = f'"{python}" -m orchestrator.follow_up_tickets'
@@ -2217,9 +2300,7 @@ def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
         python,
         "-m",
         "orchestrator.follow_up_tickets",
-        "compose",
-        "--template",
-        str(REPO_ROOT / TEMPLATE),
+        "answers",
         "--root",
         str(bench.drafts_root),
         "--run",
@@ -2247,21 +2328,21 @@ def _compose_command(bench: Bench, run: str, plan_store: str) -> list[str]:
     ]
 
 
-def test_a_plan_store_the_dispatch_could_not_run_composes_no_task_at_all(
+def test_a_plan_store_the_dispatch_could_not_run_answers_no_task_at_all(
     followed: Followed,
 ) -> None:
-    """The composer refuses a program the dispatch could not run, before a task exists.
+    """The answers refuse a program the dispatch could not run, before a task exists.
 
-    Driven where `scripts/follow-ups.sh` drives it: the real `compose` command, spawned
-    through this checkout's own interpreter over the tracked template and the run's real
-    drafts root, with only `--plan-store` differing between the three invocations. That is
-    the boundary the refusal defends — the recipe writes this command's standard output
-    straight into the task the launch dispatches, so a value it let through would reach the
-    agent as a store instruction that fails after the launch, with the task already written
-    and two real runs' worth of evidence for what that costs.
+    Driven where `scripts/follow-ups.sh` drives it: the real `answers` command, spawned
+    through this checkout's own interpreter over the run's real drafts root, with only
+    `--plan-store` differing between the invocations. That is the boundary the refusal
+    defends — the recipe renders the node's task from this command's standard output, so a
+    value it let through would reach the agent as a store instruction that fails after the
+    launch, with the task already written and two real runs' worth of evidence for what
+    that costs.
 
-    Each refusal is read as *no task composed* rather than as a message alone: an empty
-    standard output is what keeps the recipe from launching, and the sound invocation
+    Each refusal is read as *nothing answered* rather than as a message alone: an empty
+    standard output is what keeps the recipe from creating a task, and the sound invocation
     beside them is what says the rest of the argv is not what any of them answered. The
     third is absolute and really executable — a symlink to the pinned CLI — and is refused
     only for the space in its directory, which the shell a store instruction runs in would
@@ -2269,9 +2350,9 @@ def test_a_plan_store_the_dispatch_could_not_run_composes_no_task_at_all(
     """
     bench, run = followed.bench, followed.main
 
-    composed = _run(_compose_command(bench, run, str(ONETASKGRAPH_BIN)), bench)
-    assert composed.returncode == OK, composed.stdout + composed.stderr
-    assert str(ONETASKGRAPH_BIN) in composed.stdout
+    answered = _run(_answers_command(bench, run, str(ONETASKGRAPH_BIN)), bench)
+    assert answered.returncode == OK, answered.stdout + answered.stderr
+    assert json.loads(answered.stdout)["plan_store"] == str(ONETASKGRAPH_BIN)
 
     unquotable = bench.tmp / "plan store"
     unquotable.mkdir(exist_ok=True)
@@ -2281,12 +2362,131 @@ def test_a_plan_store_the_dispatch_could_not_run_composes_no_task_at_all(
         (str(bench.tmp / "no-such-plan-store"), "is not an executable file"),
         (str(unquotable / "onetaskgraph"), "does not read as part of one word"),
     ):
-        refused = _run(_compose_command(bench, run, named), bench)
+        refused = _run(_answers_command(bench, run, named), bench)
         assert refused.returncode == REFUSED, refused.stdout + refused.stderr
         assert refusal in refused.stderr, refused.stderr
         assert refused.stdout == "", (
-            f"a plan store the dispatch could not run still composed a task: {refused.stdout}"
+            f"a plan store the dispatch could not run still answered a task: {refused.stdout}"
         )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These journeys run in the
+# plan_tooling Nx project, the dedicated tier for journeys that drive the installed engine,
+# whose planToolingWorkspace input covers the recipe, the template, the task module and the
+# store configuration they read. They spend no launch of their own: each reads back what the
+# module fixture's launches left, and the override's recipe run stops before any launch.
+def test_the_launched_task_was_created_from_the_template_and_is_exactly_its_rendering(
+    followed: Followed,
+) -> None:
+    """The node the recipe launched is the store's rendering of `follow-up-task`, whole.
+
+    Read back out of the store right after the launch: it records the registered template's
+    reference as its provenance, the pinned engine's own check of the stored item passes, the
+    answers the store kept beside it render to its body byte for byte, the body ends at the
+    placement note the template renders — nothing appended after it — and it is the task the
+    member's turn was given.
+    """
+    stored = followed.first_stored
+
+    assert len(stored.tasks) == 1, stored.tasks
+    provenance = stored.metadata[PROVENANCE]
+    assert isinstance(provenance, dict), stored.metadata
+    assert provenance["template"] == REFERENCE, provenance
+    assert stored.checked.returncode == OK, stored.checked.stdout + stored.checked.stderr
+    assert f"item {stored.tasks[0]}: ok" in stored.checked.stdout, stored.checked.stdout
+    assert stored.content == stored.rerendered
+    # The note is read where the recipe reads it: sourced out of `scripts/plan-brief.sh`.
+    note = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; printf %s "$PLAN_DIRECT_PLACEMENT_NOTE"',
+            "_",
+            str(REPO_ROOT / "scripts" / "plan-brief.sh"),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert note.strip() and stored.content.rstrip().endswith(note.strip()), stored.content[-400:]
+    assert (followed.first.prompts[0].strip(), stored.metadata["onepipeline.id"]) == (
+        stored.content.strip(),
+        NODE,
+    )
+
+
+def test_a_re_dispatch_retires_the_previous_task_so_the_project_keeps_one_node(
+    followed: Followed,
+) -> None:
+    """The second pass's project holds its own rendering and nothing of the first pass's.
+
+    The store files a created task by its title rather than under its project, so a second
+    create alone would leave the first pass's node beside the new one; the recipe retires
+    the project's previous task before creating the next, and the manager's feedback the
+    second pass was given is in the one task that remains.
+    """
+    stored = followed.second_stored
+
+    assert len(stored.tasks) == 1, stored.tasks
+    assert stored.checked.returncode == OK, stored.checked.stdout + stored.checked.stderr
+    assert stored.content == stored.rerendered
+    assert "## Feedback on the previous follow-up run" in stored.content
+    assert "## Feedback on the previous follow-up run" not in followed.first_stored.content
+
+
+#: An override of `follow-up-task` in the repository layer, ahead of this host's root: the
+#: tracked template's own declarations, so the recipe's answers are ones it takes, over a body
+#: that renders no criterion at all.
+def _criterionless_override(layer: Path) -> Path:
+    tracked = (REPO_ROOT / "templates" / f"{TEMPLATE_NAME}.md.j2").read_text(encoding="utf-8")
+    front = tracked[: tracked.index("\n---\n", len("---")) + len("\n---\n")]
+    override = layer / ".onepipeline" / "templates" / f"{TEMPLATE_NAME}.md.j2"
+    override.parent.mkdir(parents=True)
+    override.write_text(
+        front
+        + '{% extends "onepipeline/plan-task.md.j2" %}\n'
+        + "{% block before_criteria %}\n## What\n\nVerify run `{{ run }}`.\n\n{% endblock %}\n",
+        encoding="utf-8",
+    )
+    return override
+
+
+def test_an_override_that_renders_no_criterion_is_refused_before_anything_launches(
+    followed: Followed, tmp_path: Path
+) -> None:
+    """A repository layer's `follow-up-task` that lists no criteria launches nothing.
+
+    The recipe is run from a directory whose `.onepipeline/templates/` overrides the
+    template, which is the repository layer `onepipeline template resolve` reads ahead of
+    this host's root. The store renders and stores it, and the engine's check of the stored
+    item refuses it for listing no acceptance criteria, so no follow-up run exists.
+    """
+    bench = followed.bench
+    run = f"fu-criterionless-{os.getpid()}"
+    _draft(bench, run, "The sweep trailer omits a family")
+    layer = tmp_path / "overriding-repository"
+    override = _criterionless_override(layer)
+
+    refused = subprocess.run(  # noqa: S603 - this repository's own recipe
+        [str(REPO_ROOT / "scripts" / "follow-ups.sh"), run, "--to", BOARD],
+        cwd=layer,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert "no criteria listed" in refused.stderr, refused.stderr
+    assert "no follow-up run was launched" in refused.stderr, refused.stderr
+    assert not (bench.runs / f"{run}{SUFFIX}").exists(), (
+        f"the recipe launched a run over a task {override} rendered with no criteria"
+    )
+    assert refused.stdout == "", refused.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _unprovisioned(root: Path) -> Path:
@@ -2475,17 +2675,17 @@ def test_the_validate_instruction_runs_the_locked_plan_store_with_an_older_one_f
     )
 
 
-def test_the_member_is_given_the_composed_task_whole(followed: Followed) -> None:
+def test_the_member_is_given_the_created_task_whole(followed: Followed) -> None:
     first = followed.first
     node = _launched_node(followed.bench, first.run)
 
     assert len(first.prompts) == 1, first.prompts
     assert first.prompts[0].strip() == str(node["task"]).strip(), (
-        "the follow-up agent's turn was not given the task the recipe composed, whole"
+        "the follow-up agent's turn was not given the task the recipe created, whole"
     )
 
 
-def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
+def test_the_task_carries_every_instruction_and_both_contracts(
     followed: Followed,
 ) -> None:
     (task,) = followed.first.prompts
@@ -2541,23 +2741,19 @@ def test_the_composed_task_carries_every_instruction_and_renders_both_contracts(
     assert copied is not None, task
     estimated = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets re-estimate) --board", task)
     assert estimated is not None, task
-    contract = (
-        tickets.ticket_contract(main, BOARD)
-        .replace("@DRAFTS_ROOT@", str(root))
-        .replace("@VALIDATE@", validated[1])
-        .replace("@BOARD_STATUS@", decided[1])
-        .replace("@BOARD_ITEMS@", listed[1])
-        .replace("@COPY@", copied[1])
-        .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
+    assert f"````markdown\n{tickets.ticket_example(main, BOARD)}````" in task, (
+        "the example ticket is not the one the module renders"
     )
-    assert contract in task, "the ticket shape is not the one the module renders"
-    ownership = (
-        tickets.comment_contract(main, BOARD)
-        .replace("@PLAN_STORE@", str(ONETASKGRAPH_BIN))
-        .replace("@RE_ESTIMATE@", estimated[1])
+    for marker in (
+        tickets.comment_marker(main, "<root-cause>"),
+        tickets.reply_marker(
+            main, "<root-cause>", "<comment id>", "<confirms or does-not-confirm>"
+        ),
+    ):
+        assert f"`{marker}`" in task, marker
+    assert flat.count(" ".join(tickets.status_vocabulary().split())) == 1, (
+        "the status vocabulary is not there once"
     )
-    assert ownership in task, "board ownership is not the module's"
-    assert task.count(tickets.status_vocabulary()) == 1, "the status vocabulary is not there once"
     assert "## This is a re-dispatch" not in task
     assert "## Feedback on the previous follow-up run" not in task
 
@@ -3243,38 +3439,64 @@ def test_a_run_whose_account_leaves_a_draft_out_fails_the_recipe_naming_that_dra
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-#: The task template `just follow-ups` composes its node's task from, for the one journey
-#: below that doubles the engine. Written rather than copied, for the reason
-#: `delegation_checkout` writes the design template: what the template *says* is asserted
-#: against a real dispatch by this module's other journeys, and this one is about where the
-#: recipe lands and what it delegates. The prose below is only what this journey
-#: reads back out of the composed task; every other placeholder the initial mode owes is
-#: appended from the composer's own set, because a template missing one is refused before
-#: anything is delegated and a spelled copy left this journey failing on the placeholders
-#: the initial/feedback split added rather than on anything it is about.
-FOLLOW_UPS_TEMPLATE = "config/follow-up-task.md"
-FOLLOW_UPS_TEMPLATE_PROSE = (
-    "Verify run @RUN@ onto @BOARD@ from @DRAFTS_ROOT@; validate with @VALIDATE@ in @CHECKOUT@.\n"
-    "Decide each status with @BOARD_STATUS@, list the board with @BOARD_ITEMS@, copy with "
-    "@COPY@, and read the store with @PLAN_STORE@.\n"
-    "Assume the accepted items' fixes — @ACCEPTED_STATUSES@ — listed by @ACCEPTED_FILTER@.\n"
-)
-FOLLOW_UPS_TEMPLATE_TEXT = FOLLOW_UPS_TEMPLATE_PROSE + "".join(
-    f"@{name}@\n"
-    for name in tickets.Mode.INITIAL.placeholders
-    if f"@{name}@" not in FOLLOW_UPS_TEMPLATE_PROSE
-)
-
-
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line
-# This journey runs in the plan_tooling Nx project, whose planToolingWorkspace key carries
-# follow_up_tickets.py and every script the recipe reads. It is `just follow-ups`' row of
-# the delegation table, and doubles what that table doubles for the reason its module
+# These journeys run in the plan_tooling Nx project, whose planToolingWorkspace key carries
+# follow_up_tickets.py and every script the recipe reads. They are `just follow-ups`' row of
+# the delegation table, and double what that table doubles for the reason its module
 # states: the engine is the published CLI the recipe delegates to, so its recorded argv is
 # the subject, while the recipe, its scripts and the shell are real — and this module's
-# other journeys prove what the real engine does with that launch. The run directory it
-# makes is the engine's run root holding an id, which only a launch the double does not
-# make would produce; the free-id choice the recipe makes over it is what is asserted.
+# other journeys prove what the real engine does with that launch. The double hands its two
+# `template` verbs, which launch nothing, to the pinned engine, so the task the recipe
+# creates is the real rendering. The run directory a journey makes is the engine's run root
+# holding an id, which only a launch the double does not make would produce; the free-id
+# choice the recipe makes over it is what is asserted.
+
+
+#: What a delegation checkout needs to create the node's task for real: this host's template
+#: root — its registration, the `follow-up-task` template and the section it includes — and
+#: the plan store's configuration, which names the `authoring` source the task is created
+#: in. Copied rather than written, because the task these journeys read back is the
+#: template's rendering and the recipe refuses a checkout whose root does not register it.
+TEMPLATE_FILES = ("templates/templates.yaml", f"templates/{TEMPLATE_NAME}.md.j2")
+TEMPLATE_DIRECTORY = f"templates/{TEMPLATE_NAME}"
+
+
+def _creates_tasks(checkout: Path) -> None:
+    """Give a delegation checkout what `task create` and the engine's `template` verbs read.
+
+    The engine a launch reaches stays the traced double; its `template` verbs — the stating
+    of the template and the check of the stored task, which are no launch — go on to the
+    pinned engine after being traced, so the recipe's task is the real rendering and the
+    trace still records every engine command line it ran.
+    """
+    for relative in TEMPLATE_FILES:
+        shutil.copy2(REPO_ROOT / relative, checkout / relative)
+    shutil.copytree(REPO_ROOT / TEMPLATE_DIRECTORY, checkout / TEMPLATE_DIRECTORY)
+    shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", checkout / "onetaskgraph.yaml")
+    engine = checkout / ".venv" / "bin" / "onepipeline"
+    traced = engine.read_text(encoding="utf-8")
+    engine.write_text(
+        traced.replace(
+            'printf \'%s %s\\n\' "$0" "$*" >>"$TRACE_FILE"\n',
+            'printf \'%s %s\\n\' "$0" "$*" >>"$TRACE_FILE"\n'
+            f'if [ "${{1:-}}" = template ]; then exec {shlex.quote(str(ENGINE))} "$@"; fi\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    assert str(ENGINE) in engine.read_text(encoding="utf-8"), "the engine double was not extended"
+
+
+def _template_lines(checkout: Path, project: str) -> tuple[str, ...]:
+    """The two engine calls the recipe makes before it launches, as the trace records them."""
+    resolved = checkout.resolve()
+    engine = f"{resolved}/.venv/bin/onepipeline"
+    return (
+        f"{engine} template resolve {TEMPLATE_NAME} --repo {resolved} --json",
+        f"{engine} template check {TEMPLATE_NAME} --repo {resolved} --item {project}",
+    )
+
+
 def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
     tmp_path: Path,
 ) -> None:
@@ -3286,9 +3508,9 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     mints — carries.
     """
     checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
-    (checkout / FOLLOW_UPS_TEMPLATE).write_text(FOLLOW_UPS_TEMPLATE_TEXT, encoding="utf-8")
+    _creates_tasks(checkout)
     # The plan-store CLI this checkout is provisioned with, which is the only program the
-    # recipe will write into the composed task: it names its own checkout's or refuses, so
+    # recipe will write into the task: it names its own checkout's or refuses, so
     # a checkout without one launches nothing at all. Linked to the installed CLI rather
     # than written, because the recipe requires an executable and the task carries its path.
     store = checkout / ".venv" / "bin" / "onetaskgraph"
@@ -3324,14 +3546,17 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
         ),
         encoding="utf-8",
     )
-    launched = tuple(
-        delegation_checkout.at(checkout, line)
-        for line in (
-            "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
-            delegation_checkout.ENGINE_VERSION,
-            f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-            "authoring:run-1-follow-ups --dag-graph off",
-        )
+    launched = (
+        *_template_lines(checkout, "authoring:run-1-follow-ups"),
+        *(
+            delegation_checkout.at(checkout, line)
+            for line in (
+                "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+                delegation_checkout.ENGINE_VERSION,
+                f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
+                "authoring:run-1-follow-ups --dag-graph off",
+            )
+        ),
     )
 
     first = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
@@ -3341,17 +3566,21 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "run-1-follow-ups"' in project
     assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
-    node = (checkout / ".plans/tasks/run-1-follow-ups/follow-ups.md").read_text(encoding="utf-8")
-    assert '"onepipeline.agent_graph": "graphs/follow-up.yaml"' in node
-    assert '"onepipeline.persona": "../personas/follow-up.yaml"' in node
-    front_matter = node.split("---\n", 2)[1]
-    assert '"onepipeline.repo"' not in front_matter, "a direct node names no repository"
-    assert "repositories:" not in front_matter, "a direct node names no repository"
-    assert f"Verify run run-1 onto followups from {checkout / '.follow-ups'}" in node
-    # The plan store the composed task names: this checkout's own, spelled in full. Never
-    # the one on the search path, which answers about whichever checkout provisioned it —
-    # the resolution two real runs were made wrong by.
-    assert f"read the store with {store}" in node, node
+    node = _one_task_record(checkout)
+    front_matter = yaml.safe_load(node.split("---\n", 2)[1])
+    metadata = front_matter["metadata"]
+    assert metadata["onepipeline.id"] == NODE, metadata
+    assert metadata["onepipeline.agent_graph"] == GRAPH, metadata
+    assert metadata["onepipeline.persona"] == PERSONA, metadata
+    assert metadata["onetaskgraph.template"]["template"] == REFERENCE, metadata
+    assert front_matter["project"] == "run-1-follow-ups", front_matter
+    assert "onepipeline.repo" not in metadata, "a direct node names no repository"
+    assert "repositories" not in front_matter, "a direct node names no repository"
+    assert f"`{checkout.resolve() / '.follow-ups'}/tasks/run-1/drafts/`" in node, node
+    # The plan store the task names: this checkout's own, spelled in full. Never the one on
+    # the search path, which answers about whichever checkout provisioned it — the
+    # resolution two real runs were made wrong by.
+    assert f"`{store} task list --source drafts --project run-1 --json`" in node, node
     assert shutil.which("onetaskgraph", path=os.environ["PATH"]) != str(store), (
         "this journey's search path already resolves to the checkout's own store, so the "
         "assertion above would hold however the recipe resolved it"
@@ -3364,6 +3593,15 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert trace.read_text().splitlines() == [*launched, *launched]
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "run-1-follow-ups-2"' in project
+    # The second launch retired the first one's task before creating its own.
+    assert f"template: {REFERENCE}" in _one_task_record(checkout)
+
+
+def _one_task_record(checkout: Path) -> str:
+    """The one task record the recipe left under the checkout's plan-authoring root."""
+    records = sorted((checkout / ".plans" / "tasks").rglob("*.md"))
+    assert len(records) == 1, records
+    return records[0].read_text(encoding="utf-8")
 
 
 def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
@@ -3377,7 +3615,7 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     project's `name` — keeps its case.
     """
     checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
-    (checkout / FOLLOW_UPS_TEMPLATE).write_text(FOLLOW_UPS_TEMPLATE_TEXT, encoding="utf-8")
+    _creates_tasks(checkout)
     store = checkout / ".venv" / "bin" / "onetaskgraph"
     store.parent.mkdir(parents=True, exist_ok=True)
     store.symlink_to(ONETASKGRAPH_BIN)
@@ -3412,13 +3650,16 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     assert launched.returncode == 0, launched.stderr
     traced = trace.read_text().splitlines()
     assert traced == [
-        delegation_checkout.at(checkout, line)
-        for line in (
-            "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
-            delegation_checkout.ENGINE_VERSION,
-            f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-            "authoring:run-1-follow-ups --dag-graph off",
-        )
+        *_template_lines(checkout, "authoring:run-1-follow-ups"),
+        *(
+            delegation_checkout.at(checkout, line)
+            for line in (
+                "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+                delegation_checkout.ENGINE_VERSION,
+                f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
+                "authoring:run-1-follow-ups --dag-graph off",
+            )
+        ),
     ]
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "Run-1-follow-ups"' in project
@@ -3429,7 +3670,7 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     gated = subprocess.run(
         [
             Path(sys.executable).with_name("orchestrator-launch-gate"),
-            *shlex.split(traced[0].split("orchestrator-launch-gate", 1)[1]),
+            *shlex.split(traced[2].split("orchestrator-launch-gate", 1)[1]),
         ],
         cwd=checkout,
         env=os.environ | {plan_root_variable.name(): str(checkout / ".plans")},
@@ -3438,6 +3679,106 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
         check=False,
     )
     assert gated.returncode == 0, gated.stderr
+
+
+def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_recovers(
+    tmp_path: Path,
+) -> None:
+    """A re-dispatch whose task cannot be created ends there; the launch after it recovers.
+
+    The recipe retires the project's previous task before it creates the next, so each way
+    the creation can fail is driven after a retirement: a host root that no longer registers
+    `follow-up-task`, which the engine refuses to state at all, and a repository layer's
+    `follow-up-task` naming a variable nothing declares, which the store cannot render. Each
+    ends the launch naming the template, launches nothing, and leaves the project holding no
+    node rather than the previous pass's. With the registration back and the override gone,
+    the next launch creates the task and launches over it.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    _creates_tasks(checkout)
+    store = checkout / ".venv" / "bin" / "onetaskgraph"
+    store.symlink_to(ONETASKGRAPH_BIN)
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+    account = tickets.dispositions_path(checkout / ".follow-ups", "run-1")
+    account.parent.mkdir(parents=True, exist_ok=True)
+    account.write_text(
+        json.dumps(
+            {
+                "schema": tickets.DISPOSITIONS_SCHEMA,
+                "run": "run-1",
+                "drafts": tickets.draft_ids(checkout / ".follow-ups", "run-1"),
+                "dispositions": [
+                    {
+                        "draft": draft,
+                        "disposition": tickets.Disposition.NOT_REPRODUCIBLE.value,
+                        "root_causes": [],
+                        "detail": "nothing in the tree bears the draft out",
+                    }
+                    for draft in tickets.draft_ids(checkout / ".follow-ups", "run-1")
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    start = f"{checkout.resolve()}/.venv/bin/onepipeline start "
+
+    first = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
+    assert first.returncode == 0, first.stderr
+    assert f"template: {REFERENCE}" in _one_task_record(checkout)
+
+    registration = checkout / "templates" / "templates.yaml"
+    registered = registration.read_text(encoding="utf-8")
+    registration.write_text("onepipeline_templates: 1\ntemplates: {}\n", encoding="utf-8")
+    (checkout / "runs" / "run-1-follow-ups").mkdir(parents=True)
+    unregistered = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
+
+    assert unregistered.returncode == REFUSED, unregistered.stdout + unregistered.stderr
+    assert f"template {TEMPLATE_NAME} is not registered" in unregistered.stderr, unregistered.stderr
+    assert (
+        f"could not be created in authoring:run-1-follow-ups from the {TEMPLATE_NAME} template"
+    ) in unregistered.stderr, unregistered.stderr
+    assert len([line for line in trace.read_text().splitlines() if line.startswith(start)]) == 1, (
+        "the re-dispatch whose template could not be stated launched"
+    )
+    assert sorted((checkout / ".plans" / "tasks").rglob("*.md")) == [], (
+        "the re-dispatch whose template could not be stated left a task for the project"
+    )
+    registration.write_text(registered, encoding="utf-8")
+
+    tracked = (REPO_ROOT / "templates" / f"{TEMPLATE_NAME}.md.j2").read_text(encoding="utf-8")
+    front = tracked[: tracked.index("\n---\n", len("---")) + len("\n---\n")]
+    override = checkout / ".onepipeline" / "templates" / f"{TEMPLATE_NAME}.md.j2"
+    override.parent.mkdir(parents=True)
+    override.write_text(
+        front
+        + '{% extends "onepipeline/plan-task.md.j2" %}\n'
+        + "{% block before_criteria %}{{ declared_by_nothing }}{% endblock %}\n",
+        encoding="utf-8",
+    )
+    (checkout / "runs" / "run-1-follow-ups-2").mkdir(parents=True)
+    refused = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert f"template {TEMPLATE_NAME}.md.j2 line" in refused.stderr, refused.stderr
+    assert "a value there is undefined" in refused.stderr, refused.stderr
+    assert (
+        f"could not be created in authoring:run-1-follow-ups from the {TEMPLATE_NAME} template"
+    ) in refused.stderr, refused.stderr
+    assert len([line for line in trace.read_text().splitlines() if line.startswith(start)]) == 1, (
+        "the refused re-dispatch launched"
+    )
+    assert sorted((checkout / ".plans" / "tasks").rglob("*.md")) == [], (
+        "the refused re-dispatch left a task for the project to launch"
+    )
+
+    override.unlink()
+    recovered = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert f"template: {REFERENCE}" in _one_task_record(checkout)
+    assert len([line for line in trace.read_text().splitlines() if line.startswith(start)]) == 2
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line

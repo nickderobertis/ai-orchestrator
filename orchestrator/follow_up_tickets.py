@@ -20,12 +20,13 @@ seam and both outlive the agent that wrote them, so both are decided here and no
   item's URL. The edge is the one record of the dependency: no record key duplicates it.
 
 **Three readers, one shape.** `scripts/follow-ups.sh` counts a run's drafts and tickets,
-composes the agent's task — rendering both contracts into it from :func:`ticket_contract`
-and :func:`comment_contract` rather than restating them — and names every ticket that fails
-the shape once an attached run settles. The agent validates each ticket it writes through
-this module's `validate` command, and decides the status it carries through its
-`board-status` command, before copying it. And the journeys read the board back through
-:func:`from_store_item` and :func:`comment_owner`.
+creates the agent's task from this host's `follow-up-task` template
+(`templates/follow-up-task.md.j2`) — answering it with :func:`answers`, whose examples,
+markers and :func:`shape` words are computed here rather than restated in the template's
+prose — and names every ticket that fails the shape once an attached run settles. The
+agent validates each ticket it writes through this module's `validate` command, and decides
+the status it carries through its `board-status` command, before copying it. And the
+journeys read the board back through :func:`from_store_item` and :func:`comment_owner`.
 
 **The board is the record of the user's decision, and a ticket names its machine.** A ticket
 reaches the board as a proposal and a person accepts it there, so the status a copy writes
@@ -441,7 +442,7 @@ def impact_section(prose: str, severity: str, workaround: str, with_workaround: 
     """The content of an `## Impact` section: ``prose``, then its three lines.
 
     The severities are words rather than :class:`Severity` members, so the example ticket
-    :func:`ticket_contract` renders can put a placeholder where each goes.
+    :func:`ticket_example` renders can put a placeholder where each goes.
     """
     values = (severity, workaround, with_workaround)
     lines = "".join(
@@ -684,20 +685,15 @@ COMMENT_ID = re.compile(r'[^\s">]+')
 #: The suffix a ticket's file carries.
 TICKET_SUFFIX = ".md"
 
-#: The placeholders a task template is filled at: values it may name as often as its
-#: prose needs them, and sections it names exactly once, since a section rendered twice is
-#: two copies of a contract in one task.
-PLACEHOLDER = re.compile(r"@([A-Z][A-Z_]*)@")
-
 
 class Mode(StrEnum):
-    """Which dispatch a task is composed for. Each has its own template and its own account.
+    """Which dispatch a task is rendered for; each has its own account, and the template branches.
 
     **Initial** verifies a run's drafts and puts the tickets that stand on the board; it is
-    what a launch with no gathered feedback composes. **Feedback** answers the board
+    what a launch with no gathered feedback renders. **Feedback** answers the board
     comments one gathering quoted and does nothing else: no inventory, no verification, no
     accepted-fix comparison, no status decision and no copy for a ticket no quoted comment
-    names. Before the split there was one template, and a comment-only re-dispatch re-read
+    names. Before the split there was one task, and a comment-only re-dispatch re-read
     and re-copied every unrelated ticket **after** its replies were already posted, which
     is how it reached the provider's deadline with the work it was dispatched for done.
     """
@@ -705,68 +701,6 @@ class Mode(StrEnum):
     INITIAL = "initial"
     FEEDBACK = "feedback"
 
-    @property
-    def values(self) -> tuple[str, ...]:
-        """The placeholders this mode's template may name as often as it likes."""
-        return _MODE_VALUES[self]
-
-    @property
-    def sections(self) -> tuple[str, ...]:
-        """The placeholders this mode's template names exactly once."""
-        return _MODE_SECTIONS[self]
-
-    @property
-    def placeholders(self) -> tuple[str, ...]:
-        """Every placeholder this mode's template names, each at least once."""
-        return (*self.values, *self.sections)
-
-
-INITIAL_VALUES = (
-    "RUN",
-    "BOARD",
-    "DRAFTS_ROOT",
-    "VALIDATE",
-    "BOARD_STATUS",
-    "BOARD_ITEMS",
-    "COPY",
-    "RE_ESTIMATE",
-    "CHECKOUT",
-    "PLAN_STORE",
-    "ACCEPTED_STATUSES",
-    "ACCEPTED_FILTER",
-    "DISPOSITIONS",
-    "CHECK_DISPOSITIONS",
-)
-INITIAL_SECTIONS = (
-    "STATUS_VOCABULARY",
-    "TICKET_CONTRACT",
-    "COMMENT_CONTRACT",
-    "DISPOSITION_CONTRACT",
-    "REDISPATCH",
-    "FEEDBACK",
-)
-INITIAL_PLACEHOLDERS = (*INITIAL_VALUES, *INITIAL_SECTIONS)
-
-FEEDBACK_VALUES = (
-    "RUN",
-    "BOARD",
-    "CHECKOUT",
-    "PLAN_STORE",
-    "DRAFTS_ROOT",
-    "TICKET_METADATA_KEY",
-    "VALIDATE",
-    "BOARD_STATUS",
-    "COPY",
-    "RE_ESTIMATE",
-    "FEEDBACK_FILE",
-    "RESPONSES",
-    "CHECK_RESPONSES",
-)
-FEEDBACK_SECTIONS = ("COMMENT_CONTRACT", "RESPONSE_CONTRACT", "FEEDBACK")
-FEEDBACK_PLACEHOLDERS = (*FEEDBACK_VALUES, *FEEDBACK_SECTIONS)
-
-_MODE_VALUES = {Mode.INITIAL: INITIAL_VALUES, Mode.FEEDBACK: FEEDBACK_VALUES}
-_MODE_SECTIONS = {Mode.INITIAL: INITIAL_SECTIONS, Mode.FEEDBACK: FEEDBACK_SECTIONS}
 
 #: This command's name in its diagnostics.
 PROG = "follow-up-tickets"
@@ -2423,8 +2357,8 @@ def may_comment_on(
 #: **The account each mode owes.** A follow-up dispatch runs in one of two modes, and each
 #: leaves one machine-checkable account of what it did: initial mode a *disposition* per
 #: input draft, feedback mode a *response* per quoted comment. Both shapes are declared in
-#: what follows and nowhere else — the task templates render their contracts from
-#: :func:`disposition_contract` and :func:`response_contract`, and the `check-dispositions`
+#: what follows and nowhere else — the task template renders each contract's example from
+#: :func:`disposition_example` and :func:`response_example`, and the `check-dispositions`
 #: and `check-responses` commands read the written account back through the same constants
 #: — so the instruction an agent follows and the validator that refuses it cannot drift.
 class Disposition(StrEnum):
@@ -2442,37 +2376,10 @@ class Disposition(StrEnum):
     TOO_LOW_IMPACT = "too-low-impact"
 
     @property
-    def meaning(self) -> str:
-        """What this disposition claims about the draft, as the agent is told it."""
-        return _DISPOSITION_MEANINGS[self]
-
-    @property
     def names_root_causes(self) -> bool:
         """Whether this disposition has to link the draft to the root causes it supports."""
         return self is Disposition.FILED
 
-
-_DISPOSITION_MEANINGS = {
-    Disposition.FILED: (
-        "its claim holds, and its evidence reached the board: as a ticket this run wrote, or "
-        "as this run's evidence comment on another run's open issue for the same root cause. "
-        "`root_causes` names every root cause it supports, each the root cause of a ticket "
-        "this run holds under its `tickets/` whose `drafts` names this draft — which it keeps "
-        "in both cases"
-    ),
-    Disposition.NOT_REPRODUCIBLE: (
-        "its claim does not hold at the basis commit, or nothing in the tree or the "
-        "transcript bears it out"
-    ),
-    Disposition.ALREADY_FIXED: (
-        "the basis already carries the fix, or an accepted ticket's fix removes the root "
-        "cause too, in which case `detail` names that item by URL"
-    ),
-    Disposition.TOO_LOW_IMPACT: (
-        "its claim holds and nothing follows from it worth a ticket; `detail` says what the "
-        "impact is and why it is below the bar"
-    ),
-}
 
 #: Where a run's dispositions are kept: outside the `tasks/` tree the plan store reads, the
 #: way a gathering's feedback is, so nothing here reaches the board as an item.
@@ -3535,8 +3442,13 @@ def _example_body() -> str:
     return "\n\n".join(sections)
 
 
-def ticket_contract(run: str, board: str) -> str:
-    """C5, as the follow-up agent is told it: the shape of the ticket it writes."""
+def ticket_example(run: str, board: str) -> str:
+    """The example ticket a verifying dispatch fills in, as the stored record renders it.
+
+    It is :func:`render` over a :class:`Ticket` of placeholders rather than text written
+    beside it, so the example an agent copies and the record the validator reads back are
+    one shape: a key added to the record reaches the example with it.
+    """
     example = Ticket(
         title="<repository name>: <the root cause in one line>",
         status=Status.PROPOSED,
@@ -3576,198 +3488,11 @@ def ticket_contract(run: str, board: str) -> str:
         ),
         priority=cast(Priority, "<written by `board-status`, never by you>"),
     )
-    ticket = qualified_id(run, "<root-cause>")
-    headings = ", ".join(f"`## {heading}`" for heading in HEADINGS)
-    accepted = ", ".join(f"`{status}`" for status in Status if status.accepted)
-    return (
-        f"A ticket is a local Markdown task in the `{SOURCE}` source, written to "
-        f"`@DRAFTS_ROOT@/{TASKS_DIRECTORY}/{run}/{TICKETS}/<root-cause>{TICKET_SUFFIX}` — "
-        f"qualified id `{ticket}` — where `<root-cause>` is a kebab-case slug.\n\n"
-        "- It carries **no `project`**, so it lands on the board as a standalone item.\n"
-        "- **Its `repositories` names exactly one normalized origin, its record's "
-        "`repository`**: the repository the root cause lives in. Its issue is created in "
-        "that one repository and added to the board as an item, and that repository must "
-        "belong to the board's owner, as `github.com/<owner>/<name>`.\n"
-        "- Its title is `<repository name>: <the root cause in one line>`, at most "
-        f"{TITLE_LIMIT} characters, where the repository name is the last segment of "
-        "`repository`.\n"
-        "- **Its status is the board's to decide.** A new ticket is "
-        f"`{Status.PROPOSED.value}`, {Status.PROPOSED.meaning}, which the board shows as "
-        "`Proposal`; a person moving it to `Todo` is what accepts it. A ticket the board "
-        "already holds carries the status the board holds it at, so a copy never undoes that "
-        "decision: a ticket the board holds at `Deferred` is copied carrying "
-        f"`{Status.DEFERRED.value}`. A ticket this run withdraws is "
-        f"`{Status.WITHDRAWN.value}`, which the board holds as closed as not planned, unless "
-        "the board shows it as accepted or deferred: this run never withdraws a deferred item "
-        "or an accepted one, so copy nothing, leave the local ticket as it is, and report that "
-        "you would have withdrawn it and why. No issue is ever deleted.\n"
-        f"- **Before every copy, run `@BOARD_STATUS@ --board {board} <path of the ticket>`** "
-        "(adding `--withdraw` for a ticket this run withdraws, before you change that ticket), "
-        "write the word it prints as the ticket's `status`, and validate the ticket again. It "
-        f"reads the board item's `{PRIORITY_FIELD}`, its record's `{ESTIMATE_FIELD}` and its "
-        f"comments in the same step, and writes the ticket's `{ESTIMATE_FIELD}`, its estimate "
-        f"line and its `{PRIORITY_FIELD}` as the rule above decides, which the copy carries onto "
-        "the board. It "
-        f"exits {SOUND} with that word; {UNPLACED} when the board holds the item at a status "
-        f"no ticket carries; {PROTECTED} for a withdrawal of an item the board shows as "
-        f"accepted or deferred; {OUTSIDE_OWNER} when the ticket's repository is not one of "
-        f"the board's owner, before anything is asked of the board; {NOT_ACCEPTED} when "
-        f"a `{DEPENDENCY_FIELD}` entry does not resolve on the board as the dependency rule "
-        "below states, naming every such entry and what the board holds; and "
-        f"{MISBOUND} when the ticket's board item cannot be established as its binding, as "
-        "the binding rule below states. On any of these refusals, copy nothing and report "
-        "what it printed.\n"
-        "- **A refusal is reported, never worked around.** When `board-status` exits "
-        f"{OUTSIDE_OWNER}, or `@COPY@` refuses the ticket — for a repository the "
-        "token cannot see, or one GitHub will not create an issue in — copy nothing for that "
-        "ticket, never retry it with `repositories` removed or changed to get it filed, and "
-        "report what was printed.\n"
-        f"- Its front matter carries the `{KEY}` record with every key present, and its body "
-        f"the headings {headings}, in that order, each with content. `created_by_run` is "
-        "this run, and `owning_runs` includes it.\n"
-        f"- **Its priority is estimated from facts, never chosen.** Judge from the original "
-        f"evidence whether the root cause fires consistently, and record it as the `{KEY}` "
-        f"record's `{FREQUENCY_FIELD}`: `{Frequency.CONSISTENT}` when it fires every time its "
-        f"conditions hold, `{Frequency.INTERMITTENT}` when it fires only sometimes or only in "
-        f"certain situations. `@VALIDATE@` refuses a ticket without it. The record's "
-        f"`{ESTIMATE_FIELD}`, the `## {IMPACT}` section's `- {ESTIMATE_LINE}:` line and the front "
-        f"matter's `{PRIORITY_FIELD}` are `@BOARD_STATUS@`'s to write and never yours; when "
-        "you rewrite a ticket, keep them as it wrote them. The estimate is the severity with "
-        + "the workaround, one level for one level ("
-        + ", ".join(f"`{severity}` is `{level}`" for severity, level in _BASE_PRIORITY.items())
-        + f"), raised one level, capped at `{Priority.URGENT}`, when `{FREQUENCY_FIELD}` is "
-        f"`{Frequency.CONSISTENT}` or the root cause has {RAISE_AT} or more occurrences: the "
-        "ticket's own evidence, plus each evidence comment another run left on its board "
-        f'issue and each reply whose marker carries `verdict="{Verdict.CONFIRMS}"`, recounted '
-        "off the issue's comments every time and stored nowhere. The board item's priority "
-        "follows the estimate while it holds the estimate its record stored — or holds none, "
-        "where its record stored none — and is otherwise a person's decision, which every copy "
-        "keeps: a person who sets it back to the estimate hands it back to the estimate.\n"
-        f"- **`## {SUGGESTED_FIX}` states one concrete fix**: a single change, or a single set "
-        "of changes that together remove the root cause, never a list of options or "
-        f"alternatives to choose between. `## {REJECTED_FIXES}` is optional: when another fix "
-        f"was considered, it comes directly after `## {SUGGESTED_FIX}` and gives each rejected "
-        "fix with why it was rejected; otherwise it is left out.\n"
-        "- **`host` is read, never typed.** Run `hostname` on the machine you run on and "
-        f"write exactly what it prints, both as `host` and in the `## {EVIDENCE}` section, "
-        "never a value you type or recall.\n"
-        f"- **A ticket written against an accepted ticket's fix depends on it, as the "
-        f"store's own top-level `{DEPENDENCY_FIELD}`** — one entry per accepted ticket whose "
-        f"fix changed this ticket, as `{{id: {board}:<native id>, item: {DEPENDENCY_ITEM}}}` "
-        "and nothing else, its `kind` left to its default; no entry, and no "
-        f"`{DEPENDENCY_FIELD}` at all, when no accepted fix changed it. `<native id>` is the "
-        f"accepted item's id as `@BOARD_ITEMS@ --board {board}` reports it, after "
-        f"the `{board}:`. The copy carries the entry onto the board as the board's own item "
-        "dependency, which `@PLAN_STORE@ task deps` walks from either end, and the edge is "
-        f"the one record of it: nothing in the `{KEY}` record repeats it.\n"
-        "- **Where the accepted fix changed the ticket, the text says so with the item's "
-        f"URL** — the `url` the board reports for the accepted item. In `## {IMPACT}` or "
-        f"`## Root cause` for a ticket the fix narrowed, in `## {SUGGESTED_FIX}` for one it "
-        f"re-fixed, and in `## {REJECTED_FIXES}` beside the fix it displaced, stating what "
-        'is assumed ("assuming the fix in <URL> lands, …"; "chosen because <URL> already '
-        '…"). A `Proposal` or `Deferred` item for a clearly related root cause may be '
-        f"named as related, by URL, with **no** `{DEPENDENCY_FIELD}` entry and no change to "
-        "the ticket's claims.\n"
-        f"- **`@VALIDATE@` holds the entries' shape and reads no board**: it refuses a ticket "
-        f"any of whose entries is not a `{DEPENDENCY_ITEM}`, is not of the `{DEPENDENCY_KIND}` "
-        "kind, is not `<source>:<native id>` with both parts non-empty, names the "
-        f"`{SOURCE}` source, names a second source beside the others', or names a far end "
-        "another entry already names. "
-        f"**`@BOARD_STATUS@` resolves every entry against the board** before every copy and "
-        f"exits {NOT_ACCEPTED} when an entry names a source other than `{board}`; names an "
-        f"item the board holds outside the accepted statuses ({accepted}); names an item "
-        "whose record carries this ticket's own `root_cause` — an accepted item for the "
-        "*same* root cause is the same-root-cause path's, which takes this run's evidence as "
-        "a comment, and never this rule's; names an item the board reports no `url` for; or "
-        "names an item whose URL the ticket's body does not carry. On that refusal copy "
-        "nothing for the ticket, re-derive it against the board as it now is — removing the "
-        "entry and the assumption from the text where the item is no longer accepted — "
-        "validate it again, and report what was printed.\n"
-        f"- **`{BINDING_FIELD}` binds the ticket to its board item**: the native id of the "
-        f"item it is copied onto, as `@BOARD_ITEMS@ --board {board}` reports it after the "
-        f"`{board}:`, in the `{KEY}` record. `@BOARD_STATUS@` and `@COPY@` write it and nothing "
-        "else does — when this run creates its item or first reaches it, and again when two "
-        "board items carry the ticket's origin, naming this run's own open item, the one "
-        "survivor; each withdrawn duplicate is then left a comment naming the survivor. They "
-        f"write the store's `{ORIGIN_KEY}` naming `{board}:<that id>` into the ticket's "
-        "metadata beside it, which makes every later copy reach that item directly. When you "
-        "rewrite a ticket, keep both exactly as they stand. Both commands exit "
-        f"{MISBOUND}, naming both ids, when the store reports a destination other than the "
-        "binding, or the binding names an item that does not carry the ticket's origin; and "
-        "when two or more items carry it but not exactly one is this run's own open item "
-        "beside only withdrawn ones.\n"
-        f"- It reaches the board only as `@COPY@ --board {board} <path of the ticket>`, which "
-        f"copies `{ticket}` onto its bound item and prints the action and the item it reached; "
-        f"never as a bare `@PLAN_STORE@ task copy`, which follows whichever item the store "
-        "finds first. That copy is the only way an issue is edited.\n\n"
-        "The shape, with every placeholder to fill:\n\n"
-        f"````markdown\n{render(example, board=board)}````\n"
-    )
-
-
-def comment_contract(run: str, board: str) -> str:
-    """C6, as the follow-up agent is told it: who owns what on the board."""
-    evidence = comment_marker(run, "<root-cause>")
-    reply = reply_marker(
-        run, "<root-cause>", "<comment id>", f"<{Verdict.CONFIRMS} or {Verdict.DOES_NOT_CONFIRM}>"
-    )
-    re_estimate = f"`@RE_ESTIMATE@ --board {board} <the issue's id, as `{board}:<id>`>`"
-    return (
-        f"- **Ownership is by run.** An issue on `{board}` belongs to the run its `{KEY}` "
-        "record's `created_by_run` names. A comment belongs to the run named in its **last "
-        "line**, whichever of the two kinds below it is. This run, "
-        f"`{run}`, may create, edit (by copying its ticket again) or close as not planned only "
-        f"issues whose `created_by_run` is `{run}`, and may edit or delete only comments whose "
-        f"marker names `{run}`. It never changes an issue or a comment belonging to another "
-        f"run, but for the one write below: {re_estimate}.\n"
-        f"- **{re_estimate} re-estimates an issue's priority after this run comments on it.** "
-        "It recounts the issue's occurrences off its comments, stores the estimate in its "
-        f"`{KEY}` record — bringing a schema-{PRIOR_SCHEMA} record to schema {SCHEMA} — "
-        f"rewrites the `- {ESTIMATE_LINE}:` line of its `## {IMPACT}` section, and moves its "
-        "priority only while the board holds the estimate its record stored (or holds none, "
-        "where it stored none), so a priority a person set stays. It changes nothing else about "
-        "the issue, its status included. Run it on the issue each time this run adds or edits "
-        "an evidence comment there, and each time it posts a reply marked "
-        f'`verdict="{Verdict.CONFIRMS}"` there; never on any other occasion.\n'
-        "- **An evidence comment** carries this run's evidence on another run's issue. Its last "
-        "line is exactly\n\n"
-        f"  `{evidence}`\n\n"
-        f"  and its first line is visible to a reader: `{comment_opening(run)}`\n\n"
-        "  It goes only on an open issue another run created for the same root cause, which "
-        "receives at most **one** from this run — whatever status the board holds it at, so an "
-        "item at `Deferred` receives this run's one comment like any other open item. Where "
-        "this run's evidence comment is already there, edit it in place with `@PLAN_STORE@ "
-        "task comment edit`; never add a second. This run never adds an evidence comment to "
-        "an issue it created: it edits that issue by copying its ticket again instead.\n"
-        "- **A reply** answers one person's comment. Each comment the feedback below quotes "
-        "under a `### Comment` heading, with its id and URL, gets exactly **one** new reply "
-        "from this run, on the issue that holds that comment, whichever run owns that issue. "
-        "Its last line is exactly\n\n"
-        f"  `{reply}`\n\n"
-        "  where `<root-cause>` is the `root_cause` in the ticket record of the issue the reply "
-        "is posted on, and `answers` is the id of the comment it answers, exactly as the "
-        "feedback gives it. `verdict` is this run's judgment of the comment: "
-        f"`{Verdict.CONFIRMS}` when it confirms the issue's root cause occurs — a new sighting "
-        "of it, or evidence that it is more prevalent than the ticket says — and "
-        f"`{Verdict.DOES_NOT_CONFIRM}` for anything else: a question, a correction, a "
-        "disagreement. A confirming reply counts as one more occurrence of the root cause. "
-        "Its first line is visible to a reader: "
-        f"`{reply_opening(run, '<comment URL>', '<author>')}`, or "
-        f"`{reply_opening(run, '<comment URL>', None)}` when the feedback reports no author. "
-        "After a blank line comes the response: what this run did about the comment and why, "
-        "or why it did nothing; after another blank line, the marker. Post it with "
-        "`@PLAN_STORE@ task comment add`, after the actions it reports.\n"
-        "- **A reply is never edited to answer a different comment**, since every comment gets "
-        "a reply of its own. A reply never counts as this run's one evidence comment, and never "
-        "carries evidence in place of the ticket or the evidence comment.\n"
-        "- **Reply only to the comments the feedback quotes.** A comment that appears on the "
-        "board during this dispatch is left for the next gathering, and feedback the manager "
-        "wrote quotes no board comment, so it gets no reply.\n"
-    )
+    return render(example, board=board)
 
 
 def _keyed(keys: Sequence[str], *values: object) -> dict[str, object]:
-    """``values`` under ``keys``, in order, which is how each contract's example is written.
+    """``values`` under ``keys``, in order, which is how each account's example is written.
 
     The example an agent fills in and the keys the validator reads back are one shape, so
     the example is written from those keys rather than beside them: a key added to the
@@ -3777,8 +3502,8 @@ def _keyed(keys: Sequence[str], *values: object) -> dict[str, object]:
     return dict(zip(keys, values, strict=True))
 
 
-def disposition_contract(run: str) -> str:
-    """C8, as the initial dispatch is told it: the account it owes for every input draft."""
+def disposition_example(run: str) -> str:
+    """C8's example: the disposition account an initial dispatch owes, as JSON."""
     entry = _keyed(
         DISPOSITION_ENTRY_KEYS,
         f"{SOURCE}:{run}/{drafts.DRAFTS}/<draft-id>",
@@ -3793,111 +3518,84 @@ def disposition_contract(run: str) -> str:
         ["<written for you; do not add to it, remove from it, or reorder it>"],
         [entry],
     )
-    meanings = "".join(f"- **`{one.value}`** — {one.meaning}.\n" for one in Disposition)
-    return (
-        "**Every draft this dispatch was given is accounted for, exactly once.** The account "
-        f"is a JSON document at `@DISPOSITIONS@`, which already exists: its `drafts` is the "
-        "input set, written before you were dispatched, and it is not yours to change. Yours "
-        "is `dispositions`, one entry per draft in `drafts`:\n\n"
-        f"{meanings}\n"
-        f"`root_causes` is a list of kebab-case root-cause slugs, one per ticket or open "
-        f"issue the draft's evidence reached, each the file name of a ticket under "
-        f"`@DRAFTS_ROOT@/{TASKS_DIRECTORY}/{run}/{TICKETS}/`; it is non-empty for "
-        f"`{Disposition.FILED.value}` and empty for every other disposition. `detail` is "
-        "always stated.\n\n"
-        "The shape, with every placeholder to fill:\n\n"
-        f"````json\n{json.dumps(example, indent=2)}\n````\n\n"
-        "**`@CHECK_DISPOSITIONS@` is what says the account is complete.** Run it, correct the "
-        f"document until it reports the account sound, and run it again. It exits {SOUND} "
-        f"when every draft carries exactly one disposition with everything that disposition "
-        f"owes, and {UNSOUND} naming each draft that is absent, that carries more than one, "
-        "or whose disposition links it to no root cause where it must, to one this run "
-        "holds no ticket for, or to a ticket whose `drafts` does not name it; and each filed "
-        "root cause whose board item does not store the estimate its comments recount to or "
-        "state it on its estimate line, or whose item this run copied and does not hold the "
-        "priority its ticket carries. This dispatch is not finished while it refuses.\n"
-    )
+    return json.dumps(example, indent=2)
 
 
-def response_contract(run: str) -> str:
-    """C9, as the feedback dispatch is told it: the account it owes for every quoted comment."""
+def response_example(run: str, feedback_file: str, plan_store: str) -> str:
+    """C9's example: the response account a feedback dispatch owes, as JSON."""
     entry = _keyed(
         RESPONSE_ENTRY_KEYS,
         "<the comment id, exactly as the comment's section gives it>",
         "<the issue id, exactly as the comment's section gives it>",
         "<what this run did about the comment, or why it did nothing>",
-        "<the id `@PLAN_STORE@ task comment add` printed for the reply>",
+        f"<the id `{plan_store} task comment add` printed for the reply>",
         f"<{Verdict.CONFIRMS} or {Verdict.DOES_NOT_CONFIRM}: the verdict the reply's marker "
         "carries>",
     )
-    example = _keyed(RESPONSE_KEYS, RESPONSES_SCHEMA, run, "@FEEDBACK_FILE@", [entry])
-    return (
-        "**Every comment this feedback quotes is accounted for, exactly once, in the order "
-        "it is quoted.** The account is a JSON document at `@RESPONSES@`, which you write. "
-        "One entry per quoted comment, in that order:\n\n"
-        f"````json\n{json.dumps(example, indent=2)}\n````\n\n"
-        "`action` is what you did before the reply went up, in your words; `reply` is the id "
-        "of the reply you posted for that comment, which is the one the board gave it; and "
-        "`verdict` is the verdict that reply's marker carries.\n\n"
-        "**`@CHECK_RESPONSES@` is what says the account is complete.** Run it, correct the "
-        f"document until it reports the account sound, and run it again. It exits {SOUND} "
-        "when every quoted comment carries exactly one response, in order, naming the issue "
-        "the feedback quotes it on and its verdict, the board holds a reply of this run "
-        "answering it whose marker carries that verdict, and every issue a "
-        f"`{Verdict.CONFIRMS}` reply sits on stores the estimate its comments recount to and "
-        f"states it on its estimate line; and {UNSOUND} naming each comment that is absent, "
-        "answered twice, out of order, or whose reply the board does not hold or marks with "
-        "another verdict, and each issue whose estimate or estimate line disagrees — run "
-        "`@RE_ESTIMATE@` on that issue. This dispatch is not finished while it refuses.\n"
-    )
+    example = _keyed(RESPONSE_KEYS, RESPONSES_SCHEMA, run, feedback_file, [entry])
+    return json.dumps(example, indent=2)
 
 
-#: The section a re-dispatch adds: when the manager sends feedback, or the run already
-#: holds tickets from a follow-up agent before this one.
-REDISPATCH = """\
-## This is a re-dispatch
+def shape(run: str) -> dict[str, object]:
+    """The identifiers and numbers of the stored shapes, as the follow-up task names them.
 
-A follow-up agent has already worked run `@RUN@`'s drafts, so tickets, board issues and
-comments of this run may already exist. "Ownership on the board" above binds every change:
-
-- change only what belongs to run `@RUN@`, as those rules say, and nothing belonging to any
-  other run;
-- an issue run `@RUN@` created is **edited** — change its ticket and copy the ticket again —
-  and every comment of run `@RUN@` is added, edited or left as those rules say;
-- an existing ticket of run `@RUN@` is copied again carrying the board's status, which
-  `@BOARD_STATUS@ --board @BOARD@ <path of the ticket>` prints, never the status the ticket
-  held before — the board may have been moved since the last copy;
-- a ticket of an older schema is brought to the current shape before it is copied, its
-  `repositories` naming its record's `repository`, its `host` read from this machine
-  with `hostname`, and its `## Impact` section written from the evidence the ticket
-  already carries, re-verifying only a claim that no longer holds; its `## Repository`
-  section removed, any path the ticket still needs moved into `## Root cause`; its
-  `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's
-  evidence supports; and every other option it offered moved into `## Rejected fixes`,
-  with why each was not chosen; then it is validated again.
-- a ticket's dependencies on accepted tickets, and the claims written against their fixes,
-  are re-derived from the board as it now is on every pass — an accepted ticket may have
-  appeared, moved or been un-accepted since the last pass, so `depends_on` entries are
-  added and removed and the ticket's `## Impact`, `## Root cause`, `## Suggested fix` and
-  `## Rejected fixes` re-derived to match, and `@BOARD_STATUS@ --board @BOARD@ <path of
-  the ticket>` refusing an entry is the signal to re-derive that ticket before copying it;
-  nothing else about an older ticket moves.
-- a schema-6 ticket of this run is brought to schema 7 by recording its `frequency` from
-  the evidence it already carries, then running `@BOARD_STATUS@ --board @BOARD@ <path of
-  the ticket>`, which writes its `priority_estimate`, its `## Impact` estimate line and its
-  `priority` and reads its schema-6 board item as storing no estimate; validate it and copy
-  it. Another run's schema-6 item is brought forward by `@RE_ESTIMATE@ --board @BOARD@ <its
-  id>` alone, and only after this run comments on it.
-"""
-
-#: The heading the manager's feedback goes under, above the feedback itself.
-FEEDBACK = """\
-## Feedback on the previous follow-up run
-
-The manager's feedback on what the previous follow-up agent of run `@RUN@` produced,
-verbatim. Act on it within the rules above.
-
-"""
+    What the task's prose says about a ticket, a comment and an account is the template's
+    text; the words and numbers the validators here read back are this module's, handed to
+    the template as data, so the prose cannot name a field, a word or an exit status the
+    validator does not. Each value is one this module decides elsewhere, spelled from it.
+    """
+    return {
+        "drafts_source": SOURCE,
+        "drafts_directory": drafts.DRAFTS,
+        "tasks_directory": TASKS_DIRECTORY,
+        "tickets_directory": TICKETS,
+        "ticket_suffix": TICKET_SUFFIX,
+        "ticket_id": qualified_id(run, "<root-cause>"),
+        "record_key": KEY,
+        "title_limit": TITLE_LIMIT,
+        "schema": SCHEMA,
+        "prior_schema": PRIOR_SCHEMA,
+        "proposed": Status.PROPOSED.value,
+        "deferred": Status.DEFERRED.value,
+        "withdrawn": Status.WITHDRAWN.value,
+        "accepted": ", ".join(f"`{status}`" for status in Status if status.accepted),
+        "priority_field": PRIORITY_FIELD,
+        "estimate_field": ESTIMATE_FIELD,
+        "frequency_field": FREQUENCY_FIELD,
+        "binding_field": BINDING_FIELD,
+        "dependency_field": DEPENDENCY_FIELD,
+        "dependency_item": DEPENDENCY_ITEM,
+        "dependency_kind": DEPENDENCY_KIND,
+        "origin_key": ORIGIN_KEY,
+        "headings": ", ".join(f"`## {heading}`" for heading in HEADINGS),
+        "impact": IMPACT,
+        "evidence": EVIDENCE,
+        "suggested_fix": SUGGESTED_FIX,
+        "rejected_fixes": REJECTED_FIXES,
+        "estimate_line": ESTIMATE_LINE,
+        "consistent": Frequency.CONSISTENT.value,
+        "intermittent": Frequency.INTERMITTENT.value,
+        "estimate_levels": ", ".join(
+            f"`{severity}` is `{level}`" for severity, level in _BASE_PRIORITY.items()
+        ),
+        "urgent": Priority.URGENT.value,
+        "raise_at": RAISE_AT,
+        "confirms": Verdict.CONFIRMS.value,
+        "does_not_confirm": Verdict.DOES_NOT_CONFIRM.value,
+        "filed": Disposition.FILED.value,
+        "not_reproducible": Disposition.NOT_REPRODUCIBLE.value,
+        "already_fixed": Disposition.ALREADY_FIXED.value,
+        "too_low_impact": Disposition.TOO_LOW_IMPACT.value,
+        "exits": {
+            "sound": SOUND,
+            "unsound": UNSOUND,
+            "unplaced": UNPLACED,
+            "protected": PROTECTED,
+            "outside_owner": OUTSIDE_OWNER,
+            "not_accepted": NOT_ACCEPTED,
+            "misbound": MISBOUND,
+        },
+    }
 
 
 #: What a word cannot carry and still survive unquoted in the shell a store instruction is
@@ -3909,7 +3607,7 @@ _NEEDS_QUOTING = re.compile(r"[^\w@%+=:,./-]", re.ASCII)
 
 
 def _plan_store_problems(plan_store: str) -> list[str]:
-    """Every way the program a composed task writes its store instructions with is not one.
+    """Every way the program a task writes its store instructions with is not one.
 
     All three are the same boundary. A value that is not **absolute** leaves the
     dispatch's own search path to decide what a store instruction runs, which is the whole
@@ -3940,13 +3638,37 @@ def _plan_store_problems(plan_store: str) -> list[str]:
     return []
 
 
-def _filled(text: str, values: Mapping[str, str]) -> str:
-    """``text`` with each placeholder ``values`` names filled, and every other left as is."""
-    return PLACEHOLDER.sub(lambda matched: values.get(matched[1], matched[0]), text)
+def _value_problems(
+    drafts_root: Path, checkout: Path, board: str, commands: Mapping[str, str]
+) -> list[str]:
+    """Every value the task's instructions embed that is not one those instructions can run.
+
+    The two directories are where the dispatch reads drafts and runs every command, so a
+    relative one would be answered by whichever directory the dispatch's turn runs in; the
+    board is a word every store instruction passes as `--board`, so anything the shell
+    would split reaches the dispatch as something other than that source; and a command the
+    task tells the agent to run cannot be blank.
+    """
+    found = [
+        f"the {named} {value} is not an absolute path, so the task would name a directory "
+        "relative to wherever the dispatch runs"
+        for named, value in (("drafts root", drafts_root), ("checkout", checkout))
+        if not value.is_absolute()
+    ]
+    if not board or _NEEDS_QUOTING.search(board):
+        found.append(
+            f"the board {board!r} is not one word the shell a store instruction runs in "
+            "reads as a source name"
+        )
+    found.extend(
+        f"the {named} command is blank, so the task would tell the agent to run nothing"
+        for named, command in commands.items()
+        if not command.strip()
+    )
+    return found
 
 
-def compose(
-    template: str,
+def answers(
     *,
     mode: Mode = Mode.INITIAL,
     run: str,
@@ -3966,40 +3688,41 @@ def compose(
     check_dispositions: str | None = None,
     responses: Path | None = None,
     check_responses: str | None = None,
-) -> str:
-    """One dispatch's task: ``template`` with every placeholder of ``mode`` filled, once.
+) -> dict[str, object]:
+    """One dispatch's answers to this host's `follow-up-task` template, for ``mode``.
+
+    What the task says is the template's; these are the values it is rendered with and the
+    data computed here — the examples, markers and shape words the validators read back —
+    so a value and its validator cannot drift apart. The template renders `mode` and refuses
+    any other, and `placement_note` is the caller's own to answer.
 
     ``plan_store`` is the plan-store program every store instruction in the task is
-    written with, and is refused unless it is an absolute path: the agent reads this task
-    in a directory of its own, where a relative or bare name is answered by that
-    dispatch's own search path. `scripts/follow-ups.sh` resolves it and says what that
-    cost.
+    written with, and is refused unless it is an absolute path to an executable that the
+    shell reads as one word: the agent reads this task in a directory of its own, where a
+    relative or bare name is answered by that dispatch's own search path.
+    `scripts/follow-ups.sh` resolves it and says what that cost. The other values the
+    instructions embed are held to what running them needs (:func:`_value_problems`), and
+    each mode's own account is refused absent, since the task's criteria name it.
 
-    The template is filled in a single pass, so what fills a placeholder is never read
-    again for one — which is what brings the feedback into the task verbatim, whatever it
-    quotes. The contracts and sections carry the run and the drafts root themselves, so
-    those are filled into them first.
-
-    Which placeholders a template owes is ``mode``'s, and a value a mode's template never
-    names is not required: :data:`Mode.FEEDBACK`'s template names no ticket contract
-    or board-wide listing, which keeps the comment-answering dispatch scoped to the
-    tickets its quoted comments name.
+    The feedback is an answer rather than text spliced into the template, so what it quotes
+    — a brace, a placeholder-shaped word — reaches the task verbatim, less its trailing
+    whitespace.
     """
-    named = PLACEHOLDER.findall(template)
-    found = []
-    if unknown := sorted(set(named) - set(mode.placeholders)):
-        found.append(
-            f"the {mode.value} task template names placeholders nothing fills: {', '.join(unknown)}"
+    found = _plan_store_problems(plan_store)
+    found.extend(
+        _value_problems(
+            drafts_root,
+            checkout,
+            board,
+            {
+                "validate": validate,
+                "board-status": board_status,
+                "board-items": board_items,
+                "copy": copy,
+                "re-estimate": re_estimate,
+            },
         )
-    if missing := [name for name in mode.placeholders if name not in named]:
-        found.append(
-            f"the {mode.value} task template is missing placeholders: {', '.join(missing)}"
-        )
-    if repeated := sorted(name for name in mode.sections if named.count(name) > 1):
-        found.append(
-            f"the {mode.value} task template names these more than once: {', '.join(repeated)}"
-        )
-    found.extend(_plan_store_problems(plan_store))
+    )
     found.extend(
         _mode_problems(
             mode, dispositions, check_dispositions, responses, check_responses, feedback_file
@@ -4007,51 +3730,53 @@ def compose(
     )
     if found:
         raise Refused(found)
-    scalars = {
-        "RUN": run,
-        "BOARD": board,
-        "DRAFTS_ROOT": str(drafts_root),
-        "TICKET_METADATA_KEY": KEY,
-        "VALIDATE": validate,
-        "BOARD_STATUS": board_status,
-        "BOARD_ITEMS": board_items,
-        "COPY": copy,
-        "RE_ESTIMATE": re_estimate,
-        "CHECKOUT": str(checkout),
-        "PLAN_STORE": plan_store,
-        "ACCEPTED_STATUSES": accepted_statuses(),
-        "ACCEPTED_FILTER": accepted_filter(),
-        "FEEDBACK_FILE": "" if feedback_file is None else feedback_file.name,
-        "DISPOSITIONS": str(dispositions),
-        "CHECK_DISPOSITIONS": str(check_dispositions),
-        "RESPONSES": str(responses),
-        "CHECK_RESPONSES": str(check_responses),
+    answered: dict[str, object] = {
+        "mode": mode.value,
+        "run": run,
+        "board": board,
+        "drafts_root": str(drafts_root),
+        "checkout": str(checkout),
+        "plan_store": plan_store,
+        "validate": validate,
+        "board_status": board_status,
+        "board_items": board_items,
+        "copy": copy,
+        "re_estimate": re_estimate,
+        "shape": shape(run),
+        "evidence_marker": comment_marker(run, "<root-cause>"),
+        "evidence_opening": comment_opening(run),
+        "reply_marker": reply_marker(
+            run,
+            "<root-cause>",
+            "<comment id>",
+            f"<{Verdict.CONFIRMS} or {Verdict.DOES_NOT_CONFIRM}>",
+        ),
+        "reply_opening": reply_opening(run, "<comment URL>", "<author>"),
+        "reply_opening_unattributed": reply_opening(run, "<comment URL>", None),
     }
-    values = {
-        **scalars,
-        "STATUS_VOCABULARY": status_vocabulary(),
-        "TICKET_CONTRACT": _filled(ticket_contract(run, board), scalars),
-        "COMMENT_CONTRACT": _filled(comment_contract(run, board), scalars),
-        "DISPOSITION_CONTRACT": _filled(disposition_contract(run), scalars),
-        "RESPONSE_CONTRACT": _filled(response_contract(run), scalars),
-        "REDISPATCH": _filled(REDISPATCH, scalars) if redispatch else "",
-        "FEEDBACK": _feedback_section(mode, feedback, scalars),
-    }
-    return PLACEHOLDER.sub(lambda matched: values[matched[1]], template)
-
-
-def _feedback_section(mode: Mode, feedback: str | None, scalars: Mapping[str, str]) -> str:
-    """What fills `@FEEDBACK@`: the gathering itself in feedback mode, a heading over it in initial.
-
-    A feedback dispatch **is** the gathering, so the file stands as the task's own section
-    and a heading calling it "feedback on the previous run" would read as an aside. An
-    initial dispatch that carries feedback carries it as one, under that heading.
-    """
-    if feedback is None:
-        return ""
-    if mode is Mode.FEEDBACK:
-        return feedback.rstrip() + "\n"
-    return _filled(FEEDBACK, scalars) + feedback.rstrip() + "\n"
+    if feedback is not None:
+        answered["feedback"] = feedback.rstrip()
+    # `_mode_problems` refused every account value a mode owes that is absent, so each
+    # below is present for its mode.
+    if mode is Mode.INITIAL:
+        answered |= {
+            "redispatch": redispatch,
+            "accepted_statuses": accepted_statuses(),
+            "accepted_filter": accepted_filter(),
+            "dispositions": str(dispositions),
+            "check_dispositions": str(check_dispositions),
+            "ticket_example": ticket_example(run, board),
+            "disposition_example": disposition_example(run),
+        }
+    else:
+        named = cast(Path, feedback_file).name
+        answered |= {
+            "responses": str(responses),
+            "check_responses": str(check_responses),
+            "feedback_file": named,
+            "response_example": response_example(run, named, plan_store),
+        }
+    return answered
 
 
 def _mode_problems(
@@ -4064,7 +3789,7 @@ def _mode_problems(
 ) -> list[str]:
     """Every value a mode's own account needs that the caller did not give.
 
-    Each names an artifact the dispatch is held to, so a task composed without one is a
+    Each names an artifact the dispatch is held to, so a task rendered without one is a
     task whose acceptance criteria name a document at the word ``None``.
     """
     owed = {
@@ -4114,7 +3839,7 @@ class _Parser(argparse.ArgumentParser):
 def _parser() -> _Parser:
     parser = _Parser(
         prog=PROG,
-        description="Validate follow-up tickets, and compose the follow-up agent's task.",
+        description="Validate follow-up tickets, and answer the follow-up agent's task template.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     root_help = "the drafts root the launch exported"
@@ -4222,14 +3947,16 @@ def _parser() -> _Parser:
         help="the gathered feedback file",
     )
     answered.add_argument("run", metavar="RUN-ID")
-    task = commands.add_parser("compose", help="print one follow-up dispatch's task")
+    task = commands.add_parser(
+        "answers",
+        help="print one follow-up dispatch's answers to the follow-up-task template, as YAML",
+    )
     task.add_argument(
         "--mode",
         default=Mode.INITIAL.value,
         choices=[one.value for one in Mode],
         help="which dispatch this task is for; the caller decides it, never the feedback's content",
     )
-    task.add_argument("--template", type=Path, required=True)
     task.add_argument("--root", type=Path, required=True, help=root_help)
     task.add_argument("--run", required=True, metavar="RUN-ID")
     task.add_argument("--board", required=True, metavar="SOURCE")
@@ -4316,7 +4043,7 @@ def _accounted(arguments: argparse.Namespace) -> int:
 def _gathered(arguments: argparse.Namespace) -> int:
     """Validate that a file is a gathering, for the `check-gathering` command.
 
-    The recipe runs it before it composes: a feedback mode task carries that file verbatim
+    The recipe runs it before it creates the task: a feedback mode task carries that file verbatim
     and its acceptance criteria rest on an account of the comments it quotes, so a file
     that is no gathering is one this dispatch should never be launched over.
     """
@@ -4371,15 +4098,17 @@ def _answered(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
-def _composed(arguments: argparse.Namespace) -> int:
-    """Print the follow-up agent's task, for the `compose` command."""
+def _answered_template(arguments: argparse.Namespace) -> int:
+    """Print the answers the follow-up agent's task is rendered from, for `answers`.
+
+    JSON, which is YAML, so the store's `--answers` reads it and every string reaches the
+    template byte for byte whatever it quotes.
+    """
     root: Path = arguments.root
     try:
-        template = _text(arguments.template)
         feedback = None if arguments.feedback is None else _text(arguments.feedback)
         mode = Mode(arguments.mode)
-        task = compose(
-            template,
+        answered = answers(
             mode=mode,
             run=arguments.run,
             board=arguments.board,
@@ -4404,7 +4133,8 @@ def _composed(arguments: argparse.Namespace) -> int:
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
-    sys.stdout.write(task)
+    json.dump(answered, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
     return SOUND
 
 
@@ -4498,7 +4228,7 @@ def _copied(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate, account, decide a status, list, copy, count or compose, for every caller."""
+    """Validate, account, decide a status, list, copy, count or answer, for every caller."""
     arguments = _parser().parse_args(argv)
     match arguments.command:
         case "validate":
@@ -4544,7 +4274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tickets = (arguments.root / TASKS_DIRECTORY / arguments.run / TICKETS).glob("*.md")
             return _validated(sorted(tickets))
         case _:
-            return _composed(arguments)
+            return _answered_template(arguments)
 
 
 if __name__ == "__main__":  # pragma: no cover - the module's own command line

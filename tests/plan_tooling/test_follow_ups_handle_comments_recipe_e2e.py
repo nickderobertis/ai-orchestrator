@@ -16,12 +16,13 @@ prints, which is how an agent answers a comment on its own issue, posting one re
 each comment its task's feedback quotes, read out of the task the turn was given, and
 writing the response account that task is held to.
 
-**This recipe composes the feedback mode**, the narrow comment-answering task
-(`config/follow-up-feedback-task.md`): the run's drafts are never inventoried, the board is
-never listed, no accepted item is read, and no ticket but one a quoted comment sits on is
-read, rewritten or copied. The fixture leaves a ticket of the run under an unrelated root
-cause that no comment names and that `validate` refuses, so a dispatch or a recipe that
-still ranged over this run's tickets would be seen here rather than inferred.
+**This recipe launches the feedback mode**, the narrow comment-answering task the
+`follow-up-task` template's `feedback` branch renders: the run's drafts are never
+inventoried, the board is never listed, no accepted item is read, and no ticket but one a
+quoted comment sits on is read, rewritten or copied. The fixture leaves a ticket of the run
+under an unrelated root cause that no comment names and that `validate` refuses, so a
+dispatch or a recipe that still ranged over this run's tickets would be seen here rather
+than inferred.
 
 One module fixture seeds the board, drives the refusal on a run with nothing new, drives the
 re-dispatch on the run with comments — during which a person comments again, before the
@@ -63,9 +64,12 @@ from test_follow_ups_recipe_e2e import (
     HOST,
     NODE,
     OK,
+    PROVENANCE,
+    REFERENCE,
     REFUSED,
     SUFFIX,
     Bench,
+    Stored,
     _bench,
     _category,
     _comments,
@@ -81,6 +85,7 @@ from test_follow_ups_recipe_e2e import (
     _run,
     _script,
     _store,
+    _stored,
     _ticket,
 )
 from waits import timeout as e2e_timeout
@@ -145,7 +150,7 @@ confirming = [text.rstrip() for text in json.loads(confirming)]
 with open(log, encoding="utf-8") as stream:
     task = json.loads(stream.read().splitlines()[-1])["prompt"]
 # Where this dispatch's account goes and which gathering it answers, read out of the task
-# the way the agent is told to: the composer fills both into it and nowhere else.
+# the way the agent is told to: the template renders both into it and nowhere else.
 account = re.search(r"account is a JSON document at `([^`]+)`", task)[1]
 gathered = re.search(r'"feedback": "([^"]+)"', task)[1]
 gathering = tickets.read_gathering(task.split("## The comments to answer", 1)[1])
@@ -230,6 +235,9 @@ class Handled(NamedTuple):
     watched: subprocess.CompletedProcess[str]
     follow_up_run: str
     launched: list[str]
+    #: The node's task read back out of the store right after the launch, before the next
+    #: gathering's launch retires it.
+    stored: Stored
     prompts: list[str]
     statuses_after: dict[str, object]
     comments_after_first: dict[str, list[dict[str, object]]]
@@ -467,6 +475,7 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
         # is what `check-responses` reads and what the recipe re-runs it over.
         gathered = WROTE.search(handled_run.stderr)
         account = tickets.responses_path(Path(gathered[1]) if gathered else tmp / "none.md")
+        stored = _stored(bench, follow_up_run)
         watched = _run(["just", "watch", follow_up_run, "--until", "settled"], bench)
         launched = sorted(path.name for path in bench.runs.glob(f"{main}{SUFFIX}*"))
         statuses_after = _statuses(bench)
@@ -573,6 +582,7 @@ def handled(tmp_path_factory: pytest.TempPathFactory) -> Handled:
             watched=watched,
             follow_up_run=follow_up_run,
             launched=launched,
+            stored=stored,
             prompts=_prompts(log),
             statuses_after=statuses_after,
             comments_after_first=comments_after_first,
@@ -731,6 +741,40 @@ def test_the_recipe_re_dispatches_once_through_the_feedback_path_with_the_file_v
     assert feedback.rstrip() in prompt
     results = _run(["just", "results", handled.follow_up_run], bench)
     assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in the plan_tooling Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingWorkspace input covers the recipe, the template and the
+# store configuration this test reads, and it spends no launch of its own: it reads back
+# the task the module fixture's launch created.
+def test_the_gatherings_task_was_created_from_the_template_and_is_exactly_its_rendering(
+    handled: Handled,
+) -> None:
+    """The launched node, read back out of the store: the `feedback` branch of the template.
+
+    It records the registered template's reference as its provenance, the pinned engine's
+    check of the stored item passes, the answers the store kept beside it render to its body
+    byte for byte, and that body is the task the launch dispatched and the turn was given.
+    """
+    stored = handled.stored
+    _, feedback = _feedback(handled)
+
+    assert len(stored.tasks) == 1, stored.tasks
+    provenance = stored.metadata[PROVENANCE]
+    assert isinstance(provenance, dict), stored.metadata
+    assert provenance["template"] == REFERENCE, provenance
+    assert stored.checked.returncode == OK, stored.checked.stdout + stored.checked.stderr
+    assert f"item {stored.tasks[0]}: ok" in stored.checked.stdout, stored.checked.stdout
+    assert stored.content == stored.rerendered
+    assert feedback.rstrip() in stored.content.split("## The comments to answer", 1)[1]
+    node = _launched_node(handled.bench, handled.follow_up_run)
+    assert str(node["task"]).strip() == stored.content.strip()
+    (prompt,) = handled.prompts
+    assert prompt.strip() == stored.content.strip()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_no_board_items_status_changes_including_one_a_person_moved_after_the_run(
@@ -1070,10 +1114,10 @@ exec "$REAL_PLAN_STORE" "$@"
 """
 
 #: `scripts/follow-ups.sh`'s own refusal where the mirror's launch stops: that checkout
-#: carries this repository's `scripts/` and `justfile` and nothing else, so the feedback
-#: mode's task template is not there to compose from — which is past the board read this
-#: mirror exists for, and before anything is launched.
-NO_TEMPLATE = "the follow-up agent's task could not be composed from"
+#: carries this repository's `scripts/`, `justfile` and a plan store and nothing else, so
+#: there is no engine to state the follow-up task's template with — which is past the board
+#: read this mirror exists for, and before any task is created or anything launched.
+NO_ENGINE = "has no engine at"
 
 
 class Mirror(NamedTuple):
@@ -1121,8 +1165,8 @@ def _mirror(
     mirroring this checkout's (:func:`_mirrored_toolchain`) whose plan store is ``store``,
     with the `.env` this journey states. The board is the same `local-md` stand-in every
     journey here reads, holding one issue the run owns with a person's comment nobody
-    answered. That checkout carries no `config/`, so the re-dispatch stops where its task
-    would be composed — after the board read this exists for, and before any launch.
+    answered. That checkout carries no engine, so the re-dispatch stops where its task
+    would be created — after the board read this exists for, and before any launch.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -1203,7 +1247,7 @@ def test_the_board_read_is_handed_the_credential_this_checkout_supplies(
     feedback = Path(named[1]).read_text(encoding="utf-8")
     assert f"on `{mirror.issue}`, this run's issue" in feedback, feedback
     assert ON_OWN.rstrip() in feedback
-    assert NO_TEMPLATE in result.stderr, result.stderr
+    assert NO_ENGINE in result.stderr, result.stderr
     assert not list(mirror.bench.runs.glob(f"{mirror.run}{SUFFIX}*"))
     assert PLANTED_CREDENTIAL not in result.stdout + result.stderr, "a credential value was printed"
 

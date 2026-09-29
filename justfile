@@ -658,8 +658,9 @@ follow-up *args:
 # `just follow-ups <run-id> [--feedback FILE] [--detach] [--to SOURCE]`.
 #
 # Launches one direct node under `graphs/follow-up.yaml` — a single-sided follow-up agent
-# with no judge — on a task composed from `config/follow-up-task.md`, which renders the
-# ticket shape and board ownership out of `orchestrator/follow_up_tickets.py`. It refuses a
+# with no judge — on a task the store renders from this host's `follow-up-task` template,
+# `templates/follow-up-task.md.j2`, answered by `orchestrator/follow_up_tickets.py`, which
+# owns the ticket shape and board ownership the template's prose states. It refuses a
 # run something is still driving, launches nothing for a run with no drafts or tickets,
 # and checks every ticket once an attached run settles; `--feedback` re-dispatches over the
 # same run, `--detach` returns at the launch record with the follow-up run id and its watch

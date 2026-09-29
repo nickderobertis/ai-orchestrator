@@ -887,7 +887,8 @@ launches owes — rather than an `orchestrator/` implementation constraint, and
 follow-ups section this document already carries, which `tests/test_follow_up_ticket_docs.py`
 reads from `AGENTS.md` by name and holds to the module's own vocabularies. The block runs to
 the end of the paragraph naming the two places each validator binds. -->
-**A follow-up dispatch is composed in one of two modes, and each owes one checked
+**A follow-up dispatch's task is rendered from this host's `follow-up-task` template,
+`templates/follow-up-task.md.j2`, in one of two modes, and each owes one checked
 account.** Which mode is the **caller's** to state and is never inferred from a feedback
 file's contents: `just follow-ups-handle-comments` passes `--comments` through, and a bare
 `--feedback` of your own stays the full re-dispatch above, so a manager's feedback that
@@ -912,7 +913,7 @@ happens to quote a board comment does not narrow the dispatch silently.
   the board. The pre-launch `check-gathering` read also refuses an issue the run neither
   owns nor marked, and a comment whose marker says a run wrote it.
 
-Both bind in the two places a run can end: each composed task's own acceptance criteria
+Both bind in the two places a run can end: each rendered task's own acceptance criteria
 require its validator green, and an attached `just follow-ups` re-runs it after the
 dispatch settles.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->

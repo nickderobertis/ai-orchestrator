@@ -1,0 +1,57 @@
+{#- Who owns what on the board, which both modes of `follow-up-task.md.j2` carry whole. -#}
+{% set re_estimate_command = "`" ~ re_estimate ~ " --board " ~ board ~ " <the issue's id, as `" ~ board ~ ":<id>`>`" %}
+## Ownership on the board
+
+- **Ownership is by run.** An issue on `{{ board }}` belongs to the run its `{{ shape.record_key }}`
+  record's `created_by_run` names. A comment belongs to the run named in its **last line**,
+  whichever of the two kinds below it is. This run, `{{ run }}`, may create, edit (by copying
+  its ticket again) or close as not planned only issues whose `created_by_run` is `{{ run }}`,
+  and may edit or delete only comments whose marker names `{{ run }}`. It never changes an
+  issue or a comment belonging to another run, but for the one write below:
+  {{ re_estimate_command }}.
+- **{{ re_estimate_command }} re-estimates an issue's priority after this run comments on
+  it.** It recounts the issue's occurrences off its comments, stores the estimate in its
+  `{{ shape.record_key }}` record — bringing a schema-{{ shape.prior_schema }} record to schema {{ shape.schema }} — rewrites the
+  `- {{ shape.estimate_line }}:` line of its `## {{ shape.impact }}` section, and moves its priority only while the
+  board holds the estimate its record stored (or holds none, where it stored none), so a
+  priority a person set stays. It changes nothing else about the issue, its status
+  included. Run it on the issue each time this run adds or edits an evidence comment there,
+  and each time it posts a reply marked `verdict="{{ shape.confirms }}"` there; never on any other
+  occasion.
+- **An evidence comment** carries this run's evidence on another run's issue. Its last line
+  is exactly
+
+  `{{ evidence_marker }}`
+
+  and its first line is visible to a reader: `{{ evidence_opening }}`
+
+  It goes only on an open issue another run created for the same root cause, which
+  receives at most **one** from this run — whatever status the board holds it at, so an
+  item at `Deferred` receives this run's one comment like any other open item. Where this
+  run's evidence comment is already there, edit it in place with
+  `{{ plan_store }} task comment edit`; never add a second. This run never adds an evidence
+  comment to an issue it created: it edits that issue by copying its ticket again instead.
+- **A reply** answers one person's comment. Each comment the feedback below quotes under a
+  `### Comment` heading, with its id and URL, gets exactly **one** new reply from this run,
+  on the issue that holds that comment, whichever run owns that issue. Its last line is
+  exactly
+
+  `{{ reply_marker }}`
+
+  where `<root-cause>` is the `root_cause` in the ticket record of the issue the reply is
+  posted on, and `answers` is the id of the comment it answers, exactly as the feedback
+  gives it. `verdict` is this run's judgment of the comment: `{{ shape.confirms }}` when it confirms
+  the issue's root cause occurs — a new sighting of it, or evidence that it is more
+  prevalent than the ticket says — and `{{ shape.does_not_confirm }}` for anything else: a question, a
+  correction, a disagreement. A confirming reply counts as one more occurrence of the root
+  cause. Its first line is visible to a reader: `{{ reply_opening }}`, or
+  `{{ reply_opening_unattributed }}` when the feedback reports no author. After a blank line
+  comes the response: what this run did about the comment and why, or why it did nothing;
+  after another blank line, the marker. Post it with `{{ plan_store }} task comment add`, after
+  the actions it reports.
+- **A reply is never edited to answer a different comment**, since every comment gets a
+  reply of its own. A reply never counts as this run's one evidence comment, and never
+  carries evidence in place of the ticket or the evidence comment.
+- **Reply only to the comments the feedback quotes.** A comment that appears on the board
+  during this dispatch is left for the next gathering, and feedback the manager wrote
+  quotes no board comment, so it gets no reply.

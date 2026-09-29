@@ -7,8 +7,9 @@
 # `orchestrator/follow_up_tickets.py` states and `just follow-ups` validates once an
 # attached run settles, the manager's reading of its report, and the journeys.
 #
-# The member claims no `task` of its own, so the task `scripts/follow-ups.sh` composes
-# from `config/follow-up-task.md` reaches it whole as its prompt. It layers no persona
+# The member claims no `task` of its own, so the task `scripts/follow-ups.sh` creates
+# from the `follow-up-task` template, `templates/follow-up-task.md.j2`, reaches it whole as
+# its prompt. It layers no persona
 # either — a single-sided member has no onejudge base config to layer a persona delta
 # over — so `../personas/follow-up.yaml` is named for the label alone and that composed
 # task is the one copy of its instructions the model is given. The plan node names the
