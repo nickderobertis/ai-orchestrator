@@ -1465,7 +1465,9 @@ four-hour age floor when you name none, because a host running several dispatche
 churns workspaces hourly and almost nothing provably dead is ever a day old, and
 lowering it weakens no proof. Read each verb's "Families not examined" section before
 its reclaimed figure, because `0 B reclaimed` beside an unexamined family reads as an
-all-clear. Session setup runs it. The processes meant to outlive their launcher — the driver and the
+all-clear. Session setup starts it detached, one at a time host-wide and at most once an
+hour — the session hook's own job, as [`docs/host-setup.md`](docs/host-setup.md#the-host-sweep-detached-one-at-a-time-once-an-hour)
+says — and never waits on it. The processes meant to outlive their launcher — the driver and the
 dispatches and publications it forks — are the engines' to keep alive and reap: never
 work around a kill with `nohup` or `setsid` by hand. A run root is pruned by the next
 `onevcs session open`, which skips an open session's root and keeps a closed one only

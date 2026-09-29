@@ -1090,8 +1090,9 @@ class SessionStart:
         return process
 
     def hand_sweep(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        """A hand-run to completion, bounded well below any sweep a journey holds."""
         process = self.spawn_hand_sweep(*arguments)
-        stdout, stderr = process.communicate(timeout=e2e_timeout(120))
+        stdout, stderr = process.communicate(timeout=e2e_timeout(30))
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     def verb_calls(self) -> list[str]:

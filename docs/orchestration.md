@@ -2647,7 +2647,9 @@ The conservative sweep exposed as `just sweep` reclaims what a finished dispatch
 a finished publication left behind. A directory its ownership proof does not clear is
 reported as retained rather than removed, and a directory that is only stale is
 eligible after the conservative age threshold alone. Use `just sweep --dry-run` to
-inspect candidates without removing any of them.
+inspect candidates without removing any of them. Where it runs on its own — detached
+from session setup, one at a time, at most once an hour — is
+[`docs/host-setup.md`](host-setup.md#the-host-sweep-detached-one-at-a-time-once-an-hour).
 
 It is **two published verbs, and the recipe is nothing more than running both**:
 `onevcs sweep` for the publication and recovery workspaces a lifecycle leaves behind,

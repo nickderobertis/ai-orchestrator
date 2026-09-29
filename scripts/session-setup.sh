@@ -31,12 +31,10 @@
 #      names for every Rust identity's warm worktree slots, and a command the host lacks
 #      would fail on every idle tick the engine sweeps the pool on. Optional — a host
 #      without `cargo` pools nothing Rust — so it never changes the exit status.
-#  10. The host sweep — `just sweep`, `onevcs sweep` then `oneagentgraph sweep` over the
-#      dead workspaces, session records and scratch nothing else here reclaims — started
-#      by `scripts/host-sweep.sh --detach` as a job detached from this hook, which is
-#      that script's own job and not an engine process. It never waits: a sweep already
-#      holding the host-wide lock, or one completed within the hour, starts nothing, and
-#      a last sweep that failed is named with its log and never changes the exit status.
+#  10. The host sweep (`just sweep`), started by `scripts/host-sweep.sh --detach` as this
+#      hook's own job, detached from it: never waited on, one at a time host-wide, at
+#      most once an hour, and a failed last sweep named with its log without changing
+#      the exit status. docs/host-setup.md, "The host sweep", is the account.
 #  11. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
 #      `just bootstrap`, memoized per checkout, started as a job detached from this
 #      hook so the gate a dispatch publishes through gets its tools however long they
