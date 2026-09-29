@@ -1736,8 +1736,10 @@ def test_the_merge_queue_bound_is_floored_at_the_default_onevcs_declares() -> No
 #: surveyed run and adds the
 #: skipped-runs trailer. Anchoring on the outer function is how these gates came to
 #: report the health opener as gone from a view that still prints it: the composition
-#: moved down one function while the entry point kept its name.
-STATUS_VIEW = re.compile(r"pub\(crate\) fn status_of\(.*?\n\}\n", re.DOTALL)
+#: moved down one function while the entry point kept its name. From onepipeline 0.53.0,
+#: whose `status --no-providers` leaves the health report out, `status_of` is one call to
+#: `status_reporting` asking for it, and that is where the block is composed.
+STATUS_VIEW = re.compile(r"pub\(crate\) fn status_reporting\(.*?\n\}\n", re.DOTALL)
 
 #: The helper that view writes a run's own block through, and the call by which it does.
 #:

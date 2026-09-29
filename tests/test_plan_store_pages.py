@@ -1,7 +1,7 @@
 """Every plan-store listing is read to its last page, against the installed `onetaskgraph`.
 
 A listing the store answers is one page — its `page_size` setting, 50 unless configured —
-with a `next` cursor when more remain, and `just follow-ups-handle-comments` once read the
+with a `next` cursor when more remain, and the follow-up comment gathering once read the
 `followups` board as its first page and answered "no new feedback" for a run whose every
 issue sat on the second. What is proven here is `plan_store.every_page` and each reader
 routed through it, over real `local-md` sources with nothing in the store's place: a
@@ -12,11 +12,12 @@ small source span pages for the rest.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import follow_up_variables
 import pytest
-from test_follow_up_comments import BOARD, _filed
+from test_follow_up_comments import BOARD, _commented, _filed
 
 from orchestrator import follow_up_comments, plan_store
 from orchestrator import follow_up_tickets as tickets
@@ -150,9 +151,10 @@ def test_projects_and_documents_are_read_past_one_page(
     assert {document.project for document in read} == {"alpha"}
 
 
-def test_board_issues_returns_an_issue_past_the_first_page(
+def test_the_narrowed_comment_listing_returns_an_issue_past_the_first_page(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The comment gathering's one listing, `commented_since` and all, read to its last page."""
     drafts = tmp_path / "follow-ups"
     drafts.mkdir()
     monkeypatch.setenv(follow_up_variables.root_name(), str(drafts))
@@ -160,14 +162,21 @@ def test_board_issues_returns_an_issue_past_the_first_page(
     _source(monkeypatch, BOARD, tmp_path / "board")
     (tmp_path / "board").mkdir()
     filed = [_filed(drafts, f"run-{i}", f"cause-{i}") for i in range(5)]
+    since = datetime.now(UTC).replace(microsecond=0)
+    for issue in filed:
+        _commented(issue, "Still happening.\n")
     monkeypatch.setenv("ONETASKGRAPH_PAGE_SIZE", "2")
 
-    first = plan_store.sdk(plan_store.client().task_list(source=[BOARD]))
+    first = plan_store.sdk(
+        plan_store.client().task_list(
+            source=[BOARD], commented_since=follow_up_comments.instant(since)
+        )
+    )
     listed_first = [held.id.model_dump() for held in first.items]
     assert first.next is not None
     assert filed[-1] not in listed_first
 
-    issues = follow_up_comments.board_issues(BOARD)
+    issues = follow_up_comments.commented_issues(BOARD, since)
 
     assert [issue.id for issue in issues] == filed
     assert [issue.owner for issue in issues] == [tickets.RunId(f"run-{i}") for i in range(5)]

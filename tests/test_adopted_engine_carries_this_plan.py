@@ -517,6 +517,20 @@ GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
     ),
 )
 
+#: The follow-up comment flow plan's engine-side node, which relinked the plan store so a
+#: dispatch's linked store answers the narrowed comment query `just
+#: follow-ups-answer-comments` asks;
+#: `tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py` drives that query
+#: through a real launch.
+COMMENT_FLOW_LANDINGS = (
+    Landing(
+        node="op-relink-onetaskgraph",
+        change_request=575,
+        commit="97b3e5195d1caf0f3be683e043d4edf126051ac9",
+        did="link the onetaskgraph release that filters tasks by comment activity",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -535,6 +549,7 @@ LANDINGS = (
     *UNPUBLISHED_UNFINISHED_LANDINGS,
     *BRANCH_RETIREMENT_LANDINGS,
     *GRAPHQL_WRITEBACK_QUOTA_LANDINGS,
+    *COMMENT_FLOW_LANDINGS,
 )
 
 

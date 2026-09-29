@@ -815,7 +815,7 @@ TEMPLATE_NAME = "follow-up-task"
 #: What the recipe answers `placement_note` with is `scripts/plan-brief.sh`'s; a note of
 #: this test's own stands in, so a rendering is read for what the template does with it.
 PLACEMENT_NOTE = "\n## Additional info\n\nThis stands in for the direct-node placement note.\n"
-#: A gathering, as `just follow-ups-handle-comments` writes one, cut to what a task carries.
+#: A gathering, as `just follow-ups-answer-comments` writes one, cut to what a task carries.
 GATHERING = "### Comment 1: on `followups:x`\n\nPlease add page 9.\n"
 
 
@@ -3074,7 +3074,7 @@ def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry()
 
 
 #: **The two accounts, one per mode.** `tests/plan_tooling/test_follow_ups_recipe_e2e.py`
-#: and `tests/plan_tooling/test_follow_ups_handle_comments_recipe_e2e.py` drive each mode
+#: and `tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py` drive each mode
 #: through its real recipe and a real launch. What is proven below is every way one account
 #: can fail to be one, which a journey reaches one at a time.
 #:

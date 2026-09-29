@@ -6,7 +6,7 @@ Everything below the recipe is real: `just follow-ups` and its script, the gathe
 every ticket, board item and comment is written and read through. The bench, the board — a
 `local-md` stand-in named with `--to`, never the live `followups` board — and the mirror
 checkout are `tests/plan_tooling/test_follow_ups_recipe_e2e.py`'s and
-`tests/plan_tooling/test_follow_ups_handle_comments_recipe_e2e.py`'s, imported rather than
+`tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py`'s, imported rather than
 restated. **`tests/e2e/fake_codex.py` stands in for the paid model alone**, running the
 commands the answering agent would choose through the real programs.
 
@@ -30,7 +30,7 @@ from typing import NamedTuple
 import pytest
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from published_tools import ONETASKGRAPH_BIN
-from test_follow_ups_handle_comments_recipe_e2e import (
+from test_follow_ups_answer_comments_recipe_e2e import (
     BOARD_CREDENTIAL,
     NO_ENGINE,
     PLANTED_CREDENTIAL,
@@ -271,24 +271,64 @@ class Answered(NamedTuple):
     other_run_after: dict[str, object]
 
 
+#: A gathering for one run, composed from the module's own reads and writer: every person's
+#: comment on the issues ``run`` owns or has marked with its own comment. It is composed here
+#: rather than by `just follow-ups-answer-comments`, whose routing sends a comment to the run
+#: owning its issue alone: this journey's subject is what the dispatch does with a gathering
+#: that also quotes another run's item, which `check-gathering` admits for a run that marked
+#: it and a manager may hand `just follow-ups --comments` directly.
+GATHER_FOR = """\
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+from orchestrator import follow_up_comments as comments
+from orchestrator import follow_up_tickets as tickets
+
+root, board, run = sys.argv[1:4]
+issues = comments.commented_issues(board, comments.moment(sys.argv[4], "since"))
+chosen = [
+    comments.Selected(issue, comment.id, comments.comment_url(issue, comment),
+                      comment.author or comments.UNKNOWN_AUTHOR, comment.last_changed,
+                      comment.body)
+    for issue in issues
+    if issue.owner == run or any(
+        (owner := tickets.comment_owner(held.body)) is not None and owner.run == run
+        for held in issue.comments
+    )
+    for comment in issue.comments
+    if tickets.comment_owner(comment.body) is None
+]
+print(comments.write_feedback(Path(root), run, board, chosen, None, datetime.now(UTC)))
+"""
+
+#: Before every comment these journeys write.
+GATHERED_SINCE = "2026-01-01T00:00:00Z"
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] The recipe routes a comment to the run
+# owning its issue alone, so no recipe writes a gathering that also quotes another run's item
+# this run marked — which `check-gathering` admits and a manager may hand `just follow-ups
+# --comments` — and that dispatch is this journey's subject; the gathering is composed
+# through the recipe's own module reads and writer instead.
 def _gathered(bench: Bench, run: str, board: str = BOARD) -> Path:
-    """``run``'s new comments on ``board``, gathered by the module the recipe gathers with."""
+    """``run``'s comments on ``board``, gathered through the module the recipe gathers with."""
     written = _run(
         [
             str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            "-m",
-            "orchestrator.follow_up_comments",
-            "feedback",
-            "--root",
+            "-c",
+            GATHER_FOR,
             str(bench.drafts_root),
-            "--board",
             board,
             run,
+            GATHERED_SINCE,
         ],
         bench,
     )
     assert written.returncode == 0, written.stdout + written.stderr
     return Path(written.stdout.strip())
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
 
 
 def test_the_older_tickets_are_refused_by_validate_as_the_schema_history_says(
@@ -856,7 +896,7 @@ def test_the_comments_mode_reads_the_board_with_the_credential_this_checkout_sup
 ) -> None:
     """`--comments` run directly: the gathering's board read is handed the `.env` token.
 
-    A manager running `just follow-ups … --comments` without the handle-comments wrapper was
+    A manager running `just follow-ups … --comments` without the answer-comments recipe was
     refused for a missing `GH_PROJECTS_TOKEN` while the token sat in that file.
     """
     mirror = _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")

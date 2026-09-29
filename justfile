@@ -672,9 +672,12 @@ follow-up *args:
 follow-ups *args:
     @./scripts/follow-ups.sh "$@"
 
-[doc("Re-dispatch a run's follow-up agent over people's new board comments on its follow-ups.")]
-follow-ups-handle-comments *args:
-    @./scripts/follow-ups-handle-comments.sh "$@"
+# `just follow-ups-answer-comments [--dry-run] [--run RUN-ID] [--to SOURCE] [--since RFC3339]
+# [--detach]`: `orchestrator/follow_up_comments.py` states which comments are read, which run
+# each goes to, and when the board's watermark moves.
+[doc("Answer people's unanswered board comments on follow-ups, one run per owning run; `--dry-run` reports only.")]
+follow-ups-answer-comments *args:
+    @./scripts/follow-ups-answer-comments.sh "$@"
 
 # Register a repository checkout alias. Publication policy and approvals come from
 # the rules file the identity matches rather than from flags here; `onevcs` detects

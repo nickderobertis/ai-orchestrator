@@ -2,9 +2,10 @@
 
 A finished run's follow-ups are verified by exactly two routes: the engine's success hook,
 which `just orchestrate` wires to `scripts/run-ended.sh`, and a manager typing the recipe —
-either `just follow-ups` itself or `just follow-ups-handle-comments`, which a manager types to
-re-dispatch a run over people's new board comments and which reaches the one feedback path
-by running `scripts/follow-ups.sh --feedback` rather than composing a launch of its own.
+either `just follow-ups` itself or `just follow-ups-answer-comments`, which a manager types to
+answer people's board comments and which reaches the one feedback path by running
+`scripts/follow-ups.sh --feedback` once per owning run rather than composing a launch of its
+own.
 A scripted chain — a launcher running the follow-ups recipe once an attached launch
 returns — was ruled out in favour of the hook, because a chain fires on a run the engine
 did not judge complete and fires a second time beside the hook. So this gate holds the
@@ -48,9 +49,9 @@ ALLOWED = {
     "scripts/run-ended.sh": (
         'output=$(cd -- "$checkout" && just follow-ups "$run" --detach) || status=$?'
     ),
-    "scripts/follow-ups-handle-comments.sh": (
-        'exec "$checkout/scripts/follow-ups.sh" "$run" --feedback "$feedback" --comments '
-        '${passed[@]+"${passed[@]}"}'
+    "scripts/follow-ups-answer-comments.sh": (
+        '(cd -- "$checkout" && exec scripts/follow-ups.sh "$run" --feedback "$feedback" '
+        '--comments --detach ${to:+"$to"}) >"$log" &'
     ),
 }
 

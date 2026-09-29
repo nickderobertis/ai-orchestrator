@@ -4105,36 +4105,54 @@ def _gathered(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
+class Unanswered(NamedTuple):
+    """Why one gathering's account does not answer it: the file at fault, and each reason."""
+
+    path: Path
+    problems: list[str]
+
+
+def responses_unanswered(board: str, feedback: Path, run: str) -> Unanswered | None:
+    """What `check-responses` refuses a gathering's account for, or `None` when it is sound.
+
+    :class:`OSError` or :class:`Refused` when the gathering or the board cannot be read at
+    all. `just follow-ups-answer-comments` asks this of every run it settled, in process,
+    and the `check-responses` command reports the same answer.
+    """
+    path = responses_path(feedback)
+    gathering = read_gathering(_text(feedback))
+    if problems := gathering_problems(gathering, feedback, board, run):
+        return Unanswered(feedback, problems)
+    quoted = gathering.quoted
+    if not path.is_file():
+        return Unanswered(
+            path,
+            [
+                "it does not exist, so nothing says what was done about the "
+                f"{len(quoted)} comment(s) {feedback.name} quotes"
+            ],
+        )
+    problems, answered = response_problems(_artifact(path), run, feedback, quoted)
+    # The gathering is held to the board first, so no issue it names is asked for its
+    # replies until the board says this run may answer there.
+    if not problems:
+        problems = gathering_on_board(gathering, run, check_issue_title=False)
+    if not problems:
+        problems = replies_posted(run, answered)
+    return Unanswered(path, problems) if problems else None
+
+
 def _answered(arguments: argparse.Namespace) -> int:
     """Validate a gathering's response artifact, for the `check-responses` command."""
     feedback: Path = arguments.feedback
-    path = responses_path(feedback)
     try:
-        gathering = read_gathering(_text(feedback))
-        if problems := gathering_problems(gathering, feedback, arguments.board, arguments.run):
-            return _refused(str(feedback), problems)
-        quoted = gathering.quoted
-        if not path.is_file():
-            return _refused(
-                str(path),
-                [
-                    "it does not exist, so nothing says what was done about the "
-                    f"{len(quoted)} comment(s) {feedback.name} quotes"
-                ],
-            )
-        problems, answered = response_problems(_artifact(path), arguments.run, feedback, quoted)
-        # The gathering is held to the board first, so no issue it names is asked for its
-        # replies until the board says this run may answer there.
-        if not problems:
-            problems = gathering_on_board(gathering, arguments.run, check_issue_title=False)
-        if not problems:
-            problems = replies_posted(arguments.run, answered)
+        unanswered = responses_unanswered(arguments.board, feedback, arguments.run)
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
-    if problems:
-        return _refused(str(path), problems)
-    print(f"{PROG}: {path} answers every comment {feedback.name} quotes")
+    if unanswered is not None:
+        return _refused(str(unanswered.path), unanswered.problems)
+    print(f"{PROG}: {responses_path(feedback)} answers every comment {feedback.name} quotes")
     return SOUND
 
 

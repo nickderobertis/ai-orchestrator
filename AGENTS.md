@@ -869,15 +869,19 @@ success hook, launching the follow-up run.
 
 **Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
 comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
---feedback FILE`, and people's new comments on a run's board issues go back with `just
-follow-ups-handle-comments <run-id>`, which writes that file from the board and has the
-re-dispatch answer each comment with a reply under the run's marker. On the `followups`
-board a run owns only the issues it created and the comments its marker names
-(`orchestrator/follow_up_tickets.py`).
+--feedback FILE`. On the `followups` board a run owns only the issues it created and the
+comments its marker names (`orchestrator/follow_up_tickets.py`).
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The plan that added the command requires this section to name it, its dry run, what it reads and how a comment is routed and answered, because those decide whether a manager runs it and what its cost scales with; the rule itself is stated once, in the module this points to. -->
+People's board comments are answered by `just follow-ups-answer-comments` (`--dry-run`
+launches nothing). It reads only the items commented on since the board's watermark,
+routes each comment to the run owning its issue, and counts it answered once any run's
+reply names it; `orchestrator/follow_up_comments.py` states the rule.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] Which recipe selects which mode is
 a decision the manager makes before running either, and neither recipe's own help states
-it: `just follow-ups` and `just follow-ups-handle-comments` differ in what the dispatch
+it: `just follow-ups` and `just follow-ups-answer-comments` differ in what the dispatch
 they launch will and will not do, and a manager who picks the wrong one pays a provider
 turn to find out. The disposition words are named because the manager reads the account,
 and each validator is named because the manager runs it when a detached run's own report is
@@ -895,7 +899,7 @@ the end of the paragraph naming the two places each validator binds. -->
 **A follow-up dispatch's task is rendered from this host's `follow-up-task` template,
 `templates/follow-up-task.md.j2`, in one of two modes, and each owes one checked
 account.** Which mode is the **caller's** to state and is never inferred from a feedback
-file's contents: `just follow-ups-handle-comments` passes `--comments` through, and a bare
+file's contents: `just follow-ups-answer-comments` passes `--comments` through, and a bare
 `--feedback` of your own stays the full re-dispatch above, so a manager's feedback that
 happens to quote a board comment does not narrow the dispatch silently.
 

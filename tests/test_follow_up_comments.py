@@ -1,11 +1,12 @@
-"""Which of a person's board comments are feedback for a run, and the file they are written as.
+"""Which board comments go to which run, the files they are written as, and the watermark.
 
-`tests/plan_tooling/test_follow_ups_handle_comments_recipe_e2e.py` drives the recipe through a
-real launch. What is proven here is the selection one boundary at a time, against the
-installed `onetaskgraph`: a drafts root and a second local store standing in for the board,
-both named through the store's environment layer, tickets copied and comments written through
-the store's own verbs. Only the malformed answers a real store never gives are put in the
-store's place, the way `tests/test_plan_store.py` refuses a listing it cannot account for.
+`tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py` drives the recipe through
+real launches. What is proven here is each of the module's three steps in process, against
+the installed `onetaskgraph`: a drafts root and a second local store standing in for the
+board, both named through the store's environment layer, tickets copied and comments written
+through the store's own verbs. Only the malformed answers a real store never gives are put
+in the store's place, the way `tests/test_plan_store.py` refuses a listing it cannot account
+for.
 
 Comment times are the store's own and whole seconds, so a test that needs one comment to be
 older than a response waits for the clock to pass a second between them.
@@ -14,9 +15,13 @@ older than a response waits for the clock to pass a second between them.
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
+import shlex
+import socket
+import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import follow_up_variables
@@ -28,7 +33,7 @@ from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 
 #: The local store standing in for the board, spelled lowercase because it is spelled into
-#: the store's environment layer as well as onto `--board`.
+#: the store's environment layer as well as onto `--to`.
 BOARD = "commentboard"
 RUN = "listing-run"
 OTHER_RUN = "earlier-run"
@@ -36,6 +41,7 @@ THIRD_RUN = "unrelated-run"
 CAUSE = "cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 PERSON = "a-reviewer"
+HOST = socket.gethostname()
 
 
 def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
@@ -43,6 +49,10 @@ def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
         comments.moment(None, "comment")
     with pytest.raises(OSError, match="names no offset"):
         comments.moment(datetime(2026, 1, 1), "comment")
+    with pytest.raises(OSError, match="not an RFC 3339 time"):
+        comments.moment("yesterday", "comment")
+    with pytest.raises(OSError, match="not an RFC 3339 time"):
+        comments.moment("20260101T000000+00:00", "comment")
 
     comment = comments.Comment(
         comments.CommentId("c-1"),
@@ -66,6 +76,12 @@ def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
     assert comments.comment_url(
         dataclasses.replace(issue, url=None), dataclasses.replace(comment, url=None)
     ).startswith("file:///tmp/issue.md#comment-")
+    qualified = comments.QualifiedTaskId(f"{BOARD}:x")
+    assert comments._location_path({"path": "/tmp/issue.md"}, qualified) == "/tmp/issue.md"
+    assert comments._location_path({}, qualified) is None
+    for path in (3, "", "/tmp/one\nfile:///elsewhere"):
+        with pytest.raises(OSError, match="which is not a path"):
+            comments._location_path({"path": path}, qualified)
     without_urls = dataclasses.replace(issue, url=None, location=None)
     with pytest.raises(OSError, match="no URL and no location"):
         comments.comment_url(without_urls, dataclasses.replace(comment, url=None))
@@ -91,18 +107,30 @@ def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-def _filed(root: Path, run: str, cause: str, body: str = "What the ticket says.") -> str:
-    """Write ``run``'s ticket for ``cause`` and copy it onto the board, as the agent does."""
+def _filed(
+    root: Path,
+    run: str,
+    cause: str,
+    body: str = "What the ticket says.",
+    *,
+    host: str | None = HOST,
+    record: bool = True,
+) -> str:
+    """Write ``run``'s ticket for ``cause`` and copy it onto the board, as the agent does.
+
+    ``host`` is the machine the record says verified it, and none is written when it is
+    `None`; with ``record`` false the item carries no follow-up record at all.
+    """
     path = tickets.ticket_path(root, run, cause)
     path.parent.mkdir(parents=True, exist_ok=True)
+    held = f"  {tickets.KEY}:\n    created_by_run: {run}\n" + (
+        f"    host: {host}\n" if host is not None else ""
+    )
     path.write_text(
         "---\n"
         f'title: "some-service: {cause}"\n'
         'status: "backlog"\n'
-        "metadata:\n"
-        f"  {tickets.KEY}:\n"
-        f"    created_by_run: {run}\n"
-        "---\n"
+        "metadata:\n" + (held if record else "  other: 1\n") + "---\n"
         f"{body}\n",
         encoding="utf-8",
     )
@@ -132,17 +160,53 @@ def _edited(issue: str, identifier: str, body: str) -> None:
     path.unlink()
 
 
+def _moved(issue: str, category: str) -> None:
+    plan_store.sdk(plan_store.client().task_status_set(issue, category))
+
+
 def _next_second() -> None:
     """Wait until the store's whole-second clock has moved past every time written so far."""
     time.sleep(1.1)
 
 
-def _written(root: Path, capsys: pytest.CaptureFixture[str]) -> str:
-    status = comments.main(["feedback", "--root", str(root), "--board", BOARD, RUN])
+#: A start before every comment a test writes, for the gatherings that name `--since`.
+EARLY = "2026-01-01T00:00:00Z"
+
+
+def _gathered(
+    root: Path,
+    capsys: pytest.CaptureFixture[str],
+    *arguments: str,
+    since: str | None = EARLY,
+) -> tuple[str, comments.Plan | None]:
+    """One `gather` over the stand-in board: its report, and the plan it wrote, if any."""
+    plan = root.parent / f"plan-{time.monotonic_ns()}.json"
+    status = comments.main(
+        [
+            "gather",
+            "--root",
+            str(root),
+            "--plan",
+            str(plan),
+            "--to",
+            BOARD,
+            *(["--since", since] if since is not None else []),
+            *arguments,
+        ]
+    )
     captured = capsys.readouterr()
-    assert status == comments.WRITTEN, captured.err
-    path = Path(captured.out.strip())
-    assert path.parent == root / comments.FEEDBACK_DIRECTORY / RUN, path
+    assert status == comments.DONE, captured.err
+    written = plan.read_text(encoding="utf-8")
+    return captured.out, comments.read_plan(plan, root) if written else None
+
+
+def _written(root: Path, capsys: pytest.CaptureFixture[str], run: str = RUN) -> str:
+    """The feedback file one `--run` gathering wrote for ``run``."""
+    _, plan = _gathered(root, capsys, "--run", run)
+    assert plan is not None
+    ((named, path),) = plan.runs
+    assert named == run
+    assert path.parent == root / comments.FEEDBACK_DIRECTORY / run, path
     return path.read_text(encoding="utf-8")
 
 
@@ -150,44 +214,52 @@ def _snapshot(root: Path) -> dict[str, bytes]:
     return {str(path): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
 
 
-def test_only_a_persons_comments_after_the_runs_last_marked_comment_are_selected(
+def _line(report: str, url_part: str) -> str:
+    (line,) = [line for line in report.splitlines() if url_part in line]
+    return line
+
+
+def _id_line(report: str, issue: str, identifier: str) -> str:
+    return _line(report, f"#comment-{identifier} on {issue}")
+
+
+def test_each_persons_comment_goes_to_the_run_owning_its_issue_and_to_no_other(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     own = _filed(drafts_root, RUN, CAUSE)
     others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
-    unrelated = _filed(drafts_root, THIRD_RUN, "an-unrelated-cause")
     _next_second()
-    _commented(own, "Answered before the run last responded.\n")
-    earlier = _commented(others, "Also answered before.\n")
+    marked = _commented(
+        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+    )
     _next_second()
-    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
-    _next_second()
-    _commented(own, "The examples still miss page 9 — see ```listing.py```.\n")
-    _edited(others, earlier, "Edited after the run responded, so it is new.\n")
-    _commented(own, tickets.render_comment(OTHER_RUN, CAUSE, "Another run's comment."), None)
-    _commented(unrelated, "On an issue this run neither owns nor commented on.\n")
+    on_own = _commented(own, "The examples still miss page 9 — see ```listing.py```.\n")
+    on_others = _commented(others, "Does this also hit the nightly sweep?\n")
     before = _snapshot(board)
 
-    written = _written(drafts_root, capsys)
+    report, plan = _gathered(drafts_root, capsys)
 
-    assert written.count("### Comment ") == 2, written
-    assert "The examples still miss page 9" in written
-    assert "Edited after the run responded, so it is new." in written
-    for absent in ("Answered before", "Also answered before", "evidence", "unrelated"):
-        assert absent not in written, written
-    assert f"- Author: {PERSON}" in written
-    assert f"on `{own}`, this run's issue" in written
-    assert f"on `{others}`, run `{OTHER_RUN}`'s issue" in written
+    assert plan is not None
+    files = dict(plan.runs)
+    assert sorted(files) == sorted([RUN, OTHER_RUN])
+    assert _id_line(report, own, on_own).endswith(f"goes to run {RUN}")
+    assert _id_line(report, others, on_others).endswith(f"goes to run {OTHER_RUN}")
+    assert _id_line(report, others, marked).endswith(f": marked by run {RUN}")
+    own_file = files[tickets.RunId(RUN)].read_text(encoding="utf-8")
+    assert own_file.count("### Comment ") == 1, own_file
+    assert f"on `{own}`, this run's issue" in own_file
     # A body carrying a fence is quoted inside a longer one, so it reaches the task whole.
-    assert "````text\nThe examples still miss page 9 — see ```listing.py```.\n````" in written
-    assert "- URL: file://" in written and "#comment-" in written
-    assert tickets.WITHDRAWAL_EXCEPTION in written
-    # The anchor `follow_up_tickets.check-responses` reads this gathering's comments back
-    # out of: one per quoted comment, each naming the issue its own section names, in the
-    # order the sections appear, and none of them read out of a quoted body.
-    assert [one.issue for one in tickets.quoted_comments(written)] == re.findall(
-        r"^### Comment \d+: on `([^`]+)`", written, re.MULTILINE
-    ), written
+    assert "````text\nThe examples still miss page 9 — see ```listing.py```.\n````" in own_file
+    assert "- URL: file://" in own_file and "#comment-" in own_file
+    assert tickets.WITHDRAWAL_EXCEPTION in own_file
+    others_file = files[tickets.RunId(OTHER_RUN)].read_text(encoding="utf-8")
+    assert "Does this also hit the nightly sweep?" in others_file
+    assert "page 9" not in others_file
+    # The anchor `check-responses` reads each gathering's comments back out of.
+    for text in (own_file, others_file):
+        assert [one.issue for one in tickets.quoted_comments(text)] == re.findall(
+            r"^### Comment \d+: on `([^`]+)`", text, re.MULTILINE
+        ), text
     assert _snapshot(board) == before, "gathering feedback wrote to the board"
 
 
@@ -197,7 +269,6 @@ def _replied(issue: str, answers: str, cause: str = CAUSE, run: str = RUN) -> st
         comment.model_dump(mode="json")
         for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
     ]
-    assert isinstance(listed, list), listed
     (answered,) = [one for one in listed if one["id"] == answers]
     reply = tickets.render_reply(
         run,
@@ -220,15 +291,6 @@ def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
     for body in (
         tickets.render_comment(OTHER_RUN, CAUSE, "Another run's evidence."),
         tickets.render_reply(
-            OTHER_RUN,
-            CAUSE,
-            answers=person,
-            url="u",
-            author=PERSON,
-            response="Theirs.",
-            verdict=tickets.Verdict.CONFIRMS,
-        ),
-        tickets.render_reply(
             RUN,
             CAUSE,
             answers="a-comment-gone",
@@ -244,27 +306,27 @@ def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
 
     assert written.count("### Comment ") == 1, written
     assert f"- Comment id: {person}\n" in written
-    for absent in ("evidence", "Theirs.", "Ours."):
+    for absent in ("evidence", "Ours."):
         assert absent not in written, written
 
 
-def test_a_replied_comment_is_not_selected_until_a_person_edits_it_after_the_reply(
+def test_a_reply_of_any_run_answers_a_comment_until_a_person_edits_it_after_the_reply(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     own = _filed(drafts_root, RUN, CAUSE)
-    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
-    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
     _next_second()
-    answered = _commented(own, "Answered by a reply.\n")
-    unanswered = _commented(others, "Nobody replied to this one.\n", "a-maintainer")
-    _replied(own, answered)
+    answered = _commented(own, "Answered by another run's reply.\n")
+    unanswered = _commented(own, "Nobody replied to this one.\n", "a-maintainer")
+    reply = _replied(own, answered, run=OTHER_RUN)
 
-    written = _written(drafts_root, capsys)
+    report, plan = _gathered(drafts_root, capsys)
 
+    assert _id_line(report, own, answered).endswith(f": answered by reply {reply}")
+    assert _id_line(report, own, unanswered).endswith(f"goes to run {RUN}")
+    assert plan is not None
+    written = plan.runs[0][1].read_text(encoding="utf-8")
     assert written.count("### Comment ") == 1, written
-    assert "Nobody replied to this one." in written, "a reply naming another comment hid it"
-    assert f"- Comment id: {unanswered}\n- URL: " in written
-    assert "Answered by a reply." not in written
+    assert "Answered by another run's reply." not in written
 
     _next_second()
     _edited(own, answered, "Edited after the reply, so it is asked again.\n")
@@ -273,6 +335,95 @@ def test_a_replied_comment_is_not_selected_until_a_person_edits_it_after_the_rep
 
     assert "Edited after the reply, so it is asked again." in edited
     assert f"- Comment id: {answered}\n" in edited
+
+
+def test_comments_on_items_no_run_here_answers_are_each_left_out_with_their_one_reason(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    decided = _filed(drafts_root, RUN, "a-decided-cause")
+    deferred = _filed(drafts_root, RUN, "a-deferred-cause")
+    elsewhere = _filed(drafts_root, RUN, "a-cause-seen-elsewhere", host="another-host")
+    hostless = _filed(drafts_root, RUN, "a-cause-of-an-older-schema", host=None)
+    gone = _filed(drafts_root, THIRD_RUN, "a-reaped-cause")
+    dotted = _filed(drafts_root, "a.dotted.run", "a-dotted-cause")
+    unowned = _filed(drafts_root, "no-run", "an-unowned-cause", record=False)
+    for path in (drafts_root / "tasks" / THIRD_RUN).rglob("*"):
+        if path.is_file():
+            path.unlink()
+    for path in sorted((drafts_root / "tasks" / THIRD_RUN).rglob("*"), reverse=True):
+        path.rmdir()
+    (drafts_root / "tasks" / THIRD_RUN).rmdir()
+    _moved(decided, tickets.Status.ACCEPTED.value)
+    _moved(deferred, tickets.Status.DEFERRED.value)
+    _next_second()
+    on_decided = _commented(decided, "Moved on already.\n")
+    on_deferred = _commented(deferred, "Still worth doing later?\n")
+    on_elsewhere = _commented(elsewhere, "Seen on the other host.\n")
+    on_hostless = _commented(hostless, "From before hosts were recorded.\n")
+    on_gone = _commented(gone, "Nobody here holds this run.\n")
+    on_unowned = _commented(unowned, "On an item no run filed.\n")
+    on_dotted = _commented(dotted, "Filed by a run no launch takes.\n")
+    by_app = _commented(deferred, "Automated note.\n", "dependabot[bot]")
+    by_actions = _commented(deferred, "Workflow note.\n", "github-actions")
+
+    report, plan = _gathered(drafts_root, capsys)
+
+    status = plan_store.task_record(decided)["status"]
+    assert isinstance(status, dict)
+    assert _id_line(report, decided, on_decided).endswith(f": item at {status['name']}")
+    assert _id_line(report, deferred, on_deferred).endswith(f"goes to run {RUN}")
+    assert _id_line(report, elsewhere, on_elsewhere).endswith(
+        ": ticket verified on host another-host"
+    )
+    assert _id_line(report, hostless, on_hostless).endswith(
+        ": ticket verified on host (none recorded)"
+    )
+    assert _id_line(report, gone, on_gone).endswith(f": no records for owning run {THIRD_RUN} here")
+    assert _id_line(report, unowned, on_unowned).endswith(
+        ": the no-answer rule: the item carries no follow-up record, so no run answers it"
+    )
+    assert _id_line(report, dotted, on_dotted).endswith(
+        ": owning run a.dotted.run is not a run id `just follow-ups` launches"
+    )
+    assert _id_line(report, deferred, by_app).endswith(": bot author dependabot[bot]")
+    assert _id_line(report, deferred, by_actions).endswith(": bot author github-actions")
+    assert plan is not None
+    assert [run for run, _ in plan.runs] == [RUN]
+
+
+def test_a_dry_run_reports_what_would_go_where_and_writes_nothing(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    asked = _commented(own, "Please add page 9.\n")
+    before = _snapshot(drafts_root)
+
+    report, plan = _gathered(drafts_root, capsys, "--dry-run")
+
+    assert plan is None
+    assert _id_line(report, own, asked).endswith(f"would go to run {RUN}")
+    assert _snapshot(drafts_root) == before, "a dry run wrote under the drafts root"
+    assert report.splitlines()[-1] == (
+        f"plan store: {comments.store_version()}; the narrowed query returned 1 item(s) "
+        f"commented on since {EARLY}"
+    )
+
+
+def test_a_run_scoped_gathering_names_only_that_runs_comments(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _next_second()
+    _commented(own, "Ours.\n")
+    _commented(others, "Theirs.\n")
+
+    report, plan = _gathered(drafts_root, capsys, "--run", RUN)
+
+    assert plan is not None and plan.scope == RUN
+    assert [run for run, _ in plan.runs] == [RUN]
+    assert own in report and others not in report
 
 
 def test_a_comment_written_after_the_first_gathering_is_selected_whatever_responses_follow_it(
@@ -312,7 +463,7 @@ def test_the_boundary_is_the_last_response_before_the_first_gathering_and_never_
 ) -> None:
     own = _filed(drafts_root, RUN, CAUSE)
     _next_second()
-    _commented(own, "Answered by the copy that follows.\n")
+    answered_by_copy = _commented(own, "Answered by the copy that follows.\n")
     _next_second()
     _filed(drafts_root, RUN, CAUSE, "Copied again, answering it.")
     written_at = tickets.ticket_path(drafts_root, RUN, CAUSE).stat().st_mtime
@@ -321,9 +472,14 @@ def test_the_boundary_is_the_last_response_before_the_first_gathering_and_never_
     _next_second()
     missed = _commented(own, "Gathered, and never replied to.\n")
     _next_second()
-    first = _written(drafts_root, capsys)
+    report, plan = _gathered(drafts_root, capsys, "--run", RUN)
+    assert plan is not None
+    first = plan.runs[0][1].read_text(encoding="utf-8")
     assert "Gathered, and never replied to." in first
     assert "Answered by the copy that follows." not in first
+    assert _id_line(report, own, answered_by_copy).endswith(
+        f": at or before run {RUN}'s boundary {comments.instant(boundary)}"
+    )
     _next_second()
     # Responses after the first gathering: a copy, and a feedback file of a later gathering.
     _filed(drafts_root, RUN, CAUSE, "Copied again after the first gathering.")
@@ -339,7 +495,7 @@ def test_the_boundary_is_the_last_response_before_the_first_gathering_and_never_
 
     assert f"- Comment id: {missed}\n" in second, "a copy after the first gathering hid it"
     assert "Answered by the copy that follows." not in second
-    assert f", each changed after {boundary.strftime(comments.MOMENT_FORMAT)}," in second
+    assert f", each changed after {comments.instant(boundary)}," in second
     assert len(list(directory.glob("2*.md"))) == 2
     assert comments.first_gathering(drafts_root, RUN) == (stamp, comments.Boundary(boundary))
 
@@ -352,6 +508,39 @@ def test_the_boundary_is_the_last_response_before_the_first_gathering_and_never_
 
     assert "Answered by the copy that follows." in third, "the recorded boundary was not read"
     assert third.splitlines()[0] == comments.boundary_line(None)
+
+
+def test_a_computed_boundary_is_recorded_beside_the_runs_feedback_and_read_from_there(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run with no comment selected still has the boundary it was computed recorded."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _next_second()
+    _commented(own, "Answered by the evidence comment that follows.\n")
+    _next_second()
+    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
+    (evidence,) = plan_store.sdk(plan_store.client().task_comment_list(others)).comments
+    boundary = comments.moment(evidence.updated_at or evidence.created_at, "the evidence")
+    path = comments.boundary_path(drafts_root, RUN)
+
+    _gathered(drafts_root, capsys, "--dry-run")
+    assert not path.exists(), "a dry run recorded a boundary"
+    _gathered(drafts_root, capsys, "--run", OTHER_RUN)
+    assert not path.exists(), "a gathering scoped to another run recorded this run's boundary"
+
+    report, plan = _gathered(drafts_root, capsys, "--run", RUN)
+
+    assert plan is not None and plan.runs == ()
+    assert "nothing to answer: no comment was selected, so nothing was launched" in report
+    assert path.read_text(encoding="utf-8") == comments.boundary_line(boundary) + "\n"
+    # Read from there once it is recorded, whatever the responses since say.
+    _next_second()
+    _filed(drafts_root, RUN, CAUSE, "Copied again after the boundary was recorded.")
+    assert comments.run_boundary(drafts_root, RUN, []) == (comments.Boundary(boundary), False)
+    path.write_text("not a boundary\n", encoding="utf-8")
+    with pytest.raises(OSError, match="records no boundary line"):
+        comments.stored_boundary(drafts_root, RUN)
 
 
 def test_an_earliest_feedback_file_recording_no_boundary_falls_back_to_the_computed_one(
@@ -403,10 +592,14 @@ def test_a_boundary_a_feedback_file_records_that_is_no_moment_is_unrunnable(
         comments.boundary_line(None) + "\n", encoding="utf-8"
     )
 
-    status = comments.main(["feedback", "--root", str(drafts_root), "--board", BOARD, RUN])
+    gather = ["gather", "--root", str(drafts_root), "--plan", str(drafts_root.parent / "p.json")]
+    status = comments.main([*gather, "--to", BOARD, "--since", EARLY])
 
     assert status == comments.UNRUNNABLE
     assert "20260101T000000Z.md records reports 'yesterday'" in capsys.readouterr().err
+    (directory / "20261399T000000Z.md").write_text("", encoding="utf-8")
+    assert comments.main([*gather, "--to", BOARD, "--since", EARLY]) == comments.UNRUNNABLE
+    assert "20261399T000000Z.md is named for no moment" in capsys.readouterr().err
 
 
 def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
@@ -424,6 +617,7 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
     assert f"- Comment id: {identifier}\n- URL: file://" in written
     assert f"- Author: {PERSON}\n- Last changed: {listed['updated_at']}\n" in written
     for said in (
+        "Gathered by `just follow-ups-answer-comments`",
         "each is quoted verbatim below with its id, its URL, its author and when it last changed",
         '1. **Act on it** under "Ownership on the board" above: perform whatever action it calls '
         "for, or none.",
@@ -435,8 +629,9 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
         assert said in flat, said
     # The anchor sits with the comment it names, so the account's order is the file's.
     assert tickets.quoted_comments(written) == [tickets.Quoted(own, identifier)], written
-    assert "edit this run's one comment" not in flat, "the feedback restates an ownership rule"
     assert written.index("1. **Act on it**") < written.index("2. **Post its one reply**")
+    # A run with no response has no boundary, and an unnamed author is said to be one.
+    assert "changed after" not in written
 
 
 def test_a_comment_before_the_runs_last_ticket_copy_is_not_selected_and_one_after_is(
@@ -448,96 +643,465 @@ def test_a_comment_before_the_runs_last_ticket_copy_is_not_selected_and_one_afte
     _next_second()
     _filed(drafts_root, RUN, CAUSE, "What the ticket says, answering the comment.")
     _next_second()
-    _commented(own, "A new question after that copy.\n")
+    _commented(own, "A new question after that copy.\n", None)
 
     written = _written(drafts_root, capsys)
 
     assert "A new question after that copy." in written
     assert "Answered by the copy that follows." not in written
     assert ", each changed after " in written
-
-
-def test_a_run_that_never_responded_has_every_persons_comment_selected(
-    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    own = _filed(drafts_root, RUN, CAUSE)
-    # The ticket file is gone from this host, so nothing says when the run last copied it.
-    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
-    _commented(own, "Written with no author named.\n", None)
-
-    written = _written(drafts_root, capsys)
-
-    assert "changed after" not in written
     assert f"- Author: {comments.UNKNOWN_AUTHOR}" in written
 
 
-def test_a_run_owning_nothing_on_the_board_is_refused_naming_it(
-    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _commented(_filed(drafts_root, OTHER_RUN, SHARED_CAUSE), "Not about this run.\n")
-
-    status = comments.main(["feedback", "--root", str(drafts_root), "--board", BOARD, RUN])
-
-    captured = capsys.readouterr()
-    assert status == comments.NOTHING_NEW
-    assert f"run {RUN} owns no follow-up issue on the {BOARD!r} board" in captured.err
-    assert "nothing was launched" in captured.err
-    assert not (drafts_root / comments.FEEDBACK_DIRECTORY).exists()
-
-
-def test_a_run_with_no_new_comment_is_refused_naming_it_and_its_last_response(
-    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    own = _filed(drafts_root, RUN, CAUSE)
-    _commented(own, tickets.render_comment(OTHER_RUN, CAUSE, "Another run's."), None)
-    _next_second()
-    _filed(drafts_root, RUN, CAUSE, "Copied again, after every comment.")
-
-    status = comments.main(["feedback", "--root", str(drafts_root), "--board", BOARD, RUN])
-
-    captured = capsys.readouterr()
-    assert status == comments.NOTHING_NEW
-    assert f"run {RUN} has no new feedback: of the 1 comment(s) on the 1 issue(s)" in captured.err
-    assert (
-        "none is a person's that no reply of this run answers and that changed after "
-        in captured.err
-    )
-
-
-def test_a_run_whose_every_comment_is_a_runs_own_is_refused_when_it_never_responded(
-    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    own = _filed(drafts_root, RUN, CAUSE)
-    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
-    _commented(own, tickets.render_comment(OTHER_RUN, CAUSE, "Another run's."), None)
-
-    status = comments.main(["feedback", "--root", str(drafts_root), "--board", BOARD, RUN])
-
-    assert status == comments.NOTHING_NEW
-    refusal = capsys.readouterr().err
-    assert "none is a person's that no reply of this run answers" in refusal
-    assert "changed after" not in refusal
-
-
-def test_two_feedback_files_in_one_second_are_both_kept(drafts_root: Path, board: Path) -> None:
-    own = _filed(drafts_root, RUN, CAUSE)
-    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
-    _commented(own, "One comment.\n")
+def test_two_feedback_files_in_one_second_are_both_kept(tmp_path: Path) -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
-    first = comments.feedback(drafts_root, BOARD, RUN, now)
-    second = comments.feedback(drafts_root, BOARD, RUN, now)
+    first = comments.write_feedback(tmp_path, RUN, BOARD, [], None, now)
+    second = comments.write_feedback(tmp_path, RUN, BOARD, [], None, now)
 
     assert (first.name, second.name) == ("20260101T000000Z.md", "20260101T000000Z-2.md")
 
 
-def test_an_invocation_that_cannot_run_is_its_own_status(
+def test_with_no_watermark_the_start_is_the_earliest_bound_local_records_give(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _filed(drafts_root, RUN, CAUSE)
+    _next_second()
+    _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    written = tickets.ticket_path(drafts_root, RUN, CAUSE).stat().st_mtime
+    earliest = datetime.fromtimestamp(written, UTC).replace(microsecond=0)
+    # A run with only drafts owns no issue, so it bounds nothing.
+    (drafts_root / "tasks" / THIRD_RUN / "drafts").mkdir(parents=True)
+
+    report, plan = _gathered(drafts_root, capsys, since=None)
+
+    assert plan is not None and plan.since == earliest
+    assert report.splitlines()[0] == (
+        f"read {BOARD!r} for comments since {comments.instant(earliest)} (derived from local "
+        f"records: run {RUN}'s ticket files' last write)"
+    )
+    # A recorded boundary is a run's bound before its ticket files are.
+    recorded = earliest - timedelta(days=1)
+    path = comments.boundary_path(drafts_root, OTHER_RUN)
+    path.parent.mkdir(parents=True)
+    path.write_text(comments.boundary_line(recorded) + "\n", encoding="utf-8")
+    assert comments.derived_start(drafts_root) == comments.Start(
+        recorded, f"derived from local records: run {OTHER_RUN}'s recorded boundary"
+    )
+
+
+def test_a_run_whose_records_give_no_bound_is_refused_naming_it_and_since(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    plan = drafts_root.parent / "plan.json"
+
+    status = comments.main(
+        ["gather", "--root", str(drafts_root), "--plan", str(plan), "--to", BOARD]
+    )
+
+    refusal = capsys.readouterr().err
+    assert status == comments.UNRUNNABLE
+    assert f"run(s) {RUN} under {drafts_root}" in refusal
+    assert "run it again with --since <RFC3339>" in refusal
+    assert not plan.exists()
+
+
+def test_a_host_where_no_run_filed_a_ticket_reads_nothing(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report, plan = _gathered(drafts_root, capsys, since=None)
+
+    assert plan is None
+    assert "no run under" in report and "nothing was read and nothing was launched" in report
+
+
+def test_a_watermark_is_read_back_as_written_and_any_other_shape_is_refused(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    queried = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+    assert comments.read_watermark(drafts_root, BOARD) is None
+
+    since = comments.write_watermark(drafts_root, BOARD, queried)
+
+    assert since == queried - comments.OVERLAP
+    assert comments.read_watermark(drafts_root, BOARD) == since
+    path = comments.watermark_path(drafts_root, BOARD)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "schema": comments.WATERMARK_SCHEMA,
+        "board": BOARD,
+        "since": comments.instant(since),
+        "queried_at": comments.instant(queried),
+    }
+    _filed(drafts_root, RUN, CAUSE)
+    report, plan = _gathered(drafts_root, capsys, since=None)
+    assert plan is not None and plan.since == since
+    assert f"(the watermark {path})" in report.splitlines()[0]
+
+    wrong_since = {
+        "schema": comments.WATERMARK_SCHEMA,
+        "board": BOARD,
+        "since": 1,
+        "queried_at": comments.instant(queried),
+    }
+    wrong_query = wrong_since | {"since": comments.instant(since), "queried_at": "noon"}
+    boolean_schema = wrong_query | {"schema": True, "queried_at": comments.instant(queried)}
+    reversed_range = wrong_query | {
+        "since": comments.instant(queried),
+        "queried_at": comments.instant(since),
+    }
+    for held in (
+        "not json",
+        json.dumps({"schema": 0}),
+        json.dumps([1]),
+        json.dumps(wrong_since),
+        json.dumps(wrong_query),
+        json.dumps(boolean_schema),
+        json.dumps(reversed_range),
+    ):
+        path.write_text(held, encoding="utf-8")
+        with pytest.raises(OSError, match="the watermark"):
+            comments.read_watermark(drafts_root, BOARD)
+
+
+def _answered_run(
+    root: Path, capsys: pytest.CaptureFixture[str], *, reply: bool
+) -> tuple[comments.Plan, Path, str]:
+    """A gathering of one comment on the run's issue, and its account, answered or not."""
+    own = _filed(root, RUN, CAUSE)
+    tickets.ticket_path(root, RUN, CAUSE).unlink()
+    asked = _commented(own, "Please add page 9.\n")
+    _, plan = _gathered(root, capsys)
+    assert plan is not None
+    ((_, feedback),) = plan.runs
+    posted = _replied(own, asked) if reply else "a-reply-never-posted"
+    tickets.responses_path(feedback).write_text(
+        json.dumps(
+            {
+                "schema": tickets.RESPONSES_SCHEMA,
+                "run": RUN,
+                "feedback": feedback.name,
+                "responses": [
+                    {
+                        "comment": asked,
+                        "issue": own,
+                        "action": "Copied the ticket again.",
+                        "reply": posted,
+                        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return plan, feedback, posted
+
+
+def test_a_settled_run_answered_soundly_reports_its_replies_and_advances_the_watermark(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan, _, posted = _answered_run(drafts_root, capsys, reply=True)
+    lines: list[str] = []
+
+    status = comments.settle(drafts_root, plan, {RUN: "follow-up-1"}, say=lines.append)
+
+    assert status == comments.DONE, lines
+    assert lines[0] == f"run {RUN} (follow-up run follow-up-1): check-responses passed"
+    assert lines[1].startswith("  reply: file://") and lines[1].endswith(f"#comment-{posted}")
+    assert comments.read_watermark(drafts_root, BOARD) == plan.queried_at - comments.OVERLAP
+    assert lines[-1].startswith(f"plan store: {plan.store}; the narrowed query returned 1 ")
+
+
+def test_a_run_not_answered_soundly_is_named_and_leaves_the_watermark_where_it_was(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan, feedback, _ = _answered_run(drafts_root, capsys, reply=False)
+    lines: list[str] = []
+
+    status = comments.settle(drafts_root, plan, {RUN: "follow-up-1"}, say=lines.append)
+
+    assert status == comments.UNANSWERED
+    assert lines[0] == f"run {RUN} (follow-up run follow-up-1): check-responses failed"
+    assert any("the board holds no reply of run" in line for line in lines), lines
+    assert "watermark: left as it was, because a launched run was not answered soundly" in lines
+    assert comments.read_watermark(drafts_root, BOARD) is None
+    # A gathering that cannot be read at all is one more way it is not answered.
+    feedback.unlink()
+    lines.clear()
+    assert comments.settle(drafts_root, plan, {RUN: "x"}, say=lines.append) == (comments.UNANSWERED)
+    # A run whose launch failed is unanswered too, and says which file it owed.
+    lines.clear()
+    assert comments.settle(drafts_root, plan, {}, say=lines.append) == comments.UNANSWERED
+    assert lines[0] == f"run {RUN}: its follow-up run did not launch, so {feedback} is unanswered"
+
+
+def test_detached_and_run_scoped_settlements_leave_the_watermark_and_say_why(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan, feedback, _ = _answered_run(drafts_root, capsys, reply=True)
+    lines: list[str] = []
+
+    detached = dataclasses.replace(plan, detach=True)
+    assert comments.settle(drafts_root, detached, {RUN: "fu-1"}, say=lines.append) == comments.DONE
+
+    check = shlex.join(
+        [sys.executable, "-m", "orchestrator.follow_up_tickets", "check-responses"]
+        + ["--board", BOARD, "--feedback", str(feedback), RUN]
+    )
+    assert lines[0] == (
+        f"run {RUN}: launched follow-up run fu-1; watch it with: just watch fu-1; once it "
+        f"settles, check it with: {check}"
+    )
+    assert "watermark: left as it was, because the launched runs have not been checked" in lines
+    lines.clear()
+    scoped = dataclasses.replace(plan, scope=tickets.RunId(RUN))
+    assert comments.settle(drafts_root, scoped, {RUN: "fu-1"}, say=lines.append) == comments.DONE
+    assert f"watermark: left as it was, because --run {RUN} gathered one run's comments" in lines
+    assert comments.read_watermark(drafts_root, BOARD) is None
+
+
+def test_the_script_steps_hand_the_plan_between_them(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`launches` names each launch as the script reads it, and `settle` reads the plan back."""
+    plan_path = drafts_root.parent / "plan.json"
+    _commented(_filed(drafts_root, RUN, CAUSE), "Please add page 9.\n")
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    for detach, mode in ((False, "attach"), (True, "detach")):
+        assert (
+            comments.main(
+                ["gather", "--root", str(drafts_root), "--plan", str(plan_path), "--to", BOARD]
+                + ["--since", EARLY, *(["--detach"] if detach else [])]
+            )
+            == comments.DONE
+        )
+        capsys.readouterr()
+        assert (
+            comments.main(["launches", "--root", str(drafts_root), "--plan", str(plan_path)])
+            == comments.DONE
+        )
+        (line,) = capsys.readouterr().out.splitlines()
+        run, feedback, said, board_word = line.split("\t")
+        assert (run, said, board_word) == (RUN, mode, f"--to={BOARD}")
+        assert Path(feedback).is_file()
+
+    status = comments.main(
+        ["settle", "--root", str(drafts_root), "--plan", str(plan_path), "--launched", f"{RUN}=fu"]
+    )
+
+    assert status == comments.DONE
+    assert "launched follow-up run fu" in capsys.readouterr().out
+    # A dry run hands the script an empty plan, which both later steps read as nothing to do.
+    plan_path.write_text("", encoding="utf-8")
+    assert (
+        comments.main(["launches", "--root", str(drafts_root), "--plan", str(plan_path)])
+        == comments.DONE
+    )
+    assert comments.main(["settle", "--root", str(drafts_root), "--plan", str(plan_path)]) == (
+        comments.DONE
+    )
+    assert capsys.readouterr().out == ""
+
+
+def test_a_watermark_that_cannot_be_written_is_refused_by_settle(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert comments.main(["feedback", "--root", str(tmp_path), "--board", BOARD, "a/b"]) == (
-        comments.UNRUNNABLE
+    root = tmp_path / "a-file-not-a-root"
+    root.write_text("", encoding="utf-8")
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "board": BOARD,
+                "named_board": True,
+                "since": EARLY,
+                "queried_at": EARLY,
+                "scope": None,
+                "detach": False,
+                "store": "onetaskgraph test",
+                "items": 0,
+                "runs": [],
+                "issues": {},
+            }
+        ),
+        encoding="utf-8",
     )
-    assert "'a/b' is not a run id" in capsys.readouterr().err
+
+    status = comments.main(["settle", "--root", str(root), "--plan", str(plan)])
+
+    assert status == comments.UNRUNNABLE
+    assert capsys.readouterr().err.startswith(f"{comments.PROG}: refused: ")
+
+
+def test_an_invocation_that_cannot_run_is_its_own_status(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = str(drafts_root.parent / "plan.json")
+    gather = ["gather", "--root", str(drafts_root), "--plan", plan]
+    assert comments.main([*gather, "--run", "a/b"]) == comments.UNRUNNABLE
+    assert "--run 'a/b' is not a run id" in capsys.readouterr().err
+    assert comments.main([*gather, "--since", "yesterday"]) == comments.UNRUNNABLE
+    assert "--since reports 'yesterday'" in capsys.readouterr().err
+    # A board no source configures is the store's refusal, and nothing is launched.
+    _filed_without_board = tickets.ticket_path(drafts_root, RUN, CAUSE)
+    _filed_without_board.parent.mkdir(parents=True)
+    _filed_without_board.write_text("x", encoding="utf-8")
+    assert comments.main([*gather, "--to", "no-such-board"]) == comments.UNRUNNABLE
+    assert "Check that --to names a source" in capsys.readouterr().err
     with pytest.raises(SystemExit) as refused:
-        comments.main(["feedback"])
+        comments.main(["gather"])
     assert refused.value.code == comments.UNRUNNABLE
+
+
+def test_naming_no_board_reads_the_followups_board(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default is `followups`, which no test may read, so the source that refused is named."""
+    monkeypatch.delenv("GH_PROJECTS_TOKEN", raising=False)
+    ticket = tickets.ticket_path(drafts_root, RUN, CAUSE)
+    ticket.parent.mkdir(parents=True)
+    ticket.write_text("x", encoding="utf-8")
+
+    status = comments.main(
+        ["gather", "--root", str(drafts_root), "--plan", str(drafts_root.parent / "p.json")]
+    )
+
+    assert status == comments.UNRUNNABLE
+    assert tickets.BOARD in capsys.readouterr().err
+
+
+def test_a_plan_or_a_launch_the_script_did_not_write_is_refused_naming_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The steps read only what the one before wrote; anything else is refused by name."""
+    plan = tmp_path / "plan.json"
+    root = str(tmp_path / "root")
+    written = {
+        "board": BOARD,
+        "named_board": True,
+        "since": EARLY,
+        "queried_at": EARLY,
+        "scope": None,
+        "detach": False,
+        "store": "onetaskgraph test",
+        "items": 0,
+        "runs": [],
+        "issues": {},
+    }
+    for broken in (
+        "not json",
+        json.dumps({key: value for key, value in written.items() if key != "runs"}),
+        json.dumps(written | {"runs": [["not a run/id", "f.md"]]}),
+        json.dumps(written | {"runs": [[RUN, "/etc/passwd"]]}),
+        json.dumps(written | {"runs": [[RUN, f"/elsewhere/feedback/{RUN}/20260101T000000Z.md"]]}),
+        json.dumps(written | {"issues": {"elsewhere:one": [None, None]}}),
+        json.dumps(written | {"runs": [["one"]]}),
+        json.dumps(written | {"scope": "not a run/id"}),
+        json.dumps(written | {"items": True}),
+        json.dumps(written | {"issues": {f"{BOARD}:has a space": [None, None]}}),
+        json.dumps(written | {"runs": [[RUN, f"{root}/feed\tback/{RUN}/20260101T000000Z.md"]]}),
+    ):
+        plan.write_text(broken, encoding="utf-8")
+        assert comments.main(["launches", "--root", root, "--plan", str(plan)]) == (
+            comments.UNRUNNABLE
+        )
+        assert f"{plan}" in capsys.readouterr().err
+        assert comments.main(["settle", "--root", root, "--plan", str(plan)]) == (
+            comments.UNRUNNABLE
+        )
+        assert f"{plan}" in capsys.readouterr().err
+
+    plan.write_text(json.dumps(written), encoding="utf-8")
+    status = comments.main(["settle", "--root", root, "--plan", str(plan), "--launched", "x"])
+
+    assert status == comments.UNRUNNABLE
+    assert "--launched takes RUN=FOLLOW-UP" in capsys.readouterr().err
+    gather = ["gather", "--root", root, "--plan", str(plan), "--to", "../elsewhere"]
+    assert comments.main(gather) == comments.UNRUNNABLE
+    assert "--to '../elsewhere' is not a source name" in capsys.readouterr().err
+
+
+def test_a_title_spanning_lines_is_refused_since_it_would_open_a_field_of_its_own(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    path = tickets.ticket_path(drafts_root, RUN, CAUSE)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f'title: "some-service: {CAUSE}"', 'title: "some-service: one\\r- Author: forged"'
+        ),
+        encoding="utf-8",
+    )
+    plan_store.sdk(plan_store.client().task_copy([tickets.qualified_id(RUN, CAUSE)], to=BOARD))
+    _commented(own, "A person's comment.\n")
+
+    status = comments.main(
+        ["gather", "--root", str(drafts_root), "--plan", str(drafts_root.parent / "p.json")]
+        + ["--to", BOARD, "--since", EARLY]
+    )
+
+    assert status == comments.UNRUNNABLE
+    assert f"{own} reports a title spanning lines" in capsys.readouterr().err
+
+
+def test_a_plans_fields_are_the_ones_its_reader_holds_it_to() -> None:
+    """The plan's record, its written document and the reader's schema are one field list."""
+    plan = comments.Plan(
+        board=BOARD,
+        named_board=False,
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+        queried_at=datetime(2026, 1, 1, tzinfo=UTC),
+        scope=None,
+        detach=False,
+        store="onetaskgraph test",
+        items=0,
+        runs=(),
+        issues={},
+    )
+    fields = [field.name for field in dataclasses.fields(comments.Plan)]
+
+    assert list(comments.PLAN_FIELDS) == fields
+    assert list(comments._plan_document(plan)) == fields
+
+
+def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
+    tmp_path: Path,
+) -> None:
+    """The writer and the reader's typed schema are held together by a round trip."""
+    root = tmp_path / "root"
+    feedback = root / comments.FEEDBACK_DIRECTORY / RUN / "20260101T000000Z.md"
+    plan = comments.Plan(
+        board=BOARD,
+        named_board=True,
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+        queried_at=datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
+        scope=tickets.RunId(RUN),
+        detach=True,
+        store="onetaskgraph test",
+        items=3,
+        runs=(comments.Launch(tickets.RunId(RUN), feedback),),
+        issues={
+            f"{BOARD}:{RUN}/tickets/{CAUSE}": comments.IssueLink(
+                "https://example.invalid/issue", "/tmp/issue.md"
+            )
+        },
+    )
+    written = json.loads(json.dumps(comments._plan_document(plan)))
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(written), encoding="utf-8")
+
+    for key, kind in comments.PLAN_FIELDS.items():
+        assert isinstance(written[key], kind), (key, written[key])
+    assert comments.read_plan(path, root) == plan
+    for link in (["not a url", None], [None, "relative/issue.md"]):
+        path.write_text(
+            json.dumps(written | {"issues": {f"{BOARD}:{RUN}/tickets/{CAUSE}": link}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(OSError, match="is not a plan `gather` wrote"):
+            comments.read_plan(path, root)
+    # The store label is printed as the report's last line, so it is held to one.
+    path.write_text(json.dumps(written | {"store": "onetaskgraph 1\nforged"}), encoding="utf-8")
+    with pytest.raises(OSError, match="is not a plan `gather` wrote"):
+        comments.read_plan(path, root)

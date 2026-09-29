@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import venv
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,7 +91,8 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     assert read["tasks"][1]["delivers"] == ["followups:I_1"]
     assert plan_store.task_record("sdksource:demo/first")["title"] == "First"
     assert plan_store.read_projects("sdksource")[0].title == "demo"
-    assert follow_up_comments.board_issues("sdksource") == []
+    # No task there carries a comment, so the narrowed query keeps none of them.
+    assert follow_up_comments.commented_issues("sdksource", datetime(2026, 1, 1, tzinfo=UTC)) == []
     assert plan_store.local_projects("sdksource") == ["sdksource:demo"]
     assert plan_store.task_document("sdksource", "demo/first").is_file()
     assert plan_store.read_documents("sdksource:demo")[0].labels == ["design"]
@@ -716,7 +718,7 @@ def test_typed_listings_are_still_held_to_the_requested_source(
         plan_store, "sdk", lambda _answer: tasks.model_copy(update={"items": [outside]})
     )
     with pytest.raises(OSError, match="not one of its ids"):
-        follow_up_comments.board_issues("sdksource")
+        follow_up_comments.commented_issues("sdksource", datetime(2026, 1, 1, tzinfo=UTC))
     with pytest.raises(OSError, match="outside itself"):
         plan_store.read_tasks("sdksource:demo")
 

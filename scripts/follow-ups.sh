@@ -71,7 +71,7 @@
 #     comment-answering task, with no inventory, no run-wide verification and no
 #     accepted-fix comparison, and no status decision or copy but for a ticket a quoted
 #     comment names. It is refused without `--feedback`, and
-#     `scripts/follow-ups-handle-comments.sh` is its one caller.
+#     `scripts/follow-ups-answer-comments.sh` is its one caller.
 #
 # **Which mode is the caller's to say, never the file's.** Sniffing a feedback file for
 # quoted comments would work for every file this repository writes and narrow silently the
@@ -232,7 +232,7 @@ if [ -n "$feedback" ] && { [ ! -f "$feedback" ] || [ ! -r "$feedback" ]; }; then
 fi
 if [ "$comments" -eq 1 ] && [ -z "$feedback" ]; then
     fail "--comments says which kind of feedback file this is, and none was named" \
-        "gather the board's comments with 'just follow-ups-handle-comments', which names both"
+        "gather the board's comments with 'just follow-ups-answer-comments', which names both"
 fi
 
 # The board credential from this checkout's `.env`, before the first board read in either
@@ -360,7 +360,7 @@ if [ "$comments" -eq 1 ]; then
     # and the command's refusals reach standard error whatever this does with its answer.
     "${tickets_module[@]}" check-gathering --board "$board" --feedback "$feedback" "$run" >/dev/null ||
         fail "'$feedback' is not a gathering of '$board' this run could answer, so no follow-up run was launched" \
-            "gather the board's comments with 'just follow-ups-handle-comments $run', which writes one"
+            "gather the board's comments with 'just follow-ups-answer-comments --run $run', which writes one"
     # Asked of the module rather than restated here: where one gathering's account goes is
     # `responses_path`'s, and a second spelling of it would drift the day either moves.
     account=$("${tickets_module[@]}" responses-path --feedback "$feedback") ||
