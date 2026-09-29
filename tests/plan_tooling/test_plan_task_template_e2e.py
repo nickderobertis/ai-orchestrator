@@ -29,6 +29,7 @@ import plan_root_variable
 import pytest
 from fake_backend import AUTHOR_PLAN_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from published_tools import ONETASKGRAPH_BIN
+from scratch_identity import PLANNING_FLOW_ORIGIN
 from test_plan_flow_e2e import (
     DESIGN_RUN_SUFFIX,
     DESIGN_TASK_MARKER,
@@ -39,7 +40,7 @@ from test_plan_flow_e2e import (
     _renders_the_document,
 )
 
-from orchestrator import plan_store, task_body
+from orchestrator import plan_check, plan_store, task_body
 from orchestrator.root import REPO_ROOT
 
 #: The source a planning launch authors into, whose root the launch exports to the
@@ -100,6 +101,8 @@ class Authored(NamedTuple):
     tasks: dict[str, str]
     #: The digest the pinned engine states for `plan-task` from this host's root.
     digest: str
+    #: The runs root both of the flow's launches recorded themselves under.
+    runs: Path
 
 
 def _loader() -> dict[str, object]:
@@ -175,8 +178,11 @@ def authored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> A
         qualified=f"{AUTHORING}:{unique}",
         task_title="feat: page the node listing",
         second_task_title="feat: follow the cursor from the view",
-        repository="github.com/nickderobertis/onepipeline",
-        second_repository="github.com/nickderobertis/onepipeline-ui",
+        # The one repository this flow's scratch identity registers, for both tasks: under
+        # `require_rendered` the engine resolves each task's template through the repository
+        # it names, and a repository this host has no checkout of cannot be asked.
+        repository=PLANNING_FLOW_ORIGIN,
+        second_repository=PLANNING_FLOW_ORIGIN,
         document=f"{unique}-document",
         document_qualified=f"{AUTHORING}:{unique}-document",
         document_path=Path(os.environ[AUTHORING_ROOT]) / "documents" / f"{unique}-document.md",
@@ -186,6 +192,10 @@ def authored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> A
     environment = _environment(tmp_path, stored, destination=DESTINATION, declared_at=destination)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
+    # This flow's tasks are renderings, so it runs without the suite's session-wide opt-out
+    # for hand-written fixture plans: every launch and check below takes the
+    # `require_rendered` answer the recipes name, which is what the journey reads back.
+    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
     # The planner authors by running commands rather than by having files written for it.
     environment.pop(AUTHOR_PLAN_ENV, None)
     keyed = tmp_path / "planner-commands.json"
@@ -226,6 +236,7 @@ def authored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> A
             destination=destination,
             tasks=tasks,
             digest=str(_loader()["digest"]),
+            runs=Path(environment["ONEPIPELINE_RUNS_DIR"]),
         )
     finally:
         for ended in (RUN, DESIGN_RUN):
@@ -267,6 +278,20 @@ def test_the_flow_accepts_a_plan_whose_planner_rendered_every_task(authored: Aut
         if re.search(rf"^project: \"?{re.escape(project)}\"?$", one.read_text("utf-8"), re.M)
     ]
     assert len(filed) == 2, f"the destination holds {filed} of this plan's tasks"
+
+
+@pytest.mark.xdist_group("plan-task-template")
+def test_the_planning_launch_alone_runs_without_require_rendered(authored: Authored) -> None:
+    """The planner's one node is the manager's hand-written brief; the document's is rendered.
+
+    Read off each launch's own record, because the flag is named on the flow's behalf —
+    `false` by `scripts/plan.sh` for the brief, `true` by `scripts/onepipeline.sh` for every
+    other launch — and a plan check the flow ran in between took the same `true`.
+    """
+    assert authored.launch.returncode == 0, authored.launch.stdout + authored.launch.stderr
+    for run, expected in ((RUN, False), (DESIGN_RUN, True)):
+        record = json.loads((authored.runs / run / "launch.json").read_text("utf-8"))
+        assert record.get("require_rendered", False) is expected, (run, record)
 
 
 @pytest.mark.xdist_group("plan-task-template")

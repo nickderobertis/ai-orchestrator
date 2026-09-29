@@ -66,6 +66,7 @@ from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from shared_dispatch_bar import shared_completion_bar
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_check
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, and the provider binary beneath it — the second
@@ -841,6 +842,55 @@ def test_a_caller_who_names_an_observer_launches_with_the_one_they_named(
     finally:
         _just("stop", observer.run, environment=environment, seconds=60)
         _remove_project(observer.run)
+
+
+@pytest.mark.parametrize(
+    "named_as",
+    [("--require-rendered", "true"), ("--require-rendered=true",)],
+    ids=["separate", "joined"],
+)
+def test_a_planning_launch_names_require_rendered_false_and_a_callers_own_answer_stands(
+    tmp_path: Path, named_as: tuple[str, ...]
+) -> None:
+    """The brief is the one task no template renders, so the recipe opts its launch out.
+
+    Without the suite's session-wide opt-out, so each answer is the one the recipe or its
+    caller named. Naming none, the launch records `false`; a caller's `true` stands in
+    either spelling, and the engine then refuses the brief's node for want of a rendering —
+    which is the proof that the recipe added nothing of its own over what the caller typed.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    brief = tmp_path / "cursor-shape.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    environment = _environment(tmp_path)
+    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    runs = Path(environment["ONEPIPELINE_RUNS_DIR"])
+    defaulted = RunId(f"plan-recipe-rendered-default-{len(named_as)}")
+    named = RunId(f"plan-recipe-rendered-named-{len(named_as)}")
+
+    try:
+        default = _just(
+            "plan", str(brief), "--name", defaulted, "--detach", environment=environment
+        )
+        refused = _just(
+            "plan",
+            str(brief),
+            "--name",
+            named,
+            "--detach",
+            *named_as,
+            environment=environment,
+        )
+        assert default.returncode == 0, default.stdout + default.stderr
+        recorded = json.loads((runs / defaulted / "launch.json").read_text(encoding="utf-8"))
+        assert recorded.get("require_rendered", False) is False, recorded
+        assert refused.returncode != 0, refused.stdout + refused.stderr
+        assert "not rendered: no provenance" in refused.stderr, refused.stderr
+    finally:
+        for run in (defaulted, named):
+            _just("stop", run, environment=environment, seconds=60)
+            _remove_project(run)
 
 
 class Malformed(NamedTuple):

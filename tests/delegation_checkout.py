@@ -78,11 +78,6 @@ WRAPPER_SCRIPTS = (
     # `just follow-ups` writes a one-node direct project and launches it through the same
     # wrapper, having counted the run's drafts under the root `follow-up-env.sh` exports.
     "follow-ups.sh",
-    # And the operational appendix every dispatched task must carry, which `just plan`
-    # hands its planner as text rather than as a path into a checkout that planner cannot
-    # see. It reads `templates/dispatch-appendix.md`, which `delegation_checkout`
-    # copies beside it.
-    "dispatch-appendix-env.sh",
     # This host's template root, which the launch wrapper names on every verb and which
     # the dispatch-environment definition below establishes for a dispatch; it refuses a
     # checkout whose `templates/` carries no registration.
@@ -187,11 +182,6 @@ CREATED_TASK = "authoring:write-the-design-document"
 #: flow's name the recipes below launch under.
 CREATED_PROJECT = "cursor-shape-design"
 
-#: The operational appendix `just plan` hands its dispatch, spelled here for the reason
-#: the template above is: this suite states what a runnable checkout holds rather than
-#: asking its subject.
-DISPATCH_APPENDIX = "templates/dispatch-appendix.md"
-
 #: The host root's registration `scripts/template-env.sh` refuses a checkout without,
 #: spelled here for the same reason.
 TEMPLATE_REGISTRATION = "templates/templates.yaml"
@@ -230,19 +220,11 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     # The one source the wrappers read the read API's address from; a checkout
     # without it is not one these recipes can run in.
     shutil.copy2(ROOT / "config/read-api.address", checkout / "config/read-api.address")
-    # The operational appendix `just plan` hands its dispatch. Written rather than copied,
-    # for the reason the template below is: what a launch does with it — that it exports
-    # the text and refuses a checkout carrying none — is this suite's subject, and what
-    # the appendix *says* is `tests/test_dispatch_appendix.py`'s. Copying the tracked one
-    # would also put these journeys outside the recipe key that memoizes them.
-    (checkout / DISPATCH_APPENDIX).write_text(
-        "## Additional info\n\n### Operational notes\n\nWork the branch and report.\n",
-        encoding="utf-8",
-    )
     # The host root's registration, which the launch wrapper refuses a checkout without.
-    # Written rather than copied, for the reason the appendix above is: which names it
-    # registers is `tests/test_task_templates.py`'s, and these journeys are about where a
-    # recipe lands and what it names.
+    # Written rather than copied: which names it registers is
+    # `tests/test_task_templates.py`'s, and these journeys are about where a recipe lands
+    # and what it names. Copying the tracked one would also put these journeys outside the
+    # recipe key that memoizes them.
     (checkout / TEMPLATE_REGISTRATION).write_text(
         "onepipeline_templates: 1\ntemplates: {}\n", encoding="utf-8"
     )

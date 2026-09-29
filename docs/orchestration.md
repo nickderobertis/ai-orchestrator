@@ -2395,7 +2395,11 @@ A task is changed by **regenerating** it — the same `resolve` piped into `onet
 task render <id> --template-loader - --var NAME=VALUE --no-interactive`, which keeps its
 id, dependencies and metadata, with `onetaskgraph task answers <id>` printing what it
 holds now — and never by editing its body. `just check-plan` is where a rendering is
-validated, so it runs after every create or regenerate. A manager running a render verb
+validated, so it runs after every create or regenerate: every plan-loading verb
+`scripts/onepipeline.sh` runs names `--require-rendered true`, so the engine refuses a
+task with no provenance, one whose template changed since it was rendered and one edited
+after it, at `just check-plan` and again at launch, each naming this regenerate as the
+fix. A manager running a render verb
 by hand passes `--no-interactive` too: the plan store prompts for an unanswered variable
 by default, which is a person's default at a terminal and the reason every automated path
 here passes the flag or runs with `ONETASKGRAPH_INTERACTIVE=false`.

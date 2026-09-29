@@ -51,7 +51,6 @@ from waits import timeout as e2e_timeout
 from orchestrator import host_installs, plan_store, task_body
 from orchestrator.criteria_guard import (
     APPENDIX,
-    APPENDIX_ENV,
     AUTHORIZATIONS,
     OUT_OF_DISPATCH,
     Authorization,
@@ -1216,54 +1215,19 @@ def test_a_persona_that_replaces_the_shared_bar_is_read_as_the_bar_in_force(
     assert "docs/routes.md" in refused.stderr, refused.stderr
 
 
-def test_a_task_rebuilt_from_a_stale_appendix_is_refused(tmp_path: Path) -> None:
-    """The copy-paste failure this promotion exists to end, driven through the recipe.
-
-    Every task carries the appendix by copy, so a builder cloned before an appendix
-    fix silently reintroduces the wording that fix removed — which is exactly how the
-    complete-gate contradiction outlived being noticed, and exactly what an older
-    builder would do with the complete-gate instruction this host has since removed.
-    The edit below is that regression in miniature: the leading rule about which checks
-    a dispatch owes, replaced by the chained gate invocation it superseded.
-    """
-    plan = _plan(tmp_path, STATES_ITS_BAR)
-    document = json.loads(plan.read_text(encoding="utf-8"))
-    stale = document["tasks"][0]["task"].replace(
-        "Run only the checks that exercise what you changed",
-        "Run `just bootstrap && just gate` once at closeout",
-    )
-    assert stale != document["tasks"][0]["task"], (
-        "the appendix no longer carries the leading rule this journey ages out, so "
-        "nothing here proves a task rebuilt from an older copy is refused"
-    )
-    document["tasks"][0]["task"] = stale
-    plan.write_text(json.dumps(document), encoding="utf-8")
-
-    refused = _check_plan(plan)
-
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "current operational appendix" in refused.stderr, refused.stderr
-    # And where it sends the party that has to act, which is the planner rather than
-    # whoever is reading this: the variable every `just plan` launch hands its dispatch,
-    # and an absolute path on this host. It named a path relative to this checkout, which
-    # a planner working in another repository's worktree cannot open at all.
-    assert f"${APPENDIX_ENV}" in refused.stderr, refused.stderr
-    assert str(REPO_ROOT / APPENDIX) in refused.stderr, refused.stderr
-
-
-def test_a_task_opening_its_notes_under_a_longer_heading_is_refused_naming_the_one_to_write(
+def test_a_hand_written_task_under_a_longer_notes_heading_is_checked_for_its_criteria_alone(
     tmp_path: Path,
 ) -> None:
-    """The heading a launch accepted and a retry could not restate, refused before launch.
+    """How a task's notes are headed is no longer this repository's check to make.
 
-    The live-edit check reads a task's own grants only under a line reading exactly
-    `## Additional info`, so a task whose author wrote `## Additional info for this node`
-    launched granting early publication and was read as granting nothing when a retry
-    restated it. The same task under the exact heading is accepted.
+    The `plan-task` template renders `## Additional info` itself, and `require_rendered`
+    holds every launched task to being that rendering, so this host retired its own heading
+    check. A hand-written task under a longer heading — which only a caller opting out of
+    `require_rendered`, as this suite does for its fixture plans, can launch — is then
+    checked for its criteria alone.
     """
     own = "The change request may be published early."
     plan = _plan(tmp_path, STATES_ITS_BAR, own=own)
-    accepted = _check_plan(plan)
     document = json.loads(plan.read_text(encoding="utf-8"))
     exact = f"## Additional info\n\n{own}"
     assert exact in document["tasks"][0]["task"], "the task no longer opens its own notes"
@@ -1272,15 +1236,10 @@ def test_a_task_opening_its_notes_under_a_longer_heading_is_refused_naming_the_o
     )
     plan.write_text(json.dumps(document), encoding="utf-8")
 
-    refused = _check_plan(plan)
+    accepted = _check_plan(plan)
 
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "'## Additional info for this node'" in refused.stderr, refused.stderr
-    assert "exactly `## Additional info`" in refused.stderr, refused.stderr
-    assert "a `retry` or `requeue` restating this task loses every grant" in refused.stderr, (
-        refused.stderr
-    )
+    assert "Additional info for this node" not in accepted.stderr, accepted.stderr
 
 
 def test_a_plan_that_cannot_be_read_is_not_reported_as_a_refusal(tmp_path: Path) -> None:

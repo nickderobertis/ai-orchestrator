@@ -21,11 +21,12 @@ import pytest
 from criteria_examples import RELEASED_ELSEWHERE
 
 from orchestrator import criteria_guard, plan_check, plan_review, plan_store, task_body
+from orchestrator.root import REPO_ROOT
 
 #: A synthetic appendix, for the reason `tests/test_criteria_guard.py` states: reading
 #: the tracked one would put these in the whole-workspace tier, where coverage is not
 #: measured, and its wording is the marked journeys' to hold. What is under test here is
-#: the plug-in, so the file it reads is this test's to write.
+#: the plug-in, so the notes each task carries below its own are this test's to write.
 APPENDIX = "## Additional info\n\n### Operational notes\n\nWork the branch and report.\n"
 
 COMPLETE = (
@@ -34,14 +35,6 @@ COMPLETE = (
     "- Every claim the dispatch makes about the finished work is true of the tree as "
     "it finally stands."
 )
-
-
-@pytest.fixture(autouse=True)
-def appendix(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the appendix check at the synthetic one every task here carries."""
-    written = tmp_path_factory.mktemp("appendix") / "appendix.md"
-    written.write_text(APPENDIX, encoding="utf-8")
-    monkeypatch.setattr(criteria_guard, "APPENDIX", written)
 
 
 @pytest.fixture(autouse=True)
@@ -194,58 +187,6 @@ def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_
     # The node id is the refusal's own field, so the reason does not open with it again.
     assert not refusal["reason"].startswith("route: ")
     assert "the dispatch cannot do" in refusal["reason"]
-
-
-def _with_own_notes(heading: str) -> str:
-    """A task whose author wrote notes of their own under ``heading``, above the appendix."""
-    return (
-        f"## What\n\nAdd it.\n\n## Acceptance criteria\n\n{COMPLETE}\n\n"
-        f"{heading}\n\nThe change request may be published early.\n\n{APPENDIX}"
-    )
-
-
-@pytest.mark.parametrize(
-    "heading",
-    (
-        "## Additional info for this node",
-        "## Additional information",
-        "## additional info",
-        "##Additional info",
-    ),
-)
-def test_a_task_opening_its_notes_under_a_longer_heading_is_refused_naming_the_one_to_write(
-    project_record: dict[str, object], heading: str
-) -> None:
-    """The live-edit check reads a task's own grants under exactly one heading line.
-
-    So a task written under any other spelling of it launches with grants a retry
-    restating it would lose; both plan-tier paths refuse it, naming the heading as
-    written, the heading to write, and what a retry would lose.
-    """
-    document = _planned(project_record, _document(_reviewed(_node(task=_with_own_notes(heading)))))
-
-    (refusal,) = plan_check.refusals(document, "s:p")
-
-    assert refusal["node"] == "route"
-    assert refusal["field"] == "task"
-    assert repr(heading) in refusal["reason"], refusal["reason"]
-    assert "exactly `## Additional info`" in refusal["reason"], refusal["reason"]
-    assert "a `retry` or `requeue` restating this task loses every grant" in refusal["reason"]
-    with pytest.raises(criteria_guard.CriteriaError, match="exactly `## Additional info`"):
-        criteria_guard.check_plan(document)
-
-
-@pytest.mark.parametrize(
-    "heading", ("## Additional info", "## Additional info  ", "### Additional info for this node")
-)
-def test_a_task_opening_its_notes_under_the_exact_heading_is_not_refused_for_it(
-    project_record: dict[str, object], heading: str
-) -> None:
-    """The live tier reads trailing blanks as the heading, and a level-3 heading is not one."""
-    document = _planned(project_record, _document(_reviewed(_node(task=_with_own_notes(heading)))))
-
-    assert plan_check.refusals(document, "s:p") == []
-    assert criteria_guard.check_plan(document) == 1
 
 
 def test_a_task_whose_issue_body_would_exceed_the_boards_limit_is_refused_against_its_task(
@@ -528,18 +469,14 @@ def test_a_project_that_is_not_a_qualified_id_is_not_put_into_a_command_to_run(
         assert "not-qualified" not in refusal["reason"]
 
 
-def test_the_engine_is_taken_from_the_environment_before_the_search_path(
+def test_the_engine_is_taken_from_the_environment_before_the_launch_wrapper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(plan_check.ENGINE_ENV, "/named/onepipeline")
     assert plan_check.plan_check_engine() == "/named/onepipeline"
 
     monkeypatch.delenv(plan_check.ENGINE_ENV)
-    monkeypatch.setattr(plan_check.shutil, "which", lambda _: "/found/onepipeline")
-    assert plan_check.plan_check_engine() == "/found/onepipeline"
-
-    monkeypatch.setattr(plan_check.shutil, "which", lambda _: None)
-    assert plan_check.plan_check_engine() is None
+    assert plan_check.plan_check_engine() == str(REPO_ROOT / "scripts" / "onepipeline.sh")
 
 
 def _completed(code: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -584,6 +521,39 @@ def test_an_accepted_plan_reports_the_path_that_read_it(
     read = capsys.readouterr().out
     assert criteria_guard.THROUGH_ENGINE in read
     assert "3 dispatched node(s)" in read
+
+
+@pytest.mark.parametrize(
+    ("exported", "named"),
+    [(None, ["--require-rendered", "true"]), ("false", []), ("true", [])],
+    ids=["unset", "exported-false", "exported-true"],
+)
+def test_the_verb_is_asked_to_require_rendered_tasks_unless_the_caller_exported_the_answer(
+    monkeypatch: pytest.MonkeyPatch, exported: str | None, named: list[str]
+) -> None:
+    """`true` by default, and nothing where the engine's own variable already answers it.
+
+    The journeys in `tests/plan_tooling/test_check_plan_recipe_e2e.py` drive what the
+    engine then refuses; this is what the command hands it, read off the argv it spawns.
+    """
+    if exported is None:
+        monkeypatch.delenv(plan_check.REQUIRE_RENDERED_ENV, raising=False)
+    else:
+        monkeypatch.setenv(plan_check.REQUIRE_RENDERED_ENV, exported)
+    spawned: list[list[str]] = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        spawned.append(command)
+        return _completed(0, json.dumps(ACCEPTED))
+
+    monkeypatch.setattr(plan_check.subprocess, "run", run)
+    monkeypatch.setattr(
+        plan_check, "dispatched_in_with_records", lambda _: (criteria_guard.Counted(1), [])
+    )
+
+    assert plan_check.check_through_engine("s:p", "/new/onepipeline") == 0
+    (command,) = spawned
+    assert command[command.index("--json") + 1 :] == named, command
 
 
 def test_a_plan_the_engine_accepted_is_counted_by_re_reading_its_project(
@@ -755,15 +725,11 @@ def test_the_command_takes_the_engines_verb_where_there_is_one(
     capsys.readouterr()
 
 
-@pytest.mark.parametrize(
-    ("engine", "carries"),
-    (pytest.param("/old/onepipeline", False, id="no-verb"), pytest.param(None, True, id="absent")),
-)
 def test_the_command_falls_back_to_this_repositorys_checks_alone(
-    monkeypatch: pytest.MonkeyPatch, engine: str | None, carries: bool
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(plan_check, "plan_check_engine", lambda: engine)
-    monkeypatch.setattr(plan_check, "carries_plan_check", lambda _: carries)
+    monkeypatch.setattr(plan_check, "plan_check_engine", lambda: "/old/onepipeline")
+    monkeypatch.setattr(plan_check, "carries_plan_check", lambda _: False)
     monkeypatch.setattr(
         plan_check,
         "check_through_engine",
@@ -772,3 +738,17 @@ def test_the_command_falls_back_to_this_repositorys_checks_alone(
     monkeypatch.setattr(criteria_guard, "check_directly", lambda project: 5)
 
     assert plan_check.main(["s:p"]) == 5
+
+
+def test_a_require_rendered_answer_that_is_neither_true_nor_false_is_refused_before_the_engine(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An exported value suppresses the default flag, so one that says nothing is refused."""
+    monkeypatch.setenv(plan_check.REQUIRE_RENDERED_ENV, "yes")
+    monkeypatch.setattr(
+        plan_check, "carries_plan_check", lambda _: pytest.fail("the engine was asked")
+    )
+
+    assert plan_check.main(["s:p"]) == 2
+    reported = capsys.readouterr().err
+    assert plan_check.REQUIRE_RENDERED_ENV in reported and "'yes'" in reported, reported

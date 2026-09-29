@@ -287,7 +287,6 @@ def test_a_rendering_is_the_layout_every_plan_task_here_carries(
     assert "\n- The thing is built.\n" in body
     assert "\n- The thing is proven end to end\n  by a journey that drives it.\n" in body
     assert criteria_guard.own_additional_info(body).strip() == ANSWERS["additional_info"]
-    criteria_guard.check_appendix(body, "probe")
 
 
 def test_a_task_with_no_notes_of_its_own_renders_no_section_for_them(

@@ -15,9 +15,9 @@ that resolution against the real binary this checkout installs, so a release tha
 moves a role moves what this guard demands, with nothing here to update.
 
 `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the same guard through the real
-`just check-plan` over the real tracked appendix; the tests here are the ones that
-can state a synthetic bar and a synthetic appendix, which is what makes each
-refusal attributable to one cause.
+`just check-plan` over tasks carrying the real tracked appendix; the tests here are the
+ones that can state a synthetic bar, and notes shaped like the appendix whose wording
+makes no demand of its own, which is what makes each refusal attributable to one cause.
 """
 
 from __future__ import annotations
@@ -39,19 +39,16 @@ from criteria_examples import (
 
 from orchestrator import criteria_guard, plan_check, plan_review, plan_store, task_body
 from orchestrator.criteria_guard import (
-    APPENDIX_ENV,
     AUTHORIZATIONS,
     CRITERIA_HEADING,
     Authorization,
     Bar,
     CriteriaError,
-    appendix_text,
     block_scalar,
     builtin_persona,
     builtin_persona_names,
     check,
     check_amendment,
-    check_appendix,
     check_changes_allowed,
     check_directly,
     check_plan,
@@ -105,21 +102,6 @@ REPORTS_BY_THE_WITHDRAWN_WORDING = (
     "- A journey proves the thing end to end against the real interface.\n"
     "- The dispatch closes with a completion report naming the evidence."
 )
-
-
-@pytest.fixture
-def appendix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the appendix check at a synthetic appendix this test controls.
-
-    The tracked appendix is prose, and a test that read it would belong to the
-    whole-workspace tier — where coverage is not measured. Its own wording is held
-    by the journeys that are marked for that tier; what is under test here is the
-    check, so the file it reads is this test's to write.
-    """
-    written = tmp_path / "appendix.md"
-    written.write_text(APPENDIX, encoding="utf-8")
-    monkeypatch.setattr(criteria_guard, "APPENDIX", written)
-    return written
 
 
 def _plan(**node: object) -> dict[str, object]:
@@ -604,19 +586,18 @@ def test_a_demand_the_criteria_are_silent_about_is_left_to_the_judged_tier(
     check(_task("- The thing is done.\n- A report names the evidence.", additional), "probe", bar)
 
 
-def test_a_criterion_answering_a_demand_in_its_own_words_is_accepted_too(appendix: Path) -> None:
+def test_a_criterion_answering_a_demand_in_its_own_words_is_accepted_too() -> None:
     """The other side of that: nothing here rules on the wording either way.
 
     Read through `check_plan`, whose count is the observable answer — a check that only
     declined to raise would pass just as well if it had stopped looking at all.
     """
     quiet = _task("- The thing is done.", additional="## Additional info\n\nNothing is asked.\n")
-    appendix.write_text("## Additional info\n\nNothing is asked.\n", encoding="utf-8")
 
     assert check_plan(_plan(task=quiet)) == 1
 
 
-def test_criteria_that_answer_every_demand_are_accepted(appendix: Path) -> None:
+def test_criteria_that_answer_every_demand_are_accepted() -> None:
     """The whole accepting path under the real `engineer` bar, counted rather than assumed."""
     assert check_plan(_plan(persona="engineer", task=_task(COMPLETE))) == 1
 
@@ -629,7 +610,7 @@ def test_criteria_that_answer_every_demand_are_accepted(appendix: Path) -> None:
     ],
 )
 def test_a_node_under_the_real_role_is_accepted_whichever_wording_it_reports_in(
-    appendix: Path, criteria: str
+    criteria: str,
 ) -> None:
     """Both wordings reach a dispatch, under the bar the engine binary really ships.
 
@@ -639,41 +620,6 @@ def test_a_node_under_the_real_role_is_accepted_whichever_wording_it_reports_in(
     wording that names a report, which plans written before that narrowing still carry.
     """
     assert check_plan(_plan(persona="engineer", task=_task(criteria))) == 1
-
-
-def test_a_task_rebuilt_from_a_stale_appendix_is_refused(appendix: Path) -> None:
-    """A builder cloned before an appendix fix reintroduces the wording it removed.
-
-    The refusal names two places the appendix can be had, and both are openable from
-    where the party that has to act stands: the variable every planning launch hands its
-    dispatch, and an absolute path on this host. It named a path relative to this
-    checkout, which a planner working in another repository's worktree cannot open at
-    all — so the planner that met this refusal was told to read a file that does not
-    exist from there, and a manager appended the text by hand instead.
-    """
-    appendix.write_text(APPENDIX + "\nA rule that was added since.\n", encoding="utf-8")
-
-    with pytest.raises(CriteriaError) as refused:
-        check_appendix(_task(COMPLETE), "probe")
-
-    reported = str(refused.value)
-    assert "current operational appendix" in reported, reported
-    assert f"${APPENDIX_ENV}" in reported, reported
-    assert str(appendix) in reported, reported
-
-
-def test_the_text_a_task_must_carry_is_the_text_the_launch_hands_over(appendix: Path) -> None:
-    """One reader for both ends of that requirement, which is what makes it answerable.
-
-    `scripts/dispatch-appendix-env.sh` exports what this function answers, so what a
-    planning dispatch is handed is byte-for-byte what the check demands as a substring
-    rather than a second rendering of the same file — which is how the two come to differ
-    by a trailing newline nobody can see.
-    """
-    appendix.write_text(f"\n\n{APPENDIX}\n\n", encoding="utf-8")
-
-    assert appendix_text() == APPENDIX.strip()
-    check_appendix(_task(COMPLETE, additional=appendix_text()), "probe")
 
 
 def test_only_the_nodes_that_dispatch_an_agent_are_checked() -> None:
@@ -731,7 +677,7 @@ def test_a_plan_whose_shape_is_wrong_is_refused_by_the_field_that_is_wrong(
     assert reason in str(refused.value)
 
 
-def test_a_node_that_dispatches_but_states_no_task_is_refused(appendix: Path) -> None:
+def test_a_node_that_dispatches_but_states_no_task_is_refused() -> None:
     with pytest.raises(CriteriaError, match="states no `task` string"):
         check_plan(_plan(persona="engineer"))
 
@@ -758,7 +704,6 @@ def _planned(record: dict[str, object], plan: dict[str, object]) -> dict[str, ob
 
 
 def test_the_command_accepts_a_plan_that_states_its_bar(
-    appendix: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
@@ -771,7 +716,7 @@ def test_the_command_accepts_a_plan_that_states_its_bar(
 
 
 def test_the_command_refuses_a_plan_that_does_not(
-    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     refused = _task(f"{RELEASED_ELSEWHERE[0]}\n{COMPLETE}")
     monkeypatch.setattr(
@@ -783,7 +728,7 @@ def test_the_command_refuses_a_plan_that_does_not(
 
 
 def test_the_command_refuses_a_task_whose_issue_body_the_board_would_refuse(
-    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The direct path refuses the size the spawned check refuses, naming the same three things.
 
@@ -803,7 +748,6 @@ def test_the_command_refuses_a_task_whose_issue_body_the_board_would_refuse(
 
 
 def test_the_command_warns_about_a_task_between_the_thresholds_and_accepts_it(
-    appendix: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
@@ -937,9 +881,7 @@ def test_the_shipped_researcher_is_the_role_this_refuses() -> None:
         pytest.param("- The finding covers docs/x.md and is added to the answer.", id="unquoted"),
     ),
 )
-def test_a_read_only_node_that_merely_names_a_file_is_left_alone(
-    criterion: str, appendix: Path
-) -> None:
+def test_a_read_only_node_that_merely_names_a_file_is_left_alone(criterion: str) -> None:
     """The false refusal this check is written to avoid, in the shapes it would take.
 
     Naming a file is what a role forbidden to touch the tree is *for*, and an unquoted
@@ -955,7 +897,7 @@ def test_a_read_only_node_that_merely_names_a_file_is_left_alone(
     assert check_plan(node) == 1
 
 
-def test_a_bar_that_permits_changes_never_reads_the_criteria_at_all(appendix: Path) -> None:
+def test_a_bar_that_permits_changes_never_reads_the_criteria_at_all() -> None:
     """Neither half is a fault alone: an editing criterion is right for an editing bar."""
     editing = _task(f"{COMPLETE}\n- `docs/x.md` gains a row.")
 
@@ -1022,11 +964,6 @@ def test_an_engine_whose_every_role_forbids_changes_says_so_rather_than_offering
     assert "move the editing into a node of its own" in str(refused.value)
 
 
-def test_the_tracked_appendix_is_where_the_guard_reads_it_from() -> None:
-    """The promotion this module is half of: the appendix is tracked, not scratch."""
-    assert (REPO_ROOT / criteria_guard.APPENDIX).is_file()
-
-
 def _reviewable(**metadata: object) -> plan_store.StoreTask:
     return plan_store.StoreTask(
         qualified_id="authoring:probe/probe",
@@ -1040,7 +977,6 @@ def _reviewable(**metadata: object) -> plan_store.StoreTask:
 
 
 def test_the_command_refuses_a_task_nothing_has_reviewed(
-    appendix: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
@@ -1069,7 +1005,6 @@ def _recorded() -> plan_store.StoreTask:
 
 
 def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
-    appendix: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
@@ -1086,7 +1021,6 @@ def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
 
 
 def test_the_command_refuses_a_plan_every_task_of_which_is_recorded_and_no_plan_level_record(
-    appendix: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
@@ -1124,7 +1058,7 @@ def test_the_command_refuses_a_plan_every_task_of_which_is_recorded_and_no_plan_
 
 
 def test_the_command_reports_a_checkout_that_cannot_answer_what_the_review_bar_is(
-    appendix: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The bar is tracked files, so a checkout missing one says so rather than passing."""
     monkeypatch.setattr(

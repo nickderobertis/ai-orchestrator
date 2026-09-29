@@ -688,10 +688,22 @@ them reach you; `manager` names the session role and is never a command.
    place is the same over-reach as planning it yourself and lands work no plan-quality
    judge reviewed. A plan you wrote or tweaked is unreviewed until `just review-plan
    <source:project>` has read it, and `just check-plan` refuses it by name until then;
-   a planner-written plan you did not touch is already recorded. A task is changed by
-   regenerating it from its template, never by editing its body, and a render verb you
-   run by hand names `--no-interactive`, because the plan store prompts by default and
-   that default is a person's.
+   a planner-written plan you did not touch is already recorded.
+
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse, determinism_vs_judgment] The one statement of how a manager changes a planned task, which `personas/planner.yaml` states for the planner: the order across the authoring copy, its review and the board copy is judgment the pipe cannot carry, and the pipe is two published verbs with no recipe over them to point at instead, because this repository is their canonical example rather than a wrapper layer. -->
+   **A task is changed by
+   regenerating it, never by editing its body**, in the `authoring` copy: `onetaskgraph
+   task answers <id>` prints what it was answered, and `onepipeline template resolve
+   plan-task --json | onetaskgraph task render <qualified id> --template-loader - --var
+   NAME=VALUE --no-interactive` (or `--answers FILE`) regenerates it in place, keeping its
+   id, dependencies and metadata. Then `just review-plan`, `just finish-plan` — whose
+   re-copy updates the same issue and board item — and the launch. A board item
+   regenerated directly needs every required answer, since a copy carries none, and the
+   store prompts by default, a person's default, so a render by hand names
+   `--no-interactive`. A criteria-less, hand-edited or stale body is refused on
+   onepipeline's side, at `just check-plan` (`onepipeline template check plan-task --item
+   <id>` for one task) and at launch, naming that pipe.
+   <!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
 5. **Pick or create personas.** Prefer precise task prose over encoding subtask detail
    in a new persona; there is no test-only persona, so a node closing a coverage gap
    uses `engineer`. A node's bare `persona` is a name resolved against the roles built
@@ -1331,17 +1343,25 @@ channel; it names `--dag-graph off`, because a planning run's plan is its own ou
 both of the flow's nodes are **direct** nodes in the launching checkout — the one flag
 that changes the dispatched task — because no lifecycle shape fits a dispatched node
 that commits nothing (`scripts/plan.sh`'s header holds the placement note and the
-incident behind it); and it exports `ORCHESTRATOR_DISPATCH_APPENDIX_TEXT` holding
-`templates/dispatch-appendix.md`'s text rather than its path, because a planner plans
-against other repositories too. That file is the operational notes every dispatched
-task carries and the one statement of what a worker may suppress; this document states
-none of it. It sits in `templates/`, this host's template root.
+incident behind it); and it names `--require-rendered false`, the one launch here that
+does, because its one node is the manager's hand-written brief, which no template
+renders. `templates/dispatch-appendix.md` is the operational notes every dispatched task
+carries — `templates/plan-task.md.j2` includes it, so a task carries it by being that
+template's rendering — and the one statement of what a worker may suppress; this document
+states none of it. It sits in `templates/`, this host's template root.
 
 `just check-plan` reads a project against the bar each node will be judged against —
-the engine's loader first, then `scripts/plan-check.sh`, each refusal naming its source
-— and refuses the shapes that have each failed correct work on procedure: a criterion
+the engine's loader first, then `scripts/plan-check.sh`, each refusal naming its source.
+The loader runs under `require_rendered`, which every plan-loading verb
+`scripts/onepipeline.sh` runs names: a task that is not its template's rendering is
+refused, naming the regenerate the manager loop states — a hand-written one is rendered by
+it from an `--answers FILE` — and so is one naming a repository with no checkout registered
+here. Exporting `ONEPIPELINE_REQUIRE_RENDERED`, like naming the flag, opts a launch out, so
+nothing but the test suite exports it.
+The registered check then refuses the shapes that have each
+failed correct work on procedure: a criterion
 naming a procedure instead of a property or resting on something outside the dispatch,
-a task carrying no review record or not the appendix verbatim, a lifecycle `title` the
+a task carrying no review record, a lifecycle `title` the
 destination's own `commit-msg` hook would refuse, a `consumes` on a `local-direct`
 identity. It also refuses the release-adoption shapes a matcher can see will never
 complete — a `consumes` naming a target its producer does not resolve, a `published`

@@ -20,11 +20,11 @@
 #     taken rather than by predicting what will be minted. **Both** of this flow's run
 #     ids are refused that way, here, before anything is launched: the tail below runs a
 #     second launch, and an hour of planning must not end at a name collision.
-#   * **The operational appendix is exported into the launch environment**, as text
-#     rather than as a path. Every dispatched task must carry it verbatim and the
-#     planner is what copies it in, but a planner may plan against a checkout other
-#     than the one holding the tracked file — so a path names a file it cannot open,
-#     and the refusal it then met named that same path.
+#   * **The launch names `--require-rendered false`**, the one launch of this host that
+#     does. Its one node's task is the manager's hand-written brief, which no template
+#     renders and which the user ruled out of the template's scope; every other launch
+#     `scripts/onepipeline.sh` makes is held to its tasks being their template's
+#     rendering. A caller who names the flag keeps theirs.
 #   * **`ORCHESTRATOR_ASK_MANAGER` is exported into the launch environment**, holding
 #     the path of `scripts/ask-manager.sh`, which runs the engine's `onepipeline ask`,
 #     which is how the dispatched planner stops and asks rather
@@ -290,14 +290,17 @@ name=$(plan_run_name plan "$PLAN_OPT_NAME" "$brief") || exit 2
 # The observer default, composed from what was forwarded rather than consumed out of
 # it: a caller's `--dag-graph` — either spelling, and including their own `off` —
 # reaches `onepipeline start` as they typed it, and this adds one only when they named
-# neither. The same pass reads whether this launch was detached, which decides whether
-# the tail can run at all.
+# neither. `--require-rendered false` is kept the same way, so a caller's own answer to it
+# stands. The same pass reads whether this launch was detached, which decides whether the
+# tail can run at all.
 observer=("$DAG_GRAPH_FLAG" "$DEFAULT_DAG_GRAPH")
+rendered=(--require-rendered false)
 detached=0
 # llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the idiom for expanding a possibly-empty array under `set -u`, and only its `+` alternate-value part is unquoted — the value it expands to is `"${a[@]}"`, so every element stays one argument. Measured: an array of `one two`, `*` and the empty string expands to exactly those three arguments, and an empty array expands to none. shellcheck, which this repository's `lint` target runs over every script, accepts it.
 for argument in ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"}; do
     case "$argument" in
         "$DAG_GRAPH_FLAG" | "$DAG_GRAPH_FLAG"=*) observer=() ;;
+        --require-rendered | --require-rendered=*) rendered=() ;;
         "$DETACH_FLAG") detached=1 ;;
     esac
 done
@@ -353,9 +356,6 @@ export_ask_manager plan || exit "$?"
 # shellcheck source=scripts/plan-root-env.sh
 load plan-root-env.sh
 export_plan_authoring_root plan || exit "$?"
-# shellcheck source=scripts/dispatch-appendix-env.sh
-load dispatch-appendix-env.sh
-export_dispatch_appendix plan || exit "$?"
 
 # The root the helper above resolved, which is where this launch writes its project and
 # where everything downstream of it then looks: `onepipeline start` below, the review
@@ -469,7 +469,7 @@ trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could no
 status=0
 # One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
 # llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the one line this script owns, the plan it wrote and the command that answers the planner, is printed above; and the two array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
-"$script_dir/onepipeline.sh" start "$project" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} || status=$?
+"$script_dir/onepipeline.sh" start "$project" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} ${rendered[@]+"${rendered[@]}"} || status=$?
 if [ "$status" -eq 0 ]; then
     # llmlint: ignore[changed_behavior_has_e2e] The one ending left is a settled run whose closeout then fails outright, which now takes an unreadable snapshot or an unreadable review bar rather than any plan on disk; a project it cannot record is passed over instead, which `tests/test_plan_review.py` drives.
     "$python" -m orchestrator.plan_review closeout "$snapshot" || status=$?

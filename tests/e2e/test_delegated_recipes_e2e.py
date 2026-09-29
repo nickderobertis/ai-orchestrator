@@ -84,6 +84,10 @@ DESIGN_PROJECT = "authoring:cursor-shape-design"
 #: constant would make this table assert that it equals itself.
 THE_BOARD = "plans"
 
+#: What `just plan` adds to its planning launch, and only to that one: its one node is the
+#: manager's hand-written brief, which no template renders, so it names the opt-out itself.
+PLANNING_RENDERED = "--require-rendered false"
+
 
 def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[str, ...]:
     """Every command line the tail of the planning flow reaches, in order.
@@ -301,7 +305,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF,),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
         then=_tail(),
     ),
     # `--detach` hands back before the planner has written anything, so there is no plan
@@ -310,7 +314,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off "
+        f"{PLANNING_RENDERED}",
     ),
     # The joined spelling of both, which is a separate parsing path: `--name=` decides
     # the plan path this line names, and `--max-turns=` is absorbed rather than
@@ -318,7 +323,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off "
+        f"{PLANNING_RENDERED}",
     ),
     # `--no-design-doc` stops the flow after the planner, so the tail is absent here for
     # a different reason than it is absent above: there is nothing to write a document
@@ -326,7 +332,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--no-design-doc"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
     ),
     # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
     # destination decides nothing about the planner, and everything about where the plan
@@ -334,7 +340,7 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--to", "elsewhere"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
         then=_tail(destination="elsewhere"),
     ),
     # A caller who names an observer keeps it, in either spelling and including their
@@ -344,13 +350,15 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph graphs/dag-scope.yaml",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph graphs/dag-scope.yaml "
+        f"{PLANNING_RENDERED}",
         then=_tail(),
     ),
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph=graphs/other.yaml --detach",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph=graphs/other.yaml --detach "
+        f"{PLANNING_RENDERED}",
     ),
     # The tail on its own, which is how a plan edited after it was authored is finished:
     # the same six verbs in the same order, reached without a planner being launched at
@@ -1019,9 +1027,9 @@ def test_the_plan_recipe_launches_a_brief_named_after_its_plan_under_another_nam
     result = _run(checkout, trace, "plan", COLLIDING_BRIEF, "--name", run, "--detach")
 
     assert result.returncode == 0, result.stderr
-    published = f"{ENGINE} start {DEFAULTS} authoring:{run} --detach --dag-graph off".replace(
-        CHECKOUT, str(checkout.resolve())
-    )
+    published = (
+        f"{ENGINE} start {DEFAULTS} authoring:{run} --detach --dag-graph off {PLANNING_RENDERED}"
+    ).replace(CHECKOUT, str(checkout.resolve()))
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{run}.md").is_file(), result.stderr
     native = COLLIDING_PROJECT.split(":", 1)[1]
@@ -1054,9 +1062,9 @@ def test_the_plan_recipe_launches_a_run_named_as_a_plan_in_another_source(
 
     assert result.returncode == 0, result.stderr
     assert "the native id of the brief's plan project" not in result.stderr, result.stderr
-    published = (f"{ENGINE} start {DEFAULTS} authoring:{native} --detach --dag-graph off").replace(
-        CHECKOUT, str(checkout.resolve())
-    )
+    published = (
+        f"{ENGINE} start {DEFAULTS} authoring:{native} --detach --dag-graph off {PLANNING_RENDERED}"
+    ).replace(CHECKOUT, str(checkout.resolve()))
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{native}.md").is_file(), result.stderr
 

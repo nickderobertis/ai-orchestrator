@@ -14,8 +14,9 @@ construction, rather than by a second implementation somebody has to keep in ste
 `AGENTS.md` carries what that drift cost.
 
 What is left here is what no published CLI can know: the review bar each node resolves
-to out of the `oneagentgraph` that `onepipeline` links, this host's own operational
-appendix, and whether anything has reviewed the criteria at all.
+to out of the `oneagentgraph` that `onepipeline` links, and whether anything has reviewed
+the criteria at all. Whether a task carries this host's operational appendix is the
+engine's to decide, as whether the task is its template's rendering (`require_rendered`).
 
 **The contract, which is the whole of this module's interface.** The plan arrives on
 stdin as `{"schema_version", "name", "goal", "concurrency", "tasks": [...]}`, each task
@@ -25,7 +26,7 @@ repository's review record lives in. The answer goes to stdout as
 `{"refusals": [{"node", "field", "reason"}, ...]}` with **exit 0 whether or not it
 refused**: a non-zero exit means the check could not be run, and is reported as such
 rather than as an accept. So a configuration this checkout cannot read — a missing
-review bar, an absent appendix — exits non-zero deliberately, because "this repository
+review bar — exits non-zero deliberately, because "this repository
 cannot say" is not the same answer as "this plan is fine".
 """
 
@@ -78,6 +79,11 @@ PYTHON_ENV = "ORCHESTRATOR_PYTHON"
 #: both paths run these same checks over the same plan — so it cannot make a plan pass
 #: that the other path refuses.
 ENGINE_ENV = "ORCHESTRATOR_PLAN_CHECK_ENGINE"
+
+#: The engine's own lever beneath `--require-rendered`; a caller who exported it has
+#: named the answer, so :func:`require_rendered` adds no flag. Recognised here because an
+#: engine named under :data:`ENGINE_ENV` has no wrapper in front of it to do so.
+REQUIRE_RENDERED_ENV = "ONEPIPELINE_REQUIRE_RENDERED"
 
 
 class Refusal(TypedDict):
@@ -142,9 +148,8 @@ def _node_refusals(document: object) -> Iterator[Refusal]:
             yield Refusal(node=node.id, field="persona", reason=_reason(node.id, exc))
             continue
         try:
+            # llmlint: ignore[boundary_inputs_validated] Under `require_rendered`, the task reaching this check is one the engine's loader has already held to being its template's rendering, whose `## Additional info` heading the `plan-task` template renders itself; a caller exporting the variable `false` opts out on purpose, and this then reads the task's notes as written rather than guessing at a variant heading.  # noqa: E501
             criteria_guard.check(node.task, node.id, bar)
-            criteria_guard.check_appendix(node.task, node.id)
-            criteria_guard.check_notes_heading(node.task, node.id)
         except CriteriaError as exc:
             yield Refusal(node=node.id, field="task", reason=_reason(node.id, exc))
 
@@ -315,9 +320,17 @@ def _runnable(named: str) -> bool:
     return bool(shutil.which(named))
 
 
-def plan_check_engine() -> str | None:
-    """The engine binary a plan check runs through, or ``None`` when there is none."""
-    return os.environ.get(ENGINE_ENV) or shutil.which(criteria_guard.ENGINE)
+#: The wrapper every verb of this checkout's engine runs through, and so what a plan check
+#: runs through: it names this checkout's own template root, which the engine resolves each
+#: task's recorded template against, and `--require-rendered true` — so `plan check` loads
+#: a plan exactly as `start` would, rather than against whatever root the calling shell
+#: happened to export.
+ENGINE_WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
+
+
+def plan_check_engine() -> str:
+    """The engine a plan check runs through: the one a journey names, else the wrapper."""
+    return os.environ.get(ENGINE_ENV) or str(ENGINE_WRAPPER)
 
 
 def carries_plan_check(engine: str) -> bool:
@@ -428,6 +441,17 @@ def dispatched_in_with_records(
     return counted, records
 
 
+def require_rendered() -> list[str]:
+    """The `--require-rendered` this command's `plan check` names, or none.
+
+    `true` unless the caller exported :data:`REQUIRE_RENDERED_ENV`: every plan this command
+    checks is one a launch would load under `require_rendered`, so the engine refuses here
+    the task with no recorded provenance, the one whose template changed since it was
+    rendered and the one whose body was edited after it — what the launch would refuse.
+    """
+    return [] if os.environ.get(REQUIRE_RENDERED_ENV) else ["--require-rendered", "true"]
+
+
 def check_through_engine(project: str, engine: str) -> int:
     """Check ``project`` through the engine's own loader and this repository's checks.
 
@@ -453,6 +477,7 @@ def check_through_engine(project: str, engine: str) -> int:
             # the whole of this checkout's location.
             criteria_guard.PLAN_CHECK_SCRIPT.as_posix(),
             "--json",
+            *require_rendered(),
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -517,6 +542,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("project", metavar="SOURCE:PROJECT")
     args = parser.parse_args(argv)
+    exported = os.environ.get(REQUIRE_RENDERED_ENV, "")
+    if exported not in {"", "true", "false"}:
+        print(
+            f"check-plan: {REQUIRE_RENDERED_ENV} is {exported!r}, which is neither true nor "
+            f"false, so whether this plan is held to its tasks being their template's "
+            f"rendering cannot be read from it; remove it from the environment, which holds "
+            f"it, then retry",
+            file=sys.stderr,
+        )
+        return 2
     named = os.environ.get(ENGINE_ENV)
     if named and not _runnable(named):
         print(
@@ -527,7 +562,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     engine = plan_check_engine()
-    if engine is not None and carries_plan_check(engine):
+    # llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] A probe that fails for any reason takes the direct path, as an engine that could not be found always has, and that path says on its accepted line that the engine's loader did not read the plan and a launch may still refuse it — so the narrower answer is never read as the whole one. The direct path after a failed probe is driven through the real recipe by `tests/plan_tooling/test_check_plan_recipe_e2e.py`'s narrower-path journeys; a failing probe of this checkout's own wrapper is a checkout whose pinned engine is not installed, which no journey can produce without breaking the `.venv` every concurrent test shares.  # noqa: E501
+    if carries_plan_check(engine):
         return check_through_engine(args.project, engine)
     return criteria_guard.check_directly(args.project)
 

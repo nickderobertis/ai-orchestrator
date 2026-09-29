@@ -67,6 +67,7 @@ from registered_checkouts import listed_checkout_paths
 from short_state import short_state_base  # noqa: F401 - registered by being named here
 from waits import install_default_bounds
 
+from orchestrator import plan_check
 from orchestrator.root import REPO_ROOT
 
 # Every blocking call this suite makes gets a finite bound here, at import, and the one
@@ -248,6 +249,24 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
             root = base / source
             root.mkdir()
             patched.setenv(variable, str(root))
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _hand_written_fixture_plans() -> Iterator[None]:
+    """Load this suite's hand-written fixture plans without `require_rendered`.
+
+    Every plan-loading launch `scripts/onepipeline.sh` and `just check-plan` make names
+    `--require-rendered true` unless the caller named the flag or exported the engine's own
+    variable beneath it, and almost every journey here launches or checks a plan whose tasks
+    it wrote by hand, about something other than how a task is rendered. So the variable is
+    exported `false` for the session — the one place anything exports it — and the journeys
+    about rendering remove it from the environment they launch in, which is what makes them
+    prove the `true` default rather than this. Session scope and by mutating the
+    environment, for the reason the plan-store roots above give.
+    """
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setenv(plan_check.REQUIRE_RENDERED_ENV, "false")
         yield
 
 

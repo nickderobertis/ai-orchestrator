@@ -26,13 +26,13 @@ from plan_store_pin import (
     adopted_release,
     held_below_the_pacing_floor,
 )
-from project_fixtures import designed
+from project_fixtures import designed, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from registered_checkouts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator import follow_up_tickets, plan_store
+from orchestrator import follow_up_tickets, plan_check, plan_store
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -4490,3 +4490,524 @@ def test_settlement_write_back_preserves_the_authored_project_description(
         f"{after!r}; the write-back owns the node projection and nothing else on that "
         "record"
     )
+
+
+#: The plan the regenerate journeys author: two tasks rendered from this host's `plan-task`
+#: template, the second depending on the first, so what a regenerate keeps includes an
+#: edge. Each carries criteria that answer every demand `just check-plan` reads, because
+#: the journeys check the plan whole rather than the one refusal each is about.
+RENDERED_PROJECT = _ProjectId("rendered")
+RENDERED_QUALIFIED = f"{AUTHORING_SOURCE}:{RENDERED_PROJECT}"
+
+
+class _RenderedNode(NamedTuple):
+    """One of the regenerate journeys' tasks: its node id and the title it is filed under."""
+
+    node: str
+    title: str
+
+
+RENDERED_FIRST = _RenderedNode("page-the-listing", "feat: page the node listing")
+RENDERED_SECOND = _RenderedNode("follow-the-cursor", "feat: follow the cursor from the view")
+RENDERED_ANSWERS: dict[str, dict[str, object]] = {
+    RENDERED_FIRST.node: {
+        "what": "Add the paginated listing and the test that drives it.",
+        "why": "An operator cannot see past the first screen of nodes.",
+        "acceptance_criteria": [
+            "The route accepts a valid request and rejects an invalid one.",
+            "A request-level test drives the route end to end and covers both paths.",
+            "Every claim the dispatch makes about the finished work is true of the tree as "
+            "it finally stands.",
+        ],
+    },
+    RENDERED_SECOND.node: {
+        "what": "Follow the stated cursor from the browser view.",
+        "why": "The listing's cursor is worth nothing until something reads it.",
+        "acceptance_criteria": [
+            "The view pages on the stated cursor and reports a rejected one.",
+            "A browser-level test drives both of those paths end to end.",
+            "Every claim the dispatch makes about the finished work is true of the tree as "
+            "it finally stands.",
+        ],
+        "additional_info": "The page size is the view's to choose.",
+    },
+}
+#: The answer the regenerate journey changes, on the second task, and what it becomes.
+REGENERATED_ANSWER = ("why", "An operator loses every node past the first screen of the listing.")
+#: The provenance key the plan store records beside a rendering, and the reference this
+#: host's `plan-task` resolves to through the engine.
+RENDERED_PROVENANCE = "onetaskgraph.template"
+PLAN_TASK_REFERENCE = "onepipeline:plan-task"
+
+
+def _rendering_environment(root: Path) -> dict[str, str]:
+    """The environment a planner renders, reviews and checks a plan of ``root`` in.
+
+    Without the suite's session-wide opt-out for hand-written fixture plans, because these
+    plans are renderings and every check below is the `require_rendered` default. The
+    locked installs lead the search path, as they do in a dispatch, so the bare `onepipeline`
+    and `onetaskgraph` of the pipe a planner is told to run are the pinned ones; and the
+    engine is pointed at this checkout's template root, which is what the launch wrapper
+    names on every verb it runs.
+    """
+    environment = _plan_environment(root)
+    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    environment["PATH"] = f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{environment['PATH']}"
+    environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(REPO_ROOT / "templates")
+    return environment
+
+
+def _through_the_template(
+    environment: Mapping[str, str], *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """`onepipeline template resolve plan-task --json` piped into one `onetaskgraph task` verb.
+
+    The pipe a planner is told to run, whole: the engine states the template as a loader
+    document and the store renders from it, each the pinned CLI the search path resolves.
+    """
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail; "
+            'onepipeline template resolve plan-task --json | onetaskgraph task "$@"',
+            "through-the-template",
+            *arguments,
+        ],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _write_rendered_project(
+    tmp_path: Path, root: Path, environment: Mapping[str, str]
+) -> dict[str, str]:
+    """Author :data:`RENDERED_PROJECT` into ``root`` as a planner does, and approve its document.
+
+    The project record is written as the planner writes it, and each task is created through
+    :func:`_through_the_template` — never a body written by hand. Answers the node's qualified
+    task ids, by node id. The design document is rendered and approved for the reason
+    :func:`_write_local_project` gives.
+    """
+    (root / "projects").mkdir(parents=True, exist_ok=True)
+    # llmlint: ignore[tests_mirror_real_usage] The plan store has no project-create verb, and `personas/planner.yaml` has a planner author a plan as one `projects/<project>.md` record under the source's root before creating its tasks through the store, so this writes it exactly as a planner does.  # noqa: E501
+    (root / "projects" / f"{RENDERED_PROJECT}.md").write_text(
+        f'---\ntitle: "{RENDERED_PROJECT}"\nstatus: "todo"\nmetadata:\n'
+        '  "onepipeline.schema_version": 3\n'
+        '  "onepipeline.goal": {"text": "Page the node listing and follow its cursor"}\n---\n\n'
+        f"Execution plan {RENDERED_PROJECT}.\n",
+        encoding="utf-8",
+    )
+    answers = tmp_path / "answers"
+    answers.mkdir(exist_ok=True)
+    created: dict[str, str] = {}
+    for node, title in (RENDERED_FIRST, RENDERED_SECOND):
+        answered = answers / f"{node}.json"
+        answered.write_text(json.dumps(RENDERED_ANSWERS[node]), encoding="utf-8")
+        depends = [f"--depends-on={created[RENDERED_FIRST.node]}"] if created else []
+        made = _through_the_template(
+            environment,
+            "create",
+            AUTHORING_SOURCE,
+            "--template-loader",
+            "-",
+            "--no-interactive",
+            "--project",
+            RENDERED_PROJECT,
+            "--title",
+            title,
+            "--answers",
+            str(answered),
+            f"--metadata=onepipeline.id={json.dumps(node)}",
+            '--metadata=onepipeline.persona="engineer"',
+            *depends,
+        )
+        assert made.returncode == 0, made.stdout + made.stderr
+        created[node] = made.stdout.strip()
+    designed(
+        AUTHORING_SOURCE,
+        RENDERED_PROJECT,
+        [
+            {
+                "task": title,
+                "delivers": f"the {node} change",
+                "depends_on": "none" if node == RENDERED_FIRST.node else RENDERED_FIRST.node,
+                "location": f"{root}/tasks",
+            }
+            for node, title in (RENDERED_FIRST, RENDERED_SECOND)
+        ],
+        {**os.environ, AUTHORING_ROOT_ENV: str(root)},
+    )
+    approved = subprocess.run(
+        ["just", "approve-design", RENDERED_QUALIFIED],
+        cwd=REPO_ROOT,
+        env={**os.environ, AUTHORING_ROOT_ENV: str(root)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    return created
+
+
+def _recipe(environment: Mapping[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+    """One of this checkout's recipes, as an operator runs it."""
+    return subprocess.run(
+        ["just", *arguments],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+
+
+def _rendered_task(qualified: str) -> plan_store.StoreTask:
+    """One of :data:`RENDERED_PROJECT`'s tasks, read through the store as `check-plan` reads it."""
+    (task,) = [
+        one for one in plan_store.read_tasks(RENDERED_QUALIFIED) if one.qualified_id == qualified
+    ]
+    return task
+
+
+def _stored_answers(environment: Mapping[str, str], qualified: str) -> dict[str, object]:
+    shown = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "answers", qualified, "--json"],
+        cwd=REPO_ROOT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    answers: dict[str, object] = json.loads(shown.stdout)
+    return answers
+
+
+def _record_of(root: Path, qualified: str) -> Path:
+    """The `local-md` file holding ``qualified``, which a hand edit changes."""
+    native = qualified.partition(":")[2]
+    (record,) = [one for one in (root / "tasks").rglob("*.md") if one.stem == native]
+    return record
+
+
+def _copied(reported: str) -> dict[str, str]:
+    """Each copied record's destination id by its source id, off `just copy-plan`'s report."""
+    return {
+        str(entry["source"]): str(entry["destination"])
+        for entry in (json.loads(line) for line in reported.splitlines() if line.startswith("{"))
+        if entry.get("destination")
+    }
+
+
+def _remedy(qualified: str) -> str:
+    return (
+        "onepipeline template resolve plan-task --json | onetaskgraph task render "
+        f"{qualified} --template-loader -"
+    )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge] Same subject and same inputs as every journey beside them — the installed plan-store CLI and engine driven through this checkout's recipes, against the loopback board and the local project writer this module owns — so `nx affected` already selects the module together, and a project of three functions would be keyed on the same files. They run in `orchestrator:test`, keyed `codeWorkspace`, the edge every launch and board journey in this file pays.  # noqa: E501
+# llmlint: ignore-block[e2e_not_mocked] GitHub's Projects API is the one boundary doubled,
+# for the reason the block around `_Board` gives — driving it writes to the live board this
+# repository plans on — and the paid model is the other; the recipes, the pinned engine and
+# plan store and the records they write are all real.
+# llmlint: ignore-block[tests_mirror_real_usage] The issue body is what a reader of the
+# issue sees, and the store answers a task's content with its metadata slot parsed away, so
+# the wire body — and whether a re-copy filed a second issue — can only be read where the
+# fixture holds them; the item a copy reached is also asserted through the store's own copy
+# report.
+def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_rendered(
+    tmp_path: Path, oneharness_bin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path a manager changes a planned task by, end to end, under `require_rendered`.
+
+    A plan is authored in the `authoring` store the way a planner authors it, reviewed,
+    checked and copied onto the loopback `plans` board. One answer is then changed with
+    `task render`, which keeps the task's id, dependencies and metadata; the changed content
+    is reviewed again, checked, and copied again — onto the same issue and the same board
+    item, carrying the new body and no answer outside it — and the board copy is launched
+    through `just orchestrate`, whose launch record says it ran under `require_rendered`.
+    """
+    root = tmp_path / "authoring"
+    root.mkdir()
+    # `reviewed` spawns `just review-plan` in this process's environment.
+    monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+    environment = _rendering_environment(root)
+    tasks = _write_rendered_project(tmp_path, root, environment)
+    reviewed(RENDERED_QUALIFIED)
+    checked = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+    changed = tasks[RENDERED_SECOND.node]
+    before = _rendered_task(changed)
+    name, value = REGENERATED_ANSWER
+    with _serving_board() as remote:
+        on_the_board = {**environment, **remote}
+        first = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        assert first.returncode == 0, first.stdout + first.stderr
+        destinations = _copied(first.stdout)
+        issued = {issue.title: issue for issue in BOARD.issues_created_and_kept()}
+        filed = issued[RENDERED_SECOND.title]
+        first_item, first_issue = filed.item_id, filed.content_id
+
+        rendered = _through_the_template(
+            environment,
+            "render",
+            changed,
+            "--template-loader",
+            "-",
+            "--var",
+            f"{name}={value}",
+            "--no-interactive",
+        )
+        assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+        after = _rendered_task(changed)
+
+        unreviewed = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
+        reviewed(RENDERED_QUALIFIED)
+        rechecked = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
+        second = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        assert second.returncode == 0, second.stdout + second.stderr
+        reissued = {issue.title: issue for issue in BOARD.issues_created_and_kept()}
+
+        launching = _launch_environment(tmp_path / "execution", oneharness_bin)
+        launching.update(_prepare_plan_sources(root))
+        launching.update(remote)
+        launching.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+        launching[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
+        launched = _recipe(
+            launching, "orchestrate", destinations[RENDERED_QUALIFIED], "--dag-graph", "off"
+        )
+
+    assert (
+        (after.qualified_id, after.node_id, after.deps)
+        == (
+            before.qualified_id,
+            before.node_id,
+            before.deps,
+        )
+        == (changed, RENDERED_SECOND.node, (RENDERED_FIRST.node,))
+    )
+    kept = {key: held for key, held in before.metadata.items() if key != RENDERED_PROVENANCE}
+    assert {key: held for key, held in after.metadata.items() if key != RENDERED_PROVENANCE} == kept
+    provenance = after.metadata[RENDERED_PROVENANCE]
+    assert isinstance(provenance, dict) and provenance["template"] == PLAN_TASK_REFERENCE, (
+        provenance
+    )
+    assert after.content is not None and f"## Why\n\n{value}\n" in after.content, after.content
+    assert str(RENDERED_ANSWERS[RENDERED_SECOND.node][name]) not in after.content
+    assert _stored_answers(environment, changed)[name] == value
+
+    assert unreviewed.returncode == 1, unreviewed.stdout + unreviewed.stderr
+    assert "no review record for its current authored content" in unreviewed.stderr
+    assert rechecked.returncode == 0, rechecked.stdout + rechecked.stderr
+
+    assert _copied(second.stdout) == destinations, second.stdout
+    assert len(reissued) == len(issued), (issued, reissued)
+    refiled = reissued[RENDERED_SECOND.title]
+    assert (refiled.item_id, refiled.content_id) == (first_item, first_issue)
+    assert refiled.body.startswith(after.content), refiled.body[:400]
+    carried = refiled.body.removeprefix(after.content)
+    answers = RENDERED_ANSWERS[RENDERED_SECOND.node]
+    criteria = answers["acceptance_criteria"]
+    assert isinstance(criteria, list)
+    texts = [value, str(answers["what"]), str(answers["additional_info"]), *map(str, criteria)]
+    assert not [text for text in texts if text in carried], (
+        f"the issue carries answer text outside the body it renders:\n{carried}"
+    )
+
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    (run,) = [held for held in Path(launching["ONEPIPELINE_RUNS_DIR"]).iterdir() if held.is_dir()]
+    record = json.loads((run / "launch.json").read_text("utf-8"))
+    assert record["require_rendered"] is True, record
+
+
+#: The two files a `plan-task` rendering here is made from, each of which a stale-rendering
+#: case below changes: the template itself, and the operational appendix it includes.
+MOVED_TEMPLATE, MOVED_APPENDIX = "plan-task.md.j2", "dispatch-appendix.md"
+
+
+def _moved_template_root(tmp_path: Path, changed: str) -> Path:
+    """A host root that differs from this checkout's in ``changed`` alone.
+
+    Rendering from it is what a task rendered *before* that file changed in `templates/`
+    looks like from here: its provenance names `onepipeline:plan-task` under a chain digest
+    the checkout no longer resolves. Every other file is linked rather than copied, and a
+    changed appendix is written whole rather than edited, because the appendix is prose
+    this tier's key does not cover and the engine is what reads it.
+    """
+    moved = tmp_path / f"moved-{changed}"
+    moved.mkdir()
+    for entry in (REPO_ROOT / "templates").iterdir():
+        if entry.name != changed:
+            (moved / entry.name).symlink_to(entry)
+        elif changed == MOVED_TEMPLATE:
+            (moved / entry.name).write_text(
+                entry.read_text(encoding="utf-8").replace(
+                    "## Why\n", "## Why\n\n<!-- moved -->\n", 1
+                ),
+                encoding="utf-8",
+            )
+        else:
+            (moved / entry.name).write_text(
+                "## Additional info\n\n### Operational notes\n\nA rule added since.\n",
+                encoding="utf-8",
+            )
+    return moved
+
+
+class _StaleCase(NamedTuple):
+    """One stale rendering: the render from a root where one file differs from this
+    checkout's, `just check-plan` over it, the regenerate from this checkout's own root, and
+    `just check-plan` over what that left."""
+
+    rendered_before: subprocess.CompletedProcess[str]
+    refused: subprocess.CompletedProcess[str]
+    regenerated: subprocess.CompletedProcess[str]
+    accepted: subprocess.CompletedProcess[str]
+
+
+def test_a_hand_edited_or_stale_rendering_is_refused_until_task_render_regenerates_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`just check-plan` refuses a task that is not the rendering in force, naming the pipe.
+
+    A hand edit to a rendered body, and a rendering made before either `plan-task.md.j2` or
+    the operational appendix it includes changed, are each refused through the engine with
+    the regenerate that repairs them; a `task render` with the answers unchanged then clears
+    each, and the plan is accepted again without another review, because the content is the
+    content that was reviewed.
+    """
+    root = tmp_path / "authoring"
+    root.mkdir()
+    monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+    environment = _rendering_environment(root)
+    tasks = _write_rendered_project(tmp_path, root, environment)
+    reviewed(RENDERED_QUALIFIED)
+    target = tasks[RENDERED_FIRST.node]
+    record = _record_of(root, target)
+    rendered = record.read_text(encoding="utf-8")
+    as_reviewed = _rendered_task(target)
+    edited_from = str(RENDERED_ANSWERS[RENDERED_FIRST.node]["why"])
+    assert edited_from in rendered
+
+    # The body's own occurrence alone: the record keeps the answers below the body too, and
+    # an edit that changed them as well would be refused for another reason entirely.
+    record.write_text(
+        rendered.replace(edited_from, "A person cannot see past the first screen.", 1),
+        encoding="utf-8",
+    )
+    hand_edited = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
+    cleared_edit = _through_the_template(
+        environment, "render", target, "--template-loader", "-", "--no-interactive"
+    )
+    after_edit = _recipe(environment, "check-plan", RENDERED_QUALIFIED)
+
+    stale_cases: dict[str, _StaleCase] = {}
+    for changed in (MOVED_TEMPLATE, MOVED_APPENDIX):
+        moved = _moved_template_root(tmp_path, changed)
+        stale_cases[changed] = _StaleCase(
+            rendered_before=_through_the_template(
+                {**environment, "ONEPIPELINE_TEMPLATE_ROOT": str(moved)},
+                "render",
+                target,
+                "--template-loader",
+                "-",
+                "--no-interactive",
+            ),
+            refused=_recipe(environment, "check-plan", RENDERED_QUALIFIED),
+            regenerated=_through_the_template(
+                environment, "render", target, "--template-loader", "-", "--no-interactive"
+            ),
+            accepted=_recipe(environment, "check-plan", RENDERED_QUALIFIED),
+        )
+
+    assert hand_edited.returncode == 1, hand_edited.stdout + hand_edited.stderr
+    assert "body differs from its rendering" in hand_edited.stderr, hand_edited.stderr
+    assert _remedy(target) in hand_edited.stderr, hand_edited.stderr
+    assert cleared_edit.returncode == 0, cleared_edit.stdout + cleared_edit.stderr
+    assert after_edit.returncode == 0, after_edit.stdout + after_edit.stderr
+
+    for changed, case in stale_cases.items():
+        assert case.rendered_before.returncode == 0, (changed, case.rendered_before.stderr)
+        assert case.refused.returncode == 1, (changed, case.refused.stdout + case.refused.stderr)
+        refusal = case.refused.stderr
+        assert "template changed since rendering" in refusal, (changed, refusal)
+        assert str(REPO_ROOT / "templates" / MOVED_TEMPLATE) in refusal, (changed, refusal)
+        assert _remedy(target) in refusal, (changed, refusal)
+        assert case.regenerated.returncode == 0, (changed, case.regenerated.stderr)
+        assert case.accepted.returncode == 0, (changed, case.accepted.stdout + case.accepted.stderr)
+    regenerated = _rendered_task(target)
+    assert (regenerated.content, regenerated.metadata) == (
+        as_reviewed.content,
+        as_reviewed.metadata,
+    )
+
+
+def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_caller_names_false(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A plan whose tasks nothing rendered has no provenance, and the default refuses it.
+
+    `just check-plan` and `just orchestrate` each refuse it through the engine, naming the
+    regenerate that renders it from answers, and each refuses an exported answer that is
+    neither `true` nor `false` rather than reading it as an opt-out; a caller who names
+    `--require-rendered false` on the launch keeps that answer, and the run records it.
+    """
+    _write_local_project(tmp_path)
+    environment = _plan_environment(tmp_path)
+    environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    checked = _recipe(environment, "check-plan", LOCAL_QUALIFIED)
+
+    launching = _launch_environment(tmp_path / "execution", oneharness_bin)
+    launching.update(_prepare_plan_sources(tmp_path))
+    launching.pop(plan_check.REQUIRE_RENDERED_ENV, None)
+    launching[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
+    refused = _recipe(launching, "orchestrate", LOCAL_QUALIFIED, "--dag-graph", "off")
+    unreadable = [
+        _recipe({**named, plan_check.REQUIRE_RENDERED_ENV: "yes"}, *verb)
+        for named, verb in (
+            (environment, ("check-plan", LOCAL_QUALIFIED)),
+            (launching, ("orchestrate", LOCAL_QUALIFIED, "--dag-graph", "off")),
+        )
+    ]
+    runs = Path(launching["ONEPIPELINE_RUNS_DIR"])
+    refused_runs = [held.name for held in runs.iterdir()] if runs.is_dir() else []
+    kept = _recipe(
+        launching,
+        "orchestrate",
+        LOCAL_QUALIFIED,
+        "--dag-graph",
+        "off",
+        "--require-rendered",
+        "false",
+    )
+
+    probe = f"{LOCAL_QUALIFIED.partition(':')[0]}:"
+    for said in (checked, refused):
+        assert said.returncode != 0, said.stdout + said.stderr
+        assert "not rendered: no provenance" in said.stderr, said.stderr
+        assert (
+            "onepipeline template resolve plan-task --json | onetaskgraph task render " + probe
+            in said.stderr
+        )
+    for said in unreadable:
+        assert said.returncode == 2, said.stdout + said.stderr
+        assert "ONEPIPELINE_REQUIRE_RENDERED is 'yes', which is neither true nor false" in (
+            said.stderr
+        )
+    assert not refused_runs, f"a refused launch minted {refused_runs}"
+    assert kept.returncode == 0, kept.stdout + kept.stderr
+    (run,) = [held for held in runs.iterdir() if held.is_dir()]
+    record = json.loads((run / "launch.json").read_text("utf-8"))
+    assert record.get("require_rendered", False) is False, record
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+# llmlint: ignore-end[e2e_not_mocked]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge]  # noqa: E501

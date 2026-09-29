@@ -245,6 +245,35 @@ if [ "${1:-}" = start ]; then
     fi
 fi
 
+# `start` and `plan check` default to `--require-rendered true` (`adopt` replays its
+# launch record). A caller who names the flag, or exports ONEPIPELINE_REQUIRE_RENDERED,
+# keeps their answer.
+plan_loading_words=0
+case "${1:-} ${2:-}" in
+    "start "*) plan_loading_words=1 ;;
+    "plan check") plan_loading_words=2 ;;
+esac
+if [ "$plan_loading_words" -gt 0 ]; then
+    case "${ONEPIPELINE_REQUIRE_RENDERED:-}" in
+        "" | true | false) ;;
+        *)
+            echo "onepipeline: ONEPIPELINE_REQUIRE_RENDERED is '${ONEPIPELINE_REQUIRE_RENDERED//[[:cntrl:]]/}', which is neither true nor false, so whether this plan is held to its tasks being their template's rendering cannot be read from it; remove it from the environment, which holds it, then retry" >&2
+            exit 2
+            ;;
+    esac
+fi
+if [ "$plan_loading_words" -gt 0 ] && [ -z "${ONEPIPELINE_REQUIRE_RENDERED:-}" ]; then
+    named_require_rendered=false
+    for argument in "${@:plan_loading_words+1}"; do
+        case "$argument" in
+            --require-rendered | --require-rendered=*) named_require_rendered=true ;;
+        esac
+    done
+    if [ "$named_require_rendered" = false ]; then
+        set -- "${@:1:plan_loading_words}" --require-rendered true "${@:plan_loading_words+1}"
+    fi
+fi
+
 # A launch runs the binary the line above reported; a read-only view keeps `uv run`, the
 # way every other recipe here reaches a pinned CLI. The header says why the two differ.
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.

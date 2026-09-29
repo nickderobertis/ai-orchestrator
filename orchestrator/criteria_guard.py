@@ -111,19 +111,9 @@ from orchestrator import (
 )
 from orchestrator.root import REPO_ROOT
 
-#: The operational text every dispatched task carries, and the one source a plan
-#: builder copies it from. It was gitignored scratch until this module tracked it,
-#: which is how it came to contradict itself for long enough to fail a node.
+#: The operational text every dispatched task carries, by way of the `plan-task`
+#: template that includes it.
 APPENDIX = Path("templates") / "dispatch-appendix.md"
-
-#: The environment variable a planning launch hands that text over in, and the one place
-#: that name is composed — `scripts/dispatch-appendix-env.sh` asks this module for both
-#: the name and the value rather than spelling either. The party required to copy the
-#: appendix into every task is the planner, which works in a worktree of its own while
-#: the tracked file above lives in the launching checkout: naming it by a path relative
-#: to this checkout told that planner to open a file that does not exist from where it
-#: stands, and a manager ended up appending the text by hand.
-APPENDIX_ENV = "ORCHESTRATOR_DISPATCH_APPENDIX_TEXT"
 
 #: The shared review contract and completion criterion every dispatch is judged
 #: against, whichever role it names.
@@ -1319,75 +1309,6 @@ def check_amendment(text: str, where: str) -> None:
         )
 
 
-def appendix_text() -> str:
-    """The appendix exactly as a task has to carry it: one contiguous stripped block.
-
-    One reader for both ends of that requirement, which is what makes it answerable from
-    where a planner stands. :func:`check_appendix` demands this text as a substring, and
-    `scripts/dispatch-appendix-env.sh` exports *this* text under :data:`APPENDIX_ENV`, so
-    what a planning dispatch is handed is byte-for-byte what the check requires rather
-    than a second rendering of the same file.
-    """
-    return (REPO_ROOT / APPENDIX).read_text(encoding="utf-8").strip()
-
-
-def check_appendix(task: str, node_id: str) -> None:
-    """Raise :class:`CriteriaError` if ``task`` does not carry the current appendix.
-
-    The appendix is copied into every node's task by whatever builds the plan, so a
-    builder cloned before an appendix fix silently reintroduces the wording that fix
-    removed. That is not hypothetical: the buried cheap-loop rule cost one node about
-    84 minutes after it had already been written down, and the sentinel that waited on
-    two of the complete gate's three parts failed another for running them separately.
-
-    It follows that **editing that file invalidates this check for every plan already
-    authored**, which is expected rather than a defect in either. A plan is checked and
-    launched against the appendix of its day; a plan authored afterwards carries the new
-    text, and one authored before is refused here until its tasks are rebuilt from the
-    current file — which is what the refusal already says to do.
-    """
-    if appendix_text() not in task:
-        raise CriteriaError(
-            f"{node_id}: task does not carry the current operational appendix. Rebuild it "
-            f"from the text in ${APPENDIX_ENV}, which every planning launch hands its "
-            f"dispatch, or from {REPO_ROOT / APPENDIX} on this host — rather than from an "
-            f"older builder's copy."
-        )
-
-
-#: A level-2 heading line naming the task's own notes, however it is spelled after the
-#: two words: `## Additional info for this node`, `## Additional information`, `##
-#: additional info`. Every one of them is refused by :func:`check_notes_heading` unless
-#: it is exactly the heading :data:`_OPENS_ADDITIONAL_INFO` reads.
-_NOTES_HEADING = re.compile(r"^##[ \t]*additional info[^\n]*$", re.IGNORECASE | re.MULTILINE)
-
-
-def check_notes_heading(task: str, node_id: str) -> None:
-    """Raise :class:`CriteriaError` if ``task`` opens its notes under a variant heading.
-
-    :func:`own_additional_info` reads a task's own grants only under a line reading
-    exactly ``## Additional info``, and it is written to miss, so a task whose author
-    wrote ``## Additional info for this node`` launches with every grant it made and is
-    read as granting nothing the moment a `retry` or `requeue` restates it — the live-edit
-    check refuses the replacement for the grant its task visibly makes. That narrow reader
-    is the one that stays: this plan tier is the side that moves, because the repair is a
-    one-line rename its author can make before launch, and a warning would let through
-    exactly the launch that later cannot be retried.
-    """
-    for opened in _NOTES_HEADING.finditer(task):
-        line = opened.group(0).rstrip(" \t")
-        if line == "## Additional info":
-            continue
-        raise CriteriaError(
-            f"{node_id}: task opens its own notes under the heading {line!r}, and a task's "
-            f"own notes are read only under a line reading exactly `## Additional info`. "
-            f"Write `## Additional info` alone on that line and move anything after it into "
-            f"the section's first sentence: under any other heading the live-edit check "
-            f"reads the section as absent, so a `retry` or `requeue` restating this task "
-            f"loses every grant those notes make."
-        )
-
-
 #: Everything that decides an answer :func:`check_whole_task` and :func:`check_amendment`
 #: give, hashed together so that a record of a pass is a claim about content **under a
 #: bar** rather than about content alone. Its own source, because the patterns above
@@ -1396,9 +1317,8 @@ def check_notes_heading(task: str, node_id: str) -> None:
 #: this module would go on naming it after the module moved, and a fingerprint that
 #: silently stopped covering the bar is worse than none.
 #:
-#: :data:`APPENDIX` is deliberately not here. It decides :func:`check_appendix`, which
-#: no caller of this fingerprint runs, and what exempts the section carrying it is that
-#: section's **heading** rather than its text — so hashing it would invalidate every
+#: :data:`APPENDIX` is deliberately not here: what exempts the section carrying it is
+#: that section's **heading** rather than its text, so hashing it would invalidate every
 #: record for an edit to prose no reader of this bar had read.
 BAR_SOURCES = (Path(__file__), REPO_ROOT / BASE_CONFIG)
 
@@ -1554,9 +1474,8 @@ def check_plan(plan: object) -> int:
     """
     checked = 0
     for node in dispatched_nodes(plan):
+        # llmlint: ignore[boundary_inputs_validated] How a task's own notes are headed is the `plan-task` template's to render, and a launch under `require_rendered` holds a task to being that rendering, so a variant heading is one the engine refuses as a hand edit; a launch that opts out (the planning launch, or a suite exporting the variable) accepts hand-written notes on purpose, and this reads them as written rather than guessing at a variant.  # noqa: E501
         check(node.task, node.id, resolve_bar(node.persona))
-        check_appendix(node.task, node.id)
-        check_notes_heading(node.task, node.id)
         checked += 1
     structural_guard.check_plan(plan)
     return checked

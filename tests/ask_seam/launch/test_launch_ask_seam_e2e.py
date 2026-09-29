@@ -70,7 +70,7 @@ from scratch_identity import GIT_IDENTITY, PLANNING_FLOW_ORIGIN, Identity, seede
 from waits import deadline
 from waits import timeout as e2e_timeout
 
-from orchestrator import criteria_guard, plan_store
+from orchestrator import plan_store
 from orchestrator.project_store import PROJECTS_DIRECTORY, TASKS_DIRECTORY, render_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -107,11 +107,6 @@ INHERITED_ENVIRONMENT = (
     # would measure a directory some outer launch chose, and a launch that stopped
     # exporting one at all would go on passing.
     plan_root_variable.name(),
-    # The operational appendix a *planning* launch exports, cleared for the reason the
-    # root above is: a journey that kept an enclosing dispatch's would be measuring text
-    # some outer launch's checkout supplied, and a launch that stopped exporting one at
-    # all would go on passing on the strength of it.
-    criteria_guard.APPENDIX_ENV,
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -210,20 +205,6 @@ SESSION = Input(
     "the session token a lifecycle dispatch's worktree belongs to, which is what the "
     "appendix's draft publication names; a direct dispatch runs in no session and is "
     "given none",
-)
-
-#: Required of a planning launch for the same reason, and it carries a **value** rather
-#: than a path. Every dispatched node's task has to hold this text verbatim or
-#: `just check-plan` refuses it, and the party that copies it in is the planner — which
-#: worked in a worktree of its own, while the tracked file lived in the launching
-#: checkout, and may still be planning against a checkout other than that one. A path
-#: would name a file that planner cannot open, which is what the refusal it met named,
-#: and a manager appended the appendix to a plan by hand instead.
-DISPATCH_APPENDIX = Input(
-    criteria_guard.APPENDIX_ENV,
-    "the operational appendix a dispatched planner copies into every task it writes; the "
-    "tracked file is outside its worktree, so an unset one leaves the planner with a "
-    "path it cannot read and a plan every node of which is refused",
 )
 
 
@@ -587,7 +568,6 @@ def _environment(
             CHANNEL_ASKER.name,
             SESSION.name,
             PLAN_ROOT.name,
-            DISPATCH_APPENDIX.name,
             CREDENTIAL_NAME,
         ]
     )
@@ -1654,31 +1634,6 @@ def test_a_dispatch_of_a_plan_launch_resolves_the_authoring_source_to_that_root(
     )
 
 
-@pytest.mark.parametrize("shape", ["plan_attached", "plan_detached"])
-def test_every_plan_launch_hands_its_dispatch_the_operational_appendix_itself(
-    shape: str, request: pytest.FixtureRequest
-) -> None:
-    """A planning dispatch is given the appendix's text, not a path to it.
-
-    Read back out of the dispatch's own turn rather than off the launcher, for the reason
-    the credential journey does: a launcher that exported a name and a dispatch that
-    received it are two different facts. What it is compared against is
-    `criteria_guard.appendix_text()` — the same function `check_appendix` demands as a
-    substring — because a launch that handed over a *second rendering* of that file, one
-    trailing newline apart, would look right here and refuse every task the planner wrote.
-
-    `cast` because the shape is parametrized: `getfixturevalue` resolves the fixture by
-    name at run time, which no static type can follow back to what it returns.
-    """
-    dispatch = cast(Dispatch, request.getfixturevalue(shape))
-
-    assert _given(dispatch, DISPATCH_APPENDIX) == criteria_guard.appendix_text(), (
-        f"the dispatch of {dispatch.run} was given an appendix that is not the text "
-        "`just check-plan` requires of every task, so a planner copying it in verbatim "
-        "would still have every node refused"
-    )
-
-
 def test_a_plan_launch_keeps_a_plan_authoring_root_its_caller_already_chose(
     plan_over_a_chosen_root: Dispatch, plan_root_already_chosen: Path
 ) -> None:
@@ -2215,7 +2170,6 @@ LAUNCH_ENVIRONMENT_HELPERS = (
     "credentials-env.sh",
     "ask-manager-env.sh",
     "plan-root-env.sh",
-    "dispatch-appendix-env.sh",
 )
 
 
@@ -2276,7 +2230,6 @@ SOURCED_HELPERS = (
     "credentials-env.sh",
     "ask-manager-env.sh",
     "plan-root-env.sh",
-    "dispatch-appendix-env.sh",
 )
 
 

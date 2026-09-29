@@ -741,11 +741,10 @@ def test_the_appendix_states_no_behaviour_specific_to_the_judged_lint_tier(
     never the conflict.
 
     Held on the file rather than driven through a dispatch, as every property in this
-    module is, because the file *is* what a dispatch is given: `tests/ask_seam/launch/
-    test_launch_ask_seam_e2e.py` reads `criteria_guard.appendix_text()` back out of a
-    real planning dispatch's own turn, and `check_appendix` refuses any task not carrying
-    that text verbatim — so a sentence in this file reaches every worker's task by the
-    journey already proven, and a sentence held absent here is absent from them all.
+    module is, because the file *is* what a dispatch is given: `templates/plan-task.md.j2`
+    includes it verbatim, and the engine's `require_rendered` refuses any task that is not
+    that template's rendering — so a sentence in this file reaches every worker's task,
+    and a sentence held absent here is absent from them all.
     """
     assert REPORT_RATHER_THAN_EDIT.search(appendix), (
         f"{APPENDIX} no longer says that a rule which looks wrong or misapplied is "
@@ -1321,20 +1320,15 @@ def test_the_appendix_is_still_the_one_source_a_task_appendix_is_built_from(
 ) -> None:
     """Whatever else it says, it stays the block a task's `## Additional info` is.
 
-    `orchestrator.criteria_guard.check_appendix` refuses a task that does not carry this
-    file's whole content, so every addition above has to leave it a document that opens
-    at that heading and is embeddable verbatim. Driven through that function rather than
-    asserted about the text, because the function is what a plan is really refused by.
+    `templates/plan-task.md.j2` includes this file's whole content, and the engine's
+    `require_rendered` refuses a task that is not that template's rendering, so every
+    addition above has to leave it a document that opens at that heading and is
+    embeddable verbatim.
     """
-    from orchestrator.criteria_guard import CriteriaError, check_appendix
-
     assert appendix.lstrip().startswith("## Additional info"), (
         f"{APPENDIX} no longer opens at the heading a task's appendix section is, so a "
         f"task built from it carries the block under no heading:\n{appendix[:120]}"
     )
-    check_appendix(f"## What\nSomething.\n\n{appendix.strip()}\n", "carrying-it")
-    with pytest.raises(CriteriaError, match="current operational appendix"):
-        check_appendix("## What\nSomething.\n", "carrying-none")
 
 
 def test_the_appendix_says_what_a_dispatch_that_changed_nothing_tracked_owes(

@@ -36,7 +36,6 @@
       "{workspaceRoot}/scripts/follow-up-draft.sh",
       "{workspaceRoot}/scripts/follow-up.sh",
       "{workspaceRoot}/scripts/follow-ups.sh",
-      "{workspaceRoot}/scripts/dispatch-appendix-env.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/templates/templates.yaml",

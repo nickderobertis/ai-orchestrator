@@ -69,6 +69,7 @@ from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_tickets as tickets
+from orchestrator import plan_check
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -133,6 +134,10 @@ INHERITED = (
     "FAKE_CODEX_HOLD_SECONDS",
     *follow_up_variables.all_names(),
     plan_root_variable.name(),
+    # The suite's session-wide opt-out for hand-written fixture plans, which the follow-up
+    # task is not: it is rendered from `follow-up-task`, so these launches run under the
+    # `require_rendered` default every launch outside the suite does.
+    plan_check.REQUIRE_RENDERED_ENV,
 )
 
 #: The interpreter the recipe spells into every `-m orchestrator.follow_up_tickets` command
@@ -3017,6 +3022,8 @@ def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_
     assert followed.detached_seconds < HOLD_SECONDS, "the detached launch waited for its turn"
     launch = json.loads((followed.bench.runs / run / "launch.json").read_text("utf-8"))
     assert launch["session"] == LAUNCHING_SESSION
+    # Named by `scripts/onepipeline.sh` on the recipe's behalf, which names none itself.
+    assert launch["require_rendered"] is True, launch
     assert followed.mine.returncode == 0, followed.mine.stderr
     assert re.search(rf"^\*?\s*{re.escape(run)}\s+\[mine\]", followed.mine.stdout, re.MULTILINE), (
         followed.mine.stdout

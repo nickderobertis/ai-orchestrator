@@ -159,9 +159,9 @@ class Dispatched(NamedTuple):
 def _task() -> str:
     """A node's task in the shape every plan this host writes has, appendix included.
 
-    Built the way a plan builder builds one — the appendix appended verbatim, which is
-    what `orchestrator.criteria_guard.check_appendix` requires of every node — so what is
-    read below is the text a real dispatch carries rather than a paraphrase of it.
+    The appendix appended verbatim, as `templates/plan-task.md.j2` includes it in every
+    task it renders, so what is read below is the text a real dispatch carries rather than
+    a paraphrase of it.
     """
     return (
         f"## What\n\n{TASK_MARKER}\n\n"

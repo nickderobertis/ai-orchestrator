@@ -24,7 +24,6 @@
     "askSeamLaunch": [
       "{workspaceRoot}/.gitignore",
       "{workspaceRoot}/templates/design-doc.md.j2",
-      "{workspaceRoot}/templates/dispatch-appendix.md",
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/config/onejudge.base.yaml",
       "{workspaceRoot}/config/onemessagebus.yaml",
@@ -65,7 +64,6 @@
       "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
       "{workspaceRoot}/scripts/codex-alt-home.sh",
       "{workspaceRoot}/scripts/credentials-env.sh",
-      "{workspaceRoot}/scripts/dispatch-appendix-env.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/templates/templates.yaml",
