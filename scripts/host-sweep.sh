@@ -53,10 +53,10 @@ host_sweep_valid() {
     case $1 in
         pid) [[ $2 =~ ^[1-9][0-9]*$ ]] ;;
         status) [[ $2 =~ ^(done|failed)$ ]] ;;
-        # Bounded so shell arithmetic on them cannot overflow: an exit status is at most
-        # three digits and an epoch-seconds stamp at most twelve.
-        exit) [[ $2 =~ ^[0-9]{1,3}$ ]] ;;
-        finished) [[ $2 =~ ^[0-9]{1,12}$ ]] ;;
+        # Bounded, and without a leading zero, so shell arithmetic reads them as the
+        # decimals they are and cannot overflow on them.
+        exit) [[ $2 =~ ^(0|[1-9][0-9]{0,2})$ ]] ;;
+        finished) [[ $2 =~ ^(0|[1-9][0-9]{0,11})$ ]] ;;
         started) [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ;;
         log) [[ $2 == - || $2 == /* ]] ;;
         *) return 1 ;;
@@ -238,7 +238,7 @@ setsid -w bash "$script_dir/host-sweep.sh" --job </dev/null >>"$log" 2>&1 &
 job=$!
 # A job that is already gone is either one that swept in an instant, which exits 0, or
 # one that never started, whose status says so and whose log holds why.
-# llmlint: ignore[changed_behavior_has_e2e] `setsid` and `bash` are checked on PATH above and the job's lock check is this caller's own descriptor, so a job refusing its start needs the host to lose a binary in the instant between; the `--job` refusal itself is driven by a journey.
+# llmlint: ignore[changed_behavior_has_e2e, robust_shell] `setsid` and `bash` are checked on PATH above and the job's lock is this caller's own descriptor, so a job refusing its start needs the host to lose a binary in the instant between, and one that does so after `kill -0` answers is still named by its log and leaves no stamp, so the next start runs a sweep again; the `--job` refusal itself is driven by a journey.
 if ! kill -0 "$job" 2>/dev/null && ! wait "$job"; then
     host_sweep_log "the sweep job did not start (log: $log)"
     exit 1

@@ -249,9 +249,9 @@ class SessionStart:
     def spawn_start(self) -> subprocess.Popen[str]:
         return self.spawn("bash", str(self.repo / "scripts" / "session-setup.sh"))
 
-    def spawn_hand_sweep(self, *arguments: str) -> subprocess.Popen[str]:
+    def spawn_hand_sweep(self, *arguments: str, **extra_env: str) -> subprocess.Popen[str]:
         """`just sweep` run by hand in the fixture repository, its doubles on PATH."""
-        environment = dict(self.environment)
+        environment = {**self.environment, **extra_env}
         environment["PATH"] = f"{self.repo / '.venv' / 'bin'}:{environment['PATH']}"
         process = subprocess.Popen(
             ["just", "--justfile", str(self.repo / "justfile"), "sweep", *arguments],
@@ -265,9 +265,9 @@ class SessionStart:
         self.processes.append(process)
         return process
 
-    def hand_sweep(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def hand_sweep(self, *arguments: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
         """A hand-run to completion, bounded well below any sweep a journey holds."""
-        process = self.spawn_hand_sweep(*arguments)
+        process = self.spawn_hand_sweep(*arguments, **extra_env)
         stdout, stderr = process.communicate(timeout=e2e_timeout(30))
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
@@ -688,6 +688,10 @@ def test_the_interval_is_the_hour_the_documentation_promises() -> None:
     assert host_sweep_interval() == 3600
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] Each journey below plants a state the
+# script finds on disk — a record no sweep wrote, a path it cannot write, a failed log it
+# cannot move — because only a host in that state reaches those paths; each still drives
+# the real session setup or recipe and reads only what the script reports and records.
 def test_a_stamp_later_than_now_is_read_as_absent(session_start: SessionStart) -> None:
     """A completion no sweep could have written never holds starts off until its date."""
     session_start.state.mkdir(parents=True)
@@ -767,3 +771,59 @@ def test_a_failed_log_that_cannot_be_kept_apart_is_appended_to_not_lost(
     kept = log.read_text(encoding="utf-8")
     assert kept.count("onevcs sweep double: exiting 3") == 1, kept
     assert kept.count("onevcs sweep double: exiting 0") == 1, kept
+
+
+def test_a_record_in_a_shape_the_script_never_writes_is_read_as_absent(
+    session_start: SessionStart,
+) -> None:
+    """A malformed stamp starts a sweep, and a malformed holder is named as unrecorded."""
+    session_start.state.mkdir(parents=True)
+    # A leading zero is octal to shell arithmetic: this is the present moment written in
+    # octal, which a reader that trusted it would take as a sweep completed just now.
+    octal_now = "0" + format(int(time.time()), "o")
+    (session_start.state / "completed").write_text(
+        f"status weird\nexit 003\nfinished {octal_now}\nlog relative\n", encoding="utf-8"
+    )
+    session_start.hold_sweeps()
+
+    start = session_start.start()
+
+    started = re.search(r"started job (\d+) ", start.stderr)
+    assert started is not None, start.stderr
+    job = int(started.group(1))
+    assert "the last sweep failed" not in start.stderr
+    session_start.await_calls(1)
+    (session_start.state / "holder").write_text("pid 0\nlog relative\n", encoding="utf-8")
+
+    held = session_start.start()
+
+    assert "a sweep is running, a holder that has not yet recorded itself" in held.stderr
+    session_start.release()
+    until(
+        f"the sweep job {job} to exit",
+        lambda: not _pid_alive(job),
+        seconds=120,
+        state=lambda: f"calls {session_start.verb_calls()}",
+    )
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+def test_a_failed_hand_run_is_named_by_the_next_session_start(
+    session_start: SessionStart,
+) -> None:
+    """A sweep run by hand for real is the stamp, failed or not; its output was its caller's."""
+    by_hand = session_start.hand_sweep(TEST_SWEEP_EXIT="4")
+
+    assert by_hand.returncode != 0
+    assert session_start.field("completed", "status") == "failed"
+
+    start = session_start.start()
+
+    assert (
+        "the last sweep failed: exit 4 (log: its caller's terminal, run by hand); "
+        "the next is due in"
+    ) in start.stderr, start.stderr
+    assert start.returncode == 0, start.stderr
+    assert len(session_start.verb_calls()) == 2
