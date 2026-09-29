@@ -10,11 +10,8 @@ whose bootstrap no journey may run. The sibling jobs it starts outlive each sess
 start by design, so the journey waits on the ending each job writes to its state and
 releases and waits out every one it started before it ends; it signals none.
 
-`test_host_sweep_e2e.py` is the host sweep session setup starts detached: the same real
-script, copied with `scripts/host-sweep.sh`, the justfile and every adopted pin into a
-fixture repository whose published CLIs are doubled on PATH — or, in one journey, are the
-real ones — under an `XDG_CACHE_HOME` of its own, so no journey meets this host's lock.
-It runs no setup of this checkout, so it takes no share of the workspace install.
+The host sweep journeys never meet this host's sweep lock: each names an
+`XDG_CACHE_HOME` of its own, and waits out every sweep job it starts.
 
 - **One target, `session-setup:test`, keyed on `sessionSetupWorkspace`**, named file by
   file rather than as `scripts/**/*` or `config/**/*`: the journey re-provisions the

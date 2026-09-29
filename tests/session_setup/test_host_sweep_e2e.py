@@ -9,6 +9,12 @@ and ends by releasing its doubles and waiting until no process or job it started
 alive; none signals anything.
 
 What the sweep is for and when it starts is docs/host-setup.md, "The host sweep".
+
+llmlint: ignore-file[e2e_not_mocked] The doubles are the published CLIs session setup
+verifies and the recipe delegates to, at the PATH boundary `tests/AGENTS.md` sanctions,
+plus `setup-llmlint.sh`, which installs llmlint from PyPI into `$HOME` and is driven for
+real by `tests/session_setup_pypi/`; the scripts, recipe, `just`, `uv`, `flock` and
+`setsid` under test are all real, and one journey runs the real verbs too.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -62,6 +69,23 @@ def _write_sdk_python(path: Path) -> None:
         path,
         f"#!/bin/sh\ncase \"$*\" in {branches}*) printf '{ADOPTED_ONEJUDGE_VERSION}\\n' ;; esac\n",
     )
+
+
+@dataclass(frozen=True)
+class ScratchRoots:
+    """The state roots the sweep verbs judge, each inside the journey's own `tmp_path`."""
+
+    onevcs_home: Path
+    oneagentgraph_state: Path
+    temp: Path
+
+    @property
+    def environment(self) -> dict[str, str]:
+        return {
+            "ONEVCS_HOME": str(self.onevcs_home),
+            "ONEAGENTGRAPH_STATE_DIR": str(self.oneagentgraph_state),
+            "TMPDIR": str(self.temp),
+        }
 
 
 #: The one place the interval is declared, read off the script.
@@ -175,21 +199,21 @@ class SessionStart:
         self.calls = tmp_path / "sweep-calls"
         self.release_file = tmp_path / "release"
         self.state = tmp_path / "cache" / "ai-orchestrator" / "sweep"
-        self.scratch = {
-            "ONEVCS_HOME": tmp_path / "onevcs-home",
-            "ONEAGENTGRAPH_STATE_DIR": tmp_path / "oneagentgraph-state",
-            "TMPDIR": tmp_path / "tmp",
-        }
-        for directory in self.scratch.values():
-            directory.mkdir()
-        (self.scratch["ONEVCS_HOME"] / "workspaces").mkdir()
+        self.scratch = ScratchRoots(
+            onevcs_home=tmp_path / "onevcs-home",
+            oneagentgraph_state=tmp_path / "oneagentgraph-state",
+            temp=tmp_path / "tmp",
+        )
+        (self.scratch.onevcs_home / "workspaces").mkdir(parents=True)
+        self.scratch.oneagentgraph_state.mkdir()
+        self.scratch.temp.mkdir()
         self.environment = {
             "HOME": str(tmp_path),
             "PATH": f"{_real_tool_path()}:/usr/bin:/bin",
             "XDG_CACHE_HOME": str(tmp_path / "cache"),
             "ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS": str(checkouts),
             "TEST_SWEEP_CALLS": str(self.calls),
-            **{name: str(path) for name, path in self.scratch.items()},
+            **self.scratch.environment,
         }
         self.processes: list[subprocess.Popen[str]] = []
 
@@ -261,6 +285,25 @@ class SessionStart:
             if name == key:
                 return value
         return None
+
+    # llmlint: ignore-block[tests_mirror_real_usage] An hour passing has no interface a
+    # journey can drive short of waiting it out, so the stamp the script reads is moved
+    # back past the interval it declares; everything the start then does is the real
+    # script's.
+    def pass_the_interval(self) -> int:
+        """Move the completion stamp back past the interval; returns the time it was moved at."""
+        now = int(time.time())
+        completed = self.state / "completed"
+        completed.write_text(
+            completed.read_text(encoding="utf-8").replace(
+                f"finished {self.field('completed', 'finished')}",
+                f"finished {now - host_sweep_interval() - 1}",
+            ),
+            encoding="utf-8",
+        )
+        return now
+
+    # llmlint: ignore-end[tests_mirror_real_usage]
 
     def holder_pid(self) -> int | None:
         pid = self.field("holder", "pid")
@@ -436,16 +479,7 @@ def test_a_start_inside_the_hour_after_a_sweep_launches_nothing_and_one_after_it
     assert "the next is due in" in inside.stderr and "none started" in inside.stderr
     assert len(session_start.verb_calls()) == 2
 
-    # The hour passing, which a journey cannot wait out: the stamp moved back past it.
-    now = int(time.time())
-    completed = session_start.state / "completed"
-    completed.write_text(
-        completed.read_text(encoding="utf-8").replace(
-            f"finished {session_start.field('completed', 'finished')}",
-            f"finished {now - host_sweep_interval() - 1}",
-        ),
-        encoding="utf-8",
-    )
+    now = session_start.pass_the_interval()
     after = session_start.start()
 
     assert "host-sweep: started job" in after.stderr, after.stderr
@@ -491,14 +525,7 @@ def test_a_failed_sweep_is_named_with_its_log_by_the_next_start_and_never_fails_
 
     # Once the hour has passed the next start runs it again, and the line naming the
     # failure names the log kept apart from the one the new job writes.
-    completed = session_start.state / "completed"
-    completed.write_text(
-        completed.read_text(encoding="utf-8").replace(
-            f"finished {session_start.field('completed', 'finished')}",
-            f"finished {int(time.time()) - host_sweep_interval() - 1}",
-        ),
-        encoding="utf-8",
-    )
+    session_start.pass_the_interval()
     again = session_start.start()
 
     kept = session_start.state / "sweep.failed.log"
@@ -507,6 +534,11 @@ def test_a_failed_sweep_is_named_with_its_log_by_the_next_start_and_never_fails_
     assert again.returncode == 0, again.stderr
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]
+# This journey takes about 1.4 s over a `tmp_path` state root (`pytest --durations`), in
+# a project whose own journey already runs this checkout's real session setup; the verbs
+# it runs are the ones every journey here doubles, so a project of its own would split
+# one subject in two to save nothing.
 def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
     tmp_path: Path,
 ) -> None:
@@ -518,7 +550,7 @@ def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
     at that floor.
     """
     session_start = SessionStart(tmp_path, real_verbs=True)
-    temp = session_start.scratch["TMPDIR"]
+    temp = session_start.scratch.temp
     aged: dict[str, Path] = {}
     for name, hours in (("old", 6), ("young", 2)):
         directory = temp / f"oneagentgraph-{name}"
@@ -544,6 +576,9 @@ def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
     assert "keeping anything written inside the last 4 hour(s)" in log, log
     assert "Session records with nothing left behind them:" in log, log
     assert "rehearsal" not in log, log
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]
 
 
 def _host_sweep(
@@ -591,6 +626,9 @@ def test_a_host_without_just_starts_no_sweep(session_start: SessionStart) -> Non
     assert session_start.verb_calls() == []
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] The refusal under test is exactly what
+# `--job` does when run some way other than `--detach` starts it, so the journey runs it
+# that way; no other interface reaches it.
 def test_the_job_form_refuses_without_the_lock_it_is_handed(session_start: SessionStart) -> None:
     """`--job` is only what `--detach` starts, and sweeps nothing run any other way."""
     result = _host_sweep(session_start, "--job")
@@ -600,11 +638,18 @@ def test_the_job_form_refuses_without_the_lock_it_is_handed(session_start: Sessi
     assert session_start.verb_calls() == []
 
 
-def test_an_unknown_argument_is_refused_with_the_usage(session_start: SessionStart) -> None:
-    result = _host_sweep(session_start, "--now")
+# llmlint: ignore-end[tests_mirror_real_usage]
 
-    assert result.returncode == 2
-    assert "usage: host-sweep.sh --detach" in result.stderr
+
+def test_an_unknown_or_extra_argument_is_refused_with_the_usage(
+    session_start: SessionStart,
+) -> None:
+    for arguments in (("--now",), ("--detach", "--now")):
+        result = _host_sweep(session_start, *arguments)
+
+        assert result.returncode == 2, arguments
+        assert "usage: host-sweep.sh --detach" in result.stderr
+    assert session_start.verb_calls() == []
 
 
 def test_a_lock_or_log_the_sweep_cannot_open_starts_nothing(session_start: SessionStart) -> None:
@@ -629,3 +674,93 @@ def test_a_lock_or_log_the_sweep_cannot_open_starts_nothing(session_start: Sessi
         f"cannot write the sweep log {session_start.state / 'sweep.log'}; no sweep started"
     ) in unlogged.stderr
     assert session_start.verb_calls() == []
+
+
+def test_the_interval_is_the_hour_the_documentation_promises() -> None:
+    """docs/host-setup.md and AGENTS.md say "at most once an hour"; this is that promise.
+
+    Moving the interval is a change to what they tell an operator, so it fails here until
+    the prose moves with it.
+    """
+    assert host_sweep_interval() == 3600
+
+
+def test_a_stamp_later_than_now_is_read_as_absent(session_start: SessionStart) -> None:
+    """A completion no sweep could have written never holds starts off until its date."""
+    session_start.state.mkdir(parents=True)
+    future = int(time.time()) + 10 * host_sweep_interval()
+    (session_start.state / "completed").write_text(
+        f"status done\nexit 0\nfinished {future}\nlog -\n", encoding="utf-8"
+    )
+
+    start = session_start.start()
+
+    assert "host-sweep: started job" in start.stderr, start.stderr
+    session_start.await_calls(2)
+    assert session_start.verb_calls() == [ONEVCS_SWEEP, ONEAGENTGRAPH_SWEEP]
+
+
+def test_a_record_the_sweep_cannot_write_is_named_and_sweeps_anyway(
+    session_start: SessionStart,
+) -> None:
+    """An unwritable holder or completion record costs the report, never the sweep.
+
+    With no stamp recorded, the next start sweeps again, which is the safe side of a
+    completion that could not be written. A holder that never recorded itself is named
+    as such to a start that meets its lock.
+    """
+    session_start.state.mkdir(parents=True)
+    for record in ("holder", "completed"):
+        (session_start.state / f"{record}.new").mkdir()
+
+    by_hand = session_start.hand_sweep()
+
+    assert by_hand.returncode == 0, by_hand.stderr
+    assert f"holder not recorded in {session_start.state}" in by_hand.stderr
+    assert f"completion not recorded in {session_start.state}" in by_hand.stderr
+    assert session_start.verb_calls() == [ONEVCS_SWEEP, ONEAGENTGRAPH_SWEEP]
+
+    session_start.hold_sweeps()
+    first = session_start.start()
+    started = re.search(r"started job (\d+) ", first.stderr)
+    assert started is not None, first.stderr
+    job = int(started.group(1))
+    assert f"holder not recorded in {session_start.state}" in first.stderr
+    session_start.await_calls(3)
+
+    second = session_start.start()
+
+    assert "a sweep is running, a holder that has not yet recorded itself" in second.stderr
+    assert len(session_start.verb_calls()) == 3
+
+    session_start.release()
+    until(
+        f"the sweep job {job} to exit",
+        lambda: not _pid_alive(job),
+        seconds=120,
+        state=lambda: f"calls {session_start.verb_calls()}",
+    )
+    log = (session_start.state / "sweep.log").read_text(encoding="utf-8")
+    assert f"completion not recorded in {session_start.state}" in log, log
+    assert not (session_start.state / "completed").exists()
+
+
+def test_a_failed_log_that_cannot_be_kept_apart_is_appended_to_not_lost(
+    session_start: SessionStart,
+) -> None:
+    """The failure a log holds survives the next job even when it cannot be moved aside."""
+    session_start.start(TEST_SWEEP_EXIT="3")
+    session_start.await_completion()
+    log = session_start.state / "sweep.log"
+    blocked = session_start.state / "sweep.failed.log"
+    blocked.mkdir()
+    (blocked / "occupied").touch()
+    since = session_start.pass_the_interval()
+
+    again = session_start.start()
+
+    assert f"the last sweep failed: exit 3 (log: {log}); started again as job" in again.stderr
+    session_start.await_completion(since=since)
+    kept = log.read_text(encoding="utf-8")
+    assert kept.count("onevcs sweep double: exiting 3") == 1, kept
+    assert kept.count("onevcs sweep double: exiting 0") == 1, kept

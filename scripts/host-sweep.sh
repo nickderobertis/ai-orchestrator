@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# One host sweep at a time: the lock, the hourly schedule and the detached start around
-# the `just sweep` recipe, which is still what runs `onevcs sweep` then `oneagentgraph
-# sweep`. Holding one sweep of both verbs at a time is this repository's own composition
-# of the two, not a fill for either library.
-#
-# Sourced by the recipe, it defines `host_sweep_hold` and `host_sweep_record`: the recipe
-# takes the host lock before either verb and sweeps nothing while another holder has it.
-# Executed with `--detach` — the last-but-one thing session setup does — it starts the
-# recipe as a job detached from the session hook and returns at once, starting nothing
-# while a sweep holds the lock or one completed within the interval below, and naming
-# the last one's log when it failed. The detach is the session hook's own job, as
-# `scripts/repos-bootstrap.sh --detach`'s is; it is not one of the engines' processes,
-# which AGENTS.md's rule against `nohup` and `setsid` by hand is about.
+# One host sweep at a time around the `just sweep` recipe: sourced by the recipe for the
+# lock it takes, and run with `--detach` by session setup to start the recipe as the
+# session hook's own detached job — not an engine process, which AGENTS.md's rule
+# against `setsid` by hand is about. Holding one sweep of both verbs at a time is this
+# repository's composition of the two, not a fill for either library. When a job starts
+# and what it reports is docs/host-setup.md, "The host sweep".
 #
 # Everything lives under `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/sweep/`, which
 # no checkout or worktree decides, so every checkout on the host shares one lock:
@@ -128,7 +121,7 @@ host_sweep_hold() {
         return 0
     fi
     if ! exec 9>>"$HOST_SWEEP_DIR/lock"; then
-        host_sweep_log "cannot open the host sweep lock $HOST_SWEEP_DIR/lock"
+        host_sweep_log "cannot open the host sweep lock $HOST_SWEEP_DIR/lock; make it a file this user can write, then run this again"
         return 2
     fi
     if ! flock -n 9; then
@@ -162,12 +155,18 @@ usage() {
     echo "usage: host-sweep.sh --detach    (run by session setup; 'just sweep' is the sweep itself)" >&2
 }
 
+# llmlint: ignore-block[changed_behavior_has_e2e] `flock` and `setsid` ship with util-linux beside the `bash` running this, so a journey would have to build a PATH holding `bash` and coreutils but not them to prove what `command -v` answers; the journey over a PATH without `just`, the one that plausibly goes missing, drives this refusal.
 for required in flock setsid just; do
     if ! command -v "$required" >/dev/null 2>&1; then
         host_sweep_log "'$required' is not on PATH, so no sweep can be started"
         exit 2
     fi
 done
+# llmlint: ignore-end[changed_behavior_has_e2e]
+if [[ $# -ne 1 ]]; then
+    usage
+    exit 2
+fi
 dir=$(host_sweep_dir) || exit 2
 log="$dir/sweep.log"
 
@@ -195,7 +194,7 @@ case ${1:-} in
 esac
 
 if ! exec 9>>"$dir/lock"; then
-    host_sweep_log "cannot open the host sweep lock $dir/lock; no sweep started"
+    host_sweep_log "cannot open the host sweep lock $dir/lock; no sweep started. Make it a file this user can write."
     exit 2
 fi
 if ! flock -n 9; then
@@ -208,7 +207,9 @@ previous_exit=$(host_sweep_field "$dir/completed" exit)
 previous_log=$(host_sweep_field "$dir/completed" log)
 finished=$(host_sweep_field "$dir/completed" finished)
 now=$(date +%s)
-if [[ -n $finished ]] && (( now - finished < HOST_SWEEP_INTERVAL_SECONDS )); then
+# A stamp later than now is one no sweep wrote, and is read as absent rather than
+# holding every start off until then.
+if [[ -n $finished ]] && (( finished <= now && now - finished < HOST_SWEEP_INTERVAL_SECONDS )); then
     due=$(( (HOST_SWEEP_INTERVAL_SECONDS - (now - finished) + 59) / 60 ))
     if [[ $previous == failed ]]; then
         host_sweep_log "the last sweep failed: exit ${previous_exit:-unrecorded} (log: $(host_sweep_where "$previous_log")); the next is due in ${due} min, none started"
@@ -219,13 +220,15 @@ if [[ -n $finished ]] && (( now - finished < HOST_SWEEP_INTERVAL_SECONDS )); the
 fi
 
 # A failed job's log is kept apart before the next job's replaces it, so the line
-# naming it still names its output.
+# naming it still names its output. One that cannot be moved is appended to instead of
+# truncated, so the failure it holds is never lost.
 kept=$previous_log
 if [[ $previous == failed && $previous_log == "$log" ]]; then
     kept="$dir/sweep.failed.log"
-    mv -f "$log" "$kept" 2>/dev/null || kept=$log
+    mv -f -T "$log" "$kept" 2>/dev/null || kept=$log
 fi
-if ! : >"$log" 2>/dev/null; then
+if { [[ $kept == "$log" ]] && ! : >>"$log"; } 2>/dev/null \
+    || { [[ $kept != "$log" ]] && ! : >"$log"; } 2>/dev/null; then
     host_sweep_log "cannot write the sweep log $log; no sweep started"
     exit 2
 fi

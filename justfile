@@ -502,7 +502,7 @@ _verdict verdict run *text:
 # llmlint: ignore[tool_output_is_signal] the two verbs' own reports are what this command is run to read.
 sweep *args:
     #!/usr/bin/env bash
-    set -uo pipefail
+    set -euo pipefail
     . "{{repo_root}}/scripts/host-sweep.sh"
     host_sweep_hold "$@" || exit $?
     floor=(--min-age-hours 4)
