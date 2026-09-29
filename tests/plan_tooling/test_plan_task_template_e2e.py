@@ -33,11 +33,10 @@ from test_plan_flow_e2e import (
     DESIGN_RUN_SUFFIX,
     DESIGN_TASK_MARKER,
     DESTINATION,
-    DRAFT_SOURCE,
     Stored,
     _environment,
     _just,
-    _staged_draft,
+    _renders_the_document,
 )
 
 from orchestrator import plan_store, task_body
@@ -189,31 +188,18 @@ def authored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> A
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
     # The planner authors by running commands rather than by having files written for it.
     environment.pop(AUTHOR_PLAN_ENV, None)
-    drafted = _staged_draft(tmp_path / "design", stored)
     keyed = tmp_path / "planner-commands.json"
     keyed.write_text(
         json.dumps(
             {
                 # Each turn is the paid model's, scripted as this node's doubled planner and
                 # drafter; what each runs is a pinned, real verb (`resolve` | `task create`,
-                # then `document copy`), judged by the real `check-plan` and flow after it.
+                # then `resolve` | `document create`), judged by the real `check-plan` and flow
+                # after it.
                 # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] Paid turn only.
                 PLANNER_MARKER: [["bash", str(_planner_script(tmp_path, stored))]],
                 # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] Paid turn only.
-                DESIGN_TASK_MARKER: [
-                    [
-                        str(ONETASKGRAPH_BIN),
-                        "--set",
-                        f"sources.{DRAFT_SOURCE}.plugin=local-md",
-                        "--set",
-                        f"sources.{DRAFT_SOURCE}.config.root={drafted}",
-                        "document",
-                        "copy",
-                        f"{DRAFT_SOURCE}:{stored.document}",
-                        "--to",
-                        AUTHORING,
-                    ]
-                ],
+                DESIGN_TASK_MARKER: [_renders_the_document(tmp_path / "design", stored, AUTHORING)],
             }
         ),
         encoding="utf-8",

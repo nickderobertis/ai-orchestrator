@@ -49,9 +49,14 @@ import pytest
 from delegation_checkout import (
     BRIEF,
     BUS_CONFIG,
+    CHECK_OUTPUT_ENV,
     CHECKOUT,
     COLLIDING_BRIEF,
     COLLIDING_PROJECT,
+    CREATED_LOCATION_ENV,
+    CREATED_PROJECT,
+    CREATED_RECORD,
+    CREATED_TASK,
     DEFAULTS,
     DISPATCH_ENV_HOOK,
     ENGINE,
@@ -60,6 +65,7 @@ from delegation_checkout import (
     MAINTENANCE_CONFIG,
     PINNED_ENGINE,
     PLAN_PROJECT,
+    RESOLVED_LOADER_ENV,
     ROOT,
     TEMPLATE_ROOT_TRACE_ENV,
     WRAPPER_DEFAULTS,
@@ -92,12 +98,42 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
     return (
         f"uv run orchestrator-review-plan {project}",
         f"uv run orchestrator-check-plan {project}",
+        *_writer_task(project),
         f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
         ENGINE_VERSION,
         f"{ENGINE} start {DEFAULTS} {DESIGN_PROJECT} --dag-graph off",
         f"uv run orchestrator-copy-plan {project} --to {destination}",
         f"uv run orchestrator-plan-locations {project} --in {destination}",
     )
+
+
+#: Where the tail's composed answers file is named on a trace line: a scratch file whose
+#: name is the system's to choose, so a row states it as this placeholder.
+ANSWERS = "--answers <answers>"
+
+
+def _writer_task(project: str) -> tuple[str, ...]:
+    """The three command lines that create and check the design-document node's own task.
+
+    The `plan-task` template resolved through the wrapper, the store's `task create` fed
+    it, and the engine's check of the item that create answered with — before the launch
+    gate, because a task the engine refuses is one nothing launches.
+    """
+    return (
+        "uv run onepipeline template resolve plan-task --json",
+        "uv run onetaskgraph task create authoring --template-loader - --no-interactive"
+        f" --project {DESIGN_PROJECT.partition(':')[2]}"
+        f" --title Write the design document for {project} {ANSWERS}"
+        ' --metadata onepipeline.id="design-doc"'
+        ' --metadata onepipeline.persona="../personas/design-doc.yaml"'
+        ' --metadata onepipeline.agent_graph="graphs/design-doc.yaml" --json',
+        f"uv run onepipeline template check plan-task --item {CREATED_TASK}",
+    )
+
+
+def _answers_named(line: str) -> str:
+    """``line`` with the scratch answers file it names stated as :data:`ANSWERS`."""
+    return re.sub(r"--answers \S+", ANSWERS, line)
 
 
 class Delegation(NamedTuple):
@@ -326,6 +362,7 @@ DELEGATIONS = (
         "uv run orchestrator-review-plan authoring:listing-cursor",
         then=(
             "uv run orchestrator-check-plan authoring:listing-cursor",
+            *_writer_task("authoring:listing-cursor"),
             "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
             ENGINE_VERSION,
             f"{ENGINE} start {DEFAULTS} authoring:cursor-shape-design --dag-graph off",
@@ -600,7 +637,7 @@ def test_a_delegated_recipe_reaches_its_published_verb(
         delegation.published,
         *delegation.then,
     ]
-    assert trace.read_text().splitlines() == [
+    assert [_answers_named(line) for line in trace.read_text().splitlines()] == [
         line.replace(CHECKOUT, str(checkout.resolve())) for line in expected
     ]
 
@@ -774,14 +811,16 @@ def test_the_orchestrate_recipe_refuses_a_checkout_whose_run_end_hook_cannot_run
     assert not trace.exists() or trace.read_text() == "", trace.read_text()
 
 
-#: The two task records a whole `just plan` writes under the local authoring source, one
-#: per launch: the planner node in the project the recipe generates, and the `design-doc`
-#: node in the project its tail generates — which reads the finished plan and writes the
-#: document a person reviews it as.
-GENERATED_TASKS = (
-    ".plans/tasks/cursor-shape/plan.md",
-    ".plans/tasks/cursor-shape-design/design-doc.md",
-)
+#: The task record a whole `just plan` writes itself under the local authoring source: the
+#: planner node in the project the recipe generates. The `design-doc` node its tail
+#: generates — which reads the finished plan and writes the document a person reviews it
+#: as — is created by the store's own `task create`, which this checkout doubles, so that
+#: node's placement is read off the command line the tail hands the store instead.
+GENERATED_TASKS = (".plans/tasks/cursor-shape/plan.md",)
+
+#: What a `task create` line would carry to place its node in a repository: the record's
+#: own `repositories`, or either placement key on its metadata.
+PLACING = ("--repository", "onepipeline.repo", "onepipeline.execution_checkout")
 
 
 class Placement(NamedTuple):
@@ -856,6 +895,14 @@ def test_the_plan_recipe_writes_both_of_its_nodes_as_direct_nodes(tmp_path: Path
         assert placed is None, (
             f"`just plan` wrote {generated} placed at {placed}, so that dispatch would be "
             f"a lifecycle node rather than a direct one: {task_record}"
+        )
+    (created,) = [
+        line for line in trace.read_text().splitlines() if line.startswith(_writer_task("")[1][:40])
+    ]
+    for placing in PLACING:
+        assert placing not in created, (
+            f"the tail created its design-doc node carrying {placing}, so that dispatch "
+            f"would be a lifecycle node rather than a direct one: {created}"
         )
     assert DIRECT_SAYS in result.stderr, (
         f"the launch said nothing about where this planner works, which is where its "
@@ -1048,6 +1095,218 @@ def test_the_plan_recipe_opt_out_still_refuses_a_plan_project_it_cannot_compare(
     assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
     written = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*"))
     assert written == [], f"a refused launch wrote plan records: {written}"
+
+
+#: The status `scripts/finish-plan.sh` ends on when a step it depends on answered with
+#: something it cannot act on. A literal for the reason every status in
+#: `tests/plan_tooling/test_finish_plan_recipe_e2e.py` is one: it is what a caller branches on.
+FINISH_PLAN_UNRUNNABLE = 2
+
+
+def _refused_before_the_launch(checkout: Path, trace: Path, env: dict[str, str]) -> str:
+    """Run `just finish-plan` on the brief, and hold it to having launched and kept nothing.
+
+    Answers the recipe's stderr. What a refusal here must leave is no `onepipeline start`
+    and no record under the authoring root: the design project it wrote first is taken
+    back, so the next run of the same name starts from nothing.
+    """
+    result = _run(checkout, trace, "finish-plan", BRIEF, env=env)
+
+    assert result.returncode == FINISH_PLAN_UNRUNNABLE, f"{result.stdout}\n{result.stderr}"
+    traced = trace.read_text(encoding="utf-8")
+    assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
+    assert "orchestrator-copy-plan" not in traced, f"a refused flow copied the plan:\n{traced}"
+    left = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*.md"))
+    assert left == [], f"a refused flow left records where the next run reads them: {left}"
+    return result.stderr
+
+
+#: The loader the engine answers `template resolve plan-task --json` with, less what a row
+#: takes out of it.
+PLAN_TASK_LOADER = '{"reference":"onepipeline:plan-task","entry":%s,"templates":%s}'
+PLAN_TASK_TEMPLATE = '{"name":"plan-task.md.j2","source":"## Acceptance criteria"}'
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("loader", "names"),
+    [
+        (
+            PLAN_TASK_LOADER % ('""', f"[{PLAN_TASK_TEMPLATE}]"),
+            "a loader with no entry or templates to render",
+        ),
+        (
+            PLAN_TASK_LOADER % ('"plan-task.md.j2"', "[]"),
+            "a loader with no entry or templates to render",
+        ),
+        (
+            PLAN_TASK_LOADER % ('"plan-task.md.j2"', '[{"name":"plan-task.md.j2"}]'),
+            "a loader holding a template with no name or no source",
+        ),
+        (
+            PLAN_TASK_LOADER % ('"plan-task.md.j2"', '[{"name":"","source":"## What"}]'),
+            "a loader holding a template with no name or no source",
+        ),
+        (
+            PLAN_TASK_LOADER % ('"plan-task.md.j2"', '[{"name":"plan-task.md.j2","source":" "}]'),
+            "a loader holding a template with no name or no source",
+        ),
+    ],
+    ids=[
+        "empty-entry",
+        "no-templates",
+        "template-without-source",
+        "unnamed-template",
+        "blank-source",
+    ],
+)
+def test_the_finish_plan_recipe_refuses_a_resolved_loader_with_nothing_to_render(
+    tmp_path: Path, loader: str, names: str
+) -> None:
+    """An engine that resolves `plan-task` to a loader naming nothing is refused by name.
+
+    Handed to the store, such a loader would be read as a template with no body, so the
+    recipe holds the engine's answer to naming an entry and templates that each carry a
+    name and a source before it creates anything — and the store is never asked.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    stderr = _refused_before_the_launch(checkout, trace, {RESOLVED_LOADER_ENV: loader})
+
+    assert f"resolved plan-task to {names}" in stderr, stderr
+    assert "is not its loader document" in stderr, stderr
+    traced = trace.read_text(encoding="utf-8")
+    assert "onetaskgraph task create" not in traced, f"the store was asked anyway:\n{traced}"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    "location", ["null", "{}", '{"path":""}'], ids=["no-location", "no-path", "empty-path"]
+)
+def test_the_finish_plan_recipe_refuses_a_created_task_the_store_placed_nowhere(
+    tmp_path: Path, location: str
+) -> None:
+    """A task the store created with an id and no record path is refused, and named.
+
+    The store has no verb that removes a task, and a removal composed from its layout would
+    stand in for that verb, so the recipe takes back the project record it wrote, leaves the
+    task where the store put it, names the project holding it and the listing that finds it
+    with the project record gone, and launches nothing.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "finish-plan", BRIEF, env={CREATED_LOCATION_ENV: location})
+
+    assert result.returncode == FINISH_PLAN_UNRUNNABLE, f"{result.stdout}\n{result.stderr}"
+    stderr = result.stderr
+    assert f"the store reports no task record path for {CREATED_TASK}" in stderr, stderr
+    assert f"the task it created is left in authoring:{CREATED_PROJECT}" in stderr, stderr
+    assert (
+        f"find it with 'just plans task list --source authoring --project {CREATED_PROJECT}'"
+        in stderr
+    ), stderr
+    # The project record is taken back; the one record left is the task the store wrote.
+    left = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*.md"))
+    assert left == [f".plans/{CREATED_RECORD}"], left
+    traced = trace.read_text(encoding="utf-8")
+    assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
+    assert "orchestrator-copy-plan" not in traced, f"a refused flow copied the plan:\n{traced}"
+    assert "template check" not in traced, f"an unplaced task was checked anyway:\n{traced}"
+
+
+ANSWERS_REPAIR = "correct the answers this recipe composes for it"
+TEMPLATE_REPAIR = "repair the plan-task template 'onepipeline template resolve plan-task --json'"
+CHECKOUT_REPAIR = "provision this checkout with 'just bootstrap'"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize(
+    ("said", "status", "names", "repair"),
+    [
+        (
+            "onepipeline: refused: item authoring:write-the-design-document: no criteria listed",
+            6,
+            "it lists no acceptance criteria",
+            ANSWERS_REPAIR,
+        ),
+        (
+            "onepipeline: refused: item authoring:write-the-design-document: not its rendering",
+            6,
+            "the engine refused it as a rendering of plan-task",
+            ANSWERS_REPAIR,
+        ),
+        (
+            "onepipeline: refused: template plan-task: the item is not its recorded rendering",
+            6,
+            "the engine refused the plan-task template it was rendered from",
+            TEMPLATE_REPAIR,
+        ),
+        (
+            "onepipeline: invalid: 'refused: no criteria listed' names nothing in the sources",
+            FINISH_PLAN_UNRUNNABLE,
+            "the engine's check of authoring:write-the-design-document could not run",
+            CHECKOUT_REPAIR,
+        ),
+        (
+            "onepipeline: refused: item authoring:another-task: no criteria listed",
+            FINISH_PLAN_UNRUNNABLE,
+            "the engine's check of authoring:write-the-design-document could not run",
+            CHECKOUT_REPAIR,
+        ),
+    ],
+    ids=["no-criteria", "other-refusal", "template-refusal", "could-not-run", "another-item"],
+)
+def test_the_finish_plan_recipe_reads_a_refusal_only_off_the_engines_own_refusal_line(
+    tmp_path: Path, said: str, status: int, names: str, repair: str
+) -> None:
+    """The engine's check answers a refusal and a check that could not run with one status.
+
+    So the recipe reads which it was off the line the engine words a refusal of this item or
+    this template on, and a `refused:` anywhere else — inside an id the engine could not
+    find, or naming some other item — is a
+    check that could not run, whose repair is this checkout rather than the task's
+    answers; and a refusal of the template is repaired in the template, which no answer
+    changes. Either way nothing is launched and the project is taken back.
+    """
+    checkout, trace = _checkout(tmp_path)
+
+    result = _run(checkout, trace, "finish-plan", BRIEF, env={CHECK_OUTPUT_ENV: said})
+
+    assert result.returncode == status, f"{result.stdout}\n{result.stderr}"
+    assert names in result.stderr, result.stderr
+    # Each refusal names the repair that answers it: answers repair an item, never a template.
+    assert repair in result.stderr, result.stderr
+    for other in {ANSWERS_REPAIR, TEMPLATE_REPAIR, CHECKOUT_REPAIR} - {repair}:
+        assert other not in result.stderr, result.stderr
+    traced = trace.read_text(encoding="utf-8")
+    assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
+    left = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*.md"))
+    assert left == [], f"a refused flow left records where the next run reads them: {left}"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("section", ["What", "Why"])
+def test_the_finish_plan_recipe_refuses_a_brief_stating_a_section_twice(
+    tmp_path: Path, section: str
+) -> None:
+    """A brief with two sections of one name gives the writer's task two answers.
+
+    The recipe composes the design-document task's What and Why from the brief, so a brief
+    stating either twice is refused by name rather than read for whichever came first — and
+    nothing is created, launched or kept.
+    """
+    checkout, trace = _checkout(tmp_path)
+    brief = checkout / BRIEF
+    brief.write_text(
+        brief.read_text(encoding="utf-8") + f"\n## {section}\nA second answer.\n",
+        encoding="utf-8",
+    )
+
+    stderr = _refused_before_the_launch(checkout, trace, {})
+
+    assert f"states ## {section} 2 times" in stderr, stderr
+    traced = trace.read_text(encoding="utf-8")
+    assert "onetaskgraph task create" not in traced, f"the store was asked anyway:\n{traced}"
 
 
 #: A commands-only envelope, the shape a manager sends all run long: no verdict to bind.

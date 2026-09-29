@@ -1,129 +1,266 @@
-"""The design document's shape has one source, and the role that writes it points there.
+"""The design document is a template this host owns, and the role that writes it points there.
 
-`config/design-doc-template.md` states the document's six sections, their order, and the
-properties the document is judged on. `personas/design-doc.yaml` is the role dispatched
-to write and to review one, and it names that path instead of restating any of it — one
-question gets one answer, and the answer belongs to the file that holds it.
+`templates/design-doc.md.j2` is registered as `design-doc` in `templates/templates.yaml`
+and states the document: its six sections, their order, and in its descriptions the reader
+and every property the document is judged on. `personas/design-doc.yaml` is the role
+dispatched to write and to review one, and it names the template's variables instead of
+restating any of it — one question gets one answer, and the answer belongs to the file
+that holds it.
 
-Two failures are what this gate is against, and they are opposite halves of the same
-drift. A template that loses a section, gains one, or reorders them changes the document
-every writer produces while the role goes on being judged against a shape nobody
-restated. A persona that names a path that is not the template's sends its writer to
-nothing at all: the role's whole statement of the shape is that pointer, so a stale one
-leaves both sides of the conversation composing their own.
+Everything here is read through the real boundary a writer uses: the pinned engine's
+`template resolve` and `template check`, reached through `scripts/onepipeline.sh` the way
+a launch reaches them, and the pinned plan store's `template variables` and `template
+render`. Nothing is doubled.
 
-`AGENTS.md` records what a second copy costs on this host, in the paragraph about the
-adoption instruction a producer owns: a worker handed two answers follows the one in
-front of it. The check below is why there is only ever one here.
+llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] Every
+file this module reads is in the key its tier is memoized on: `orchestrator:test` is keyed on
+`nx.json`'s `codeWorkspace`, which is the whole workspace less `docs/` and `*.md`, so
+`templates/design-doc.md.j2`, `templates/templates.yaml`, `personas/design-doc.yaml` and
+`scripts/onepipeline.sh` are all in it, and the published CLIs it spawns — through the
+wrapper a launch uses, which is the boundary this module is about — are the pinned installs
+`uv.lock` names, which is in it too. A project of its own would be keyed on the same files.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator.root import REPO_ROOT
 
-pytestmark = pytest.mark.reads_docs
-
-#: The one statement of the document's shape, and the role bound to it.
-TEMPLATE = REPO_ROOT / "config" / "design-doc-template.md"
+#: The registered name, the file that supplies it on this host, and the role bound to it.
+NAME = "design-doc"
+TEMPLATE = REPO_ROOT / "templates" / "design-doc.md.j2"
 PERSONA = REPO_ROOT / "personas" / "design-doc.yaml"
-
-#: How the persona has to name the template: repository-relative, which is the form a
-#: dispatched worker can follow from the root of whatever checkout it is working in.
-TEMPLATE_REFERENCE = "config/design-doc-template.md"
+WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
 
 #: The six sections, in the order the document carries them. Stated here rather than read
-#: from the template, because a gate that took its expectation from its subject would
-#: pass whatever that subject said — which is the whole of what it is here to catch.
+#: from the template, because a gate that took its expectation from its subject would pass
+#: whatever that subject said — which is the whole of what it is here to catch.
 SECTIONS = ("What", "Why", "Architecture", "Contracts", "Acceptance criteria", "Planned tasks")
 
-#: Where the template holds the shape: one fenced block, so the skeleton a writer copies
-#: is separable from the prose about it. The document's own headings are outside it and
-#: are deliberately not part of the shape.
-FENCE = re.compile(r"^```markdown$(?P<shape>.*?)^```$", re.MULTILINE | re.DOTALL)
+#: Each variable the template declares, with the type and item type its answers take.
+VARIABLES = {
+    "what": ("text", None),
+    "why": ("text", None),
+    "architecture": ("text", None),
+    "contracts": ("list", "string"),
+    "acceptance_criteria": ("list", "string"),
+    "planned_tasks": ("list", "object"),
+}
 
-#: A section heading inside that block.
-HEADING = re.compile(r"^## (?P<name>.+)$", re.MULTILINE)
+#: Each judged-on property, by a phrase only its own statement carries. The descriptions
+#: have to state each exactly once: none would leave a writer and its judge without it,
+#: and two is a second answer to drift from the first.
+PROPERTIES = {
+    "reader": "technical product manager with no depth in this domain",
+    "plain language": "plain language: simple, terse, precise, with no jargon",
+    "no easily changed detail": "leaves out detail that is easily changed later",
+    "expensive decisions": "decisions that are expensive to reverse",
+    "repositories": "Where the plan spans more than one repository",
+    "link, do not restate": "rather than restating any of it",
+    "store locations": "never one composed by hand",
+    "six sections": (
+        "six sections in the order What, Why, Architecture, Contracts, Acceptance criteria, "
+        "Planned tasks, and no other heading"
+    ),
+}
 
-#: Any path into this repository's own configuration directory that the persona names.
-#: Read as a class rather than searched for the one expected value: a persona repointed
-#: at a second config file is a second answer, and this is what reports it.
-CONFIG_PATH = re.compile(r"config/[A-Za-z0-9_.-]+\.md")
+#: Sample answers, each distinct so the rendering can be read back against them.
+ANSWERS: dict[str, object] = {
+    "what": "A paginated node listing.",
+    "why": "An operator cannot see past the first screen.",
+    "architecture": "One route, one view.",
+    "contracts": [
+        "**The cursor.** An opaque token.\nIt never names a node.",
+        "**The page.** At most fifty nodes.",
+    ],
+    "acceptance_criteria": ["The listing pages.", "The view follows the cursor."],
+    "planned_tasks": [
+        {
+            "task": "feat: page the listing",
+            "delivers": "the route",
+            "depends_on": "none",
+            "location": "https://example.invalid/issues/1",
+        },
+        {
+            "task": "feat: follow the cursor",
+            "delivers": "the view",
+            "depends_on": "feat: page the listing",
+            "location": "/plans/tasks/view.md",
+        },
+    ],
+}
 
 
-def _shape() -> str:
-    """The template's fenced skeleton — the part a writer's document is shaped like."""
-    found = FENCE.search(TEMPLATE.read_text(encoding="utf-8"))
-    assert found is not None, (
-        f"{TEMPLATE.name} no longer carries its shape in one ```markdown block, so "
-        "nothing here can tell the document's sections from the prose about them"
+def _run(command: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command, cwd=REPO_ROOT, input=stdin, text=True, capture_output=True, check=False
     )
-    return found["shape"]
 
 
-def test_the_template_states_the_six_sections_in_order() -> None:
-    """The shape is those six, in that order, and nothing else is a heading of it."""
-    named = tuple(match["name"] for match in HEADING.finditer(_shape()))
-    assert named == SECTIONS, (
-        f"{TEMPLATE.name} states {named} as the document's sections; the shape a person "
-        f"reviews a plan as is {SECTIONS}, in that order and with no others. Changing it "
-        "is a change to every design document this host produces, so change it here and "
-        "here only — the role that writes one restates none of it."
+@pytest.fixture(scope="module")
+def loader() -> str:
+    """The loader document the pinned engine states for `design-doc` through the wrapper."""
+    resolved = _run([str(WRAPPER), "template", "resolve", NAME, "--json"])
+    assert resolved.returncode == 0, resolved.stderr
+    return resolved.stdout
+
+
+# llmlint: ignore-block[suppressions_justified] The front matter is onetaskgraph's open template
+# contract, parsed from YAML; each caller subscripts the one field it reads, so a moved shape fails
+# there rather than at a model of it written here.
+def _front_matter() -> dict[str, Any]:
+    text = TEMPLATE.read_text(encoding="utf-8")
+    found = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
+    assert found is not None, f"{TEMPLATE.name} opens with no front matter"
+    matter: dict[str, Any] = yaml.safe_load(found.group(1))
+    return matter
+
+
+# llmlint: ignore-end[suppressions_justified]
+
+
+def test_the_launch_environment_resolves_the_template_from_this_hosts_root(loader: str) -> None:
+    """The name resolves at the host layer, to this file, and extends nothing of the engine's."""
+    stated = json.loads(loader)
+    assert stated["reference"] == f"onepipeline:{NAME}", stated
+    assert stated["layer"] == "host", stated
+    assert stated["role"] == "document", stated
+    assert Path(stated["path"]) == TEMPLATE, stated
+    # The loader carries the engine's own templates as its search set whatever the entry
+    # uses, so what says this one uses none of them is its own source.
+    source = TEMPLATE.read_text(encoding="utf-8")
+    assert not re.search(r"{%-?\s*(extends|include|import|from)\b", source), (
+        f"{TEMPLATE.name} builds on another template, and the design document is this "
+        f"host's own:\n{source}"
     )
 
 
-def test_the_persona_names_the_template_and_names_nothing_else() -> None:
-    """The role's whole statement of the shape is that one pointer."""
-    persona = PERSONA.read_text(encoding="utf-8")
-    named = set(CONFIG_PATH.findall(persona))
-    assert named == {TEMPLATE_REFERENCE}, (
-        f"{PERSONA.name} names {sorted(named) or 'no configuration document'} where it "
-        f"must name exactly {TEMPLATE_REFERENCE}: that pointer is the only thing sending "
-        "a dispatched writer and its reviewer to the shape they are both held to"
+def test_the_engine_checks_the_template_through_the_launch_environment() -> None:
+    checked = _run([str(WRAPPER), "template", "check", NAME])
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "ok" in checked.stdout, checked.stdout
+
+
+def test_the_template_declares_the_six_variables_with_their_types(loader: str) -> None:
+    listed = _run(
+        [str(ONETASKGRAPH_BIN), "template", "variables", "--template-loader", "-", "--json"],
+        loader,
     )
-    assert TEMPLATE.is_file(), (
-        f"{PERSONA.name} points at {TEMPLATE_REFERENCE}, which this checkout does not "
-        "have, so a dispatch of this role is sent to nothing"
+    assert listed.returncode == 0, listed.stderr
+    declared = {
+        one["name"]: (one["type"], one.get("items"), one.get("required"))
+        for one in json.loads(listed.stdout)["variables"]
+    }
+    assert declared == {name: (kind, items, True) for name, (kind, items) in VARIABLES.items()}, (
+        declared
     )
 
 
-def test_both_sides_of_the_role_are_pointed_at_it() -> None:
-    """The writer's role and the reviewer's bar each name it, because each is held to it.
+@pytest.mark.parametrize("judged", PROPERTIES, ids=list(PROPERTIES))
+def test_the_descriptions_state_each_judged_on_property_exactly_once(judged: str) -> None:
+    """The reader, and every property the document is judged on, is stated once."""
+    matter = _front_matter()
+    descriptions = [matter["description"]] + [
+        one["description"] for one in matter["variables"].values()
+    ]
+    stated = sum(" ".join(one.split()).count(PROPERTIES[judged]) for one in descriptions)
+    assert stated == 1, (
+        f"the template's descriptions state the {judged!r} property {stated} times; it is "
+        f"stated once, in the one place a writer and its judge both read it"
+    )
 
-    Separate from the reference check above, which would pass on a file that named the
-    template once. `system_prompt` is what the worker is given and `user.persona` is what
-    its supervisor is given; a pointer in only one of them leaves the other side judging
-    or writing against a shape it was never shown.
+
+def test_rendering_sample_answers_gives_the_six_sections_the_contracts_and_the_table(
+    tmp_path: Path, loader: str
+) -> None:
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps(ANSWERS), encoding="utf-8")
+    rendered = _run(
+        [str(ONETASKGRAPH_BIN), "template", "render", "--template-loader", "-"]
+        + ["--answers", str(answers), "--no-interactive"],
+        loader,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    body = rendered.stdout
+    headings = re.findall(r"^#+ (.+)$", body, re.MULTILINE)
+    assert tuple(headings) == SECTIONS, f"the rendering's headings are {headings}:\n{body}"
+    contracts = body.split("## Contracts\n", 1)[1].split("\n## ", 1)[0]
+    assert contracts.strip().splitlines() == [
+        "- **The cursor.** An opaque token.",
+        "  It never names a node.",
+        "- **The page.** At most fifty nodes.",
+    ], contracts
+    table = body.split("## Planned tasks\n", 1)[1].strip().splitlines()
+    assert table == [
+        "| Task | What it delivers | Depends on | Where it lives |",
+        "| --- | --- | --- | --- |",
+        "| feat: page the listing | the route | none | https://example.invalid/issues/1 |",
+        "| feat: follow the cursor | the view | feat: page the listing | /plans/tasks/view.md |",
+    ], table
+
+
+def test_a_planned_task_answer_holding_a_delimiter_or_a_line_break_stays_in_its_cell(
+    tmp_path: Path, loader: str
+) -> None:
+    """An answer is prose, so a pipe or a newline in it is text, never a column or a row.
+
+    Rendered raw, a task titled with a pipe would split its row into five columns and a
+    two-line delivery would end the table mid-row, so the document a person approves would
+    no longer say which task lives where.
     """
+    answers = tmp_path / "answers.json"
+    answers.write_text(
+        json.dumps(
+            {
+                **ANSWERS,
+                "planned_tasks": [
+                    {
+                        "task": "feat: read a | b",
+                        "delivers": "the route\nand its view",
+                        "depends_on": "",
+                        "location": "/plans/tasks/pipe.md",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rendered = _run(
+        [str(ONETASKGRAPH_BIN), "template", "render", "--template-loader", "-"]
+        + ["--answers", str(answers), "--no-interactive"],
+        loader,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    table = rendered.stdout.split("## Planned tasks\n", 1)[1].strip().splitlines()
+    assert table[2:] == [
+        "| feat: read a \\| b | the route and its view | none | /plans/tasks/pipe.md |"
+    ], table
+
+
+def test_the_persona_names_the_templates_variables_and_restates_none_of_it() -> None:
+    """The role's whole statement of the document is a pointer at the template."""
     persona = PERSONA.read_text(encoding="utf-8")
-    # From `system_prompt:` rather than from the file's start, so a pointer sitting in
-    # the header comment — which reaches no turn at all — cannot answer for the role.
-    _, _, declared = persona.partition("\nsystem_prompt: |\n")
-    role, _, bar = declared.partition("\nuser:\n")
-    assert role, f"{PERSONA.name} declares no `system_prompt`, so it states no role"
-    assert bar, f"{PERSONA.name} declares no `user:` block, so it states no review bar"
-    for half, prose in (("system_prompt", role), ("user.persona", bar)):
-        assert TEMPLATE_REFERENCE in prose, (
-            f"{PERSONA.name}'s {half} no longer names {TEMPLATE_REFERENCE}; both sides of "
-            "this conversation are held to that shape, and the side that cannot see it "
-            "composes its own"
-        )
-
-
-def test_the_persona_does_not_restate_the_shape() -> None:
-    """The sections are stated once, and the role is not the place.
-
-    A restatement is what goes stale: the template moves, the copy does not, and the
-    writer follows whichever it read last. Headings are what a restatement would carry,
-    so a persona that reproduces one is refused by that.
-    """
-    persona = PERSONA.read_text(encoding="utf-8")
-    restated = [section for section in SECTIONS if f"## {section}" in persona]
-    assert not restated, (
-        f"{PERSONA.name} restates {restated} as document heading(s); the sections live in "
-        f"{TEMPLATE_REFERENCE} alone, and a second copy is a second answer for a writer "
-        "to follow the day the two disagree"
+    loaded = yaml.safe_load(persona)
+    for side in (loaded["system_prompt"], loaded["user"]["persona"]):
+        assert (
+            f"onepipeline template resolve {NAME} --json | onetaskgraph template variables "
+            "--template-loader -" in " ".join(side.split())
+        ), side
+    flat = " ".join(persona.split())
+    restated = [judged for judged, phrase in PROPERTIES.items() if phrase in flat]
+    assert not restated, f"{PERSONA.name} restates the template's {restated}"
+    assert not any(section in flat for section in ("## What", "## Planned tasks")), (
+        f"{PERSONA.name} restates the document's sections"
+    )
+    assert not re.search(r"config/[A-Za-z0-9_.-]+\.md", persona), (
+        f"{PERSONA.name} names a configuration file as the document's shape"
     )

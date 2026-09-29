@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -37,6 +38,7 @@ import plan_fixture_source
 import plan_root_variable
 import pytest
 import short_state
+import yaml
 from fake_backend import (
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
@@ -44,6 +46,7 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
     RecordedTurn,
 )
+from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -106,12 +109,17 @@ DESIGN_RUN_SUFFIX = "-design"
 
 #: The fragment only the design-doc dispatch's task carries, which is what tells its turn
 #: apart at the stand-in.
-DESIGN_TASK_MARKER = "## What this dispatch owes"
+DESIGN_TASK_MARKER = "Write the one short design document a person reviews the plan"
 
-#: The source a design-doc dispatch drafts into before storing: one of its own, named on
-#: its own command line rather than in any tracked configuration, which is what an agent's
-#: scratch directory is.
-DRAFT_SOURCE = "draft"
+#: The pinned engine this checkout installs, which the doubled writer runs as a real agent
+#: would: its `template resolve` is what states the design-doc template it renders.
+ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+
+#: The provenance key the plan store records a rendering under, and the references the
+#: writer's task and its document each record there.
+PROVENANCE_KEY = "onetaskgraph.template"
+WRITER_TASK_TEMPLATE = "onepipeline:plan-task"
+DOCUMENT_TEMPLATE = "onepipeline:design-doc"
 
 #: The key `onetaskgraph` stamps on a record it created by copying, naming what it copied.
 ORIGIN_KEY = "onetaskgraph.origin"
@@ -139,6 +147,7 @@ UNRUNNABLE = 2
 PLAN_REFUSED = 3
 LAUNCH_FAILED = 4
 COPY_REFUSED = 5
+WRITER_REFUSED = 6
 
 #: Criteria that answer every demand the tracked appendix and the shipped `engineer` bar
 #: make, so a plan carrying them is refused by nothing this module is not about.
@@ -257,38 +266,41 @@ def _draft(
     )
 
 
-def _document(drafted: Drafted) -> str:
-    """The prose a design-doc dispatch drafted, as a record of the source it drafted into.
+def _answers(drafted: Drafted) -> dict[str, object]:
+    """The design-doc template's answers a design-doc dispatch composed for ``drafted``.
 
-    The paid model's answer and nothing else: what makes it a document *of the plan's
-    project* in the plan store is the copy the dispatch performs, not this.
+    The paid model's answer and nothing else: what renders them, and what makes the result
+    a document *of the plan's project* in the plan store, is the pinned engine's resolve
+    piped into the store's own `document create`, which the dispatch runs.
     """
-    return (
-        f'---\ntitle: "Design: {drafted.project}"\n'
-        f'project: "{drafted.project}"\n---\n\n'
-        "## What\n\nA paginated node listing.\n\n"
-        "## Why\n\nAn operator cannot see past the first screen.\n\n"
-        "## Architecture\n\nOne route, one view.\n\n"
-        "## Contracts\n\nThe cursor is an opaque token.\n\n"
-        "## Acceptance criteria\n\nThe listing pages.\n\n"
-        "## Planned tasks\n\n"
-        "| Task | What it delivers | Depends on | Where it lives |\n"
-        "| --- | --- | --- | --- |\n"
-        f"| {drafted.task_title} | the route | none | the store's own location |\n"
-    )
+    return {
+        "what": "A paginated node listing.",
+        "why": "An operator cannot see past the first screen.",
+        "architecture": "One route, one view.",
+        "contracts": ["The cursor is an opaque token."],
+        "acceptance_criteria": ["The listing pages."],
+        "planned_tasks": [
+            {
+                "task": drafted.task_title,
+                "delivers": "the route",
+                "depends_on": "none",
+                "location": "the store's own location",
+            }
+        ],
+    }
 
 
-def _staged_draft(tmp_path: Path, drafted: Drafted) -> Path:
-    """Stage the document's prose where the design-doc dispatch drafted it.
+def _staged_answers(tmp_path: Path, drafted: Drafted) -> Path:
+    """Stage the answers where the design-doc dispatch composed them.
 
-    This is the scripted half and the whole of it. **Storing it is not staged**: the plan
-    store holds no document until the dispatch itself runs the store's own command line,
-    so what the read-back proves is that the dispatch ran it.
+    This is the scripted half and the whole of it. **Rendering and storing are not
+    staged**: the plan store holds no document until the dispatch itself runs the pinned
+    resolve and the store's own command line, so what the read-back proves is that it ran.
     """
-    documents = tmp_path / "drafted" / "documents"
-    documents.mkdir(parents=True)
-    (documents / f"{drafted.document}.md").write_text(_document(drafted), encoding="utf-8")
-    return documents.parent
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    answers = tmp_path / f"{drafted.document}.answers.json"
+    answers.write_text(json.dumps(_answers(drafted)), encoding="utf-8")
+    return answers
 
 
 class Bench(NamedTuple):
@@ -347,25 +359,31 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
 
 
 def _stores_the_document(bench: Bench, drafted: Drafted) -> None:
-    """Script the one command the design-doc dispatch runs to store what it drafted."""
+    """Script the one command the design-doc dispatch runs to render and store its answers."""
     keyed = bench.tmp_path / f"commands-{drafted.project}.json"
-    drafted_root = _staged_draft(bench.tmp_path / drafted.project, drafted)
+    answers = _staged_answers(bench.tmp_path / drafted.project, drafted)
+    source, _, project = drafted.qualified.partition(":")
     keyed.write_text(
         json.dumps(
             {
                 DESIGN_TASK_MARKER: [
                     [
+                        "bash",
+                        "-c",
+                        # The pinned engine's resolve, piped into the pinned store's own
+                        # create, into the plan's own source and project: what the task
+                        # tells the dispatch to run, run where the dispatch runs it.
+                        '"$1" template resolve design-doc --json | "$2" document create "$3"'
+                        ' --project "$4" --title "$5" --id "$6" --template-loader -'
+                        ' --answers "$7" --no-interactive',
+                        "store-the-document",
+                        str(ENGINE_BIN),
                         str(ONETASKGRAPH_BIN),
-                        "--set",
-                        f"sources.{DRAFT_SOURCE}.plugin=local-md",
-                        "--set",
-                        f"sources.{DRAFT_SOURCE}.config.root={drafted_root}",
-                        "document",
-                        "copy",
-                        f"{DRAFT_SOURCE}:{drafted.document}",
-                        "--to",
-                        # The plan's own source, which is where the task says it goes.
-                        drafted.qualified.partition(":")[0],
+                        source,
+                        project,
+                        f"Design: {drafted.project}",
+                        drafted.document,
+                        str(answers),
                     ]
                 ]
             }
@@ -411,15 +429,29 @@ def _records(root: Path) -> list[str]:
 
 
 def _stop(bench: Bench, *runs: str) -> None:
-    """End every run a flow left on this bench's ledger, and take back its projects."""
+    """End every run a flow left on this bench's ledger, and take back its projects.
+
+    The design project's task is taken back by the path the store reports for it, because
+    the store names a task it creates rather than this module.
+    """
     for run in runs:
         _just("stop", run, environment=bench.environment, seconds=60)
+        listed = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "task", "list", "--source", AUTHORING_SOURCE]
+            + ["--project", run, "--json"],
+            cwd=REPO_ROOT,
+            env=bench.environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        if listed.returncode == 0:
+            for held in json.loads(listed.stdout)["items"]:
+                path = (held["item"].get("location") or {}).get("path")
+                if path:
+                    Path(path).unlink(missing_ok=True)
         (REPO_ROOT / ".plans" / "projects" / f"{run}.md").unlink(missing_ok=True)
-        tasks = REPO_ROOT / ".plans" / "tasks" / run
-        if tasks.is_dir():
-            for record in tasks.iterdir():
-                record.unlink(missing_ok=True)
-            tasks.rmdir()
 
 
 class StoredTask(TypedDict):
@@ -432,6 +464,7 @@ class StoredTask(TypedDict):
 
     repositories: list[str]
     metadata: dict[str, object]
+    content: str
 
 
 class Finished(NamedTuple):
@@ -474,6 +507,9 @@ def _design_task(bench: Bench, run: RunId) -> StoredTask:
     )
     assert listed.returncode == 0, f"the store could not list the design project:\n{listed.stderr}"
     (task,) = [record["item"] for record in json.loads(listed.stdout)["items"]]
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the three
+    # fields `StoredTask` names are subscripted by every reader, so a record without one fails
+    # loudly there.
     return cast(StoredTask, task)
 
 
@@ -659,6 +695,156 @@ def test_the_design_document_node_names_no_repository_because_it_is_a_direct_nod
     metadata = finished.design_task["metadata"]
     assert "onepipeline.repo" not in metadata, metadata
     assert "onepipeline.execution_checkout" not in metadata, metadata
+
+
+def _criteria(content: str) -> str:
+    """The block a task's `## Acceptance criteria` heading opens, up to the next heading."""
+    _, _, after = content.partition("## Acceptance criteria\n")
+    assert after, f"the task carries no acceptance criteria heading:\n{content}"
+    return after.split("\n## ", 1)[0]
+
+
+#: Each obligation the writer's task owes its judge, as a fragment its criteria have to
+#: carry. Stated here rather than read out of `scripts/finish-plan.sh`, so a recipe that
+#: stopped composing one fails this rather than agreeing with itself.
+WRITER_OBLIGATIONS = (
+    # Answers meeting every property the template's descriptions state.
+    "The document answers every variable `onepipeline template resolve design-doc --json | "
+    "onetaskgraph template variables --template-loader -` lists",
+    "property the template\u2019s own description and each variable\u2019s description state",
+    # The multi-repository architecture property, stated in the criteria as well.
+    "spans more than one repository, the architecture answer names the repository each piece "
+    "lives in",
+    # Stored through the pinned resolve piped into the store, as that plan's document.
+    "`onepipeline template resolve design-doc --json` piped into `onetaskgraph document "
+    "create --template-loader -`",
+    "`onetaskgraph document render --template-loader -` where a document by that id",
+    # Every row's location is the store's own answer.
+    "location is the location the plan store reports for that task",
+    # And where the store put it is reported.
+    "This dispatch reports where the store put the document",
+)
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_the_design_document_nodes_task_is_a_plan_task_rendering_owing_each_obligation(
+    finished: Finished,
+) -> None:
+    """The writer's task was created through the template, and states what it is judged on.
+
+    Its provenance names the engine's `plan-task` template, which only a `task create`
+    fed `onepipeline template resolve plan-task --json` records; and its criteria carry
+    each obligation of the writer's task — the document's own id among them — while the
+    brief's criteria, which are the *plan's*, are not among them.
+    """
+    provenance = finished.design_task["metadata"].get(PROVENANCE_KEY)
+    assert isinstance(provenance, dict), finished.design_task["metadata"]
+    assert provenance.get("template") == WRITER_TASK_TEMPLATE, provenance
+    criteria = _criteria(finished.design_task["content"])
+    for obligation in WRITER_OBLIGATIONS:
+        assert obligation in criteria, f"the writer's criteria lack {obligation!r}:\n{criteria}"
+    document_id = f"{finished.drafted.project}{DESIGN_DOCUMENT_SUFFIX}"
+    assert f"under the document id `{document_id}`" in criteria, criteria
+    assert f"`{finished.drafted.qualified}`" in criteria, criteria
+    assert "The cursor's shape and its type are stated." not in criteria, (
+        f"the brief's own criterion, which is the plan's, reached the writer's:\n{criteria}"
+    )
+
+
+#: The clauses of the design-doc template's multi-repository architecture property, which
+#: the writer's criteria state a second time because its task requires them to.
+REPOSITORY_CLAUSES = (
+    "spans more than one repository",
+    "the repository each piece lives in",
+    "the planned-tasks table has no column for it",
+    "says nothing about repositories",
+)
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_the_writers_repository_criterion_restates_the_templates_own_property(
+    finished: Finished,
+) -> None:
+    """The one property the writer's criteria restate is held to the template stating it.
+
+    The template's `architecture` description is that property's source; the writer's task
+    repeats it among its criteria so its judge reads it too. Both are read here — the
+    template's description off its front matter, the criteria off the task the store holds
+    — so a template that moved the property without the recipe, or the reverse, fails.
+    """
+    text = (REPO_ROOT / "templates" / "design-doc.md.j2").read_text(encoding="utf-8")
+    _, front, _ = text.split("---\n", 2)
+    described = " ".join(yaml.safe_load(front)["variables"]["architecture"]["description"].split())
+    criteria = " ".join(_criteria(finished.design_task["content"]).split())
+    for clause in REPOSITORY_CLAUSES:
+        assert clause in described, f"the template's architecture property lacks {clause!r}"
+        assert clause in criteria, f"the writer's criteria lack {clause!r}:\n{criteria}"
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This reads the one flow
+# the `finished` fixture already drove, behind `plan-tooling`'s own `planToolingWorkspace` edge
+# with every other reading of it, and adds two recipe calls and no launch of its own.
+@pytest.mark.xdist_group("finish-plan")
+def test_the_stored_design_document_is_a_rendering_a_person_can_approve_and_launch(
+    finished: Finished,
+) -> None:
+    """What the writer stored is a design-doc rendering, and the bar downstream of it holds.
+
+    Read on the destination, which is where a person approves it: the copy carries the
+    rendering's provenance, the real `just approve-design` records an approval for it, and
+    the real launch gate then lets the approved plan through.
+    """
+    listed = _just(
+        "plans",
+        "project",
+        "list",
+        "--source",
+        DESTINATION,
+        "--json",
+        environment=finished.bench.environment,
+        seconds=120,
+    )
+    assert listed.returncode == 0, listed.stderr
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
+    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
+    (landed,) = [
+        one["id"]
+        for one in projects
+        if one["item"]["metadata"].get(ORIGIN_KEY) == finished.drafted.qualified
+    ]
+    documents = _just(
+        "plans",
+        "document",
+        "list",
+        "--project",
+        landed,
+        "--json",
+        environment=finished.bench.environment,
+        seconds=120,
+    )
+    assert documents.returncode == 0, documents.stderr
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
+    (held,) = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    provenance = held["item"]["metadata"].get(PROVENANCE_KEY)
+    assert isinstance(provenance, dict), held["item"]["metadata"]
+    assert provenance.get("template") == DOCUMENT_TEMPLATE, provenance
+
+    approved = _just("approve-design", landed, environment=finished.bench.environment)
+    assert approved.returncode == OK, f"{approved.stdout}\n{approved.stderr}"
+    assert "recorded the approval" in approved.stdout, approved.stdout
+    gated = subprocess.run(
+        ["uv", "run", "orchestrator-launch-gate", landed],
+        cwd=REPO_ROOT,
+        env=finished.bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert gated.returncode == OK, gated.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _judge_turns(bench: Bench, drafted: Drafted) -> list[RecordedTurn]:
@@ -1228,3 +1414,114 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
         assert _records(bench.destination) == [], "a detached launch reached the destination"
     finally:
         _stop(bench, named)
+
+
+def _provisioned_copy_listing_no_criterion(tmp_path: Path) -> Path:
+    """A copy of this checkout whose tail composes its writer's task with no criterion.
+
+    Everything is this checkout's — its recipes, its scripts, its templates, its installed
+    commands, provisioned from the locked installs as a session would provision it — but
+    for the one list the tail answers the `plan-task` template's criteria with, emptied in
+    the copy. That is the whole of what a composition that renders no criterion is, and
+    the copy is the only place it can be made without editing the tree every other tier
+    reads.
+    """
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    copy_working_tree(checkout)
+    # The review's records are keyed under a bar naming this host's own repository, read
+    # off the checkout's `origin`; the copy answers this checkout's.
+    answering_this_checkouts_origin(checkout)
+    script = checkout / "scripts" / "finish-plan.sh"
+    # llmlint: ignore-block[tests_mirror_real_usage, e2e_not_mocked] The writer's answers are
+    # the recipe's own composition, fixed in its source, so no caller of `just finish-plan`
+    # can supply a list with no criterion; the refusal guards that composition, and this
+    # node's task requires a journey whose composed answers render none. The copy is the one
+    # place the composition can change without editing the tree every other tier reads, and
+    # everything the journey then drives — the recipe, the store, the engine's check — is real.
+    composed = script.read_text(encoding="utf-8")
+    emptied = re.sub(
+        r'^    "acceptance_criteria": \[\n.*?^    \],\n',
+        '    "acceptance_criteria": [],\n',
+        composed,
+        count=1,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert emptied != composed, (
+        f"the copied {script.name} composes no `acceptance_criteria` list this journey can "
+        "empty, so it would launch a writer it could not have refused"
+    )
+    script.write_text(emptied, encoding="utf-8")
+    # llmlint: ignore-end[tests_mirror_real_usage, e2e_not_mocked]
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
+    }
+    synced = subprocess.run(
+        ["uv", "sync", "--locked"],
+        cwd=checkout,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
+    return checkout
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+# tests/plan_tooling/AGENTS.md states this project's split: `reads_docs` routes a journey that
+# builds a copy of this checkout to `plan-tooling:test-docs`, keyed on the whole workspace because
+# copying the tracked tree reads all of it, and never out of this project. `test_plan_flow_e2e.py`'s
+# default-board flow copies and provisions a checkout behind the same marker for the same reason.
+@pytest.mark.reads_docs
+@pytest.mark.xdist_group("finish-plan")
+def test_a_writer_task_that_lists_no_criterion_is_refused_before_anything_is_launched(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The rendering is validated once it is written, and a refusal launches nothing.
+
+    Driven through the real `just finish-plan` of a copied checkout whose composed answers
+    carry an empty criteria list: the review and the plan check pass as they would for any
+    reviewed plan, the store renders the task, and the engine's check of that stored task
+    refuses it — so the flow ends on its own status, says the task lists no acceptance
+    criteria, takes back what it wrote, and neither launches a run nor copies anything.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    checkout = _provisioned_copy_listing_no_criterion(tmp_path)
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    bench.environment[plan_root_variable.name()] = str(authoring)
+    drafted = _draft("finish-plan-no-criterion")
+    named = RunId("finish-plan-e2e-no-criterion")
+
+    refused = subprocess.run(
+        ["just", "finish-plan", str(_brief(tmp_path, drafted)), "--name", named]
+        + ["--to", DESTINATION],
+        cwd=checkout,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+
+    assert refused.returncode == WRITER_REFUSED, f"{refused.stdout}\n{refused.stderr}"
+    assert "lists no acceptance criteria" in refused.stderr, refused.stderr
+    assert "no design document was launched and nothing was copied" in refused.stderr, (
+        refused.stderr
+    )
+    assert not (bench.runs / f"{named}{DESIGN_RUN_SUFFIX}").exists(), (
+        f"a design run was launched for a task the engine refused:\n{_records(bench.runs)}"
+    )
+    assert _records(authoring) == [], (
+        f"the refused task's project was left where the next run reads it: {_records(authoring)}"
+    )
+    assert _records(bench.destination) == [], _records(bench.destination)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501

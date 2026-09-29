@@ -105,9 +105,10 @@ reach either run's channel.
 
 **Its refusals are told apart by exit status**, because each names a different thing to
 correct and a caller scripting the flow branches on the status: **1** is the review
-refusing the plan's own criteria, **3** is the pre-launch check refusing the plan, **4** is
-the document launch not settling, **5** is the destination refusing the copy, and **2** is
-a flow that could not run at all. There is no repair loop between them — the planner's own
+refusing the plan's own criteria, **3** is the pre-launch check refusing the plan, **6** is
+the engine refusing the design-document node's own rendered task, **4** is the document
+launch not settling, **5** is the destination refusing the copy, and **2** is a flow that
+could not run at all. There is no repair loop between them — the planner's own
 judge is the repair loop and it has already run — so a refusal hands every refused
 criterion back and stops.
 
@@ -191,6 +192,31 @@ review of it. `just approve-design <source>:<project>` records that they approve
 and `just orchestrate` refuses a project carrying no such record before anything is
 dispatched.
 
+*What the document is.* A rendering of this host's `design-doc` template,
+[`templates/design-doc.md.j2`](../templates/design-doc.md.j2), which
+`templates/templates.yaml` registers for `onepipeline template` with the role `document`.
+The template is this host's own — it extends nothing of onepipeline's, which knows only the
+name registered here — and it is the one statement of the document: six sections in a
+fixed order, and in its front matter's descriptions the reader it is written for and every
+property each section is judged on. A writer answers its variables, which
+`onepipeline template resolve design-doc --json | onetaskgraph template variables
+--template-loader -` lists with those descriptions, and the plan store renders them:
+`onepipeline template resolve design-doc --json` piped into `onetaskgraph document create
+<source> --project <project> --id <doc> --template-loader - --answers FILE`. The store
+records the rendering's provenance on the document — the template reference
+`onepipeline:design-doc`, the chain digest it rendered, and the digest of the body it
+produced — and keeps the answers beside the document where it was drafted, never copying
+them onto the board.
+
+*Changing one is regenerating it.* Change an answer and regenerate the document in place:
+`onepipeline template resolve design-doc --json | onetaskgraph document render <id>
+--template-loader - [--var NAME=VALUE]... [--answers FILE] --no-interactive`, which renders
+from the stored answers overlaid by the new ones and keeps the document's id and binding.
+A copy on the board holds no stored answers, so it is regenerated there with the whole
+answers file given as `--answers FILE`.
+Never edit the body by hand: an edited body is no longer the rendering its provenance
+records, and it can be neither approved nor launched until it is regenerated.
+
 *What is recorded, and where.* One entry of the design document's own metadata map,
 holding a digest and the moment it was written. It goes onto the document in the plan
 store rather than into a file beside the plan, which is what makes it readable from
@@ -216,12 +242,18 @@ because that key is its own bookkeeping of the last copy; and the write replaces
 record whole, so it stages every field the store just reported rather than the ones this
 repository cares about.
 
-*What invalidates one.* The digest covers the document's own authored content — its title
-and its prose — **and** the tracked template that says what a design document is. So
-editing the document after it was approved leaves it unapproved, and changing
-`config/design-doc-template.md` leaves every previously approved document unapproved,
-exactly as moving the plan-review bar invalidates every review record granted under the
-previous one.
+*What invalidates one.* A document is approvable only while it is a rendering of the
+template in force: it records `onepipeline:design-doc` provenance, the chain digest it
+records is the one the pinned engine resolves through this host's template root *now*, and
+its content hashes to the body digest the store recorded. The key is a digest of three
+things — the document's title, that resolved chain digest, and that recorded body digest —
+and it reads no answers, which is what lets it hold for the board copy a person approves,
+where no answers are stored. So regenerating the document from changed answers leaves it
+unapproved, changing `templates/design-doc.md.j2` leaves every previously approved
+document unapproved, exactly as moving the plan-review bar invalidates every review record
+granted under the previous one, and a regenerate with unchanged answers and an unchanged
+template renders the same body and keeps the approval. Like the plan-review record, the key
+trusts the provenance the store recorded.
 
 **Nothing the store the document sits in owns is in the digest**, and that is what makes
 the travel above real rather than only carried. The origin rewrite is the obvious one: it
@@ -242,7 +274,10 @@ document being written, and one whose document carries **no approval for what it
 currently says** is waiting on a person reading it. Each names the project, the second
 names the document and where the store says it is, and both name `just approve-design`.
 A project holding more than one document is a third answer — which of them is the design
-document cannot be decided, so it is refused rather than guessed at.
+document cannot be decided, so it is refused rather than guessed at. A document that is
+not the rendering in force — one recording no design-doc provenance, one rendered from a
+template since changed, or one whose body was edited after it was rendered — is refused by
+both `just approve-design` and the launch, each naming the regenerate above as the repair.
 
 *The one exemption, and it is a **launch** rather than a project.* A planning launch is
 exempt, because its output *is* the plan and the document it will be reviewed as does not
@@ -568,13 +603,22 @@ its own version of the reason the planning launch attaches none: a one-node run 
 a finished plan and writes one document has no frontier for a monitor to compare against a
 plan, and it is the last step of a flow rather than the work a flow supervises. So it is
 owed a watch for the same reason the planner is, and being the second such launch is what
-makes it the one a supervisor forgets. Its task is the brief unchanged, followed by its
-own instructions and its own acceptance criteria — which open by disowning the criteria
-above them, because those are the *plan's* and a judge holds a dispatch to every criterion
-it finds in its task. What states the document itself is
-[`config/design-doc-template.md`](../config/design-doc-template.md), and nothing restates
-it: the node's task names that path, the persona names that path, and the file is the one
-statement of the shape, the reader, and every property the document is judged on.
+makes it the one a supervisor forgets. Its task is created the way every task on this host
+is, through the `plan-task` template: `onepipeline template resolve plan-task --json` piped
+into `onetaskgraph task create --template-loader -`, answered from the brief's own What and
+Why, the plan's qualified id and the document's id. The brief's criteria are *not* among
+its criteria, because those are the plan's and a judge holds a dispatch to every criterion
+it finds in its task; its own require answers meeting every property the design-doc
+template's descriptions state — the architecture naming each piece's repository in a plan
+across several stated among them — the document stored through the pinned design-doc
+resolve piped into `document create` (or `document render` where it exists), every
+planned-task row's location taken from the store, and a report of where the store put it.
+The rendered task is then held to the engine's own check of a stored item,
+`onepipeline template check plan-task --item <task>`, before anything is launched: a task
+listing no acceptance criteria, or not the rendering its provenance records, is refused,
+the flow takes back the project it wrote and exits 6, and nothing is launched. What states
+the document itself is the `design-doc` template, and nothing restates it: the node's task
+and the persona both name the command that lists its variables.
 
 The dispatch reads the finished plan out of the store, stores what it wrote as a
 **document of that same project**, and reports where the store says that document is — a

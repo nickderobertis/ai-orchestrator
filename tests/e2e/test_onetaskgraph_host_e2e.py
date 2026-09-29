@@ -26,6 +26,7 @@ from plan_store_pin import (
     adopted_release,
     held_below_the_pacing_floor,
 )
+from project_fixtures import designed
 from published_tools import ONETASKGRAPH_BIN
 from registered_checkouts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
@@ -1510,19 +1511,18 @@ def _write_local_project(root: Path) -> None:
             ],
         },
     )
-    documents = root / "documents"
-    documents.mkdir(parents=True, exist_ok=True)
-    (documents / f"{LOCAL_PROJECT}-design.md").write_text(
-        frontmatter(
-            {"title": f"Design: {LOCAL_PROJECT}", "project": LOCAL_PROJECT},
-            "## What\n\nOne probe.\n\n## Why\n\nA launch needs a plan.\n\n"
-            "## Architecture\n\nOne node.\n\n## Contracts\n\nNone.\n\n"
-            "## Acceptance criteria\n\nThe node settles.\n\n## Planned tasks\n\n"
-            "| Task | What it delivers | Depends on | Where it lives |\n"
-            "| --- | --- | --- | --- |\n"
-            f"| {LOCAL_TASK_TITLE} | the probe | none | {root}/tasks/{LOCAL_PROJECT} |\n",
-        ),
-        encoding="utf-8",
+    designed(
+        AUTHORING_SOURCE,
+        LOCAL_PROJECT,
+        [
+            {
+                "task": LOCAL_TASK_TITLE,
+                "delivers": "the probe",
+                "depends_on": "none",
+                "location": f"{root}/tasks/{LOCAL_PROJECT}",
+            }
+        ],
+        {**os.environ, AUTHORING_ROOT_ENV: str(root)},
     )
     recording = subprocess.run(
         ["just", "approve-design", LOCAL_QUALIFIED],
@@ -4015,21 +4015,24 @@ def _write_delivering_plan(root: Path, delivers: str) -> None:
             ],
         },
     )
-    documents = root / "documents"
-    documents.mkdir(parents=True, exist_ok=True)
-    (documents / f"{DELIVERING_PROJECT}-design.md").write_text(
-        frontmatter(
-            {"title": f"Design: {DELIVERING_PROJECT}", "project": DELIVERING_PROJECT},
-            "## What\n\nTwo probes.\n\n## Why\n\nA launch needs a plan.\n\n"
-            "## Architecture\n\nTwo nodes, the second behind the first.\n\n"
-            "## Contracts\n\nNone.\n\n## Acceptance criteria\n\nBoth nodes settle.\n\n"
-            "## Planned tasks\n\n"
-            "| Task | What it delivers | Depends on | Where it lives |\n"
-            "| --- | --- | --- | --- |\n"
-            f"| {FIRST_TASK_TITLE} | the first probe | none | {root} |\n"
-            f"| {DELIVERING_TASK_TITLE} | the ticket | first | {root} |\n",
-        ),
-        encoding="utf-8",
+    designed(
+        AUTHORING_SOURCE,
+        DELIVERING_PROJECT,
+        [
+            {
+                "task": FIRST_TASK_TITLE,
+                "delivers": "the first probe",
+                "depends_on": "none",
+                "location": str(root),
+            },
+            {
+                "task": DELIVERING_TASK_TITLE,
+                "delivers": "the ticket",
+                "depends_on": "first",
+                "location": str(root),
+            },
+        ],
+        {**os.environ, AUTHORING_ROOT_ENV: str(root)},
     )
     recording = subprocess.run(
         ["just", "approve-design", DELIVERING_QUALIFIED],

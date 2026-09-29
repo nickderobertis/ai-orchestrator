@@ -1,5 +1,5 @@
 # The design-doc REVIEWER's harness config: WHICH harness + model supervises the writer
-# and holds the finished document to `config/design-doc-template.md`. Named by
+# and holds the finished document to the `design-doc` template's descriptions. Named by
 # `graphs/design-doc.yaml`'s `worker` member as its **judge** side. See
 # docs/onejudge-integration.md.
 #

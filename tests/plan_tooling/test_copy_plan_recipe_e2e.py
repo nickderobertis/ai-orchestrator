@@ -32,11 +32,11 @@ from typing import Any, NewType
 
 import pytest
 from project_fixtures import approved, local_project, reviewed
+from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import frontmatter
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`; see
@@ -622,26 +622,43 @@ def _reported_locations(project: str) -> dict[plan_store.NodeId, ReportedLocatio
 def _write_design_document_pointing_at(
     project: str, native: str, located: Mapping[plan_store.NodeId, ReportedLocation]
 ) -> None:
-    """Overwrite ``project``'s design document with the planned-tasks table this is about.
+    """Regenerate ``project``'s design document with the planned-tasks rows this is about.
 
-    One row per task, whose last column is that task's location **as its own store
-    reports it** — which is what `config/design-doc-template.md` asks a design document
-    for, and what a reference is: a literal occurrence of the exact location string a
-    source reported. Written the way `project_fixtures._designed` writes the document it
-    replaces, because the store exposes no verb that edits a document's content in place
-    and staging one through a copy is what the command under test is.
+    One row per task, whose location is that task's location **as its own store reports
+    it** — which is what the `design-doc` template asks a design document's planned-tasks
+    rows for, and what a reference is: a literal occurrence of the exact location string a
+    source reported. Changed the one way a rendered document changes, by regenerating it:
+    the pinned engine's resolve piped into the store's own `document render`, with the rows
+    as the one answer that moves.
     """
+    del native
     document = design_approval.design_document(project)
-    location = document.location
-    assert isinstance(location, dict), document
-    rows = "\n".join(f"| {node} | `{where}` |" for node, where in sorted(located.items()))
-    Path(str(location["path"])).write_text(
-        frontmatter(
-            {"title": document.title, "project": native},
-            "## Planned tasks\n\n| Task | Where it lives |\n| --- | --- |\n" + rows + "\n",
-        ),
-        encoding="utf-8",
+    rows = [
+        {"task": node, "delivers": "its part", "depends_on": "none", "location": f"`{where}`"}
+        for node, where in sorted(located.items())
+    ]
+    resolved = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        + ["design-doc", "--json", "--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
     )
+    assert resolved.returncode == 0, resolved.stderr
+    rendered = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "document", "render", str(document.qualified_id)]
+        + ["--template-loader", "-", "--var", f"planned_tasks={json.dumps(rows)}"]
+        + ["--no-interactive"],
+        cwd=REPO_ROOT,
+        input=resolved.stdout,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is a

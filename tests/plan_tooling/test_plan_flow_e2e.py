@@ -158,38 +158,38 @@ NODE_LABEL = "node"
 
 #: The fragment only the design-doc node's task carries, which is what tells the two
 #: dispatches apart at the stand-in: both run as `worker`, so the member cannot.
-DESIGN_TASK_MARKER = "## What this dispatch owes"
+DESIGN_TASK_MARKER = "Write the one short design document a person reviews the plan"
 
-#: The one statement of the document's shape, repository-relative inside this checkout —
-#: the dispatch works in the checkout the flow was launched from, which may be a checkout
-#: of the repository the *plan* is of, so this is a file it is sent to by name rather
-#: than one it finds underfoot.
-DESIGN_TEMPLATE = "config/design-doc-template.md"
-
-#: Where that template's lent block ends. The marker's own bytes, because the probe below
-#: appends a line *inside* that block and a drifted copy would place it outside.
-LIFT_CLOSE = "<!-- end composed-into-the-dispatch -->"
+#: The command the dispatched task names the document's template by: the registered name
+#: resolved, and its variables listed with what each is judged on. The dispatch works in the
+#: checkout the flow was launched from, which may be a checkout of the repository the
+#: *plan* is of, so the template is named rather than found underfoot.
+DESIGN_TEMPLATE_VARIABLES = (
+    "onepipeline template resolve design-doc --json | onetaskgraph template variables "
+    "--template-loader -"
+)
 
 #: What the dispatched task has to require of the architecture: the condition, since a
 #: plan inside one repository is exempt, and the demand. Stated here rather than read out
-#: of the template, which is the assertion rather than a shortcut — a journey that built
-#: its expectation from that file would pass whatever the two said, including saying
-#: nothing to each other.
-ARCHITECTURE_NAMES_ITS_REPOSITORIES = "Where the plan spans more than one repository"
+#: of the task's composer, which is the assertion rather than a shortcut — a journey that
+#: built its expectation from that script would pass whatever the two said.
+ARCHITECTURE_NAMES_ITS_REPOSITORIES = "spans more than one repository"
 ARCHITECTURE_NAMES_ITS_REPOSITORIES_DEMAND = (
-    "the architecture names the repository each piece lives in"
+    "the architecture answer names the repository each piece lives in"
 )
 
-#: The source a design-doc dispatch drafts into before storing: one of its own, named on
-#: its own command line rather than in any tracked configuration, which is what an agent's
-#: scratch directory is. The plan store is the *destination*, and it is never named here —
-#: the dispatch takes it from the configuration its own repository tracks.
-DRAFT_SOURCE = "draft"
+#: The pinned engine, whose `template resolve design-doc` the doubled writer pipes into the
+#: store exactly as the task tells a real one to.
+ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+
+#: The key the store records a rendering's provenance under, and what a design-doc
+#: rendering records there. Reading it is how this journey tells a document the store
+#: rendered from one a test placed where the store would have written it: nothing here
+#: composes it, and a planted file would not carry it.
+PROVENANCE_KEY = "onetaskgraph.template"
+DESIGN_REFERENCE = "onepipeline:design-doc"
 
 #: The key `onetaskgraph` stamps on a record it created by copying, naming what it copied.
-#: Reading it is how this journey tells a document the store wrote from one a test placed
-#: where the store would have written it: nothing here composes this, and a planted file
-#: would not carry it.
 ORIGIN_KEY = "onetaskgraph.origin"
 
 RunId = NewType("RunId", str)
@@ -351,45 +351,63 @@ def _plan_records(stored: Stored) -> dict[str, str]:
     }
 
 
-def _document(stored: Stored) -> str:
-    """The prose a design-doc dispatch drafted, as a record of the source it drafted into.
+def _answers(stored: Stored) -> dict[str, object]:
+    """The design-doc template's answers a design-doc dispatch composed.
 
-    The paid model's answer and nothing else: what makes it a document *of the plan's
-    project* in the plan store is the copy the dispatch performs, not this.
+    The paid model's answer and nothing else: what renders them, and what makes the result
+    a document *of the plan's project* in the plan store, is the pinned engine's resolve
+    piped into the store's own `document create`, which the dispatch runs.
     """
-    return (
-        f'---\ntitle: "Design: {stored.project}"\n'
-        f'project: "{stored.project}"\n---\n\n'
-        "## What\n\nA paginated node listing.\n\n"
-        "## Why\n\nAn operator cannot see past the first screen.\n\n"
-        "## Architecture\n\nOne route, one view.\n\n"
-        "## Contracts\n\nThe cursor is an opaque token.\n\n"
-        "## Acceptance criteria\n\nThe listing pages.\n\n"
-        "## Planned tasks\n\n"
-        "| Task | What it delivers | Depends on | Where it lives |\n"
-        "| --- | --- | --- | --- |\n"
-        f"| {stored.task_title} | the route | none | the store's own location |\n"
-        f"| {stored.second_task_title} | the view | {stored.task_title} | "
-        "the store's own location |\n"
-    )
+    return {
+        "what": "A paginated node listing.",
+        "why": "An operator cannot see past the first screen.",
+        "architecture": "One route, one view.",
+        "contracts": ["The cursor is an opaque token."],
+        "acceptance_criteria": ["The listing pages."],
+        "planned_tasks": [
+            {
+                "task": stored.task_title,
+                "delivers": "the route",
+                "depends_on": "none",
+                "location": "the store's own location",
+            },
+            {
+                "task": stored.second_task_title,
+                "delivers": "the view",
+                "depends_on": stored.task_title,
+                "location": "the store's own location",
+            },
+        ],
+    }
 
 
-def _staged_draft(tmp_path: Path, stored: Stored) -> Path:
-    """Stage the document's prose where the design-doc dispatch drafted it.
+def _renders_the_document(tmp_path: Path, stored: Stored, source: str) -> list[str]:
+    """The one command a design-doc dispatch runs to render and store its answers.
 
-    This is the scripted half and the whole of it: the prose a paid model would have
-    written, staged before the launch exactly as every other scripted answer in this suite
-    is. **Storing it is not staged.** The plan store holds no document until the dispatch
-    itself runs the store's own command line, so what the read-back at the end proves is
-    that the dispatch ran it.
-
-    Answers the root of the source the draft is a document of, which is what the dispatch
-    names on that command line.
+    This is the scripted half and the whole of it: the answers a paid model would have
+    written, staged before the launch. **Rendering and storing are not staged**: the plan
+    store holds no document until the dispatch itself runs the pinned engine's resolve
+    piped into the store's own `document create`, into ``source`` — so what the read-back
+    at the end proves is that the dispatch ran it.
     """
-    documents = tmp_path / "drafted" / "documents"
-    documents.mkdir(parents=True)
-    (documents / f"{stored.document}.md").write_text(_document(stored), encoding="utf-8")
-    return documents.parent
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    answers = tmp_path / "design-answers.json"
+    answers.write_text(json.dumps(_answers(stored)), encoding="utf-8")
+    return [
+        "bash",
+        "-c",
+        '"$1" template resolve design-doc --json | "$2" document create "$3"'
+        ' --project "$4" --title "$5" --id "$6" --template-loader -'
+        ' --answers "$7" --no-interactive',
+        "store-the-document",
+        str(ENGINE_BIN),
+        str(ONETASKGRAPH_BIN),
+        source,
+        stored.project,
+        f"Design: {stored.project}",
+        stored.document,
+        str(answers),
+    ]
 
 
 def _environment(
@@ -449,26 +467,8 @@ def _environment(
     authored.write_text(json.dumps(_plan_records(stored)), encoding="utf-8")
     environment[AUTHOR_PLAN_ENV] = str(authored)
     keyed = tmp_path / "commands-per-marker.json"
-    drafted = _staged_draft(tmp_path, stored)
     keyed.write_text(
-        json.dumps(
-            {
-                DESIGN_TASK_MARKER: [
-                    [
-                        str(ONETASKGRAPH_BIN),
-                        "--set",
-                        f"sources.{DRAFT_SOURCE}.plugin=local-md",
-                        "--set",
-                        f"sources.{DRAFT_SOURCE}.config.root={drafted}",
-                        "document",
-                        "copy",
-                        f"{DRAFT_SOURCE}:{stored.document}",
-                        "--to",
-                        FIXTURE_SOURCE,
-                    ]
-                ]
-            }
-        ),
+        json.dumps({DESIGN_TASK_MARKER: [_renders_the_document(tmp_path, stored, FIXTURE_SOURCE)]}),
         encoding="utf-8",
     )
     environment[RUN_ON_MARKER_ENV] = str(keyed)
@@ -725,14 +725,11 @@ def test_the_design_doc_dispatch_is_required_to_name_each_pieces_repository(
     """A plan across two repositories owes a reader which change lands where.
 
     Read where the requirement is consumed, which is the dispatched task itself: the flow
-    lifts that criterion out of `config/design-doc-template.md` as it composes the task, so
-    the template stays the one statement of what the document is judged on while the
-    dispatch still meets the requirement in the text its judge reads. A pointer alone was
-    not that — the document that came back obeyed everything except the part nobody had put
-    in front of it, naming each piece by role and no repository at all.
-
-    So nothing here opens that template; asserting its own words back out of a real
-    launch's prompt is what keeps the two from agreeing by saying nothing to each other.
+    states that criterion among the task's own acceptance criteria as well as in the
+    template's description of the architecture answer, so the dispatch meets the
+    requirement in the text its judge reads. A pointer alone was not that — the document
+    that came back obeyed everything except the part nobody had put in front of it, naming
+    each piece by role and no repository at all.
     The plan is read back from the store too, because the requirement is conditional and a
     journey spanning one repository would exercise the exempt case instead.
     """
@@ -763,9 +760,9 @@ def test_the_design_doc_dispatch_is_required_to_name_each_pieces_repository(
 
     for prompt in dispatched:
         flat = " ".join(prompt.split())
-        assert DESIGN_TEMPLATE in flat, (
-            f"the design-doc dispatch was never sent to {DESIGN_TEMPLATE}, which is the "
-            f"one statement of the document's shape:\n{prompt!r}"
+        assert DESIGN_TEMPLATE_VARIABLES in flat, (
+            f"the design-doc dispatch was never sent to `{DESIGN_TEMPLATE_VARIABLES}`, which "
+            f"is the one statement of the document's shape:\n{prompt!r}"
         )
         assert ARCHITECTURE_NAMES_ITS_REPOSITORIES in flat, (
             "the design-doc dispatch's own task states no condition on a plan spanning "
@@ -794,12 +791,12 @@ def test_the_stored_document_reads_back_as_a_document_of_the_plans_own_project(
     whereabouts of is one a reviewer cannot open — and a `local-md` source answers a
     **path**, which is one of the two forms this repository's rows are written from.
 
-    And the origin the store stamped is read, which is what makes this a reading of the
-    dispatch rather than of the fixture. Nothing here writes into the plan store: the
-    prose was staged in a source of the dispatch's own, and this record exists because the
-    dispatch ran `onetaskgraph document copy` against the store its repository names. That
-    stamp is the store's own account of having done it, and a file placed where the store
-    would have put one carries nothing of the kind.
+    And the provenance the store recorded is read, which is what makes this a reading of the
+    dispatch rather than of the fixture. Nothing here writes into the plan store: only the
+    answers were staged, and this record exists because the dispatch piped the pinned
+    `template resolve design-doc` into `onetaskgraph document create` against the store its
+    repository names. That provenance is the store's own account of having rendered it,
+    and a file placed where the store would have put one carries nothing of the kind.
     """
     stored = planned.stored
     assert stored.document_path.is_file(), (
@@ -832,10 +829,12 @@ def test_the_stored_document_reads_back_as_a_document_of_the_plans_own_project(
         f"the store reports the document at {item['location']!r}; a reviewer following "
         f"that pointer does not reach {stored.document_path}"
     )
-    assert item["metadata"].get(ORIGIN_KEY) == f"{DRAFT_SOURCE}:{stored.document}", (
-        f"the store records this document's origin as {item['metadata'].get(ORIGIN_KEY)!r} "
-        f"rather than the draft the dispatch copied, so the record in the plan store was "
-        "not written by the store's own copy of that draft"
+    provenance = item["metadata"].get(PROVENANCE_KEY)
+    assert isinstance(provenance, dict), item["metadata"]
+    assert provenance.get("template") == DESIGN_REFERENCE, (
+        f"the store records this document as a rendering of {provenance.get('template')!r} "
+        f"rather than of {DESIGN_REFERENCE}, so it was not rendered from the template the "
+        "dispatch was told to render"
     )
 
 
@@ -932,38 +931,6 @@ def test_the_flow_reports_where_the_destination_holds_the_project_and_the_docume
 #: the one place that states it rather than spelled a second time here. Naming it this way
 #: is what makes the journey below about the default rather than about the string `plans`.
 DEFAULT_BOARD = plan_copy.BOARD
-
-#: A criterion carrying the two characters a Bash `//` replacement does not leave alone,
-#: appended to the *copied* checkout's template so the flow lifts it like any other line.
-#: `&` and `\` rather than an arbitrary odd string, because those two are the whole of the
-#: hazard the splice in `scripts/finish-plan.sh` is written against; that site states why.
-#:
-#: Written into the template here rather than asserted of the shipped one, because a
-#: template author is who writes this in reality and what is under test is that *whatever*
-#: goes between those markers reaches the dispatch verbatim. The shipped criterion carries
-#: neither character today, which is why nothing caught this.
-LIFT_METACHARACTER_PROBE = (
-    "- A lifted criterion reaches the dispatch verbatim: read & write the c:\\plans path."
-)
-
-
-def _lends_a_criterion_carrying_metacharacters(checkout: Path) -> None:
-    """Append :data:`LIFT_METACHARACTER_PROBE` inside that checkout's own lent block.
-
-    Appended rather than substituted for the shipped criterion, so the sibling journey
-    reading the shipped requirement's own words out of a dispatched task keeps its
-    subject: both lines are lent, and each is read for a different property.
-    """
-    template = checkout / DESIGN_TEMPLATE
-    text = template.read_text(encoding="utf-8")
-    assert text.count(LIFT_CLOSE) == 1, (
-        f"the copied {DESIGN_TEMPLATE} carries {text.count(LIFT_CLOSE)} closing markers "
-        "rather than one, so this journey cannot say where the lent block ends"
-    )
-    template.write_text(
-        text.replace(LIFT_CLOSE, f"{LIFT_METACHARACTER_PROBE}\n{LIFT_CLOSE}"), encoding="utf-8"
-    )
-
 
 #: The default-board flow's own run, and the tail's derived from it.
 DEFAULT_RUN = RunId("plan-flow-default-e2e")
@@ -1078,7 +1045,6 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     # is: a `local-md` source canonicalizes its root when it is built.
     board.mkdir()
     _the_board_is_a_directory(checkout, board)
-    _lends_a_criterion_carrying_metacharacters(checkout)
     _provisioned(checkout)
 
     unique = f"test-{os.getpid()}-plan-flow-default"
@@ -1132,45 +1098,6 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     finally:
         for ended in (DEFAULT_RUN, DEFAULT_DESIGN_RUN):
             _just("stop", ended, environment=environment, seconds=60, checkout=checkout)
-
-
-@COPIES_THE_TRACKED_TREE
-@pytest.mark.xdist_group("plan-flow")
-def test_a_lifted_criterion_reaches_the_dispatch_with_its_metacharacters_intact(
-    default_board: Defaulted,
-) -> None:
-    """Whatever a template author writes between those markers arrives verbatim.
-
-    A corrupted criterion is the one failure nothing downstream can catch: the flow still
-    composes, still launches, still succeeds, and the worker is judged against whatever
-    reached it. So this writes :data:`LIFT_METACHARACTER_PROBE` into the copied checkout's
-    own template and requires those literal bytes back out of the dispatched task. The
-    substitution hazard it guards against is stated at the splice in
-    `scripts/finish-plan.sh`.
-
-    Read where the criterion is consumed, and opening no template to build its
-    expectation, for the reason the sibling journey gives.
-    """
-    # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only place
-    # a dispatched task is observable; no published view carries it. The fake backend
-    # writes these records itself and `TurnRecord` states the schema it owns.
-    dispatched = [
-        turn["prompt"]
-        for turn in default_board.turns
-        if _member(turn) == WORKER_MEMBER and DESIGN_TASK_MARKER in turn["prompt"]
-    ]
-    # llmlint: ignore-end[tests_mirror_real_usage]
-    assert dispatched, (
-        "no dispatched turn carried the design-doc node's own task, so nothing here is "
-        "about that dispatch at all"
-    )
-
-    for prompt in dispatched:
-        assert LIFT_METACHARACTER_PROBE in prompt, (
-            "the criterion this flow lifted out of the template did not reach the "
-            "dispatched task as it was written, so what the design-doc dispatch is "
-            f"judged against is not what the template says:\n{prompt!r}"
-        )
 
 
 @COPIES_THE_TRACKED_TREE

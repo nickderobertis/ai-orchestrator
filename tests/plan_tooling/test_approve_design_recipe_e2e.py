@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from project_fixtures import helper, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -42,7 +43,7 @@ from orchestrator.design_approval import (
     STAMP_KIND,
     STAMP_NODES,
 )
-from orchestrator.plan_store import ORIGIN_KEY, StoreDocument
+from orchestrator.plan_store import StoreDocument
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -58,14 +59,23 @@ SOURCE = "drafting"
 #: repository launches from. A plain lowercase name for the reason :data:`SOURCE` is one.
 BOARD = "board"
 
-#: The source each design document is drafted in before it is stored. A design-doc
-#: dispatch writes the prose in a directory of its own and then puts it into the plan's
-#: store with the store's own `document copy` — the write
-#: `tests/plan_tooling/test_plan_flow_e2e.py` scripts that dispatch to make, and
-#: the only way a document reaches a plan store at all. Named on the copy's own command
-#: line rather than in the environment, so no launch below sees a source it would never
-#: see in production.
+#: The source a document written by hand is drafted in before the store's own `document
+#: copy` puts it into a plan's store — the way a document reached a plan before documents
+#: were renderings, and the one shape here that records no rendering at all. Named on the
+#: copy's own command line rather than in the environment, so no launch below sees it.
 DRAFT = "drafted"
+
+#: The pinned engine, whose `template resolve design-doc` states the template every
+#: document here is rendered from, exactly as a design-doc dispatch pipes it.
+ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+
+#: The provenance key the store records a rendering under, and what a design-doc
+#: rendering records there.
+PROVENANCE = "onetaskgraph.template"
+DESIGN_REFERENCE = "onepipeline:design-doc"
+
+#: The regenerate every refusal of a document that is not the rendering in force names.
+REGENERATE = "onepipeline template resolve design-doc --json | onetaskgraph document render"
 
 #: The guard covering every paid identity `ONEHARNESS_BIN_*` cannot reach. Nothing here
 #: should dispatch at all, which is exactly why it is worth proving rather than assuming:
@@ -95,13 +105,38 @@ NO_OBSERVER = ("--dag-graph", "off")
 #: stamp names what the launch wrote, so one node states that with one fewer launch.
 PLANNING_NODE = "handoff"
 
-#: The document each plan here is read as, before anybody has approved it.
-DESIGN = (
+#: The answers each plan's document here is rendered from, before anybody has approved it.
+DESIGN: Mapping[str, object] = {
+    "what": "One node that changes nothing.",
+    "why": "Something has to be launchable for this to be a gate at all.",
+    "architecture": "One node, settled without a dispatch.",
+    "contracts": ["None: nothing outside this plan reads it."],
+    "acceptance_criteria": ["The run settles and nothing changed."],
+    "planned_tasks": [
+        {
+            "task": "handoff",
+            "delivers": "the recorded no-change handoff",
+            "depends_on": "none",
+            "location": "the store's own location",
+        }
+    ],
+}
+
+#: Answers to this host's `plan-task` template, which renders a document here only to be
+#: one that records another template's provenance.
+PLAN_TASK_ANSWERS: Mapping[str, object] = {
+    "what": "One node that changes nothing.",
+    "why": "Something has to be launchable for this to be a gate at all.",
+    "acceptance_criteria": ["The run settles and nothing changed."],
+}
+
+#: The same document written by hand, as prose rather than as a rendering.
+HAND_WRITTEN = (
     "## What\n\nOne node that changes nothing.\n\n"
     "## Why\n\nSomething has to be launchable for this to be a gate at all.\n\n"
     "## Architecture\n\nOne node, settled without a dispatch.\n\n"
-    "## Contracts\n\nNone: nothing outside this plan reads it.\n\n"
-    "## Acceptance criteria\n\nThe run settles and nothing changed.\n\n"
+    "## Contracts\n\n- None: nothing outside this plan reads it.\n\n"
+    "## Acceptance criteria\n\n- The run settles and nothing changed.\n\n"
     "## Planned tasks\n\n"
     "| Task | What it delivers | Depends on | Where it lives |\n"
     "| --- | --- | --- | --- |\n"
@@ -178,15 +213,24 @@ class Store:
         )
         return f"{SOURCE}:{native}"
 
-    def document(self, native: str, content: str = DESIGN, *, named: str = "design") -> Path:
-        """Store one document of ``native``'s plan the way the design-doc dispatch does.
+    def document(
+        self,
+        native: str,
+        answers: Mapping[str, object] = DESIGN,
+        *,
+        named: str = "design",
+        template_root: Path = REPO_ROOT / "templates",
+        template: str = "design-doc",
+    ) -> Path:
+        """Render one document of ``native``'s plan the way the design-doc dispatch does.
 
-        The prose is drafted in :data:`DRAFT`, a source of this store's own, and then put
-        into the plan's store with the store's own `document copy`. That is the whole of
-        what the design-doc dispatch does to store what it wrote — the prose itself is the
-        model's, and it is the one part of that dispatch nothing here spends — so a
-        document reaches a plan here through the same verb rather than by a write into the
-        store's directory behind its back.
+        The answers are the model's, and the one part of that dispatch nothing here spends;
+        the rendering is the pinned engine's `template resolve design-doc` piped into the
+        store's own `document create`, which is what a design-doc dispatch runs to store
+        what it wrote. ``template_root`` is the host root that resolve reads, which is this
+        checkout's own unless a journey renders from a template that is no longer in force,
+        and ``template`` the registered name resolved, which is `design-doc` unless a
+        journey renders the document from another template altogether.
 
         ``named`` is what distinguishes a second document *of the same project* from a
         document of another one — which is the state the ambiguity refusal is about, and
@@ -195,11 +239,86 @@ class Store:
         Answers where the store says the stored record is, read back from the store rather
         than composed, which is the same rule the refusals themselves follow.
         """
-        drafted = f"{native}-{named}"
+        written = self.drafts.parent / f"{self.root.name}-{native}-{named}.answers.json"
+        written.write_text(json.dumps(dict(answers)), encoding="utf-8")
+        created = self._piped(
+            "document",
+            "create",
+            self.source,
+            "--project",
+            native,
+            "--title",
+            f"Design: {native} ({named})",
+            "--id",
+            f"{native}-{named}",
+            "--answers",
+            str(written),
+            template_root=template_root,
+            template=template,
+        )
+        (record,) = created["items"]
+        return Path(str(record["item"]["location"]["path"]))
+
+    def regenerate(
+        self, native: str, *answered: str, named: str = "design", answers: Path | None = None
+    ) -> dict[str, Any]:
+        """Regenerate a stored document in place from its stored answers, overlaid by ``answered``.
+
+        The repair every refusal of an unrendered document names: the pinned resolve piped
+        into the store's own `document render`, each ``NAME=VALUE`` an answer changed, and
+        ``answers`` a file of answers supplied whole, for a document that holds none.
+        """
+        changed = [flag for answer in answered for flag in ("--var", answer)]
+        supplied = ["--answers", str(answers)] if answers is not None else []
+        return self._piped(
+            "document", "render", f"{self.source}:{native}-{named}", *changed, *supplied
+        )
+
+    def listed(self) -> list[dict[str, Any]]:
+        """Every document this store holds, as the store's own `document list` answers."""
+        held: list[dict[str, Any]] = self._stored("document", "list", "--source", self.source)[
+            "items"
+        ]
+        return held
+
+    def regenerating(self, qualified: str, *supplied: str) -> subprocess.CompletedProcess[str]:
+        """The regenerate a refusal names, run on ``qualified`` and answered whatever it says.
+
+        :meth:`regenerate` holds the store to succeeding; this is the same pinned resolve
+        piped into `document render` for a journey that has to read a refusal of it too.
+        """
+        resolved = subprocess.run(
+            [str(ENGINE), "template", "resolve", "design-doc", "--json"]
+            + ["--template-root", str(REPO_ROOT / "templates")],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert resolved.returncode == 0, resolved.stderr
+        return subprocess.run(
+            [str(ONETASKGRAPH_BIN), "document", "render", qualified, *supplied]
+            + ["--template-loader", "-", "--no-interactive", "--json"],
+            input=resolved.stdout,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+
+    def hand_written(self, native: str, content: str = HAND_WRITTEN) -> Path:
+        """Put a document written by hand into ``native``'s plan, recording no rendering.
+
+        Drafted in :data:`DRAFT` and put into the plan's store with the store's own
+        `document copy`, which is how a document reached a plan before documents were
+        renderings — so it is what a document with no provenance really looks like.
+        """
+        drafted = f"{native}-design"
         documents = self.drafts / "documents"
         documents.mkdir(parents=True, exist_ok=True)
         (documents / f"{drafted}.md").write_text(
-            frontmatter({"title": f"Design: {native} ({named})", "project": native}, content),
+            frontmatter({"title": f"Design: {native} (design)", "project": native}, content),
             encoding="utf-8",
         )
         copied = self._stored("document", "copy", f"{DRAFT}:{drafted}", "--to", self.source)
@@ -207,6 +326,37 @@ class Store:
         shown = self._stored("document", "show", str(one["destination"]))
         (record,) = shown["items"]
         return Path(str(record["item"]["location"]["path"]))
+
+    def _piped(
+        self,
+        *arguments: str,
+        template_root: Path = REPO_ROOT / "templates",
+        template: str = "design-doc",
+    ) -> dict[str, Any]:
+        """The pinned `template resolve <template>`, piped into one pinned store command."""
+        resolved = subprocess.run(
+            [str(ENGINE), "template", "resolve", template, "--json"]
+            + ["--template-root", str(template_root)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert resolved.returncode == 0, resolved.stderr
+        answered = subprocess.run(
+            [str(ONETASKGRAPH_BIN), *arguments]
+            + ["--template-loader", "-", "--no-interactive", "--json"],
+            input=resolved.stdout,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert answered.returncode == 0, answered.stdout + answered.stderr
+        # Narrowed to a mapping and no further, for the reason `_stored` gives.
+        payload: dict[str, Any] = json.loads(answered.stdout)
+        return payload
 
     def metadata(self, record: Path) -> dict[str, Any]:
         """What the store says the document at ``record`` holds under `metadata`.
@@ -257,23 +407,18 @@ class Store:
         payload: dict[str, Any] = json.loads(answered.stdout)
         return payload
 
-    def edit(self, record: Path, content: str) -> None:
+    def edit(self, record: Path, said: str, instead: str) -> None:
         """Change what a stored document says, where the store says it is.
 
         What a person does with the path every refusal hands them — *"It is at …: read
-        it"* — and the only editing interface a local Markdown store has. The record the
-        store keeps around the prose is left alone, because a reader edits the document
-        rather than replacing it: re-storing it through the copy verb would take the
-        approval record with it, and the refusal that followed would then be about a
-        record that had gone rather than about content nobody has read.
+        it"* — and the only editing interface a local Markdown store has: the first place
+        the body says ``said`` is made to say ``instead``. The record the store keeps
+        around the prose — its metadata, and the answers it stores after the body — is left
+        alone, because a reader edits the document rather than replacing it.
         """
-        lines = record.read_text(encoding="utf-8").splitlines()
-        closing = next(
-            index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"
-        )
-        record.write_text(
-            "\n".join([*lines[: closing + 1], "", content.rstrip(), ""]), encoding="utf-8"
-        )
+        text = record.read_text(encoding="utf-8")
+        assert said in text, f"{record} does not say {said!r}:\n{text}"
+        record.write_text(text.replace(said, instead, 1), encoding="utf-8")
 
     def standing_project(self, native: str, *, titled: str) -> Path:
         """One project this store already holds, under an identifier of its own.
@@ -426,10 +571,10 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
     )
     assert not runs.exists(), "a launch refused for an unapproved document reached the ledger"
 
-    # The copy recorded where the document came from; the approval has to leave that
-    # standing, because it is what a later copy matches the document by.
+    # The store recorded which template rendered the document; the approval has to leave
+    # that standing, because it is what the approval is keyed on.
     stored = store.metadata(record)
-    assert stored[ORIGIN_KEY] == f"{DRAFT}:{native}-design", stored
+    assert stored[PROVENANCE]["template"] == DESIGN_REFERENCE, stored
     assert RECORD_KEY not in stored, stored
     rendered = record.read_bytes()
 
@@ -437,9 +582,9 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
     assert approved.returncode == 0, approved.stdout + approved.stderr
     assert "recorded the approval" in approved.stdout, approved.stdout
     # One entry landed and every other byte of the document is as the store rendered it,
-    # the origin included.
+    # the provenance included.
     assert RECORD_KEY in store.metadata(record)
-    assert store.metadata(record)[ORIGIN_KEY] == stored[ORIGIN_KEY]
+    assert store.metadata(record)[PROVENANCE] == stored[PROVENANCE]
     entry = f'  "{RECORD_KEY}": '.encode()
     kept = [
         line for line in record.read_bytes().splitlines(keepends=True) if not line.startswith(entry)
@@ -461,12 +606,34 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
     assert _settled(launched) == "complete", launched.stdout
     assert (runs / native).is_dir(), f"the run this launch settled is not on the ledger:\n{runs}"
 
-    # Editing the document afterwards is content nobody has approved, which is the whole
-    # reason the record is keyed on the document rather than on the plan.
-    store.edit(record, DESIGN.replace("One node that changes nothing", "Something else"))
+    # Regenerating it with unchanged answers and an unchanged template renders the same
+    # document, so the approval still holds and the plan still launches.
+    unchanged = store.regenerate(native)
+    assert unchanged["changed"] is False, unchanged
+    kept_launch = _launch(project, runs)
+    assert kept_launch.returncode == 0, kept_launch.stdout + kept_launch.stderr
+
+    # Editing the body by hand afterwards leaves a document that is not the rendering its
+    # provenance records: both the recipe and the launch refuse it, naming the regenerate.
+    store.edit(record, "One node that changes nothing.", "Something else.")
     edited = _launch(project, runs)
     assert edited.returncode == 1, edited.stdout + edited.stderr
-    assert "carries no approval for what it currently says" in edited.stderr, edited.stderr
+    assert "was edited after it was rendered" in edited.stderr, edited.stderr
+    assert REGENERATE in edited.stderr, edited.stderr
+    unapprovable = _just("approve-design", project, runs=runs)
+    assert unapprovable.returncode == 1, unapprovable.stdout + unapprovable.stderr
+    assert "was edited after it was rendered" in unapprovable.stderr, unapprovable.stderr
+    assert REGENERATE in unapprovable.stderr, unapprovable.stderr
+
+    # Changing an answer and regenerating is content nobody has approved, which is the
+    # whole reason the record is keyed on the rendering rather than on the plan.
+    changed = store.regenerate(native, "what=Something else.")
+    assert changed["changed"] is True, changed
+    regenerated = _launch(project, runs)
+    assert regenerated.returncode == 1, regenerated.stdout + regenerated.stderr
+    assert "carries no approval for what it currently says" in regenerated.stderr, (
+        regenerated.stderr
+    )
 
     reapproved = _just("approve-design", project, runs=runs)
     assert reapproved.returncode == 0, reapproved.stdout + reapproved.stderr
@@ -474,6 +641,216 @@ def test_a_plan_is_launched_only_while_its_design_document_is_the_one_approved(
     relaunched = _launch(project, runs)
     assert relaunched.returncode == 0, relaunched.stdout + relaunched.stderr
     assert _settled(relaunched) == "complete", relaunched.stdout
+
+    # Renaming the document is a change to what a person read too, though no body byte
+    # moves: the title is in the key, so the launch is refused until it is approved again.
+    _retitled(record, f"Design: {native}, renamed")
+    retitled = _launch(project, runs)
+    assert retitled.returncode == 1, retitled.stdout + retitled.stderr
+    assert "carries no approval for what it currently says" in retitled.stderr, retitled.stderr
+    renamed = _just("approve-design", project, runs=runs)
+    assert renamed.returncode == 0, renamed.stdout + renamed.stderr
+    assert "recorded the approval" in renamed.stdout, renamed.stdout
+
+
+def _retitled(record: Path, title: str) -> None:
+    """Rename the document at ``record`` the one way a local store offers: its front matter.
+
+    The store has no verb that retitles a document, so this is the edit a person makes to
+    the file every refusal points them at, read and written as the YAML it is, leaving the
+    body and the provenance as the store rendered them.
+    """
+    text = record.read_text(encoding="utf-8")
+    _, front, body = text.split("---\n", 2)
+    matter = yaml.safe_load(front)
+    matter["title"] = title
+    record.write_text(
+        f"---\n{yaml.safe_dump(matter, sort_keys=False, allow_unicode=True)}---\n{body}",
+        encoding="utf-8",
+    )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other gate
+# journey of this module already runs behind it. That key names the recipes, scripts and
+# package these launches drive, so narrowing it would memoize a verdict over a tree never run.
+def _without_its_body_digest(record: Path) -> None:
+    """Drop the body digest from the provenance ``record``'s front matter holds, and nothing else.
+
+    Read and written as the YAML the front matter is, so it holds whichever spelling the
+    store wrote the provenance mapping in; the body below the front matter is left as the
+    store rendered it.
+    """
+    text = record.read_text(encoding="utf-8")
+    _, front, body = text.split("---\n", 2)
+    matter = yaml.safe_load(front)
+    del matter["metadata"][PROVENANCE]["body_digest"]
+    record.write_text(
+        f"---\n{yaml.safe_dump(matter, sort_keys=False, allow_unicode=True)}---\n{body}",
+        encoding="utf-8",
+    )
+
+
+def _moved_template_root(tmp_path: Path) -> Path:
+    """A host root whose `design-doc` template differs from this checkout's by one line.
+
+    Rendering from it is what a document rendered *before* the template changed looks like
+    from here: its provenance names `onepipeline:design-doc`, under a chain digest that is
+    not the one this checkout resolves now.
+    """
+    root = tmp_path / "moved-templates"
+    shutil.copytree(REPO_ROOT / "templates", root)
+    template = root / "design-doc.md.j2"
+    template.write_text(
+        template.read_text(encoding="utf-8").replace("## Why\n", "## Why\n\n<!-- moved -->\n"),
+        encoding="utf-8",
+    )
+    return root
+
+
+@pytest.mark.xdist_group("approve-design")
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "no provenance",
+        "incomplete provenance",
+        "another template's rendering",
+        "a template changed after rendering",
+    ],
+)
+def test_a_document_that_is_not_the_rendering_in_force_is_refused_by_the_recipe_and_the_launch(
+    store: Store, runs: Path, tmp_path: Path, shape: str
+) -> None:
+    """None can be approved, and none can be launched, and each names the repair that works.
+
+    A document written by hand records no rendering at all, and one whose provenance lost a
+    field records no rendering this can read; one rendered from another
+    registered template records that template's reference; one rendered from a template
+    since changed records a chain digest the pinned engine no longer resolves. The hand
+    edit of a rendering is the third shape, driven in the journey above.
+
+    The named regenerate is then run as the refusal words it — from the stored answers, or
+    from the design-doc answers where the document holds none of its own — and the document
+    it leaves is approved and launched, so the repair each refusal names is one that works.
+    """
+    native = f"approve-design-{shape.split()[0]}-{len(shape)}"
+    project = store.plan(native)
+    match shape:
+        case "no provenance":
+            store.hand_written(native)
+            said = "records no rendering of the design-doc template"
+        case "incomplete provenance":
+            _without_its_body_digest(store.document(native))
+            said = "records no rendering of the design-doc template"
+        case "another template's rendering":
+            store.document(native, PLAN_TASK_ANSWERS, template="plan-task")
+            said = "is a rendering of onepipeline:plan-task, not of onepipeline:design-doc"
+        case _:
+            store.document(native, template_root=_moved_template_root(tmp_path))
+            said = "written against a template no longer in force"
+
+    recorded = _just("approve-design", project, runs=runs)
+    assert recorded.returncode == 1, recorded.stdout + recorded.stderr
+    assert said in recorded.stderr, recorded.stderr
+    assert REGENERATE in recorded.stderr, recorded.stderr
+
+    launched = _launch(project, runs)
+    assert launched.returncode == 1, launched.stdout + launched.stderr
+    assert said in launched.stderr, launched.stderr
+    assert REGENERATE in launched.stderr, launched.stderr
+    assert "nothing was dispatched" in launched.stderr, launched.stderr
+    assert not runs.exists(), "a refused launch wrote a run onto the ledger"
+
+    # Each repair as its refusal words it: a document holding no stored answers a
+    # regenerate can trust is regenerated from the design-doc answers supplied whole; a
+    # rendering of another template is replaced by the store's `document create` naming its
+    # id, which is what `store.document` runs; one rendered from a template since changed is
+    # regenerated from the answers it holds.
+    match shape:
+        case "no provenance" | "incomplete provenance":
+            assert f"{REGENERATE} " in recorded.stderr and "--answers" in recorded.stderr, (
+                recorded.stderr
+            )
+            supplied = tmp_path / f"{native}.answers.json"
+            supplied.write_text(json.dumps(dict(DESIGN)), encoding="utf-8")
+            store.regenerate(native, answers=supplied)
+        case "another template's rendering":
+            assert "onetaskgraph document create" in recorded.stderr, recorded.stderr
+            assert f"--id {native}-design --template-loader -" in recorded.stderr, recorded.stderr
+            store.document(native)
+        case _:
+            store.regenerate(native)
+    repaired = _just("approve-design", project, runs=runs)
+    assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+    assert "recorded the approval" in repaired.stdout, repaired.stdout
+    relaunched = _launch(project, runs)
+    assert relaunched.returncode == 0, relaunched.stdout + relaunched.stderr
+    assert _settled(relaunched) == "complete", relaunched.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+@pytest.mark.xdist_group("approve-design")
+@pytest.mark.parametrize("shape", ["a hand edit", "a template changed after rendering"])
+def test_a_copied_document_that_is_not_the_rendering_in_force_is_repaired_from_supplied_answers(
+    store: Store, board: Store, runs: Path, tmp_path: Path, shape: str
+) -> None:
+    """On the board a plan is launched from, the regenerate is handed the answers whole.
+
+    The store keeps a rendering's answers where it was drafted and never copies them, so a
+    copy of a design document holds none: regenerating it from its stored answers is
+    refused by the store for want of every required one. Each refusal of a stale or edited
+    document therefore names the regenerate with the answers supplied as well, and this
+    runs both as the refusal words them on a real copy — the one from stored answers
+    refused, the one from supplied answers repairing the copy so it is approved and
+    launched from the board.
+    """
+    native = f"approve-design-copied-{shape.split()[1]}"
+    drafted = store.plan(native)
+    if shape == "a hand edit":
+        store.document(native)
+        said = "was edited after it was rendered"
+    else:
+        store.document(native, template_root=_moved_template_root(tmp_path))
+        said = "written against a template no longer in force"
+    # llmlint: ignore[e2e_not_mocked] `reviewed` substitutes the paid provider process alone,
+    # as the journey above says: `just copy-plan` refuses a plan no review record covers.
+    reviewed(drafted)
+    copied = _just("copy-plan", drafted, "--to", BOARD, runs=runs)
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+
+    landed = f"{BOARD}:{native}"
+    listed = board.listed()
+    (document,) = listed
+    if shape == "a hand edit":
+        board.edit(
+            Path(document["item"]["location"]["path"]), "One node that changes nothing.", "Else."
+        )
+
+    refused = _just("approve-design", landed, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert said in refused.stderr, refused.stderr
+    assert f"{REGENERATE} {document['id']} " in refused.stderr, refused.stderr
+    assert "--answers" in refused.stderr, refused.stderr
+
+    # The copy holds no answers of its own, so the regenerate from stored answers alone
+    # cannot repair it — which is why the refusal names the supplied one beside it.
+    unanswered = board.regenerating(str(document["id"]))
+    assert unanswered.returncode != 0, unanswered.stdout + unanswered.stderr
+    assert "supply every required answer" in unanswered.stderr, unanswered.stderr
+
+    supplied = tmp_path / f"{native}.answers.json"
+    supplied.write_text(json.dumps(dict(DESIGN)), encoding="utf-8")
+    repaired = board.regenerating(str(document["id"]), "--answers", str(supplied))
+    assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+
+    approved = _just("approve-design", landed, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+    launched = _launch(landed, runs)
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    assert _settled(launched) == "complete", launched.stdout
 
 
 @pytest.mark.xdist_group("approve-design")

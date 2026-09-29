@@ -48,8 +48,8 @@ orchestrator-review-plan = "orchestrator.plan_review:main"
 orchestrator-copy-plan = "orchestrator.plan_copy:main"
 # The fifth records the user's approval of the design document a plan is reviewed as,
 # which is the thing a person can actually judge and so the thing put in front of them.
-# It is a command of this repository because the record is keyed on this checkout's own
-# tracked template — see `orchestrator/design_approval.py`.
+# It is a command of this repository because the record is keyed on the design-doc template
+# as this checkout's own template root resolves it — see `orchestrator/design_approval.py`.
 orchestrator-approve-design = "orchestrator.design_approval:main"
 # The sixth is the other half of that gate and is not a verb anybody types: every launch
 # this repository makes goes through it, and it refuses a plan whose design document is

@@ -327,17 +327,19 @@ review-plan *args:
 # approve-design <source>:<project>`.
 #
 # This is the gate on dispatch, and the one a person is actually the subject of. A plan
-# is not what somebody outside the domain can review; the one short document
-# `config/design-doc-template.md` states is, and a planning run's `design-doc` node
-# writes it into the plan's own project. So the document goes to the user, and this
+# is not what somebody outside the domain can review; the one short document this host's
+# `design-doc` template (`templates/design-doc.md.j2`) renders is, and a planning run's
+# `design-doc` node writes it into the plan's own project. So the document goes to the user, and this
 # command records that they approved it — after which `just orchestrate` will launch that
 # plan, and before which it refuses to.
 #
 # The record goes onto the document in the plan store, so it travels with the plan
 # through `just copy-plan` exactly as a review record travels with a task: approve where
-# you draft, then copy up. It is keyed on the document's own authored content *and* on
-# that template, so editing the document leaves it unapproved and moving the template
-# leaves every approved document unapproved.
+# you draft, then copy up. It is keyed on the document's title, the template's chain digest
+# as the pinned engine resolves it now, and the body digest the store recorded when it
+# rendered the document, so editing or regenerating the document leaves it unapproved and
+# changing the template leaves every approved document unapproved; a document that is not
+# the rendering its provenance records is refused, naming the regenerate that repairs it.
 #
 # There is no flag that skips this and none is coming; running it on an unchanged
 # document a second time writes nothing and says so. Exit 1 is a refusal — no design

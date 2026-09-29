@@ -78,6 +78,12 @@ SUBCOMMAND_SHAPED = re.compile(r"^[a-z][a-z0-9-]*$")
 #: they are what marks `<run-id>` a placeholder rather than a subcommand.
 TRIM = "`'\",;:."
 
+#: The pipe and list operators that end one command and start another, so that the flags
+#: after one are read against the program it starts rather than the one before it. Not `;`:
+#: prose uses it between clauses, so :data:`TRIM` strips it as punctuation before any token
+#: is compared here.
+PIPE_AND_LIST_OPERATORS = frozenset({"|", "||", "&&"})
+
 #: Every retired round-era name, and what replaced it. The engine drives its DAG
 #: continuously to settlement, so none of these exists any more — and prose that still
 #: teaches one sends a planner to a verb that is gone.
@@ -230,6 +236,12 @@ def _drift_in(span: str, where: str, recipes: dict[str, Recipe]) -> list[Drift]:
     index = 0
     while index < len(tokens):
         token = tokens[index]
+        if token in PIPE_AND_LIST_OPERATORS:
+            # A pipe or a list ends the command it follows: what comes after is another
+            # program's surface, so its flags are never the previous invocation's.
+            invoked = None
+            index += 1
+            continue
         if token == "just" and index + 1 < len(tokens):
             named = tokens[index + 1]
             if SUBCOMMAND_SHAPED.match(named):
@@ -327,3 +339,19 @@ def test_no_round_era_command_survives_in_the_prose() -> None:
                 named.append(f"  - {where} names `{retired}`; {instead}")
 
     assert not named, "retired round-era vocabulary survives in the prose:\n" + "\n".join(named)
+
+
+def test_a_flag_after_a_pipe_is_read_against_the_program_the_pipe_starts() -> None:
+    """A pipeline is two commands, so the second's flags are never charged to the first.
+
+    The design document's regenerate path is taught as one engine verb piped into a
+    plan-store verb; read as one command, every plan-store flag reads as one the engine
+    lacks. The same flag before the pipe is still the engine's to answer for.
+    """
+    piped = "onepipeline template resolve design-doc --json | onetaskgraph x --template-loader -"
+    assert _drift_in(piped, "here", {}) == []
+
+    unpiped = "onepipeline template resolve design-doc --json --template-loader -"
+    assert [drift.named for drift in _drift_in(unpiped, "here", {})] == [
+        "the flag `--template-loader`"
+    ]

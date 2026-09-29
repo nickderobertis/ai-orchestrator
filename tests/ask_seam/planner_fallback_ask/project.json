@@ -20,7 +20,7 @@
   ],
   "namedInputs": {
     "askSeamPlannerFallbackAsk": [
-      "{workspaceRoot}/config/design-doc-template.md",
+      "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/graphs/node-scope.yaml",

@@ -180,11 +180,12 @@ ENGINE_REPORTS_ENV = "FAKE_ENGINE_REPORTS"
 PINNED_ENGINE = "0.40.0"
 
 
-#: Where `just finish-plan` reads the design document's template from, relative to the
-#: checkout it runs in. Stated here rather than read out of `scripts/finish-plan.sh`, for
-#: the reason every expectation in this suite is stated: a fixture that took its shape
-#: from its subject would build whatever the subject asked for and prove nothing about it.
-DESIGN_TEMPLATE = "config/design-doc-template.md"
+#: The task id the doubled store answers `task create` with; `just finish-plan` checks and
+#: launches whatever id that answer names.
+CREATED_TASK = "authoring:write-the-design-document"
+#: The project that answer names the task as created in: the tail's own, derived from the
+#: flow's name the recipes below launch under.
+CREATED_PROJECT = "cursor-shape-design"
 
 #: The operational appendix `just plan` hands its dispatch, spelled here for the reason
 #: the template above is: this suite states what a runnable checkout holds rather than
@@ -194,6 +195,23 @@ DISPATCH_APPENDIX = "templates/dispatch-appendix.md"
 #: The host root's registration `scripts/template-env.sh` refuses a checkout without,
 #: spelled here for the same reason.
 TEMPLATE_REGISTRATION = "templates/templates.yaml"
+
+#: What the doubled engine answers `template resolve plan-task --json` with instead of the
+#: plan-task loader, when a journey names one: how a journey states an engine that resolved
+#: the template to a loader with nothing to render.
+RESOLVED_LOADER_ENV = "FAKE_RESOLVED_LOADER"
+#: The JSON the doubled store reports as the created task's `location` instead of its record
+#: path under the authoring root, when a journey names one: how a journey states a store that
+#: created the task and did not say where.
+CREATED_LOCATION_ENV = "FAKE_CREATED_LOCATION"
+#: Where the doubled store writes the record of the task it creates, under the authoring
+#: root the flow writes into, so a journey can read whether a refusal took it back.
+CREATED_RECORD = "tasks/write-the-design-document.md"
+
+#: What the doubled engine's `template check plan-task --item` prints on stderr, ending on
+#: the status 2 the engine answers a refusal and a check that could not run with alike,
+#: when a journey names it: how a journey states which of the two the engine said.
+CHECK_OUTPUT_ENV = "FAKE_CHECK_OUTPUT"
 
 #: Where both doubled engines below record the template root each call was handed, one
 #: `<root> <argv>` line per call, when a journey names the file; `<unset>` when none was.
@@ -234,19 +252,6 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
         copied = checkout / "scripts" / name
         shutil.copy2(ROOT / "scripts" / name, copied)
         copied.chmod(0o755)
-    # The template `just finish-plan` lends its `design-doc` node a criterion out of and
-    # refuses the flow without. Written rather than copied, for the reason the brief below
-    # is, and with both markers because a template that lends nothing is refused by name.
-    # What the criterion *says* is `tests/plan_tooling/`'s to assert against a real
-    # dispatch; these journeys are about where a recipe lands and what it delegates.
-    template = checkout / DESIGN_TEMPLATE
-    template.write_text(
-        "# A template this journey states\n\n"
-        "<!-- composed-into-the-dispatch -->\n"
-        "- The criterion this flow lends its design-doc node.\n"
-        "<!-- end composed-into-the-dispatch -->\n",
-        encoding="utf-8",
-    )
     # The brief `just plan` reads. Written rather than copied from `examples/`: these
     # journeys are memoized on `recipeWorkspace`, which no document under `examples/`
     # is in, so reading one here would replay a verdict recorded before it changed.
@@ -282,8 +287,37 @@ fi
 if [ ! -t 0 ]; then
   while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
 fi
+case "$*" in
+  "run onepipeline template resolve plan-task --json")
+    if [ -n "${FAKE_RESOLVED_LOADER-}" ]; then
+      printf '%s' "$FAKE_RESOLVED_LOADER"
+    else
+      printf '{"reference":"onepipeline:plan-task","entry":"plan-task.md.j2",'
+      printf '"templates":[{"name":"plan-task.md.j2","source":"## Acceptance criteria"}]}'
+    fi ;;
+  "run onepipeline template check plan-task --item "*)
+    if [ -n "${FAKE_CHECK_OUTPUT-}" ]; then
+      printf '%s\\n' "$FAKE_CHECK_OUTPUT" >&2
+      exit 2
+    fi ;;
+  "run onetaskgraph task create "*)
+    record="$PLAN_ROOT"/tasks/write-the-design-document.md
+    location="${FAKE_CREATED_LOCATION-}"
+    mkdir -p "${record%/*}"
+    printf -- '---\\ntitle: Write the design document\\n---\\n' >"$record"
+    printf '{"items":[{"id":"%s","item":{"project":"%s",' "$1"
+    printf '"metadata":{"onepipeline.id":"design-doc"},'
+    if [ -n "$location" ]; then
+      printf '"location":%s}}]}\\n' "$location"
+    else
+      printf '"location":{"path":"%s"}}}]}\\n' "$record"
+    fi ;;
+esac
 exit "${FAKE_UV_EXIT:-0}"
-"""
+""".replace('"$1"\n', f'"{CREATED_TASK}" "{CREATED_PROJECT}"\n')
+        # The root the store reports its created task under, read through the one helper
+        # that composes the variable's name rather than spelled a second time here.
+        .replace('"$PLAN_ROOT"', f'"${plan_root_variable.name()}"')
     )
     uv.chmod(0o755)
     # The engine a **launch** reaches: the installed binary in this checkout's own

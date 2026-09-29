@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -55,10 +56,24 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     drafts = tmp_path / "drafts"
     documents = drafts / "documents"
     documents.mkdir(parents=True)
+    # Provenance built here in the shape a rendering of this body records, so the approval
+    # below reads a design document it can key rather than one it refuses. One value is
+    # both hashed and written, which `frontmatter` stores with its trailing whitespace cut.
+    body = "The design."
+    rendering = {
+        "template": design_approval.TEMPLATE_REFERENCE,
+        "digest": "sha256:test-template",
+        "body_digest": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+    }
     (documents / "design.md").write_text(
         frontmatter(
-            {"title": "Design", "project": "demo", "labels": ["design"]},
-            "The design.\n",
+            {
+                "title": "Design",
+                "project": "demo",
+                "labels": ["design"],
+                "metadata": {design_approval.PROVENANCE: rendering},
+            },
+            body,
         ),
         encoding="utf-8",
     )
@@ -83,8 +98,8 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
 
     monkeypatch.setattr(
         design_approval,
-        "template_fingerprint",
-        lambda: design_approval.TemplateFingerprint("test-template"),
+        "resolved_digest",
+        lambda: design_approval.ChainDigest("sha256:test-template"),
     )
     assert design_approval.main(["sdksource:demo"]) == 0
     assert design_approval.approve("sdksource:demo").held

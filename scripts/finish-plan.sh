@@ -23,7 +23,9 @@
 #      content nobody read;
 #   2. **check** the plan the way its launch will, so a plan that would be refused costs
 #      no document dispatch;
-#   3. **launch** the design-document node, as its own one-node planning project;
+#   3. **launch** the design-document node, as its own one-node planning project whose
+#      task is rendered from the `plan-task` template and checked by the engine before
+#      anything is dispatched;
 #   4. **copy** the plan and its documents into the destination a person reviews them in;
 #   5. **report** where that destination holds the project and the document, read back
 #      out of the store rather than composed from a name.
@@ -36,9 +38,9 @@
 #
 # **The refusals are told apart by exit status**, because a builder that could not tell
 # them apart would retry one as the other: 1 is the review refusing the plan's own
-# criteria, 3 is the pre-launch check refusing the plan, 5 is the destination refusing
-# the copy, 4 is the design-document launch not settling, and 2 is a flow that could not
-# run at all. There is no repair loop here and there will not be one: the planner's own
+# criteria, 3 is the pre-launch check refusing the plan, 6 is the engine refusing the
+# design-document node's own rendered task, 5 is the destination refusing the copy, 4 is
+# the design-document launch not settling, and 2 is a flow that could not run at all. There is no repair loop here and there will not be one: the planner's own
 # judge is the repair loop and it has already run, so a refusal hands every refused
 # criterion back and stops.
 #
@@ -85,12 +87,9 @@ PLANNING_PROJECT_METADATA='{"orchestrator.plan-kind": {"kind": "planning", "node
 #: The root itself is not named here — it is resolved at launch, below, because it is
 #: the store's own answer rather than this script's.
 PLAN_RECORDS="projects"
-#: Where a project's task records sit under that same root, which the cleanup below
-#: reaches when a write fails partway.
-PLAN_TASKS="tasks"
 PLAN_SOURCE="authoring"
-#: Where a local Markdown source keeps its documents under that same root, beside the two
-#: directories above: flat, one file per document id, every project's documents together.
+#: Where a local Markdown source keeps its documents under that same root, beside the
+#: `projects/` directory above: flat, one file per document id, every project's documents together.
 PLAN_DOCUMENTS="documents"
 
 #: The document id the design-doc dispatch stores its document under: the plan's own
@@ -138,26 +137,14 @@ DESIGN_DOC_PERSONA="../personas/design-doc.yaml"
 #: reviews whether it reads plainly to somebody outside the domain.
 DESIGN_DOC_GRAPH="graphs/design-doc.yaml"
 
-#: The one statement of what the document contains, who it is for, and what it is judged
-#: on. Named in the dispatched task rather than left to the persona alone, because the
-#: task is the only text a worker and its judge both read; the persona names the same
-#: path, and neither restates the file.
-DESIGN_DOC_TEMPLATE="config/design-doc-template.md"
-
-#: The pair of markers in that file bounding the block this flow lends the dispatch.
-#: One property is composed into the design-doc node's own acceptance criteria rather
-#: than left behind the pointer above, because a document written from the pointer alone
-#: kept missing it: a plan over four repositories named each piece by role and no
-#: repository at all. The template stays the single source — what is composed are its own
-#: bytes, read at launch — and a template this flow cannot find the pair in refuses the
-#: launch rather than composing a task with the requirement silently missing.
-DESIGN_DOC_LIFT_OPEN="<!-- composed-into-the-dispatch -->"
-DESIGN_DOC_LIFT_CLOSE="<!-- end composed-into-the-dispatch -->"
-
-#: Where those lifted bytes go in the task below. Named rather than spelled at the splice,
-#: because the splice reads it three times — twice to cut the instructions around it and
-#: once to count it — and three spellings of one placeholder is a typo that fills nothing.
-DESIGN_DOC_LIFT_PLACEHOLDER="@ARCHITECTURE@"
+#: The two registered templates this flow reaches, by the names `onepipeline template`
+#: resolves. The writer's own task is a `plan-task` rendering, like every dispatched task on
+#: this host, and what it writes is a `design-doc` rendering — this host's own template,
+#: `templates/design-doc.md.j2`, which states the document's sections, its reader and every
+#: property it is judged on. Neither is restated here: the task names the template and its
+#: variables, and the template's descriptions are the one statement of the bar.
+WRITER_TASK_TEMPLATE="plan-task"
+DOCUMENT_TEMPLATE="design-doc"
 
 #: The observer this launch attaches when the caller names none: nothing. A one-node run
 #: that reads a finished plan and writes one document has no frontier for a monitor to
@@ -171,116 +158,181 @@ DEFAULT_DAG_GRAPH="off"
 #: over the caller's own would refuse the launch outright.
 DAG_GRAPH_FLAG="--dag-graph"
 
-#: What the design-doc node is told, appended after the brief as the rest of its task.
-#: `@PLAN_PROJECT@`, `@TEMPLATE@` and `@ARCHITECTURE@` are substituted below —
-#: placeholders rather than `printf` conversions, because two of them appear twice and a
-#: format string reused per argument is how a multi-placeholder template comes out
-#: interleaved.
-#:
-#: It opens by disowning the criteria above it, and that is the load-bearing sentence.
-#: The brief is the planner's, so its `## Acceptance criteria` state what the PLAN has to
-#: satisfy — and a judge reading a task holds the dispatch to every criterion it finds in
-#: one. A design-doc dispatch judged against the plan's criteria is one that cannot pass,
-#: because producing the plan was somebody else's node.
-#:
-#: What it does NOT do is restate the document: `config/design-doc-template.md` is the
-#: one statement of the shape, the reader, and every property the document is judged on,
-#: and a second copy here would be the copy a writer follows on the day the two drift.
-#: `@ARCHITECTURE@` is filled from that file's own bytes rather than typed here, which is
-#: why it is no exception to that; the lift itself is documented at the marker constants
-#: above. It lands among the criteria rather than in the prose because a criterion is what
-#: this dispatch's judge reads.
-DESIGN_DOC_INSTRUCTIONS="
+#: The answers the writer's task is rendered from, composed from the brief, the plan's
+#: qualified id and the document id. The brief's `## What` and `## Why` are quoted into the
+#: task's own What and Why rather than the brief being embedded whole, because the brief's
+#: acceptance criteria are the *plan's* and a judge holds a dispatch to every criterion it
+#: finds in its task; the criteria below are this dispatch's, and the one property a plan
+#: across repositories turns on is stated among them so it is judged here rather than only
+#: behind the template. The note on where a direct node works is the task's additional info.
+# shellcheck disable=SC2016 # A Python program: its backticks are Markdown in the task it writes, never shell.
+WRITER_ANSWERS_PROGRAM='
+import json, pathlib, re, sys
 
-## What this dispatch owes
+(brief, plan, document, template, note) = sys.argv[1:6]
+# Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
+# when it validates the brief, so a brief it accepted is one this composes from.
+text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
 
-**Everything above is the brief a planner was given, and none of it is this dispatch's
-acceptance criteria.** Writing the plan was another node's job and it is already done.
-The brief is here because the document opens with what is being built and why, and the
-manager's own words are where those two come from. Where anything above and anything
-below disagree about what this dispatch owes, below wins.
+def section(name):
+    heading = rf"^## {name}[^\S\n]*\n(.*?)(?=^## |\Z)"
+    found = re.findall(heading, text, re.MULTILINE | re.DOTALL)
+    # Two sections of one name are two answers, and taking the first would compose the
+    # task from whichever its author happened to write higher up.
+    if len(found) > 1:
+        sys.exit(f"{brief} states ## {name} {len(found)} times, so which one the task is composed from is ambiguous")
+    return found[0].strip() if found else ""
 
-What this dispatch owes is the one short document a person reviews that plan as, instead
-of reading it node by node.
-
-Read the whole plan out of the plan store — the project record and every one of its
-tasks. The plan is
-\`@PLAN_PROJECT@\`.
-\`onetaskgraph\` is that store's command line, and \`--help\` documents what it can do.
-
-The document itself is stated in the \`ai-orchestrator\` orchestration repository, at
-\`@TEMPLATE@\`.
-That file states its sections, their order, the reader it is written for, and every
-property it is judged on, and it is the only statement of any of that — so read it before
-writing anything and follow it exactly, and where anything else disagrees with it about
-the document, that file wins.
-
-## Acceptance criteria for this dispatch
-
-One of these is quoted out of that template rather than written here, because that file
-is the one statement of what the document is judged on. It is the property a plan across
-repositories turns on, and it is in this task so that this dispatch is held to it here
-rather than only behind the pointer above.
-
-- One document exists, written to that template: its sections, in that file's order, and
-  no others, satisfying every property it states of them.
-@ARCHITECTURE@
-- That document is stored as a document of that plan's own project, in the same plan
-  store the plan itself is in, under the document id \`@DOCUMENT_ID@\`, so a reader finds
-  it beside the plan rather than in a directory only this dispatch knows about.
-- Every task of that plan has one row in the document's planned-tasks table, and each row
-  points at its task using the location the store reports for that task — read back out
-  of the store, never composed by hand.
-- This dispatch reports where the stored document is, in the form the store reports it: a
-  link where the store puts it on a website, a path where it puts it in a file on this
-  machine.
-- Every claim this dispatch makes about the finished work is true of the tree as it
-  finally stands."
+brief_what = section("What")
+brief_why = section("Why")
+if not brief_what or not brief_why:
+    sys.exit(f"{brief} states no ## What or no ## Why for the task to be composed from")
+variables = f"onepipeline template resolve {template} --json | onetaskgraph template variables --template-loader -"
+answers = {
+    "what": (
+        f"Write the one short design document a person reviews the plan `{plan}` as, instead of "
+        f"reading that plan node by node, and store it beside the plan under the document id "
+        f"`{document}`.\n\n"
+        f"Read the whole plan out of the plan store: the project record and every one of its "
+        f"tasks. `onetaskgraph` is that store\u2019s command line, and `--help` documents what it "
+        f"can do. The document is a rendering of this host\u2019s `{template}` template, and "
+        f"`{variables}` lists the answers it takes and what each is judged on.\n\n"
+        f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
+        f"\n\n{brief_what}"
+    ),
+    "why": (
+        "A person decides whether this plan launches by reading this document instead of the "
+        "plan, so it has to let them accept or reject what the plan commits to. What the user "
+        f"wants from the plan itself, in the brief\u2019s words:\n\n{brief_why}"
+    ),
+    "acceptance_criteria": [
+        f"The document answers every variable `{variables}` lists, and the answers meet every "
+        f"property the template\u2019s own description and each variable\u2019s description "
+        f"state, read against `{plan}` as the store holds it.",
+        f"Where `{plan}` spans more than one repository, the architecture answer names the "
+        "repository each piece lives in, because the planned-tasks table has no column for it; "
+        "where the plan lies inside one repository, the document says nothing about "
+        "repositories.",
+        f"The document is stored as a project document of `{plan}`, in the store that plan is "
+        f"in, under the document id `{document}`, and is a rendering of the pinned `{template}` "
+        f"template: `onepipeline template resolve {template} --json` piped into `onetaskgraph "
+        f"document create --template-loader -` wrote it, or piped into `onetaskgraph document "
+        f"render --template-loader -` where a document by that id already existed, so it "
+        f"records `onepipeline:{template}` provenance and the answers it was rendered from.",
+        f"Every task of `{plan}` has one row in the planned-tasks answer, and each row\u2019s "
+        "location is the location the plan store reports for that task, read back out of the "
+        "store and never composed by hand.",
+        "This dispatch reports where the store put the document, in the form the store reports "
+        "it: a link where it is on a website, a path where it is a file on this machine.",
+        "Every claim this dispatch makes about the finished work is true of the tree as it "
+        "finally stands.",
+    ],
+    "additional_info": re.sub(r"\A\s*## Additional info\s*", "", note).strip(),
+}
+sys.stdout.write(json.dumps(answers, ensure_ascii=False, indent=2) + "\n")
+'
 
 #: The exit statuses this flow answers with, which are its whole contract to a caller
 #: that reads only the status. Every one of them is a *different next action*: correct
 #: the criteria a reviewer named, correct the plan a check refused, read why a launch did
-#: not settle, repair the destination, or repair this checkout.
+#: not settle, repair the destination, repair the task this checkout composes for the
+#: design-document node, or repair this checkout.
 REVIEW_REFUSED=1
 UNRUNNABLE=2
 PLAN_REFUSED=3
 LAUNCH_FAILED=4
 COPY_REFUSED=5
+WRITER_REFUSED=6
 
-#: Writes the one-node project this launch runs. The brief is read here and embedded
-#: verbatim: it IS the opening of the task, in the `## What` / `## Why` / `## Acceptance
-#: criteria` template every task this repository dispatches is written in, so anything
-#: that reformatted it would be editing the manager's words on the way to the dispatch.
-#: Two things are appended after it, in this order and never woven in, so the manager's
-#: own words are always the whole of what precedes them: the instructions that are the
-#: rest of this node's task and the criteria it is judged against, and the note stating
-#: where the dispatch works and which clause of the shared completion bar it is therefore
-#: exempt from. The node carries no `repo`, no `execution_checkout` and no `title`: it is
-#: a direct node, for the reason `scripts/plan.sh`'s header gives, and a direct node
-#: publishes nothing a subject could name.
+#: Writes the project this launch runs, and nothing else: its one task is created below
+#: through the `plan-task` template, into the project this writes. The project states the
+#: goal and the name, and carries the planning stamp that bounds its exemption.
 PLAN_PROGRAM='
-import json, pathlib, sys
+import json, sys
 
-(name, brief, node_id, persona, graph, direct_note, design_task) = sys.argv[1:8]
-task = pathlib.Path(brief).read_text(encoding="utf-8").rstrip()
-task = task + "\n\n" + design_task.strip() + "\n"
-
-# A per-node agent graph rather than the run-wide default: this role pairs its two sides
-# the other way round from every other dispatch on this host, and that reversal is a
-# property of the node rather than of the run.
-node = {"id": node_id, "persona": persona, "agent_graph": graph}
-# A direct node works in the launch directory, and the shared completion bar demands
-# every change committed. Saying so in the task is the only place the dispatch and its
-# judge both read it.
-node["task"] = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
+(name, brief) = sys.argv[1:3]
 plan = {
     "schema_version": 3,
     "goal": {"text": f"Write the design document for the plan the manager briefed in {brief}"},
     "name": name,
-    "tasks": [node],
+    "tasks": [],
 }
 sys.stdout.write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 '
+
+#: The metadata the writer's task record carries beside its rendered body: the node id the
+#: planning stamp names, the persona path and the per-node agent graph. A per-node graph
+#: rather than the run-wide default, because this role pairs its two sides the other way
+#: round from every other dispatch on this host, and that reversal is a property of the node.
+#: The node carries no `repo` and no `execution_checkout`: it is a direct node, for the
+#: reason `scripts/plan.sh`'s header gives.
+WRITER_METADATA_PROGRAM='
+import json, sys
+
+(node_id, persona, graph) = sys.argv[1:4]
+for key, value in (("id", node_id), ("persona", persona), ("agent_graph", graph)):
+    print(f"onepipeline.{key}={json.dumps(value)}")
+'
+
+#: Holds the engine's `template resolve --json` answer to being the loader document of the
+#: one template asked for: an object naming it as its reference, with an entry to render.
+LOADER_PROGRAM='
+import json, sys
+
+(name,) = sys.argv[1:2]
+stated = json.load(sys.stdin)
+if not isinstance(stated, dict) or stated.get("reference") != f"onepipeline:{name}":
+    sys.exit(f"the engine resolved {name} to no loader naming onepipeline:{name}")
+entry, templates = stated.get("entry"), stated.get("templates")
+if not isinstance(entry, str) or not entry or not isinstance(templates, list) or not templates:
+    sys.exit(f"the engine resolved {name} to a loader with no entry or templates to render")
+# Which of these the entry names is left to the store, which resolves it against them and
+# the loader search path and refuses an entry naming nothing (`template "<entry>" was not
+# found`) before it creates anything: repeating that resolution here would be a second one.
+for template in templates:
+    if not isinstance(template, dict) or not isinstance(template.get("name"), str) \
+            or not template["name"] or not isinstance(template.get("source"), str) \
+            or not template["source"].strip():
+        sys.exit(f"the engine resolved {name} to a loader holding a template with no name or no source: {template!r}")
+'
+
+#: Reads `onetaskgraph task create --json`'s answer: the created task's qualified id, then
+#: the path the store reports it at, one per line — held to being this project's one node
+#: and a record under the authoring root's `tasks/`, since the authoring store is a local one
+#: and always reports where it wrote. The path is
+#: what a refused task is taken back by, so it is the store's answer rather than a layout —
+#: and it is held to lying under the plan-authoring root this launch wrote into, the one
+#: directory a removal here may reach, before anything deletes it.
+CREATED_PROGRAM='
+import json, pathlib, sys
+
+(root, source, project, node) = sys.argv[1:5]
+answered = json.load(sys.stdin)
+items = answered.get("items") if isinstance(answered, dict) else None
+if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+    sys.exit(f"the store answered the create with no one created task: {answered!r}")
+(item,) = items
+created, record = item.get("id"), item.get("item")
+if not isinstance(created, str) or not created.startswith(f"{source}:") or "\n" in created:
+    sys.exit(f"the store reports the created task as {created!r}, not an id in {source}")
+if not isinstance(record, dict) or record.get("project") != project:
+    sys.exit(f"the store reports {created} outside the project {project} it was created in")
+metadata = record.get("metadata")
+if not isinstance(metadata, dict) or metadata.get("onepipeline.id") != node:
+    sys.exit(f"the store reports {created} as a node other than {node}, the one created")
+located = record.get("location")
+held = located.get("path") if isinstance(located, dict) else None
+tasks = pathlib.Path(root).resolve() / "tasks"
+if not isinstance(held, str) or "\n" in held or pathlib.Path(held).suffix != ".md":
+    sys.exit(f"the store reports no task record path for {created}: {located!r}")
+if not pathlib.Path(held).resolve().is_relative_to(tasks):
+    sys.exit(f"the store reports the task at {held}, not a task record under {tasks}")
+if pathlib.Path(held).resolve().relative_to(tasks).with_suffix("").as_posix() != created.partition(":")[2]:
+    sys.exit(f"the store reports {created} at {held}, a record named for another task")
+print(created)
+print(held)
+'
+
 
 fail() {
     echo "finish-plan: $1; $2" >&2
@@ -364,67 +416,6 @@ fi
 
 plan_project=$(plan_brief_project finish-plan "$brief") || exit "$UNRUNNABLE"
 plan_run_is_free finish-plan "$design_run" || exit "$UNRUNNABLE"
-
-# Lifted here and not lower down. Every refusal above is about the caller's own invocation,
-# which is what an operator can correct; everything below costs a store CLI install, a
-# judged review turn, a check and a launch. A checkout that cannot lift from this template
-# cannot compose the dispatch at all, so discovering it after the review is a turn spent
-# for nothing.
-template="$script_dir/../$DESIGN_DOC_TEMPLATE"
-# A regular file rather than anything readable: a directory at that path is readable, and
-# `awk` answers one with a read error and an exit status the branch below would then
-# report as a template lending no criterion — the wrong refusal, and the one whose repair
-# is to edit a file that is not there.
-{ [ -f "$template" ] && [ -r "$template" ]; } || fail "the design document's template is not readable as a file at '$template'" \
-    "run this recipe from a checkout that has $DESIGN_DOC_TEMPLATE, or pass --no-design-doc to launch the planner alone"
-# One open, one close, in that order, with a non-blank line between them. Counted rather
-# than merely seen: a second open, a stray close and an unclosed block each name a
-# different span from the one whoever edited that file meant, and each composes silently
-# if the check asks only whether a marker went past. So each exits with a status of its
-# own and is named on its own below — "no criterion between the markers" would send
-# whoever reads it looking for missing prose when what is there is a second block. Blank
-# lines inside the block are kept, so the criterion arrives as its author wrote it. The
-# statuses start past `awk`'s own fatal exit so a read that failed inside `awk` cannot be
-# reported as one of them.
-#
-# `|| lifted=$?` rather than reading `$?` on the next line: `set -e` ends the script on a
-# failed assignment, so a status read afterwards is a line this never reaches.
-lifted=0
-architecture=$(awk -v opened="$DESIGN_DOC_LIFT_OPEN" -v closed="$DESIGN_DOC_LIFT_CLOSE" '
-    $0 == opened { opens += 1; inside = 1; next }
-    $0 == closed { closes += 1; if (!inside) { stray = 1 }; inside = 0; next }
-    inside { print; if ($0 ~ /[^[:space:]]/) { lent = 1 } }
-    END {
-        if (opens == 0 && closes == 0) { exit 11 }
-        if (stray) { exit 12 }
-        if (inside) { exit 13 }
-        if (opens > 1 || closes > 1) { exit 14 }
-        if (!lent) { exit 15 }
-        exit 0
-    }
-' "$template") || lifted=$?
-case $lifted in
-    0) ;;
-    11) fail "$DESIGN_DOC_TEMPLATE carries neither '$DESIGN_DOC_LIFT_OPEN' nor '$DESIGN_DOC_LIFT_CLOSE', so it lends the design-doc dispatch no criterion" \
-        "put both markers back around the property that dispatch is to be held to in its own task, or pass --no-design-doc to launch the planner alone" ;;
-    12) fail "$DESIGN_DOC_TEMPLATE closes the lent block with '$DESIGN_DOC_LIFT_CLOSE' before any '$DESIGN_DOC_LIFT_OPEN' opens one" \
-        "put the opening marker above the property that dispatch is to be held to, or pass --no-design-doc to launch the planner alone" ;;
-    13) fail "$DESIGN_DOC_TEMPLATE opens the lent block with '$DESIGN_DOC_LIFT_OPEN' and never closes it, so the span it lends runs to the end of the file" \
-        "put '$DESIGN_DOC_LIFT_CLOSE' back below that property, or pass --no-design-doc to launch the planner alone" ;;
-    14) fail "$DESIGN_DOC_TEMPLATE carries more than one '$DESIGN_DOC_LIFT_OPEN' or '$DESIGN_DOC_LIFT_CLOSE', so more than one span claims to be the criterion" \
-        "leave one pair of markers, around the property that dispatch is to be held to, or pass --no-design-doc to launch the planner alone" ;;
-    15) fail "$DESIGN_DOC_TEMPLATE holds nothing but whitespace between '$DESIGN_DOC_LIFT_OPEN' and '$DESIGN_DOC_LIFT_CLOSE', so it lends the design-doc dispatch no criterion" \
-        "write the property that dispatch is to be held to between those markers, or pass --no-design-doc to launch the planner alone" ;;
-    # Every status above is one this flow assigns to a condition of the template, so it
-    # names that condition and the edit that repairs it. This one is any other status
-    # `awk` exited with, and the whole point of it is that this flow does not know what
-    # happened — 127 is no `awk` on `PATH` at all, 126 is one that is not executable, and
-    # a signal death is neither. Reporting those as a template that could not be read
-    # sends whoever hits one to edit a file that is very likely fine, so it says what it
-    # observed and names both places the fault can be instead of picking one.
-    *) fail "the criterion between '$DESIGN_DOC_LIFT_OPEN' and '$DESIGN_DOC_LIFT_CLOSE' could not be lifted from $DESIGN_DOC_TEMPLATE: awk exited $lifted, which is not a status this recipe assigns" \
-        "check that awk runs where this recipe is running and that $DESIGN_DOC_TEMPLATE is readable there — awk exits 127 when it is not on PATH and 126 when it is not executable — or pass --no-design-doc to launch the planner alone" ;;
-esac
 
 # The board this repository plans against when the caller names none, read from the one
 # place that states it rather than spelled a second time here: `just copy-plan` copies
@@ -530,53 +521,162 @@ if [ "$plan_source" = "$PLAN_AUTHORING_SOURCE" ]; then
     judge_artifacts=("$JUDGE_ARTIFACTS_ENV=$documents_root/$PLAN_DOCUMENTS/$design_document_id.md")
 fi
 
-design_instructions="${DESIGN_DOC_INSTRUCTIONS//@PLAN_PROJECT@/$plan_project}"
-design_instructions="${design_instructions//@TEMPLATE@/$DESIGN_DOC_TEMPLATE}"
-design_instructions="${design_instructions//@DOCUMENT_ID@/$design_document_id}"
-# `@ARCHITECTURE@` is spliced rather than substituted, because what fills it is somebody
-# else's bytes and has to arrive verbatim. A `//` replacement would not leave it so: bash
-# 5.2 enables `patsub_replacement`, which reads `&` in a *replacement* as the matched
-# pattern and `\` as an escape, so a block saying `read & write` would reach the dispatch
-# saying `read @ARCHITECTURE@ write` — the criterion this path exists to place in front of
-# the dispatch, corrupted silently, with the flow still composing and still launching.
-# Escaping the two is the wrong repair: correct only while `patsub_replacement` is on, and
-# double-escaping where it is off. Prefix and suffix removal interpret nothing, so the
-# splice is verbatim under either shell.
-#
-# The guard is what makes it total, since `%%` and `#` remove only the outermost match and
-# a second placeholder would be left unfilled. It counts by length rather than with a
-# tool so that the failure of the thing counting cannot arrive as the count: `grep -c`
-# counts lines rather than occurrences, and a `grep`ped count that finds none exits 1,
-# which `pipefail` and `set -e` turn into the end of the script.
-placeholder_free=${DESIGN_DOC_INSTRUCTIONS//"$DESIGN_DOC_LIFT_PLACEHOLDER"/}
-placeholder_count=$(( (${#DESIGN_DOC_INSTRUCTIONS} - ${#placeholder_free}) / ${#DESIGN_DOC_LIFT_PLACEHOLDER} ))
-[ "$placeholder_count" = "1" ] || fail \
-    "this recipe's design-doc instructions carry $placeholder_count '$DESIGN_DOC_LIFT_PLACEHOLDER' placeholders rather than exactly one, so the criterion lifted from $DESIGN_DOC_TEMPLATE would not reach the dispatched task whole" \
-    "leave exactly one '$DESIGN_DOC_LIFT_PLACEHOLDER' in DESIGN_DOC_INSTRUCTIONS in $(basename "$0"), where that criterion belongs"
-design_instructions="${design_instructions%%"$DESIGN_DOC_LIFT_PLACEHOLDER"*}$architecture${design_instructions#*"$DESIGN_DOC_LIFT_PLACEHOLDER"}"
 planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$DESIGN_DOC_NODE_ID\"]}"
 
 design_plan="$plan_directory/$design_run.md"
-design_tasks="$plan_root/$PLAN_TASKS/$design_run"
-"$python" -c "$PLAN_PROGRAM" "$design_run" "$brief" "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" \
-    "$DESIGN_DOC_GRAPH" "$PLAN_DIRECT_PLACEMENT_NOTE" "$design_instructions" \
+# Where the writer's task record sits once the store has created it, which is the store's
+# own answer below; empty until then, so a refusal before it takes back the project alone.
+writer_record=""
+# Take back what this launch wrote when a later step refuses it, so the next run of the
+# same name starts from nothing: a project left holding a refused task would be read by
+# that run as a project with two nodes, which its planning stamp does not describe.
+# Reported rather than swallowed when a removal fails, because a record left behind is one
+# the next run reads.
+take_back() {
+    local record
+    for record in "$design_plan" ${writer_record:+"$writer_record"}; do
+        rm -f "$record" ||
+            echo "finish-plan: $record could not be removed; delete it by hand, or the next run of '$design_run' reads what this one left" >&2
+    done
+    # A task the store created but reported no path for is one this cannot reach, so it is
+    # named for the operator to remove rather than left behind in silence.
+    if [ -n "${writer_task:-}" ] && [ -z "$writer_record" ]; then
+        echo "finish-plan: the store reported no path for $writer_task, so it was not removed; remove it from $PLAN_SOURCE:$design_run by hand before the next run of '$design_run'" >&2
+    fi
+}
+"$python" -c "$PLAN_PROGRAM" "$design_run" "$brief" \
     | "$python" -m orchestrator.project_store "$plan_root" "$planning_metadata" >/dev/null || {
-    # Reported rather than swallowed, and reported without ending the launch here: what
-    # the operator has to act on is the write that failed, which the diagnostic below
-    # names, and a removal that failed on top of it leaves records the next run would
-    # read — so it earns its own line naming them, and the refusal still comes last. The
-    # one task record is named rather than matched by a pattern: this project has exactly
-    # one node and its id is what that file is called, so there is nothing to sweep.
-    rm -f "$design_plan" "$design_tasks/$DESIGN_DOC_NODE_ID.md" ||
-        echo "finish-plan: part of the half-written project could not be removed; delete $design_plan and $design_tasks by hand, or the next run of '$design_run' reads what this one left" >&2
-    # This one is *expected* to fail whenever the directory is absent or still holds the
-    # record the removal above could not take, and both are already reported by that
-    # line, so its own failure is not a second thing to tell anybody about.
-    rmdir "$design_tasks" 2>/dev/null || :
+    take_back
     fail "the design-document project for '$brief' could not be written to $design_plan by $python" \
         "restore the pinned toolchain with 'just bootstrap', then retry"
 }
 
+# The writer's task, created the way every task on this host is: the `plan-task` template
+# as the engine resolves it now, piped into the store's own `task create`, answering its
+# variables. The answers travel in a file rather than as `--var` words because two of them
+# run to many lines.
+answers_file=""
+# Remove the scratch answers file, reporting rather than ending on a removal that fails:
+# what is left is a scratch file under the system's temporary directory, and the refusal
+# or the launch after it is what the operator acts on.
+discard_answers() {
+    [ -z "$answers_file" ] || rm -f "$answers_file" ||
+        echo "finish-plan: the scratch answers file $answers_file could not be removed; delete it by hand" >&2
+}
+answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
+    answers_file=""
+    take_back
+    fail "a scratch file for the design-document task's answers could not be created" \
+        "check that ${TMPDIR:-/tmp} is a directory this launch may write into, then retry"
+}
+"$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" "$design_document_id" \
+    "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" >"$answers_file" || {
+    discard_answers
+    take_back
+    fail "the design-document task's answers could not be composed from '$brief' by $python; the diagnostic above names why" \
+        "give the brief a '## What' and a '## Why', or restore the pinned toolchain with 'just bootstrap', then retry"
+}
+metadata=$("$python" -c "$WRITER_METADATA_PROGRAM" "$DESIGN_DOC_NODE_ID" "$DESIGN_DOC_PERSONA" "$DESIGN_DOC_GRAPH") || {
+    discard_answers
+    take_back
+    fail "the design-document task's node metadata could not be composed by $python" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+}
+metadata_flags=()
+while IFS= read -r setting; do
+    metadata_flags+=(--metadata "$setting")
+done <<<"$metadata"
+# The loader is resolved before the store is asked, rather than streamed into it, so a
+# resolve that fails is reported as that rather than as a store handed nothing to render.
+loader=$("$script_dir/onepipeline.sh" template resolve "$WRITER_TASK_TEMPLATE" --json) || {
+    discard_answers
+    take_back
+    fail "the $WRITER_TASK_TEMPLATE template could not be resolved through this checkout's templates/; the diagnostic above names why" \
+        "repair what it names, then run this command again"
+}
+# The loader is the engine's answer and the one thing the store renders from, so it is held
+# to naming the template this asked for before anything is created from it.
+"$python" -c "$LOADER_PROGRAM" "$WRITER_TASK_TEMPLATE" <<<"$loader" || {
+    discard_answers
+    take_back
+    fail "the engine's answer to resolving the $WRITER_TASK_TEMPLATE template is not its loader document; the diagnostic above names why" \
+        "provision this checkout with 'just bootstrap', then run this command again"
+}
+created_status=0
+# llmlint: ignore[tool_output_is_signal] The store's answer is read, not shown: it is the created task's id and the path a refusal takes it back by.
+created=$(printf '%s' "$loader" \
+    | uv run onetaskgraph task create "$PLAN_SOURCE" --template-loader - --no-interactive \
+        --project "$design_run" --title "Write the design document for $plan_project" \
+        --answers "$answers_file" "${metadata_flags[@]}" --json) || created_status=$?
+discard_answers
+if [ "$created_status" -ne 0 ]; then
+    take_back
+    fail "the design-document task could not be rendered from the $WRITER_TASK_TEMPLATE template into $PLAN_SOURCE:$design_run (status $created_status); the diagnostic above names why" \
+        "repair what it names, then run this command again"
+fi
+case $plan_root in
+    /*) authoring_root=$plan_root ;;
+    *) authoring_root="$PWD/$plan_root" ;;
+esac
+read_status=0
+answered=$(printf '%s' "$created" | "$python" -c "$CREATED_PROGRAM" "$authoring_root" "$PLAN_SOURCE" \
+    "$design_run" "$DESIGN_DOC_NODE_ID") || read_status=$?
+if [ "$read_status" -ne 0 ]; then
+    take_back
+    fail "the store's answer to creating the design-document task could not be read (status $read_status); the diagnostic above names why, and the task it created is left in $PLAN_SOURCE:$design_run" \
+        "find it with 'just plans task list --source $PLAN_SOURCE --project $design_run', which lists it without the project record this took back, remove the record it names, then retry"
+fi
+{ read -r writer_task; read -r writer_record; } <<<"$answered" || :
+if [ -z "${writer_task:-}" ] || [ -z "${writer_record:-}" ]; then
+    take_back
+    fail "the store created the design-document task but reported no id or no record path for it" \
+        "find it with 'just plans task list --source $PLAN_SOURCE --project $design_run', which lists it without the project record this took back, remove the record it names, then retry"
+fi
+
+# The rendering, validated now that it is written, before anything is launched: the
+# engine's own check of a stored item against the criteria rule and against being the
+# rendering its provenance records. A task that lists no acceptance criteria is refused
+# here, by the engine that would otherwise refuse it at launch, and nothing is launched.
+# Not `just check-plan`, which holds a planner's plan to its review records and so refuses
+# every freshly rendered one-node project of this kind for want of one.
+checked=0
+verdict=$("$script_dir/onepipeline.sh" template check "$WRITER_TASK_TEMPLATE" --item "$writer_task" 2>&1) ||
+    checked=$?
+if [ "$checked" -ne 0 ]; then
+    take_back
+    [ -z "$verdict" ] || printf '%s\n' "$verdict" >&2
+    # The engine words a refusal as a line of its own opening `onepipeline: refused:` and
+    # naming the item or the template it checked, and answers a check that could not run at
+    # all with the same status, so that line is what tells them apart; a `refused:` anywhere
+    # else in its output is not one, and its repair is this checkout rather than the answers.
+    refusal=""
+    while IFS= read -r said; do
+        case $said in
+            "onepipeline: refused: item $writer_task: "* | "onepipeline: refused: template $WRITER_TASK_TEMPLATE: "*)
+                refusal=$said
+                break
+                ;;
+        esac
+    done <<<"$verdict"
+    [ -n "$refusal" ] ||
+        fail "the engine's check of $writer_task could not run (status $checked), so no design document was launched and nothing was copied" \
+            "provision this checkout with 'just bootstrap', then run this command again"
+    # A refusal of the item is repaired in the answers this recipe composes for it; one of
+    # the template is not, since every answer renders through that template unchanged.
+    repair="correct the answers this recipe composes for it, then run this command again"
+    case $refusal in
+        *": no criteria listed") why="it lists no acceptance criteria, so there is nothing its dispatch could be judged against" ;;
+        "onepipeline: refused: template "*)
+            why="the engine refused the $WRITER_TASK_TEMPLATE template it was rendered from (status $checked), for the reason above"
+            repair="repair the $WRITER_TASK_TEMPLATE template 'onepipeline template resolve $WRITER_TASK_TEMPLATE --json' names until 'onepipeline template check $WRITER_TASK_TEMPLATE' passes, then run this command again"
+            ;;
+        *) why="the engine refused it as a rendering of $WRITER_TASK_TEMPLATE (status $checked), for the reason above" ;;
+    esac
+    echo "finish-plan: the design-document task $writer_task was refused before launching: $why; no design document was launched and nothing was copied. To go on, $repair" >&2
+    exit "$WRITER_REFUSED"
+fi
+
+# llmlint: ignore[tool_output_is_signal] The one line naming the run this launches and the command that answers its questions, which a detached or interrupted supervisor has no other way to reach; tests/plan_tooling/test_finish_plan_recipe_e2e.py's test_the_tail_names_the_channel_of_the_run_it_launches requires it.
 echo "finish-plan: launching run $design_run to write the design document for $plan_project; answer this dispatch's questions with: just channel-next $design_run" >&2
 
 # 3. The design-document launch, through the shared wrapper rather than `uv run`

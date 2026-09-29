@@ -7,19 +7,25 @@ part of the decision no journey reaches without breaking this checkout: how the 
 composed, what a record that cannot be read means, and how the launch gate reads a command
 line it deliberately does not parse.
 
-The key is the half worth stating. It covers the document's own authored content **and**
-the tracked template that says what a design document is, so a passing test here is a
-claim about both: editing the document loses its approval, and moving the template
-invalidates every approval granted under the previous one. A key over the content alone
-would leave a standing approval after the bar it was granted under had moved, which is the
-same defect the plan-review key exists to prevent one document further up. The other
-direction is the one a copied plan pays for: nothing the store the document sits in owns is
-in the key, so a record that travels arrives matching what the destination computes.
+The key is the half worth stating. It covers the document's title, the design-doc
+template's chain digest as it resolves now, and the body digest the store recorded when it
+rendered the document — and a document is keyable only while it *is* that rendering: one
+recording no design-doc provenance, rendered from a chain that is not the one in force, or
+edited after it was rendered is refused, naming the regenerate that repairs it. So a
+passing test here is a claim about both halves: editing the document loses its approval,
+and changing the template invalidates every approval granted under the previous one. The
+other direction is the one a copied plan pays for: nothing the store the document sits in
+owns is in the key, so a record that travels arrives matching what the destination
+computes.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
+import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -33,20 +39,19 @@ from orchestrator.plan_store import (
     StoreDocument,
     StoreTask,
 )
+from orchestrator.root import REPO_ROOT
 
-#: The bar a document is approved under, stated here rather than read off this
-#: checkout's own `config/design-doc-template.md`. Every test below that is not *about*
-#: that file takes it, and the reason is a cache key rather than taste: the tier these
-#: run in is memoized on the workspace **minus its prose**, so a test reading that file
-#: would have to move to the whole-workspace tier — which measures no coverage — to be
-#: allowed to. Holding the bar still also makes each of these a claim about the key
-#: rather than about what the template currently says.
-STATED = design_approval.TemplateFingerprint("a stated design-document template")
+#: The chain digest a document is approved under, stated here rather than resolved through
+#: this checkout's own `templates/`. Every test below that is not *about* the resolve takes
+#: it, and the reason is a cache key rather than taste: the tier these run in is memoized on
+#: the workspace **minus its prose**, and holding the digest still also makes each of these a
+#: claim about the key rather than about what the template currently says.
+STATED = design_approval.ChainDigest("sha256:" + "a" * 64)
 
-#: That same bar after somebody edited `config/design-doc-template.md`. Distinct from
-#: :data:`STATED` and meaningless beyond being distinct: what an approval turns on is
-#: whether the fingerprint in force is the one it was granted under.
-MOVED = design_approval.TemplateFingerprint("a template that has moved")
+#: That same chain after somebody changed the template. Distinct from :data:`STATED` and
+#: meaningless beyond being distinct: what an approval turns on is whether the digest in
+#: force is the one the document was rendered from.
+MOVED = design_approval.ChainDigest("sha256:" + "b" * 64)
 
 #: The two things a person reads when they approve a design document, and what
 #: :func:`_document` states them as. Named so a test can hold one still while it moves
@@ -95,10 +100,28 @@ OTHERWISE: Mapping[str, object] = {
 
 
 @pytest.fixture
-def template(monkeypatch: pytest.MonkeyPatch) -> design_approval.TemplateFingerprint:
-    """Hold the design-document template still, and off this checkout's own prose."""
-    monkeypatch.setattr(design_approval, "template_fingerprint", lambda *_arguments: STATED)
+def template(monkeypatch: pytest.MonkeyPatch) -> design_approval.ChainDigest:
+    """Hold the design-doc chain still, and off this checkout's own templates."""
+    monkeypatch.setattr(design_approval, "resolved_digest", lambda *_arguments: STATED)
     return STATED
+
+
+def _provenance(
+    content: str,
+    *,
+    digest: str = STATED,
+    template: str = design_approval.TEMPLATE_REFERENCE,
+) -> dict[str, object]:
+    """The provenance the plan store records on a rendering of ``content``."""
+    body = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return {
+        design_approval.PROVENANCE: {
+            "template": template,
+            "digest": digest,
+            "body_digest": body,
+            "answers_digest": "sha256:" + "c" * 64,
+        }
+    }
 
 
 def _document(
@@ -111,13 +134,17 @@ def _document(
     repositories: list[str] | None = None,
     metadata: Mapping[str, object] | None = None,
     location: Mapping[str, object] | None = LOCATED,
+    rendered: bool = True,
 ) -> StoreDocument:
     """One design document as the store reports it, with anything a test states of it.
 
     Keyword parameters rather than a merged mapping, so what a test may vary is stated
     and typed: the shape a `**overrides` helper takes is `object`, which types the call
     site as accepting anything and needs an escape at the constructor to get back out.
+    ``rendered`` gives it the provenance a rendering of ``content`` under :data:`STATED`
+    records, under anything ``metadata`` states.
     """
+    held = (_provenance(content) if rendered else {}) | dict(metadata or {})
     return StoreDocument(
         qualified_id=QualifiedDocumentId(qualified_id),
         title=title,
@@ -125,7 +152,7 @@ def _document(
         project=project,
         labels=labels or [],
         repositories=repositories or [],
-        metadata=metadata or {},
+        metadata=held,
         location=location,
     )
 
@@ -133,7 +160,7 @@ def _document(
 def _approved(document: StoreDocument | None = None) -> StoreDocument:
     """``document`` carrying a record for exactly the content it currently states."""
     held = document or _document()
-    key = design_approval.approval_key(held, design_approval.template_fingerprint())
+    key = design_approval.approval_key(held, design_approval.resolved_digest())
     return _document(
         content=held.content,
         title=held.title,
@@ -143,13 +170,29 @@ def _approved(document: StoreDocument | None = None) -> StoreDocument:
 
 
 def _otherwise(document: StoreDocument, field: str) -> StoreDocument:
-    """``document`` with ``field`` holding a different value of that field's own type."""
+    """``document`` with ``field`` holding a different value of that field's own type.
+
+    Content is moved the one way a rendered document's content moves without refusal — by
+    regenerating it, so its provenance names the new body — and metadata by writing beside
+    the provenance rather than over it, since a map without it is not a rendering at all.
+    """
     if field not in OTHERWISE:
         raise AssertionError(
             f"{field!r} is a field of a store document that this module states no second "
             f"value for, so nothing here says whether the approval key covers it"
         )
-    return dataclasses.replace(document, **{field: OTHERWISE[field]})
+    match field, OTHERWISE[field]:
+        case "content", str() as regenerated:
+            return dataclasses.replace(
+                document,
+                content=regenerated,
+                metadata=dict(document.metadata) | _provenance(regenerated),
+            )
+        case "metadata", Mapping() as bookkeeping:
+            rendering = {design_approval.PROVENANCE: document.metadata[design_approval.PROVENANCE]}
+            return dataclasses.replace(document, metadata=dict(bookkeeping) | rendering)
+        case _, value:
+            return dataclasses.replace(document, **{field: value})
 
 
 def _elsewhere(document: StoreDocument) -> StoreDocument:
@@ -220,11 +263,49 @@ def test_the_key_covers_what_a_person_read(field: str) -> None:
     assert design_approval.approval_key(_otherwise(_document(), field), STATED) != base
 
 
-def test_the_key_covers_the_template_the_document_was_read_against() -> None:
-    """And the bar, because an approval is of one document under one statement of the shape."""
-    assert design_approval.approval_key(_document(), MOVED) != design_approval.approval_key(
+def test_the_key_covers_the_template_the_document_was_rendered_from() -> None:
+    """And the bar, because an approval is of one document under one template."""
+    regenerated = _document(metadata=_provenance(APPROVED_PROSE, digest=MOVED))
+    assert design_approval.approval_key(regenerated, MOVED) != design_approval.approval_key(
         _document(), STATED
     )
+
+
+@pytest.mark.parametrize(
+    ("document", "said"),
+    [
+        (_document(rendered=False), "records no rendering of the design-doc template"),
+        (
+            _document(metadata={design_approval.PROVENANCE: {"template": "x"}}),
+            "records no rendering of the design-doc template",
+        ),
+        (
+            _document(metadata=_provenance(APPROVED_PROSE, template="onepipeline:plan-task")),
+            "is a rendering of onepipeline:plan-task, not of onepipeline:design-doc",
+        ),
+        (
+            _document(metadata=_provenance(APPROVED_PROSE, digest=MOVED)),
+            "written against a template no longer in force",
+        ),
+        (
+            _document(metadata=_provenance("## What\n\nWhat was rendered.\n")),
+            "was edited after it was rendered",
+        ),
+    ],
+    ids=["no provenance", "unreadable provenance", "foreign template", "stale chain", "edited"],
+)
+def test_a_document_that_is_not_the_rendering_in_force_has_no_key(
+    document: StoreDocument, said: str
+) -> None:
+    """Each is refused naming the regenerate that repairs it, rather than keyed and unapproved."""
+    with pytest.raises(design_approval.Unrendered) as refused:
+        design_approval.approval_key(document, STATED)
+    reason = str(refused.value)
+    assert said in reason, reason
+    assert "onepipeline template resolve design-doc --json | onetaskgraph document render" in (
+        reason
+    ), reason
+    assert "authoring:demo-design --template-loader -" in reason, reason
 
 
 @pytest.mark.parametrize("field", EXCLUDED)
@@ -262,7 +343,7 @@ def _recorded_by_approving(
     """``document`` carrying an approval for its current content."""
     del monkeypatch
     record = {
-        "key": design_approval.approval_key(document, design_approval.template_fingerprint()),
+        "key": design_approval.approval_key(document, design_approval.resolved_digest()),
         "approved_at": "not-read-by-this-test",
     }
     return _document(
@@ -287,9 +368,9 @@ def test_a_travelled_document_is_unapproved_again_once_what_was_approved_moves(
     moved: str,
     title: str,
     prose: str,
-    in_force: design_approval.TemplateFingerprint,
+    in_force: design_approval.ChainDigest,
     monkeypatch: pytest.MonkeyPatch,
-    template: design_approval.TemplateFingerprint,
+    template: design_approval.ChainDigest,
 ) -> None:
     """Surviving a copy is not the same as surviving anything, and this is the other half.
 
@@ -313,10 +394,13 @@ def test_a_travelled_document_is_unapproved_again_once_what_was_approved_moves(
         "so what follows would be a refusal this test could not attribute"
     )
 
-    monkeypatch.setattr(design_approval, "template_fingerprint", lambda *_arguments: in_force)
+    # Moved the one way a rendered document moves without being refused as unrendered:
+    # regenerated, so its provenance names the chain in force and the body it now says.
+    monkeypatch.setattr(design_approval, "resolved_digest", lambda *_arguments: in_force)
+    regenerated = dict(approved.metadata) | _provenance(prose, digest=in_force)
     _holds(
         monkeypatch,
-        _elsewhere(_document(title=title, content=prose, metadata=approved.metadata)),
+        _elsewhere(_document(title=title, content=prose, metadata=regenerated)),
     )
     reason = design_approval.assess(BOARD_PROJECT).refusal
     assert reason is not None, f"the copy is still approved after {moved} moved"
@@ -328,20 +412,122 @@ def test_a_travelled_document_is_unapproved_again_once_what_was_approved_moves(
     )
 
 
-def test_a_moved_template_gives_every_document_a_different_key(tmp_path: Path) -> None:
-    """The bar is hashed from the file, so a checkout whose template differs answers differently.
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split] It
+# is keyed right: `templates/templates.yaml` is in the key this tier is memoized on, and
+# `nx.json`'s `codeWorkspace` is the whole workspace less `docs/` and `*.md`; the engine it
+# spawns is the pinned install `uv.lock` names — the workspace's own, not a host tool — and
+# this test covers `resolved_digest` under the tier's 100% coverage floor.
+def test_a_changed_template_resolves_to_a_different_chain_digest(tmp_path: Path) -> None:
+    """The digest is the pinned engine's answer through a host root, so the template decides it.
 
-    Taken over two checkouts of this journey's own rather than against this one's, for the
-    reason :data:`STATED` gives — and it says the same thing either way, since what is
-    under test is that the file's bytes decide.
+    Taken over two host roots of this test's own rather than this checkout's `templates/`,
+    for the reason :data:`STATED` gives — and it says the same thing either way, since what
+    is under test is that the template's bytes, resolved by the real engine, decide.
     """
-    fingerprints = []
-    for shape in ("a shape", "a different shape"):
-        root = tmp_path / shape.replace(" ", "-")
-        (root / design_approval.TEMPLATE.parent).mkdir(parents=True)
-        (root / design_approval.TEMPLATE).write_text(shape, encoding="utf-8")
-        fingerprints.append(design_approval.template_fingerprint(root))
-    assert fingerprints[0] != fingerprints[1]
+    digests: list[design_approval.ChainDigest] = []
+    for shape in ("## What\n\n{{ what }}\n", "## What\n\n{{ what }}, changed\n"):
+        root = tmp_path / f"root-{len(digests)}"
+        root.mkdir()
+        shutil.copyfile(REPO_ROOT / "templates" / "templates.yaml", root / "templates.yaml")
+        (root / "design-doc.md.j2").write_text(
+            "---\nonetaskgraph_template: 1\nvariables:\n  what:\n    description: w\n"
+            "    type: text\n---\n" + shape,
+            encoding="utf-8",
+        )
+        digests.append(design_approval.resolved_digest(root))
+    assert all(digest.startswith("sha256:") for digest in digests), digests
+    assert digests[0] != digests[1]
+    assert design_approval.resolved_digest(tmp_path / "root-0") == digests[0]
+
+
+# llmlint: ignore[shell_test_tiers_stay_split] Not a shell suite and not a host tool: the
+# engine is the workspace's own locked install, in this tier's key, and this test covers
+# `resolved_digest`'s refusal under the tier's 100% coverage floor.
+def test_a_host_root_that_registers_no_design_doc_template_is_refused_by_name(
+    tmp_path: Path,
+) -> None:
+    """The engine's own refusal is carried through, so no approval is keyed on nothing."""
+    with pytest.raises(OSError, match="`onepipeline template resolve design-doc` refused"):
+        design_approval.resolved_digest(tmp_path)
+
+
+def test_an_unprovisioned_checkout_is_told_to_bootstrap_rather_than_keyed_on_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkout with no pinned engine cannot say what the template resolves to."""
+    monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    with pytest.raises(OSError, match="`just bootstrap`"):
+        design_approval.resolved_digest(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "stated",
+    [
+        "not json",
+        '{"reference": "onepipeline:design-doc"}',
+        '{"reference": "onepipeline:design-doc", "digest": 7}',
+        '{"reference": "onepipeline:design-doc", "digest": ""}',
+        '{"reference": "onepipeline:design-doc", "digest": "sha256:not-hex"}',
+        '{"reference": "onepipeline:plan-task", "digest": "sha256:' + "a" * 64 + '"}',
+    ],
+    ids=["not json", "no digest", "not a string", "empty", "not a sha256 digest", "another"],
+)
+def test_a_resolve_that_states_no_digest_is_refused_rather_than_keyed_on(
+    stated: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine is the published CLI this boundary delegates to, so it alone is doubled."""
+    engine = tmp_path / ".venv" / "bin" / "onepipeline"
+    engine.parent.mkdir(parents=True)
+    # llmlint: ignore[e2e_not_mocked] Only the published engine this module spawns is doubled, to
+    # state an answer the real one never gives.  # noqa: E501
+    engine.write_text(f"#!/bin/sh\ncat <<'END'\n{stated}\nEND\n", encoding="utf-8")
+    engine.chmod(0o755)
+    monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    with pytest.raises(OSError, match="stated no digest"):
+        design_approval.resolved_digest(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("engine", "said"),
+    [
+        (None, "`just bootstrap`"),
+        ("echo 'refused: no such template' >&2; exit 2", "refused: no such template"),
+        ('echo \'{"digest": "sha256:short"}\'', "stated no digest"),
+    ],
+    ids=["no engine", "the engine refuses", "a malformed digest"],
+)
+def test_an_engine_that_cannot_state_the_digest_refuses_the_approval_and_the_launch(
+    engine: str | None,
+    said: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both entry points refuse, naming why, rather than keying an approval on nothing.
+
+    Driven through `just approve-design`'s entry point and the launch gate's, over a store
+    holding one rendered document, with the published engine this module spawns doubled.
+    """
+    if engine is not None:
+        doubled = tmp_path / ".venv" / "bin" / "onepipeline"
+        doubled.parent.mkdir(parents=True)
+        # llmlint: ignore[e2e_not_mocked] Only the published engine this module spawns is
+        # doubled, to fail the way the real one fails on a broken checkout.
+        doubled.write_text(f"#!/bin/sh\n{engine}\n", encoding="utf-8")
+        doubled.chmod(0o755)
+    monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        design_approval, "configured_sources", lambda: frozenset({"authoring", "plans"})
+    )
+    _project(monkeypatch, {})
+    _holds(monkeypatch, _document())
+
+    assert design_approval.main(["authoring:demo"]) == 1
+    assert said in capsys.readouterr().err
+    assert design_approval.gate_main(["authoring:demo"]) == 1
+    refused = capsys.readouterr().err
+    assert said in refused, refused
+    assert "nothing was dispatched" in refused, refused
 
 
 @pytest.mark.parametrize(
@@ -448,23 +634,35 @@ def test_the_nodes_a_planning_launch_dispatches_are_read_off_the_project_itself(
 
 
 def test_the_launch_is_refused_until_the_document_it_holds_is_the_one_approved(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
-    """Approved, then edited, then unapproved again — the whole point of keying on content."""
+    """Approved, then changed, then unapproved again — the whole point of keying on content.
+
+    Changed both ways a document changes: edited by hand, which is refused as no longer the
+    rendering it records and names the regenerate; and regenerated from new answers, which
+    is a rendering nobody has approved and names the recipe that approves it.
+    """
     _project(monkeypatch, {})
     _holds(monkeypatch, _approved())
     assert design_approval.assess("authoring:demo").refusal is None
 
-    edited = _approved()
-    _holds(monkeypatch, _document(metadata=edited.metadata, content="## What\n\nMore.\n"))
-    reason = design_approval.assess("authoring:demo").refusal
-    assert reason is not None
-    assert "carries no approval for what it currently says" in reason
-    assert design_approval.RECIPE in reason
+    approved = _approved().metadata
+    more = "## What\n\nMore.\n"
+    _holds(monkeypatch, _document(metadata=approved, content=more))
+    edited = design_approval.assess("authoring:demo").refusal
+    assert edited is not None
+    assert "was edited after it was rendered" in edited
+    assert design_approval.REGENERATE.replace("<id>", "authoring:demo-design") in edited
+
+    _holds(monkeypatch, _document(metadata=dict(approved) | _provenance(more), content=more))
+    regenerated = design_approval.assess("authoring:demo").refusal
+    assert regenerated is not None
+    assert "carries no approval for what it currently says" in regenerated
+    assert design_approval.RECIPE in regenerated
 
 
 def test_a_planning_launch_is_exempt_and_the_gate_says_so_rather_than_passing_it_over(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """Its output is the plan, so the document it is reviewed as does not exist yet.
 
@@ -484,7 +682,7 @@ def test_a_planning_launch_is_exempt_and_the_gate_says_so_rather_than_passing_it
 
 
 def test_a_planning_project_holding_work_to_be_executed_is_not_exempt(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """The plan a planner writes into the planning project is not that launch any more.
 
@@ -516,7 +714,7 @@ def test_a_planning_project_holding_work_to_be_executed_is_not_exempt(
 
 
 def test_a_stamp_claiming_more_than_the_project_holds_does_not_bound_the_exemption(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """The other direction of the agreement, and the one a covering check lets through.
 
@@ -543,7 +741,7 @@ def test_a_stamp_claiming_more_than_the_project_holds_does_not_bound_the_exempti
 
 
 def test_both_directions_of_the_disagreement_are_reported_at_once(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """A stamp that overlaps the project's tasks without agreeing with them.
 
@@ -561,7 +759,7 @@ def test_both_directions_of_the_disagreement_are_reported_at_once(
 
 
 def test_a_claim_repeated_cannot_stand_in_for_a_node_the_project_holds(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """A stamp of the right length, naming one of the project's two tasks twice.
 
@@ -581,7 +779,7 @@ def test_a_claim_repeated_cannot_stand_in_for_a_node_the_project_holds(
 
 
 def test_a_planning_project_stops_being_exempt_once_it_holds_a_document_to_read(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """The other half of the bound: the exemption is for a launch with nothing to approve.
 
@@ -607,7 +805,7 @@ def test_a_planning_project_stops_being_exempt_once_it_holds_a_document_to_read(
 
 
 def test_a_project_stamped_by_an_older_planning_launch_is_gated_like_any_other(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """A stamp naming no nodes bounds nothing, so it exempts nothing.
 
@@ -623,7 +821,7 @@ def test_a_project_stamped_by_an_older_planning_launch_is_gated_like_any_other(
 
 
 def test_a_project_with_no_document_is_refused_as_that_rather_than_as_unapproved(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """The two refusals owe different next actions, so they are told apart in the text."""
     _project(monkeypatch, {})
@@ -820,9 +1018,10 @@ def test_every_shipped_example_project_carries_an_approved_design_document() -> 
 
     It fails in exactly the two cases the doctrine says it should, and both are somebody's
     to act on rather than defects here: an example project added without a design document,
-    and a change to `config/design-doc-template.md`, which invalidates every approval
-    granted under the previous shape. The repair for the second is to read each document
-    against the new template and run the recipe again — which is what the gate is for.
+    and a change to `templates/design-doc.md.j2`, which invalidates every approval granted
+    under the previous template. The repair for the second is to regenerate each document
+    through the new template, read it, and run the recipe again — which is what the gate is
+    for.
     """
     projects = plan_store.local_projects(EXAMPLES)
     assert projects, f"the {EXAMPLES!r} source ships no project, so this proves nothing"
@@ -848,7 +1047,7 @@ def _follow_ups_stamp(*nodes: str) -> Mapping[str, object]:
 
 
 def test_a_follow_ups_launch_is_exempt_for_its_one_node_and_the_gate_says_so(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     """There is no plan to read that project as, so its one node launches unapproved — said."""
     _project(monkeypatch, _follow_ups_stamp("follow-ups"))
@@ -871,7 +1070,7 @@ def test_a_follow_ups_launch_is_exempt_for_its_one_node_and_the_gate_says_so(
 
 
 def test_a_follow_ups_project_that_gained_a_second_node_is_refused_like_any_other(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     _project(monkeypatch, _follow_ups_stamp("follow-ups"))
     _tasks(monkeypatch, "follow-ups", "work-somebody-added")
@@ -887,7 +1086,7 @@ def test_a_follow_ups_project_that_gained_a_second_node_is_refused_like_any_othe
 
 
 def test_a_follow_ups_stamp_naming_a_node_the_project_does_not_hold_is_refused(
-    monkeypatch: pytest.MonkeyPatch, template: design_approval.TemplateFingerprint
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
 ) -> None:
     _project(monkeypatch, _follow_ups_stamp("follow-ups"))
     _tasks(monkeypatch, "something-else")
@@ -903,7 +1102,7 @@ def test_a_follow_ups_stamp_naming_a_node_the_project_does_not_hold_is_refused(
 @pytest.mark.parametrize("nodes", [(), ("follow-ups", "second")], ids=["none", "two"])
 def test_a_follow_ups_stamp_naming_anything_but_one_node_bounds_nothing(
     monkeypatch: pytest.MonkeyPatch,
-    template: design_approval.TemplateFingerprint,
+    template: design_approval.ChainDigest,
     nodes: tuple[str, ...],
 ) -> None:
     """That launch writes one node, so a stamp of its kind naming more is no claim at all."""
@@ -916,3 +1115,53 @@ def test_a_follow_ups_stamp_naming_anything_but_one_node_bounds_nothing(
     assert assessed.exemption is None
     assert assessed.refusal is not None
     assert "follow-ups launch" not in assessed.refusal
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes between this
+# project's own two targets and never out of it (`tests/conftest.py`'s `READS_DOCS_MARKER`): the
+# examples are Markdown the code tier's key leaves out, exactly as the shipped-examples test above
+# it reads them.
+@pytest.mark.reads_docs
+def test_regenerating_a_shipped_example_with_no_new_answers_changes_nothing_and_keeps_it_approved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each example is a rendering with stored answers, so the regenerate path is a no-op on it.
+
+    Driven through the pinned engine's real resolve piped into the pinned plan store's real
+    `document render`, over a copy of the `examples` source so the tracked one is not
+    written. A document whose stored answers did not render its current body would report
+    `changed: true`, and one whose approval covered anything a regenerate moves would lose it.
+    """
+    copied = tmp_path / EXAMPLES
+    shutil.copytree(REPO_ROOT / EXAMPLES, copied)
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT", str(copied))
+    project = f"{EXAMPLES}:health-endpoint"
+    document = f"{project}-design"
+    assert design_approval.assess(project).refusal is None
+
+    resolve = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        + [design_approval.TEMPLATE_NAME, "--json"]
+        + ["--template-root", str(design_approval.TEMPLATE_ROOT)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    render = subprocess.run(
+        [str(plan_store.locked_binary()), "document", "render", document]
+        + ["--template-loader", "-", "--no-interactive", "--json"],
+        cwd=REPO_ROOT,
+        input=resolve.stdout,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert render.returncode == 0, render.stderr
+    answered = json.loads(render.stdout)
+    assert answered["changed"] is False, answered
+    assert answered["digest"] == json.loads(resolve.stdout)["digest"]
+    assert design_approval.assess(project).refusal is None
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

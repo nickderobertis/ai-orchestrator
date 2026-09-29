@@ -1,0 +1,94 @@
+---
+onetaskgraph_template: 1
+description: >-
+  The one short document a plan is read and approved as. Its reader is a technical product
+  manager with no depth in this domain, who reads it instead of the plan and must be able to
+  accept a contract, argue with the architecture, or say the acceptance criteria do not
+  describe what was asked; a document only its author's peers can read has failed. Every
+  answer is in plain language: simple, terse, precise, with no jargon, and a term that cannot
+  be avoided defined once, in passing, in words that reader already has. The document is six
+  sections in the order What, Why, Architecture, Contracts, Acceptance criteria, Planned
+  tasks, and no other heading, so no answer carries a heading of its own.
+variables:
+  what:
+    description: >-
+      What is being built, in one short passage.
+    type: text
+    required: true
+  why:
+    description: >-
+      The motivation in the user's own terms: what they said they wanted and why. Not the
+      handoff, and not a restatement of what is built.
+    type: text
+    required: true
+  architecture:
+    description: >-
+      The pieces and how they fit, enough for the reader to picture them. It leaves out detail
+      that is easily changed later: no function names, file layout, library with many
+      equivalents, or order two steps run in. It highlights the decisions that are expensive
+      to reverse — a stored shape, a published interface, a boundary between pieces of code, a
+      dependency on another party's release — saying what each commits to and what reversing
+      it costs. Where the plan spans more than one repository it names the repository each
+      piece lives in, since the planned-tasks table has no column for it; a plan inside one
+      repository says nothing about repositories.
+    type: text
+    required: true
+  contracts:
+    description: >-
+      The agreements the plan cuts at, one per entry, each stated so the reader could accept
+      or reject it: what each party owes, and what the other may assume.
+    type: list
+    items: string
+    required: true
+  acceptance_criteria:
+    description: >-
+      The document's own criteria, one per entry: what has to be true when the whole plan is
+      done, as properties of the finished thing rather than the steps taken to reach it.
+    type: list
+    items: string
+    required: true
+  planned_tasks:
+    description: >-
+      One entry per task of the plan, in the order the table lists them, each an object of
+      four strings: `task` (its title), `delivers` (one line), `depends_on` (the titles it
+      depends on, or `none`) and `location`. This table is where the document links out to
+      the tasks and issues that hold the detail rather than restating any of it. Each
+      `location` is the one the plan store reports for that task — a link where it lives on a
+      website, a path where it is a file on this machine — and never one composed by hand.
+    type: list
+    items: object
+    required: true
+---
+## What
+
+{{ what }}
+
+## Why
+
+{{ why }}
+
+## Architecture
+
+{{ architecture }}
+
+## Contracts
+
+{% for contract in contracts %}
+- {{ contract | replace("\n", "\n  ") }}
+{% endfor %}
+
+## Acceptance criteria
+
+{% for criterion in acceptance_criteria %}
+- {{ criterion | replace("\n", "\n  ") }}
+{% endfor %}
+
+## Planned tasks
+
+| Task | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- |
+{# A table cell is one line holding no bare column delimiter, whatever an answer says. #}
+{% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\n", " ") }}{% endmacro %}
+{% for row in planned_tasks %}
+| {{ cell(row.task) }} | {{ cell(row.delivers) }} | {{ cell(row.depends_on or "none") }} | {{ cell(row.location) }} |
+{% endfor %}

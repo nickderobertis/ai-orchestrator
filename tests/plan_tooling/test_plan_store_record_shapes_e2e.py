@@ -54,7 +54,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import frontmatter, write_plan_project
+from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`; see `tests/plan_tooling/project.json`
@@ -89,19 +89,24 @@ STATES_ITS_BAR = (
     "- The dispatch closes with a completion report naming the evidence it verified."
 )
 
-#: The one document a plan is read as. Its shape is `config/design-doc-template.md`'s; what
-#: matters here is only that it is a document, so it is the shortest one that is.
-DESIGN = (
-    "## What\n\nOne route, and the test that drives it.\n\n"
-    "## Why\n\nThe user cannot complete a purchase without it.\n\n"
-    "## Architecture\n\nOne route on the service that is already there.\n\n"
-    "## Contracts\n\nThe route's request and response shape.\n\n"
-    "## Acceptance criteria\n\nA request reaches the route and is answered.\n\n"
-    "## Planned tasks\n\n"
-    "| Task | What it delivers | Depends on | Where it lives |\n"
-    "| --- | --- | --- | --- |\n"
-    "| landing | the route and its test | none | the store's own location |\n"
-)
+#: The answers the one document a plan is read as is rendered from. Its shape is the
+#: `design-doc` template's; what matters here is only that it is a document, so these are
+#: the shortest answers that make one.
+DESIGN = {
+    "what": "One route, and the test that drives it.",
+    "why": "The user cannot complete a purchase without it.",
+    "architecture": "One route on the service that is already there.",
+    "contracts": ["The route's request and response shape."],
+    "acceptance_criteria": ["A request reaches the route and is answered."],
+    "planned_tasks": [
+        {
+            "task": "landing",
+            "delivers": "the route and its test",
+            "depends_on": "none",
+            "location": "the store's own location",
+        }
+    ],
+}
 
 
 def _step(step_id: str, what: str) -> dict[str, str]:
@@ -163,22 +168,44 @@ class Store:
         return f"{STORED}:{native}"
 
     def document(self, native: str, labels: list[object]) -> str:
-        """Store one document of ``native``'s plan carrying ``labels``; answer its id.
+        """Store one rendered document of ``native``'s plan carrying ``labels``; answer its id.
 
-        Written through this repository's own record renderer and put into the plan's
-        store with the store's own `document copy`, which is the whole of what a
-        design-doc dispatch does to store what it wrote — and, here, what normalises
-        whatever an author typed into the one shape the store answers with.
+        Rendered in :data:`DRAFTING` the way a design-doc dispatch renders one — the pinned
+        engine's `template resolve design-doc` piped into the store's own `document create`
+        — then given ``labels`` in its front matter, exactly as an author types them, and
+        put into the plan's store with the store's own `document copy`, which is what
+        normalises whatever an author typed into the one shape the store answers with. The
+        labels sit in the front matter, so the rendered body — and the provenance keyed on
+        it — is left as the store rendered it.
         """
-        documents = self.drafts / "documents"
-        documents.mkdir(parents=True, exist_ok=True)
         drafted = f"{native}-design"
-        (documents / f"{drafted}.md").write_text(
-            frontmatter(
-                {"title": f"Design: {native}", "project": native, "labels": labels}, DESIGN
-            ),
-            encoding="utf-8",
+        answers = self.drafts.parent / f"{drafted}.answers.json"
+        answers.write_text(json.dumps(DESIGN), encoding="utf-8")
+        resolved = subprocess.run(
+            [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+            + ["design-doc", "--json", "--template-root", str(REPO_ROOT / "templates")],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
         )
+        assert resolved.returncode == 0, resolved.stderr
+        created = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "document", "create", DRAFTING, "--project", native]
+            + ["--title", f"Design: {native}", "--id", drafted, "--template-loader", "-"]
+            + ["--answers", str(answers), "--no-interactive", "--json"],
+            input=resolved.stdout,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+        assert created.returncode == 0, created.stdout + created.stderr
+        (record,) = json.loads(created.stdout)["items"]
+        path = Path(str(record["item"]["location"]["path"]))
+        front, body = path.read_text(encoding="utf-8").split("\n---\n", 1)
+        path.write_text(f"{front}\nlabels: {json.dumps(labels)}\n---\n{body}", encoding="utf-8")
         copied = self.copy("document", f"{DRAFTING}:{drafted}")
         (one,) = copied["items"]
         return str(one["destination"])

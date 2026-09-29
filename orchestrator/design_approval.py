@@ -1,12 +1,15 @@
 """Record a person's approval of a plan's design document, and refuse a launch without one.
 
 A plan is not what a person can usefully review. What they can judge is the one short
-document `config/design-doc-template.md` states — what is being built and why, the
+document the `design-doc` template renders — what is being built and why, the
 architecture, the contracts, the acceptance criteria, and the planned work as a table of
-links — written for a reader who has no depth in the domain. So the thing put in front of
-the user is that document, and **their approval of it is what gates dispatch**: `just
-approve-design` records the approval, and a launch against a project carrying none is
-refused before anything is dispatched.
+links — written for a reader who has no depth in the domain. That template is this host's
+own, `templates/design-doc.md.j2`, registered for `onepipeline template` in
+`templates/templates.yaml`, and a document is always its rendering: the plan store renders
+it from answers, records which template and which digest it rendered, and regenerates it.
+So the thing put in front of the user is that document, and **their approval of it is
+what gates dispatch**: `just approve-design` records the approval, and a launch against a
+project carrying none is refused before anything is dispatched.
 
 Four properties are deliberate, and each is the one `orchestrator/plan_review.py` already
 defends for the plan-review gate beside this one:
@@ -18,10 +21,10 @@ defends for the plan-review gate beside this one:
 * **There is no escape hatch** — no flag, no option, no environment variable. An escape
   here is reached under exactly the time pressure that makes skipping this a mistake.
 * **The key covers the bar as well as the content, and nothing else.** It is a digest of
-  the document's own authored content *and* of the tracked template that says what a design
-  document is, so editing the document loses its approval and moving the template
-  invalidates every approval granted under the previous one — while nothing the store the
-  document sits in owns is in it at all.
+  the document's title, the design-doc template's chain digest as it resolves *now*, and the
+  body digest the store recorded when it rendered the document — see :func:`approval_key`
+  for why those three. Editing the document loses its approval, and so does changing the
+  template, while nothing the store the document sits in owns is in it at all.
 
 **The record goes onto the document itself**, in the open metadata map every store carries,
 rather than into a file beside the plan. That is what makes it readable from whichever
@@ -68,6 +71,8 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
+import subprocess
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -79,14 +84,14 @@ from orchestrator import plan_store
 from orchestrator.plan_store import NodeId, StoreDocument
 from orchestrator.root import REPO_ROOT
 
-#: A digest of the bar a design document is written and read against — the tracked
-#: template. Distinct from :data:`ApprovalKey`, which is a digest of one document's
-#: content *under* that bar: both are hex strings of the same length and each is
+#: The design-doc template's chain digest, `sha256:<hex>`, as `onepipeline template resolve`
+#: states it and as the plan store records it on a rendering. Distinct from
+#: :data:`ApprovalKey`, which is a digest of one document *under* that template: each is
 #: meaningless in the other's place.
-TemplateFingerprint = NewType("TemplateFingerprint", str)
+ChainDigest = NewType("ChainDigest", str)
 
-#: The digest one document's authored content approved under one template hashes to —
-#: what a record holds and what the launch gate compares against.
+#: The digest one rendered document approved under one template hashes to — what a record
+#: holds and what the launch gate compares against.
 ApprovalKey = NewType("ApprovalKey", str)
 
 #: Where one document's approval record lives: a namespaced entry of the open metadata
@@ -94,9 +99,56 @@ ApprovalKey = NewType("ApprovalKey", str)
 #: the plan is copied to and stays visible to anybody reading it.
 RECORD_KEY = "orchestrator.design-approval"
 
-#: What a design document is, and the only statement of it. Hashed into every key, so an
-#: approval granted under one shape does not stand once that shape has moved.
-TEMPLATE = Path("config") / "design-doc-template.md"
+#: The name this host registers the design document's template under, in
+#: `templates/templates.yaml`, and the reference a rendering of it records. The document is
+#: this host's concept: onepipeline knows only the name registered here.
+TEMPLATE_NAME = "design-doc"
+TEMPLATE_REFERENCE = f"onepipeline:{TEMPLATE_NAME}"
+
+#: This host's template root, which the digest is resolved through — the same directory
+#: `scripts/template-env.sh` exports to every launch, named here by path so the key does
+#: not depend on which environment asked.
+TEMPLATE_ROOT = REPO_ROOT / "templates"
+
+#: The metadata key the plan store records a rendering's provenance under, and the three
+#: of its fields the key reads. Its fourth, `answers_digest`, is deliberately not read: the
+#: answers are stored only where the document was drafted, and a key over them would not
+#: hold for the board copy a person approves.
+PROVENANCE = "onetaskgraph.template"
+
+#: The regenerate every refusal of an unrendered document names: render it again through
+#: the template in force, from the answers stored where it was drafted.
+REGENERATE = (
+    f"onepipeline template resolve {TEMPLATE_NAME} --json | onetaskgraph document render "
+    "<id> --template-loader - --no-interactive"
+)
+
+#: Where a document holds no stored answers a regenerate can use, the file of its design-doc
+#: answers that regenerate is handed.
+SUPPLIED = "--answers <answers-file>"
+
+#: How a stale or edited refusal names the regenerate for either store a document may be
+#: read from: the store keeps the answers where the document was drafted and never copies
+#: them, so a board copy holds none and is regenerated from the answers supplied whole.
+EITHER = "`{regenerate}` where it was drafted, or `{regenerate} " + SUPPLIED + "` on a copy"
+
+#: The repair for a rendering of another template: the store's `document create` naming the
+#: id it holds replaces that document, where a regenerate in place would lay the design-doc
+#: answers over the other template's stored ones, which the design-doc template refuses.
+REPLACE = (
+    f"onepipeline template resolve {TEMPLATE_NAME} --json | onetaskgraph document create "
+    f"<source> --project <project> --title <title> --id <native> --template-loader - "
+    f"{SUPPLIED} --no-interactive"
+)
+
+
+#: The one shape a chain digest has, as the engine states it and the store records it.
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+class Unrendered(OSError):
+    """A document that is not, as it stands, a rendering of the design-doc template in force."""
+
 
 #: Where a project says what kind of plan it is, and — for a planning project — what the
 #: launch that wrote it dispatches. A key of this repository's own rather than an
@@ -193,30 +245,131 @@ class Approved(NamedTuple):
     held: bool
 
 
-# llmlint: ignore[changed_behavior_has_e2e] What a moved template does is a key that no
-# longer matches, and that mechanism is driven end to end by
-# `tests/plan_tooling/test_approve_design_recipe_e2e.py`, which edits a real document and
-# has a real launch refused for it. The only half left is *which* input moved, and driving
-# that means moving a tracked file of this checkout — which every other tier of this suite
-# reads concurrently — or installing a second copy of it to move the file in. What does
-# catch a moved template is deterministic rather than absent: the shipped-examples test in
-# `tests/test_design_approval.py` goes red until every example this repository documents as
-# launchable has been read against the new shape and approved again.
-def template_fingerprint(root: Path = REPO_ROOT) -> TemplateFingerprint:
-    """A digest of the design-document template in force, over ``root``'s copy of it."""
-    digest = hashlib.sha256()
-    digest.update(TEMPLATE.as_posix().encode("utf-8"))
-    digest.update(b"\0")
-    digest.update((root / TEMPLATE).read_bytes())
-    return TemplateFingerprint(digest.hexdigest())
+def resolved_digest(root: Path = TEMPLATE_ROOT) -> ChainDigest:
+    """The design-doc template's chain digest resolved now, through ``root`` and the pinned engine.
+
+    Asked of `onepipeline template resolve` rather than hashed here, because what the chain
+    is — which layer answers, what it extends — is the engine's to say, and a digest this
+    module composed would be a second definition of it. The engine is this checkout's locked
+    install, the one `config/onepipeline.version` governs, run from this checkout so no
+    target repository's layer can answer for it.
+    """
+    engine = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+    command = [
+        str(engine),
+        "template",
+        "resolve",
+        TEMPLATE_NAME,
+        "--json",
+        "--template-root",
+        str(root),
+    ]
+    # llmlint: ignore-block[changed_behavior_has_e2e] Every refusal below is an engine that
+    # is missing, fails, or answers in a shape the pinned release never gives — a broken
+    # checkout rather than a state a journey over the real engine can reach without breaking
+    # the toolchain every other tier shares. Each is driven through both entry points,
+    # `approve-design`'s and the launch gate's, against a doubled engine in
+    # `tests/test_design_approval.py`, the one boundary that can be made to answer that way.
+    try:
+        done = subprocess.run(
+            command, cwd=REPO_ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True
+        )
+    except OSError as exc:
+        raise OSError(
+            f"the pinned engine could not be run to resolve the {TEMPLATE_NAME} template "
+            f"({exc}); provision this checkout with `just bootstrap`, then retry"
+        ) from exc
+    if done.returncode != 0:
+        raise OSError(
+            f"`onepipeline template resolve {TEMPLATE_NAME}` refused through {root}: "
+            f"{done.stderr.strip()}"
+        )
+    try:
+        stated = json.loads(done.stdout)
+        if stated["reference"] != TEMPLATE_REFERENCE:
+            raise ValueError(f"it names {stated['reference']!r}, not {TEMPLATE_REFERENCE}")
+        digest = stated["digest"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise OSError(
+            f"`onepipeline template resolve {TEMPLATE_NAME} --json` stated no digest ({exc})"
+        ) from exc
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise OSError(
+            f"`onepipeline template resolve {TEMPLATE_NAME} --json` stated no digest of the "
+            f"form `sha256:<64 hex>`: {digest!r}"
+        )
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    return ChainDigest(digest)
 
 
-def approval_key(document: StoreDocument, template: TemplateFingerprint) -> ApprovalKey:
-    """The digest ``document``'s content hashes to, approved under ``template``.
+def body_digest(document: StoreDocument, digest: ChainDigest) -> str:
+    """The body digest ``document`` records, once it is a rendering of the template in force.
 
-    **Exactly the authored content, and the bar.** The title, the prose, and the template
-    that says what a design document is — the two things a person read when they approved
-    it, and the shape they read them under. **Nothing the destination store owns is here**,
+    Three things make a document not one, each refused as :class:`Unrendered` naming the
+    regenerate that repairs it: it records no design-doc provenance at all (written by hand,
+    or rendered from another template); it was rendered from a chain whose digest is not the
+    one resolved now (the template changed after it was rendered); or its content no longer
+    hashes to the body digest recorded when it was (it was edited by hand since). Like the
+    plan-review record this trusts the provenance the store recorded: a writer who forges
+    one is not a case this guards.
+    """
+    regenerate = REGENERATE.replace("<id>", str(document.qualified_id))
+    match document.metadata.get(PROVENANCE):
+        case {
+            "template": str() as template,
+            "digest": str() as recorded,
+            "body_digest": str() as body,
+        }:
+            pass
+        case _:
+            raise Unrendered(
+                f"{document.qualified_id} records no rendering of the {TEMPLATE_NAME} "
+                f"template, so it is not a design document this host can approve and holds no "
+                f"stored answers a regenerate can trust; regenerate it from its design-doc "
+                f"answers with `{regenerate} {SUPPLIED}`"
+            )
+    if template != TEMPLATE_REFERENCE:
+        source, _, native = str(document.qualified_id).partition(":")
+        replace = (
+            REPLACE.replace("<source>", source)
+            .replace("<project>", document.project or "<project>")
+            .replace("<title>", shlex.quote(document.title))
+            .replace("<native>", native)
+        )
+        raise Unrendered(
+            f"{document.qualified_id} is a rendering of {template}, not of "
+            f"{TEMPLATE_REFERENCE}, so it is not a design document this host can approve; "
+            f"`{regenerate}` would lay its design-doc answers over that template's stored "
+            f"ones, so replace it from them with `{replace}`"
+        )
+    if recorded != digest:
+        raise Unrendered(
+            f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
+            f"{recorded}, and that template now resolves to {digest}, so what it says was "
+            f"written against a template no longer in force; regenerate it with "
+            + EITHER.format(regenerate=regenerate)
+        )
+    held = "sha256:" + hashlib.sha256(document.content.encode("utf-8")).hexdigest()
+    if held != body:
+        raise Unrendered(
+            f"{document.qualified_id}'s content is not the rendering its provenance records "
+            f"(it hashes to {held}, the rendering to {body}), so it was edited after it was "
+            f"rendered; change its answers and regenerate it with "
+            + EITHER.format(regenerate=regenerate)
+        )
+    return body
+
+
+def approval_key(document: StoreDocument, digest: ChainDigest) -> ApprovalKey:
+    """The digest ``document`` hashes to as a rendering of the design-doc chain at ``digest``.
+
+    **The title, the template, and the rendered body — and nothing else.** The body is
+    named by the digest the store recorded when it rendered it, which :func:`body_digest`
+    has held the content to, and the template by its chain digest resolved now, so a
+    changed template leaves every approval granted under the previous one unapproved. The
+    answers are not in it: they are stored only in the store the document was drafted in,
+    and never copied, so a key over them could not hold for the board copy a person
+    approves. **Nothing the destination store owns is here**,
     and that is the whole of what makes the record travel: a copy is *defined* to change
     where a record sits, so a key covering any of that would invalidate the approval in the
     act of moving it. `project` in particular is not: it is the store's own local
@@ -235,8 +388,8 @@ def approval_key(document: StoreDocument, template: TemplateFingerprint) -> Appr
     and it is unchanged.
     """
     authored = {
-        "content": document.content,
-        "template": template,
+        "body_digest": body_digest(document, digest),
+        "digest": digest,
         "title": document.title,
     }
     rendered = json.dumps(authored, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -416,7 +569,7 @@ def approve(project: str) -> Approved:
     approves it.
     """
     document = design_document(project)
-    key = approval_key(document, template_fingerprint())
+    key = approval_key(document, resolved_digest())
     if recorded(document) == key:
         return Approved(document.qualified_id, located(document), held=True)
     value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
@@ -463,9 +616,10 @@ def assess(project: str) -> Assessment:
                 return Assessment(exemption=exemption(project, stamped.nodes, stamped.kind))
             note = lapsed(project, beyond, unheld, documents, stamped.kind)
         document = one_document(project, documents)
+        key = approval_key(document, resolved_digest())
     except OSError as exc:
         return Assessment(refusal=stated(str(exc), note))
-    if recorded(document) == approval_key(document, template_fingerprint()):
+    if recorded(document) == key:
         return Assessment()
     return Assessment(
         refusal=stated(
@@ -526,7 +680,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     print(
         f"approve-design: recorded the approval of {answered.document} ({answered.location}); "
-        f"editing it, or moving {TEMPLATE}, leaves it unapproved again"
+        f"editing it, or changing the {TEMPLATE_NAME} template it renders, leaves it "
+        f"unapproved again"
     )
     return 0
 

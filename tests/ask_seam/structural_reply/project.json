@@ -22,7 +22,7 @@
   "namedInputs": {
     "askSeamStructuralReply": [
       "{workspaceRoot}/.gitignore",
-      "{workspaceRoot}/config/design-doc-template.md",
+      "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/onejudge.base.yaml",
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onevcs.checkouts",

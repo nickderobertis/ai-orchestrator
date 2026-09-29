@@ -21,7 +21,7 @@ from typing import Any
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator.project_store import frontmatter, publish_record, write_plan_project
+from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
@@ -82,11 +82,11 @@ def local_project(content: str, name: str) -> str:
     produce a project no `just orchestrate` could start — and every journey that launches
     one would be asserting about that refusal instead of about what it came to test.
 
-    The document is written the way the project and its tasks are, through this
-    repository's own record renderer rather than by hand, and the approval is recorded by
-    the real `just approve-design` — the same seam `reviewed` below reaches its own record
-    through, so no journey built on this begins from state the exercised interface cannot
-    produce. What the recipe *decides* is proven in
+    The document is rendered the way a design-doc dispatch renders one — the pinned
+    engine's `template resolve design-doc` piped into the pinned store's `document create`
+    — and the approval is recorded by the real `just approve-design`, the same seam
+    `reviewed` below reaches its own record through, so no journey built on this begins
+    from state the exercised interface cannot produce. What the recipe *decides* is proven in
     `tests/plan_tooling/test_approve_design_recipe_e2e.py`; what it does here is put a
     fixture project into the one state a launch accepts.
     """
@@ -107,10 +107,9 @@ def approved(project: str) -> str:
     """Record the user's approval of ``project``'s design document, and answer its id.
 
     Through the real recipe rather than in process, and that is not only for realism: the
-    approval key is a digest of `config/design-doc-template.md`, so computing one here
-    would be the code tier reading prose its cache key deliberately does not cover — and
-    the tier's answer does not depend on what that template says, only on the approval
-    having been recorded under whatever it currently is.
+    approval key covers the design-doc template's chain digest as the pinned engine
+    resolves it now, and the tier's answer does not depend on what that template says,
+    only on the approval having been recorded under whatever it currently is.
     """
     recording = subprocess.run(
         ["just", "approve-design", project],
@@ -127,34 +126,86 @@ def approved(project: str) -> str:
     return project
 
 
+#: The pinned engine, whose `template resolve` states the design-doc template a fixture's
+#: document is rendered from.
+_ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+
+
 def _designed(native: str) -> None:
-    """Write the design document a fixture project is launched against.
+    """Render the design document a fixture project is launched against.
 
     Its title carries the project's own unique native id, and that is load-bearing rather
     than cosmetic: a record is copied over the destination it matches **by title**, and
     one test process writes every one of its projects into one root, so two documents
-    sharing a title would let one project's approval land on another's document.
+    sharing a title would let one project's approval land on another's document. The store
+    writes it through a staging file and a rename, so a read walking `documents/` while the
+    next fixture writes never meets one half-written.
     """
-    # Staged and renamed into place, as the plan's own records are: a document read walks
-    # every file under `documents/`, so one caught empty mid-write refuses whichever read
-    # met it — and a journey's own `just` recipes, driver and dispatches all walk this
-    # root while the next fixture writes into it.
     root = plan_fixture_source.root()
-    publish_record(
-        root / "documents" / f"{native}-design.md",
-        frontmatter(
-            {"title": f"Design: {native}", "project": native},
-            f"## What\n\nThe fixture plan {native}.\n\n"
-            "## Why\n\nA journey needs a project it can launch.\n\n"
-            "## Architecture\n\nOne project, its tasks, and this document.\n\n"
-            "## Contracts\n\nNone: nothing outside this fixture reads it.\n\n"
-            "## Acceptance criteria\n\nThe journey that launched it passes.\n\n"
-            "## Planned tasks\n\n"
-            "| Task | What it delivers | Depends on | Where it lives |\n"
-            "| --- | --- | --- | --- |\n"
-            f"| the plan's own tasks | the fixture | none | {root}/tasks/{native} |\n",
-        ),
+    designed(
+        plan_fixture_source.SOURCE,
+        native,
+        [
+            {
+                "task": "the plan's own tasks",
+                "delivers": "the fixture",
+                "depends_on": "none",
+                "location": f"{root}/tasks/{native}",
+            }
+        ],
     )
+
+
+def designed(
+    source: str,
+    native: str,
+    planned_tasks: list[dict[str, str]],
+    environment: dict[str, str] | None = None,
+) -> None:
+    """Render ``native``'s design document into ``source`` the way a design-doc dispatch does.
+
+    The pinned engine's `template resolve design-doc` piped into the pinned store's
+    `document create`, titled and identified after the project, so `just approve-design`
+    reads it as a rendering of this host's template rather than a hand-written body it
+    refuses. ``environment`` is the store's, for a journey that points ``source`` at a
+    root of its own; the planned tasks are the one answer a journey states, because each
+    row's location is where that journey's store put the task.
+    """
+    answers = {
+        "what": f"The fixture plan {native}.",
+        "why": "A journey needs a project it can launch.",
+        "architecture": "One project, its tasks, and this document.",
+        "contracts": ["None: nothing outside this fixture reads it."],
+        "acceptance_criteria": ["The journey that launched it passes."],
+        "planned_tasks": planned_tasks,
+    }
+    resolved = subprocess.run(
+        [str(_ENGINE), "template", "resolve", "design-doc", "--json"]
+        + ["--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if resolved.returncode != 0:
+        raise AssertionError(f"the design-doc template did not resolve: {resolved.stderr}")
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as written:
+        json.dump(answers, written)
+        written.flush()
+        created = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "document", "create", source]
+            + ["--project", native, "--title", f"Design: {native}", "--id", f"{native}-design"]
+            + ["--template-loader", "-", "--answers", written.name, "--no-interactive"],
+            cwd=REPO_ROOT,
+            env=environment,
+            input=resolved.stdout,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    if created.returncode != 0:
+        raise AssertionError(f"the fixture's design document was not created: {created.stderr}")
 
 
 def project_from_plan(plan: Path, name: str | None = None) -> str:
