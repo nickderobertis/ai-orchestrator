@@ -1760,10 +1760,12 @@ def test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider() -> 
                 assert glob in tracked, f"{journey.key} names {glob}, which git does not track"
 
         covered = {path for path in tracked if covers(globs, path)}
-        # A Markdown file under `config/` is a template a tool reads — the dispatch appendix,
-        # the design-document template — not prose about this repository.
+        # A Markdown file under `config/` or `templates/` is a template a tool reads — the
+        # dispatch appendix, the design-document template — not prose about this repository.
         prose = sorted(
-            path for path in covered if _is_documentation(path) and not path.startswith("config/")
+            path
+            for path in covered
+            if _is_documentation(path) and not path.startswith(("config/", "templates/"))
         )
         assert not prose, f"{journey.key} reaches prose the journey never opens: {prose}"
 

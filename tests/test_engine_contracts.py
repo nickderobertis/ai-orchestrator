@@ -3156,10 +3156,10 @@ def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
     """Retry edits, a closed item retried reopens, cancel parks, drop closes, siblings stay.
 
     Each word the prose uses for what a ruling projects is read off entry 80's `unchanged`
-    and `destination` blocks — `parked` for a cancel, `cancelled` for a drop, the
-    furthest-along item over an older board — so the day the engine changes what a cancel
-    projects, the sentence telling a manager what to expect on the board fails here rather
-    than being believed.
+    and `destination` blocks — `parked` for a cancel, `cancelled` for a drop, the landed
+    baseline's item, else the furthest-along one, over an older board — so the day the
+    engine changes what a cancel projects, the sentence telling a manager what to expect on
+    the board fails here rather than being believed.
     """
     contract = _lineage_contract()
     unchanged = contract["unchanged"]
@@ -3182,10 +3182,19 @@ def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
     assert "a drop projects cancelled and keeps its paired close" in paragraph, (
         f"the paragraph does not say a drop projects {unchanged['drop']!r}"
     )
+    assert "landed baseline" in str(destination["item_of_a_lineage"]), destination
+    assert "the item its landed baseline records for the lineage" in paragraph, (
+        "the paragraph does not say a lineage's item is the one its landed baseline records"
+    )
+    unheld = destination["a_lineage_the_baseline_does_not_hold"]
+    assert isinstance(unheld, str) and "furthest-along id the run knows" in unheld, unheld
+    assert "reads once by the furthest-along id the run knows" in paragraph, (
+        "the paragraph does not say an unheld lineage resolves by the furthest-along id"
+    )
     several = destination["several_under_one_root"]
-    assert isinstance(several, str) and "furthest-along" in several, several
-    assert "the item at the furthest-along position" in paragraph, (
-        "the paragraph does not say an older board's siblings resolve to the furthest-along item"
+    assert isinstance(several, str) and "the rest left as they are" in several, several
+    assert "leaving the rest exactly as they are" in paragraph, (
+        "the paragraph does not say an older board's other siblings are left as they are"
     )
     counted = reopened["counted_when"]
     assert isinstance(counted, list) and any("done or cancelled" in when for when in counted), (

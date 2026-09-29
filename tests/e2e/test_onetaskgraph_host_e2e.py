@@ -3585,8 +3585,12 @@ def test_a_transferred_follow_up_issue_is_updated_in_place_by_a_re_copy_of_its_o
 
 ONEPIPELINE_IDENTITY = "github.com/nickderobertis/onepipeline"
 #: `ProjectedStatus` in onepipeline's `src/writeback.rs`, its variants, and each one's
-#: serde rename, which is the word the write-back sends.
-PROJECTED_STATUS_DECLARATION = re.compile(r"\nenum ProjectedStatus \{(?P<body>.*?)\n\}", re.DOTALL)
+#: serde rename, which is the word the write-back sends. Its visibility is not part of the
+#: vocabulary, so a declaration is found whether or not the engine exports it
+#: (`pub(crate)` from 0.52.1).
+PROJECTED_STATUS_DECLARATION = re.compile(
+    r"\n(?:pub(?:\([^)]*\))? )?enum ProjectedStatus \{(?P<body>.*?)\n\}", re.DOTALL
+)
 PROJECTED_STATUS_VARIANT = re.compile(r"^\s*([A-Z]\w*),\s*$", re.MULTILINE)
 PROJECTED_STATUS_WORD = re.compile(r'#\[serde\(rename = "([^"]+)"\)\]')
 

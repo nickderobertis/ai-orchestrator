@@ -60,7 +60,7 @@ OTHER_PROSE = (
     "README.md",
     "docs/**/*.md",
     "personas/**/*.yaml",
-    "config/dispatch-appendix.md",
+    "templates/dispatch-appendix.md",
 )
 
 #: The section of `AGENTS.md` that lists every tool this harness configures, one bold

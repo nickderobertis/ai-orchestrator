@@ -2,7 +2,7 @@
 # The ONE source of the operational appendix a planning launch puts in its dispatches'
 # environment, sourced by scripts/plan.sh.
 #
-# Every dispatched task has to carry `config/dispatch-appendix.md` verbatim, as one
+# Every dispatched task has to carry `templates/dispatch-appendix.md` verbatim, as one
 # contiguous block under `## Additional info` — `just check-plan` refuses a task that
 # does not — and the party that copies it in is the **planner**. A planner works in a
 # worktree of its own while that file lives in the launching checkout, so naming it by a
@@ -67,7 +67,7 @@ export_dispatch_appendix() {
     # is what still answers under `PYTHONSAFEPATH`.
     if ! answered=$(cd -- "$here" && PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" "$python" -c "$DISPATCH_APPENDIX_PROGRAM" 2>&1); then
         echo "$caller: the operational appendix every dispatched task must carry could not be read: ${answered:-the read reported nothing}" >&2
-        echo "$caller: restore config/dispatch-appendix.md in $here, and provision this checkout with 'just bootstrap' if the read could not run at all. Then retry" >&2
+        echo "$caller: restore templates/dispatch-appendix.md in $here, and provision this checkout with 'just bootstrap' if the read could not run at all. Then retry" >&2
         return 2
     fi
     # Split on the first newline, and answer "no newline at all" as an empty appendix
@@ -87,7 +87,7 @@ export_dispatch_appendix() {
             ;;
     esac
     if [ -z "$name" ] || [ -z "$text" ]; then
-        echo "$caller: the operational appendix read back as empty, so a planner would be told this host asks for no operational notes at all; restore config/dispatch-appendix.md in $here, then retry" >&2
+        echo "$caller: the operational appendix read back as empty, so a planner would be told this host asks for no operational notes at all; restore templates/dispatch-appendix.md in $here, then retry" >&2
         return 2
     fi
     export "$name=$text"

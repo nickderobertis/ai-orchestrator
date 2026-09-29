@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.51.0. The whole of that reasoning —
+onepipeline 0.52.1. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -292,11 +292,12 @@ it.
 ## What the write-back owns, and what a green run proves
 
 **What the write-back owns is the node projection, and nothing else on that record.**
-It is a projection rather than a rewrite: before it builds anything it reads the
-destination with `project show <project> --json`, and the shadow project it then
-copies over carries **that read's own description** — so a body somebody authored on
-the board survives every settlement of every run launched from it, re-read on the
-adopted onepipeline 0.51.0. Below the 0.16.3 that fixed it, it did not: the shadow
+It is a projection rather than a rewrite: a node already on the destination is sent as a
+targeted update that names no project description at all, and the one copy it makes — a
+creation — reads the destination with `project show <project> --json` first, so the shadow
+project that copy carries restates **that read's own description** — so a body somebody
+authored on the board survives every settlement of every run launched from it, re-read on
+the adopted onepipeline 0.52.1. Below the 0.16.3 that fixed it, it did not: the shadow
 was built with the body hardcoded to an empty string
 and the copy that follows is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
@@ -316,10 +317,10 @@ delete — the shadow would carry an empty description and the copy is a total
 replacement — so this is the property that makes the preservation above worth
 anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted
-onepipeline 0.51.0 among them — reads and projects plans through the linked onetaskgraph
+onepipeline 0.52.1 among them — reads and projects plans through the linked onetaskgraph
 crates and ignores `ONETASKGRAPH_BIN`, so no host
 seam can inject a refused read into the store in process any more, and
-`store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
+`store::a_refusal_of_any_call_an_attempt_makes_stops_the_retry_timer`
 there is the test that fails when a refused read reaches a copy.
 
 **A projection the store refuses is reported once and waits for the graph; any other
@@ -328,7 +329,7 @@ backs a failing write-back off from a prompt first retry to a one-minute ceiling
 retrying about four times a second, resets that schedule once it recovers, and retries until
 the projection lands; stopping or settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.51.0, that schedule answers only the failures a retry can change. A projection the store
+0.52.1, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. Every
@@ -341,29 +342,29 @@ store. See [Where a plan of this repository
 lives](../AGENTS.md#where-a-plan-of-this-repository-lives) for the secondary limiter, which is
 the other half of that pressure.
 
-**A projection carries only the nodes that changed.** Since
-https://github.com/nickderobertis/onepipeline/pull/287, in force on the adopted engine, an
-attempt names to the store's member copy only the nodes whose shadow task changed since the
-last projection that landed, and neither reads nor rewrites a node it does not name — so a
-person's edit on an unnamed item stands until that node next changes. A projection is
-**whole**, every node as before, for one of two reasons, recorded as its `whole_because`:
-`first`, where nothing has landed in this driver yet, a driver `just orchestrate --adopt`
-started included; and `after-failure`, where the attempt before it failed. A record an
-older run wrote may also read `store-lacks-members`, where the spawned store predated the
-first onetaskgraph release offering `--member`; the adopted engine links the store and
-never writes it, though it still reads it. onepipeline's
-`tests/e2e/writeback_projections.rs` drives both against the real store, and
-`tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` drives them on
-this host's own launch path.
+**A projection carries only what changed.** Since
+https://github.com/nickderobertis/onepipeline/pull/559, in force on the adopted engine, an
+attempt sends each existing item one targeted update of exactly the fields that
+changed since the run last landed them, against a landed baseline advanced per item as each
+update lands, and creates an `add`ed node's item with a member copy naming only the lineages
+being created. It reads nothing that baseline answers — no page of tasks, no item, and no
+project except the one read an attempt creating an item makes — so a person's edit to any
+field stands until the run next changes that same field, and a driver `just orchestrate
+--adopt` started carries only what differs from the baseline the previous driver left.
+Every attempt is recorded `members`; `whole` and its `whole_because` (`first`,
+`after-failure`, `store-lacks-members`) are read on lines an older engine wrote and never
+written. onepipeline's `tests/e2e/writeback_projections.rs` drives that against the real
+store, and `tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` and
+`tests/writeback_budget/test_linked_plan_store_e2e.py` drive it on this host's own launch
+path.
 
 **A copy is allowed the deadline its items earn.** Every store command the write-back
 runs used to be killed at one fixed minute, and a large enough plan outgrew it: a run could
 settle every node with its board left behind by a copy killed mid-write. onepipeline
 https://github.com/nickderobertis/onepipeline/pull/248, in force on the adopted engine,
 bounds that copy at `max(60 s, per-item budget × items)` instead, and leaves the reads on
-the sixty-second deadline. *Items* counts the nodes the copy carries — every node for a whole
-copy, only the changed ones for a member copy — so one node's transition is bounded by the
-floor. The per-item budget is ten seconds unless a launch names one —
+the sixty-second deadline. *Items* counts the items a copy creates, and a targeted update is bounded
+by its one item, so one node's transition is bounded by the floor. The per-item budget is ten seconds unless a launch names one —
 `--writeback-item-budget`, then `ONEPIPELINE_WRITEBACK_ITEM_BUDGET`, then the launch
 config's `writeback_item_budget`, in that order — and the budget a launch resolved is
 recorded on the run's `launch.json`, so a driver adopted later bounds its copies the same
@@ -383,19 +384,23 @@ links, so no host seam can hold a copy open any more.
 **Every attempt is recorded on the run.** The engine appends one JSON line per projection
 attempt, landed or failed, to `writeback-projections.jsonl` in the run's own directory under
 the runs root, beside its `driver.log`, and never rewrites one. Each line carries `at`,
-`project`, `scope` (`whole` or `members`), `whole_because`, `items` (the lineage roots the
-copy carried — one id per item, never one per retry), `outcome` (`projected` or `failed`),
-the store's `class` and `kind` when it failed with its failure document, `reason`,
-`duration_ms` (the whole attempt, reads included), `actions` (the copy report's `created`,
-`updated`, `unchanged` and `orphaned`, and the `reopened` the engine derives beside them:
-the carried items the store `updated` from a `done` or `cancelled` category onto a word that
-is neither), and `spent` — the copy report's own `spent` object verbatim, and `null` wherever
-the destination meters nothing, which is every local Markdown one. That is where a manager
-reads what the write-back
-cost rather than guessing it: how many items each copy carried and whether `whole` keeps
-recurring (a run repeating `after-failure` is failing), whether a failure is `refused` and so
-waiting on the graph rather than on a timer, how long each attempt took, and on the `plans`
-board the GraphQL points `spent` names. onepipeline's `docs/contract-divergences.md` entry 73
+`project`, `scope` (`members` on every line the adopted engine writes), `whole_because`
+(`null` on each of them), `items` (the lineage roots the copy carried, or the targeted updates
+did — one id per item, never one per retry), `outcome` (`projected` or `failed`), the
+store's `class` and `kind` when it failed with its failure document, `reason`,
+`duration_ms` (the whole attempt, reads included), `calls` (how many times the attempt
+called each store operation, an operation not called left off), `updated_fields` (how many
+items each field was written on, where the attempt made a targeted update), `actions` (a
+copy report's `created`, `updated`, `unchanged` and `orphaned`, and the `reopened` the
+engine derives beside them: the carried items whose update wrote status from a word the run
+knew as `done` or `cancelled` onto one that is neither; each targeted update counts its one
+item as updated where the store wrote a field and unchanged where it wrote none), and `spent` — every call's
+reported spend summed, and `null` wherever the destination meters nothing, which is every
+local Markdown one. That is where a manager reads what the write-back
+cost rather than guessing it: how many items each attempt carried and which store calls it
+made — `project-copy` and `project-show` only where it created an item — whether a failure
+is `refused` and so waiting on the graph rather than on a timer, how long each attempt took,
+and on the `plans` board the GraphQL points `spent` names. onepipeline's `docs/contract-divergences.md` entry 73
 is the source of that shape.
 onepipeline's own suite holds the three paragraphs above, for the same reason the copy
 deadline is held there: `tests/e2e/store.rs`'s
@@ -413,7 +418,10 @@ replacement rather than creating a card beside it, and a `retry` or `requeue` of
 whose card reads closed on the board — closed by a person, or written `cancelled` by an
 older engine for a superseded attempt — writes `queued` onto it: a `retry` or `requeue` of a
 node whose item reads `done` or `cancelled` writes an open word onto it, which the store
-pairs with reopening the issue and the attempt counts as `reopened`. A plain `cancel` of a
+pairs with reopening the issue. The attempt counts it as `reopened` only where the run knew
+that word — what it landed there, or what it read of an item its landed baseline does not
+hold — so a card a person closed over the run's `parked` is reopened and counted
+`reopened: 0`. A plain `cancel` of a
 running node settles it `cancelled` in the run's own record while its item reads `parked` —
 the park outranks the settlement, and it is an open word, so a cancel closes nothing and a
 retry after it lands `queued` on the same item reporting `reopened: 0`; a `drop` projects
@@ -421,8 +429,9 @@ retry after it lands `queued` on the same item reporting `reopened: 0`; a `drop`
 is retried, so the run's views and the board agree on one card however many attempts the
 work took. A board an older
 engine wrote — one item per attempt, the superseded ones closed — keeps its dead siblings:
-nothing deletes a card, and the engine reuses the item at the **furthest-along** position
-of the lineage, leaving the rest exactly as they are. onepipeline's
+nothing deletes a card, and the engine reuses the item its landed baseline records for the
+lineage — one that baseline does not hold, the item it reads once by the **furthest-along**
+id the run knows — leaving the rest exactly as they are. onepipeline's
 `docs/contract-divergences.md` entry 80 is the source of that shape, and
 `tests/test_engine_contracts.py` holds these keys and words to it at the pinned release;
 `tests/writeback_budget/test_lineage_item_reuse_e2e.py` drives the installed engine
@@ -433,7 +442,7 @@ retry, and an `--adopt`, against a local Markdown destination.
 not started yet is projected `queued`, which `onetaskgraph.yaml` maps to the `Queued`
 option on both boards; a running node is `in progress`, a settled one its own settlement
 word, and at closeout — settled or stopped — a node that never started is written back to
-`todo`, releasing what it claimed. The first whole projection is attempted **once, bounded,
+`todo`, releasing what it claimed. The first projection is attempted **once, bounded,
 before the first dispatch**, so a manager reading the board sees the claim before any of
 the work it claims begins. A node's
 `delivers` names the tickets that node delivers, and the tickets themselves are moved by
@@ -593,7 +602,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.51.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.52.1 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -721,7 +730,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.51.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.52.1 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, so a
   release that moved the export fails there rather than here. Write the member
@@ -1101,7 +1110,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.51.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.52.1 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1273,7 +1282,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.51.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.52.1**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -2303,21 +2312,30 @@ outlives the node that carried it: a transition keeps the reference rather than
 removing it as a satisfied dependency, and passes it to the dependents of a
 consumer it carried out — see [The graph of record is the live graph](#the-graph-of-record-is-the-live-graph).
 
-The planner writes every agent node and step `task` with this prose template:
+Every agent node's and step's `task` is **rendered from the `plan-task` template**, never
+written by hand. `onepipeline template resolve plan-task --json` states the template its
+layers resolve to as a loader document — a repository's
+`.onepipeline/templates/plan-task.md.j2`, else this host's
+[`templates/plan-task.md.j2`](../templates/plan-task.md.j2) under the root
+`ONEPIPELINE_TEMPLATE_ROOT` names, else the engine's built-in — and the planner pipes it
+into `onetaskgraph task create <SOURCE> --template-loader - --no-interactive`, answering
+the template's variables with the record's fields on the same call. This host's template
+extends the engine's base and renders `## What`, `## Why`, the base's one
+`## Acceptance criteria`, the task's own `## Additional info` where it has any, and then
+[`templates/dispatch-appendix.md`](../templates/dispatch-appendix.md) verbatim; each
+variable's `description` is where what that section is for is stated, and `onetaskgraph
+template variables --template-loader -` prints them. The answers are stored beside the
+task in the `authoring` source, never in its body or its metadata, so a board copy
+carries the rendering and its provenance and nothing twice.
 
-```markdown
-## What
-<the change>
-
-## Why
-<the user's motivation: impact and decision driver>
-
-## Acceptance criteria
-<detailed, specific source of truth for done>
-
-## Additional info
-<optional; omit the section when empty>
-```
+A task is changed by **regenerating** it — the same `resolve` piped into `onetaskgraph
+task render <id> --template-loader - --var NAME=VALUE --no-interactive`, which keeps its
+id, dependencies and metadata, with `onetaskgraph task answers <id>` printing what it
+holds now — and never by editing its body. `just check-plan` is where a rendering is
+validated, so it runs after every create or regenerate. A manager running a render verb
+by hand passes `--no-interactive` too: the plan store prompts for an unanswered variable
+by default, which is a person's default at a terminal and the reason every automated path
+here passes the flag or runs with `ONETASKGRAPH_INTERACTIVE=false`.
 
 The task is visible to both the worker and judge, so its Acceptance criteria hold
 all detailed, change-specific requirements — and, since schema version 2, they are
@@ -3598,7 +3616,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.51.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.52.1 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`

@@ -1,19 +1,17 @@
 """The contracts the manager/planner seam restates are reconciled with their source.
 
-`scripts/plan-brief.sh` is shell, and shell cannot import, so it holds a copy of a
-contract owned somewhere else — the task template `personas/planner.yaml` states — and a
-copy is only sound while something reconciles it. The second copy runs the other way: the
-engine's `onepipeline ask`, which `scripts/ask-manager.sh` runs, refuses without the run it
-asks on, and the journeys that prove a launch builds that hold their own list of the names
-they measure. The third is the persona's fallback ask, a statement of the engine's channel
-layout a planner runs when its launch exported no adapter.
+A copy of a contract owned somewhere else is only sound while something reconciles it.
+`scripts/plan-brief.sh`'s copy of the plan-task layout is reconciled in
+`tests/plan_tooling/test_task_templates.py`, where the template is rendered. Two copies
+are held here. The engine's `onepipeline ask`, which `scripts/ask-manager.sh` runs,
+refuses without the run it asks on, and the journeys that prove a launch builds that hold
+their own list of the names they measure. And the persona's fallback ask is a statement
+of the engine's channel layout a planner runs when its launch exported no adapter.
 
 Every copy fails quietly if it drifts, which is why they are gated here rather than
-reviewed. A `PLAN_REQUIRED_SECTIONS` that no longer matches the template lets a brief
-through that is not a task, or refuses one that is. And an input the ask starts
-requiring that no journey checks for is a launch path free to stop providing it — which
-is exactly how a whole launch path came to export the seam nowhere at all, unnoticed for
-every run this host had ever driven.
+reviewed. An input the ask starts requiring that no journey checks for is a launch path
+free to stop providing it — which is exactly how a whole launch path came to export the
+seam nowhere at all, unnoticed for every run this host had ever driven.
 """
 
 from __future__ import annotations
@@ -30,15 +28,8 @@ from planner_fallback import PLACEHOLDER_QUESTION, fallback_snippet
 
 from orchestrator.root import REPO_ROOT
 
-#: The grammar both planning entry points read a manager's brief through, and the prose
-#: that says what a task is written in. `just plan` and `just finish-plan` are two
-#: launches of one flow and each is given the same brief, so what a brief has to be is
-#: stated once, in the helper they both source — a second copy in either script is a
-#: launch path that could accept a brief the other refuses. That template is the
-#: **planner's** half of the decomposition doctrine, so it lives in the persona that
-#: travels with the dispatch rather than in `AGENTS.md`, which stays in this checkout;
-#: `tests/test_decomposition_guidance.py` is what keeps it in exactly one of them.
-PLAN_SCRIPT = REPO_ROOT / "scripts" / "plan-brief.sh"
+#: The planner persona, which states the fallback ask a planner runs when its launch
+#: exported no adapter.
 TASK_TEMPLATE = REPO_ROOT / "personas" / "planner.yaml"
 
 #: The adapter a dispatched agent asks its manager through, and the one input the verb it
@@ -81,57 +72,6 @@ RECORDED_POLICY = {"seam-probe": "the messaging policy this run's launch record 
 #: what every other gate in this file does.
 LAUNCH_JOURNEYS = REPO_ROOT / "tests" / "ask_seam" / "launch" / "test_launch_ask_seam_e2e.py"
 CHECKED_INPUT = re.compile(r'Input\(\s*"([A-Z0-9_]+)"')
-
-#: `PLAN_REQUIRED_SECTIONS=("## What" "## Why" "## Acceptance criteria")`, read out of
-#: the helper rather than restated, so this gate compares the shell's own list.
-DECLARED_SECTIONS = re.compile(r"PLAN_REQUIRED_SECTIONS=\(([^)]*)\)")
-
-#: How `personas/planner.yaml` names the same three, in the list that requires them of
-#: every task: "Write every node's task — and every step's task — with these headings,
-#: in this order:", followed by one bullet per heading. Deliberately stopping at
-#: `## Additional info`: the same list states that fourth heading and states it as
-#: conditional, so it is not one a brief can be refused for lacking. Matched as code
-#: spans, so the prose around them can be reworded without this gate caring, and
-#: matched against flattened prose, because the persona is a hard-wrapped YAML block
-#: scalar and every one of these phrases is longer than the line it sits on.
-TEMPLATE_LIST = re.compile(
-    r"Write every node's task.*?in this order:(?P<named>.*?)`## Additional info`"
-)
-SPAN = re.compile(r"`(##[^`]+)`")
-
-
-def _flat(prose: str) -> str:
-    """Collapse every run of whitespace, so a wrapped phrase reads as one line."""
-    return " ".join(prose.split())
-
-
-def test_the_brief_template_the_plan_recipe_requires_is_the_one_the_doctrine_states() -> None:
-    """`just plan` refuses exactly the sections a task is required to have.
-
-    The brief a manager writes IS the dispatched task, so the recipe checks it against
-    the template every task here is written in — and holds the copy of that template in
-    shell, where nothing can import the prose that owns it. Drift in either direction
-    is silent and costly: a section dropped here lets a brief through that dispatches a
-    planner with no review bar, and one added here refuses a brief that is a perfectly
-    good task — which is why `## Additional info`, stated in the same list but stated as
-    conditional, is on neither side of this comparison.
-    """
-    declared = DECLARED_SECTIONS.search(PLAN_SCRIPT.read_text(encoding="utf-8"))
-    assert declared is not None, f"{PLAN_SCRIPT.name} declares no PLAN_REQUIRED_SECTIONS"
-    required = tuple(re.findall(r'"([^"]+)"', declared.group(1)))
-    assert required, f"{PLAN_SCRIPT.name} requires no section at all"
-
-    listed = TEMPLATE_LIST.search(_flat(TASK_TEMPLATE.read_text(encoding="utf-8")))
-    assert listed is not None, (
-        f"{TASK_TEMPLATE.name} no longer states the task template in the list this gate "
-        "reads it from; update the pattern here together with that list"
-    )
-    stated = tuple(SPAN.findall(listed.group("named")))
-
-    assert required == stated, (
-        f"{PLAN_SCRIPT.name} requires {list(required)} of a brief, but "
-        f"{TASK_TEMPLATE.name} states a task is written with {list(stated)}"
-    )
 
 
 def test_every_input_the_wrapper_requires_is_one_a_launch_is_measured_for(

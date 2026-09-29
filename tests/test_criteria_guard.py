@@ -440,22 +440,17 @@ def test_prose_that_merely_names_the_heading_neither_opens_nor_closes_the_block(
         check(NAMES_THE_HEADING_IN_PROSE, "probe", NOTHING_DEMANDED)
 
 
-def test_a_task_that_opens_that_heading_twice_is_refused_by_name() -> None:
-    """Which block states the node's bar cannot be decided from such a task.
+def test_a_missing_or_repeated_criteria_section_is_left_to_the_engine_to_refuse() -> None:
+    """Absent reads as an empty block and repeated as its first; neither raises here.
 
-    The judge is handed the whole task and reads both, so a reader here that picked
-    either would be checking one while the dispatch is judged against the other. Naming
-    the ambiguity is the same answer `orchestrator/plan_store.py` gives a record that
-    opens `metadata` twice.
+    The engine's plan loader refuses both before any consumer check runs —
+    `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives that refusal through the
+    recipe — so this module restates neither.
     """
-    twice = f"{_task('- The thing is done.')}\n{CRITERIA_HEADING}\n\n- `just gate` is green.\n"
+    twice = f"{_task('- The thing is done.')}\n{CRITERIA_HEADING}\n\n- Another thing.\n"
 
-    with pytest.raises(CriteriaError) as refused:
-        check(twice, "probe", NOTHING_DEMANDED)
-
-    reported = str(refused.value)
-    assert f"opens {CRITERIA_HEADING!r} 2 times" in reported, reported
-    assert "Leave one block of criteria" in reported, reported
+    assert criteria_block("## What\n\nDo the thing.\n") == ""
+    assert criteria_block(twice).strip() == "- The thing is done."
 
 
 #: A heading that *starts with* the criteria heading's text and is a different heading:
@@ -485,8 +480,7 @@ def test_a_longer_heading_that_starts_with_that_text_is_a_different_heading() ->
 
     alone = f"## What\n\nDo the thing.\n\n{LONGER_HEADING}\n\n- A criterion reads like this.\n"
 
-    with pytest.raises(CriteriaError, match=f"no {CRITERIA_HEADING!r} section"):
-        criteria_block(alone)
+    assert criteria_block(alone) == ""
 
 
 def test_trailing_whitespace_is_not_part_of_the_heading_a_reader_sees() -> None:
@@ -548,11 +542,6 @@ def test_a_criterion_leaving_a_backtick_run_unclosed_is_refused_by_name() -> Non
     assert "onepipeline.deps for an in-plan edge" in reported
     assert "real `git` repositories" not in reported
     assert "shell invocation" not in reported
-
-
-def test_a_task_with_no_criteria_at_all_is_refused() -> None:
-    with pytest.raises(CriteriaError, match="Acceptance criteria"):
-        check("## What\n\nNo bar at all.\n", "probe", NOTHING_DEMANDED)
 
 
 @pytest.mark.parametrize(

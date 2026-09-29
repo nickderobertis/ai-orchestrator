@@ -1,6 +1,6 @@
 """The operational appendix hands a dispatch its checks, and no longer hands it a gate.
 
-`config/dispatch-appendix.md` is the text every dispatched task carries, and it was
+`templates/dispatch-appendix.md` is the text every dispatched task carries, and it was
 gitignored scratch propagated by copy-paste until this suite tracked it. That is not
 incidental to what went wrong in it. It named a three-part chain as the complete gate to
 be run *once*, and then, four paragraphs later, demonstrated waiting on a gate with a

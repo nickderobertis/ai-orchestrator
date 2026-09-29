@@ -1,6 +1,6 @@
 """The operational notes a dispatched worker is really handed, read off its own turn.
 
-`config/dispatch-appendix.md` is this host's one source for that text, and every plan
+`templates/dispatch-appendix.md` is this host's one source for that text, and every plan
 node carries a copy of it inside its own `task`. So the file being right is not the same
 claim as the rules arriving: a task is composed by a plan builder, rendered by
 `onepipeline`, and handed to `oneagentgraph`, and each of those is a place a rule can be

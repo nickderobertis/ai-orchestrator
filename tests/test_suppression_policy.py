@@ -2,7 +2,7 @@
 
 Three sources stated this and no two agreed, and a dispatch that followed one of them
 had correct work failed by a judge that had read another. So the policy lives in
-`config/dispatch-appendix.md`, the only copy handed to a worker and its judge together,
+`templates/dispatch-appendix.md`, the only copy handed to a worker and its judge together,
 and `AGENTS.md` points at it instead of restating it.
 
 The second half is what needs a gate: a document asked to stop stating something states
@@ -152,7 +152,7 @@ POLICY_VOCABULARY = (
 
 #: What the pointer has to name. The path rather than the word "appendix", because a
 #: reader following this is opening a file.
-ONE_SOURCE = "config/dispatch-appendix.md"
+ONE_SOURCE = "templates/dispatch-appendix.md"
 
 
 def _document(name: str) -> str:
@@ -282,7 +282,8 @@ SUPERSEDED_POLICY_PARAGRAPH = (
 #: stood in `AGENTS.md` through a green run of this file.
 RESTATED_POLICY_SENTENCE = (
     "that. The marker is a suppression and is held to what\n"
-    "[`config/dispatch-appendix.md`](config/dispatch-appendix.md) holds one to: a substantive\n"
+    "[`templates/dispatch-appendix.md`](templates/dispatch-appendix.md) holds one to: a "
+    "substantive\n"
     "reason, at the site, that a reader sees beside the claim it excuses.\n"
 )
 

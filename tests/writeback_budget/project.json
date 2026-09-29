@@ -48,6 +48,8 @@
       "{workspaceRoot}/scripts/credentials-env.sh",
       "{workspaceRoot}/scripts/dispatch-env-hook.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/templates/templates.yaml",
       "{workspaceRoot}/scripts/follow-up-draft.sh",
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/follow-ups.sh",

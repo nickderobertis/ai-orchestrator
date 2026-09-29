@@ -1005,13 +1005,13 @@ def test_the_task_bearing_ops_are_the_ones_the_live_edit_table_says_carry_a_task
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes a
 # test between two targets of the project that already owns it, rather than standing in
-# for a project: this one reads `config/dispatch-appendix.md`, which collection refuses
+# for a project: this one reads `templates/dispatch-appendix.md`, which collection refuses
 # without the marker, and so runs under `orchestrator:test-docs`'s whole-workspace key.
 @pytest.mark.reads_docs
 def test_the_tracked_appendix_itself_is_left_alone() -> None:
     """The exemption proven against the text this host actually requires.
 
-    Every dispatched task carries `config/dispatch-appendix.md` verbatim, and that text
+    Every dispatched task carries `templates/dispatch-appendix.md` verbatim, and that text
     names `pkill`, `git status`, a `just` invocation and a chained shell command — so a
     reader that examined its section would refuse every task this repository demands.
     """

@@ -27,10 +27,12 @@ records, off disk and through the real store CLI:
   `reopened: 0`. The journey then closes the card the way a person or an older engine
   would, writing `cancelled` onto that record through the store's own CLI, and a second
   `retry` writes an open word back onto the same record — `onepipeline.supersedes` now
-  naming both superseded ids in order — with the attempt reporting `reopened: 1` and
-  `created: 0`;
-* the whole projection a driver makes after `just orchestrate --adopt <run>` carries the
-  lineage once, under its root, and creates nothing for it.
+  naming both superseded ids in order — with the attempt reporting `created: 0`, and
+  `reopened: 0`, because the engine reads nothing its landed baseline answers and so knew
+  that item's word as the park it wrote, never as the person's close;
+* a driver `just orchestrate --adopt <run>` attaches reads the landed baseline the previous
+  one left, so its first attempt carries nothing and calls the store for nothing, and the
+  lineage keeps its one item.
 
 On onepipeline 0.37.0, the release before the landing, the attempt after the first retry
 carries the replacement as an item of its own beside the root and reports `created: 1` —
@@ -290,9 +292,11 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         lambda: next(iter(projections(driven)), None),
         PATIENCE_SECONDS,
     )
-    assert (first.scope, first.whole_because, first.outcome) == ("whole", "first", "projected"), (
+    assert (first.scope, first.whole_because, first.outcome) == ("members", None, "projected"), (
         first
     )
+    assert set(first.items) == {ROOT, KEEPER} and first.actions is not None, first
+    assert first.actions["created"] == 0 and first.calls == {"task-update": len(first.items)}, first
     recorded = quiet_projections(driven)
     (before,) = _lineage(driven, ROOT)
     assert SUPERSEDES_KEY not in before.metadata and SECOND_TASK not in before.body, before
@@ -344,12 +348,11 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         PATIENCE_SECONDS,
     )
     reopened = _carried(quiet_projections(driven)[len(recorded) :], ROOT, THIRD)
-    # The first attempt after the retry is the one that wrote the open word over the
-    # closed card, and it alone counts the reopen.
-    assert [attempt.actions["reopened"] for attempt in reopened if attempt.actions][0] == 1, (
-        reopened
-    )
-    assert sum(attempt.actions["reopened"] for attempt in reopened if attempt.actions) == 1, (
+    # The engine reads nothing its landed baseline answers, so the word it knew for the
+    # item is the park it wrote, never the person's close: the update that writes the open
+    # word over the closed card counts no reopen, which entry 80 keeps for a word the run
+    # itself knew as `done` or `cancelled`.
+    assert sum(attempt.actions["reopened"] for attempt in reopened if attempt.actions) == 0, (
         reopened
     )
     (after_reopen,) = _lineage(driven, ROOT)
@@ -370,13 +373,16 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         lambda: _new_projections(driven, len(recorded)),
         PATIENCE_SECONDS,
     )[0]
-    assert (adopted.scope, adopted.whole_because, adopted.outcome) == (
-        "whole",
-        "first",
+    # The adopted driver reads the baseline the previous one left, and every lineage there
+    # already landed as the run now stands: its first attempt carries nothing, calls no
+    # store operation, and so can neither read the board nor create an item for the lineage.
+    assert (adopted.scope, adopted.whole_because, adopted.outcome, adopted.items) == (
+        "members",
+        None,
         "projected",
+        (),
     ), adopted
-    assert adopted.items.count(ROOT) == 1 and set(adopted.items) == {ROOT, KEEPER}, adopted
-    assert adopted.actions is not None and adopted.actions["created"] == 0, adopted
+    assert adopted.calls == {} and adopted.actions is None, adopted
     (after_adopt,) = _lineage(driven, ROOT)
     assert after_adopt.identifier == before.identifier, after_adopt
     assert after_adopt.metadata.get(NODE_KEY) == THIRD, after_adopt.metadata

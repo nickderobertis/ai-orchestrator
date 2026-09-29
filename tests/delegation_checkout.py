@@ -80,9 +80,13 @@ WRAPPER_SCRIPTS = (
     "follow-ups.sh",
     # And the operational appendix every dispatched task must carry, which `just plan`
     # hands its planner as text rather than as a path into a checkout that planner cannot
-    # see. It reads `config/dispatch-appendix.md`, which `delegation_checkout`
+    # see. It reads `templates/dispatch-appendix.md`, which `delegation_checkout`
     # copies beside it.
     "dispatch-appendix-env.sh",
+    # This host's template root, which the launch wrapper names on every verb and which
+    # the dispatch-environment definition below establishes for a dispatch; it refuses a
+    # checkout whose `templates/` carries no registration.
+    "template-env.sh",
     # The one definition of which resolvers establish a dispatch's environment, which
     # every launch runs at driver start and names — as the hook beside it, by absolute
     # path — for the engine to re-run before each node-scope dispatch. A checkout
@@ -185,7 +189,15 @@ DESIGN_TEMPLATE = "config/design-doc-template.md"
 #: The operational appendix `just plan` hands its dispatch, spelled here for the reason
 #: the template above is: this suite states what a runnable checkout holds rather than
 #: asking its subject.
-DISPATCH_APPENDIX = "config/dispatch-appendix.md"
+DISPATCH_APPENDIX = "templates/dispatch-appendix.md"
+
+#: The host root's registration `scripts/template-env.sh` refuses a checkout without,
+#: spelled here for the same reason.
+TEMPLATE_REGISTRATION = "templates/templates.yaml"
+
+#: Where both doubled engines below record the template root each call was handed, one
+#: `<root> <argv>` line per call, when a journey names the file; `<unset>` when none was.
+TEMPLATE_ROOT_TRACE_ENV = "FAKE_TEMPLATE_ROOT_TRACE"
 
 
 def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
@@ -195,6 +207,7 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     (checkout / "bin").mkdir()
     (checkout / "personas").mkdir()
     (checkout / "config").mkdir()
+    (checkout / "templates").mkdir()
     shutil.copy2(ROOT / "justfile", checkout / "justfile")
     # The one source the wrappers read the read API's address from; a checkout
     # without it is not one these recipes can run in.
@@ -207,6 +220,13 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     (checkout / DISPATCH_APPENDIX).write_text(
         "## Additional info\n\n### Operational notes\n\nWork the branch and report.\n",
         encoding="utf-8",
+    )
+    # The host root's registration, which the launch wrapper refuses a checkout without.
+    # Written rather than copied, for the reason the appendix above is: which names it
+    # registers is `tests/test_task_templates.py`'s, and these journeys are about where a
+    # recipe lands and what it names.
+    (checkout / TEMPLATE_REGISTRATION).write_text(
+        "onepipeline_templates: 1\ntemplates: {}\n", encoding="utf-8"
     )
     # The engine pin the launch wrapper names as the release a launch requests.
     (checkout / "config/onepipeline.version").write_text(f"{PINNED_ENGINE}\n", encoding="utf-8")
@@ -256,6 +276,9 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+if [ -n "${FAKE_TEMPLATE_ROOT_TRACE-}" ]; then
+  printf '%s uv %s\\n' "${ONEPIPELINE_TEMPLATE_ROOT-<unset>}" "$*" >>"$FAKE_TEMPLATE_ROOT_TRACE"
+fi
 if [ ! -t 0 ]; then
   while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
 fi
@@ -276,6 +299,10 @@ exit "${FAKE_UV_EXIT:-0}"
         f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s %s\\n' "$0" "$*" >>"$TRACE_FILE"
+if [ -n "${{FAKE_TEMPLATE_ROOT_TRACE-}}" ]; then
+  printf '%s %s %s\\n' "${{ONEPIPELINE_TEMPLATE_ROOT-<unset>}}" "$0" "$*" \\
+    >>"$FAKE_TEMPLATE_ROOT_TRACE"
+fi
 if [ "$*" = "--version" ]; then
   echo "onepipeline ${{{ENGINE_REPORTS_ENV}:-{PINNED_ENGINE}}}"
   exit 0

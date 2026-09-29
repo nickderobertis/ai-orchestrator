@@ -15,6 +15,8 @@ ONEPIPELINE = REPO_ROOT / "scripts" / "onepipeline.sh"
 #: below that drive the entry point copy it beside the helper they are about — without
 #: it their subject is a missing file rather than the credential loading they assert on.
 LAUNCHER_SESSION = REPO_ROOT / "scripts" / "launcher-session.sh"
+TEMPLATE_ENV = REPO_ROOT / "scripts" / "template-env.sh"
+TEMPLATE_REGISTRATION = REPO_ROOT / "templates" / "templates.yaml"
 PRESERVED_LOG = REPO_ROOT / "scripts" / "preserved-log.sh"
 
 
@@ -137,6 +139,15 @@ def test_read_only_onepipeline_view_does_not_load_a_malformed_file(tmp_path: Pat
         LAUNCHER_SESSION.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (scripts / HELPER.name).write_text(HELPER.read_text(encoding="utf-8"), encoding="utf-8")
+    # Every verb names this checkout's template root, and a root without its registration
+    # is refused before the view runs.
+    (scripts / TEMPLATE_ENV.name).write_text(
+        TEMPLATE_ENV.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / TEMPLATE_REGISTRATION.name).write_text(
+        TEMPLATE_REGISTRATION.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     (tmp_path / ".env").write_text("not-an-assignment\n", encoding="utf-8")
     binaries = tmp_path / "bin"
     binaries.mkdir()

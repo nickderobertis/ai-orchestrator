@@ -271,7 +271,7 @@ def test_a_launch_whose_appendix_is_unusable_writes_nothing(
 
     assert refused.returncode != 0, refused.stdout
     assert said in refused.stderr, refused.stderr
-    assert "config/dispatch-appendix.md" in refused.stderr, refused.stderr
+    assert "templates/dispatch-appendix.md" in refused.stderr, refused.stderr
     assert "Traceback" not in refused.stderr, refused.stderr
     assert not (root / "projects").exists(), (
         "a plan was written for a launch whose dispatches would carry no operational notes"

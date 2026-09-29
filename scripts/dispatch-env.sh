@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # The ONE definition of which resolvers establish a dispatch's environment — the `.env`
-# credentials, every Claude identity's config directory, the alternate Codex home —
+# credentials, every Claude identity's config directory, the alternate Codex home, this
+# checkout's template root and the plan store's non-interactive setting —
 # sourced by scripts/onepipeline.sh at driver start and by scripts/dispatch-env-hook.sh
 # before every node-scope dispatch (ai-orchestrator#1109). One table serves both so the
 # two lists cannot drift; `tests/test_dispatch_env_hook.py` holds both callers to it.
@@ -18,6 +19,8 @@ DISPATCH_ENVIRONMENT_RESOLVERS=(
     "credentials-env.sh:export_host_credentials"
     "claude-alt-config-dir.sh:resolve_claude_alt_config_dir"
     "codex-alt-home.sh:ensure_codex_alt_home"
+    "template-env.sh:export_template_root"
+    "template-env.sh:export_noninteractive_plan_store"
 )
 
 # Every variable the resolvers established on the last call, in resolver order, so a
@@ -53,7 +56,7 @@ export_dispatch_environment() {
         # What each resolver established, read off the resolver's own record of it: the
         # credentials helper's parser leaves the names its file defines in
         # `env_file_names`, the identities helper declares its four indirections, and
-        # the Codex helper exports exactly one.
+        # the Codex helper and each template helper export exactly one.
         case $function in
             export_host_credentials)
                 # shellcheck disable=SC2154  # left by read_env_file in credentials-env.sh
@@ -64,6 +67,12 @@ export_dispatch_environment() {
                 ;;
             ensure_codex_alt_home)
                 dispatch_environment_names+=(ORCHESTRATOR_CODEX_ALT_HOME)
+                ;;
+            export_template_root)
+                dispatch_environment_names+=(ONEPIPELINE_TEMPLATE_ROOT)
+                ;;
+            export_noninteractive_plan_store)
+                dispatch_environment_names+=(ONETASKGRAPH_INTERACTIVE)
                 ;;
         esac
     done

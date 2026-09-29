@@ -94,7 +94,7 @@ working branch, and every read are the agent's own git, because local authoring 
 git and a rule everyone breaks routes nothing. A lifecycle worker may do exactly two
 things to a remote on its own — open its own draft, and a throwaway demonstration change
 request stacked on it, each only when its task grants it — and
-`config/dispatch-appendix.md` is the one statement of both, because every dispatch reads
+`templates/dispatch-appendix.md` is the one statement of both, because every dispatch reads
 that text and `tests/test_shared_dispatch_bar.py` refuses a second. Every branch state has a verb, decided
 by what the branch *is*: `just publish-branch` verifies and publishes a complete
 unpublished branch no session holds, under its identity's resolved policy; `just
@@ -567,9 +567,7 @@ approved the document.
 **A green run proves nothing about the board.** The settlement write-back is best-effort
 and off the reconcile loop: a projection that never landed settles the run exactly like
 one that did, with one line on the driver's stderr. `just results`, `just status`, and
-the run journal are the record. A projection carries only the nodes that changed, and is
-whole only for a driver's first, the attempt after a failure, or a store offering no
-`--member`; its copy deadline counts the items it carries. One the store refuses is
+the run journal are the record. A projection carries only what changed. One the store refuses is
 reported once and projected again only when the graph next changes, while any other
 failure is retried, spaced to a one-minute ceiling. The engine records every attempt as one
 line of `writeback-projections.jsonl` in the run's directory, and that line is what the
@@ -697,7 +695,10 @@ them reach you; `manager` names the session role and is never a command.
    place is the same over-reach as planning it yourself and lands work no plan-quality
    judge reviewed. A plan you wrote or tweaked is unreviewed until `just review-plan
    <source:project>` has read it, and `just check-plan` refuses it by name until then;
-   a planner-written plan you did not touch is already recorded.
+   a planner-written plan you did not touch is already recorded. A task is changed by
+   regenerating it from its template, never by editing its body, and a render verb you
+   run by hand names `--no-interactive`, because the plan store prompts by default and
+   that default is a person's.
 5. **Pick or create personas.** Prefer precise task prose over encoding subtask detail
    in a new persona; there is no test-only persona, so a node closing a coverage gap
    uses `engineer`. A node's bare `persona` is a name resolved against the roles built
@@ -1332,10 +1333,10 @@ both of the flow's nodes are **direct** nodes in the launching checkout — the 
 that changes the dispatched task — because no lifecycle shape fits a dispatched node
 that commits nothing (`scripts/plan.sh`'s header holds the placement note and the
 incident behind it); and it exports `ORCHESTRATOR_DISPATCH_APPENDIX_TEXT` holding
-`config/dispatch-appendix.md`'s text rather than its path, because a planner plans
+`templates/dispatch-appendix.md`'s text rather than its path, because a planner plans
 against other repositories too. That file is the operational notes every dispatched
 task carries and the one statement of what a worker may suppress; this document states
-none of it.
+none of it. It sits in `templates/`, this host's template root.
 
 `just check-plan` reads a project against the bar each node will be judged against —
 the engine's loader first, then `scripts/plan-check.sh`, each refusal naming its source

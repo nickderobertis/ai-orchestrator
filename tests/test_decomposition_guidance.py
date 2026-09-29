@@ -72,8 +72,8 @@ OWNED_STATEMENTS = (
     # a remote is the manager's, because the commands and the closing belong to the
     # appendix and the manager's document only points at it.
     Owned(PLANNER.document, "One exception, and it is the worker's own draft"),
-    Owned(PLANNER.document, "State the evidence in `## Acceptance criteria`, addressing nobody"),
-    Owned(PLANNER.document, "Grant the worker what it needs in `## Additional info`"),
+    Owned(PLANNER.document, "State the evidence in the `acceptance_criteria` answer, addressing"),
+    Owned(PLANNER.document, "Grant the worker what it needs in the `additional_info` answer"),
     Owned(PLANNER.document, "Never write a static rule about which dependents produce evidence"),
     # The `draft` field itself is the engine's vocabulary and both documents name it;
     # what is the planner's alone is when to reach for it.

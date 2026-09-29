@@ -22,10 +22,12 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypedDict, get_type_hints
 
 import pytest
+from published_tools import ONETASKGRAPH_BIN
 from test_host_installs import RELEASE_RULE, RELEASES
 
 from orchestrator import criteria_guard, host_installs, plan_review, plan_store
@@ -1922,7 +1924,64 @@ def test_a_task_of_another_project_is_never_recorded_against_this_one(
         plan_review.write_record("demo:plan", elsewhere, "abc", plan_review.BY_REVIEW)
     with pytest.raises(OSError, match="is not one of"):
         plan_review.write_record("other:plan", _task(), "abc", plan_review.BY_REVIEW)
+    # A task the store created is named by the source, not under its project's directory,
+    # so what it was read as belonging to is what decides — and it belongs to another.
+    filed_elsewhere = replace(_task(qualified_id="demo:route"), project="other")
+    with pytest.raises(OSError, match="is not one of"):
+        plan_review.write_record("demo:plan", filed_elsewhere, "abc", plan_review.BY_REVIEW)
     assert store.written("plan/route") is None
+
+
+def test_a_review_is_recorded_on_a_task_the_store_created_and_refused_for_another_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A created task's id is the source's, so its own project decides where it is recorded.
+
+    Run against a real `local-md` source through the real plan store: the task is created
+    by `onetaskgraph task create`, which files it flat under `tasks/`, and read back the
+    way `just review-plan` reads a project.
+    """
+    root = tmp_path / "source"
+    for project in ("plan", "other"):
+        (root / "projects").mkdir(parents=True, exist_ok=True)
+        (root / "projects" / f"{project}.md").write_text(
+            f'---\ntitle: "{project}"\nstatus: "todo"\n---\n', encoding="utf-8"
+        )
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__REVIEWED__PLUGIN", "local-md")
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__REVIEWED__CONFIG__ROOT", str(root))
+    body = tmp_path / "body.md"
+    body.write_text("## What\n\nAdd the route.\n", encoding="utf-8")
+    created = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "create",
+            "reviewed",
+            "--project",
+            "other",
+            "--title",
+            "feat: add the route",
+            "--body-file",
+            str(body),
+            "--metadata",
+            'onepipeline.id="route"',
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    (task,) = plan_store.read_tasks("reviewed:other")
+
+    with pytest.raises(OSError, match="is not one of"):
+        plan_review.write_record("reviewed:plan", task, "abc", plan_review.BY_REVIEW)
+    written = plan_review.write_record("reviewed:other", task, "abc", plan_review.BY_REVIEW)
+
+    (reread,) = plan_store.read_tasks("reviewed:other")
+    record = reread.metadata[plan_review.RECORD_KEY]
+    assert isinstance(record, dict) and record["key"] == "abc", record
+    assert written.is_file()
 
 
 def test_the_planning_verbs_round_trip_their_snapshot(

@@ -9,9 +9,10 @@ added while a run was live failed the run's next dispatch at provider startup.
 Two properties are held here, and both are held on the real script under a real bash
 in an environment built from nothing. The document is exactly the shape onepipeline's
 `docs/contract.md` (**Dispatch-env hook**) accepts, `{"version": 1, "env": {...}}` with
-every value a string, and its members are the variables the three resolvers establish
-at driver start: the checkout's `.env` credentials, every Claude identity's config
-directory and the alternate Codex home. And there is one definition of which resolvers
+every value a string, and its members are the variables the resolvers establish at
+driver start: the checkout's `.env` credentials, every Claude identity's config
+directory, the alternate Codex home, the checkout's template root and the plan store's
+non-interactive setting. And there is one definition of which resolvers
 those are — `scripts/dispatch-env.sh` — that both the wrapper's driver-start arm and the
 hook source, so a resolver added to one cannot be missing from the other.
 `tests/e2e/test_orchestrate_launch_e2e.py` drives the hook through a real launch.
@@ -48,6 +49,10 @@ CLAUDE_INDIRECTIONS = (
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
 )
 CODEX_INDIRECTION = "ORCHESTRATOR_CODEX_ALT_HOME"
+#: The host root `onepipeline template` reads, and the plan store's prompt switch, as
+#: `scripts/template-env.sh` establishes them.
+TEMPLATE_ROOT = "ONEPIPELINE_TEMPLATE_ROOT"
+INTERACTIVE = "ONETASKGRAPH_INTERACTIVE"
 
 #: An environment variable name, which is what every member of `env` has to be.
 VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -65,10 +70,16 @@ def _checkout(root: Path) -> Path:
     """A checkout-shaped directory holding the hook and everything it sources.
 
     Copied rather than run in place so that the `.env` the credentials resolver reads —
-    the file beside `scripts/` — is this test's own and never the tree's.
+    the file beside `scripts/` — is this test's own and never the tree's. The template
+    root's registration is copied too, because the template resolver refuses a checkout
+    without one.
     """
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
+    (root / "templates").mkdir()
+    (root / "templates" / "templates.yaml").write_bytes(
+        (REPO_ROOT / "templates" / "templates.yaml").read_bytes()
+    )
     for name in ("dispatch-env-hook.sh", "dispatch-env.sh", *_resolver_helpers()):
         copied = scripts / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
@@ -121,8 +132,8 @@ def _env(ran: Ran) -> dict[str, str]:
     return dict(members)
 
 
-def test_the_document_carries_what_the_three_resolvers_establish(tmp_path: Path) -> None:
-    """Every identity indirection, the Codex home and each `.env` name, as strings."""
+def test_the_document_carries_what_the_resolvers_establish(tmp_path: Path) -> None:
+    """Every identity indirection, the Codex home, the template names and each `.env` name."""
     checkout = _checkout(tmp_path / "checkout")
     (checkout / ".env").write_text(
         'GH_PROJECTS_TOKEN="planted-by-the-hook-test"\nGH_PROJECTS_OWNER=nickderobertis\n',
@@ -140,6 +151,8 @@ def test_the_document_carries_what_the_three_resolvers_establish(tmp_path: Path)
         "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": str(home / ".claude-primary-backup"),
         "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": str(home / ".claude"),
         CODEX_INDIRECTION: str(home / ".codex-alt"),
+        TEMPLATE_ROOT: str(checkout / "templates"),
+        INTERACTIVE: "false",
     }
     # The Codex resolver's one side effect, which the hook has to keep: an absent home
     # falls through as `auth` and a missing one hard-fails.
@@ -153,7 +166,43 @@ def test_without_a_credentials_file_the_document_carries_the_indirections_alone(
 
     env = _env(_run(checkout, {"HOME": str(tmp_path / "home")}))
 
-    assert tuple(env) == (*CLAUDE_INDIRECTIONS, CODEX_INDIRECTION)
+    assert tuple(env) == (*CLAUDE_INDIRECTIONS, CODEX_INDIRECTION, TEMPLATE_ROOT, INTERACTIVE)
+
+
+def test_the_template_root_is_the_hooks_own_checkout_whatever_the_environment_held(
+    tmp_path: Path,
+) -> None:
+    """A dispatch reads the launching checkout's templates, and is never left prompting.
+
+    Both are set over what the driver inherited: a root some shell had exported, or a
+    person's interactive setting, would otherwise reach every dispatch.
+    """
+    checkout = _checkout(tmp_path / "checkout")
+    environment = {
+        "HOME": str(tmp_path / "home"),
+        TEMPLATE_ROOT: str(tmp_path / "somebody-elses-templates"),
+        INTERACTIVE: "true",
+    }
+
+    env = _env(_run(checkout, environment))
+
+    assert env[TEMPLATE_ROOT] == str(checkout / "templates")
+    assert env[INTERACTIVE] == "false"
+
+
+def test_a_checkout_without_its_template_registration_is_refused_by_the_hook(
+    tmp_path: Path,
+) -> None:
+    """No document at all, rather than a dispatch whose templates silently resolve to none."""
+    checkout = _checkout(tmp_path / "checkout")
+    (checkout / "templates" / "templates.yaml").unlink()
+
+    ran = _run(checkout, {"HOME": str(tmp_path / "home")})
+
+    assert ran.returncode == 2, ran.stdout
+    assert ran.stdout == "", "a refused run printed a document the engine would overlay"
+    assert ran.stderr.startswith("dispatch-env-hook: "), ran.stderr
+    assert "templates.yaml" in ran.stderr
 
 
 def test_the_environment_wins_over_the_credentials_file_as_it_does_at_driver_start(
@@ -261,7 +310,7 @@ def test_every_resolver_in_the_table_has_an_arm_recording_what_it_established() 
     assert sorted(arms) == sorted(function for _, function in RESOLVER_ENTRY.findall(definition))
 
 
-def test_the_definition_names_the_three_resolvers_the_driver_start_arm_ran() -> None:
+def test_the_definition_names_the_resolvers_the_driver_start_arm_ran() -> None:
     """The table is the whole list, and each entry is a helper beside it with that function."""
     entries = RESOLVER_ENTRY.findall(DEFINITION.read_text("utf-8"))
 
@@ -269,6 +318,8 @@ def test_the_definition_names_the_three_resolvers_the_driver_start_arm_ran() -> 
         ("credentials-env.sh", "export_host_credentials"),
         ("claude-alt-config-dir.sh", "resolve_claude_alt_config_dir"),
         ("codex-alt-home.sh", "ensure_codex_alt_home"),
+        ("template-env.sh", "export_template_root"),
+        ("template-env.sh", "export_noninteractive_plan_store"),
     ]
     for helper, function in entries:
         source = (REPO_ROOT / "scripts" / helper).read_text("utf-8")
@@ -287,6 +338,14 @@ def test_both_sourcing_scripts_run_the_resolvers_through_the_one_definition(scri
     """
     source = script.read_text("utf-8")
     code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    # The one resolver the wrapper also runs outside a launch: every verb it makes names
+    # the template root, a read-only `template resolve` included, which the definition's
+    # launch-only arm never reaches. It is still in the definition, so the hook carries it.
+    if script == LAUNCH_WRAPPER:
+        assert '. "$script_dir/template-env.sh"\nexport_template_root onepipeline' in code
+        code = code.replace('. "$script_dir/template-env.sh"', "").replace(
+            "export_template_root onepipeline", ""
+        )
 
     assert "export_dispatch_environment" in code, f"{script.name} never runs the definition"
     for helper, function in RESOLVER_ENTRY.findall(DEFINITION.read_text("utf-8")):

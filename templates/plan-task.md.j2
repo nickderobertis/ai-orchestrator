@@ -1,0 +1,45 @@
+---
+onetaskgraph_template: 1
+description: A task this host dispatches, in the layout every plan task here carries.
+variables:
+  what:
+    description: >-
+      The change, stated concretely enough that the worker can act on it without guessing:
+      what to build or alter, where, and what it must not touch.
+    type: text
+    required: true
+  why:
+    description: >-
+      The user's motivation for the change, in the user's own terms: what the worker and
+      its judge weigh a trade-off against.
+    type: text
+    required: true
+  additional_info:
+    description: >-
+      The task's own notes and grants, rendered under `## Additional info` above this host's
+      operational notes: context the worker needs that is not a criterion, and any carve-out
+      the operational notes say only a task may grant. Leave empty when there is none.
+    type: text
+    default: ""
+---
+{% extends "onepipeline/plan-task.md.j2" %}
+{% block before_criteria %}
+## What
+
+{{ what }}
+
+## Why
+
+{{ why }}
+
+{% endblock %}
+{% block after_criteria %}
+{% if additional_info %}
+
+## Additional info
+
+{{ additional_info }}
+{% endif %}
+
+{% include "dispatch-appendix.md" %}
+{% endblock %}

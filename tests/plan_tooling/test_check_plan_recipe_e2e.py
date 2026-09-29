@@ -2,7 +2,7 @@
 
 This is the whole seam an operator touches, driven for real: the recipe, the console
 script it delegates to, this checkout's own `config/onejudge.base.yaml`, the tracked
-`config/dispatch-appendix.md`, and the real `onepipeline` binary whose linked
+`templates/dispatch-appendix.md`, and the real `onepipeline` binary whose linked
 `oneagentgraph` ships the role a node's `persona` name resolves to. Nothing is
 doubled — there is nothing here to double, because the guard spends no provider turn
 and launches nothing.
@@ -672,7 +672,7 @@ def test_a_criterion_about_the_workers_own_draft_is_admitted_only_under_its_task
 
     A worker may open its session's change request as a draft, and a throwaway
     demonstration change request stacked on it, only when its task's own
-    `## Additional info` says so in the words `config/dispatch-appendix.md` names. So the
+    `## Additional info` says so in the words `templates/dispatch-appendix.md` names. So the
     same criterion on the same node is admitted with that grant above the appendix and
     refused on an otherwise identical task without it — and the refusal names the grant
     to write rather than a precondition to state, which is the correction an author
@@ -1928,6 +1928,48 @@ def test_both_paths_reach_the_same_verdict_on_one_plan(
         # only one loader, so there is no source to name.
         assert "check-plan: scripts/plan-check.sh: route: task: " in through.stderr, through.stderr
         assert "check-plan: route: " in directly.stderr, directly.stderr
+
+
+@pytest.mark.parametrize(
+    ("shape", "rule"),
+    (
+        pytest.param("missing", "no criteria section", id="missing"),
+        pytest.param("repeated", "criteria section repeated", id="repeated"),
+    ),
+)
+def test_a_criteria_section_missing_or_repeated_is_the_engines_to_refuse_on_either_path(
+    tmp_path: Path, shape: str, rule: str
+) -> None:
+    """The engine refuses both shapes; the narrower path leaves them to it and says so.
+
+    This repository's checks no longer restate the engine's criteria-section rule, so an
+    engine with no `plan check` accepts such a plan on what this host checks and names the
+    narrower path, whose own sentence warns that a launch may still refuse the plan's
+    structure — which the installed engine then does, by the rule's own name.
+    """
+    plan = _plan(tmp_path, STATES_ITS_BAR)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    node = document["tasks"][0]
+    if shape == "missing":
+        # The heading line alone: the appendix names the heading in its own prose.
+        node["task"] = node["task"].replace("\n## Acceptance criteria\n", "\n## Notes\n", 1)
+    else:
+        node["task"] += "\n## Acceptance criteria\n\n- The thing is done.\n"
+    plan.write_text(json.dumps(document), encoding="utf-8")
+    project = project_from_plan(plan)
+    # llmlint: ignore-block[e2e_not_mocked] The narrower path is reached only against an
+    # engine carrying no `plan check`, for the reason `_older_engine` states; the refusal
+    # this journey holds is the installed engine's own, read on the other path.
+    direct = os.environ | {"ORCHESTRATOR_PLAN_CHECK_ENGINE": str(_older_engine(tmp_path))}
+    # llmlint: ignore-end[e2e_not_mocked]
+
+    through = _check_project(project)
+    directly = _check_project(project, environment=direct)
+
+    assert through.returncode == 1, through.stdout + through.stderr
+    assert f"node 'route': {rule}" in through.stderr, through.stderr
+    assert directly.returncode == 0, directly.stdout + directly.stderr
+    assert "carries no `plan check`" in directly.stdout, directly.stdout
 
 
 def _loaded_plan(project: str, root: Path) -> str:

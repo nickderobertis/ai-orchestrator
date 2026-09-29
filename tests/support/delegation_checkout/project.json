@@ -38,6 +38,8 @@
       "{workspaceRoot}/scripts/follow-ups.sh",
       "{workspaceRoot}/scripts/dispatch-appendix-env.sh",
       "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/templates/templates.yaml",
       "{workspaceRoot}/scripts/dispatch-env-hook.sh",
       "{workspaceRoot}/scripts/lock-timeout.sh",
       "{workspaceRoot}/scripts/claude-alt-config-dir.sh",

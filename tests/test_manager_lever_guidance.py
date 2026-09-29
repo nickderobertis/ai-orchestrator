@@ -66,7 +66,7 @@ def test_the_operational_notes_really_open_at_the_heading_the_manager_is_told_to
 ):
     """ "Above the operational notes" has to name a position a task really has.
 
-    A task carries `config/dispatch-appendix.md` verbatim — `just check-plan` refuses one
+    A task carries `templates/dispatch-appendix.md` verbatim — `just check-plan` refuses one
     that does not — so the heading that file opens with is the boundary an amendment sits
     above. If it moved, the placement instruction would send a manager to a heading no
     task has, and the precedence sentence would sit under text it does not govern.

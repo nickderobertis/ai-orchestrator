@@ -206,6 +206,9 @@ class StoreTask:
     repositories: list[object]
     deps: tuple[NodeId, ...]
     delivers: tuple[str, ...] = ()
+    #: The native id of the project the store files this task under, or `None` for a
+    #: record not read from the store.
+    project: str | None = None
 
 
 @dataclass(frozen=True)
@@ -248,8 +251,18 @@ def read_tasks(project: str) -> list[StoreTask]:
     records = []
     for held in chain.from_iterable(page.items for page in listed):
         held_id = held.id.model_dump()
-        if not held_id.startswith(f"{source}:{native}/"):
+        # Membership is the item's own `project`, never its id: a task created by the
+        # store — from a template, say — is named by the source, and a `local-md` source
+        # names it after its title rather than under a directory of its project.
+        filed = None if held.item.project is None else held.item.project.model_dump()
+        # llmlint: ignore-block[changed_behavior_has_e2e] A trust-boundary guard no conforming
+        # store reaches: a listing filtered to one project answers only its own items, so
+        # `tests/test_plan_store_sdk.py` reads a real store's template-created task through
+        # it and substitutes only the listing to drive the refusal, as it does for the
+        # source guard beside it.
+        if not held_id.startswith(f"{source}:") or filed != native:
             raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
+        # llmlint: ignore-end[changed_behavior_has_e2e]
         item, metadata = held.item, held.item.metadata or {}
         node_id = metadata.get("onepipeline.id")
         if not isinstance(node_id, str):
@@ -267,6 +280,7 @@ def read_tasks(project: str) -> list[StoreTask]:
                 repositories,
                 (),
                 tuple(x.model_dump() for x in item.delivers or []),
+                native,
             )
         )
     ids = {record.qualified_id: record.node_id for record in records}

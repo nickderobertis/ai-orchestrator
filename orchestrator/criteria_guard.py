@@ -51,7 +51,7 @@ amendment — :func:`check_amendment` says why.
 One shape on that list is **admitted** under a condition, and the condition is the
 task's own. A worker may open its session's change request as a draft it holds, and a
 throwaway demonstration change request stacked on that draft, when its task's own
-``## Additional info`` grants either in the words `config/dispatch-appendix.md`'s
+``## Additional info`` grants either in the words `templates/dispatch-appendix.md`'s
 carve-out names — so a criterion whose subject is that draft, or that demonstration
 change request, and whose predicate is the publication entry, is a property of state the
 worker controls. :data:`AUTHORIZATIONS` holds the two grants and :func:`_admitted` reads
@@ -114,7 +114,7 @@ from orchestrator.root import REPO_ROOT
 #: The operational text every dispatched task carries, and the one source a plan
 #: builder copies it from. It was gitignored scratch until this module tracked it,
 #: which is how it came to contradict itself for long enough to fail a node.
-APPENDIX = Path("config") / "dispatch-appendix.md"
+APPENDIX = Path("templates") / "dispatch-appendix.md"
 
 #: The environment variable a planning launch hands that text over in, and the one place
 #: that name is composed — `scripts/dispatch-appendix-env.sh` asks this module for both
@@ -506,7 +506,7 @@ OUT_OF_DISPATCH = (
     #
     # The one admissible entry. "The worker's draft is published" and "the demonstration
     # change request is published as a draft" are properties of state the worker controls
-    # once its task grants the carve-out `config/dispatch-appendix.md` names, and
+    # once its task grants the carve-out `templates/dispatch-appendix.md` names, and
     # :func:`_admitted` is what decides that — on the clause's subject, never on the word
     # `draft` appearing somewhere in the criterion.
     OutOfDispatch(
@@ -585,7 +585,7 @@ OUT_OF_DISPATCH = (
 class Authorization(NamedTuple):
     """One thing a task's own ``## Additional info`` may let its worker do on the host.
 
-    The carve-out in `config/dispatch-appendix.md` names two, each conditional on the
+    The carve-out in `templates/dispatch-appendix.md` names two, each conditional on the
     task saying so in its own words above the operational notes: publishing the session's
     change request early, as a draft the worker holds, and opening a throwaway
     demonstration change request stacked on it. A criterion about either is a property
@@ -766,7 +766,7 @@ PROCEDURE = (
     Procedure(re.compile(r"`[^`]*\bjust\s"), "names a `just` invocation", PLAN_TOOLING),
     Procedure(re.compile(r"&&"), "names a chained shell command"),
     Procedure(re.compile(r"`[^`]*\b(npm|pnpm|nx|cargo|pytest|git)\s"), "names a shell invocation"),
-    # Red before green. A worker is told to do it in `config/dispatch-appendix.md`; as a
+    # Red before green. A worker is told to do it in `templates/dispatch-appendix.md`; as a
     # *criterion* it asks for a development step the finished tree cannot carry, so a
     # judge can only take the worker's word for it. `docs/plan-review-refusals.md` is
     # what the two spellings below are drawn from.
@@ -1107,24 +1107,18 @@ CLOSES_CRITERIA = re.compile(r"^#{2,}\s", re.MULTILINE)
 def criteria_block(task: str) -> str:
     """The block ``task``'s acceptance-criteria heading opens, and nothing after it.
 
-    A task that opens that heading **more than once** is refused by name rather than
-    read. Which of two blocks states the node's bar cannot be decided from such a task:
-    the judge is handed the whole task and reads both, so a reader here that picked
-    either would be checking one while the dispatch is judged against the other. That is
-    the same answer `orchestrator/plan_store.py` gives a record opening `metadata` twice
-    — a block this cannot identify unambiguously is better refused than guessed at.
+    A task with no such heading reads as an empty block, and one that opens it more than
+    once as its first. Neither is this module's to refuse: the engine's plan loader
+    refuses both by name — `no criteria section` and `criteria section repeated`, its
+    contract C6b — before `plan check` hands a consumer check any plan at all, so a
+    refusal here would only restate the engine's.
     """
+    # llmlint: ignore-block[boundary_inputs_validated] The criteria-section rule is the engine's (onepipeline's contract C6b), and this host moved it there on purpose: every engine `config/onepipeline.version` admits refuses both shapes at plan load and at `start`, and the one path that reads a task without that loader — `check_directly`, for an engine with no `plan check` — says in its accepted line that a launch may still refuse the plan's structure.  # noqa: E501
     opens = list(OPENS_CRITERIA.finditer(task))
     if not opens:
-        raise CriteriaError(f"no {CRITERIA_HEADING!r} section")
-    if len(opens) > 1:
-        raise CriteriaError(
-            f"the task opens {CRITERIA_HEADING!r} {len(opens)} times, so which block "
-            f"states this node's bar cannot be read from it — a judge is handed the whole "
-            f"task and reads both. Leave one block of criteria, and say whatever else that "
-            f"heading was introducing in prose that does not open it."
-        )
+        return ""
     opened = opens[0].end()
+    # llmlint: ignore-end[boundary_inputs_validated]
     ends = CLOSES_CRITERIA.search(task, opened)
     return task[opened : len(task) if ends is None else ends.start()]
 

@@ -174,15 +174,19 @@ def _cancel(driven: DrivenRun, node: str, reason: str) -> None:
 def test_a_projection_carries_only_what_changed_and_a_refusal_waits_for_the_graph(
     driven: DrivenRun,
 ) -> None:
-    """Whole first, then one node per change; a refusal is asked again only on a change."""
+    """Each node once by targeted update, then one node per change; a refusal waits for one."""
     first = waited_for(
         "the run's first projection",
         lambda: next(iter(projections(driven)), None),
         PATIENCE_SECONDS,
     )
-    assert (first.scope, first.whole_because, first.outcome) == ("whole", "first", "projected"), (
+    assert (first.scope, first.whole_because, first.outcome) == ("members", None, "projected"), (
         first
     )
+    assert (
+        set(first.items) == {HELD_NODE, SETTLED_NODE, EDITED_NODE} and first.actions is not None
+    ), first
+    assert first.actions["created"] == 0 and first.calls == {"task-update": len(first.items)}, first
 
     recorded = quiet_projections(driven)
     before = _destination(driven)

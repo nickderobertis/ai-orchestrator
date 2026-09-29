@@ -78,6 +78,15 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
 . "$script_dir/launcher-session.sh"
 
+# Every verb names this host's template root, so `template list`, `resolve` and `check`
+# and a launch's `start` and `adopt` read one registration; `scripts/template-env.sh` owns
+# the name and the refusal. A launch establishes it again through the dispatch-environment
+# resolvers below, which is how the dispatch-env hook carries it to every dispatch.
+# shellcheck source=scripts/template-env.sh
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/template-env.sh"
+export_template_root onepipeline || exit "$?"
+
 # Only a launch starts harnesses; a read-only view must not create a directory or
 # refuse on an indirection it never uses. `launching` carries this arm's answer past the
 # design-approval gate below, so which verbs are a launch is decided here once.

@@ -74,7 +74,7 @@ refuse none of the tasks behind them.
 * **`PROCEDURE` — red before green.** These are the `procedure` (17 newly caught)
   entries, all of one demand: that each assertion be *observed failing for the intended
   reason before it passes*. It is good
-  practice, and `config/dispatch-appendix.md` tells a worker to do it; as a **criterion**
+  practice, and `templates/dispatch-appendix.md` tells a worker to do it; as a **criterion**
   it asks for a development step the finished tree cannot carry, so a judge either takes
   the worker's word for it or fails work that did it. This host has paid the second — the
   appendix records a node failed because its own criteria required its assertions be
@@ -271,7 +271,7 @@ The admission is bounded three ways, and each bound is a refusal kept rather tha
 admitted only for a task whose own `## Additional info`, above the operational appendix,
 says *the change request may be published early*; one about a demonstration change
 request only for a task saying *a throwaway demonstration change request is authorized* —
-the words `config/dispatch-appendix.md`'s carve-out names, which is what makes the grant
+the words `templates/dispatch-appendix.md`'s carve-out names, which is what makes the grant
 one sentence a worker, its judge and this check read alike. An otherwise identical task
 carrying no grant has the same criterion refused exactly as before, naming the grant to
 write, because a worker of that task may not do the thing the criterion rests on; and a

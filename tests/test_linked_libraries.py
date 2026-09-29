@@ -109,7 +109,7 @@ GATE_FREE_FLOOR = Release(0, 11, 0)
 #: The onevcs release that let a session open its own change request **as a draft it
 #: holds**, describe it after it exists, and lift the draft as a verb —
 #: https://github.com/nickderobertis/onevcs/pull/138, cut as 0.21.0. Below it a
-#: lifecycle worker granted `config/dispatch-appendix.md`'s early-publication carve-out
+#: lifecycle worker granted `templates/dispatch-appendix.md`'s early-publication carve-out
 #: has no `onevcs publish "$ONEVCS_SESSION" --draft` to run: the linked copy is what a
 #: dispatch publishes through, and a `--draft` it does not know is refused by the verb
 #: while every version file on this host reads current. What the floor buys is that the
@@ -633,7 +633,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.2", core="0.18.0"),
     LinkedCore(dependent="onejudge", dependent_version="0.14.0", core="0.18.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.51.0", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.52.1", core="0.18.0"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -808,8 +808,9 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: A pair declared apart, naming both measured releases so it fails the moment either
-#: wheel changes; `None` while the adopted reader links the pinned engine.
+#: No pair is declared apart: the adopted `onepipeline-api-cli`'s SBOM declares the engine
+#: `config/onepipeline.version` pins, which the test below measures. A future record names
+#: both measured releases, so it fails the moment either wheel changes.
 DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
 
 

@@ -200,7 +200,7 @@ PLAN_ROOT = Input(
 #: Not an input of the wrapper at all, and read here because this is the one place a
 #: real dispatch's own environment is read per launch shape. `ONEVCS_SESSION` is what
 #: lets a lifecycle worker publish its session's change request as a draft
-#: (`onevcs publish "$ONEVCS_SESSION" --draft`), which `config/dispatch-appendix.md`'s
+#: (`onevcs publish "$ONEVCS_SESSION" --draft`), which `templates/dispatch-appendix.md`'s
 #: carve-out lets it do when its task says so; the engine composes it for every dispatch
 #: that runs in a session's worktree and for no direct dispatch, whose worktree is nobody's
 #: session. A lifecycle worker whose environment lost it would meet the carve-out with
@@ -2074,14 +2074,15 @@ def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_anothe
 
 #: The scripts a launch runs before it reaches the seam: the entry point itself and the
 #: helper it asks who is acting, the definition of which resolvers establish a
-#: dispatch's environment and the three resolvers it names, the merge-queue bound's
-#: helper, and the ask-manager helper. Copied into a checkout of their own so the wrapper
-#: they resolve is that checkout's, which is how the refusal below is driven without
-#: touching this one.
+#: dispatch's environment and the resolvers it names, the template-root helper every verb
+#: sources, the merge-queue bound's helper, and the ask-manager helper. Copied into a
+#: checkout of their own so the wrapper they resolve is that checkout's, which is how the
+#: refusal below is driven without touching this one.
 LAUNCH_SCRIPTS = (
     "onepipeline.sh",
     "launcher-session.sh",
     "dispatch-env.sh",
+    "template-env.sh",
     "credentials-env.sh",
     "ask-manager-env.sh",
     "claude-alt-config-dir.sh",
@@ -2115,6 +2116,11 @@ def test_a_launch_whose_wrapper_it_cannot_run_is_refused_before_anything_starts(
     unrunnable = scripts / "ask-manager.sh"
     unrunnable.write_bytes((REPO_ROOT / "scripts" / "ask-manager.sh").read_bytes())
     unrunnable.chmod(0o644)
+    # The template root every verb names is refused without its registration, before the
+    # seam is reached, so the checkout carries this one's.
+    registration = tmp_path / "checkout" / "templates" / "templates.yaml"
+    registration.parent.mkdir()
+    registration.write_bytes((REPO_ROOT / "templates" / "templates.yaml").read_bytes())
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)

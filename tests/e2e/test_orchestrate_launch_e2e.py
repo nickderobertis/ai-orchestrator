@@ -3248,11 +3248,12 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
 
 
 #: The scripts the dispatch-env hook is made of: the hook itself, the one definition of
-#: which resolvers it runs, and those three resolvers. Copied into a checkout-shaped
+#: which resolvers it runs, and those resolvers. Copied into a checkout-shaped
 #: directory of the journey's own — see `_hook_checkout` — rather than named in place.
 DISPATCH_ENV_HOOK_SCRIPTS = (
     "dispatch-env-hook.sh",
     "dispatch-env.sh",
+    "template-env.sh",
     "credentials-env.sh",
     "claude-alt-config-dir.sh",
     "codex-alt-home.sh",
@@ -3292,6 +3293,10 @@ def _hook_checkout(tmp_path: Path, credentials: str) -> Path:
         copied = scripts / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)
+    # The template-root resolver refuses a checkout whose `templates/` has no registration.
+    registration = checkout / "templates" / "templates.yaml"
+    registration.parent.mkdir()
+    registration.write_bytes((REPO_ROOT / "templates" / "templates.yaml").read_bytes())
     (checkout / ".env").write_text(credentials, encoding="utf-8")
     return scripts / "dispatch-env-hook.sh"
 
@@ -3552,7 +3557,9 @@ def test_a_launch_builds_its_dispatches_environment_rather_than_inheriting_one(
     the environment ai-orchestrator#1162's worker installed into — while every
     `env_from` source this repository's routing names, the credentials and identity
     indirections the resolvers establish, and the families the table keeps all arrive —
-    and so does the merge-queue bound the launch derives from this host's last gate.
+    and so does the merge-queue bound the launch derives from this host's last gate, this
+    checkout's template root, and the plan store's non-interactive setting, which a
+    person's own `onetaskgraph` never reads because nothing tracked sets it.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -3568,10 +3575,15 @@ def test_a_launch_builds_its_dispatches_environment_rather_than_inheriting_one(
         KEPT_NOMINATION,
         "PATH",
         LOCK_BOUND,
+        "ONEPIPELINE_TEMPLATE_ROOT",
+        "ONETASKGRAPH_INTERACTIVE",
         *sources,
         *probes,
     )
     environment[ENVIRONMENT_KEYS_ENV] = ",".join(recorded)
+    # A launching shell's own answers, both of which the launch replaces rather than keeps.
+    environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(tmp_path / "somebody-elses-templates")
+    environment["ONETASKGRAPH_INTERACTIVE"] = "true"
     # This host's last gate, as the pre-push hook records it under the launch's own state
     # root; the bound a dispatch publishes under is derived from it at launch.
     environment.pop(LOCK_BOUND, None)
@@ -3643,6 +3655,17 @@ def test_a_launch_builds_its_dispatches_environment_rather_than_inheriting_one(
                 f"rather than the {DERIVED_LOCK_BOUND}s a {RECORDED_GATE_SECONDS}s gate "
                 "derives, so the onevcs it publishes through gives up on the merge queue "
                 "while a sibling's gate still holds it (ai-orchestrator#1164)"
+            )
+            assert handed.get("ONEPIPELINE_TEMPLATE_ROOT") == str(REPO_ROOT / "templates"), (
+                "the dispatched turn was handed ONEPIPELINE_TEMPLATE_ROOT="
+                f"{handed.get('ONEPIPELINE_TEMPLATE_ROOT')!r} rather than the launching "
+                "checkout's templates/, so its `onepipeline template resolve` reads another "
+                "registration or none"
+            )
+            assert handed.get("ONETASKGRAPH_INTERACTIVE") == "false", (
+                "the dispatched turn was handed ONETASKGRAPH_INTERACTIVE="
+                f"{handed.get('ONETASKGRAPH_INTERACTIVE')!r}, so a prompting verb it runs "
+                "waits on a terminal nobody is at"
             )
     finally:
         _just("stop", run, environment=environment, seconds=60)

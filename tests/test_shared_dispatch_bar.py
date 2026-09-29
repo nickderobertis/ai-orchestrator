@@ -31,7 +31,7 @@ why it is not the next thing to remove.
 
 The preamble half below is a guard about **which document** states a thing rather than
 about what this one says. Dispatch policy — which checks a dispatch runs, and when its
-work is done — has one source, `config/dispatch-appendix.md`, the only copy a worker and
+work is done — has one source, `templates/dispatch-appendix.md`, the only copy a worker and
 its judge read together. So what is held below is that policy's absence, the one clause
 that stays and the scope that makes it sayable, the pointer that keeps "states nothing"
 from reading as "nothing is owed", and that no statement of it stands in both files.
@@ -228,7 +228,7 @@ CHECK_SELECTION_POLICY = (
 
 #: Every rule about publication the preamble may not state, held **absent** the way the
 #: check-selection policies above are. Publication is dispatch policy with one source:
-#: `config/dispatch-appendix.md` states the rule and the two carve-outs a task may grant
+#: `templates/dispatch-appendix.md` states the rule and the two carve-outs a task may grant
 #: — the worker's own draft, and a demonstration change request stacked on it — and a
 #: preamble stating any rule about pushing, opening or landing a change request would be
 #: a second copy the carve-outs then have to be carved out of twice. On the demand
@@ -277,7 +277,7 @@ def test_the_preamble_states_no_policy_about_which_checks_a_dispatch_runs(policy
     found = policy.stated_by.search(preamble)
     assert found is None, (
         f"{BASE_CONFIG}'s `system_prompt` states {policy.name} again ({found.group(0)!r}). "
-        "Which checks a dispatch runs is `config/dispatch-appendix.md`'s to say — the "
+        "Which checks a dispatch runs is `templates/dispatch-appendix.md`'s to say — the "
         "one copy a worker and its judge read together — and two copies of it have "
         f"already disagreed:\n{preamble}"
     )
@@ -298,7 +298,7 @@ def test_the_preamble_states_no_rule_of_its_own_about_publication(policy: Policy
     found = policy.stated_by.search(preamble)
     assert found is None, (
         f"{BASE_CONFIG}'s `system_prompt` states {policy.name} ({found.group(0)!r}). "
-        "What a dispatch may push, open or land is `config/dispatch-appendix.md`'s to "
+        "What a dispatch may push, open or land is `templates/dispatch-appendix.md`'s to "
         "say, carve-outs included; the preamble points at the task's own "
         f"`## Additional info` and states nothing of its own:\n{preamble}"
     )
@@ -310,7 +310,7 @@ def test_the_preamble_sends_a_reader_to_the_one_place_that_does_state_them() -> 
     A worker handed a standing bar that never mentions checks concludes they are nobody's
     and runs whatever it judges best, which is the removed policy returning through its
     own judgment. So the preamble names where the policy is instead: the operational
-    notes under the task's own `## Additional info`, which is `config/dispatch-appendix.md`
+    notes under the task's own `## Additional info`, which is `templates/dispatch-appendix.md`
     verbatim, with the node's `## Acceptance criteria` stating what they have to show.
     """
     preamble = " ".join(shared_agent_preamble().split())
@@ -454,14 +454,14 @@ def test_the_preamble_names_no_repository_wide_bar_at_all() -> None:
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes a
 # test between two targets of the project that already owns it, rather than standing in
-# for a project. Both cases below read `config/dispatch-appendix.md`, which collection
+# for a project. Both cases below read `templates/dispatch-appendix.md`, which collection
 # refuses without the marker.
 @pytest.mark.reads_docs
 def test_no_statement_of_dispatch_policy_stands_in_both_files() -> None:
     """The structural half: one policy, one document, and a gate rather than a rule.
 
     `AGENTS.md` has said since the suppression incident that this policy has one source
-    and that it is `config/dispatch-appendix.md`; nothing checked it. Compared as a worker
+    and that it is `templates/dispatch-appendix.md`; nothing checked it. Compared as a worker
     meets them: this preamble as a system prompt, the appendix as its task's
     `## Additional info`.
     """

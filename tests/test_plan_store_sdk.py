@@ -586,6 +586,68 @@ def test_a_page_cursor_already_followed_is_refused_naming_it(
     assert len(pages) == 1, "a third page was asked for after the cursor repeated"
 
 
+def test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Membership is the item's own `project`, which a created task's id does not spell.
+
+    `onetaskgraph task create` into a `local-md` source names the file after the task's
+    title, so its id sits beside the project's other tasks rather than under a directory
+    of the project. A reader holding it to `<project>/<task>` refused every task a planner
+    created from a template; one filed under another project is still refused.
+    """
+    root = tmp_path / "source"
+    write_plan_project(
+        root,
+        {"name": "demo", "tasks": [PlanNode(id="written", title="Written", task="Body")]},
+    )
+    _source(monkeypatch, "sdksource", root)
+    body = tmp_path / "body.md"
+    body.write_text("## What\n\nCreated by the store.\n", encoding="utf-8")
+    created = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "create",
+            "sdksource",
+            "--project",
+            "demo",
+            "--title",
+            "Created by the store",
+            "--body-file",
+            str(body),
+            "--metadata",
+            'onepipeline.id="created"',
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    minted = created.stdout.strip()
+    assert not minted.startswith("sdksource:demo/"), minted
+
+    read = {task.node_id: task for task in plan_store.read_tasks("sdksource:demo")}
+
+    assert set(read) == {"written", "created"}, read
+    assert read["created"].qualified_id == minted
+    assert {task.project for task in read.values()} == {"demo"}
+
+    listed = plan_store.sdk(plan_store.client().task_list(source=["sdksource"], project="demo"))
+    (held,) = [item for item in listed.items if item.id.model_dump() == minted]
+    elsewhere = held.model_copy(
+        update={
+            "item": held.item.model_copy(update={"project": held.item.project.__class__("other")})
+        }
+    )
+    monkeypatch.setattr(
+        plan_store, "sdk", lambda _answer: listed.model_copy(update={"items": [elsewhere]})
+    )
+    with pytest.raises(OSError, match="outside itself"):
+        plan_store.read_tasks("sdksource:demo")
+
+
 def test_typed_listings_are_still_held_to_the_requested_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

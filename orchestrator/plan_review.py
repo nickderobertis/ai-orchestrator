@@ -779,7 +779,12 @@ def write_record(project: str, task: StoreTask, key: ReviewKey, by: By) -> Path:
     """
     source, native = plan_store.qualified(project)
     held, _, task_native = task.qualified_id.partition(":")
-    if held != source or not task_native.startswith(f"{native}/"):
+    # A task read from the store names its project; one built without it is read by the
+    # `<project>/<task>` id this host's own project writer gives every task it renders.
+    belongs = (
+        task.project == native if task.project is not None else task_native.startswith(f"{native}/")
+    )
+    if held != source or not belongs:
         raise OSError(
             f"task {task.qualified_id!r} is not one of {project!r}'s, so recording its "
             f"review against that project would write into a record it does not describe"

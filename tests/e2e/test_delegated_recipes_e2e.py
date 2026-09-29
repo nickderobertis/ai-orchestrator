@@ -61,6 +61,7 @@ from delegation_checkout import (
     PINNED_ENGINE,
     PLAN_PROJECT,
     ROOT,
+    TEMPLATE_ROOT_TRACE_ENV,
     WRAPPER_DEFAULTS,
 )
 from delegation_checkout import at as _at
@@ -602,6 +603,74 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     assert trace.read_text().splitlines() == [
         line.replace(CHECKOUT, str(checkout.resolve())) for line in expected
     ]
+
+
+#: Every row whose published verb is `onepipeline`, reached through `scripts/onepipeline.sh`
+#: — a launch's installed engine or a view's `uv run onepipeline`. `channel-surface` is
+#: the one such recipe with a wrapper of its own, `scripts/planner-surface.sh`, which
+#: raises a surface and resolves no template.
+ENGINE_DELEGATIONS = tuple(
+    row
+    for row in DELEGATIONS
+    if row.published.startswith((f"{ENGINE} ", "uv run onepipeline "))
+    and row.recipe != "channel-surface"
+)
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.parametrize("delegation", ENGINE_DELEGATIONS, ids=lambda row: " ".join(row.invocation))
+def test_every_engine_call_the_wrapper_makes_names_this_checkouts_template_root(
+    tmp_path: Path, delegation: Delegation
+) -> None:
+    """A launch, an adoption and a read-only view all resolve templates against one root.
+
+    Read off what each doubled engine was handed, and against a root some other shell had
+    exported, because the wrapper names this checkout's own `templates/` over it: a
+    dispatch reading another checkout's registration would render every task against a
+    layout this host never wrote.
+    """
+    checkout, trace = _checkout(tmp_path)
+    for argument in delegation.arguments:
+        if argument.endswith(".json"):
+            (checkout / argument).write_text(REPLY_ENVELOPE, encoding="utf-8")
+    roots = tmp_path / "template-roots"
+
+    result = _run(
+        checkout,
+        trace,
+        *delegation.invocation,
+        env={
+            TEMPLATE_ROOT_TRACE_ENV: str(roots),
+            "ONEPIPELINE_TEMPLATE_ROOT": str(tmp_path / "somebody-elses-templates"),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    engine = _at(checkout, ENGINE)
+    calls = [
+        line
+        for line in roots.read_text(encoding="utf-8").splitlines()
+        if f" {engine} " in f"{line} " or " uv run onepipeline " in line
+    ]
+    assert calls, f"{delegation.recipe} reached no onepipeline call:\n{trace.read_text()}"
+    expected = f"{checkout.resolve() / 'templates'} "
+    wrong = [line for line in calls if not line.startswith(expected)]
+    assert not wrong, f"these engine calls were not handed {expected.strip()}: {wrong}"
+
+
+@pytest.mark.reads_recipes
+def test_a_checkout_without_its_template_registration_is_refused_before_the_engine(
+    tmp_path: Path,
+) -> None:
+    """No verb reaches the engine resolving templates against a root that registers none."""
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "templates" / "templates.yaml").unlink()
+
+    result = _run(checkout, trace, "status", "run-1")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "carries no readable templates.yaml" in result.stderr, result.stderr
+    assert not trace.exists() or trace.read_text() == "", trace.read_text()
 
 
 #: The one line a launch prints on stderr naming the engine it requests and the one it is

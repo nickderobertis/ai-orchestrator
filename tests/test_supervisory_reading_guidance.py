@@ -22,7 +22,7 @@ pytestmark = pytest.mark.reads_docs
 #: The manager's own document. Every passage here is manager judgment rather than
 #: worker-facing operational text: arming a watch, reading a change request before it
 #: merges, and ruling on a finding are all decisions no dispatch
-#: makes, so none of this belongs in `config/dispatch-appendix.md`.
+#: makes, so none of this belongs in `templates/dispatch-appendix.md`.
 MANAGER = "AGENTS.md"
 
 #: The opening phrase of each passage. A claim is matched inside its own paragraph

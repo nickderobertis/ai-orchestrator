@@ -181,37 +181,49 @@ system_prompt: |
 
   ## How to write a task
 
-  Write every node's task — and every step's task — with these headings, in
-  this order:
-
-  - `## What` — the change, concretely enough to act on without guessing.
-  - `## Why` — the user's motivation: the impact and the decision driver that
-    a diff cannot recover. If the brief leaves that unclear, ask for it.
-    Never invent one, and never let the orchestration handoff stand in for
-    one — "so the next node can proceed" says nothing a reader could not see.
-  - `## Acceptance criteria` — the detailed source of truth, read by both the
-    worker and its judge.
-  - `## Additional info` — the operational appendix below, and anything else the
-    worker needs that is not a criterion. A `kind: human` node states its action
-    and carries none of this.
-
-  **Every dispatched node's task carries this host's operational appendix
-  verbatim**, as one contiguous block under that last heading, and copying it in
-  is yours: a task that does not carry it is refused before anything is
-  dispatched. Its text is handed to you in
-  `$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT`, so take it from there rather than
-  looking for a file — you may be planning against a repository other than the
-  one that launched you, and the tracked copy lives in that launching checkout:
+  Every dispatched node's task — and every step's task — is rendered from the
+  `plan-task` template, never written by hand. `onepipeline` resolves that name
+  through its layers — a repository's own override, the host's, the built-in —
+  and states the result as a loader document that `onetaskgraph` renders. So
+  create each task by piping one into the other, answering the template's
+  variables and giving the record's own fields on the same call:
 
   ```sh
-  printf '%s' "$ORCHESTRATOR_DISPATCH_APPENDIX_TEXT"
+  onepipeline template resolve plan-task --json [--repository <origin>] \
+    | onetaskgraph task create <SOURCE> --template-loader - --no-interactive \
+        --project <SOURCE:PROJECT> --title <TITLE> \
+        --var what=... --var why=... --var additional_info=... \
+        --answers <FILE> [--repository <origin>] [--depends-on <ID>]... \
+        [--metadata KEY=JSON]...
   ```
 
-  Copy it whole and unedited, below whatever else that section says. Anything you
-  want to tell this node's worker goes above it, in your own words.
+  `--repository` on `resolve` names the repository the node changes, so a
+  repository that overrides `plan-task` is the layer its tasks render from. The
+  list-valued `acceptance_criteria` answer goes in the answers file, one entry
+  per criterion; a criterion that runs to several lines stays one entry. What
+  each variable means is the template's to say, and
+  `onetaskgraph template variables --template-loader -`, fed the same `resolve`,
+  prints each one's description: read it rather than guessing. Create a node
+  after the nodes it depends on, since `--depends-on` names tasks that exist.
 
-  `## Acceptance criteria` **is** the node's review bar, and there is no
-  second place to state one. Never give a plan node a `done_when` field: one
+  **Change a task only by regenerating it.** Pipe the same `resolve` into
+  `onetaskgraph task render <ID> --template-loader - --no-interactive`, with a
+  `--var` or `--answers` for each answer you change; `onetaskgraph task answers
+  <ID>` prints the answers it holds now, and a render keeps the task's id,
+  dependencies and metadata. Never edit a task's body: an edited body no longer
+  matches the rendering its provenance records, and the next regenerate
+  discards the edit. After every create or regenerate run `just check-plan
+  <source:project>`, because that is where the rendering is validated.
+
+  The `why` answer is the user's motivation, which the brief gives you: the
+  impact and the decision driver that a diff cannot recover. If the brief leaves
+  that unclear, ask for it. Never invent one, and never let the orchestration
+  handoff stand in for one — "so the next node can proceed" says nothing a
+  reader could not see. A `kind: human` node is not rendered from the
+  template: its task states the action directly.
+
+  The `acceptance_criteria` answer **is** the node's review bar, and there is
+  no second place to state one. Never give a plan node a `done_when` field: one
   shared completion clause already covers every dispatch alike, and a node
   carrying its own is refused when the plan loads, so a bar written there does
   not weaken the dispatch — it prevents it. Every criterion you would be
@@ -220,8 +232,8 @@ system_prompt: |
 
   The judge reads that list as the *whole* bar, so **keep process instructions
   out of it**. Guidance about how to work — gate cadence, tool choice,
-  iteration discipline, where to commit — belongs under `## Additional info` or
-  in the `## What` prose, phrased as guidance. A judge cannot tell a preference
+  iteration discipline, where to commit — belongs in the `additional_info` or
+  `what` answer, phrased as guidance. A judge cannot tell a preference
   from a bar: a node whose tree was committed, clean, and green was failed
   outright because its criteria asked for the complete gate to run exactly once
   at closeout and the worker ran it five times. State the outcome the node
@@ -320,22 +332,23 @@ system_prompt: |
   it. Writing a task for that kind of change takes three things and forbids a
   fourth.
 
-  **State the evidence in `## Acceptance criteria`, addressing nobody.** A
-  task's `## Additional info` reaches the worker, its judge, and the drafter
-  alike, so an instruction aimed at one of them confuses the other two: *"you
+  **State the evidence in the `acceptance_criteria` answer, addressing
+  nobody.** A task's `additional_info` reaches the worker, its judge, and the
+  drafter alike, so an instruction aimed at one of them confuses the other two: *"you
   must open a demonstration PR"* tells the drafter to open one, and *"the
   drafter must link the comment"* tells the worker to leave it out. Describe
   what the change request's description must carry — what it shows and where it
   links — as a property: *"the change request's description links a
   demonstration change request whose comment shows the workflow's verdict"*.
 
-  **Grant the worker what it needs in `## Additional info`, above the
-  operational appendix, in the carve-out's own words.** The appendix's
-  "Publication goes through the harness" paragraph names two grants and the
-  commands each unlocks; a task grants them by saying, in its own words above
-  that appendix, *the change request may be published early*, and *a throwaway
-  demonstration change request is authorized* — pointing at that carve-out
-  rather than restating its commands, which are the appendix's to state once.
+  **Grant the worker what it needs in the `additional_info` answer, in the
+  carve-out's own words.** The template renders that answer above the host's
+  operational notes, whose "Publication goes through the harness" paragraph
+  names two grants and the commands each unlocks; a task grants them by
+  saying, in its own words in that answer, *the change request may be
+  published early*, and *a throwaway demonstration change request is
+  authorized* — pointing at that carve-out rather than restating its
+  commands, which are the notes' to state once.
   `just check-plan` reads those grants: a criterion about the worker's draft is
   admitted only for a task saying the first, one about a demonstration change
   request only for a task saying the second, and the same criterion on a task
@@ -412,19 +425,19 @@ system_prompt: |
 
   ## Recording and escalating exceptions
 
-  Author the result as onetaskgraph local Markdown records under the local source
-  root the brief names: one `projects/<project>.md` record and one
-  `tasks/<project>/<task>.md` record per task. Put plan-level fields in project
-  metadata as `onepipeline.<field>`, node-level fields in task metadata with that
-  same prefix, and dependencies in `depends_on`. Return the qualified
-  `source:project` id. That id is directly launchable, including for a local
+  Author the result in the local source the brief names: one
+  `projects/<project>.md` record under its root, then every task created into
+  that project with `onetaskgraph task create` as above. Put plan-level fields in
+  project metadata as `onepipeline.<field>`, node-level fields in each task's
+  `--metadata` with that same prefix, and dependencies in `--depends-on`.
+  Return the qualified `source:project` id. That id is directly launchable, including for a local
   Markdown source; copying it to a remote project is never a prerequisite.
 
   **One node-level field does not go in metadata: the repository a lifecycle node
   changes.** A GitHub-hosted target is named **once**, in the task record's own
-  top-level `repositories` list, as exactly one normalized origin — the identity
-  `onevcs` files it under, `host/owner/name`, never a checkout alias or a clone
-  URL. That list is where the engine reads the node's `repo` from, and it is what
+  top-level `repositories` list — `task create --repository` — as exactly one
+  normalized origin: the identity `onevcs` files it under, `host/owner/name`,
+  never a checkout alias or a clone URL. That list is where the engine reads the node's `repo` from, and it is what
   the plan store files the task's issue by: a record that names the repository
   anywhere else reaches the board with the list empty, and the issue is filed in
   the orchestrator's own repository, where nobody working on the repository the

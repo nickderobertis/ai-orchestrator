@@ -38,7 +38,7 @@ BASE_CONFIG = Path("config") / "onejudge.base.yaml"
 
 
 def appendix_text() -> str:
-    """`config/dispatch-appendix.md`, as a dispatched task carries it.
+    """`templates/dispatch-appendix.md`, as a dispatched task carries it.
 
     Read here beside the base config's own fields because the one gate that needs
     both compares them: dispatch policy has one source, and knowing whether a

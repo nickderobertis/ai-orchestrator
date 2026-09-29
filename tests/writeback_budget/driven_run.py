@@ -113,6 +113,10 @@ class Projection(NamedTuple):
     #: and the `reopened` the engine derives beside them, or `None` where no copy report
     #: was read. Required present for the same reason `spent` is.
     actions: dict[str, int] | None
+    #: How many times the attempt called each store operation, keyed by the engine's closed
+    #: set of names, an operation not called left off. Every line the adopted engine writes
+    #: names it, so a line without it is refused here rather than read as calling nothing.
+    calls: dict[str, int]
 
     @classmethod
     def parse(cls, line: str) -> Projection:
@@ -138,6 +142,8 @@ class Projection(NamedTuple):
                     and all(isinstance(count, int) for count in record["actions"].values())
                 )
             )
+            and isinstance(record.get("calls"), dict)
+            and all(isinstance(count, int) for count in record["calls"].values())
         ):
             raise ValueError(f"a projection record is malformed: {line!r}")
         return cls(
@@ -151,6 +157,7 @@ class Projection(NamedTuple):
             duration_ms=record["duration_ms"],
             spent=record["spent"],
             actions=record["actions"],
+            calls=record["calls"],
         )
 
 

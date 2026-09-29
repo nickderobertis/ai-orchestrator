@@ -43,10 +43,12 @@
       "{workspaceRoot}/oneharness.design-doc-judge.toml",
       "{workspaceRoot}/oneharness.follow-up.toml",
       "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/templates/**/*",
       "{workspaceRoot}/graphs/**/*",
       "{workspaceRoot}/personas/**/*",
       "{workspaceRoot}/scratch/personas/**/*",
       "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/.githooks/**/*",
       "{workspaceRoot}/orchestrator/**/*",
       "{workspaceRoot}/tests/plan_tooling/**/*",
       "{workspaceRoot}/tests/fixtures/timeline-runs/dag-ui-truth-monitor-slice/**/*"

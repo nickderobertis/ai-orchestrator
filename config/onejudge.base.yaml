@@ -27,7 +27,7 @@ provider:
 # per dispatch, so no `dir` lives here.
 #
 # This preamble states no policy about which checks a dispatch runs: that has one source,
-# `config/dispatch-appendix.md`, the only copy a worker and its judge read together. What
+# `templates/dispatch-appendix.md`, the only copy a worker and its judge read together. What
 # is left is the completion clause, scoped to a check bearing on this dispatch's own
 # change. `tests/test_shared_dispatch_bar.py` holds the absence, the scope, and the gate.
 #

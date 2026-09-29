@@ -329,7 +329,7 @@ def test_an_incident_is_written_by_classifying_it_rather_than_by_being_recognise
 def test_a_classification_with_no_substantive_reason_is_not_one(marker: str) -> None:
     """The marker is a suppression, so it is held to what this repository holds one to.
 
-    `config/dispatch-appendix.md` is the one source of that policy and it is the same
+    `templates/dispatch-appendix.md` is the one source of that policy and it is the same
     sentence: a directive carries a substantive reason saying why the rule is misapplied
     at that site. A marker that only names the rule it silences is the bare `ignore` that
     policy refuses, and it would turn this gate into an escape hatch reachable under
