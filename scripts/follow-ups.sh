@@ -68,8 +68,9 @@
 #     heading of its own, for a re-dispatch over the same run's drafts, tickets and board;
 #   * `--comments` says that file is a gathering of the board's own comments rather than a
 #     manager's prose, and renders the **feedback** mode instead — the narrow
-#     comment-answering task, with no inventory, no verification, no accepted-fix
-#     comparison, no status decision and no copy. It is refused without `--feedback`, and
+#     comment-answering task, with no inventory, no run-wide verification and no
+#     accepted-fix comparison, and no status decision or copy but for a ticket a quoted
+#     comment names. It is refused without `--feedback`, and
 #     `scripts/follow-ups-handle-comments.sh` is its one caller.
 #
 # **Which mode is the caller's to say, never the file's.** Sniffing a feedback file for
@@ -84,8 +85,8 @@
 # this recipe exits non-zero with. In initial mode that is every ticket left under
 # `tasks/<run-id>/tickets/` validated and each one that fails named, then the disposition
 # artifact checked for a disposition per input draft; in feedback mode it is the response
-# artifact alone, because a run answering comments touches no ticket and reading the
-# tickets would refuse it for somebody else's unfinished work. The task's own steps name
+# artifact alone, because a run answering comments touches only the tickets its quoted
+# comments name, and reading the rest would refuse it for somebody else's unfinished work. The task's own steps name
 # the same validator, which is what binds the detached path the success hook launches.
 #
 # **`--detach` returns once the launch record exists**, printing
@@ -233,6 +234,14 @@ if [ "$comments" -eq 1 ] && [ -z "$feedback" ]; then
     fail "--comments says which kind of feedback file this is, and none was named" \
         "gather the board's comments with 'just follow-ups-handle-comments', which names both"
 fi
+
+# The board credential from this checkout's `.env`, before the first board read in either
+# mode; a name the environment already defines wins.
+# llmlint: ignore-block[changed_behavior_has_e2e] Each outcome of these two lines is driven by `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py`: in both modes, `.env` handed to the store and a defined name winning, a `.env` the helper refuses (malformed, or not a file), and the helper missing or unreadable; in `--comments` mode, the only one that reads the board before launching, no credential refused by the store. What they establish serves this recipe's own board reads before it launches; a dispatched worker's copy does not come from here but from the engine's dispatch environment hook, which `scripts/onepipeline.sh` names on every start and which re-runs `export_host_credentials` through `scripts/dispatch-env.sh` before each dispatch, unchanged by this recipe.
+# shellcheck source=scripts/credentials-env.sh
+load credentials-env.sh
+export_host_credentials follow-ups || exit "$?"
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 runs_root="${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}"
 if [ -e "$runs_root" ] && { [ ! -d "$runs_root" ] || [ ! -r "$runs_root" ] || [ ! -x "$runs_root" ]; }; then

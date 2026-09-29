@@ -47,8 +47,9 @@ rule; the documents point here.
 `<drafts root>/feedback/<run-id>/`, outside the `tasks/` tree the store reads, so the
 manager can read what was sent, and the next gathering when the first was. A person's move
 of an item to `Todo`, `Deferred` or `In Progress` is a decision no run undoes, so the
-feedback says so again beside the re-dispatch rule that copies a ticket carrying the status
-the board holds.
+feedback says so again, beside the one status change a comment dispatch may make —
+withdrawing this run's own proposal a comment clearly retires — in the words of
+:data:`follow_up_tickets.WITHDRAWAL_EXCEPTION`, which the feedback task carries too.
 """
 
 from __future__ import annotations
@@ -393,9 +394,9 @@ def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | N
         "2. **Post its one reply**, naming the comment's id, as those rules state.\n"
         "3. **Report** the comment's URL beside what you did about it, or why you did "
         "nothing.\n\n"
-        "**Never change a board item's status**, and never touch a ticket or an issue no "
-        "comment above names: a person's move to `Todo`, `Deferred` or `In Progress` stands "
-        "whenever they made it, and this dispatch answers these comments and nothing else.\n"
+        f"{tickets.WITHDRAWAL_EXCEPTION} Never touch a ticket or an issue no comment above "
+        "names: a person's move to `Todo`, `Deferred` or `In Progress` stands whenever they "
+        "made it, and this dispatch answers these comments and nothing else.\n"
     ]
     for number, selected in enumerate(chosen, start=1):
         issue = selected.issue

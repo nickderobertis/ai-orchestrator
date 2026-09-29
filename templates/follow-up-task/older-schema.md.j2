@@ -1,0 +1,30 @@
+{#- How a ticket of an older record schema is brought to the current one, stated once as the
+    macro `rule` and called by both places `follow-up-task.md.j2` may copy such a ticket: the
+    re-dispatch section, and the feedback mode's step that edits the ticket a quoted comment
+    asks to change. A comment asking for a change to a schema-5 ticket once ended at
+    `board-status`'s schema refusal, its reply posted and its issue left stale, because only
+    the re-dispatch carried this rule. The schemas and headings it names are the module's,
+    through `shape`, and `tests/test_follow_up_tickets.py` holds them to it. It is imported at
+    the head of that template rather than included where it is used, so every mode loads it
+    at one point: the store records a rendering's template digest in the order its templates
+    load, and `onepipeline template check` recomputes it in one fixed order.
+-#}
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] Each clause is the agent's instruction for an edit the suite never scripts a verdict for — which fields a ticket already carries and what its evidence supports are its reading of the tree — so a journey can only drive the tooling around it, and does: `tests/plan_tooling/test_follow_ups_recipe_e2e.py`'s `test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its_item` brings schema-4 tickets forward with the `## Repository` section removed, the options moved under `## Rejected fixes`, and `host` and `repositories` recorded, and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py` drives the rule in the feedback mode over schemas 4, 5 and 6 and another run's schema-6 item. Schemas 1 to 3 meet the same `validate` refusal those do, which `tests/test_follow_up_tickets.py` holds for schemas 1, 2, 3, 4 and 6. -->
+{% macro rule(shape, board, board_status, re_estimate) -%}
+- a ticket of an older schema is brought to the current shape before it is copied, its
+  `repositories` naming its record's `repository`, its `host` read from this machine
+  with `hostname`, and its `## {{ shape.impact }}` section written from the evidence the ticket
+  already carries, re-verifying only a claim that no longer holds; its `## {{ shape.retired_headings[0] }}`
+  section removed, any path the ticket still needs moved into `## Root cause`; its
+  `## {{ shape.retired_headings[1] }}` rewritten as `## {{ shape.suggested_fix }}`, stating the one fix the ticket's
+  evidence supports; and every other option it offered moved into `## {{ shape.rejected_fixes }}`,
+  with why each was not chosen; then it is validated again.
+- a schema-{{ shape.prior_schema }} ticket of this run is brought to schema {{ shape.schema }} by recording its `{{ shape.frequency_field }}` from
+  the evidence it already carries, then running `{{ board_status }} --board {{ board }} <path of
+  the ticket>`, which writes its `{{ shape.estimate_field }}`, its `## {{ shape.impact }}` estimate line and its
+  `{{ shape.priority_field }}` and reads its schema-{{ shape.prior_schema }} board item as storing no estimate; validate it and copy
+  it. Another run's schema-{{ shape.prior_schema }} item is brought forward by `{{ re_estimate }} --board {{ board }} <its
+  id>` alone, and only when this run adds or edits its evidence comment there, or posts a
+  reply there marked `verdict="{{ shape.confirms }}"`.
+{%- endmacro %}
+<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->

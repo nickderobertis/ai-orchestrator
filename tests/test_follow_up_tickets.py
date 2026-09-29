@@ -934,6 +934,7 @@ FEEDBACK_SECTIONS = (
     "What",
     "Why",
     "Where everything is",
+    "Investigating what a comment asks",
     "What to do, in order",
     "Ownership on the board",
     "The account of every comment",
@@ -961,7 +962,13 @@ FEEDBACK_CRITERIA = (
     "final edit to that account, because a run of it from before either says nothing about "
     "what you leave.",
     "No issue, comment or ticket that no comment below names was created, edited, copied or "
-    "closed by this dispatch.",
+    "closed by this dispatch, and no ticket or board item a quoted comment does not sit on "
+    "was read.",
+    "No board item's status was changed but by withdrawing this run's own item at `Proposal` "
+    "where a quoted comment clearly says its ticket is not needed, and that comment's account "
+    "entry says the item was withdrawn.",
+    "Every reply to a comment asking something only an investigation answers states what the "
+    "investigation found, or what exactly would settle the question.",
     "Every claim the report makes is true of the board as it finally stands.",
 )
 
@@ -3906,6 +3913,160 @@ def test_the_feedback_mode_task_carries_the_gathering_and_none_of_the_ticket_seq
         "check_dispositions",
         "redispatch",
     }.isdisjoint(answered)
+
+
+def _feedback_task() -> str:
+    """The feedback mode's task as `scripts/follow-ups.sh --comments` renders it."""
+    return _task(tickets.Mode.FEEDBACK, feedback=GATHERING, redispatch=True)
+
+
+def test_the_feedback_task_bounds_investigation_to_the_ticket_a_comment_asks_about() -> None:
+    """The user's bound, as the comment dispatch reads it: one ticket, read-only but for tests.
+
+    A reply saying a question "needs a separate verification" answers nothing a person asked,
+    and a dispatch re-verifying every ticket runs into the provider's deadline, so what the
+    dispatch may and may not do is stated, and what reaches it is only the ticket a quoted
+    comment sits on.
+    """
+    task = _feedback_task()
+    bound = _flat(_section(task, "Investigating what a comment asks"))
+
+    assert "do not verify a claim" not in _flat(task)
+    for said in (
+        "Where a quoted comment asks something about the ticket of the issue it sits on that "
+        "only an investigation answers",
+        "you may investigate **that one ticket**, and no other, before you reply",
+        "read its evidence paths, and the code and docs they name, at the current tip of the "
+        "repositories its record names;",
+        "read the releases, changelogs and tags, and the state of the issues or change "
+        "requests, that the ticket or the comment cites;",
+        "run read-only commands, such as `git log`, `git show`, `git grep` and `git blame`, "
+        "and a tool's `--help` or `--version`;",
+        "run the targeted test suites and builds needed to reproduce, or check, the claim the "
+        "comment questions.",
+        "You may not install anything, launch or dispatch anything, read any other ticket or "
+        "board item, or edit any repository.",
+        "A comment that asks nothing an investigation answers is not investigated.",
+        "Where running something is not enough to settle the question, the reply says exactly "
+        "what would settle it",
+    ):
+        assert said in bound, said
+    assert (
+        "the investigation reaches the one ticket the quoted comment sits on and nothing else, "
+        "never another ticket or board item"
+    ) in _flat(_section(task, "Why")), _section(task, "Why")
+    criteria = _criteria(task)
+    assert any(
+        "no ticket or board item a quoted comment does not sit on was read" in held
+        for held in criteria
+    ), criteria
+    assert any(
+        "states what the investigation found, or what exactly would settle the question" in held
+        for held in criteria
+    ), criteria
+
+
+@pytest.mark.reads_docs
+def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_agents_md() -> None:
+    """Withdrawing this run's own proposal a comment clearly retires, and nothing else.
+
+    The task and the gathering's preamble carry one wording, the module's; AGENTS.md states
+    the same bound for a manager.
+    """
+    flat = _flat(_feedback_task())
+    exception = _flat(tickets.WITHDRAWAL_EXCEPTION)
+
+    assert flat.count(exception) == 1, flat
+    for said in (
+        "**Never change a board item's status except by one withdrawal.**",
+        "clearly says the ticket of the issue it sits on is not needed",
+        "that issue is this run's own item at `Proposal`, withdraw it",
+        "run `board-status` with `--withdraw` on its ticket, write the word it prints as the "
+        "ticket's `status`, validate the ticket and copy it",
+        "say in that comment's account entry that the item was withdrawn",
+        "A comment that does not clearly say so is replied to and changes nothing.",
+        "No item at `Todo`, `Deferred`, `Queued` or `In Progress`, and no closed one, is ever "
+        "withdrawn",
+    ):
+        assert said in exception, said
+    assert f"`{BOARD_STATUS} --board followups --withdraw <path of the ticket>`" in flat
+    assert "**Never change a board item's status**," not in flat, "the old rule still stands"
+    assert exception not in _flat(_task(redispatch=True)), (
+        "the initial mode withdraws by its own rule"
+    )
+    preamble = comments.render(RUN, "followups", [], None)
+    assert tickets.WITHDRAWAL_EXCEPTION in preamble
+    agents = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert (
+        "It never changes a board item's status except by one withdrawal: this run's own item "
+        "at `Proposal`, when a quoted comment clearly says its ticket is not needed."
+    ) in agents
+
+
+#: The one file the older-schema rule is written in, which both modes include.
+OLDER_SCHEMA_RULE = REPO_ROOT / "templates" / "follow-up-task" / "older-schema.md.j2"
+
+
+def _older_schema_rule(task: str) -> str:
+    """The rule as the re-dispatch section renders it: its bullets, flattened."""
+    section = _section(task, REDISPATCH_SECTION)
+    start = section.index("- a ticket of an older schema")
+    return _flat(section[start : section.index("- a ticket's dependencies", start)])
+
+
+def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
+    """How a ticket of an older schema is brought forward is stated once, and both tasks carry it.
+
+    A comment asking to change a schema-5 ticket ended at `board-status`'s schema refusal
+    because only the re-dispatch carried the rule, so the feedback task now includes the same
+    file, at the step that edits the ticket, before that ticket's status, validation and copy.
+    """
+    rule = _older_schema_rule(_task(redispatch=True))
+    step = _section(_feedback_task(), "What to do, in order")
+    step = _flat(step.split("1. **Act on it**", 1)[1].split("\n2. ", 1)[0])
+
+    assert rule.startswith("- a ticket of an older schema is brought to the current shape"), rule
+    assert rule in step, step
+    assert step.index(rule) < step.index(f"run `{BOARD_STATUS} --board followups <path"), step
+    assert step.index(rule) < step.index(f"run `{COPY} --board followups"), step
+    # One wording: each of the rule's bullets opens exactly once across everything a task is
+    # rendered from, which is the included file itself.
+    written = OLDER_SCHEMA_RULE.read_text(encoding="utf-8")
+    openings = [
+        _flat(bullet).split(",", 1)[0].lower()
+        for bullet in re.split(r"(?m)^- ", written.split("-#}", 1)[1])[1:]
+    ]
+    assert len(openings) == 2, openings
+    sources = {
+        path: _flat(path.read_text(encoding="utf-8")).lower()
+        for pattern in ("orchestrator/*.py", "templates/**/*.j2")
+        for path in sorted(REPO_ROOT.glob(pattern))
+    }
+    for opening in openings:
+        found = {
+            str(path.relative_to(REPO_ROOT)): text.count(opening)
+            for path, text in sources.items()
+            if opening in text
+        }
+        assert found == {str(OLDER_SCHEMA_RULE.relative_to(REPO_ROOT)): 1}, (opening, found)
+
+
+def test_the_older_schema_rule_names_the_schemas_and_headings_the_module_reads() -> None:
+    """The rule's last clause is written for the step from :data:`PRIOR_SCHEMA` to
+    :data:`SCHEMA`, and its first for the headings :data:`RETIRED_HEADINGS` names."""
+    rule = _older_schema_rule(_task(redispatch=True))
+
+    assert (
+        f"a schema-{tickets.PRIOR_SCHEMA} ticket of this run is brought to schema "
+        f"{tickets.SCHEMA} by recording its `{tickets.FREQUENCY_FIELD}`"
+    ) in rule, rule
+    assert f"Another run's schema-{tickets.PRIOR_SCHEMA} item" in rule, rule
+    assert f"its `## {tickets.RETIRED_HEADINGS[0]}` section removed" in rule, rule
+    assert (
+        f"its `## {tickets.RETIRED_HEADINGS[1]}` rewritten as `## {tickets.SUGGESTED_FIX}`" in rule
+    ), rule
+    assert f"into `## {tickets.REJECTED_FIXES}`" in rule, rule
+    assert f"its `## {tickets.IMPACT}` section written" in rule, rule
 
 
 @pytest.mark.parametrize(

@@ -100,6 +100,10 @@ PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6)
 #: The schema just before, which `re-estimate` also reads as carrying no stored estimate and
 #: no frequency judgment, bringing it to :data:`SCHEMA` as it writes.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
+#: The schemas that added what a ticket of an earlier one lacks: `host`, `repositories`, and
+#: the body's `## Impact` section, as :data:`SCHEMA`'s history states; :data:`RETIRED_AT` is
+#: the one that retired headings.
+HOST_AT, REPOSITORIES_AT, IMPACT_AT = 2, 3, 4
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -255,6 +259,40 @@ def board_option(status: Status) -> str:
     matched = re.search(r"`([^`]+)`", _PLACES[status].shown)
     assert matched is not None, status  # noqa: S101 - every place above names its option
     return matched[1]
+
+
+#: The open statuses a withdrawal never reaches, because a person decided on them; a closed
+#: one is not withdrawn either, and is named as closed rather than listed.
+_KEPT_OPEN = [
+    f"`{board_option(status)}`"
+    for status in Status
+    if status.protected_from_withdrawal and not _PLACES[status].shown.startswith("Closed")
+]
+
+#: **The one status change a comment dispatch makes**, stated once: the feedback mode of the
+#: task template carries it where it says which board changes are forbidden, answered from
+#: here as `withdrawal`, and so does the preamble every gathering opens with
+#: (`follow_up_comments.render`). It names no command path, because a gathering reaches the
+#: task verbatim and is written before any command is resolved.
+# llmlint: ignore-block[changed_behavior_has_e2e] This is the task's prose, and what it binds
+# is driven where the tooling decides it: `board-status --withdraw` over a real `local-md`
+# board refuses every protected status (`tests/test_follow_up_tickets.py`'s
+# `test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_moves_nothing`,
+# parametrized over each), and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py`
+# drives a comment dispatch withdrawing its own `Proposal` and being refused at `Deferred`.
+# Whether a comment clearly retires its ticket is the agent's reading, which no journey scripts.
+WITHDRAWAL_EXCEPTION = (
+    "**Never change a board item's status except by one withdrawal.** Where a quoted comment "
+    "clearly says the ticket of the issue it sits on is not needed — that it is handled "
+    "elsewhere, say, or will not be needed — and that issue is this run's own item at "
+    f"`{board_option(Status.PROPOSED)}`, withdraw it: run `board-status` with `--withdraw` on "
+    "its ticket, write the word it prints as the ticket's `status`, validate the ticket and "
+    "copy it, and say in that comment's account entry that the item was withdrawn. A comment "
+    "that does not clearly say so is replied to and changes nothing. No item at "
+    f"{', '.join(_KEPT_OPEN[:-1])} or {_KEPT_OPEN[-1]}, and no closed one, is ever withdrawn, "
+    "and `board-status --withdraw` refuses the ones a person decided on."
+)
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 
 def accepted_statuses() -> str:
@@ -3571,6 +3609,7 @@ def shape(run: str) -> dict[str, object]:
         "impact": IMPACT,
         "evidence": EVIDENCE,
         "suggested_fix": SUGGESTED_FIX,
+        "retired_headings": list(RETIRED_HEADINGS),
         "rejected_fixes": REJECTED_FIXES,
         "estimate_line": ESTIMATE_LINE,
         "consistent": Frequency.CONSISTENT.value,
@@ -3771,6 +3810,7 @@ def answers(
     else:
         named = cast(Path, feedback_file).name
         answered |= {
+            "withdrawal": WITHDRAWAL_EXCEPTION,
             "responses": str(responses),
             "check_responses": str(check_responses),
             "feedback_file": named,
