@@ -492,6 +492,31 @@ BRANCH_RETIREMENT_LANDINGS = (
     ),
 )
 
+#: The two engine-side nodes of the GraphQL write-back quota plan: a landed baseline beside
+#: the run, so no attempt copies the whole project and a rate limit is waited out for as
+#: long as the store asked; then targeted updates of only the fields that changed, with a
+#: copy kept for creating an item. `tests/writeback_budget/test_targeted_writeback_e2e.py`
+#: and `tests/writeback_budget/test_lineage_item_reuse_e2e.py` drive the baseline and the
+#: targeted updates through a real launch; the rate-limit wait is held in onepipeline's own
+#: suite, since a local Markdown destination never rate-limits.
+GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
+    Landing(
+        node="onepipeline-writeback-baseline",
+        change_request=556,
+        commit="55df74af14a8b86d9818e72a30ddb6792232fd5c",
+        did=(
+            "keep a landed baseline so no attempt is whole, and wait out a rate limit for as "
+            "long as the store asked"
+        ),
+    ),
+    Landing(
+        node="onepipeline-writeback-targeted",
+        change_request=559,
+        commit="736a50e38ee794c439c51e57beb798e4a9a02ec8",
+        did="write changes to existing items through targeted updates",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -509,6 +534,7 @@ LANDINGS = (
     *SCRIPTS_AUDIT_LANDINGS,
     *UNPUBLISHED_UNFINISHED_LANDINGS,
     *BRANCH_RETIREMENT_LANDINGS,
+    *GRAPHQL_WRITEBACK_QUOTA_LANDINGS,
 )
 
 

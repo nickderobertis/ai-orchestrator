@@ -24,51 +24,52 @@ records, off disk and through the real store CLI:
 * a `cancel` of the running replacement settles it `cancelled` in the run's own record
   while its destination item reads the run's open park word on that same record — the
   installed engine's contract, and the reason a retry after a plain cancel reports
-  `reopened: 0`. The journey then closes the card the way a person or an older engine
-  would, writing `cancelled` onto that record through the store's own CLI, and a second
-  `retry` writes an open word back onto the same record — `onepipeline.supersedes` now
-  naming both superseded ids in order — with the attempt reporting `created: 0`, and
-  `reopened: 0`, because the engine reads nothing its landed baseline answers and so knew
-  that item's word as the park it wrote, never as the person's close;
-* a driver `just orchestrate --adopt <run>` attaches reads the landed baseline the previous
-  one left, so its first attempt carries nothing and calls the store for nothing, and the
-  lineage keeps its one item.
+  `reopened: 0`. The journey then closes the card the way a person would, writing
+  `cancelled` onto that record through the store's own CLI, and a second `retry` writes an
+  open word back onto the same record — `onepipeline.supersedes` now naming both superseded
+  ids in order — as a targeted update creating nothing. The run's landed baseline still
+  knew the item as parked, so the attempt counts `reopened: 0`: a reopen is counted off the
+  word the run knew (entry 80), and the card is reopened all the same;
+* the first projection a driver makes after `just orchestrate --adopt <run>` is no whole
+  copy: it reads and copies nothing, creates nothing, and carries the lineage at most
+  once, under its root.
 
 On onepipeline 0.37.0, the release before the landing, the attempt after the first retry
 carries the replacement as an item of its own beside the root and reports `created: 1` —
 the minted sibling — so the journey fails at its first read of that attempt: "a
-replacement was carried by id".
+replacement was carried by id". On onepipeline 0.51.0, before the landed baseline, the
+first projection is a `whole` copy at schema version 3, and the journey fails at its
+first read of the record.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import subprocess
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NamedTuple
 
 import pytest
 from driven_run import (
     PATIENCE_SECONDS,
+    TARGETED_CALLS,
+    DestinationItem,
     DrivenRun,
     NodeId,
     Projection,
     apply,
+    destination,
     just,
+    landed,
     launched,
     projections,
     quiet_projections,
+    store,
     waited_for,
 )
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
-from published_tools import ONETASKGRAPH_BIN
 from waits import deadline
-from waits import timeout as e2e_timeout
-
-from orchestrator.root import REPO_ROOT
 
 #: The session these launches run under, stated rather than inherited: this suite runs
 #: inside a dispatch whose own harness session would otherwise own the run.
@@ -112,17 +113,6 @@ PASSING_REVIEW = json.dumps([json.dumps({"passes": True, "findings": []})])
 pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 
 
-class DestinationItem(NamedTuple):
-    """One task of the launched project, as the destination store holds it."""
-
-    #: The task's qualified id, which is what the store's own verbs take.
-    identifier: str
-    record: Path
-    status: object
-    body: str
-    metadata: dict[str, object]
-
-
 @pytest.fixture
 def driven(
     tmp_path: Path, request: pytest.FixtureRequest, oneharness_bin: str
@@ -135,9 +125,9 @@ def driven(
     # in that key are the launch's own machinery, which is what this journey exercises,
     # so an edit outside it does not pay for the launch and an edit inside it should.
     # llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is faked, at the
-    # `oneharness` seam, which this repository's realistic-tests invariant permits
-    # doubling. The recipe, the engine, its driver and write-back worker, the plan store
-    # it links and the store on disk are all real.
+    # `oneharness` seam — the one boundary this repository's realistic-tests invariant
+    # permits doubling here. The recipe, the engine, its driver and write-back worker, the
+    # store it links and the store on disk are all real.
     with launched(
         tmp_path,
         request,
@@ -157,56 +147,14 @@ def driven(
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-def _store(*arguments: str) -> subprocess.CompletedProcess[str]:
-    """One call of the real store CLI, as a person at the terminal makes it."""
-    return subprocess.run(
-        [str(ONETASKGRAPH_BIN), *arguments],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
-    )
-
-
-def _destination(driven: DrivenRun) -> list[DestinationItem]:
-    """Every task of the launched project, read through the real store CLI.
-
-    Every item rather than one per node, because the claim under test is a *count*: a
-    lineage that minted a sibling shows up as two items sharing an `onepipeline.id`, which
-    a read keyed by that id would silently collapse into one.
-    """
-    source, native = driven.project.split(":", 1)
-    listed = _store(
-        "task", "list", "--source", source, "--project", native, "--limit", "1000", "--json"
-    )
-    assert listed.returncode == 0, listed.stdout + listed.stderr
-    payload = json.loads(listed.stdout)
-    assert isinstance(payload, dict) and isinstance(payload.get("items"), list), listed.stdout
-    items: list[DestinationItem] = []
-    for entry in payload["items"]:
-        identifier, item = entry["id"], entry["item"]
-        assert isinstance(identifier, str) and identifier.startswith(f"{source}:"), entry
-        location = item.get("location") or {}
-        record = Path(str(location.get("path", "")))
-        assert record.is_file(), f"{identifier} is kept nowhere this journey can read: {entry}"
-        metadata = item.get("metadata") or {}
-        assert isinstance(metadata, dict), entry
-        items.append(
-            DestinationItem(
-                identifier=identifier,
-                record=record,
-                status=item.get("status"),
-                body=str(item.get("content") or ""),
-                metadata=metadata,
-            )
-        )
-    return items
-
-
 def _lineage(driven: DrivenRun, root: NodeId) -> list[DestinationItem]:
     """Every destination item carrying `root` as its `onepipeline.id`."""
-    return [item for item in _destination(driven) if item.metadata.get(ID_KEY) == root]
+    return [item for item in destination(driven) if item.metadata.get(ID_KEY) == root]
+
+
+def _targeted_only(attempt: Projection) -> None:
+    assert (attempt.scope, attempt.whole_because) == ("members", None), attempt
+    assert set(attempt.calls) <= TARGETED_CALLS, f"a call beyond a targeted update: {attempt}"
 
 
 def _new_projections(driven: DrivenRun, seen: int) -> list[Projection] | None:
@@ -226,6 +174,7 @@ def _carried(attempts: list[Projection], root: NodeId, *never: NodeId) -> list[P
         assert attempt.items.count(root) == 1, f"{root} is not carried once: {attempt}"
         assert not set(never) & set(attempt.items), f"a replacement was carried by id: {attempt}"
         assert attempt.actions is not None and attempt.actions["created"] == 0, attempt
+        _targeted_only(attempt)
     return carrying
 
 
@@ -292,11 +241,8 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         lambda: next(iter(projections(driven)), None),
         PATIENCE_SECONDS,
     )
-    assert (first.scope, first.whole_because, first.outcome) == ("members", None, "projected"), (
-        first
-    )
-    assert set(first.items) == {ROOT, KEEPER} and first.actions is not None, first
-    assert first.actions["created"] == 0 and first.calls == {"task-update": len(first.items)}, first
+    _targeted_only(first)
+    assert first.outcome == "projected" and ROOT in first.items, first
     recorded = quiet_projections(driven)
     (before,) = _lineage(driven, ROOT)
     assert SUPERSEDES_KEY not in before.metadata and SECOND_TASK not in before.body, before
@@ -310,7 +256,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     )
     retried = _carried(quiet_projections(driven)[len(recorded) :], ROOT, SECOND)
     assert sum(attempt.actions["reopened"] for attempt in retried if attempt.actions) == 0, retried
-    minted = [item for item in _destination(driven) if item.metadata.get(ID_KEY) == SECOND]
+    minted = [item for item in destination(driven) if item.metadata.get(ID_KEY) == SECOND]
     assert not minted, f"the retry minted a destination item of its own: {minted}"
     (after_retry,) = _lineage(driven, ROOT)
     assert after_retry.identifier == before.identifier and after_retry.record == before.record, (
@@ -335,7 +281,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     assert "cancelled" not in json.dumps(after_cancel.status), after_cancel
     assert after_cancel.metadata.get(NODE_KEY) == SECOND, after_cancel.metadata
 
-    closed = _store("task", "status", "set", before.identifier, CLOSED_BY_A_PERSON)
+    closed = store("task", "status", "set", before.identifier, CLOSED_BY_A_PERSON)
     assert closed.returncode == 0, closed.stdout + closed.stderr
     (person_closed,) = _lineage(driven, ROOT)
     assert "cancelled" in json.dumps(person_closed.status), person_closed
@@ -348,10 +294,11 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         PATIENCE_SECONDS,
     )
     reopened = _carried(quiet_projections(driven)[len(recorded) :], ROOT, THIRD)
-    # The engine reads nothing its landed baseline answers, so the word it knew for the
-    # item is the park it wrote, never the person's close: the update that writes the open
-    # word over the closed card counts no reopen, which entry 80 keeps for a word the run
-    # itself knew as `done` or `cancelled`.
+    # The run's baseline knew the item as parked, not closed, so the update that wrote the
+    # open word over the person's close counts no reopen — entry 80 counts off the word the
+    # run knew — while the card below reads open all the same.
+    assert landed(driven)[ROOT].status is not None, landed(driven)[ROOT]
+    assert "cancelled" not in json.dumps(landed(driven)[ROOT].status), landed(driven)[ROOT]
     assert sum(attempt.actions["reopened"] for attempt in reopened if attempt.actions) == 0, (
         reopened
     )
@@ -361,7 +308,7 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
     assert after_reopen.metadata.get(SUPERSEDES_KEY) == [ROOT, SECOND], after_reopen.metadata
     assert THIRD_TASK in after_reopen.body, after_reopen.body
     assert "cancelled" not in json.dumps(after_reopen.status), after_reopen
-    assert len(_destination(driven)) == 2, _destination(driven)
+    assert len(destination(driven)) == 2, destination(driven)
 
     # Park everything still running, so the run settles and its driver lets go.
     _cancel_and_settle(driven, THIRD, "parked so the run settles for an adoption")
@@ -373,17 +320,11 @@ def test_a_retried_node_keeps_its_one_destination_item_across_a_cancel_and_a_reo
         lambda: _new_projections(driven, len(recorded)),
         PATIENCE_SECONDS,
     )[0]
-    # The adopted driver reads the baseline the previous one left, and every lineage there
-    # already landed as the run now stands: its first attempt carries nothing, calls no
-    # store operation, and so can neither read the board nor create an item for the lineage.
-    assert (adopted.scope, adopted.whole_because, adopted.outcome, adopted.items) == (
-        "members",
-        None,
-        "projected",
-        (),
-    ), adopted
-    assert adopted.calls == {} and adopted.actions is None, adopted
+    _targeted_only(adopted)
+    assert adopted.outcome == "projected", adopted
+    assert adopted.items.count(ROOT) <= 1 and set(adopted.items) <= {ROOT, KEEPER}, adopted
+    assert adopted.actions is None or adopted.actions["created"] == 0, adopted
     (after_adopt,) = _lineage(driven, ROOT)
     assert after_adopt.identifier == before.identifier, after_adopt
     assert after_adopt.metadata.get(NODE_KEY) == THIRD, after_adopt.metadata
-    assert len(_destination(driven)) == 2, _destination(driven)
+    assert len(destination(driven)) == 2, destination(driven)

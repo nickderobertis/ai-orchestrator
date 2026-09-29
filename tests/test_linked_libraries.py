@@ -808,14 +808,8 @@ def _ui_api_linked_engine() -> str:
     return declared.pop()
 
 
-#: No pair is declared apart: the adopted `onepipeline-api-cli`'s SBOM declares the engine
-#: `config/onepipeline.version` pins, which the test below measures. A future record names
-#: both measured releases, so it fails the moment either wheel changes.
-DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
-
-
-def test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it() -> None:
-    """The reader's own engine, held level with `config/onepipeline.version` or to one record.
+def test_the_ui_api_links_the_pinned_engine() -> None:
+    """The reader's own engine, held level with `config/onepipeline.version`.
 
     **This is a determinism standing in for a judgment.** The reader used to be free to
     link any engine, because a process that only read runs could not decide what a
@@ -836,23 +830,11 @@ def test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it() 
     gives, and `tests/dag_ui/test_dag_ui_serving_e2e.py` holds the served `/healthz` to
     the same number, so this and the surface an operator reads cannot disagree.
 
-    The one pair measured apart that passes is :data:`DECLARED_UI_ENGINE_DIVERGENCE`,
-    and only while both installed wheels read exactly the two releases it names: any
-    other pair fails, and so does that record once either wheel moves.
+    There is no escape hatch: a pair measured apart fails, and the remedy is to hold the
+    engine pin until a reader linking it ships.
     """
     linked = _ui_api_linked_engine()
     pinned = _pinned_cli("onepipeline.version")
-    declared = DECLARED_UI_ENGINE_DIVERGENCE
-
-    if declared is not None:
-        assert (declared.linked, declared.pinned) == (linked, pinned), (
-            f"the declared UI-engine divergence was written against the UI linking "
-            f"{declared.linked} / the engine pin at {declared.pinned}, and this host measures "
-            f"{linked} / {pinned}. It held only while {declared.because}: delete "
-            "DECLARED_UI_ENGINE_DIVERGENCE and its caveats in AGENTS.md and docs/dag-ui.md "
-            "if the two now agree, or re-read why they do not"
-        )
-        return
     assert linked == pinned, (
         f"the adopted {UI_API_DISTRIBUTION} links onepipeline {linked} while "
         f"config/onepipeline.version adopts {pinned}. An adopt from the DAG Observatory "

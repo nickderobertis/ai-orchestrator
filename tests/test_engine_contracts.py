@@ -91,6 +91,14 @@ MANAGER = REPO_ROOT / "AGENTS.md"
 INCREMENTAL_JOURNEY = (
     REPO_ROOT / "tests" / "writeback_budget" / "test_adopted_engine_projects_incrementally_e2e.py"
 )
+#: The launch fixture every write-back journey reads a projection record through, which
+#: holds a targeted attempt to an allow-list of the engine's store operations.
+DRIVEN_RUN = REPO_ROOT / "tests" / "writeback_budget" / "driven_run.py"
+#: The journey that waits on an idle sweep, and so states the engine's load variable.
+SWEEP_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_launch_walks_no_host_identity_e2e.py"
+#: The journey that holds a settlement's targeted update to the engine-owned keys a
+#: settlement writes, and so has to name every one the engine declares.
+TARGETED_JOURNEY = REPO_ROOT / "tests" / "writeback_budget" / "test_targeted_writeback_e2e.py"
 
 #: The heading the outcome table sits under. A heading rather than a line number, so
 #: a reflow above it cannot silently move this gate onto some other table.
@@ -666,6 +674,16 @@ CONSTANTS = (
         re.compile(r"pub const PRESERVED_LOG_DIRNAME: &str = \"([a-z-]+)\";"),
         LIFECYCLE,
         "{value}",
+    ),
+    # The load an idle sweep's journey states, so a host at its cores still sweeps: a name
+    # the engine stopped reading would leave that journey passing only on a quiet host.
+    Constant(
+        "stated load average variable",
+        ONEPIPELINE,
+        "executor.rs",
+        re.compile(r'pub const LOAD1_ENV: &str = "([A-Z0-9_]+)";'),
+        SWEEP_JOURNEY,
+        'LOAD1_ENV = "{value}"',
     ),
 )
 
@@ -2530,6 +2548,98 @@ MARKER_DECLARATIONS = {
 }
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
+# these three out of every memoized tier into the uncached `orchestrator:test-checkouts`,
+# because their subject — the adopted engine's own source, in a checkout
+# `config/onevcs.checkouts` registers — is outside this workspace and no `nx.json` glob
+# hashes it; a project of their own would give them a key to be replayed from across the
+# very engine upgrade they exist to catch.
+#: Where an idle driver asks its executor for room before it starts a sweep, which is
+#: what makes the sweep journey's stated load decide whether it sweeps.
+SWEEP_ASKS_FOR_ROOM = re.compile(
+    r"fn host_has_room\(\) -> bool \{.*?Executor::capacity\(.*?\.slots_free > 0", re.DOTALL
+)
+
+
+def test_an_idle_sweep_waits_on_the_room_the_executor_reports() -> None:
+    """The sweep journey states no load because an idle sweep asks the executor for room.
+
+    Its positive control needs an idle sweep, which the engine starts only while its
+    executor reports a free slot. The variable's name is held with the other quoted
+    constants; this holds the reason for stating it at all.
+    """
+    assert SWEEP_ASKS_FOR_ROOM.search(_source(ONEPIPELINE, "maintenance.rs")) is not None, (
+        f"onepipeline {ONEPIPELINE.ref}'s idle sweep no longer asks the executor for a free "
+        "slot, so the sweep journey's stated load no longer decides whether it sweeps; "
+        "re-read `maintenance.rs` and drop or correct `LOAD1_ENV`"
+    )
+
+
+#: A frozenset literal a journey states, by the name it binds, and each string in it.
+_FROZENSET_LITERAL = r"\n{name} = frozenset\(\s*\{{(?P<body>[^}}]*)\}}\s*\)"
+_STRING = re.compile(r'"([^"]+)"')
+#: A closed `[&str; N]` list of store operations `src/cli.rs` declares, by its name.
+_OPERATIONS = r"pub const {name}: \[&str; \d+\] = \[(?P<body>[^\]]*)\];"
+#: Where the write-back declares each settlement key the targeted journey allows.
+_SETTLEMENT_KEY_SOURCES = (
+    ("taskgraph.rs", "SETTLEMENT_KEY"),
+    ("writeback.rs", "LANDING_KEY"),
+    ("writeback.rs", "LANDING_COMMIT_KEY"),
+    ("writeback.rs", "CHANGE_URL_KEY"),
+    ("writeback.rs", "LANDING_EVIDENCE_KEY"),
+)
+
+
+def _stated_set(path: Path, name: str) -> set[str]:
+    """The strings of the frozenset literal ``path`` binds to ``name``, read as text."""
+    found = re.search(_FROZENSET_LITERAL.format(name=name), path.read_text("utf-8"))
+    assert found is not None, f"{path} no longer binds `{name}` to a frozenset literal"
+    return set(_STRING.findall(found.group("body")))
+
+
+def _declared_operations(name: str) -> set[str]:
+    """The store operations the engine's `src/cli.rs` lists under ``name``."""
+    found = re.search(_OPERATIONS.format(name=name), _source(ONEPIPELINE, "cli.rs"))
+    assert found is not None, f"onepipeline {ONEPIPELINE.ref} no longer declares `{name}`"
+    return set(_STRING.findall(found.group("body")))
+
+
+def test_the_settlement_keys_a_targeted_update_may_set_are_exactly_the_engines() -> None:
+    """`SETTLEMENT_KEYS` is the engine's set, neither missing a key nor carrying one more.
+
+    A key missing reads a settlement's own write as one it never owned; a key too many
+    lets a targeted update set it unnoticed. So both directions are held.
+    """
+    declared = set()
+    for source, constant in _SETTLEMENT_KEY_SOURCES:
+        found = re.search(rf'const {constant}: &str = "([^"]+)";', _source(ONEPIPELINE, source))
+        assert found is not None, f"onepipeline {ONEPIPELINE.ref} no longer declares {constant}"
+        declared.add(found.group(1))
+    stated = _stated_set(TARGETED_JOURNEY, "SETTLEMENT_KEYS")
+    assert stated == declared, (
+        f"the targeted journey allows {sorted(stated)} while onepipeline {ONEPIPELINE.ref} "
+        f"writes {sorted(declared)} for a settlement"
+    )
+
+
+def test_a_targeted_attempts_allowed_calls_are_the_engines_targeted_writes() -> None:
+    """`TARGETED_CALLS` names only store operations the engine calls a targeted write.
+
+    The allow-list is what refuses a copy, so a name in it the engine does not declare as a
+    targeted write — a read, a copy, a name it never uses — would let that call pass.
+    """
+    stated = _stated_set(DRIVEN_RUN, "TARGETED_CALLS")
+    targeted = _declared_operations("WRITEBACK_TARGETED_WRITES")
+    assert stated and stated <= targeted, (
+        f"`TARGETED_CALLS` is {sorted(stated)} while onepipeline {ONEPIPELINE.ref} declares "
+        f"its targeted writes as {sorted(targeted)}"
+    )
+    assert not stated & _declared_operations("WRITEBACK_CLASSIFIED_COMMANDS"), stated
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
 def test_the_markers_a_snapshot_withdraws_are_the_ones_the_engine_takes_back() -> None:
     """`run_snapshot.MARKERS` leaves a vanished name out without waiting for it,
     which is right only for a record the engine removes when its work ends. Restated
@@ -3147,7 +3257,7 @@ def test_the_projection_records_actions_and_items_are_the_engines_own() -> None:
     )
     entry = _plain(_source(ONEPIPELINE_DOCS, "contract-divergences.md"))
     assert "items names lineage roots" in entry, "entry 80 no longer says what `items` names"
-    assert "items (the lineage roots the copy carried" in _plain(
+    assert "items (the lineage roots the attempt carried" in _plain(
         ORCHESTRATION.read_text("utf-8")
     ), "docs/orchestration.md's record paragraph no longer says `items` names lineage roots"
 
@@ -3157,9 +3267,9 @@ def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
 
     Each word the prose uses for what a ruling projects is read off entry 80's `unchanged`
     and `destination` blocks — `parked` for a cancel, `cancelled` for a drop, the landed
-    baseline's item, else the furthest-along one, over an older board — so the day the
-    engine changes what a cancel projects, the sentence telling a manager what to expect on
-    the board fails here rather than being believed.
+    baseline placing each item and the furthest-along id a run without one reads — so the
+    day the engine changes what a cancel projects, the sentence telling a manager what to
+    expect on the board fails here rather than being believed.
     """
     contract = _lineage_contract()
     unchanged = contract["unchanged"]
@@ -3182,19 +3292,15 @@ def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
     assert "a drop projects cancelled and keeps its paired close" in paragraph, (
         f"the paragraph does not say a drop projects {unchanged['drop']!r}"
     )
-    assert "landed baseline" in str(destination["item_of_a_lineage"]), destination
-    assert "the item its landed baseline records for the lineage" in paragraph, (
-        "the paragraph does not say a lineage's item is the one its landed baseline records"
+    assert destination["item_of_a_lineage"].startswith("the landed baseline"), destination
+    assert "Where each lineage's item is, is the landed baseline's" in paragraph, (
+        "the paragraph does not say where each lineage's item is comes from the landed baseline"
     )
     unheld = destination["a_lineage_the_baseline_does_not_hold"]
-    assert isinstance(unheld, str) and "furthest-along id the run knows" in unheld, unheld
-    assert "reads once by the furthest-along id the run knows" in paragraph, (
-        "the paragraph does not say an unheld lineage resolves by the furthest-along id"
-    )
-    several = destination["several_under_one_root"]
-    assert isinstance(several, str) and "the rest left as they are" in several, several
-    assert "leaving the rest exactly as they are" in paragraph, (
-        "the paragraph does not say an older board's other siblings are left as they are"
+    assert isinstance(unheld, str) and "furthest-along" in unheld, unheld
+    assert "reads each lineage once by the furthest-along id the run knows" in paragraph, (
+        "the paragraph does not say a run with no baseline reads each lineage at its "
+        "furthest-along id"
     )
     counted = reopened["counted_when"]
     assert isinstance(counted, list) and any("done or cancelled" in when for when in counted), (
@@ -3203,6 +3309,10 @@ def test_the_reuse_rule_the_prose_states_is_the_engines_own() -> None:
     assert "reads done or cancelled writes an open word onto it" in paragraph, (
         "the paragraph does not say which items a retry or requeue reopens"
     )
+    assert (
+        "the run knew" in " ".join(counted)
+        and "where the run knew the item as done or cancelled" in paragraph
+    ), "the paragraph does not say a reopen counts the word the run knew"
     assert "inherits the superseded node's" in str(retry["delivers"]), retry
     assert "reopened: 0" in paragraph, (
         "the paragraph does not say a retry after a plain cancel reports reopened: 0"

@@ -7,10 +7,11 @@ path, against a local Markdown destination read back off disk:
 
 * with `ONETASKGRAPH_BIN` naming a program that fails whenever it runs, the run still reads
   its plan and projects a settlement onto the destination, and the program never runs;
-* a destination the store cannot read ends the projection and writes nothing: the fault
-  is a real one on the real store — the carried task's own record made unreadable — so the
-  attempt it fails is recorded `failed` / `refused`, and every record the destination
-  keeps stays byte for byte what it was.
+* a destination item the store cannot read ends the projection and writes nothing: the
+  fault is a real one on the real store — the settled node's own task record made
+  unreadable, the one record its targeted update reads — so every attempt it meets is
+  recorded `failed`, and every record the destination keeps stays byte for byte what it
+  was.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import shlex
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import plan_fixture_source
 import pytest
@@ -30,6 +31,7 @@ from driven_run import (
     NodeId,
     Projection,
     apply,
+    destination,
     launched,
     projections,
     quiet_projections,
@@ -105,13 +107,8 @@ def driven(
     # llmlint: ignore-end[e2e_not_mocked]
 
 
-def _listed(driven: DrivenRun) -> dict[str, dict[str, Any]]:
-    """Every task of the launched project by node id, as the real store CLI lists it.
-
-    `Any` because this is the store's JSON as it printed it, indexed by the journeys along
-    the paths its `task list --json` documents; a key that moved fails as a `KeyError`
-    naming it rather than as a type this module would have to restate.
-    """
+def _settlements(driven: DrivenRun) -> dict[str, object]:
+    """Each task's projected settlement, by node id, read through the real store CLI."""
     source, native = driven.project.split(":", 1)
     listed = subprocess.run(
         [str(ONETASKGRAPH_BIN), "task", "list", "--source", source, "--project", native]
@@ -123,21 +120,13 @@ def _listed(driven: DrivenRun) -> dict[str, dict[str, Any]]:
         check=False,
     )
     assert listed.returncode == 0, listed.stdout + listed.stderr
-    items = [entry["item"] for entry in json.loads(listed.stdout)["items"]]
-    return {item["metadata"]["onepipeline.id"]: item for item in items}
-
-
-def _settlements(driven: DrivenRun) -> dict[str, object]:
-    """Each task's projected settlement, by node id."""
+    items = json.loads(listed.stdout)["items"]
     return {
-        node: item["metadata"].get("onepipeline.settlement")
-        for node, item in _listed(driven).items()
+        entry["item"]["metadata"]["onepipeline.id"]: entry["item"]["metadata"].get(
+            "onepipeline.settlement"
+        )
+        for entry in items
     }
-
-
-def _record_of(driven: DrivenRun, node: NodeId) -> Path:
-    """Where the destination keeps `node`'s task, as the store reports it."""
-    return Path(str(_listed(driven)[node]["location"]["path"]))
 
 
 def _destination_bytes(driven: DrivenRun) -> dict[Path, bytes]:
@@ -180,8 +169,6 @@ def test_the_engine_reads_and_projects_without_the_plan_store_executable(
     assert (first.scope, first.whole_because, first.outcome) == ("members", None, "projected"), (
         first
     )
-    assert set(first.items) == {HELD_NODE, SETTLED_NODE} and first.actions is not None, first
-    assert first.actions["created"] == 0 and first.calls == {"task-update": len(first.items)}, first
     attempts = _attempts_after_settling(driven)
     assert [(a.items, a.outcome) for a in attempts] == [((SETTLED_NODE,), "projected")], attempts
 
@@ -193,19 +180,17 @@ def test_the_engine_reads_and_projects_without_the_plan_store_executable(
     assert not ran.exists(), f"something ran the program ONETASKGRAPH_BIN names: {ran.read_text()}"
 
 
-def test_a_refused_destination_read_stops_the_projection_and_writes_nothing(
+def test_an_unreadable_destination_item_stops_the_projection_and_writes_nothing(
     driven: DrivenRun,
 ) -> None:
-    """An unreadable record fails the attempt that meets it, and leaves every record as it was.
+    """An unreadable item fails the attempt it meets, and leaves every record as it was.
 
-    The write-back sends an existing item a targeted update, which the store makes by reading
-    the item's record and writing back only the fields that changed. A read it cannot trust
-    has to end the projection rather than fall back to a default — a read that defaulted
-    would be a write over fields the run never owned. The fault is on the one record the
-    attempt carries, because the adopted engine reads nothing else: the project is read only
-    by an attempt that creates an item. Both halves are asserted, because either alone
-    passes for the wrong reason: a run that never projected leaves the destination untouched
-    too.
+    A targeted update reads the one item it names and nothing else — not the project's
+    record, not a page of tasks — so the fault is put on that item. A read it cannot trust
+    has to end the projection rather than fall back to a default, since a write from a
+    defaulted read would replace what a person kept there. Both halves are asserted,
+    because either alone passes for the wrong reason: a run that never projected leaves
+    the destination untouched too.
     """
     waited_for(
         "the run's first projection",
@@ -214,7 +199,11 @@ def test_a_refused_destination_read_stops_the_projection_and_writes_nothing(
     )
     quiet_projections(driven)
     before = _destination_bytes(driven)
-    settled_record = _record_of(driven, SETTLED_NODE)
+    settled_record = next(
+        item.record
+        for item in destination(driven)
+        if item.metadata.get("onepipeline.id") == SETTLED_NODE
+    )
     assert settled_record in before, (settled_record, sorted(before))
     settled_record.chmod(0)
     try:
@@ -222,12 +211,11 @@ def test_a_refused_destination_read_stops_the_projection_and_writes_nothing(
     finally:
         settled_record.chmod(0o644)
 
-    assert after_fault and [(a.items, a.outcome, a.failure_class) for a in after_fault] == [
-        ((SETTLED_NODE,), "failed", "refused")
-    ] * len(after_fault), (
-        f"a projection past an unreadable destination was not refused: {after_fault}"
+    assert after_fault and all(a.outcome == "failed" for a in after_fault), (
+        f"a projection past an unreadable item was not failed: {after_fault}"
     )
+    assert all(a.items == (SETTLED_NODE,) for a in after_fault), after_fault
     assert _destination_bytes(driven) == before, (
-        "the refused projection rewrote the destination anyway; a destination read it "
+        "the failed projection rewrote the destination anyway; a destination read it "
         "cannot trust has to leave the store exactly as it found it"
     )

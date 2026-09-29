@@ -320,9 +320,6 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
   **this pin can govern a dispatch**, and the two pins are held to linking one engine by
   `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
-  A pair it measures apart would be held by its `DECLARED_UI_ENGINE_DIVERGENCE` record,
-  which fails once either pin moves; while one stands a browser adopt drives the
-  reader's own engine rather than the pin, so adopt with `just orchestrate --adopt`.
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
@@ -567,12 +564,8 @@ approved the document.
 **A green run proves nothing about the board.** The settlement write-back is best-effort
 and off the reconcile loop: a projection that never landed settles the run exactly like
 one that did, with one line on the driver's stderr. `just results`, `just status`, and
-the run journal are the record. A projection carries only what changed. One the store refuses is
-reported once and projected again only when the graph next changes, while any other
-failure is retried, spaced to a one-minute ceiling. The engine records every attempt as one
-line of `writeback-projections.jsonl` in the run's directory, and that line is what the
-attempt cost: the items it carried, its outcome and failure class, its duration, and `spent`
-where the store meters.
+the run journal are the record, and what each projection attempt carried and cost is one
+line of the run's `writeback-projections.jsonl`.
 <!-- llmlint: ignore-block[agents_md_durable_and_terse, no_redundant_instruction_pointers] One sentence, required of this paragraph by the plan that adopted the engine reusing a node's board item: a manager deciding from the board whether work was retried has to know the card is reused rather than minted, and the rule itself stays in docs/orchestration.md — only that it exists, and where, is said here. -->
 A node's board item is reused across its retries, under the rule
 `docs/orchestration.md`'s *One board item per lineage* states.

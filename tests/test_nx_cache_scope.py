@@ -898,10 +898,11 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: `unwatched` project owns the journeys over the verb a `Stop` hook reads and the hook
 #: itself in one, the `merge-policy` project owns the journeys that hold
 #: the restated `merge_policy` vocabulary to the launcher in one, the `writeback-budget`
-#: project owns the journey that holds the adopted engine to the copy deadline its items
-#: earn in one, the `run-end-hooks` project owns the journey that fires the run-end hooks
-#: through a real launch in one, the `project-store-race` project owns the clock-bounded
-#: replacement race over the record store in one, the `unpublished-view` project owns the
+#: project owns the journeys that hold the adopted engine's write-back to targeted
+#: updates and one board item per lineage in one, the `run-end-hooks` project owns the
+#: journey that fires the run-end hooks through a real launch in one, the
+#: `project-store-race` project owns the clock-bounded replacement race over the record
+#: store in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
 #: `just unfinished` in one, the `host-views` project owns the journeys
 #: over `just status` and `just host` in one, and the orchestrator project owns the rest

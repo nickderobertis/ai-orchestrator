@@ -77,6 +77,14 @@ LET_GO_SECONDS = 60
 #: The branch the journey's own checkout holds and its origin does not, which makes it a
 #: candidate the driver's retirement pass asks the origin about.
 UNPUBLISHED = "journey/unpublished"
+#: The engine's own statement of the host's one-minute load average, which its executor
+#: reads in place of measuring one. An idle pass starts its sweep only while the executor
+#: reports a free slot — cores less the load — so on a host whose load is at or past its
+#: cores, as it is under the pre-push gate's four workers beside live dispatches, the
+#: driver never sweeps and the positive control below fails for a reason that says
+#: nothing about which identities a sweep walks. Stating no load takes the host's
+#: business out of a journey about the registry.
+LOAD1_ENV = "ONEPIPELINE_LOAD1"
 
 _ONE_NODE: CandidatePlan = {
     "schema_version": 2,
@@ -236,6 +244,7 @@ def test_a_launched_driver_walks_only_the_identity_its_journey_registered(
     trace.mkdir()
     environment[TRACE] = str(trace)
     environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
+    environment[LOAD1_ENV] = "0"
 
     plan = tmp_path / "walk.plan.json"
     plan.write_text(json.dumps(_ONE_NODE), encoding="utf-8")

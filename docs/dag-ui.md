@@ -203,19 +203,16 @@ about what a dispatch ran. An adoption made from the browser is not a read: `POS
 revives is driven by the engine **this reader** links, and `config/onepipeline-ui.version`
 is from then on a pin that can govern a dispatch on this host. So the two are held
 level, and **not by an operator remembering to check**:
-`tests/test_linked_libraries.py::test_the_ui_api_links_the_pinned_engine_or_the_divergence_declared_for_it`
+`tests/test_linked_libraries.py::test_the_ui_api_links_the_pinned_engine`
 reads the engine out of the adopted read-API wheel's own bill of materials and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than at whatever a browser adoption then drives.
 
-**They are level today**: no divergence is declared, so the adopted read-API wheel's
-bill of materials names the very engine `config/onepipeline.version` pins. A pair the gate measures apart may be
-held only by `DECLARED_UI_ENGINE_DIVERGENCE` in the same module, naming both measured
-releases so it fails, naming itself, the moment either moves; while such a record
-stands, adopt through the launcher, `just orchestrate --adopt <run-id>`, never from the
-browser. What `/healthz` is for from here is the question that gate cannot answer — which release is answering **on this port right now**, since both pieces load
-once at start and a server left running from before a bump goes on serving what it
-loaded.
+There is no record that holds a pair apart: until a read-API release linking the
+engine a bump wants exists, the engine pin waits for it. What `/healthz` is for from
+here is the question that gate cannot answer — which release is answering **on this
+port right now**, since both pieces load once at start and a server left running from
+before a bump goes on serving what it loaded.
 
 The pair has been apart before, and that history is worth keeping because it says what
 the old freedom cost. The reader has been moved with the engine because a reader linking

@@ -145,6 +145,7 @@ RELEASE_SUBCOMMANDS = (
 # is asserted in is the one the block above already justifies; it declares no marker of
 # its own and adds no tier.
 DECLARING_IDENTITIES = {
+    "github.com/nickderobertis/llmlint": 2,
     "github.com/nickderobertis/oneagentgraph": 3,
     "github.com/nickderobertis/oneharness": 6,
     "github.com/nickderobertis/onejudge": 3,

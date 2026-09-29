@@ -292,14 +292,14 @@ it.
 ## What the write-back owns, and what a green run proves
 
 **What the write-back owns is the node projection, and nothing else on that record.**
-It is a projection rather than a rewrite: a node already on the destination is sent as a
-targeted update that names no project description at all, and the one copy it makes — a
-creation — reads the destination with `project show <project> --json` first, so the shadow
-project that copy carries restates **that read's own description** — so a body somebody
-authored on the board survives every settlement of every run launched from it, re-read on
-the adopted onepipeline 0.52.1. Below the 0.16.3 that fixed it, it did not: the shadow
-was built with the body hardcoded to an empty string
-and the copy that follows is a total replacement by contract, so every destination
+It never writes the project's title, description or labels, and on an item it names only
+the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
+and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
+a body somebody authored on the board survives every settlement of every run launched from
+it, re-read on the adopted onepipeline 0.52.1, and a person's edit to any field stands
+until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
+the shadow project a copy wrote over the board was built with the body hardcoded to an
+empty string and the copy is a total replacement by contract, so every destination
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
 board alike. Task bodies survived and only the project description was lost, which is
 what let it reach a release.
@@ -309,101 +309,112 @@ before the run — because an assertion that the description is merely present c
 fail on a deletion.
 
 **That read refuses rather than defaults**, which is the half worth knowing before
-trusting a projection. A destination read that exits non-zero, answers unparseable
-JSON, reports partial results, finds no project, or answers with the wrong or a
-duplicate project ends the projection there: nothing is written, and the destination
-is left exactly as it was. A read that could fall back to a default is a read that can
-delete — the shadow would carry an empty description and the copy is a total
-replacement — so this is the property that makes the preservation above worth
-anything. It is held in onepipeline's own suite rather than here: since
-https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted
-onepipeline 0.52.1 among them — reads and projects plans through the linked onetaskgraph
-crates and ignores `ONETASKGRAPH_BIN`, so no host
-seam can inject a refused read into the store in process any more, and
-`store::a_refusal_of_any_call_an_attempt_makes_stops_the_retry_timer`
+trusting the one attempt that still reads the project: an attempt that **creates** an
+item — the one an `add`ed node needs — is a member copy, and the copy always lands the
+project item beside what it creates, so the attempt reads the destination project first
+and the shadow restates it exactly. A read that fails, reports partial results, finds no
+project, or answers with the wrong or a duplicate project ends that attempt there: nothing
+is written, and the destination is left exactly as it was. A read that could fall back to
+a default is a read that can delete, so this is the property that makes the preservation
+above worth anything. It is held in onepipeline's own suite rather than here: since
+https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
+0.52.1 among them — reads and projects plans through the linked onetaskgraph crates and
+ignores `ONETASKGRAPH_BIN`, so no host seam can
+inject a refused read into the store in process any more, and
+`store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
 there is the test that fails when a refused read reaches a copy.
 
-**A projection the store refuses is reported once and waits for the graph; any other
-failure is spaced out.** onepipeline https://github.com/nickderobertis/onepipeline/pull/176
-backs a failing write-back off from a prompt first retry to a one-minute ceiling instead of
-retrying about four times a second, resets that schedule once it recovers, and retries until
-the projection lands; stopping or settling stays prompt during a long backoff. Since
+**A projection the store refuses is reported once and waits for the graph; a rate limit
+is waited out; any other failure is spaced out.** onepipeline
+https://github.com/nickderobertis/onepipeline/pull/176 backs a failing write-back off from a
+prompt first retry to a one-minute ceiling instead of retrying about four times a second,
+resets that schedule once it recovers, and retries until the projection lands; stopping or
+settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
 0.52.1, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
-`kind` and say the projection is attempted again when the run's graph next changes. Every
-other failure keeps the spaced schedule. The reason is the allowance a refusal spent: the
-board refuses the same projection the same way however often it is asked, and each attempt
-re-ran its reads and a copy, so a run holding one refused node drained the board token's
-hourly GraphQL allowance for as long as it lived. onepipeline's `docs/contract-divergences.md`
-entry 72 holds the figures, and its `tests/e2e/store.rs` drives every class against the real
-store. See [Where a plan of this repository
-lives](../AGENTS.md#where-a-plan-of-this-repository-lives) for the secondary limiter, which is
-the other half of that pressure.
+`kind` and say the projection is attempted again when the run's graph next changes. A
+**rate limit** that names how long to wait is waited out for that long — the longest, where
+several name one — with no store call before it passes, not from the retry schedule, a
+snapshot published meanwhile or closeout; the wait is kept in the run's
+`writeback-wait.json`, so a stop's release and a driver an adoption starts honour it too.
+Every other failure keeps the spaced schedule. The reason is the allowance a refusal spent:
+the board refuses the same projection the same way however often it is asked, so a run
+holding one refused node drained the board token's hourly GraphQL allowance for as long as
+it lived. onepipeline's `docs/contract-divergences.md` entry 72 holds the figures, and its
+`tests/e2e/store.rs` drives every class against the real store. See [Where a plan of this
+repository lives](../AGENTS.md#where-a-plan-of-this-repository-lives) for the secondary
+limiter, which is the other half of that pressure.
 
-**A projection carries only what changed.** Since
-https://github.com/nickderobertis/onepipeline/pull/559, in force on the adopted engine, an
-attempt sends each existing item one targeted update of exactly the fields that
-changed since the run last landed them, against a landed baseline advanced per item as each
-update lands, and creates an `add`ed node's item with a member copy naming only the lineages
-being created. It reads nothing that baseline answers — no page of tasks, no item, and no
-project except the one read an attempt creating an item makes — so a person's edit to any
-field stands until the run next changes that same field, and a driver `just orchestrate
---adopt` started carries only what differs from the baseline the previous driver left.
-Every attempt is recorded `members`; `whole` and its `whole_because` (`first`,
-`after-failure`, `store-lacks-members`) are read on lines an older engine wrote and never
-written. onepipeline's `tests/e2e/writeback_projections.rs` drives that against the real
-store, and `tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py` and
-`tests/writeback_budget/test_linked_plan_store_e2e.py` drive it on this host's own launch
-path.
+**A projection carries only what differs from what landed, as targeted updates.** The run
+keeps a **landed baseline**, `writeback-landed.json` in its own directory: per lineage root,
+the destination item's qualified id, its title, a SHA-256 of its body, the word last landed
+(`null` for an item seeded from a read), its engine-owned `onepipeline.*` keys, the tickets
+it delivers and the roots it depends on, beside the engine-owned project keys. The launch
+seeds it from its own plan read before the first projection, each write that lands advances
+its one item at once, and every later driver — one `just orchestrate --adopt` started
+included — and a stop's release read it. It never feeds scheduling. An attempt carries only
+the lineages whose rendering differs from it, and sends each existing item **one targeted
+update** naming exactly the fields that differ; a member copy is made only to create an item
+that does not exist yet. So no attempt copies the whole project: a fresh launch's first
+projection carries the claim — every lineage's word, since the seed records none — and
+nothing else; an adopted driver's first carries only what differs from the file the previous
+driver left; and the attempt after a failure carries what has still not landed, never what
+did. No projection reads a page of tasks or an item the baseline holds; a lineage the
+baseline does not hold — a run an older build started — is read once by its own id. An
+attempt with nothing to carry opens no store at all. onepipeline's
+`docs/contract-divergences.md` entries 73 and 93 are the source, and its
+`tests/e2e/writeback_projections.rs` drives each case against the real store;
+`tests/writeback_budget/test_targeted_writeback_e2e.py` drives the installed engine through
+a fresh launch, a settlement, a failed attempt and its successor against a local Markdown
+destination.
 
-**A copy is allowed the deadline its items earn.** Every store command the write-back
-runs used to be killed at one fixed minute, and a large enough plan outgrew it: a run could
-settle every node with its board left behind by a copy killed mid-write. onepipeline
-https://github.com/nickderobertis/onepipeline/pull/248, in force on the adopted engine,
-bounds that copy at `max(60 s, per-item budget × items)` instead, and leaves the reads on
-the sixty-second deadline. *Items* counts the items a copy creates, and a targeted update is bounded
-by its one item, so one node's transition is bounded by the floor. The per-item budget is ten seconds unless a launch names one —
+**A store call is allowed the deadline its items earn.** Every store command the
+write-back ran used to be killed at one fixed minute, and a large enough plan outgrew it.
+onepipeline https://github.com/nickderobertis/onepipeline/pull/248 bounded a copy by its
+items instead, and the adopted engine bounds it at the sixty-second floor **plus** the
+per-item budget times the items the copy creates — added rather than traded against each
+other, because every call also spends the fixed round trips a read does — and bounds each
+targeted update the same way over its one item, so one node's transition is bounded by the
+floor plus one item. The per-item budget is twelve seconds unless a launch names one —
 `--writeback-item-budget`, then `ONEPIPELINE_WRITEBACK_ITEM_BUDGET`, then the launch
 config's `writeback_item_budget`, in that order — and the budget a launch resolved is
-recorded on the run's `launch.json`, so a driver adopted later bounds its copies the same
-way. `just orchestrate` names none, so this host runs the shipped default. A copy that
-outlasts its deadline is refused with the arithmetic that set it — `project-copy exceeded
-100 seconds (10 items × 10 seconds per item)`, or `(the 60 second floor; 1 item × 10 seconds
-per item is less)` where the floor governed — on the driver's stderr line below and on the
-finding the run raises, which names the items the copy was carrying, and in the attempt's
-projection record.
-onepipeline's own suite holds it — `the_copy_deadline_is_the_budget_times_the_items_and_never_below_the_floor`
-in `src/writeback.rs`, and the `tests/e2e/writeback_budget.rs` journeys
-`a_copy_held_past_the_floor_still_lands_when_the_item_count_lifts_its_deadline` and
-`a_copy_held_past_a_tiny_budget_is_cancelled_and_the_refusal_names_the_arithmetic` — because
-the engine reads and projects the plan store in process through the onetaskgraph crates it
-links, so no host seam can hold a copy open any more.
+recorded on the run's `launch.json`, so a driver adopted later bounds its calls the same
+way. `just orchestrate` names none, so this host runs the shipped default. A call that
+outlasts its deadline is cancelled and refused with the arithmetic that set it —
+`project-copy exceeded 144 seconds (the 60 second floor + 7 items × 12 seconds per item)`,
+or `task-update exceeded …` in the same words — on the driver's stderr line below, on the
+finding the run raises, and in the attempt's projection record. onepipeline's
+`docs/contract-divergences.md` entry 71 is the source, and its own suite holds it —
+`tests/e2e/writeback_budget.rs` — because the engine reads and projects the plan store in
+process through the onetaskgraph crates it links, so no host seam can hold a call open any
+more.
 
 **Every attempt is recorded on the run.** The engine appends one JSON line per projection
 attempt, landed or failed, to `writeback-projections.jsonl` in the run's own directory under
-the runs root, beside its `driver.log`, and never rewrites one. Each line carries `at`,
-`project`, `scope` (`members` on every line the adopted engine writes), `whole_because`
-(`null` on each of them), `items` (the lineage roots the copy carried, or the targeted updates
-did — one id per item, never one per retry), `outcome` (`projected` or `failed`), the
-store's `class` and `kind` when it failed with its failure document, `reason`,
-`duration_ms` (the whole attempt, reads included), `calls` (how many times the attempt
-called each store operation, an operation not called left off), `updated_fields` (how many
-items each field was written on, where the attempt made a targeted update), `actions` (a
-copy report's `created`, `updated`, `unchanged` and `orphaned`, and the `reopened` the
-engine derives beside them: the carried items whose update wrote status from a word the run
-knew as `done` or `cancelled` onto one that is neither; each targeted update counts its one
-item as updated where the store wrote a field and unchanged where it wrote none), and `spent` — every call's
-reported spend summed, and `null` wherever the destination meters nothing, which is every
-local Markdown one. That is where a manager reads what the write-back
-cost rather than guessing it: how many items each attempt carried and which store calls it
-made — `project-copy` and `project-show` only where it created an item — whether a failure
-is `refused` and so waiting on the graph rather than on a timer, how long each attempt took,
-and on the `plans` board the GraphQL points `spent` names. onepipeline's `docs/contract-divergences.md` entry 73
-is the source of that shape.
-onepipeline's own suite holds the three paragraphs above, for the same reason the copy
-deadline is held there: `tests/e2e/store.rs`'s
+the runs root, beside its `driver.log`, and never rewrites one. Each line carries
+`schema_version`, `at`, `project`, `scope` (always `members` now; `whole` and its
+`whole_because` are read on lines an earlier engine wrote), `items` (the lineage roots the
+attempt carried — one id per item, never one per retry), `outcome` (`projected` or
+`failed`), the store's `class` and `kind` when it failed with its failure document,
+`reason`, `duration_ms` (the whole attempt, reads included), `calls` (how many times the
+attempt called each store operation — `task-update`, `project-copy`, `project-show`,
+`task-show`, `project-metadata-set` — the failing one included, and `{}` for an attempt that
+opened no store), `updated_fields` (on an attempt that sent a targeted update, how many
+items each field was written on), `actions` (`created`, `updated`, `unchanged` and
+`orphaned` — the copy report's counts, plus one updated or unchanged per targeted
+update — and the `reopened` the engine derives beside them: the carried items whose update
+wrote the status of an item the run knew as `done` or `cancelled` onto a word that is
+neither), and `spent` — every call's reported spend summed, and `null` wherever the
+destination meters nothing, which is every local Markdown one. That is where a manager
+reads what the write-back cost rather than guessing it: how many items each attempt
+carried and which calls it made, whether a failure is `refused` and so waiting on the graph
+rather than on a timer, how long each attempt took, and on the `plans` board the GraphQL
+points `spent` names. onepipeline's `docs/contract-divergences.md` entry 73 is the source
+of that shape.
+onepipeline's own suite holds the refusal and retry rules above:
+`tests/e2e/store.rs`'s
 `a_projection_the_store_refuses_is_reported_once_and_attempted_again_when_the_graph_changes`,
 `closeout_attempts_what_changed_after_a_refusal_and_never_a_refused_snapshot_again` and
 `a_projection_the_real_store_refuses_is_not_asked_again_until_the_graph_changes`.
@@ -414,25 +425,25 @@ says what the lineage **head** says: `onepipeline.node` names the head, the one 
 lineage nothing superseded, and `onepipeline.supersedes` lists the superseded ids in lineage
 order, root first, written only where the head is not the root; the title, status word,
 body, `deps` and `delivers` are the head's own. So a `retry` **edits** that item onto the
-replacement rather than creating a card beside it, and a `retry` or `requeue` of a node
-whose card reads closed on the board — closed by a person, or written `cancelled` by an
-older engine for a superseded attempt — writes `queued` onto it: a `retry` or `requeue` of a
-node whose item reads `done` or `cancelled` writes an open word onto it, which the store
-pairs with reopening the issue. The attempt counts it as `reopened` only where the run knew
-that word — what it landed there, or what it read of an item its landed baseline does not
-hold — so a card a person closed over the run's `parked` is reopened and counted
-`reopened: 0`. A plain `cancel` of a
-running node settles it `cancelled` in the run's own record while its item reads `parked` —
-the park outranks the settlement, and it is an open word, so a cancel closes nothing and a
-retry after it lands `queued` on the same item reporting `reopened: 0`; a `drop` projects
-`cancelled` and keeps its paired close, and a dropped node is not retried. The item is what
-is retried, so the run's views and the board agree on one card however many attempts the
-work took. A board an older
-engine wrote — one item per attempt, the superseded ones closed — keeps its dead siblings:
-nothing deletes a card, and the engine reuses the item its landed baseline records for the
-lineage — one that baseline does not hold, the item it reads once by the **furthest-along**
-id the run knows — leaving the rest exactly as they are. onepipeline's
-`docs/contract-divergences.md` entry 80 is the source of that shape, and
+replacement — one targeted update setting those two keys and removing the old head's
+settlement keys — rather than creating a card beside it, and a `retry` or `requeue` writes
+an open word onto the item: a `retry` or `requeue` of a node whose item reads done or
+cancelled writes an open word onto it, which the store pairs with reopening the issue. The
+attempt counts it `reopened` where the run knew the item as done or cancelled — one it
+landed for a superseded attempt, one an older engine wrote, or one a person closed on an
+item the run read cold. A card a person closes on an item the baseline already holds is
+reopened by the next retry all the same, but the run knew it as open, so that attempt
+counts `reopened: 0`. A plain `cancel` of a running node settles it
+`cancelled` in the run's own record while its item reads parked — the park outranks the
+settlement, and it is an open word, so a cancel closes nothing and a retry after it lands
+`queued` on the same item reporting `reopened: 0`; a drop projects cancelled and keeps its
+paired close, and a dropped node is not retried. The item is what is retried, so the run's
+views and the board agree on one card however many attempts the work took. Where each
+lineage's item is, is the landed baseline's. A run an older engine started holds no
+baseline, and a board that engine wrote — one item per attempt, the superseded ones closed
+— keeps its dead siblings: nothing deletes a card, and the engine reads each lineage once
+by the furthest-along id the run knows, leaving the rest exactly as they are.
+onepipeline's `docs/contract-divergences.md` entry 80 is the source of that shape, and
 `tests/test_engine_contracts.py` holds these keys and words to it at the pinned release;
 `tests/writeback_budget/test_lineage_item_reuse_e2e.py` drives the installed engine
 through a retry of a running node, a cancel, a card closed by hand and reopened by a second

@@ -69,6 +69,17 @@ PATIENCE_SECONDS = 120
 #: Where the engine appends one line per projection attempt, under the run's directory —
 #: `cli::WRITEBACK_PROJECTIONS_FILE` in the adopted `onepipeline`.
 PROJECTIONS_FILE = "writeback-projections.jsonl"
+#: The projection record's version the adopted engine writes, entry 73's `schema.current`:
+#: the one whose every line counts the store calls it made.
+PROJECTIONS_SCHEMA_VERSION = 4
+#: The one store operation an attempt that changes only existing items makes, by entry 73's
+#: closed names: a targeted update of one item. Held as an allow-list rather than a list of
+#: copy operations, so a copy under any name, renamed or new, is a call outside it.
+TARGETED_CALLS = frozenset({"task-update"})
+#: Where the engine keeps what it last put on the board, per lineage root — entry 93's
+#: landed baseline, seeded at launch and advanced only by writes that landed.
+LANDED_FILE = "writeback-landed.json"
+LANDED_SCHEMA_VERSION = 1
 
 
 #: The engine's `engine::CANCEL_GRACE_ENV`: how long a cancelled dispatch has to stop itself
@@ -110,13 +121,17 @@ class Projection(NamedTuple):
     #: stopped carrying it fails here instead of reading as a store that metered nothing.
     spent: dict[str, object] | None
     #: The copy report's action counts — `created`, `updated`, `unchanged`, `orphaned` —
-    #: and the `reopened` the engine derives beside them, or `None` where no copy report
-    #: was read. Required present for the same reason `spent` is.
+    #: plus one `updated` or `unchanged` per targeted update, and the `reopened` the engine
+    #: derives beside them, or `None` where the attempt wrote no task. Required present for
+    #: the same reason `spent` is.
     actions: dict[str, int] | None
-    #: How many times the attempt called each store operation, keyed by the engine's closed
-    #: set of names, an operation not called left off. Every line the adopted engine writes
-    #: names it, so a line without it is refused here rather than read as calling nothing.
+    #: How many times the attempt called each store operation, by entry 73's closed names,
+    #: `{}` for an attempt that opened no store. Required, so a line an engine before
+    #: version 4 wrote fails here rather than reading as an attempt that called nothing.
     calls: dict[str, int]
+    #: How many items each field was written on by the attempt's targeted updates, or `{}`
+    #: where it sent none.
+    updated_fields: dict[str, int]
 
     @classmethod
     def parse(cls, line: str) -> Projection:
@@ -125,8 +140,14 @@ class Projection(NamedTuple):
             raise ValueError(f"a projection record is not an object: {line!r}")
         items = record.get("items")
         nullable = ("whole_because", "class", "kind", "reason")
+        counts = [record.get("calls"), record.get("updated_fields", {})]
         if not (
-            record.get("scope") in {"whole", "members"}
+            record.get("schema_version") == PROJECTIONS_SCHEMA_VERSION
+            and all(
+                isinstance(count, dict) and all(isinstance(value, int) for value in count.values())
+                for count in counts
+            )
+            and record.get("scope") in {"whole", "members"}
             and record.get("outcome") in {"projected", "failed"}
             and isinstance(items, list)
             and all(isinstance(item, str) for item in items)
@@ -142,8 +163,6 @@ class Projection(NamedTuple):
                     and all(isinstance(count, int) for count in record["actions"].values())
                 )
             )
-            and isinstance(record.get("calls"), dict)
-            and all(isinstance(count, int) for count in record["calls"].values())
         ):
             raise ValueError(f"a projection record is malformed: {line!r}")
         return cls(
@@ -158,7 +177,50 @@ class Projection(NamedTuple):
             spent=record["spent"],
             actions=record["actions"],
             calls=record["calls"],
+            updated_fields=record.get("updated_fields", {}),
         )
+
+
+class LandedItem(NamedTuple):
+    """One lineage as the landed baseline says it last reached the board."""
+
+    destination: str
+    title: str
+    content_sha256: str
+    #: The word last landed, `None` for an item seeded from the launch's read.
+    status: str | None
+    metadata: dict[str, object]
+
+
+def landed(driven: DrivenRun) -> dict[str, LandedItem]:
+    """The run's landed baseline by lineage root, checked against entry 93's shape.
+
+    Required present: the launch seeds it before the first projection, so a run with none
+    is one an engine without the baseline drove.
+    """
+    record = driven.root / LANDED_FILE
+    assert record.is_file(), f"the run keeps no landed baseline at {record}"
+    document = json.loads(record.read_text(encoding="utf-8"))
+    assert isinstance(document, dict), document
+    assert document.get("schema_version") == LANDED_SCHEMA_VERSION, document
+    assert document.get("project") == driven.project, document
+    items = document.get("items")
+    assert isinstance(items, dict), document
+    baseline: dict[str, LandedItem] = {}
+    for root, item in items.items():
+        assert isinstance(item, dict), item
+        metadata = item.get("metadata")
+        assert isinstance(metadata, dict) and all(
+            key.startswith("onepipeline.") for key in metadata
+        ), f"the baseline keeps a key the engine does not own: {item}"
+        baseline[root] = LandedItem(
+            destination=item["destination"],
+            title=item["title"],
+            content_sha256=item["content_sha256"],
+            status=item["status"],
+            metadata=metadata,
+        )
+    return baseline
 
 
 def just(
@@ -361,6 +423,74 @@ def launched(
         yield DrivenRun(environment, run, project, tmp_path / "runs" / run)
     finally:
         just("stop", run, environment=environment, seconds=120)
+
+
+class DestinationItem(NamedTuple):
+    """One task of the launched project, as the destination store holds it."""
+
+    #: The task's qualified id, which is what the store's own verbs take.
+    identifier: str
+    record: Path
+    title: str
+    status: object
+    body: str
+    metadata: dict[str, object]
+
+
+def store(*arguments: str) -> subprocess.CompletedProcess[str]:
+    """One call of this checkout's real store CLI, as a person at the terminal makes it.
+
+    The engine never runs this executable — it links the store — so a read through it adds
+    nothing to what the engine did, and is the destination's own answer.
+    """
+    return subprocess.run(
+        [str(ONETASKGRAPH_BIN), *arguments],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+def destination(driven: DrivenRun) -> list[DestinationItem]:
+    """Every task of the launched project, read through the real store CLI.
+
+    Every item rather than one per node, because a lineage that minted a sibling shows up
+    as two items sharing an `onepipeline.id`, which a read keyed by that id would silently
+    collapse into one. Each carries the file its local Markdown source keeps it in, so a
+    journey can compare it byte for byte.
+    """
+    source, native = driven.project.split(":", 1)
+    listed = store(
+        "task", "list", "--source", source, "--project", native, "--limit", "1000", "--json"
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    payload = json.loads(listed.stdout)
+    assert isinstance(payload, dict) and isinstance(payload.get("items"), list), listed.stdout
+    # One page is every task only while the store names no `next` cursor; a journey's plan
+    # is a handful of nodes, so a cursor here means the read was cut short, not paged.
+    assert payload.get("next") is None, f"the listing is one page of several: {listed.stdout}"
+    items: list[DestinationItem] = []
+    for entry in payload["items"]:
+        identifier, item = entry["id"], entry["item"]
+        assert isinstance(identifier, str) and identifier.startswith(f"{source}:"), entry
+        location = item.get("location") or {}
+        record = Path(str(location.get("path", "")))
+        assert record.is_file(), f"{identifier} is kept nowhere this journey can read: {entry}"
+        metadata = item.get("metadata") or {}
+        assert isinstance(metadata, dict), entry
+        items.append(
+            DestinationItem(
+                identifier=identifier,
+                record=record,
+                title=str(item.get("title") or ""),
+                status=item.get("status"),
+                body=str(item.get("content") or ""),
+                metadata=metadata,
+            )
+        )
+    return items
 
 
 def projections(driven: DrivenRun) -> list[Projection]:
