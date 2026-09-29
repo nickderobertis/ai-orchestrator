@@ -283,6 +283,16 @@ own `## Additional info` — its own words above these notes — says so:
 
 Everything else a push or a change-request verb could do is still not yours.
 
+**A branch you resume may already be on its remote, and a published branch only grows.**
+A retry — a `checks-failed` one among them — re-dispatches onto the same branch, which an
+earlier publication may already have pushed. So check before you touch its history: `git
+fetch` and `git log origin/<branch>`, or the published commit your task's context names.
+The repair of a branch already on its remote is new commits on top of the remote's
+commit — never an amend, a rebase, a squash, a reset or a force-push of commits already
+there. One retry that fixed both refusals its merge path named by amending the two commits
+already pushed was refused `non-fast-forward` when it published, and settled
+`push-rejected` with the correct tree stranded on the host.
+
 **Every claim you make about the finished work is true of the tree as it finally
 stands.** That is the property you are held to, and it says nothing about where your
 report sits. This conversation does not end when you report — your supervisor keeps

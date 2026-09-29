@@ -309,6 +309,52 @@ EVERYTHING_ELSE_STAYS_FORBIDDEN = re.compile(
     r"Everything\s+else\s+a\s+push\s+or\s+a\s+change-request\s+verb\s+could\s+do\s+is\s+still\s+not\s+yours"
 )
 
+#: The rule's prohibition, and its incident told as the refusal a rewrite met. These are
+#: the only places the rule's paragraph may name a rewrite of history, so anything else in
+#: it naming one is an addition the contract does not account for, however it is worded.
+NEVER_REWRITES_PUBLISHED = re.compile(
+    r"never\s+an\s+amend,\s+a\s+rebase,\s+a\s+squash,\s+a\s+reset\s+or\s+a"
+    r"\s+force-push\s+of\s+commits\s+already\s+there",
+    re.IGNORECASE,
+)
+INCIDENT_IS_A_REFUSAL = re.compile(
+    r"by\s+amending\s+the\s+two\s+commits\s+already\s+pushed\s+was\s+refused"
+    r"\s+`non-fast-forward`\s+when\s+it\s+published,\s+and\s+settled\s+`push-rejected`",
+    re.IGNORECASE,
+)
+PUBLISHED_BRANCH_RULE = re.compile(
+    r"branch\s+you\s+resume\s+may\s+already\s+be\s+on\s+its\s+remote", re.IGNORECASE
+)
+PUBLISHED_BRANCH_ONLY_GROWS = (
+    (PUBLISHED_BRANCH_RULE, "that a branch a worker resumes may already be on its remote"),
+    (
+        re.compile(r"check\s+before\s+you\s+touch\s+its\s+history", re.IGNORECASE),
+        "that the remote is checked before the branch's history is touched",
+    ),
+    (re.compile(r"`git\s+log\s+origin/<branch>`"), "the read that shows what is already there"),
+    (
+        re.compile(r"published\s+commit\s+your\s+task's\s+context\s+names", re.IGNORECASE),
+        "that the published commit a re-dispatch's context names is the one to build on",
+    ),
+    (
+        re.compile(r"new\s+commits\s+on\s+top\s+of\s+the\s+remote's\s+commit", re.IGNORECASE),
+        "that the repair of a published branch is new commits on top of the remote's commit",
+    ),
+    (
+        NEVER_REWRITES_PUBLISHED,
+        "that no commit already on the remote is amended, rebased, squashed, reset or force-pushed",
+    ),
+    (
+        INCIDENT_IS_A_REFUSAL,
+        "the incident as the `non-fast-forward` refusal the rewrite met",
+    ),
+)
+REWRITES_HISTORY = re.compile(
+    r"\b(?:amend|rebas|squash|reset|force-push|force\s+push)\w*|--force\b", re.IGNORECASE
+)
+ON_THE_REMOTE = re.compile(r"\b(?:remote|origin|published|pushed)\b", re.IGNORECASE)
+
+
 #: The heading of the section that asks for each demand to be stated as a criterion. The
 #: bullets under it are what a plan's builder copies, so a demand is asked for there or
 #: nowhere — the rest of the file recounts, argues and instructs, in the same words.
@@ -482,6 +528,37 @@ def sentence_around(prose: str, at: int) -> str:
     opened = max(prose.rfind(". ", 0, at), prose.rfind("\n\n", 0, at)) + 1
     closed = prose.find(". ", at)
     return " ".join(prose[opened : len(prose) if closed < 0 else closed].split())
+
+
+def published_branch_breaches(prose: str) -> list[str]:
+    """What in ``prose`` breaks the published-branch rule's contract, or nothing.
+
+    Bounded rather than parsed. The rule's one paragraph states each part of
+    :data:`PUBLISHED_BRANCH_ONLY_GROWS`, and names a rewrite of history only inside its
+    prohibition and its incident; any rewrite left once those two are set aside is an
+    addition nobody reviewed, whether it forbids, permits or recounts. No other paragraph
+    speaks of rewriting what the remote holds, because the rule is stated once.
+    """
+    blocks = [" ".join(block.split()) for block in prose.split("\n\n")]
+    rule = [block for block in blocks if PUBLISHED_BRANCH_RULE.search(block)]
+    if len(rule) != 1:
+        return [f"the rule is stated in {len(rule)} paragraphs rather than one"]
+    breaches = [
+        f"the rule's paragraph no longer states {missing}"
+        for stated, missing in PUBLISHED_BRANCH_ONLY_GROWS
+        if not stated.search(rule[0])
+    ]
+    accounted = INCIDENT_IS_A_REFUSAL.sub(" ", NEVER_REWRITES_PUBLISHED.sub(" ", rule[0]))
+    breaches += [
+        f"the rule's paragraph names {found.group(0)!r} outside its prohibition and incident"
+        for found in REWRITES_HISTORY.finditer(accounted)
+    ]
+    breaches += [
+        f"another paragraph speaks of rewriting what the remote holds: {block}"
+        for block in blocks
+        if block is not rule[0] and REWRITES_HISTORY.search(block) and ON_THE_REMOTE.search(block)
+    ]
+    return breaches
 
 
 def test_the_appendix_defines_no_repository_wide_gate_for_a_worker_to_run(
@@ -1382,3 +1459,93 @@ def test_each_carve_out_opens_on_the_grant_the_criteria_guard_reads(appendix: st
             f"criteria guard reads a grant of {authorization.name} by — a task writing "
             f"{authorization.grant!r} would be granting something this file does not name"
         )
+
+
+def test_the_published_branch_rule_holds_its_bounded_contract(appendix: str) -> None:
+    """A published branch only grows, stated once, in the file every dispatch carries.
+
+    A re-dispatch resumes a branch an earlier publication may already have pushed, and
+    nothing a worker read said so: one fixed both of its refusals correctly by amending
+    the two commits already on the remote, and lost the dispatch to a `non-fast-forward`
+    refusal of the publishing push. The engine may name the published commit in the
+    re-dispatch's reason; this is the rule that holds on every re-dispatch whether or not
+    it does, so it defers to that commit rather than restating the engine's words.
+    """
+    breaches = published_branch_breaches(appendix)
+    assert not breaches, (
+        f"{APPENDIX} breaks the published-branch rule's contract. A retry that rewrites "
+        "what its first publication pushed is refused `non-fast-forward` with its fix "
+        "stranded:\n" + "\n".join(breaches)
+    )
+
+
+#: The end of the rule's paragraph and of the publication paragraph, where an addition is
+#: spliced, each a single line of the file so a splice needs no knowledge of its wrapping.
+RULE_PARAGRAPH_END = "`push-rejected` with the correct tree stranded on the host."
+PUBLICATION_PARAGRAPH_END = (
+    "Everything else a push or a change-request verb could do is still not yours."
+)
+
+
+@pytest.mark.parametrize(
+    ("anchor", "replacement", "breach"),
+    [
+        pytest.param(
+            RULE_PARAGRAPH_END,
+            f"{RULE_PARAGRAPH_END} Never amend commits on the remote, reset them.",
+            "names 'amend' outside",
+            id="the-comma-spliced-imperative",
+        ),
+        pytest.param(
+            RULE_PARAGRAPH_END,
+            f"{RULE_PARAGRAPH_END} Before publishing again you may amend the pushed commits.",
+            "names 'amend' outside",
+            id="a-plain-permission",
+        ),
+        pytest.param(
+            RULE_PARAGRAPH_END,
+            f"{RULE_PARAGRAPH_END} Never amend commits on the remote, but you may reset them.",
+            "names 'reset' outside",
+            id="a-permission-behind-a-prohibition",
+        ),
+        pytest.param(
+            RULE_PARAGRAPH_END,
+            f"{RULE_PARAGRAPH_END} Use git push --force to replace the published commits.",
+            "names '--force' outside",
+            id="a-forced-push",
+        ),
+        pytest.param(
+            "never an amend",
+            "if it helps, an amend",
+            "no longer states that no commit already on the remote",
+            id="the-prohibition-softened",
+        ),
+        pytest.param(
+            "was refused `non-fast-forward` when it published",
+            "published cleanly",
+            "names 'amending' outside",
+            id="the-incident-no-longer-a-refusal",
+        ),
+        pytest.param(
+            PUBLICATION_PARAGRAPH_END,
+            f"{PUBLICATION_PARAGRAPH_END} Rebase the pushed branch if its hook refuses it.",
+            "another paragraph speaks of rewriting",
+            id="a-permission-in-another-paragraph",
+        ),
+    ],
+)
+def test_a_change_permitting_a_rewrite_of_published_commits_breaks_the_contract(
+    appendix: str, anchor: str, replacement: str, breach: str
+) -> None:
+    """The contract above is only as good as what it refuses, so it is shown each change.
+
+    Each change is made to the real appendix, so what is proven is that the contract
+    refuses it among everything else the file says. The first is the counterexample the
+    clause-splitting reader this replaced let through: a prohibition with a permission
+    comma-spliced after it.
+    """
+    assert anchor in appendix, f"{APPENDIX} no longer carries {anchor!r} to change"
+    breaches = published_branch_breaches(appendix.replace(anchor, replacement, 1))
+    assert any(breach in found for found in breaches), (
+        f"the contract on {APPENDIX} did not refuse {replacement!r} for {breach!r}: {breaches}"
+    )

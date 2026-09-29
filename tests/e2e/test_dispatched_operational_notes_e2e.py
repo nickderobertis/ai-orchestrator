@@ -101,6 +101,7 @@ from test_dispatch_appendix import (
     UNRECHECKED_CLAIMS_ARE_NAMED,
     WAITED_ON,
     WIDE_BAR,
+    published_branch_breaches,
     sentence_around,
 )
 from waits import timeout as e2e_timeout
@@ -521,6 +522,29 @@ def test_a_dispatched_workers_judge_is_told_a_retry_is_not_judged_on_a_downstrea
             f"the judge of a dispatched worker is no longer handed {missing}, so it reads "
             "a refusal's failed required check as a criterion a repaired retry left unmet"
         )
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] reuses the module's one run
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] reads_docs keys its inputs
+@pytest.mark.xdist_group("dispatched-operational-notes")
+def test_a_dispatched_worker_is_told_a_published_branch_only_grows(
+    dispatched_notes: str,
+) -> None:
+    """The rule a resumed branch is held to, read off the prompt a real worker was handed.
+
+    A `checks-failed` re-dispatch resumes a branch its first publication already pushed,
+    and a worker that repaired it by amending those commits lost the dispatch to a
+    `non-fast-forward` refusal. What is asserted is that every part of the rule reaches the
+    worker through the builder, `onepipeline` and `oneagentgraph` intact, and that the
+    paragraph still names a rewrite only in its prohibition and in its incident's refusal.
+    """
+    breaches = published_branch_breaches(dispatched_notes)
+    assert not breaches, (
+        "the published-branch rule a dispatched worker was handed breaks its contract, so "
+        "a retry may rewrite what its first publication pushed:\n" + "\n".join(breaches)
+    )
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
