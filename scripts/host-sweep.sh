@@ -27,7 +27,8 @@
 # llmlint: ignore-file[tool_output_is_signal] The lines this prints are what session setup relays and an operator reads: which sweep holds the host, and where the last one's log is.
 
 #: How long after a sweep completes a session start leaves the host unswept. The one
-#: place the interval is declared; `tests/test_host_sweep.py` reads it from here.
+#: place the interval is declared; `tests/session_setup/test_host_sweep_e2e.py` reads it
+#: from here.
 readonly HOST_SWEEP_INTERVAL_SECONDS=3600
 
 host_sweep_log() { printf 'host-sweep: %s\n' "$*" >&2; }
@@ -59,7 +60,10 @@ host_sweep_valid() {
     case $1 in
         pid) [[ $2 =~ ^[1-9][0-9]*$ ]] ;;
         status) [[ $2 =~ ^(done|failed)$ ]] ;;
-        exit | finished) [[ $2 =~ ^[0-9]+$ ]] ;;
+        # Bounded so shell arithmetic on them cannot overflow: an exit status is at most
+        # three digits and an epoch-seconds stamp at most twelve.
+        exit) [[ $2 =~ ^[0-9]{1,3}$ ]] ;;
+        finished) [[ $2 =~ ^[0-9]{1,12}$ ]] ;;
         started) [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ;;
         log) [[ $2 == - || $2 == /* ]] ;;
         *) return 1 ;;
@@ -150,7 +154,7 @@ if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     return 0
 fi
 
-set -uo pipefail
+set -euo pipefail
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(dirname -- "$script_dir")"
 
@@ -169,8 +173,7 @@ log="$dir/sweep.log"
 
 case ${1:-} in
     --job)
-        # Started by `--detach` with the lock held on descriptor 9; run by hand, it runs
-        # only under the lock, which it takes if free.
+        # Only what `--detach` starts: the lock has to arrive already open on descriptor 9.
         if ! { true >&9; } 2>/dev/null || [[ ! /dev/fd/9 -ef $dir/lock ]] || ! flock -n 9; then
             host_sweep_log "--job runs only under the lock --detach hands it"
             exit 2
@@ -230,6 +233,13 @@ fi
 # inherits descriptor 9, so the lock stays held from here until the job exits.
 setsid -w bash "$script_dir/host-sweep.sh" --job </dev/null >>"$log" 2>&1 &
 job=$!
+# A job that is already gone is either one that swept in an instant, which exits 0, or
+# one that never started, whose status says so and whose log holds why.
+# llmlint: ignore[changed_behavior_has_e2e] `setsid` and `bash` are checked on PATH above and the job's lock check is this caller's own descriptor, so a job refusing its start needs the host to lose a binary in the instant between; the `--job` refusal itself is driven by a journey.
+if ! kill -0 "$job" 2>/dev/null && ! wait "$job"; then
+    host_sweep_log "the sweep job did not start (log: $log)"
+    exit 1
+fi
 host_sweep_write "$dir/holder" "pid $job" "started $(host_sweep_now_iso)" "log $log" \
     || host_sweep_log "holder not recorded in $dir"
 if [[ $previous == failed ]]; then

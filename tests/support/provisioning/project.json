@@ -15,6 +15,7 @@
       "{workspaceRoot}/config/*.version",
       "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/scripts/setup-llmlint.sh",
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh"

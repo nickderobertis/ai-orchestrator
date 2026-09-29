@@ -18,6 +18,7 @@ import functools
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -89,9 +90,11 @@ def setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
-    # The sweep session setup runs is the justfile's own recipe over two published
-    # verbs. `HOME` above already points every family it judges inside `tmp_path`, so
-    # the sweep it performs here is real and reaches nothing.
+    # The sweep session setup starts detached is the justfile's own recipe over two
+    # published verbs, started through `host-sweep.sh`. `HOME` above already points every
+    # family it judges, and the lock it takes, inside `tmp_path`, so the sweep it performs
+    # here is real and reaches nothing.
+    shutil.copy2(REPO_ROOT / "scripts" / "host-sweep.sh", scripts / "host-sweep.sh")
     # The last thing session setup runs is `just repos-bootstrap`, which provisions the
     # registered sibling checkouts' gates — through the recipe, the script, and the
     # reader of the tracked checkout list, so all three are part of a repo this script
@@ -132,7 +135,7 @@ def run_setup(
     # one redirect keeps both halves inside `tmp_path`.
     scratch_root = tmp_path / "tmp"
     scratch_root.mkdir(exist_ok=True)
-    return subprocess.run(
+    setup = subprocess.run(
         ["bash", str(repo / "scripts" / "session-setup.sh")],
         text=True,
         capture_output=True,
@@ -159,8 +162,48 @@ def run_setup(
             # downloads and sharing files; it costs a fraction of one download.
             "UV_LINK_MODE": "copy",
             **({"UV_CACHE_DIR": shared_cache} if shared_cache else {}),
+            # Named rather than inherited, so the host sweep's lock and log are this
+            # journey's own even on a host that exports its own cache home.
+            "XDG_CACHE_HOME": str(host_sweep_cache(tmp_path).parents[1]),
         },
     )
+    await_host_sweep(tmp_path)
+    return setup
+
+
+def host_sweep_cache(tmp_path: Path) -> Path:
+    """Where the host sweep a `run_setup` starts keeps its lock, holder, stamp and log."""
+    return tmp_path / ".cache" / "ai-orchestrator" / "sweep"
+
+
+#: How long the detached sweep a session start leaves running may take over a
+#: `tmp_path` state root: seconds of real work, bounded far above it.
+HOST_SWEEP_SECONDS = 300
+
+
+def await_host_sweep(tmp_path: Path) -> None:
+    """Wait until the sweep job session setup started detached has exited.
+
+    Session setup returns while its job still runs, by design. A journey reads what the
+    job did from its log, and must not end with the job still alive, so every
+    `run_setup` waits it out — by reading the process table for the pid the job's
+    holder record names, never by signalling it.
+    """
+    holder = host_sweep_cache(tmp_path) / "holder"
+    if not holder.exists():
+        return
+    fields = dict(
+        row.partition(" ")[::2] for row in holder.read_text(encoding="utf-8").splitlines()
+    )
+    pid = fields.get("pid", "")
+    if not pid.isdigit():
+        return
+    deadline = time.monotonic() + HOST_SWEEP_SECONDS
+    while Path(f"/proc/{pid}").exists():
+        assert time.monotonic() < deadline, (
+            f"the host sweep job {pid} outlived {HOST_SWEEP_SECONDS}s"
+        )
+        time.sleep(0.2)
 
 
 #: Where asdf reads a host's tool versions from when nothing nearer sets one. It is

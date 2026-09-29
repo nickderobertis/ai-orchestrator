@@ -10,10 +10,16 @@ whose bootstrap no journey may run. The sibling jobs it starts outlive each sess
 start by design, so the journey waits on the ending each job writes to its state and
 releases and waits out every one it started before it ends; it signals none.
 
+`test_host_sweep_e2e.py` is the host sweep session setup starts detached: the same real
+script, copied with `scripts/host-sweep.sh`, the justfile and every adopted pin into a
+fixture repository whose published CLIs are doubled on PATH — or, in one journey, are the
+real ones — under an `XDG_CACHE_HOME` of its own, so no journey meets this host's lock.
+It runs no setup of this checkout, so it takes no share of the workspace install.
+
 - **One target, `session-setup:test`, keyed on `sessionSetupWorkspace`**, named file by
   file rather than as `scripts/**/*` or `config/**/*`: the journey re-provisions the
-  project environment from the lock, so every glob wider than the script, the lock and
-  the one pin it reads makes an unrelated edit pay for that.
+  project environment from the lock, so every glob wider than the scripts, the lock and
+  the pins its journeys read makes an unrelated edit pay for that.
   The helpers its module imports reach that key as the test-support units under
   `tests/support/` this project depends on. The one module of `orchestrator/` in it is
   `orchestrator/root.py`, which the journey imports `REPO_ROOT` from.

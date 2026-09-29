@@ -61,7 +61,10 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: script, the lock and the one pin it reads makes an unrelated edit pay for that. The
 #: last step that script runs — `just repos-bootstrap`, over the tracked checkout list —
 #: is in the key as its script, the list reader it sources and the list itself, because
-#: what the journey asserts about the siblings is decided by those three files. The one
+#: what the journey asserts about the siblings is decided by those three files. The host
+#: sweep journeys copy session setup into a fixture with the justfile, `host-sweep.sh`
+#: and every adopted pin (`config/*.version`, which the copied setup verifies), so those
+#: are in the key too, and nothing wider of `config/` or `scripts/`. The one
 #: module of `orchestrator/` in it is `orchestrator/root.py`, which the journey imports
 #: `REPO_ROOT` from, directly and through `tests/conftest.py`: session setup runs no
 #: other orchestrator code, so no other edit there starts a real provisioning.

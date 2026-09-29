@@ -22,6 +22,7 @@ import pytest
 from onejudge_bundle import LoopbackOrigin
 from provisioning import (
     ONEHARNESS_VERSION,
+    host_sweep_cache,
     path_without_uv,
     run_setup,
     setup_repo,
@@ -39,12 +40,13 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     # This checkout carries no `config/onemessagebus.yaml`, so the warm step's fetch fails
     # whole and reports no link at all — which setup says, and survives.
     assert "schema cache: no link warmed:" in installed.stderr, installed.stderr
-    # Both sweep verbs reach a session, each printing its own report, and this fixture's
-    # `HOME` and `TMPDIR` put every family they judge inside `tmp_path`.
-    assert 'sweep: examined family "runs"' in installed.stderr, installed.stderr
-    assert "This answers for the publication and recovery workspaces onevcs owns" in (
-        installed.stderr
-    ), installed.stderr
+    # The sweep is started detached rather than run here, and `run_setup` has waited it
+    # out: both verbs ran in its job, each printing its own report to the job's log, and
+    # this fixture's `HOME` and `TMPDIR` put every family they judge inside `tmp_path`.
+    assert "host-sweep: started job" in installed.stderr, installed.stderr
+    swept = (host_sweep_cache(tmp_path) / "sweep.log").read_text(encoding="utf-8")
+    assert 'sweep: examined family "runs"' in swept, swept
+    assert "This answers for the publication and recovery workspaces onevcs owns" in swept
     # The last step reached the registered sibling checkouts through the recipe's
     # detached form, and under this fixture's `HOME` every listed `~/` path is absent,
     # so each one was skipped and no sibling's job started — which is the report a host
@@ -150,11 +152,20 @@ def test_session_setup_continues_when_the_workspace_sweep_fails(tmp_path: Path) 
     result = run_setup(repo, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert "cannot read the workspaces under" in result.stderr
+    log = host_sweep_cache(tmp_path) / "sweep.log"
+    swept = log.read_text(encoding="utf-8")
+    assert "cannot read the workspaces under" in swept, swept
     # One verb down never costs the other its reclamation — the property session
     # setup's sweep is worth running for at all.
-    assert "sweep: examined family" in result.stderr
-    assert "workspace sweep failed; continuing session setup" in result.stderr
+    assert "sweep: examined family" in swept, swept
+
+    # The job that failed is named, with its log, by the next session start, whose exit
+    # status it never changes.
+    reported = run_setup(repo, tmp_path)
+
+    assert reported.returncode == 0, reported.stderr
+    assert "host-sweep: the last sweep failed: exit " in reported.stderr, reported.stderr
+    assert f"(log: {log})" in reported.stderr, reported.stderr
 
 
 # llmlint: ignore-end[tests_mirror_real_usage]
@@ -167,7 +178,7 @@ def test_session_setup_continues_when_the_workspace_sweep_is_unavailable(tmp_pat
     result = run_setup(repo, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert "workspace sweep unavailable; continuing session setup" in result.stderr
+    assert "host sweep unavailable; continuing session setup" in result.stderr
     # The sibling step is reached through the same justfile, and is the same kind of
     # absence: reported, and never this session's exit status.
     assert "sibling checkout bootstrap unavailable; continuing session setup" in result.stderr

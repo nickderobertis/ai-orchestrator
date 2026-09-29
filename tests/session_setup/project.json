@@ -10,7 +10,8 @@
   "implicitDependencies": [
     "support-conftest",
     "support-nx-workspace",
-    "support-published-tools"
+    "support-published-tools",
+    "support-waits"
   ],
   "namedInputs": {
     "sessionSetupWorkspace": [
@@ -20,7 +21,10 @@
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/config/onetaskgraph.version",
       "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/config/*.version",
       "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
       "{workspaceRoot}/tests/session_setup/**/*",
