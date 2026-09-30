@@ -912,7 +912,7 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: store in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
 #: `just unfinished` in one, the `graceful-cancel` project owns the journey over a cancel
-#: whose dispatch stops when interrupted in one, the `manager-allowlist` project owns the
+#: whose dispatch ends inside its grace period in one, the `manager-allowlist` project owns the
 #: journeys over `just sync-allowlist` and `just probe-allowlist` in one, the `host-views`
 #: project owns the journeys
 #: over `just status` and `just host` in one, and the orchestrator project owns the rest

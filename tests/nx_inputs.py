@@ -474,9 +474,9 @@ UNFINISHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 UNFINISHED_ROOT = "tests/unfinished"
 
-#: The project whose test target owns the journey over a `cancel` whose dispatch stops
-#: when interrupted: a real launch through `just orchestrate`, cancelled over the real
-#: channel, with the fake backend serving the interrupt. A project of its own for the
+#: The project whose test target owns the journey over a `cancel` whose dispatch ends
+#: inside its grace period: a real launch through `just orchestrate`, cancelled over the
+#: real channel and waited to settlement. A project of its own for the
 #: reason `unwatched` is: a real launch waited to settlement is a cost `nx affected` can
 #: only keep off an unrelated edit where it is a separate project.
 GRACEFUL_CANCEL_PROJECT = "graceful-cancel"
