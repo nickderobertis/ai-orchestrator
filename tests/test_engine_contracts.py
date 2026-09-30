@@ -1726,20 +1726,19 @@ def test_the_merge_queue_bound_is_floored_at_the_default_onevcs_declares() -> No
         )
 
 
-#: The view a manager's watch greps, as `onepipeline` composes it. `just status` is a
-#: thin wrapper over `onepipeline status`, so the boundary `AGENTS.md` tells a watch to
-#: cut at is this function's own formatting and nothing on this side of the seam.
+#: The view a manager's watch reads, as `onepipeline` composes it. `just status` is a
+#: thin wrapper over `onepipeline status`, so what `--no-providers` leaves out of that
+#: view is this function's own composition and nothing on this side of the seam.
 #:
-#: Read from the function that composes **one run's** block — its run lines, its node
-#: lines, and the health report under them — rather than from `status`, which since
-#: https://github.com/nickderobertis/onepipeline/pull/402 only concatenates that block per
-#: surveyed run and adds the
-#: skipped-runs trailer. Anchoring on the outer function is how these gates came to
-#: report the health opener as gone from a view that still prints it: the composition
-#: moved down one function while the entry point kept its name. It moved down once more
-#: in https://github.com/nickderobertis/onepipeline/pull/574, which added `status
-#: --no-providers`: `status_of` now only calls `status_reporting` with the report on,
-#: and the block is composed there.
+#: Read from `status_reporting`, which composes **one run's** block — its run lines, its
+#: node lines, and the health report under them — with that report said or left out,
+#: rather than from `status`, which only concatenates that block per surveyed run
+#: (https://github.com/nickderobertis/onepipeline/pull/402). Anchoring on the outer
+#: function is how these gates came to report a line as gone from a view that still
+#: printed it: the composition moved down one function while the entry point kept its
+#: name. It moved down once more in https://github.com/nickderobertis/onepipeline/pull/574,
+#: which added `status --no-providers`: `status_of` now only calls `status_reporting`
+#: with the report on, and the block is composed there.
 STATUS_VIEW = re.compile(r"pub\(crate\) fn status_reporting\(.*?\n\}\n", re.DOTALL)
 
 #: The helper that view writes a run's own block through, and the call by which it does.
@@ -1747,35 +1746,33 @@ STATUS_VIEW = re.compile(r"pub\(crate\) fn status_reporting\(.*?\n\}\n", re.DOTA
 #: Two functions rather than one because the engine split them, and reading only the
 #: first is how this gate came to report the unread-surface line as *gone* from a view
 #: that still prints it: the composition moved into the helper while the call stayed
-#: where it was. So the line is looked for where it is written, and the *ordering* the
-#: watch rule depends on is read from where that helper is called — which is the fact
-#: that decides it either way, since the helper's own text says nothing about what is
-#: rendered after it.
+#: where it was.
 STATUS_RUN_LINES = re.compile(r"fn status_run_lines\(.*?\n\}\n", re.DOTALL)
 STATUS_RUN_LINES_CALL = "status_run_lines("
 
-#: The line the embedded provider health report opens with, exactly as the view writes
-#: it — two leading spaces included, because the cut is anchored (`/^  providers:/`) and
-#: a re-indent would leave it matching nothing while reading like it still works.
+#: The call that writes the free-space reading watch property 6 says `--no-providers`
+#: keeps.
+FREE_SPACE_CALL = "crate::freespace::lines("
+
+#: The line the embedded provider health report opens with, exactly as the view writes it.
 HEALTH_BLOCK_OPENER = '"  providers: '
 
-#: The line rule 5 makes a HARD REQUIREMENT, which has to survive that cut. It survives
-#: only by being printed *above* the health block, so this is an ordering claim rather
-#: than a presence one.
+#: The condition the view writes that report under, and so the one thing `--no-providers`
+#: changes. Everything the view writes before it is written whichever way the flag goes.
+HEALTH_BLOCK_GATE = "if providers == Providers::Reported {"
+
+#: The line rule 5 makes a HARD REQUIREMENT, which the flag must not drop.
 UNREAD_SURFACE_LINE = '"  {} planner update(s) waiting'
 
-#: The cut itself, as the watch item spells it. Read back out of the manager's document
-#: so a reworded instruction and this gate cannot come to be about different sed
-#: programs.
-HEALTH_BLOCK_CUT = "sed '/^  providers:/,$d'"
+#: The read the watch rule prescribes, as the manager's document spells it.
+STATUS_WITHOUT_PROVIDERS = 'just status "$RUN" --no-providers'
 
 
 def _status_run_lines() -> str:
     """The helper the status view writes a run's own block through, as source.
 
-    Its own function rather than a second search at each site, because three gates read
-    it and a view split across two functions is exactly the shape that drifts one site at
-    a time.
+    Read where the line is written rather than where the helper is called, because a view
+    split across two functions is exactly the shape that drifts one site at a time.
     """
     found = STATUS_RUN_LINES.search(_source(ONEPIPELINE, "views.rs"))
     assert found is not None, (
@@ -1785,49 +1782,48 @@ def _status_run_lines() -> str:
     return found.group(0)
 
 
-def test_the_watch_cuts_the_status_view_where_the_health_report_really_starts() -> None:
-    """The anchor a watch cuts at is `onepipeline`'s own, and the cut keeps rule 5.
+def test_the_status_view_without_providers_drops_the_health_report_and_nothing_else() -> None:
+    """`--no-providers` leaves out the host's report and keeps what rule 5 and 6 read.
 
-    Both halves fail silently. A re-indented or renamed opener leaves the cut matching
-    nothing, so the watch goes back to greping the host's health report for the run's
-    words — which is the eleven-seconds-into-a-healthy-dispatch quota death the item
-    was written from. And a health block that moved *above* the unread-surface line
-    would make the cut swallow the one line rule 5 forbids filtering, turning a
-    documented fix into the exact failure the HARD REQUIREMENT exists to prevent.
+    Both halves fail silently. A flag that stopped gating the report would put the host's
+    health words back into the view a watch greps — the eleven-seconds-into-a-healthy-
+    dispatch quota death the rule was written from. And a flag that also dropped the
+    unread-surface line or the free-space reading would turn the documented read into the
+    exact failure the HARD REQUIREMENT exists to prevent. So the report is read as written
+    only under the gate, and the other two as written before it, unconditionally.
     """
-    written = MANAGER.read_text("utf-8")
-    assert HEALTH_BLOCK_CUT in written, (
-        f"{MANAGER.name} no longer tells a watch to cut the status view at "
-        f"{HEALTH_BLOCK_CUT!r}, so this gate reconciles an instruction nobody is given"
+    written = " ".join(MANAGER.read_text("utf-8").split())
+    assert STATUS_WITHOUT_PROVIDERS in written, (
+        f"{MANAGER.name} no longer tells a watch to read {STATUS_WITHOUT_PROVIDERS!r}, so "
+        "this gate reconciles an instruction nobody is given"
     )
     view = STATUS_VIEW.search(_source(ONEPIPELINE, "views.rs"))
     assert view is not None, (
-        f"onepipeline {ONEPIPELINE.ref} no longer composes its status view where this "
-        "gate reads it, so nothing here can say where that view's two documents meet"
+        f"onepipeline {ONEPIPELINE.ref} no longer composes its status view in "
+        "`status_reporting`, so nothing here can say what `--no-providers` leaves out"
     )
     composed = view.group(0)
+    gate = composed.find(HEALTH_BLOCK_GATE)
     opener = composed.find(HEALTH_BLOCK_OPENER)
-    assert opener != -1, (
-        f"onepipeline {ONEPIPELINE.ref} no longer opens the embedded health report with "
-        f"{HEALTH_BLOCK_OPENER!r}, so {MANAGER.name}'s {HEALTH_BLOCK_CUT!r} cuts nothing "
-        "and a watch over that view is grepping the host's report for the run's words"
+    assert gate != -1 and gate < opener, (
+        f"onepipeline {ONEPIPELINE.ref} no longer writes the health report {HEALTH_BLOCK_OPENER!r} "
+        f"under {HEALTH_BLOCK_GATE!r}, so {MANAGER.name}'s {STATUS_WITHOUT_PROVIDERS!r} may "
+        "print the host's report into the view a watch greps for the run's words"
     )
     assert UNREAD_SURFACE_LINE in _status_run_lines(), (
         f"onepipeline {ONEPIPELINE.ref}'s status view no longer prints the unread-surface "
-        f"line, which {MANAGER.name} makes a HARD REQUIREMENT of every watch; the rule now "
-        "rests on `runs` alone and this gate can no longer say the cut keeps it"
+        f"line, which {MANAGER.name} makes a HARD REQUIREMENT of every watch"
     )
-    unread = composed.find(STATUS_RUN_LINES_CALL)
-    assert unread != -1, (
-        f"onepipeline {ONEPIPELINE.ref}'s status view no longer writes a run's own block "
-        f"through {STATUS_RUN_LINES_CALL!r}, so nothing here can say whether the line that "
-        "helper prints lands above the health report or below it"
-    )
-    assert unread < opener, (
-        f"onepipeline {ONEPIPELINE.ref} now prints the health report above the "
-        f"unread-surface line, so {MANAGER.name}'s cut removes the one line rule 5 forbids "
-        "filtering. Move the anchor, or the documented watch drops the question channel"
-    )
+    for call, what in (
+        (STATUS_RUN_LINES_CALL, "the unread-surface line"),
+        (FREE_SPACE_CALL, "the free-space reading"),
+    ):
+        at = composed.find(call)
+        assert at != -1 and at < gate, (
+            f"onepipeline {ONEPIPELINE.ref}'s status view no longer writes {what} through "
+            f"{call!r} ahead of {HEALTH_BLOCK_GATE!r}, so {MANAGER.name}'s "
+            f"{STATUS_WITHOUT_PROVIDERS!r} may drop the one reading watch property 6 says it keeps"
+        )
 
 
 # What each restatement below is for, and what its drift costs, is stated where it is

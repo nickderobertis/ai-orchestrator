@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.16.2/0.14.0 upgrade (`config/oneharness.version` and
+after the 0.17.0/0.14.0 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -260,7 +260,13 @@ v0.13.5 and v0.14.0 only `crates/onejudge/src/note.rs` and `sdk_schema.rs` chang
 ([onejudge#112](https://github.com/nickderobertis/onejudge/pull/112)), taking the note
 contract off the retired bus agent crate, and `onejudge-cli` 0.14.0, `oneagentgraph-cli`
 0.5.3 and the engine wheel all still link `oneharness-core` 0.18.0, read off each wheel's
-own SBOM.
+own SBOM. The oneharness half then moved to 0.17.0 on the same terms: what it adds
+([oneharness#1368](https://github.com/nickderobertis/oneharness/pull/1368)) is `oneharness
+sync`'s Codex target and `--exact`, confined under `crates/oneharness-core/src/domain/` to
+`sync.rs`, `harness.rs`, `config.rs`, `capability.rs` and `sdk.rs`, and
+`crates/oneharness-core/src/domain/usage.rs` is byte-identical between
+`oneharness-core-v0.18.0` and `oneharness-core-v0.19.0`, the core `oneharness-cli` 0.17.0 is
+compiled against, read off its wheel's own SBOM.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.

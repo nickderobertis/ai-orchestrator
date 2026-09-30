@@ -86,6 +86,8 @@ from nx_inputs import (
     DOCS_SCOPED,
     HOST_VIEWS_PROJECT,
     HOST_VIEWS_SCOPED,
+    MANAGER_ALLOWLIST_PROJECT,
+    MANAGER_ALLOWLIST_SCOPED,
     PROJECT_STORE_RACE_PROJECT,
     PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
@@ -685,6 +687,13 @@ SKIPPABLE_TIERS = frozenset(
         (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
         (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
         (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+        # describes; the manager-allowlist entry sits beside the others' rather than in a domain of
+        # its own because the catalog is the domain.
+        (MANAGER_ALLOWLIST_PROJECT, MANAGER_ALLOWLIST_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     }
 )
 
@@ -1064,8 +1073,9 @@ def test_a_diff_reaching_every_project_leaves_none_of_them_out(selector: Selecto
 def _witness_for(fileset: str) -> str:
     """The repository-relative path a change matching ``fileset`` would sit at.
 
-    Two shapes, and a third fails rather than being guessed at: a literal path, and a
-    `**/` glob whose tail names what the file is called. Guessing wrong would plant a
+    Three shapes, and a fourth fails rather than being guessed at: a literal path, a
+    `**/` glob whose tail names what the file is called, and a one-directory glob such as
+    `oneharness*.toml` whose one `*` sits in the file's name. Guessing wrong would plant a
     witness the fileset does not cover, and the journey below would then report a tier
     as reachable on the strength of a path that never reaches it.
     """
@@ -1073,7 +1083,10 @@ def _witness_for(fileset: str) -> str:
     if "*" not in relative:
         return relative
     prefix, separator, tail = relative.rpartition("**/")
-    assert separator and "*" not in prefix and tail.count("*") == 1, (
+    if not separator:
+        prefix, _, tail = relative.rpartition("/")
+        prefix = f"{prefix}/" if prefix else ""
+    assert "*" not in prefix and "**" not in tail and tail.count("*") == 1, (
         f"{fileset} is a shape these journeys cannot plant a witness for; teach "
         "_witness_for its shape rather than leaving the paths it covers unmeasured"
     )

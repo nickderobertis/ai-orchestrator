@@ -24,7 +24,7 @@ items were replaced by three recipe-coverage items.
 
 | Test file | Disposition | Evidence |
 | --- | --- | --- |
-| `tests/test_agent_allowlist.py` | Keep all | Drift gate for this checkout's `.claude/settings.json`. |
+| `tests/test_agent_allowlist.py` | Keep all | Holds the manager's allowlist, `config/manager-allowlist.toml`, to the invocation table and keeps the hooks `.claude/settings.json` registers. |
 | `tests/test_coverage_gate.py` | Keep all | Proves this checkout's 100% floor is enforceable. |
 | `tests/test_decomposition_guidance.py` | Keep all | Drift gate over this checkout's planner prose. |
 | `tests/test_dispatch_cwd_does_not_shadow.py` | Keep all | Proves this checkout's agent wrapper and installed-CLI boundary. |

@@ -1,0 +1,144 @@
+# The manager's allowlist, in Claude Code's rule dialect: the one statement of what a manager
+# session runs without asking. AGENTS.md's "The manager's allowlist" says how it is
+# rendered, checked and probed; edit it here and run `just sync-allowlist`.
+#
+# Loaded only by `--config`, so no dispatch runs under it. `allowed_tools` and nothing else:
+# a deny rule would still bind a bypass-mode dispatch, and a dispatched Codex side in a
+# linked worktree loads the Codex rendering, which must hold allow decisions only.
+
+allowed_tools = [
+    "Bash(just bootstrap)",
+    "Bash(just check)",
+    "Bash(just test)",
+    "Bash(just test-e2e)",
+    "Bash(just lint)",
+    "Bash(just format)",
+    "Bash(just format-check)",
+    "Bash(just typecheck)",
+    "Bash(just upgrade)",
+    "Bash(just validate-personas)",
+    "Bash(just session-setup)",
+    "Bash(just sync-allowlist)",
+    "Bash(just setup-llmlint)",
+    "Bash(./scripts/setup-llmlint.sh)",
+    "Bash(./scripts/session-setup.sh)",
+    # Exact forms over this checkout's own lockfile: a prefix would admit `--project` or
+    # `--directory` naming another project's.
+    "Bash(uv sync)",
+    "Bash(uv sync --frozen)",
+    "Bash(uv lock)",
+    "Bash(uv lock --check)",
+    "Bash(onejudge schema)",
+    "Bash(onejudge init --force)",
+    "Bash(oneharness detect)",
+    # llmlint: ignore-block[least_privilege_grants] `just new-persona`, `just lint-llm`, `just lint-llm-validate`, `just lint-llm-diff`, `llmlint history` and `oneharness config`: each suffix is only that one verb's own arguments, which Claude Code has no narrower pattern for, and the verb bounds what they can do — `new-persona` scaffolds one persona file under `personas/`, the three lint recipes judge the files they name and write only llmlint's own cache and history, and `llmlint history` and `oneharness config` only read.
+    "Bash(just new-persona:*)",
+    "Bash(just lint-llm:*)",
+    "Bash(just lint-llm-validate:*)",
+    "Bash(just lint-llm-diff:*)",
+    "Bash(llmlint history:*)",
+    "Bash(oneharness config:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+
+    # `just unpublished` and `just unfinished` are granted as fixed reads:
+    # a prefix would admit `--acknowledge`, the one write the first carries, and the
+    # session-targeted read of the second is approved per use.
+    "Bash(just unpublished --host)",
+    "Bash(just unpublished --print-surface)",
+    "Bash(just unfinished)",
+    "Bash(just unfinished --json)",
+    "Bash(just unfinished --print-surface)",
+    # llmlint: ignore-block[least_privilege_grants] `just runs`, `just status`, `just watch`, `just monitor`, `just unwatched`, `just host`, `just results`, `just transcript`, `just agents`, `just telemetry`, `just goals`, `just history`, `just history-show`, `just work-status`, `just recoverable` and `onemessagebus status`: each suffix is only the run, record, branch or filter the one view names, and the view bounds it — each reads the engine's, the bus's or onevcs's records and changes none of them, `just watch --log` writing only its own human form to the file it is given.
+    "Bash(just runs:*)",
+    "Bash(just status:*)",
+    "Bash(just watch:*)",
+    "Bash(just monitor:*)",
+    "Bash(just unwatched:*)",
+    "Bash(just host:*)",
+    "Bash(just results:*)",
+    "Bash(just transcript:*)",
+    "Bash(just agents:*)",
+    "Bash(just telemetry:*)",
+    "Bash(just goals:*)",
+    "Bash(just history:*)",
+    "Bash(just history-show:*)",
+    "Bash(just work-status:*)",
+    "Bash(just recoverable:*)",
+    "Bash(onemessagebus status:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+
+    # llmlint: ignore-block[least_privilege_grants] `just channel-next` and `just channel-reply`: each suffix is only the run, the envelope file and the correlation, and the bus bounds them — `channel-next` hands out one surface of the named run's own queue, and `channel-reply` appends only an envelope `config/onemessagebus.yaml`'s policy and validator accept whole, refusing a correlation nothing pending holds.
+    "Bash(just channel-next:*)",
+    "Bash(just channel-reply:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+    # A reply's envelope is written to this one file with the agent's own file tool. Claude
+    # Code applies an `Edit` rule to every built-in tool that edits a file, `Write` included,
+    # which only a real turn shows: `just probe-allowlist`'s `envelope-write` row.
+    "Edit(scratch/envelope.json)",
+
+    # The plan flow. `just plans` is granted per read: `sources fields` without `--apply`
+    # for each configured source, because a prefix would admit the write.
+    "Bash(just plans sources fields authoring)",
+    "Bash(just plans sources fields plans)",
+    "Bash(just plans sources fields followups)",
+    # llmlint: ignore-block[least_privilege_grants] `just plan`, `just finish-plan`, `just check-plan`, `just review-plan`, `just copy-plan`, `just replan`, `just plans project show` and `just orchestrate`: each suffix is only the brief, the project id or the run the one verb names, and the verb bounds it — `check-plan` and `plans project show` read, `review-plan` records only a pass on the plan it names, `copy-plan` copies that plan onto its board through the store's own verb, `replan` exits having done nothing, and `plan`, `finish-plan` and `orchestrate` launch or adopt only through the engine's ledger, which refuses a plan nothing reviewed or whose design document is unapproved.
+    "Bash(just plan:*)",
+    "Bash(just finish-plan:*)",
+    "Bash(just check-plan:*)",
+    "Bash(just review-plan:*)",
+    "Bash(just copy-plan:*)",
+    "Bash(just replan:*)",
+    "Bash(just plans project show:*)",
+    "Bash(just orchestrate:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+
+    # llmlint: ignore-block[least_privilege_grants] `just publish-branch`, `just repo-recover`, `just integrate`, `just import-branch`, `just sync`, `just repos`, `just repos-apply`, `just register-repo` and `just sweep`: each suffix is only the branch, checkout or flag the one onevcs verb names, and the verb bounds it — a change reaches a remote or a base only through its identity's own merge path, `sync` only fast-forwards, `repos` reads, `repos-apply` installs the tracked rules idempotently, `register-repo` adds a checkout alias, and `sweep` removes only what no live process references.
+    "Bash(just publish-branch:*)",
+    "Bash(just repo-recover:*)",
+    "Bash(just integrate:*)",
+    "Bash(just import-branch:*)",
+    "Bash(just sync:*)",
+    "Bash(just repos:*)",
+    "Bash(just repos-apply:*)",
+    "Bash(just register-repo:*)",
+    "Bash(just sweep:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+    # llmlint: ignore[least_privilege_grants] Approved in the branch-retirement design; the verb bounds it, since `onevcs reclaim` refuses a `keep` branch and any a live session holds (driven by tests/e2e/unpublished_view/test_superseded_branches_e2e.py).
+    "Bash(just reclaim-branch:*)",
+    # llmlint: ignore-block[least_privilege_grants] `onevcs release acknowledge`, `onevcs release status`, `onevcs rules check` and `onevcs pool status`: each suffix is only the reference, target, version or repository the one verb names, and the verb bounds it — the last three read, and `release acknowledge` records a release on an automated target only, refusing a landing whose probed baseline was established.
+    "Bash(onevcs release acknowledge:*)",
+    "Bash(onevcs release status:*)",
+    "Bash(onevcs rules check:*)",
+    "Bash(onevcs pool status:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+    # llmlint: ignore[least_privilege_grants] An allowed row of the task; the verb bounds it, acting only on the token `onevcs session open` printed and refusing to reap a worktree holding commits its branch lacks.
+    "Bash(onevcs session close:*)",
+
+    # The `uv run` forms AGENTS.md tells a manager to run, and no interpreter-wide one.
+    "Bash(uv run python -m orchestrator.follow_up_tickets statuses)",
+    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments`, `uv run onepipeline supersessions` and the `board-items`, `check-dispositions`, `check-responses` and `check-gathering` subcommands of `orchestrator.follow_up_tickets`: each suffix is only the run, board, file or filter the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` and `follow-ups-answer-comments` launch their verification through the engine's ledger, `supersessions` reads the named run's journal and with `--record` records only its superseded branches, and the four subcommands read or validate.
+    "Bash(just follow-up:*)",
+    "Bash(just follow-ups:*)",
+    "Bash(just follow-ups-answer-comments:*)",
+    "Bash(uv run onepipeline supersessions:*)",
+    "Bash(uv run python -m orchestrator.follow_up_tickets board-items:*)",
+    "Bash(uv run python -m orchestrator.follow_up_tickets check-dispositions:*)",
+    "Bash(uv run python -m orchestrator.follow_up_tickets check-responses:*)",
+    "Bash(uv run python -m orchestrator.follow_up_tickets check-gathering:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+
+    "Bash(git status)",
+    "Bash(git config core.bare)",
+    # llmlint: ignore[least_privilege_grants] Kept by the task's ruling ("Keep `Bash(git clone:*)`"); a clone adds a checkout and changes no remote or base.
+    "Bash(git clone:*)",
+    # No `git log`, `git diff` or `git show` is granted, in this checkout or as `git -C
+    # <path> <read>`: `--output` makes each of those reads write a file, and Claude Code's
+    # `*` spans words, so `git -C * log*` also passes `git -C <path> merge log-fix` and
+    # `git -C <path> commit -m "fix status"`. Those reads go to the classifier instead.
+
+    # A stage's log in a worker's worktree, read by `tail`, `grep` or the agent's own
+    # reader. Claude Code reads inside the checkout without a rule and refuses a path
+    # outside it otherwise.
+    # llmlint: ignore[least_privilege_grants] `Read` of a worker's stage logs: the tool only reads, and the pattern is confined to `.log` files in a session worktree's `.logs/`, which every stage writes with credential values redacted; a worktree's path changes per dispatch, so no narrower spelling names the live one.
+    "Read(~/.onevcs/workspaces/*/runs/*/worktree/.logs/*.log)",
+]

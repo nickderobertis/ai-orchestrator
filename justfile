@@ -797,8 +797,8 @@ telemetry-server *args:
     @./scripts/telemetry-server.sh "$@"
 
 # Show a run's live state: what is driving it, what is running, and what it is running
-# in. The engine prints its `free space:` lines ABOVE the `providers:` line, which is
-# where a supervisor's watch is told to cut this view.
+# in. The engine prints its `free space:` lines whether or not `--no-providers` leaves
+# out the host's provider report, which is how a supervisor's watch is told to read it.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
     @./scripts/onepipeline.sh status "$@"
@@ -892,6 +892,27 @@ validate-personas *args:
 # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] The smoke is not in an affected tier: `just gate` never runs it, and the pre-push hook selects it only through `scripts/pre-push-smoke-needed.sh`, for a pushed diff touching the harness routing files it exists to prove, which is the one change that can break them and the only time its paid turns buy anything; this node's task places the trust probe on exactly this path.
 smoke *args:
     @./scripts/smoke.sh "$@"
+
+# Render the manager's allowlist, `config/manager-allowlist.toml`, into the two tools a
+# manager session is started in — `.claude/settings.json`'s `permissions.allow` and
+# `.codex/rules/oneharness.rules` — with the pinned `oneharness sync --exact`, which holds
+# each list to exactly the source and leaves every other key, the hooks among them, alone.
+# Rules Codex cannot express are reported per rule on stderr and kept for Claude Code.
+# `tests/manager_allowlist/test_manager_allowlist_sync.py` runs the same verb with
+# `--check`. `project` renders into another directory instead — `just probe-allowlist`'s
+# scratch project.
+sync-allowlist project=".":
+    @uv run oneharness sync --exact --config config/manager-allowlist.toml --harness claude-code,codex --cwd "$1"
+
+# Spend real Claude Code and Codex turns driving every row of the manager's invocation
+# table, `tests/manager_invocations.py`, against the rendered allowlist in a scratch
+# project, and print per row and per tool whether it got through, was stopped, or was
+# never tried. Kept out of `check` and the pre-push gate for the reason `smoke` is;
+# `scripts/allowlist-probe.py` says how nothing real is reached. `--tool` and `--row`
+# narrow it.
+# llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] Not in an affected tier: neither `just check` nor the pre-push gate runs it; an operator runs it by hand after changing the allowlist, the one change it can say anything about, as `smoke` is run for the harness routing.
+probe-allowlist *args:
+    @./scripts/allowlist-probe.sh "$@"
 
 # Provision the session toolchain (installs onejudge, oneharness, bun, llmlint, and
 # the four published CLIs this repository is a configuration layer over).

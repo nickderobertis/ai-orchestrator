@@ -67,8 +67,14 @@ from orchestrator.root import REPO_ROOT
 
 #: Path-shaped: segments of word characters, dots, hyphens and glob stars, with an
 #: optional trailing slash marking a directory. Deliberately no `<`/`>`, so a
-#: placeholder token is cut short here rather than matched and then filtered.
-PATH_TOKEN = re.compile(r"[A-Za-z0-9_.*][A-Za-z0-9_.*-]*(?:/[A-Za-z0-9_.*][A-Za-z0-9_.*-]*)+/?")
+#: placeholder token is cut short here rather than matched and then filtered. Never
+#: begun after `~/` or inside a word: `~/.codex/config.toml` names a file in a home
+#: directory, and read from its second character it would pass for this repository's own
+#: `.codex/`.
+PATH_TOKEN = re.compile(
+    r"(?<!~/)(?<![A-Za-z0-9_.*-])"
+    r"[A-Za-z0-9_.*][A-Za-z0-9_.*-]*(?:/[A-Za-z0-9_.*][A-Za-z0-9_.*-]*)+/?"
+)
 #: Sentence punctuation a path collects when prose ends on it.
 TRAILING_PUNCTUATION = ".,;:"
 
@@ -327,6 +333,20 @@ def test_the_gate_fails_against_the_tree_that_carried_the_stale_example(
     assert [reference.path for reference in dangling] == [LEGACY_EXAMPLE], (
         f"{site} carrying its pre-repair text was not reported"
     )
+
+
+def test_a_path_in_a_home_directory_is_not_read_as_this_repositorys_own() -> None:
+    """`.codex/` is a directory this repository tracks and a home directory carries too."""
+    assert (
+        dangling_references("the default in `~/.codex/config.toml` is host state\n", "AGENTS.md")
+        == ()
+    )
+    assert [
+        reference.path
+        for reference in dangling_references(
+            "the default in `.codex/config.toml` is host state\n", "AGENTS.md"
+        )
+    ] == [".codex/config.toml"]
 
 
 @pytest.mark.reads_docs

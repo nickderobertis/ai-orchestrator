@@ -284,8 +284,14 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.16.2 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.17.0 is
 the adopted release. What it changes
+([oneharness#1368](https://github.com/nickderobertis/oneharness/pull/1368)) is `oneharness
+sync` alone: a Codex target, `.codex/rules/oneharness.rules`, rendered from the same
+Claude-dialect `allowed_tools` and reporting per rule what Codex cannot express, and
+`--exact`, which holds each rendered list to exactly the configured one. This host uses
+it for the manager's allowlist alone; no role config carries a permission list, so
+nothing a dispatch runs changes. What 0.16.2 before it changed
 ([oneharness#1349](https://github.com/nickderobertis/oneharness/pull/1349)) is one thing
 a reader of the CLI meets: a config file may carry `extends = "<path>"`, naming a parent
 whose values it inherits, and the parent is resolved **against the extending file's own
@@ -815,7 +821,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.16.2, a config's per-harness `model` **beats** the variable, while the `--model`
+0.17.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -952,7 +958,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.16.2, confirmed against the binary:
+candidate it ended up running — through oneharness 0.17.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1432,7 +1438,7 @@ the adopted release through the variant-to-base fallback every override layer ma
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.16.2, a harness selected
+do not collide: re-measured against the adopted oneharness 0.17.0, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>` — the flag
 layer outranks the environment layer, and on this release a base-id `--mock-harness`
 covers a variant too — so the

@@ -107,6 +107,16 @@ UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 #: `scripts/**` or `tests/unwatched/**`, because an edit this recipe never reaches must not
 #: pay for its real sessions.
 UNFINISHED_WORKSPACE = "unfinishedWorkspace"
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
+# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
+# a project's tests fall outside the tiers it describes; the manager-allowlist entry sits beside the
+# others' rather than in a domain of its own because the catalog is the domain.
+#: The key the `manager-allowlist` project's one tier is memoized on: the recipes, the
+#: probe and the resolvers its wrapper sources, the source and its two renderings, the
+#: chain the probe reads its identities from, and the modules the journeys import. Files
+#: rather than trees, for the reason `unwatchedWorkspace` names.
+MANAGER_ALLOWLIST_WORKSPACE = "managerAllowlistWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The key the `merge-policy` project's one tier is memoized on. Files rather than trees,
 #: for the reason `unwatchedWorkspace` names: every journey there spends a real launch,
 #: so every path in the key they never read makes an unrelated edit pay for it. Measured
@@ -423,6 +433,22 @@ UNFINISHED_PROJECT = "unfinished"
 UNFINISHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 UNFINISHED_ROOT = "tests/unfinished"
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
+# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
+# a project's tests fall outside the tiers it describes; the manager-allowlist entry sits beside the
+# others' rather than in a domain of its own because the catalog is the domain.
+#: The project whose test target owns the journeys over `just sync-allowlist` and `just
+#: probe-allowlist`: the real recipes, the pinned `oneharness sync` and the probe's
+#: scratch project, with the paid tools doubled. A project of its own because each drives
+#: real host tools, a cost `nx affected` can only keep off an unrelated edit where it is a
+#: separate project.
+MANAGER_ALLOWLIST_PROJECT = "manager-allowlist"
+#: That project's one test target: nothing here reads this repository's prose.
+MANAGER_ALLOWLIST_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #: The uncached tier that reads the measuring tier's coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:

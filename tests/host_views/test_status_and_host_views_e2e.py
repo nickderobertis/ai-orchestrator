@@ -3,10 +3,11 @@
 Both recipes are the engine's views passed through untouched: `onepipeline status` and
 `onepipeline host` print a `free space:` line per filesystem the runs root and the
 lifecycle workspaces are on, above the `providers:` block `oneagentgraph health`
-contributes. That placement is what `AGENTS.md`'s watch property 6 rests on — a
-supervisor cuts `just status` at `providers:` and reads only what is above it — so these
-journeys hold the recipes to printing the engine's line there, and to printing nothing
-of this repository's beside the engine's view.
+contributes. `AGENTS.md`'s watch property 6 has a supervisor read `just status "$RUN"
+--no-providers`, which leaves that block out and keeps everything above it, so these
+journeys hold the recipes to printing the engine's line there, to the flag dropping that
+block and nothing else, and to printing nothing of this repository's beside the engine's
+view.
 
 The engine is the real one and so are the recipes, the wrapper script and the shell: a
 view reaches no model, and a doubled engine would prove nothing about a rendering. The run
@@ -177,6 +178,33 @@ def test_the_status_view_reports_free_space_above_the_line_a_watch_is_cut_at(
         f"and it is not in what the view printed: {rendered.stdout!r}"
     )
     _assert_free_space_above_the_cut(rendered.stdout, "status", probe.root)
+
+
+def test_the_status_view_without_providers_is_the_view_with_only_that_report_left_out(
+    probe: Probe,
+) -> None:
+    """Watch property 6's read: `just status <run> --no-providers`.
+
+    The flag is what a supervisor's watch is told to read instead of cutting the view with
+    a shell filter, so it has to leave out the host's report and nothing else: the
+    free-space reading and every run-scoped line the plain view prints above that report.
+    """
+    whole = _view("status", probe.run, runs_root=probe.root)
+    without = _view("status", probe.run, "--no-providers", runs_root=probe.root)
+
+    assert whole.returncode == 0, whole.stderr
+    assert without.returncode == 0, without.stderr
+    assert not any(line.startswith(PROVIDERS) for line in without.stdout.splitlines()), (
+        f"`just status {probe.run} --no-providers` still printed the host's provider "
+        f"report: {without.stdout!r}"
+    )
+    _assert_free_space_above_the_cut(without.stdout, "status --no-providers", probe.root)
+    assert [_stable(line) for line in without.stdout.splitlines()] == [
+        _stable(line) for line in _above_providers(whole.stdout)
+    ], (
+        "`--no-providers` changed more than the provider report: the plain view above that "
+        f"report was {whole.stdout!r} and the view without it was {without.stdout!r}"
+    )
 
 
 def test_the_host_view_reports_free_space_above_any_provider_report(probe: Probe) -> None:

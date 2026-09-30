@@ -1,0 +1,51 @@
+{
+  "name": "manager-allowlist",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/manager_allowlist",
+  "tags": [
+    "scope:manager-allowlist",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-manager-invocations"
+  ],
+  "namedInputs": {
+    "managerAllowlistWorkspace": [
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/config/manager-allowlist.toml",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/.claude/settings.json",
+      "{workspaceRoot}/.codex/rules/oneharness.rules",
+      "{workspaceRoot}/oneharness*.toml",
+      "{workspaceRoot}/scripts/allowlist-probe.py",
+      "{workspaceRoot}/scripts/allowlist-probe.sh",
+      "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/tests/manager_allowlist/project.json",
+      "{workspaceRoot}/tests/manager_allowlist/test_manager_allowlist_recipes_e2e.py",
+      "{workspaceRoot}/tests/manager_allowlist/test_manager_allowlist_sync.py"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/manager_allowlist --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "managerAllowlistWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

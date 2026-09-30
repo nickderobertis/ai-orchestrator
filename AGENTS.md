@@ -793,7 +793,7 @@ three). **Runs are owned**: act only on runs you launched — `just runs` shows 
 owning session, or `[unknown]`, and `unknown` is never yours — and never derive a
 process list from `ps` and signal it, which has interrupted another manager
 mid-supervision here. `just stop` refuses another manager's run and is deliberately
-outside `.claude/settings.json`'s allowlist, so each one is approved on its own; `just
+outside the manager's allowlist, so each one is approved on its own; `just
 shutdown` is outside it for the same reason and more so, because at `--host` it acts on
 runs this session does not own.
 
@@ -1069,9 +1069,12 @@ watching means and what that verb is held to:
    surface ends one only under `surface`, so name both when you want both. `--timeout
    none` sets no bound on the wait. The watch returns `0` settled, `3` nothing-driving,
    `4` surface-waiting, `5` elapsed and `6` node-settled. Re-arm from the `cursor
-   <cursor>` its ending line carries. Its human form is on stderr, so redirect a watch to
-   a file or line-buffer the filter: a block-buffering pipe makes a healthy quiet run and
-   a dead one read alike.
+   <cursor>` its ending line carries. Its human form is on stderr unless `--log <file>`
+   names a file, which each line is appended to as it is written, so send it there — `just
+   watch <run> --until surface --until settled --until nothing-driving --timeout none
+   --log <file>` — never through a redirect or a pipe: a block-buffering pipe makes a
+   healthy quiet run and a dead one read alike, and neither is one command an allowlist
+   can approve.
    <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 5. **The unread-surface line is a HARD REQUIREMENT.** The `N planner update(s) waiting`
    line the views print per run, and the `N unread planner surface(s)` every watch
@@ -1079,10 +1082,10 @@ watching means and what that verb is held to:
    forbidden, because a blocking surface produces no other signal until it is read.
 6. **A grep over the whole of `just status` is watching two subjects at once**: the
    run's own lines, then `oneagentgraph health`'s report about the **host**, whose words
-   are the ones a real death is reported in. Cut at the boundary once, in one snapshot
-   the whole watch reads —
-   `just status "$RUN" 2>&1 | sed '/^  providers:/,$d'` — and the unread-surface line
-   and the free-space reading both sit above it.
+   are the ones a real death is reported in. Leave the host's report out once, in one
+   snapshot the whole watch reads — `just status "$RUN" --no-providers` — which drops
+   that report and nothing else, so the unread-surface line and the free-space reading
+   both stay in it.
 7. **A planning run is a dispatch.** Neither launch `just plan` makes attaches a
    monitor, because a planning run's plan is its own output, so each is owed the same
    watch, read to the end and re-armed from its cursor.
@@ -1446,12 +1449,12 @@ resolver that establishes it, never to a running driver.
 
 ### Supervising
 
-`just runs`, `just status`, `just host`, `just results`, and `just transcript` are how
-a run is read; never rebuild run state from `events.jsonl`, `ps`, or a clone's `git
+`just runs`, `just status`, `just host`, `just results`, `just transcript`, and `just
+agents` are how a run is read; never rebuild run state from `events.jsonl`, `ps`, or a clone's `git
 log`. Read the **side** a failed node died on before its identity, because the chains
 prefer different identities, and a `journal:` line as the one that makes the rest
 unprovable. Both `just status` and `just host` print the engine's own `free space:`
-line for every filesystem a run writes to, above the `providers:` cut so a watch still
+line for every filesystem a run writes to, and `--no-providers` keeps it, so a watch still
 sees it — read it, and leave acting on a filling disk to whoever owns what is filling
 it. Answer a run's questions through `just channel-next` on that run, and read a
 blocking surface the bus marks `abandoned` as one nobody is waiting on now. A run's journal holds a dispatch's own evidence —
@@ -1479,6 +1482,48 @@ gate`; the pre-push hook runs it only when the pushed diff touches the harness r
 files and scripts (`scripts/pre-push-smoke-needed.sh --print-paths` is the list), so
 ordinary pushes consume no harness quota. A candidate that refused the turn with a
 classified `quota` or `auth` failure is the chain working.
+
+### The manager's allowlist
+
+A manager session is started directly, as Claude Code or as Codex, and each tool reads its
+own project configuration, so the commands a manager runs without asking are stated once,
+in `config/manager-allowlist.toml` in Claude Code's dialect, and `just sync-allowlist`
+renders them with the pinned `oneharness sync --exact` into `.claude/settings.json`'s
+`permissions.allow` and `.codex/rules/oneharness.rules`. Edit the source and re-sync,
+never a rendered copy, which a drift gate refuses; a rule Codex cannot express is kept for
+Claude Code and reported by the sync. What a manager may and may not run is the table
+`tests/manager_invocations.py`, each row quoting the passage here that decides it, and
+`just probe-allowlist` drives both tools through it after the allowlist changes.
+
+**Write an invocation the way a rule can match it.** Claude Code holds each part of a
+compound command to a rule of its own, so an invocation written `cd <this checkout> &&
+<verb>` passes on the verb's grant, while a redirect into a file, a command substitution,
+an unset variable or a `..` in any argument sends the whole line to the classifier. Codex
+holds the `cd` to a rule as well, and none can be bounded to this checkout, so there the
+verb is written alone. So
+name the run id rather than a variable, spell a revision range `HEAD ^<base>` or `diff
+--merge-base <base> HEAD`, and write the envelope to `scratch/envelope.json` with your own
+file-write tool, the one file its grant names, before `just channel-reply` reads it. A
+`git -C <path>` read is not granted, because Claude Code's `*` spans words: `git -C *
+log*` also passed `git -C <path> merge log-fix`, and neither is a `git log`, `diff` or
+`show` here, whose `--output` writes a file, so those reads go to the classifier. Of `onevcs`'s own verbs, the release reads and
+acknowledgement, `rules check` and `pool status` are granted, and `onevcs session close
+<session>` closes a session you opened. The development tier — this repository's own
+recipes, `uv sync` and `uv lock` over its lockfile, `llmlint`, the `onejudge` and
+`oneharness` reads, and `onemessagebus status` over a run's channel — is granted, and so
+is `git clone`: a clone adds a checkout and changes no remote or base.
+
+What stays off it is what this document forbids a manager: a hand `git merge`, `checkout`
+or `commit` in an engine checkout or a worker's worktree, however it is prefixed; a hook
+bypassed with `git -c core.hooksPath=…` or `--no-verify`; a `gh api` write, a
+branch-protection change among them; cancelling a CI run with `gh run cancel`; a signal to
+a process; and a hand edit of a run's own state, its `launch.json` or a channel cursor. So
+do `just stop`, `just shutdown`, `just approve-design` and `just unpublished
+--acknowledge`, each approved on its own: the first two act on runs, the third records the
+user's own approval, and the fourth writes an acknowledgement. The deny list stays empty,
+because bypass mode still honours a deny rule and every dispatch runs in it, and the Codex
+rendering holds allow decisions only, because a dispatched Codex side in a linked worktree
+inherits this checkout's trust and loads it.
 
 ### The checks
 
@@ -1583,7 +1628,8 @@ pre-push because there is no CI.
   validate-personas`), and the label contract in `orchestrator/labels.py` before it can
   reach a subprocess.
 - No secrets or credentials in the tree: harness credentials live in the environment,
-  referenced by name, and the allowlist in `.claude/settings.json` stays narrow.
+  referenced by name, and the manager's allowlist, `config/manager-allowlist.toml`, stays
+  narrow.
 
 ## Tests are context engineering
 
@@ -1616,8 +1662,8 @@ and `onevcs reclaim` remove a branch's origin copy with `--no-verify`, because a
 puts no work on the origin for a merge path to rule on. Local-first is not local-only: keep the registered base
 in sync with its origin and push every change that reaches it immediately (`just sync`
 fast-forwards a publication checkout). Never force-push or rewrite history on the
-registered base. Keep the `.claude/settings.json` allowlist current with routine
-commands rather than re-approving them each session.
+registered base. Keep [the manager's allowlist](#the-managers-allowlist) current with
+routine commands rather than re-approving them each session.
 
 `core.hooksPath` activates the whole directory. **`commit-msg`** holds the
 subject to a Conventional Commit of a type this repository releases from (`feat`,

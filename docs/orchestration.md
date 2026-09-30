@@ -3016,8 +3016,9 @@ differs from a stop in what it asks, what it keeps and what it records.
   are reported at exit zero. Its last section names every other unpublished branch on
   this host that the shutdown did not push.
 
-`just shutdown` stays outside `.claude/settings.json`'s allowlist for the reason `just
-stop` does, and more so: `--host` acts on runs this session does not own.
+`just shutdown` stays outside the manager's allowlist, `config/manager-allowlist.toml`,
+for the reason `just stop` does, and more so: `--host` acts on runs this session does not
+own.
 
 ### Retrying a provider refusal
 

@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from watch_rule import ENDING_LINE, rule
@@ -156,3 +158,47 @@ def test_the_buffering_account_rests_on_the_forms_the_engine_really_splits() -> 
         f"{watched.stdout}"
     )
     assert watched.stderr.splitlines()[-1].startswith("-- watch "), watched.stderr
+
+
+@pytest.mark.reads_checkouts
+def test_a_watch_given_a_log_writes_its_human_form_there_through_the_recipe(
+    tmp_path: Path,
+) -> None:
+    """Watch property 4's form: `just watch <run> … --log <file>`, and no redirect.
+
+    The passage tells a supervisor to send the human form to a file with `--log` rather
+    than through a redirect or a pipe, so the recipe has to hand the flag to the engine and
+    the engine has to write every human line there — the ending line with its cursor
+    included — leaving standard error without them and standard output the machine record.
+    """
+    assert "--log <file>" in _flat(_region(WATCH_SECTION)), (
+        f"{MANAGER} no longer tells a supervisor to send a watch's human form to `--log <file>`"
+    )
+    log = tmp_path / "watch.log"
+    # A copy, because a reading verb writes the run's checkpoint cache beside it, and other
+    # journeys copy the recorded runs while this one runs.
+    runs = tmp_path / "runs"
+    shutil.copytree(RECORDED_RUNS / SETTLED_RUN, runs / SETTLED_RUN)
+
+    watched = subprocess.run(
+        ["just", "watch", SETTLED_RUN, "--timeout", "0", "--log", str(log)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)},
+    )
+
+    written = log.read_text(encoding="utf-8").splitlines()
+    assert written and ENDING_LINE.match(written[-1]), (
+        f"`just watch --log` wrote no ending line to {log}: {written!r}; stderr said "
+        f"{watched.stderr!r}"
+    )
+    assert "-- watch " not in watched.stderr, (
+        f"`just watch --log` still wrote its human form to stderr: {watched.stderr!r}"
+    )
+    assert all(json.loads(line).get("watch") for line in watched.stdout.splitlines()), (
+        f"the engine's standard output carries a line that is not a machine record:\n"
+        f"{watched.stdout}"
+    )

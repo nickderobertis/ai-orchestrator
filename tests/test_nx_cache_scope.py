@@ -63,6 +63,8 @@ from nx_inputs import (
     FROM_DEPENDENCIES,
     HOST_VIEWS_ROOT,
     HOST_VIEWS_SCOPED,
+    MANAGER_ALLOWLIST_ROOT,
+    MANAGER_ALLOWLIST_SCOPED,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_SCOPED,
     NX_CACHE_CHECK,
@@ -904,7 +906,8 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: `project-store-race` project owns the clock-bounded replacement race over the record
 #: store in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
-#: `just unfinished` in one, the `host-views` project owns the journeys
+#: `just unfinished` in one, the `manager-allowlist` project owns the journeys over `just
+#: sync-allowlist` and `just probe-allowlist` in one, the `host-views` project owns the journeys
 #: over `just status` and `just host` in one, and the orchestrator project owns the rest
 #: in four.
 SUITE_TIERS = (
@@ -921,6 +924,13 @@ SUITE_TIERS = (
     (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
     (f"{UNPUBLISHED_VIEW_ROOT}/project.json", UNPUBLISHED_VIEW_SCOPED),
     (f"{UNFINISHED_ROOT}/project.json", UNFINISHED_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the manager-allowlist entry sits beside the others' rather than in a domain of its
+    # own because the catalog is the domain.
+    (f"{MANAGER_ALLOWLIST_ROOT}/project.json", MANAGER_ALLOWLIST_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{HOST_VIEWS_ROOT}/project.json", HOST_VIEWS_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
