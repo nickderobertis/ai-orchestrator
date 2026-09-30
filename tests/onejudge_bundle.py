@@ -45,6 +45,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+from datetime import UTC, datetime, timedelta
 from functools import cache
 from importlib import resources
 from pathlib import Path
@@ -177,27 +178,65 @@ def relinked_copy(destination: Path, link: str, *, replacing: dict[str, str] | N
     return destination
 
 
+#: How long before its minting the fixture authority and its leaf are valid from: far past
+#: any skew between the clock `openssl` stamps with and the one a client verifies against.
+VALID_BEFORE_MINTING = timedelta(days=1)
+
+#: How long after its minting they stay valid: past the life of any suite run.
+VALID_AFTER_MINTING = timedelta(days=2)
+
+
 def _openssl(*arguments: str) -> None:
     subprocess.run(["openssl", *arguments], check=True, capture_output=True, timeout=60)
 
 
-def _authority(directory: Path, hosts: set[str]) -> tuple[Path, ssl.SSLContext]:
+def mint_authority(directory: Path, hosts: set[str]) -> tuple[Path, ssl.SSLContext]:
     """A throwaway certificate authority, and a server context for `hosts` it issued.
+
+    Both certificates are valid from a day before they are minted rather than from the
+    second `openssl` reads its clock: a client verifying in that same second, or in the
+    one before it on a clock a hair behind, would otherwise refuse a certificate "not
+    valid yet". The pinned OpenSSL's `req` and `x509` take no start date, so both are
+    issued through `ca`, whose `-startdate` does, over a database private to `directory`.
 
     Each `openssl` argv below is left as written under `# fmt: skip`: the formatter would
     put every option and its value on a line of its own, and a command that reads as
     the command line it is beats one argument per line.
     """
+    minted = datetime.now(UTC)
+    starts = (minted - VALID_BEFORE_MINTING).strftime("%Y%m%d%H%M%SZ")
+    ends = (minted + VALID_AFTER_MINTING).strftime("%Y%m%d%H%M%SZ")
+    (directory / "index.txt").write_text("", encoding="utf-8")
+    (directory / "serial").write_text("01\n", encoding="utf-8")
+    issuing = directory / "ca.cnf"
+    issuing.write_text(
+        "[ca]\ndefault_ca = suite\n"
+        f"[suite]\ndatabase = {directory / 'index.txt'}\nnew_certs_dir = {directory}\n"
+        f"serial = {directory / 'serial'}\ndefault_md = sha256\npolicy = named\n"
+        "unique_subject = no\n"
+        "[named]\ncommonName = supplied\n",
+        encoding="utf-8",
+    )
     authority, key = directory / "authority.pem", directory / "authority.key"
+    authority_request, authority_extensions = (
+        directory / "authority.csr",
+        directory / "authority.ext",
+    )
+    authority_extensions.write_text(
+        "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign\n", encoding="utf-8"
+    )
     _openssl(
-        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
-        "-keyout", str(key), "-out", str(authority), "-subj", "/CN=suite authority",
-        "-addext", "basicConstraints=critical,CA:TRUE",
-        "-addext", "keyUsage=critical,keyCertSign",
+        "req", "-new", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", str(key), "-out", str(authority_request), "-subj", "/CN=suite authority",
+    )  # fmt: skip
+    _openssl(
+        "ca", "-batch", "-notext", "-config", str(issuing), "-selfsign", "-keyfile", str(key),
+        "-in", str(authority_request), "-out", str(authority),
+        "-startdate", starts, "-enddate", ends, "-extfile", str(authority_extensions),
     )  # fmt: skip
     leaf, leaf_key, request = directory / "leaf.pem", directory / "leaf.key", directory / "leaf.csr"
     _openssl(
-        "req", "-newkey", "rsa:2048", "-nodes", "-keyout", str(leaf_key),
+        "req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", str(leaf_key),
         "-out", str(request), "-subj", f"/CN={sorted(hosts)[0]}",
     )  # fmt: skip
     extensions = directory / "leaf.ext"
@@ -207,8 +246,9 @@ def _authority(directory: Path, hosts: set[str]) -> tuple[Path, ssl.SSLContext]:
         encoding="utf-8",
     )
     _openssl(
-        "x509", "-req", "-in", str(request), "-CA", str(authority), "-CAkey", str(key),
-        "-CAcreateserial", "-out", str(leaf), "-days", "2", "-extfile", str(extensions),
+        "ca", "-batch", "-notext", "-config", str(issuing),
+        "-cert", str(authority), "-keyfile", str(key), "-in", str(request), "-out", str(leaf),
+        "-startdate", starts, "-enddate", ends, "-extfile", str(extensions),
     )  # fmt: skip
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(leaf, leaf_key)
@@ -272,7 +312,7 @@ def seed_process_cache() -> Path:
     hosts = {urlsplit(link).hostname or "" for link in links if link.startswith("https://")}
     directory = Path(tempfile.mkdtemp(prefix="onemessagebus-schemas-"))
     cache_dir = directory / "cache"
-    authority, context = _authority(directory, hosts)
+    authority, context = mint_authority(directory, hosts)
     listener, proxy = _serve_through_a_tunnel(
         context,
         {

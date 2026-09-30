@@ -32,6 +32,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -463,3 +464,30 @@ def test_the_adopted_bus_resolves_the_configuration_to_the_four_queues_the_engin
         refused.stdout + refused.stderr
     )
     assert refused.stdout.strip() == "", refused.stdout
+
+
+def test_the_loopback_authority_is_valid_before_the_second_it_is_minted(tmp_path: Path) -> None:
+    """A client verifying the minted chain in the same or the preceding second accepts it.
+
+    `seed_process_cache()` hands every process of the suite this chain, and a client whose
+    clock read a second behind the one `openssl` stamped with once refused it as "not
+    valid yet". `openssl verify -attime` fixes the verification instant, so the check does
+    not depend on where the wall clock's second boundary falls.
+    """
+    before = int(time.time()) - 1
+    authority, _ = onejudge_bundle.mint_authority(tmp_path, {"suite.invalid"})
+    minted = int(time.time())
+    for instant in (before, minted):
+        verified = subprocess.run(
+            ["openssl", "verify", "-CAfile", str(authority), "-attime", str(instant),
+             str(tmp_path / "leaf.pem")],
+            capture_output=True, text=True, timeout=60, check=False,
+        )  # fmt: skip
+        assert verified.returncode == 0, (instant, verified.stdout + verified.stderr)
+    expired = minted + int(onejudge_bundle.VALID_AFTER_MINTING.total_seconds()) + 60
+    refused = subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), "-attime", str(expired),
+         str(tmp_path / "leaf.pem")],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert refused.returncode != 0 and "expired" in refused.stdout + refused.stderr, refused
