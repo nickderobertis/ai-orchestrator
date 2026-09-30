@@ -193,6 +193,7 @@ _ACK_BRANCH = (
     "acknowledge work deliberately kept with `just unpublished --acknowledge <branch> "
     '--reason "<why>"`'
 )
+_ACK_RUN = 'or close it with `just unwatched --acknowledge <run> --reason "<why>"`'
 _FORBIDDEN = "What stays off it is what this document forbids a manager"
 _NO_VERIFY = "a hook bypassed with `git -c core.hooksPath=…` or `--no-verify`"
 _BYPASS = "Nothing that changes what a remote or a base branch sees bypasses `onevcs`"
@@ -254,7 +255,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
     ),
     _allow("runs", "just runs", _VIEWS),
     _allow("monitor", "just monitor {run}", _AFTER_LAUNCH),
-    _allow("unwatched", "just unwatched", _AFTER_LAUNCH),
+    _allow("unwatched", "just unwatched", _AFTER_LAUNCH, codex=CODEX_EXACT),
     _allow("unpublished-host", "just unpublished --host", _UNPUBLISHED, codex=CODEX_EXACT),
     _allow("unfinished", "just unfinished", _UNFINISHED, codex=CODEX_EXACT),
     _allow("unfinished-json", "just unfinished --json", _UNFINISHED, codex=CODEX_EXACT),
@@ -398,6 +399,11 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "unpublished-acknowledge",
         "just unpublished --acknowledge {branch} --reason kept",
         _ACK_BRANCH,
+    ),
+    _refuse(
+        "unwatched-acknowledge",
+        "just unwatched --acknowledge {run} --reason done",
+        _ACK_RUN,
     ),
     _refuse("git-C-merge", "git -C {workspace} merge {branch}", _FORBIDDEN),
     _refuse("git-C-checkout", "git -C {workspace} checkout {branch}", _FORBIDDEN),

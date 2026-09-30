@@ -16,6 +16,12 @@ real `onevcs session open` placed and `session close` returned, and the preserve
 is a real commit its origin does not have. What each recipe argument reaches is the
 delegated-recipes table's row; what the verbs do with it is proven here.
 
+The finished-branches pass records each branch's verdict under everything its derivation
+read, and a later pass over unchanged inputs reuses it instead of re-deriving it — the
+onevcs 0.35.0 contract, `derivation: derived | reused` on every `finished-branches` entry.
+One journey drives the real recipe twice over a registered checkout holding a branch the
+pass keeps and a session branch it can prove retirable, and reads that field.
+
 What the command covers and why is docs/orchestration.md, "The recorded run".
 
 llmlint: ignore-file[shell_test_tiers_stay_split] Which Nx project owns this module is
@@ -44,7 +50,7 @@ import os
 import subprocess
 import textwrap
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Literal, NamedTuple, TypedDict, cast
 
 import pytest
 from waits import timeout as e2e_timeout
@@ -133,6 +139,47 @@ class SweepReport(TypedDict):
     totals: dict[str, int]
 
 
+Classification = Literal["keep", "retirable"]
+Derivation = Literal["derived", "reused"]
+
+
+class Verdict(NamedTuple):
+    """The verdict a pass must reach for one branch: its class, and the word that says why.
+
+    ``why`` is the keep reason for a kept branch and the proof's kind for a retirable
+    one, the two places the report spells what decided the class.
+    """
+
+    classification: Classification
+    why: str
+
+
+class RetirementProof(TypedDict):
+    """The part of a retirable entry's proof these journeys read."""
+
+    kind: str
+
+
+#: The fields of one `finished-branches` entry the verdict-reuse journey reads, in the
+#: functional form because the report's own `class` is a Python keyword.
+FinishedBranch = TypedDict(
+    "FinishedBranch",
+    {
+        "branch": str,
+        "class": Classification,
+        "reason": str | None,
+        "proof": RetirementProof | None,
+        "derivation": Derivation,
+    },
+)
+
+
+def _verdict(entry: FinishedBranch) -> Verdict:
+    """The verdict one entry reports, spelled as the fixture's expectations are."""
+    proof = entry["proof"]
+    return Verdict(entry["class"], str(entry["reason"] if proof is None else proof["kind"]))
+
+
 class Host:
     """The scratch roots one sweep judges, and the environment that points it at them."""
 
@@ -199,6 +246,52 @@ class Host:
         closed = self.onevcs("session", "close", session["token"])
         assert closed.returncode == 0, closed.stderr
         return checkout
+
+    def identity_with_a_kept_and_a_retirable_branch(self) -> dict[str, Verdict]:
+        """A registered checkout whose finished-branches pass keeps one branch and retires one.
+
+        The kept branch is local work its origin never received, which the pass names
+        because it holds commits no origin ref has and keeps as unmerged. The retirable
+        one is a real session's branch whose change reached the base as a squash commit
+        rather than as its own commit, which is how a `local-direct` publication lands:
+        the base does not carry its tip, so only the content proof can retire it. Every
+        piece is made by the tool that owns it — git, `onevcs register`, `session open`
+        and `session close` — and the map is each branch's expected verdict.
+        """
+        origin = self.root / "origin.git"
+        _git("init", "--quiet", "--bare", "--initial-branch=main", str(origin))
+        checkout = self.root / "project"
+        _git("clone", "--quiet", str(origin), str(checkout))
+        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=checkout)
+        _git("push", "--quiet", "origin", "HEAD:main", cwd=checkout)
+        _git("checkout", "--quiet", "-b", "unfinished", cwd=checkout)
+        (checkout / "unfinished.txt").write_text("not landed\n", encoding="utf-8")
+        _git("add", "unfinished.txt", cwd=checkout)
+        _git("commit", "--quiet", "-m", "unfinished work", cwd=checkout)
+        _git("checkout", "--quiet", "main", cwd=checkout)
+
+        registered = self.onevcs("register", str(checkout))
+        assert registered.returncode == 0, registered.stderr
+        opened = self.onevcs("session", "open", str(checkout))
+        assert opened.returncode == 0, opened.stderr
+        session = json.loads(opened.stdout)
+        worktree = Path(session["worktree"])
+        (worktree / "landed.txt").write_text("landed by squash\n", encoding="utf-8")
+        _git("add", "landed.txt", cwd=worktree)
+        _git("commit", "--quiet", "-m", "landed work", cwd=worktree)
+        closed = self.onevcs("session", "close", session["token"])
+        assert closed.returncode == 0, closed.stderr
+
+        # The squash: the same content as a new commit on the base, pushed to the origin.
+        _git("pull", "--quiet", "--ff-only", "origin", "main", cwd=checkout)
+        (checkout / "landed.txt").write_text("landed by squash\n", encoding="utf-8")
+        _git("add", "landed.txt", cwd=checkout)
+        _git("commit", "--quiet", "-m", "landed work (squashed)", cwd=checkout)
+        _git("push", "--quiet", "origin", "HEAD:main", cwd=checkout)
+        return {
+            "unfinished": Verdict("keep", "unmerged-unique-commits"),
+            session["branch"]: Verdict("retirable", "content-identical"),
+        }
 
     def scratch(self, name: str, *, held: bool) -> Path:
         """One `temp`-family directory, with an owner that is either alive or gone."""
@@ -286,6 +379,57 @@ def test_each_verb_reports_every_family_it_left_with_its_owner(host: Host, verb:
             f"holding a pool slot and a preserved branch: {report['not_examined']}"
         )
         assert named["preserved-branches"]["path"] == str(checkout), named["preserved-branches"]
+
+
+def _finished_branches(result: subprocess.CompletedProcess[str]) -> dict[str, FinishedBranch]:
+    """The `finished-branches` entries of the onevcs report a `--format json` recipe run printed.
+
+    The recipe prints onevcs's document and then oneagentgraph's on one stdout, so the
+    first JSON value is the one read, and its `verb` is checked rather than assumed.
+    """
+    assert result.returncode == 0, result.stderr
+    report, _ = json.JSONDecoder().raw_decode(result.stdout.lstrip())
+    assert report["verb"] == "onevcs sweep", f"the first report is not onevcs's: {report}"
+    # The fields the journey reads are asserted on by name there, so a release that drops
+    # one fails by name; the cast only lets the type checker follow them.
+    entries = cast(list[FinishedBranch], report["finished_branches"]["examined"])
+    return {entry["branch"]: entry for entry in entries}
+
+
+def test_a_second_pass_over_unchanged_branches_reuses_every_recorded_verdict(
+    host: Host,
+) -> None:
+    """The fix `just sweep` carries from onevcs 0.35.0, proven on the installed verb.
+
+    The first pass derives each branch's verdict and records it — a dry run records too —
+    and the second, over nothing changed, answers every one from that record. The
+    fixture holds a branch kept and a branch proven retirable, so a family that came back
+    empty, dropped a branch, or re-derived one fails here by name.
+    """
+    expected = host.identity_with_a_kept_and_a_retirable_branch()
+
+    first = _finished_branches(sweep(host, "--dry-run", "--format", "json"))
+    second = _finished_branches(sweep(host, "--dry-run", "--format", "json"))
+
+    assert first, "the finished-branches pass examined nothing"
+    assert set(first) == set(expected), (
+        f"the first pass examined {sorted(first)}, not {sorted(expected)}"
+    )
+    assert set(second) == set(first), (
+        f"the second pass examined {sorted(second)} where the first examined {sorted(first)}"
+    )
+    for branch, verdict in expected.items():
+        assert _verdict(first[branch]) == verdict, f"{branch} was classified {first[branch]}"
+    assert {branch: entry["derivation"] for branch, entry in first.items()} == dict.fromkeys(
+        first, "derived"
+    ), f"the first pass did not derive every verdict: {first}"
+    assert {branch: entry["derivation"] for branch, entry in second.items()} == dict.fromkeys(
+        second, "reused"
+    ), f"the second pass re-derived a verdict nothing changed under: {second}"
+    assert {branch: _verdict(entry) for branch, entry in second.items()} == {
+        branch: _verdict(entry) for branch, entry in first.items()
+    }, "a reused verdict differs from the one derived"
+    assert list((host.onevcs_home / "verdicts").iterdir()), "no verdict was recorded"
 
 
 def test_the_recipe_prints_both_reports_onevcs_first_with_the_default_floor(

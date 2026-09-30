@@ -84,6 +84,13 @@ from typing import NamedTuple, TypedDict
 #: name again would re-enter this script.
 REAL_BINARY_ENV = "REAL_ONEHARNESS_BIN"
 
+#: Verbs that reach no provider, so there is no model for this file to stand in for and
+#: the real CLI answers them unchanged. `interrupt` is the cancel lever: the engine's
+#: linked `oneagentgraph` spawns `interrupt --session … --cwd … --format json --compact
+#: --input …` through the same binary variable as every turn, and refusing it here made
+#: the lever read as *failed* rather than as the real control socket's own answer.
+PASSED_THROUGH_VERBS = frozenset({"interrupt"})
+
 #: The one identity every delegated turn is pinned to, and mocked at.
 #:
 #: Both flags, and neither is optional. `--mock-harness ID` replaces the provider
@@ -710,8 +717,20 @@ def _busy_turn(config: str | None, prompt: str) -> BusyTurn | None:
     return BusyTurn(int(calls), int(os.environ.get(AGENT_ACTIVITY_INTERVAL_ENV, "1000")))
 
 
+def _passed_through(argv: list[str]) -> int:
+    """Hand a verb that reaches no provider to the real CLI exactly as it arrived."""
+    real = os.environ.get(REAL_BINARY_ENV)
+    if not real:
+        print(f"fake_backend: {REAL_BINARY_ENV} is not set", file=sys.stderr)
+        return 2
+    passed = subprocess.run([real, *argv], check=False)  # noqa: S603 - the real CLI, unchanged
+    return passed.returncode
+
+
 def main(argv: list[str]) -> int:
     """Answer one harness turn."""
+    if argv and argv[0] in PASSED_THROUGH_VERBS:
+        return _passed_through(argv)
     if not argv or argv[0] != "run":
         print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
         return 2

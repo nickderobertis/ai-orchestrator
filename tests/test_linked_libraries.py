@@ -633,7 +633,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.3", core="0.18.0"),
     LinkedCore(dependent="onejudge", dependent_version="0.14.0", core="0.18.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.53.3", core="0.18.0"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.54.0", core="0.18.0"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

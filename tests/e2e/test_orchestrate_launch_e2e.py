@@ -264,6 +264,20 @@ LAUNCHER_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
+#: The history store a dispatch running this suite exports for its own turns. Inherited,
+#: every doubled turn of a launch here wrote to the host's shared store and waited on
+#: its one index lock — measured at 37s of a 48s mocked turn, on a store holding 1661
+#: projects — which pushed a 20-second worker past a 60-second cancel grace and got it
+#: killed. The pointer file is that dispatch's own run's, so it also recorded these
+#: journeys' turns as the enclosing run's. Cleared, history lands under the journey's
+#: own `XDG_STATE_HOME`; a journey that means a store names one, as
+#: `observed_launch` does.
+INHERITED_HISTORY_ENVIRONMENT = (
+    "ONEHARNESS_HISTORY_DIR",
+    "ONEHARNESS_HISTORY_POINTER_FILE",
+    "ONEHARNESS_HISTORY_LABELS",
+)
+
 
 class Launched(NamedTuple):
     """One launched run: the environment it lives in, and how its launch ended.
@@ -407,8 +421,17 @@ def _environment(
     every path; the two seams below are what cover this one.
     """
     environment = dict(os.environ)
-    for name in LAUNCHER_ENVIRONMENT:
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This clears three
+    # inherited variables in the existing shared environment so the host's history store
+    # cannot decide these journeys' verdicts; it adds no launch and moves none, and
+    # re-homing `tests/e2e` into an Nx project of its own is enforcement configuration
+    # this change may not move in order to pass.
+    # llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this
+    # is a pytest journey over the real recipe, not a shell test suite.
+    for name in LAUNCHER_ENVIRONMENT + INHERITED_HISTORY_ENVIRONMENT:
         environment.pop(name, None)
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
     # Every launch through the recipe names the run-end hooks, and the success hook reads
     # the run's drafts and writes a follow-up project when it finds some. So the drafts
     # root and the authoring root are this journey's own, never the real stores of the
