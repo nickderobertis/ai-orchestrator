@@ -53,6 +53,7 @@ Conventions for this repository's tests.
   `onevcs_state_snapshot.host_registry()` for that one call, never for a launch or a
   sweep; `tests/e2e/test_launch_walks_no_host_identity_e2e.py` holds it.
 - **The environment a test runs in is the test's to state.** The autouse fixtures in
-  `conftest.py` drop the dispatch's comparison base, ownership stamp, and per-side
-  harness selection; a test that means to exercise one sets it itself.
+  `conftest.py` drop the dispatch's comparison base, ownership stamp, per-side harness
+  selection, and oneharness history settings — inherited, the last queue every turn on
+  a host-wide history index — and a test that means to exercise one sets it itself.
 - Every recipe needs a real journey here before it is done.

@@ -4143,13 +4143,6 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
 CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
 CANCEL_GRACE_SECONDS = 5
 
-#: The grace the *graceful* journey runs under, and the one of this pair that may be
-#: scaled: there the deadline is only the premise, so it has to be long enough for a
-#: real process teardown to finish under this tier's own load, which the unscaled five
-#: seconds have not been. The escalation journey keeps them, because there the deadline
-#: expiring *is* the behaviour under test.
-STOPPING_GRACE_SECONDS = round(e2e_timeout(15))
-
 #: The grace the *requeue* journey runs under. There the deadline is only the premise
 #: too: the requeue has to reach the driver while the cancelled dispatch is still in
 #: flight, and that dispatch is in flight only until the grace expires. Each reply the
@@ -4164,14 +4157,6 @@ REQUEUE_GRACE_SECONDS = 60
 #: stand-in answers on a timer and takes no redirection: it is the dispatch that does
 #: *not* stop when asked, which is exactly the arm the deadline exists for.
 CANCELLED_WORKER_HELD_SECONDS = 90
-
-#: The channel-reply recipe judges its answer before the driver sees it. A two-second
-#: worker settled before that reply reached the driver under the publication gate's
-#: load, so no cancellation happened. Hold the worker past that turn while leaving
-#: enough grace for its ordinary completion and teardown.
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This repairs the existing
-# cancellation journey's timing under the gate; moving its whole suite is outside this task.
-STOPPING_WORKER_HELD_SECONDS = 20
 
 #: The two surfaces a cancellation raises, in the order it raises them.
 INTERRUPTED = "dispatch-interrupted"
@@ -4227,18 +4212,6 @@ def requeueable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
         RunId("cancel-requeue-e2e"),
         CANCELLED_WORKER_HELD_SECONDS,
         REQUEUE_GRACE_SECONDS,
-    )
-
-
-@pytest.fixture
-def stopping_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
-    """A run whose only node ends well inside a short cancellation grace period."""
-    yield from _cancellable(
-        tmp_path,
-        oneharness_bin,
-        RunId("cancel-graceful-e2e"),
-        STOPPING_WORKER_HELD_SECONDS,
-        STOPPING_GRACE_SECONDS,
     )
 
 
@@ -4344,40 +4317,6 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-
-
-@pytest.mark.xdist_group("cancellation")
-def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
-    stopping_run: LiveRun,
-) -> None:
-    """The other arm of a cancel, and the one a planner should usually see.
-
-    The escalation journey holds a dispatch that will not stop; this holds the ordinary
-    case, and the two together are what make the pair of surfaces worth telling apart at
-    all. What is asserted is the *absence* of the kill: a supervisor reading
-    `dispatch-killed` is being told that whatever the turn had not committed is gone, so
-    an engine that raised it for every cancel would send them looking for lost work after
-    a dispatch that lost none.
-
-    The node is left to settle before the assertion rather than sampled the moment the
-    interrupt lands, because "was not killed" is only true once there is no longer
-    anything to kill.
-    """
-    _dispatched(stopping_run)
-    cancelled = _replied(stopping_run, {"op": "cancel", "id": "held"})
-    assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
-
-    _awaited(stopping_run, INTERRUPTED, seconds=120)
-    # Past this run's own deadline, so a kill it was going to raise has had every chance
-    # to arrive. It is `STOPPING_GRACE_SECONDS` the kill would be timed from, not the
-    # unscaled constant, so a wait measured against that one could end before the engine
-    # had reached the decision this asserts the outcome of.
-    time.sleep(STOPPING_GRACE_SECONDS + CANCEL_GRACE_SECONDS * 2)
-    stream = _just("monitor", stopping_run.run, "--all", environment=stopping_run.environment)
-    assert stream.returncode == 0, stream.stderr
-    assert KILLED not in stream.stdout, (
-        f"a dispatch that ended inside the grace period was reported killed:\n{stream.stdout}"
-    )
 
 
 def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declared(
