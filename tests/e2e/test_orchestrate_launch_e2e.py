@@ -4120,12 +4120,18 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
 CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
 CANCEL_GRACE_SECONDS = 5
 
-#: The grace the *graceful* journey runs under, and the one of this pair that may be
-#: scaled: there the deadline is only the premise, so it has to be long enough for a
-#: real process teardown to finish under this tier's own load, which the unscaled five
-#: seconds have not been. The escalation journey keeps them, because there the deadline
-#: expiring *is* the behaviour under test.
-STOPPING_GRACE_SECONDS = round(e2e_timeout(15))
+#: The grace the *graceful* journey runs under, before load scaling, and the one of this
+#: pair that may be long: there the deadline is only the premise, so it has to outlast
+#: the whole cancelled dispatch under this tier's own load. The stand-in refuses the
+#: interrupt lever, so the dispatch ends only once its held turns have run, and each of
+#: them sleeps `STOPPING_WORKER_HELD_SECONDS`: under a publication gate one such turn
+#: took 44 s and the dispatch outlived a 60 s grace, which reported a kill the engine was
+#: right to raise. The journey waits for the node to settle rather than for the grace to
+#: expire, so a long grace costs nothing when the dispatch ends early. The escalation
+#: journey keeps the unscaled five seconds, because there the deadline expiring *is* the
+#: behaviour under test.
+STOPPING_GRACE_UNSCALED_SECONDS = 150
+STOPPING_GRACE_SECONDS = round(e2e_timeout(STOPPING_GRACE_UNSCALED_SECONDS))
 
 #: The grace the *requeue* journey runs under. There the deadline is only the premise
 #: too: the requeue has to reach the driver while the cancelled dispatch is still in
@@ -4338,23 +4344,26 @@ def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
 
     The node is left to settle before the assertion rather than sampled the moment the
     interrupt lands, because "was not killed" is only true once there is no longer
-    anything to kill.
+    anything to kill: a kill is raised against a dispatch still in flight, and a settled
+    node has none. Its settlement, not the grace's expiry, is what the wait ends on, so
+    the outcome does not depend on how long a turn takes under load — the grace is long
+    enough that the dispatch ends inside it, and the wait's own bound is longer than the
+    grace, so a dispatch the engine did kill settles inside the wait and fails on the
+    kill rather than on a timeout.
     """
     _dispatched(stopping_run)
     cancelled = _replied(stopping_run, {"op": "cancel", "id": "held"})
     assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
 
     _awaited(stopping_run, INTERRUPTED, seconds=120)
-    # Past this run's own deadline, so a kill it was going to raise has had every chance
-    # to arrive. It is `STOPPING_GRACE_SECONDS` the kill would be timed from, not the
-    # unscaled constant, so a wait measured against that one could end before the engine
-    # had reached the decision this asserts the outcome of.
-    time.sleep(STOPPING_GRACE_SECONDS + CANCEL_GRACE_SECONDS * 2)
-    stream = _just("monitor", stopping_run.run, "--all", environment=stopping_run.environment)
-    assert stream.returncode == 0, stream.stderr
-    assert KILLED not in stream.stdout, (
-        f"a dispatch that ended inside the grace period was reported killed:\n{stream.stdout}"
+    stream = _awaited(stopping_run, "node-settled", seconds=STOPPING_GRACE_UNSCALED_SECONDS + 60)
+    assert KILLED not in stream, (
+        f"a dispatch that ended inside the grace period was reported killed:\n{stream}"
     )
+    # Still a cancel inside a grace: the interrupt landed while the dispatch ran, and the
+    # node settled as the cancel it was, not as work that finished on its own.
+    assert stream.index(INTERRUPTED) < stream.index("node-settled"), stream
+    assert "node-settled cancelled" in stream, stream
 
 
 def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declared(
