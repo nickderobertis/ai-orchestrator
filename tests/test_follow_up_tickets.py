@@ -2040,7 +2040,16 @@ def test_copy_refuses_a_ticket_it_cannot_read_and_a_report_naming_no_item(
             None,
         )
     written = CopyReport.model_validate(
-        {"items": [{"source": "drafts:a", "action": "updated", "destination": f"{BOARD}:b"}]}
+        {
+            "items": [
+                {
+                    "source": "drafts:a",
+                    "action": "updated",
+                    "destination": f"{BOARD}:b",
+                    "via": "origin",
+                }
+            ]
+        }
     )
     assert tickets.copied_to(written, BOARD, tickets.BoardItemId("b")) == ("updated", "b")
     orphaned = CopyReport.model_validate(

@@ -21,6 +21,8 @@ import jsonschema
 import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
+from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
+from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from plan_store_pin import (
     PACING_FLOOR,
     adopted_release,
@@ -665,23 +667,54 @@ class _Board:
     def search_response(self, search: str) -> dict[str, object]:
         """The issues of this board a search finds, narrowed the way GitHub narrows one.
 
-        The `in:title "…"` qualifier is honoured rather than ignored: the source
-        compares a title for equality afterwards, so a fixture answering every search
-        with the whole board would pass a source that had stopped scoping its search at
-        all — and scoping it is the whole of what this read buys over walking the board.
+        The `in:title`, `in:body` and `in:title,body` qualifiers and the quoted phrases
+        after them are honoured rather than ignored: the source confirms each candidate
+        afterwards, so a fixture answering every search with the whole board would pass a
+        source that had stopped scoping its search at all — and scoping it is the whole of
+        what this read buys over walking the board. Every phrase has to appear in one of
+        the named fields, as GitHub requires of every term.
         """
-        wanted = _TITLE_QUALIFIER.search(search)
-        found = [
-            issue
-            for issue in self.issues
-            if wanted is None or _unescaped(wanted.group("title")) in issue.title
-        ]
+        wanted = _FIELD_QUALIFIER.search(search)
+        found = [issue for issue in self.issues if wanted is None or _found_by(wanted, issue)]
         return {
             "data": {
                 "search": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [issue.board_issue() for issue in found],
                 }
+            }
+        }
+
+    def origin_lookup_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """The rows whose origin field holds one copy origin, and the search for it in bodies.
+
+        Two reads in one document, as the source sends them: the board's own `items`
+        narrowed by its field filter — `onetaskgraph.origin:"<id>"`, matched exactly the way
+        GitHub matches a quoted field value — and the board-scoped issue search for the same
+        id in the body. The rows answered are only those the filter names, because the point
+        of the filter is that the board is not walked: a fixture that answered every row
+        would hide a source that had stopped narrowing.
+        """
+        filtered = _ORIGIN_FILTER.fullmatch(str(variables.get("filter")))
+        if filtered is None:
+            raise ValueError(f"the origin lookup sent no origin filter: {variables!r}")
+        origin = _unescaped(filtered.group("origin"))
+        search = variables.get("search")
+        if not isinstance(search, str):
+            raise ValueError("the origin lookup sent no search")
+        return {
+            "data": {
+                "originItems": {
+                    "projectV2": {
+                        "items": {
+                            "nodes": [
+                                issue.item() for issue in self.issues if issue.origin == origin
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                },
+                **self.search_response(search)["data"],
             }
         }
 
@@ -1093,6 +1126,7 @@ class _Operation(StrEnum):
     FIELD_SNAPSHOT = "fieldSnapshot"
     CREATE_FIELD = "createField"
     SEARCH = "search"
+    ORIGIN_LOOKUP = "originLookup"
     ISSUE = "issue"
     SUB_ISSUES = "subIssues"
     COMMENTS = "comments"
@@ -1113,6 +1147,9 @@ class _Operation(StrEnum):
 #: tried. The source ships its queries as constants, so the root field is a stable
 #: substring of each one and is what tells a board read from the writes that follow it.
 _OPERATIONS: dict[str, _Operation] = {
+    # Before the board read's own marker and the search's, both of which this document
+    # also contains: it narrows the board's items by a field filter and searches beside it.
+    "originItems:repositoryOwner": _Operation.ORIGIN_LOOKUP,
     # Before the board read's own marker, which this aliased root also contains.
     "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
     "optionId field{": _Operation.FIELD_SNAPSHOT,
@@ -1135,17 +1172,32 @@ _OPERATIONS: dict[str, _Operation] = {
     "deleteIssue(": _Operation.DELETE_ISSUE,
 }
 
-#: The title qualifier the source narrows a board search with, and the two characters
-#: GitHub's quoting grammar gives a meaning inside a quoted phrase. Both are the
-#: source's own spelling: it escapes a backslash and a double quote before it sends
-#: one, so a fixture that read the qualifier literally would find no issue whose title
-#: contains either.
-_TITLE_QUALIFIER = re.compile(r'in:title "(?P<title>(?:[^"\\]|\\.)*)"')
+#: The field qualifier the source narrows a board search with, the quoted phrases after
+#: it, and the two characters GitHub's quoting grammar gives a meaning inside a quoted
+#: phrase. All are the source's own spelling: it escapes a backslash and a double quote
+#: before it sends one, so a fixture that read the qualifier literally would find no issue
+#: whose title contains either.
+_FIELD_QUALIFIER = re.compile(
+    r'in:(?P<fields>title,body|title|body)(?P<phrases>(?:\s+"(?:[^"\\]|\\.)*")+)'
+)
+_PHRASE = re.compile(r'"(?P<phrase>(?:[^"\\]|\\.)*)"')
+#: The board field filter an origin lookup narrows the board's items with.
+_ORIGIN_FILTER = re.compile(re.escape(ORIGIN_FIELD_NAME) + r':"(?P<origin>(?:[^"\\]|\\.)*)"')
 
 
 def _unescaped(quoted: str) -> str:
-    """One quoted search phrase, as the title the source was looking for."""
+    """One quoted search phrase, as the text the source was looking for."""
     return quoted.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def _found_by(wanted: re.Match[str], issue: _Issue) -> bool:
+    """Whether every phrase ``wanted`` quotes appears in one of the fields it names."""
+    fields = wanted.group("fields").split(",")
+    searched = [issue.title if name == "title" else issue.body for name in fields]
+    return all(
+        any(_unescaped(phrase.group("phrase")) in text for text in searched)
+        for phrase in _PHRASE.finditer(wanted.group("phrases"))
+    )
 
 
 BOARD = _Board()
@@ -1275,6 +1327,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.create_field(request.variables)
             case _Operation.SEARCH:
                 return self.board.search_response(request.string("search"))
+            case _Operation.ORIGIN_LOOKUP:
+                return self.board.origin_lookup_response(request.variables)
             case _Operation.ISSUE:
                 return self.board.node_response(request.variables.get("id"))
             case _Operation.SUB_ISSUES:
@@ -2043,8 +2097,18 @@ def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
         )
         return
 
+    # The control copies a project of its own onto its fresh board: the first copy recorded
+    # a link to the item it made on the first board, and a re-copy follows that link to a
+    # board that no longer holds it, which the store refuses rather than creating anew.
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The control's own
+    # project is the same one `_write_local_project` writes for every journey in this file,
+    # which `nx affected` selects together; the pacing it measures is unchanged.
+    control = tmp_path / "control"
+    control.mkdir()
+    _write_local_project(control)
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     with _serving_board() as remote:
-        unpaced = _copy_to_the_board(tmp_path, remote, min_mutation_interval_ms="0")
+        unpaced = _copy_to_the_board(control, remote, min_mutation_interval_ms="0")
         burst = _mutation_gaps(_GitHubFixture.requests)
 
     assert unpaced.returncode == 0, unpaced.stdout + unpaced.stderr
@@ -2376,6 +2440,192 @@ def test_a_copy_onto_the_board_reports_what_it_spent(tmp_path: Path) -> None:
     )
 
 
+#: The project, task and metadata value the native-query journey files, named once so the
+#: task it creates and every query asking for it agree on one spelling.
+FILED_PROJECT = _ProjectId("filed")
+FILED_TASK_TITLE = "fix: stale cache"
+FILED_METADATA_KEY = "orchestrator.follow-up"
+FILED_ROOT_CAUSE = "stale-cache"
+FILED_PREDICATE = f"{FILED_METADATA_KEY}/root_cause={FILED_ROOT_CAUSE}"
+#: What the store records on a copied item, naming each destination it was copied to.
+COPIES_KEY = "onetaskgraph.copies"
+#: The reads that walk a board's items, which a query or a copy that knows what it wants
+#: has no reason to send: the board read and the Status snapshot are the two documents
+#: selecting `ProjectV2.items` unnarrowed.
+BOARD_ENUMERATIONS = frozenset({_Operation.BOARD, _Operation.FIELD_SNAPSHOT})
+
+
+def _store(environment: dict[str, str], *args: str) -> str:
+    """One verb of the provisioned plan-store CLI under this checkout's configuration.
+
+    The binary rather than `just plans`, because a `--metadata` value is JSON and the
+    recipe hands its arguments on through a shell that splits them.
+    """
+    result = subprocess.run(
+        [str(ONETASKGRAPH_BIN), *args, "--json"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"onetaskgraph {' '.join(args)}: {result.stdout}{result.stderr}"
+    return result.stdout
+
+
+def _listed(environment: dict[str, str], *args: str) -> list[str]:
+    """The qualified ids one `task list` answers, read through the store's own model."""
+    page = QueryResponseOfQualifiedTask.model_validate_json(
+        _store(environment, "task", "list", *args)
+    )
+    return [task.id.root for task in page.items]
+
+
+def _copy_outcome(environment: dict[str, str], task: str, destination: str) -> CopyOutcome:
+    """The one outcome a `task copy` reports, read through the store's own model."""
+    report = CopyReport.model_validate_json(
+        _store(environment, "task", "copy", task, "--to", destination)
+    )
+    (outcome,) = report.items
+    return outcome
+
+
+def _enumerations() -> list[str]:
+    """The requests the board fixture served since it was last cleared that walk its items."""
+    return [
+        str(request.operation)
+        for request in _GitHubFixture.requests
+        if request.operation in BOARD_ENUMERATIONS
+    ]
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
+# inputs as every journey beside it — the installed plan-store CLI driven against this
+# module's loopback board — so `nx affected` already selects the whole file together, and a
+# project of one function would buy no selection while splitting it from the private board
+# fixture it drives. It runs in `orchestrator:test`, keyed `codeWorkspace`.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
+# the edge it runs behind is the one every CLI-spawning journey in this file already pays,
+# and its board writes are unpaced — the fixture environment sets no pacing it waits on.
+def test_metadata_and_origin_queries_and_copy_links_spare_the_board(tmp_path: Path) -> None:
+    """The adopted store asks a board for what it wants rather than walking it.
+
+    Filing one follow-up ticket spent about 1,800 of GitHub's 5,000 hourly GraphQL points
+    because every duplicate check and every re-copy read the whole board. The adopted
+    release answers a metadata query with a board-scoped search, an origin query with the
+    board's own field filter, and a re-copy through the `onetaskgraph.copies` link the
+    first copy recorded on the item it copied. Each is driven here through the provisioned
+    CLI and this checkout's committed sources — first from `local-md`, where the answers
+    are read off files, then against the loopback board, where what each command sent is
+    read off the wire.
+    """
+    authoring = tmp_path / "authoring"
+    examples = tmp_path / "examples"
+    authoring.mkdir()
+    examples.mkdir()
+    environment = _plan_environment(authoring)
+    environment[EXAMPLES_ROOT_ENV] = str(examples)
+    write_plan_project(
+        authoring,
+        PlanDocument(
+            name=FILED_PROJECT,
+            tasks=[PlanNode(id="seed", title="feat: seed", task="## What\nNothing filed.\n")],
+        ),
+    )
+    with _serving_board() as remote:
+        environment.update(remote)
+        # How fast a copy writes is the pacing journey's subject, not this one's.
+        environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
+        # A board task is filed under its project's issue, so the project reaches the board
+        # first, as a plan does, before the task under test is written into it.
+        _store(
+            environment, "project", "copy", f"{AUTHORING_SOURCE}:{FILED_PROJECT}", "--to", "plans"
+        )
+        created = QueryResponseOfQualifiedTask.model_validate_json(
+            _store(
+                environment,
+                *("task", "create", AUTHORING_SOURCE),
+                *("--project", f"{AUTHORING_SOURCE}:{FILED_PROJECT}"),
+                *("--title", FILED_TASK_TITLE, "--no-interactive"),
+                *(
+                    "--metadata",
+                    f"{FILED_METADATA_KEY}={json.dumps({'root_cause': FILED_ROOT_CAUSE})}",
+                ),
+            )
+        )
+        filed = created.items[0].id.root
+        seed = f"{AUTHORING_SOURCE}:seed"
+        never_copied = f"{AUTHORING_SOURCE}:never-copied"
+
+        assert _listed(
+            environment, "--source", AUTHORING_SOURCE, "--metadata", FILED_PREDICATE
+        ) == [filed]
+        assert (
+            _listed(
+                environment,
+                *("--source", AUTHORING_SOURCE),
+                *("--metadata", f"{FILED_METADATA_KEY}/root_cause=other"),
+            )
+            == []
+        )
+        local_copy = _copy_outcome(environment, filed, EXAMPLES_SOURCE).root.destination.root
+        assert _listed(environment, "--source", EXAMPLES_SOURCE, "--origin", filed) == [local_copy]
+        assert _listed(environment, "--source", EXAMPLES_SOURCE, "--origin", seed) == []
+
+        first = _copy_outcome(environment, filed, "plans").root
+        assert (str(first.action), str(first.via.value), str(first.link.value)) == (
+            "created",
+            "created",
+            "recorded",
+        ), f"a first copy onto the board creates its item and records the link: {first}"
+        on_board = first.destination.root
+        (shown,) = TaskDetail.model_validate_json(_store(environment, "task", "show", filed)).items
+        copies = shown.item.metadata.get(COPIES_KEY)
+        assert copies == {EXAMPLES_SOURCE: local_copy, "plans": on_board}, (
+            f"{COPIES_KEY} on {filed} has to name each item it was copied to, {on_board} on "
+            f"the board among them, and holds {copies}"
+        )
+
+        _GitHubFixture.requests.clear()
+        assert _listed(environment, "--source", "plans", "--metadata", FILED_PREDICATE) == [
+            on_board
+        ]
+        searches = [
+            request.string("search")
+            for request in _GitHubFixture.requests
+            if request.operation is _Operation.SEARCH
+        ]
+        assert any(f'in:body "{FILED_ROOT_CAUSE}"' in search for search in searches), (
+            f"a metadata query is asked of the board as a search for the value, and sent {searches}"
+        )
+        assert _enumerations() == [], (
+            f"a metadata query walked the board's items: {_enumerations()}"
+        )
+
+        _GitHubFixture.requests.clear()
+        assert _listed(environment, "--source", "plans", "--origin", filed) == [on_board]
+        assert _listed(environment, "--source", "plans", "--origin", never_copied) == []
+        assert any(
+            request.operation is _Operation.ORIGIN_LOOKUP for request in _GitHubFixture.requests
+        ), "an origin query is asked of the board's own field filter"
+        assert _enumerations() == [], f"an origin query walked the board's items: {_enumerations()}"
+
+        _GitHubFixture.requests.clear()
+        again = _copy_outcome(environment, filed, "plans").root
+        assert again.destination.root == on_board, f"a re-copy reached another item: {again}"
+        assert str(again.via.value) == "link", (
+            f"a re-copy of an item carrying {COPIES_KEY} follows it, and this one did not: {again}"
+        )
+        assert _enumerations() == [], (
+            f"a re-copy by link walked the board's items: {_enumerations()}"
+        )
+    assert [issue.title for issue in BOARD.issues_created_and_kept()].count(
+        FILED_TASK_TITLE
+    ) == 1, "the re-copy made a second board item rather than following the link"
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 # llmlint: ignore-end[e2e_not_mocked]
 
 
@@ -4744,7 +4994,6 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     assert checked.returncode == 0, checked.stdout + checked.stderr
 
     changed = tasks[RENDERED_SECOND.node]
-    before = _rendered_task(changed)
     name, value = REGENERATED_ANSWER
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
@@ -4754,6 +5003,9 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
         issued = {issue.title: issue for issue in BOARD.issues_created_and_kept()}
         filed = issued[RENDERED_SECOND.title]
         first_item, first_issue = filed.item_id, filed.content_id
+        # Read after the copy, which records on the task the board item it made: a render
+        # keeps that link with the rest of the metadata, and the re-copy below follows it.
+        before = _rendered_task(changed)
 
         rendered = _through_the_template(
             environment,

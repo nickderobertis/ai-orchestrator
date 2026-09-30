@@ -559,6 +559,21 @@ COMMENT_FLOW_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the native board queries plan, which relinked the plan store
+#: whose `github-projects` source answers text, metadata and origin queries with GitHub's
+#: own search and whose copy records and follows `onetaskgraph.copies`. The settlement
+#: write-back and a dispatch's store reads go through that linked store;
+#: `tests/e2e/test_onetaskgraph_host_e2e.py` drives the same release's CLI over this
+#: checkout's board fixture.
+NATIVE_BOARD_QUERIES_LANDINGS = (
+    Landing(
+        node="op-link-store",
+        change_request=598,
+        commit="999dd89395532d4da82fd89f1ba75a924c65656b",
+        did="link the onetaskgraph release that searches boards natively and follows copy links",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -579,6 +594,7 @@ LANDINGS = (
     *GRAPHQL_WRITEBACK_QUOTA_LANDINGS,
     *LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS,
     *COMMENT_FLOW_LANDINGS,
+    *NATIVE_BOARD_QUERIES_LANDINGS,
 )
 
 
