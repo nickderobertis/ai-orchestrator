@@ -697,7 +697,13 @@ SKIPPABLE_TIERS = frozenset(
         (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
         (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
         (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+        # describes; the graceful-cancel entry sits beside the others' because the catalog is the
+        # domain.
         (GRACEFUL_CANCEL_PROJECT, GRACEFUL_CANCEL_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
         # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it

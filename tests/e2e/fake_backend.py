@@ -384,8 +384,11 @@ AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 #: what shows a journey the turn ended because it was interrupted.
 COOPERATIVE_INTERRUPT_ENV = "FAKE_BACKEND_COOPERATIVE_INTERRUPTS"
 INTERRUPT_LOG = "held-turns.jsonl"
-#: The mechanism a served frame names: the mocked harness's own lever.
-INTERRUPT_MECHANISM = "codex-app-server"
+#: The served frame's protocol version. Nothing here reads it off oneharness, because no
+#: verb of the CLI prints a served frame without a real controllable turn; what holds this
+#: and the frame's other fields to the contract is `tests/graceful_cancel`, which fails
+#: unless the engine read the frame as a delivered interrupt.
+CONTROL_PROTOCOL_VERSION = 2
 #: How often a held turn looks for an interrupt.
 INTERRUPT_POLL_SECONDS = 0.05
 
@@ -767,6 +770,15 @@ def _hold(seconds: float, session: str | None) -> None:
         log.write(json.dumps(turn) + "\n")
 
 
+def _mechanism(real: str) -> str:
+    """The turn-control mechanism oneharness lists for the mocked harness."""
+    listed = subprocess.run(
+        [real, "list", "--format", "json"], capture_output=True, text=True, check=True
+    )
+    harnesses = json.loads(listed.stdout)["harnesses"]
+    return next(entry["control"] for entry in harnesses if entry["id"] == MOCK_HARNESS)
+
+
 def _interrupt(argv: list[str]) -> int:
     """Answer `oneharness interrupt` with oneharness's own control frame."""
     directory = os.environ.get(COOPERATIVE_INTERRUPT_ENV)
@@ -774,18 +786,24 @@ def _interrupt(argv: list[str]) -> int:
     if not directory or session is None:
         print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
         return 2
+    real = os.environ.get(REAL_BINARY_ENV)
+    if not real:
+        print(f"fake_backend: {REAL_BINARY_ENV} is not set", file=sys.stderr)
+        return 2
     served = Path(directory)
     if not (served / f"{session}.holding").exists():
-        refused = {
-            "error": f"session `{session}` has no turn in flight",
-            "reason": "no_active_turn",
-        }
-        print(json.dumps({"v": 2, "ok": False, **refused}))
-        return 1
+        # No held turn to stop, so the real CLI answers, frame and exit status alike, from
+        # a session directory where nothing listens. Never the session's own: once the hold
+        # is over this backend answers through a real `run --control` on that socket, and
+        # an interrupt reaching it redirects the mocked provider into a turn that never ends.
+        idle = served / "no-listener"
+        idle.mkdir(exist_ok=True)
+        refused = [real, *argv, "--session-dir", str(idle)]
+        return subprocess.run(refused, stdin=subprocess.DEVNULL, check=False).returncode
     staged = served / f"{session}.interrupted.partial"
     staged.write_text(str(time.time()), encoding="utf-8")
     staged.rename(served / f"{session}.interrupted")
-    frame = {"v": 2, "ok": True, "mechanism": INTERRUPT_MECHANISM}
+    frame = {"v": CONTROL_PROTOCOL_VERSION, "ok": True, "mechanism": _mechanism(real)}
     if _flag(argv, "--input") is not None:
         frame["redirected"] = True
     print(json.dumps(frame))

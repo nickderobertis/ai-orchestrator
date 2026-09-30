@@ -171,7 +171,13 @@ OWNED_PROJECTS = {
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
     UNPUBLISHED_VIEW_ROOT: OwnedProject(key=UNPUBLISHED_VIEW_WORKSPACE, docs_tier=False),
     UNFINISHED_ROOT: OwnedProject(key=UNFINISHED_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the graceful-cancel entry sits beside the others' because the catalog is the
+    # domain.
     GRACEFUL_CANCEL_ROOT: OwnedProject(key=GRACEFUL_CANCEL_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it

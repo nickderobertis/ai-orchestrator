@@ -65,6 +65,12 @@ INHERITED = (
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
+    # Where an enclosing dispatch records its oneharness history. Inherited, every stand-in
+    # turn here queued on that host-wide history index lock, for longer than the grace.
+    "ONEHARNESS_HISTORY",
+    "ONEHARNESS_HISTORY_DIR",
+    "ONEHARNESS_HISTORY_LABELS",
+    "ONEHARNESS_HISTORY_POINTER_FILE",
     *follow_up_variables.all_names(),
     plan_root_variable.name(),
 )
@@ -88,6 +94,10 @@ HELD_SECONDS = GRACE_SECONDS * 2
 
 #: The two surfaces a cancellation can raise, and the settlement it ends in.
 INTERRUPTED = "dispatch-interrupted"
+#: How the interrupt surface words a lever the running turn took. Read beside the
+#: backend's own log because the backend ends its turn whatever the engine made of the
+#: control frame it printed: only this says the engine read that frame as served.
+DELIVERED = "the running turn took the redirection"
 KILLED = "dispatch-killed"
 SETTLED = "node-settled"
 SETTLED_CANCELLED = "node-settled cancelled"
@@ -110,12 +120,9 @@ def _environment(tmp: Path, oneharness_bin: str, interrupts: Path) -> dict[str, 
     environment[root_name] = str(tmp / "follow-ups")
     environment[plugin_name] = WRITABLE_PLUGIN
     environment[plan_root_variable.name()] = str(tmp / "plans")
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment.update(established_indirections(INDIRECTION_CALLER))
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp))
@@ -127,8 +134,8 @@ def _environment(tmp: Path, oneharness_bin: str, interrupts: Path) -> dict[str, 
 
 def _just(environment: dict[str, str], *arguments: str, stdin: str | None = None) -> str:
     """Run one of this checkout's recipes and hand back what it printed."""
-    ran = subprocess.run(  # noqa: S603 - this checkout's own recipes
-        ["just", *arguments],  # noqa: S607
+    ran = subprocess.run(
+        ["just", *arguments],
         cwd=REPO_ROOT,
         env=environment,
         input=stdin,
@@ -163,8 +170,8 @@ def cancellable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[Cancellable
     task = "## What\nReport.\n\n## Why\nBecause.\n\n## Acceptance criteria\n- Reported."
     node = {"id": NODE, "persona": "engineer", "task": task}
     plan.write_text(json.dumps({"schema_version": 2, "name": RUN, "tasks": [node]}))
-    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"],  # noqa: S607
+    launch = subprocess.Popen(
+        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -184,8 +191,8 @@ def cancellable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[Cancellable
     finally:
         launch.kill()
         launch.wait(timeout=e2e_timeout(60))
-        subprocess.run(  # noqa: S603 - the real recipe, as an operator runs it
-            ["just", "stop", RUN],  # noqa: S607
+        subprocess.run(
+            ["just", "stop", RUN],
             cwd=REPO_ROOT,
             env=environment,
             capture_output=True,
@@ -233,6 +240,7 @@ def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
     assert turn["held_from"] <= turn["interrupted_at"] <= turn["ended_at"], turn
     assert turn["ended_at"] - turn["held_from"] < HELD_SECONDS, turn
 
+    assert DELIVERED in next(line for line in stream.splitlines() if INTERRUPTED in line), stream
     interrupted, settled = _stamped(stream, INTERRUPTED), _stamped(stream, SETTLED)
     assert interrupted <= settled, stream
     assert turn["ended_at"] <= settled.timestamp(), (turn, stream)
