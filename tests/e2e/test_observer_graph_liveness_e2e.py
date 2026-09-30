@@ -31,6 +31,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,10 +39,11 @@ from typing import NamedTuple
 
 import pytest
 from fake_backend import (
-    AGENT_DELAY_ENV,
     OBSERVER_ANSWER_ENV,
     OBSERVER_MEMBER_ENV,
     PROMPT_LOG_ENV,
+    TURN_GATE_ENV,
+    TURN_GATE_RELEASED,
 )
 from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import _environment as _launched_environment
@@ -85,18 +87,35 @@ REFUSAL_NAMES_THE_ANSWER = "`background: false`"
 LAUNCHED_RUN = "observer-liveness-paced"
 HELD_NODE = "held"
 
-#: The hold the launch overrides in place of the shipped five minutes, and how long the
-#: worker is held. Thirty-eight seconds outlasts three twelve-second holds: the second
-#: turn is the pacing, the third puts the member's ~15-second heartbeat inside a hold,
-#: and the last hold ends within a few seconds of the settlement it has to be cancelled
-#: at — later, and a hold expiring during the driver's own closeout would read as one
-#: waited out. That arithmetic holds only while the worker is held **once**, which is what
-#: the short session store `tests/short_state.py` mints buys: a store whose control-socket
-#: address is past the 108 bytes Linux allows has every controlled turn refused and
-#: re-taken without control — a worker held twice, and a settlement landing wherever in a
-#: hold the second delay puts it.
+#: The hold the launch overrides in place of the shipped five minutes.
 PACED_HOLD_SECONDS = 12
-HELD_SECONDS = 38
+
+#: How many of the monitor's holds must have opened before the worker is let go. The
+#: worker's turn waits at the fake backend's gate, and a thread releases it once the
+#: graph's record carries everything the run is held open to show (`_evidenced`): this
+#: many judge closes — two completed holds, the second turn being the pacing and the third
+#: the evidence a hold is survived — and the pacemaker and `just status` each caught
+#: inside a hold. A worker held for a fixed time instead ran for however many holds the
+#: host's load fitted into that time, and landed its settlement wherever in a hold the
+#: turns' lengths put it; on a loaded host that was two turns, or a pacemaker whose every
+#: firing fell between holds.
+RELEASE_AT_HOLD = 3
+
+#: When the gate is released whether or not the holds came, so a monitor that is not
+#: being paced fails on the assertions below rather than on the gate's own ceiling.
+RELEASE_CEILING_SECONDS = 180
+
+#: The heartbeat bound this launch hands `oneagentgraph` through its documented
+#: `ONEAGENTGRAPH_HEARTBEAT_TIMEOUT` (its `docs/contract.md`, "Liveness"). The linked
+#: release publishes a running member's `member-heartbeat` every quarter of that bound,
+#: from the moment its conversation opened and whatever the conversation is doing — the
+#: default 60 seconds is a beat every 15, which a 12-second hold contains or misses by
+#: phase alone. At 20 a beat is due every 5 seconds, checked on the half-second loop that
+#: refreshes the beat, so no two consecutive beats are further apart than
+#: `HEARTBEAT_GAP_SECONDS` and every hold longer than that contains one.
+HEARTBEAT_BOUND_ENV = "ONEAGENTGRAPH_HEARTBEAT_TIMEOUT"
+HEARTBEAT_BOUND_SECONDS = 20
+HEARTBEAT_GAP_SECONDS = HEARTBEAT_BOUND_SECONDS / 4 + 1.0
 
 #: How far short of the hold two consecutive turns may open and still be the hold's
 #: doing. Measured on the linked oneagentgraph 0.3.19: a conversation held 12 seconds
@@ -320,12 +339,14 @@ def _instant(stamped: str) -> datetime:
     return datetime.strptime(stamped.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S.%f%z")
 
 
-def _graph_events(scratch: Path) -> list[Envelope]:
+def _graph_events(scratch: Path, *, live: bool = False) -> list[Envelope]:
     """The dag-scope graph's own record of this run, which names the member per event.
 
     The graph writes these into the scratch this journey named, so this is that run's
     record and no other's. Read here rather than off the run's journal because the
-    member and the turn's role are exactly what the pacing is measured on.
+    member and the turn's role are exactly what the pacing is measured on. Read `live`,
+    while the graph is still writing, a line cut short at the end of the file is skipped
+    rather than decoded; it is read whole on the next pass.
     """
     # llmlint: ignore-block[tests_mirror_real_usage] No operator view renders which member
     # a turn belongs to, and which member paused is the whole question: `just status`
@@ -339,7 +360,12 @@ def _graph_events(scratch: Path) -> list[Envelope]:
                 continue
             # `oneagentgraph` owns this schema; `kind`, `ts`, `labels.member` and the
             # payload's `role` are what is read, each narrowed here.
-            decoded = json.loads(line)
+            try:
+                decoded = json.loads(line)
+            except json.JSONDecodeError:
+                if live:
+                    continue
+                raise
             assert isinstance(decoded, dict), decoded
             labels = decoded.get("labels") or {}
             payload = decoded.get("payload") or {}
@@ -387,13 +413,26 @@ def _judge_closes(events: list[Envelope], member: str) -> list[Envelope]:
 #: event's own stamp first, then the graph column, then the kind.
 LET_GO_LINE = re.compile(r"^(?P<at>\S+)\s+\S+\s+run-hook-fired\b", re.MULTILINE)
 
+#: The line the same stream renders the held node's settlement on — the run's own, since
+#: the run holds that one node.
+SETTLED_LINE = re.compile(rf"^(?P<at>\S+)\s+graph:{HELD_NODE}\s+node-settled\b", re.MULTILINE)
 
-def _let_go(environment: dict[str, str]) -> datetime | None:
-    """When the driver fired the run-end hook, read through the run's detailed stream.
 
-    `just orchestrate` names a hook for both endings, and the driver fires it last: after
-    the engine loop has finished, the observer has been cancelled and the settlement
-    announced, and before the hook's own command runs. So its `run-hook-fired` event is
+class Ending(NamedTuple):
+    """When the run settled and when the driver let go of it, off its detailed stream."""
+
+    settled: datetime | None
+    let_go: datetime | None
+
+
+def _ending(environment: dict[str, str]) -> Ending:
+    """When the run settled and the driver fired the run-end hook, off its detailed stream.
+
+    The held node's `node-settled` is the run's settlement, the instant after which the
+    driver's closeout may cancel whatever the observer is doing. `just orchestrate` names
+    a hook for both endings, and the driver fires it last: after the engine loop has
+    finished, the observer has been cancelled and the settlement announced, and before
+    the hook's own command runs. So its `run-hook-fired` event is
     the engine's stamp for having let go of the run, on the clock the graph's events
     carry — which is what the closing assertion below needs, because the launch process
     returns only once that hook's `just` recipe has, and how long a recipe takes on a
@@ -409,8 +448,47 @@ def _let_go(environment: dict[str, str]) -> datetime | None:
         check=False,
     )
     assert rendered.returncode == 0, rendered.stderr
-    fired = LET_GO_LINE.search(rendered.stdout + rendered.stderr)
-    return _instant(fired.group("at")) if fired else None
+    said = rendered.stdout + rendered.stderr
+    fired, settled = LET_GO_LINE.search(said), SETTLED_LINE.search(said)
+    return Ending(
+        settled=_instant(settled.group("at")) if settled else None,
+        let_go=_instant(fired.group("at")) if fired else None,
+    )
+
+
+def _evidenced(events: list[Envelope], readings: list[StatusReading]) -> bool:
+    """Whether the record already carries what the run is held open to show.
+
+    `RELEASE_AT_HOLD` holds opened, the pacemaker fired inside a completed one, and a
+    `just status` read wholly inside one. Each lands wherever the host's load puts the
+    turns around it — the pacemaker's firing is its own turn plus its period, which a
+    loaded host stretched to twenty seconds and more — so the run is kept open until each
+    has happened rather than for a time in which each usually does.
+    """
+    holds = _holds(events)
+    return (
+        len(_judge_closes(events, MONITOR_MEMBER)) >= RELEASE_AT_HOLD
+        and any(
+            hold.covers(firing.at)
+            for hold in holds
+            for firing in _of(events, "cron-fired", PACEMAKER_MEMBER)
+        )
+        and any(
+            hold.covers(one.began) and hold.covers(one.ended) for hold in holds for one in readings
+        )
+    )
+
+
+def _release_when_evidenced(
+    state: Path, gate: Path, readings: list[StatusReading], stop: threading.Event
+) -> None:
+    """Let the held worker go once the live record is `_evidenced`, or at the ceiling."""
+    deadline = time.monotonic() + e2e_timeout(RELEASE_CEILING_SECONDS)
+    while not stop.is_set() and time.monotonic() < deadline:
+        if _evidenced(_graph_events(state, live=True), list(readings)):
+            break
+        time.sleep(0.2)
+    (gate / TURN_GATE_RELEASED).touch()
 
 
 class Hold(NamedTuple):
@@ -446,16 +524,16 @@ class StatusReading(NamedTuple):
 
 
 def _status_readings(
-    launch: subprocess.Popen[str], environment: dict[str, str]
-) -> list[StatusReading]:
+    launch: subprocess.Popen[str], environment: dict[str, str], readings: list[StatusReading]
+) -> None:
     """Read the run's status through the real recipe until the launch returns.
 
     Cut at the `providers:` boundary the way `AGENTS.md` tells a watch to cut it, because
     everything below it is `oneagentgraph health`'s report about the host. Each reading
     keeps both instants, so a reading is credited to a hold only when the whole of it
-    fell inside one.
+    fell inside one. Each is appended to `readings` as it is taken, which the thread
+    holding the worker reads.
     """
-    readings: list[StatusReading] = []
     consumed = False
     while launch.poll() is None:
         consumed = consumed or _a_surface_raised_and_consumed(environment)
@@ -474,7 +552,6 @@ def _status_readings(
             StatusReading(began=began, ended=datetime.now(UTC), status=status.returncode, said=said)
         )
         time.sleep(STATUS_POLL_SECONDS)
-    return readings
 
 
 #: The text of the one surface a paced launch raises and reads, as a planner would.
@@ -520,6 +597,9 @@ class Paced(NamedTuple):
 
     events: list[Envelope]
     readings: list[StatusReading]
+    #: When the run settled, by the engine's own clock: the held node's `node-settled`.
+    #: `None` when the stream renders no such settlement.
+    settled: datetime | None
     #: When the driver let go of the run, by the engine's own clock: the instant it
     #: fired the run-end hook, which it does after cancelling the observer and announcing
     #: the settlement and before the hook's command runs. `None` when the stream renders
@@ -548,8 +628,12 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
     environment[OBSERVER_ANSWER_ENV] = SAID_ON_A_QUIET_TURN
     # llmlint: ignore-end[live_tier_compiles_and_requires_credential]
     environment[OBSERVER_MEMBER_ENV] = MONITOR_MEMBER
-    environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
-    environment[GRAPH_STATE_ENV] = str(tmp_path / "graph-state")
+    gate = tmp_path / "turn-gate"
+    gate.mkdir()
+    environment[TURN_GATE_ENV] = str(gate)
+    environment[HEARTBEAT_BOUND_ENV] = str(HEARTBEAT_BOUND_SECONDS)
+    state = tmp_path / "graph-state"
+    environment[GRAPH_STATE_ENV] = str(state)
     environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
     plan = tmp_path / "paced.plan.json"
     plan.write_text(
@@ -583,11 +667,19 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
             stdout=streaming,
             stderr=subprocess.STDOUT,
         )
+        stop = threading.Event()
+        readings: list[StatusReading] = []
+        releaser = threading.Thread(
+            target=_release_when_evidenced, args=(state, gate, readings, stop)
+        )
+        releaser.start()
         try:
-            readings = _status_readings(launch, environment)
+            _status_readings(launch, environment, readings)
             status = launch.wait(timeout=e2e_timeout(300))
             returned = datetime.now(UTC)
         finally:
+            stop.set()
+            releaser.join()
             launch.kill()
             launch.wait(timeout=e2e_timeout(60))
             subprocess.run(
@@ -599,10 +691,12 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
                 timeout=e2e_timeout(60),
                 check=False,
             )
+    ending = _ending(environment)
     return Paced(
-        events=_graph_events(tmp_path / "graph-state"),
+        events=_graph_events(state),
         readings=readings,
-        let_go=_let_go(environment),
+        settled=ending.settled,
+        let_go=ending.let_go,
         returned=returned,
         status=status,
         printed=printed.read_text("utf-8"),
@@ -632,15 +726,16 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     * the monitor opens with the wave, and its next agent turn opens no sooner than the
       hold after its judge answered — two consecutive turns at least `every` apart;
     * the run is watched through the hold: the graph does not settle, the member's own
-      heartbeat lands inside a hold, and `just status` read inside one reports neither
-      `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
+      heartbeat lands inside every hold long enough to contain one, and `just status`
+      read inside one reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
     * the pacemaker fires inside a hold and the graph survives it, taking another monitor
       turn afterwards;
     * reading a planner surface restarts the pacemaker's clock and no other member's,
       because the pacemaker is the one member the launched document declares
       `resettable`;
     * the observer ends when the run settles rather than when the hold would have: the
-      driver lets go of the run before the next turn was due.
+      driver lets go of the run before the next turn was due, and a turn its own closeout
+      cancelled after the settlement is the observer being ended, never a death.
 
     Reverting the document's `schedule` fails before any of it: `--set
     members.monitor.schedule.every` on a member with no schedule is refused by the reader
@@ -660,16 +755,29 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
 
     started = _of(events, "graph-started")
     assert started, f"the observer graph never started:\n{paced.printed}"
-    died = _of(events, "member-died")
+    # A turn the driver's own closeout cancels once the run has settled is the observer
+    # being ended, not dying: the linked release journals that cancel as a
+    # `provider-failure` death with cause `cancelled`. Every other death counts, and so
+    # does a cancel before the settlement, which nothing in this run asked for.
+    assert paced.settled is not None, (
+        f"the run's detailed stream renders no settlement of `{HELD_NODE}`, so a death "
+        f"cannot be placed before or after it:\n{paced.printed}"
+    )
+    died = [
+        death
+        for death in _of(events, "member-died")
+        if not (death.payload.get("cause") == "cancelled" and death.at >= paced.settled)
+    ]
     assert not died, (
         f"a member of the observer graph died during a paced run: {died}\n{paced.printed}"
     )
 
     turns = _agent_turns(events, MONITOR_MEMBER)
     assert len(turns) >= 3, (
-        f"the `{MONITOR_MEMBER}` member took {len(turns)} agent turn(s) in a run held for "
-        f"{HELD_SECONDS}s at a {PACED_HOLD_SECONDS}s hold, so it is not being paced through "
-        f"the run — or not held open between its turns at all:\n{paced.printed}"
+        f"the `{MONITOR_MEMBER}` member took {len(turns)} agent turn(s) in a run whose "
+        f"worker waited for hold {RELEASE_AT_HOLD} at a {PACED_HOLD_SECONDS}s hold, so "
+        f"it is not being paced through the run — or not held open between its turns at "
+        f"all:\n{paced.printed}"
     )
     opened_with_the_wave = (turns[0].at - started[0].at).total_seconds()
     assert opened_with_the_wave < PACED_HOLD_SECONDS, (
@@ -695,11 +803,26 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
             f"the observer graph settled inside a hold {hold}, so the monitor's "
             f"`background: false` is not holding the run open:\n{paced.printed}"
         )
+    # A held conversation is not silent: every hold long enough that a beat published at
+    # the cadence `HEARTBEAT_BOUND_SECONDS` sets was due inside it contains one. Which
+    # holds that is follows from the bound rather than from where the beats fell, so the
+    # check holds at any phase between the cadence and the holds.
     heartbeats = _of(events, "member-heartbeat", MONITOR_MEMBER)
-    assert any(hold.covers(beat.at) for hold in holds for beat in heartbeats), (
-        f"no heartbeat of the `{MONITOR_MEMBER}` member landed inside a hold "
-        f"({[beat.at.isoformat() for beat in heartbeats]} against {holds}), so a held "
-        f"conversation is silent to the activity watchdog:\n{paced.printed}"
+    long_enough = [
+        hold
+        for hold in holds
+        if (hold.closed - hold.opened).total_seconds() > HEARTBEAT_GAP_SECONDS
+    ]
+    assert long_enough, (
+        f"no hold outlasted the {HEARTBEAT_GAP_SECONDS}s between two heartbeats ({holds}), "
+        f"so nothing here says whether a held conversation beats:\n{paced.printed}"
+    )
+    silent = [hold for hold in long_enough if not any(hold.covers(beat.at) for beat in heartbeats)]
+    assert not silent, (
+        f"no heartbeat of the `{MONITOR_MEMBER}` member landed inside the holds {silent} "
+        f"(beats at {[beat.at.isoformat() for beat in heartbeats]}), each longer than the "
+        f"{HEARTBEAT_GAP_SECONDS}s between beats, so a held conversation is silent to the "
+        f"activity watchdog:\n{paced.printed}"
     )
     inside = [
         reading
@@ -749,12 +872,27 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
 
     # Read at the driver's own stamp for letting go of the run rather than at the
     # launch's return: the run-end hook fires between the two, and its recipe's runtime
-    # on a loaded host is not the hold's — see `_let_go`.
+    # on a loaded host is not the hold's — see `_ending`.
     assert paced.let_go is not None, (
         f"the run's detailed stream renders no `run-hook-fired`, so when the driver let go "
         f"of the run cannot be read off it:\n{paced.printed}"
     )
+    # When a hold was running as the driver let go, the driver has to have cut it rather
+    # than waited it out: it let go before the next turn was due. When a turn was in
+    # flight instead, there was no hold to cut and the closeout ended the turn; what the
+    # driver must not have done is let a hold run out after the run settled, so the hold
+    # before that turn has to have opened before the settlement.
     last_close = _judge_closes(events, MONITOR_MEMBER)[-1].at
+    assert paced.settled is not None
+    in_flight = [turn.at for turn in turns if turn.at > last_close]
+    if in_flight:
+        assert last_close < paced.settled, (
+            f"the monitor's hold that opened at {last_close.isoformat()}, after the run "
+            f"settled at {paced.settled.isoformat()}, ran out at {in_flight[0].isoformat()} "
+            f"before the driver let go at {paced.let_go.isoformat()}: the driver's cancel at "
+            f"settlement is not ending the monitor's hold:\n{paced.printed}"
+        )
+        return
     next_turn_was_due = last_close.timestamp() + PACED_HOLD_SECONDS
     assert paced.let_go.timestamp() < next_turn_was_due, (
         f"the driver let go of the run at {paced.let_go.isoformat()}, after the next "
