@@ -23,7 +23,7 @@ import subprocess
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import NamedTuple, NewType, TypedDict
 
 import follow_up_variables
 import plan_root_variable
@@ -36,7 +36,7 @@ from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 from waits import until
 
-from orchestrator.plan_store import WRITABLE_PLUGIN
+from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
 from orchestrator.root import REPO_ROOT
 
 #: A real launch holds this checkout's toolchain for as long as it runs, so this module is
@@ -70,8 +70,11 @@ INHERITED = (
 #: Who the indirection helpers attribute their diagnostics to.
 INDIRECTION_CALLER = "tests/graceful_cancel/test_graceful_cancel_e2e.py"
 
-RUN = "cancel-graceful-e2e"
-NODE = "held"
+#: A run as the engine names it: the plan's name, which every run-scoped recipe takes.
+RunId = NewType("RunId", str)
+
+RUN = RunId("cancel-graceful-e2e")
+NODE = NodeId("held")
 
 #: How long the worker's turn is held: past the judged `channel-reply` that carries the
 #: cancel, so the cancel reaches a dispatch still in flight.
@@ -96,7 +99,7 @@ SETTLED_CANCELLED = "node-settled cancelled"
 class PlanNode(TypedDict):
     """The one node the launched plan holds, in the engine's plan schema."""
 
-    id: str
+    id: NodeId
     persona: str
     task: str
 
@@ -105,7 +108,7 @@ class Plan(TypedDict):
     """The plan `just orchestrate` launches; the engine's loader is what validates it."""
 
     schema_version: int
-    name: str
+    name: RunId
     tasks: list[PlanNode]
 
 
@@ -113,7 +116,7 @@ class CancelCommand(TypedDict):
     """One `cancel` in a reply envelope, which the bus validates before it is appended."""
 
     op: str
-    id: str
+    id: NodeId
 
 
 class ReplyEnvelope(TypedDict):
