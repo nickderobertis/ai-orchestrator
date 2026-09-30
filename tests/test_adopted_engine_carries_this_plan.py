@@ -574,6 +574,20 @@ NATIVE_BOARD_QUERIES_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the plan that made the host sweep fast again, which relinked
+#: the onevcs whose finished-branches retirement pass records each branch's verdict and
+#: reuses it while its inputs are unchanged. The engine's idle maintenance runs that pass
+#: through the linked onevcs; `tests/e2e/test_sweep_e2e.py` drives the same release's
+#: CLI through `just sweep` and reads the reuse off its report.
+VERDICT_REUSE_LANDINGS = (
+    Landing(
+        node="op-link-onevcs-r4",
+        change_request=600,
+        commit="bae70c28fa932a35f3f948ad04806db9dd6c726d",
+        did="link the onevcs release whose retirement pass reuses recorded verdicts",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -595,6 +609,7 @@ LANDINGS = (
     *LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS,
     *COMMENT_FLOW_LANDINGS,
     *NATIVE_BOARD_QUERIES_LANDINGS,
+    *VERDICT_REUSE_LANDINGS,
 )
 
 

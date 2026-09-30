@@ -31,9 +31,6 @@ prefix_rule(pattern=["just", "watch"], decision="allow")
 # allowed_tools: Bash(just monitor:*)
 prefix_rule(pattern=["just", "monitor"], decision="allow")
 
-# allowed_tools: Bash(just unwatched:*)
-prefix_rule(pattern=["just", "unwatched"], decision="allow")
-
 # allowed_tools: Bash(just host:*)
 prefix_rule(pattern=["just", "host"], decision="allow")
 

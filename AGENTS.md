@@ -1052,7 +1052,10 @@ watching means and what that verb is held to:
    declares. Never answer the hook twice: arm `just watch` on each run, land the branch,
    reclaim a superseded one with the `just reclaim-branch <branch> --repo <checkout>` its
    row prints, or acknowledge work deliberately kept with `just unpublished --acknowledge
-   <branch> --reason "<why>"`, until `just unfinished` answers `0`.
+   <branch> --reason "<why>"`, until `just unfinished` answers `0`. A run is owed until
+   it is closed, not until it settles, so a watch never answers a settled run: issue
+   `complete`, `just stop` it, or close it with `just unwatched --acknowledge <run> --reason
+   "<why>"`.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.
@@ -1524,9 +1527,9 @@ or `commit` in an engine checkout or a worker's worktree, however it is prefixed
 bypassed with `git -c core.hooksPath=…` or `--no-verify`; a `gh api` write, a
 branch-protection change among them; cancelling a CI run with `gh run cancel`; a signal to
 a process; and a hand edit of a run's own state, its `launch.json` or a channel cursor. So
-do `just stop`, `just shutdown`, `just approve-design` and `just unpublished
---acknowledge`, each approved on its own: the first two act on runs, the third records the
-user's own approval, and the fourth writes an acknowledgement. The deny list stays empty,
+do `just stop`, `just shutdown`, `just approve-design`, `just unpublished --acknowledge`
+and `just unwatched --acknowledge`, each approved on its own: the first two act on runs, the
+third records the user's own approval, and the last two write an acknowledgement. The deny list stays empty,
 because bypass mode still honours a deny rule and every dispatch runs in it, and the Codex
 rendering holds allow decisions only, because a dispatched Codex side in a linked worktree
 inherits this checkout's trust and loads it.

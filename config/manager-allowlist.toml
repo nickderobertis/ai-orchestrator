@@ -40,20 +40,20 @@ allowed_tools = [
     "Bash(oneharness config:*)",
     # llmlint: ignore-end[least_privilege_grants]
 
-    # `just unpublished` and `just unfinished` are granted as fixed reads:
-    # a prefix would admit `--acknowledge`, the one write the first carries, and the
-    # session-targeted read of the second is approved per use.
+    # `just unpublished`, `just unwatched` and `just unfinished` are granted as fixed
+    # reads: a prefix would admit `--acknowledge`, the one write each of the first two
+    # carries, and the session-targeted read of the last two is approved per use.
     "Bash(just unpublished --host)",
     "Bash(just unpublished --print-surface)",
+    "Bash(just unwatched)",
     "Bash(just unfinished)",
     "Bash(just unfinished --json)",
     "Bash(just unfinished --print-surface)",
-    # llmlint: ignore-block[least_privilege_grants] `just runs`, `just status`, `just watch`, `just monitor`, `just unwatched`, `just host`, `just results`, `just transcript`, `just agents`, `just telemetry`, `just goals`, `just history`, `just history-show`, `just work-status`, `just recoverable` and `onemessagebus status`: each suffix is only the run, record, branch or filter the one view names, and the view bounds it — each reads the engine's, the bus's or onevcs's records and changes none of them, `just watch --log` writing only its own human form to the file it is given.
+    # llmlint: ignore-block[least_privilege_grants] `just runs`, `just status`, `just watch`, `just monitor`, `just host`, `just results`, `just transcript`, `just agents`, `just telemetry`, `just goals`, `just history`, `just history-show`, `just work-status`, `just recoverable` and `onemessagebus status`: each suffix is only the run, record, branch or filter the one view names, and the view bounds it — each reads the engine's, the bus's or onevcs's records and changes none of them, `just watch --log` writing only its own human form to the file it is given.
     "Bash(just runs:*)",
     "Bash(just status:*)",
     "Bash(just watch:*)",
     "Bash(just monitor:*)",
-    "Bash(just unwatched:*)",
     "Bash(just host:*)",
     "Bash(just results:*)",
     "Bash(just transcript:*)",
