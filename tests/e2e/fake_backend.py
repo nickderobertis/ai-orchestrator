@@ -373,6 +373,36 @@ def _read_the_stream(
 #: journey wanting only the worker delayed launches with no observer graph.
 AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 
+#: Optionally serve `oneharness interrupt` the way a controllable harness does, so a held
+#: agent turn ends when a supervisor interrupts it rather than when its hold runs out.
+#: Names a directory. Unset, the stand-in refuses the verb as an unsupported invocation,
+#: which is a lever that breaks: the turn runs its whole hold, and only the engine's
+#: grace deadline ends the dispatch. Set, a held turn opened under `--control --session`
+#: writes `<session>.holding` there, an interrupt naming that session is answered with a
+#: served control frame and writes `<session>.interrupted`, and the held turn answers at
+#: once. Each held turn appends one `HeldTurn` line to `INTERRUPT_LOG` there, which is
+#: what shows a journey the turn ended because it was interrupted.
+COOPERATIVE_INTERRUPT_ENV = "FAKE_BACKEND_COOPERATIVE_INTERRUPTS"
+INTERRUPT_LOG = "held-turns.jsonl"
+#: The mechanism a served frame names: the mocked harness's own lever.
+INTERRUPT_MECHANISM = "codex-app-server"
+#: How often a held turn looks for an interrupt.
+INTERRUPT_POLL_SECONDS = 0.05
+
+
+class HeldTurn(TypedDict):
+    """One held agent turn, as `COOPERATIVE_INTERRUPT_ENV`'s log records it."""
+
+    session: str
+    #: Epoch seconds: when the hold began, when an interrupt arrived (or `None`), and when
+    #: the turn stopped holding.
+    held_from: float
+    interrupted_at: float | None
+    ended_at: float
+    #: `interrupt` when an interrupt ended the hold, `hold` when it ran out.
+    ended_by: str
+
+
 #: Optionally hold a dispatched worker's first turn at this boundary — before the turn is
 #: recorded or answered — until a journey lets it go. Names a directory: the turn writes
 #: `TURN_GATE_REACHED` there and waits for `TURN_GATE_RELEASED`, so a journey can read a run's
@@ -710,8 +740,62 @@ def _busy_turn(config: str | None, prompt: str) -> BusyTurn | None:
     return BusyTurn(int(calls), int(os.environ.get(AGENT_ACTIVITY_INTERVAL_ENV, "1000")))
 
 
+def _hold(seconds: float, session: str | None) -> None:
+    """Hold an agent turn open, ending early on an interrupt when interrupts are served."""
+    directory = os.environ.get(COOPERATIVE_INTERRUPT_ENV)
+    if not directory or session is None:
+        time.sleep(seconds)
+        return
+    served = Path(directory)
+    holding, interrupted = served / f"{session}.holding", served / f"{session}.interrupted"
+    held_from = time.time()
+    holding.touch()
+    try:
+        while time.time() - held_from < seconds and not interrupted.exists():
+            time.sleep(INTERRUPT_POLL_SECONDS)
+    finally:
+        holding.unlink(missing_ok=True)
+    arrived = float(interrupted.read_text(encoding="utf-8")) if interrupted.exists() else None
+    turn: HeldTurn = {
+        "session": session,
+        "held_from": held_from,
+        "interrupted_at": arrived,
+        "ended_at": time.time(),
+        "ended_by": "hold" if arrived is None else "interrupt",
+    }
+    with (served / INTERRUPT_LOG).open("a", encoding="utf-8") as log:
+        log.write(json.dumps(turn) + "\n")
+
+
+def _interrupt(argv: list[str]) -> int:
+    """Answer `oneharness interrupt` with oneharness's own control frame."""
+    directory = os.environ.get(COOPERATIVE_INTERRUPT_ENV)
+    session = _flag(argv, SESSION_FLAG)
+    if not directory or session is None:
+        print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
+        return 2
+    served = Path(directory)
+    if not (served / f"{session}.holding").exists():
+        refused = {
+            "error": f"session `{session}` has no turn in flight",
+            "reason": "no_active_turn",
+        }
+        print(json.dumps({"v": 2, "ok": False, **refused}))
+        return 1
+    staged = served / f"{session}.interrupted.partial"
+    staged.write_text(str(time.time()), encoding="utf-8")
+    staged.rename(served / f"{session}.interrupted")
+    frame = {"v": 2, "ok": True, "mechanism": INTERRUPT_MECHANISM}
+    if _flag(argv, "--input") is not None:
+        frame["redirected"] = True
+    print(json.dumps(frame))
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    """Answer one harness turn."""
+    """Answer one harness turn, or one interrupt of a held turn."""
+    if argv and argv[0] == "interrupt":
+        return _interrupt(argv)
     if not argv or argv[0] != "run":
         print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
         return 2
@@ -780,7 +864,7 @@ def main(argv: list[str]) -> int:
     _author_plan(config)
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
     if held := os.environ.get(AGENT_DELAY_ENV):
-        time.sleep(float(held))
+        _hold(float(held), _flag(argv, SESSION_FLAG) if CONTROL_FLAG in argv else None)
     return _answer(argv, WORKER_REPLY, activity=_busy_turn(config, prompt))
 
 

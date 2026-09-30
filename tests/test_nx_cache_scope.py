@@ -61,6 +61,8 @@ from nx_inputs import (
     DAG_UI_SCOPED,
     DOCS_SCOPED,
     FROM_DEPENDENCIES,
+    GRACEFUL_CANCEL_ROOT,
+    GRACEFUL_CANCEL_SCOPED,
     HOST_SWEEP_ROOT,
     HOST_SWEEP_SCOPED,
     HOST_VIEWS_ROOT,
@@ -909,8 +911,10 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: `project-store-race` project owns the clock-bounded replacement race over the record
 #: store in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
-#: `just unfinished` in one, the `manager-allowlist` project owns the journeys over `just
-#: sync-allowlist` and `just probe-allowlist` in one, the `host-views` project owns the journeys
+#: `just unfinished` in one, the `graceful-cancel` project owns the journey over a cancel
+#: whose dispatch stops when interrupted in one, the `manager-allowlist` project owns the
+#: journeys over `just sync-allowlist` and `just probe-allowlist` in one, the `host-views`
+#: project owns the journeys
 #: over `just status` and `just host` in one, and the orchestrator project owns the rest
 #: in four.
 SUITE_TIERS = (
@@ -933,6 +937,7 @@ SUITE_TIERS = (
     (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
     (f"{UNPUBLISHED_VIEW_ROOT}/project.json", UNPUBLISHED_VIEW_SCOPED),
     (f"{UNFINISHED_ROOT}/project.json", UNFINISHED_SCOPED),
+    (f"{GRACEFUL_CANCEL_ROOT}/project.json", GRACEFUL_CANCEL_SCOPED),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it

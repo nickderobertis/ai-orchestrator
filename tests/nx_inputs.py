@@ -123,6 +123,14 @@ UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 #: `scripts/**` or `tests/unwatched/**`, because an edit this recipe never reaches must not
 #: pay for its real sessions.
 UNFINISHED_WORKSPACE = "unfinishedWorkspace"
+#: The key `graceful-cancel:test` is memoized on. Files rather than trees, for the reason
+#: `unwatchedWorkspace` names, and measured the same way: the tier traced under `strace -f
+#: -e trace=openat,execve`, each opened path normalized and intersected with what git
+#: tracks, with the `orchestrator/` modules it loads from bytecode named by their source.
+#: So the key is the launch machinery a `just orchestrate` reaches, the graphs, harness
+#: configs and pins the engine reads at launch, and the project's own two files; the
+#: stand-ins and helpers it imports reach it as test-support dependencies.
+GRACEFUL_CANCEL_WORKSPACE = "gracefulCancelWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
 # a project's tests fall outside the tiers it describes; the manager-allowlist entry sits beside the
@@ -465,6 +473,17 @@ UNFINISHED_PROJECT = "unfinished"
 UNFINISHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 UNFINISHED_ROOT = "tests/unfinished"
+
+#: The project whose test target owns the journey over a `cancel` whose dispatch stops
+#: when interrupted: a real launch through `just orchestrate`, cancelled over the real
+#: channel, with the fake backend serving the interrupt. A project of its own for the
+#: reason `unwatched` is: a real launch waited to settlement is a cost `nx affected` can
+#: only keep off an unrelated edit where it is a separate project.
+GRACEFUL_CANCEL_PROJECT = "graceful-cancel"
+#: That project's one test target: nothing here reads this repository's prose.
+GRACEFUL_CANCEL_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+GRACEFUL_CANCEL_ROOT = "tests/graceful_cancel"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when

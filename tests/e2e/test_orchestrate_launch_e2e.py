@@ -4120,14 +4120,6 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
 CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
 CANCEL_GRACE_SECONDS = 5
 
-#: The grace the *graceful* journey runs under, before load scaling. There the deadline is
-#: only the premise, so it must outlast every held turn of the cancelled dispatch under
-#: load (the stand-in refuses the interrupt lever); the journey waits for settlement, not
-#: for the grace, so its length costs nothing. The escalation journey keeps the unscaled
-#: five seconds, because there the deadline expiring *is* the behaviour under test.
-STOPPING_GRACE_UNSCALED_SECONDS = 150
-STOPPING_GRACE_SECONDS = round(e2e_timeout(STOPPING_GRACE_UNSCALED_SECONDS))
-
 #: The grace the *requeue* journey runs under. There the deadline is only the premise
 #: too: the requeue has to reach the driver while the cancelled dispatch is still in
 #: flight, and that dispatch is in flight only until the grace expires. Each reply the
@@ -4142,14 +4134,6 @@ REQUEUE_GRACE_SECONDS = 60
 #: stand-in answers on a timer and takes no redirection: it is the dispatch that does
 #: *not* stop when asked, which is exactly the arm the deadline exists for.
 CANCELLED_WORKER_HELD_SECONDS = 90
-
-#: The channel-reply recipe judges its answer before the driver sees it. A two-second
-#: worker settled before that reply reached the driver under the publication gate's
-#: load, so no cancellation happened. Hold the worker past that turn while leaving
-#: enough grace for its ordinary completion and teardown.
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This repairs the existing
-# cancellation journey's timing under the gate; moving its whole suite is outside this task.
-STOPPING_WORKER_HELD_SECONDS = 20
 
 #: The two surfaces a cancellation raises, in the order it raises them.
 INTERRUPTED = "dispatch-interrupted"
@@ -4205,18 +4189,6 @@ def requeueable_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
         RunId("cancel-requeue-e2e"),
         CANCELLED_WORKER_HELD_SECONDS,
         REQUEUE_GRACE_SECONDS,
-    )
-
-
-@pytest.fixture
-def stopping_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
-    """A run whose only node ends well inside a short cancellation grace period."""
-    yield from _cancellable(
-        tmp_path,
-        oneharness_bin,
-        RunId("cancel-graceful-e2e"),
-        STOPPING_WORKER_HELD_SECONDS,
-        STOPPING_GRACE_SECONDS,
     )
 
 
@@ -4322,49 +4294,6 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This repairs the
-# existing graceful-cancel journey's timing under the gate, and now waits only as long as
-# its dispatch runs; moving the cancellation suite to its own project is outside this task.
-@pytest.mark.xdist_group("cancellation")
-def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
-    stopping_run: LiveRun,
-) -> None:
-    """The other arm of a cancel, and the one a planner should usually see.
-
-    The escalation journey holds a dispatch that will not stop; this holds the ordinary
-    case, and the two together are what make the pair of surfaces worth telling apart at
-    all. What is asserted is the *absence* of the kill: a supervisor reading
-    `dispatch-killed` is being told that whatever the turn had not committed is gone, so
-    an engine that raised it for every cancel would send them looking for lost work after
-    a dispatch that lost none.
-
-    The node is left to settle before the assertion rather than sampled the moment the
-    interrupt lands, because "was not killed" is only true once there is no longer
-    anything to kill: a kill is raised against a dispatch still in flight, and a settled
-    node has none. Its settlement, not the grace's expiry, is what the wait ends on, so
-    the outcome does not depend on how long a turn takes under load — the grace is long
-    enough that the dispatch ends inside it, and the wait's own bound is longer than the
-    grace, so a dispatch the engine did kill settles inside the wait and fails on the
-    kill rather than on a timeout.
-    """
-    _dispatched(stopping_run)
-    cancelled = _replied(stopping_run, {"op": "cancel", "id": "held"})
-    assert cancelled.returncode == 0, cancelled.stderr + cancelled.stdout
-
-    _awaited(stopping_run, INTERRUPTED, seconds=120)
-    stream = _awaited(stopping_run, "node-settled", seconds=STOPPING_GRACE_UNSCALED_SECONDS + 60)
-    assert KILLED not in stream, (
-        f"a dispatch that ended inside the grace period was reported killed:\n{stream}"
-    )
-    # Still a cancel inside a grace: the interrupt landed while the dispatch ran, and the
-    # node settled as the cancel it was, not as work that finished on its own.
-    assert stream.index(INTERRUPTED) < stream.index("node-settled"), stream
-    assert "node-settled cancelled" in stream, stream
-
-
-# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declared(
