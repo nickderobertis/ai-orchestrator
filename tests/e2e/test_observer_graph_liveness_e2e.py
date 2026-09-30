@@ -90,15 +90,9 @@ HELD_NODE = "held"
 #: The hold the launch overrides in place of the shipped five minutes.
 PACED_HOLD_SECONDS = 12
 
-#: How many of the monitor's holds must have opened before the worker is let go. The
-#: worker's turn waits at the fake backend's gate, and a thread releases it once the
-#: graph's record carries everything the run is held open to show (`_evidenced`): this
-#: many judge closes — two completed holds, the second turn being the pacing and the third
-#: the evidence a hold is survived — and the pacemaker and `just status` each caught
-#: inside a hold. A worker held for a fixed time instead ran for however many holds the
-#: host's load fitted into that time, and landed its settlement wherever in a hold the
-#: turns' lengths put it; on a loaded host that was two turns, or a pacemaker whose every
-#: firing fell between holds.
+#: How many of the monitor's holds must have opened before the worker is let go: two
+#: completed holds, the second turn being the pacing and the third the evidence a hold is
+#: survived. The rest of what releases it is `_evidenced`'s.
 RELEASE_AT_HOLD = 3
 
 #: When the gate is released whether or not the holds came, so a monitor that is not
@@ -106,13 +100,11 @@ RELEASE_AT_HOLD = 3
 RELEASE_CEILING_SECONDS = 180
 
 #: The heartbeat bound this launch hands `oneagentgraph` through its documented
-#: `ONEAGENTGRAPH_HEARTBEAT_TIMEOUT` (its `docs/contract.md`, "Liveness"). The linked
-#: release publishes a running member's `member-heartbeat` every quarter of that bound,
-#: from the moment its conversation opened and whatever the conversation is doing — the
-#: default 60 seconds is a beat every 15, which a 12-second hold contains or misses by
-#: phase alone. At 20 a beat is due every 5 seconds, checked on the half-second loop that
-#: refreshes the beat, so no two consecutive beats are further apart than
-#: `HEARTBEAT_GAP_SECONDS` and every hold longer than that contains one.
+#: `ONEAGENTGRAPH_HEARTBEAT_TIMEOUT` (its `docs/contract.md`, "Liveness"), which beats
+#: every quarter of it. The default 60 would beat every 15 s, which a 12-second hold
+#: contains or misses by phase alone; at 20 no two beats are further apart than
+#: `HEARTBEAT_GAP_SECONDS`, a quarter plus a second of scheduling slack, so every hold
+#: longer than that contains one.
 HEARTBEAT_BOUND_ENV = "ONEAGENTGRAPH_HEARTBEAT_TIMEOUT"
 HEARTBEAT_BOUND_SECONDS = 20
 HEARTBEAT_GAP_SECONDS = HEARTBEAT_BOUND_SECONDS / 4 + 1.0
@@ -877,23 +869,13 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
         f"the run's detailed stream renders no `run-hook-fired`, so when the driver let go "
         f"of the run cannot be read off it:\n{paced.printed}"
     )
-    # When a hold was running as the driver let go, the driver has to have cut it rather
-    # than waited it out: it let go before the next turn was due. When a turn was in
-    # flight instead, the hold before it ran out on its own, and two things say that was
-    # the schedule and not the driver: the hold opened before the run settled, so it is
-    # not one begun and waited out during the closeout; and the turn opened when that
-    # hold ran out — its `every` after the close, within the scheduler's granularity — and
-    # not later, so nothing held the turn back past the hold's own deadline.
-    #
-    # That turn may have opened after the settlement. It is permitted: a hold scheduled
-    # before the settlement to run out between the settlement and the driver's let-go ran
-    # out while the closeout — the driver's own teardown, about two seconds in the
-    # journals this was measured on — was still under way, before the cancel could land,
-    # and the closeout then ended the turn it opened (the `cancelled` death discounted
-    # above). One run cannot tell that from a driver that waited out the few seconds of
-    # hold left and cancelled at the turn, because the run's journal stamps no moment for
-    # the driver requesting the cancel; a driver that waited the hold out and let the
-    # conversation go on is still caught, by the hold that would follow the turn.
+    # A hold running as the driver let go must have been cut: the driver let go before
+    # the next turn was due. A turn in flight instead must be the schedule's: its hold
+    # opened before the run settled, and the turn opened at that hold's own deadline, not
+    # later. That turn may open after settlement, when the hold ran out during the
+    # closeout's teardown before the cancel landed; the journal stamps no moment for the
+    # cancel request, so that is permitted, and a driver that let the conversation go on
+    # is still caught by the hold that would follow the turn.
     last_close = _judge_closes(events, MONITOR_MEMBER)[-1].at
     assert paced.settled is not None
     in_flight = [turn.at for turn in turns if turn.at > last_close]

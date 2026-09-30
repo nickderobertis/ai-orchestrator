@@ -4120,16 +4120,11 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
 CANCEL_GRACE_ENV = "ONEPIPELINE_CANCEL_GRACE_SECONDS"
 CANCEL_GRACE_SECONDS = 5
 
-#: The grace the *graceful* journey runs under, before load scaling, and the one of this
-#: pair that may be long: there the deadline is only the premise, so it has to outlast
-#: the whole cancelled dispatch under this tier's own load. The stand-in refuses the
-#: interrupt lever, so the dispatch ends only once its held turns have run, and each of
-#: them sleeps `STOPPING_WORKER_HELD_SECONDS`: under a publication gate one such turn
-#: took 44 s and the dispatch outlived a 60 s grace, which reported a kill the engine was
-#: right to raise. The journey waits for the node to settle rather than for the grace to
-#: expire, so a long grace costs nothing when the dispatch ends early. The escalation
-#: journey keeps the unscaled five seconds, because there the deadline expiring *is* the
-#: behaviour under test.
+#: The grace the *graceful* journey runs under, before load scaling. There the deadline is
+#: only the premise, so it must outlast every held turn of the cancelled dispatch under
+#: load (the stand-in refuses the interrupt lever); the journey waits for settlement, not
+#: for the grace, so its length costs nothing. The escalation journey keeps the unscaled
+#: five seconds, because there the deadline expiring *is* the behaviour under test.
 STOPPING_GRACE_UNSCALED_SECONDS = 150
 STOPPING_GRACE_SECONDS = round(e2e_timeout(STOPPING_GRACE_UNSCALED_SECONDS))
 
