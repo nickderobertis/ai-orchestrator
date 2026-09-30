@@ -103,6 +103,8 @@ WRAPPER_SCRIPTS = (
     # `just recoverable` goes through this one, which re-renders the resume commands
     # `onevcs` prints in their `just` form.
     "recoverable.sh",
+    # `just sweep` holds the host sweep lock through this one before either verb runs.
+    "host-sweep.sh",
 )
 
 
@@ -346,6 +348,9 @@ def run_recipe(
     scratch = checkout / "scratch-root"
     scratch.mkdir(exist_ok=True)
     environment["TMPDIR"] = str(scratch)
+    # The cache root `just sweep` keeps the host sweep lock, stamp and log under, inside
+    # the throwaway checkout, so no row takes or stamps this host's own sweep lock.
+    environment["XDG_CACHE_HOME"] = str(checkout / "cache")
     # The plan-authoring root `just plan` writes its project under. Stated rather than
     # left to be discovered, and inside this checkout: discovery reads the configuration
     # and the package of whichever tree answers, which for a checkout carrying neither is

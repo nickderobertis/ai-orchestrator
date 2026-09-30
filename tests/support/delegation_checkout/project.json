@@ -45,7 +45,8 @@
       "{workspaceRoot}/scripts/codex-alt-home.sh",
       "{workspaceRoot}/scripts/node-scratch-dir.sh",
       "{workspaceRoot}/scripts/repos.sh",
-      "{workspaceRoot}/scripts/recoverable.sh"
+      "{workspaceRoot}/scripts/recoverable.sh",
+      "{workspaceRoot}/scripts/host-sweep.sh"
     ]
   },
   "targets": {

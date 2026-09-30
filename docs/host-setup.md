@@ -36,7 +36,8 @@ idempotent. It:
   `onevcs`, `onepipeline`, and `onepipeline-ui` (PyPI's `onepipeline-api-cli`) —
   from PyPI through that same `uv sync`, at the releases adopted in
   `config/<tool>.version`, and verifies each one the same two ways;
-- sweeps the reclaimable scratch and publication workspaces (`just sweep`);
+- starts the host sweep detached from the hook, at most one at a time and once an hour
+  ([The host sweep](#the-host-sweep-detached-one-at-a-time-once-an-hour));
 - installs `bun` via npm, and `codex` via npm when it is absent, exposing a stable
   `~/.local/bin/codex`;
 - installs `cargo-sweep` through `cargo install` when it is absent or at another
@@ -58,6 +59,51 @@ idempotent. It:
 
 What automation cannot do is authenticate an account, install allowlister, or rebuild the per-machine repository registry. That is
 exactly what the rest of this document is.
+
+### The host sweep: detached, one at a time, once an hour
+
+`just sweep` — `onevcs sweep` then `oneagentgraph sweep` — is the only automatic caller
+on this host of the dead publication and recovery workspaces, the session records beside
+them, and a dispatch's scratch: the engine's idle maintenance returns pool slots and
+retires finished branches, and reaches none of those. Session setup once ran it in the
+SessionStart hook's foreground, and when onevcs 0.34's finished-branches pass took
+longer than the hook's timeout, every session and every dispatch waited out the timeout
+and skipped the steps after the sweep.
+
+So session setup never waits on it. It runs `scripts/host-sweep.sh --detach`, which
+starts the recipe as a **job detached from the hook** — the session hook's own job,
+started with `setsid` as `just repos-bootstrap --detach`'s are, and not one of the
+engines' processes the rule against `nohup` and `setsid` by hand is about — and returns
+at once. The recipe's default four-hour floor applies. Three things bound it:
+
+- **One at a time, host-wide.** Every sweep holds one `flock` on
+  `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/sweep/lock`, a path no checkout or
+  worktree decides, so the canonical checkout, the isolated clones and every dispatch's
+  worktree share it. A session start that finds it held starts nothing and names the
+  holder; `just sweep` run by hand takes the same lock, and while another holder has it
+  says so, naming the holder's process and its log, sweeps nothing, and exits non-zero.
+- **At most once an hour.** A session start launches a job only when none completed
+  within the interval `HOST_SWEEP_INTERVAL_SECONDS` declares in the script — an hour — read
+  against the `completed` stamp beside the lock, which a sweep run by hand writes too. A
+  `--dry-run` neither reads nor writes it. A record no sweep wrote — a key it never
+  writes, a key twice, a malformed value, a status its exit contradicts — is refused by
+  name and read as none, so a sweep starts; a stamp up to
+  `HOST_SWEEP_CLOCK_STEP_SECONDS` ahead of the clock is the sweep that just ran, since a
+  clock corrected by stepping can move back past it.
+- **Failures are reported, never swallowed.** The job's output is `sweep.log` beside the
+  lock. A sweep that ended non-zero is named with its exit status and log by every session
+  start until the next one runs — its log then kept as `sweep.failed.log` — and never
+  changes session setup's exit status.
+
+Only `flock`'s contention outcome is read as a held lock: `flock -E` gives it a status of
+its own, and any other failure of `flock` is named on the start's or the hand-run's output
+— or in the job's log — and ends it non-zero, sweeping nothing. A start never waits on
+the job it launches, not even for it to start: a launch that fails — a host without
+util-linux's `setsid` — writes its error to `sweep.log` and leaves the job's `job` record
+beside the lock, which a finished job removes, so the next start finds it with the lock
+free, names that job as never having finished cleanly, with its log, and sweeps again;
+a job that swept but could not remove its record says why in that log. To
+sweep now, run `just sweep`; to see what it would reclaim, `just sweep --dry-run`.
 
 ### The sibling gates: `just repos-bootstrap`
 
@@ -159,7 +205,7 @@ stand-ins the journey registers rather than over this host's siblings.
 | Tool | Why this repository needs it |
 | --- | --- |
 | `git` | every checkout, worktree, clone, and merge in the lifecycle |
-| `just` | the whole command surface; session setup itself shells to `just sweep` |
+| `just` | the whole command surface; the host sweep session setup starts detached is the `just sweep` recipe |
 | `uv` | installs the pinned onejudge/oneharness into `.venv` and llmlint via `uv tool` |
 | `gh` | GitHub publication (PRs, checks) and repository-type inference (`gh api user --jq .login`) |
 | `node` / `npm` | how the codex CLI and bun are installed |

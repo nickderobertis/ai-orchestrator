@@ -14,7 +14,8 @@ Everything is real — the recipes, the wrappers, `onevcs`, git and the sessions
 doubled: the supersession is recorded through `onevcs supersede`, the verb the engine calls
 when a retry lands, and the landing is a commit pushed to the base of a bare local origin.
 What makes it safe is isolation: `ONEVCS_HOME` is a scratch registry over that throwaway
-origin, `XDG_STATE_HOME` a scratch tree, and `just sweep`'s second verb runs under a
+origin, `XDG_STATE_HOME` a scratch tree, `just sweep` takes its host-wide lock and writes
+its completion stamp under a scratch `XDG_CACHE_HOME`, and its second verb runs under a
 scratch `ONEAGENTGRAPH_STATE_DIR` and `TMPDIR`, so nothing this host holds is read, moved
 or deleted.
 
@@ -163,6 +164,10 @@ def _recipe(seed: Superseded, *arguments: str) -> subprocess.CompletedProcess[st
         env={
             **seed.registry.environment,
             "XDG_STATE_HOME": str(seed.state),
+            # `just sweep` holds the host sweep lock and stamps its completion under the
+            # cache home: this journey's own, so it neither waits on a sweep this host is
+            # running nor postpones the host's next one by an hour.
+            "XDG_CACHE_HOME": str(seed.state / "cache"),
             "ONEPIPELINE_LAUNCHER": "claude-code",
             "ONEPIPELINE_LAUNCHER_SESSION": MANAGER,
             "ONEAGENTGRAPH_STATE_DIR": str(seed.state / "oneagentgraph"),

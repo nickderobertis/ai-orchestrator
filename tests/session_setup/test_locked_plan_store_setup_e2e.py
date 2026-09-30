@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,6 +173,43 @@ def _await_mark(marks: Path, name: str) -> None:
     )
 
 
+#: The line a session start that launched the host sweep prints, naming the job's own
+#: pid: `started job <pid>`, or `started again as job <pid>` after a failed one.
+HOST_SWEEP_JOB = re.compile(r"^host-sweep: .*\bstarted (?:again as )?job (\d+)\b", re.MULTILINE)
+#: How long the host sweep a start launched may take over this journey's sandboxed state:
+#: seconds of real work, bounded far above it.
+HOST_SWEEP_SECONDS = 120
+
+
+def _host_sweep_jobs(stderr: str) -> list[int]:
+    """The pid of every host sweep job a session start's output says it launched."""
+    return [int(pid) for pid in HOST_SWEEP_JOB.findall(stderr)]
+
+
+def _await_host_sweeps(jobs: list[int]) -> None:
+    """Wait until every host sweep job this journey's starts launched has exited.
+
+    Session setup returns while its job still runs, by design, so the journey waits it
+    out by reading the process table for exactly the pids those starts printed. Only a
+    job that outlives the bound is signalled — that pid and no other — and the journey
+    then fails naming it.
+    """
+
+    def alive() -> list[int]:
+        return [pid for pid in jobs if Path(f"/proc/{pid}").exists()]
+
+    try:
+        until(
+            "the host sweep jobs this journey started to exit",
+            lambda: not alive(),
+            seconds=HOST_SWEEP_SECONDS,
+            state=lambda: f"still running: {alive()}",
+        )
+    finally:
+        for pid in alive():
+            os.kill(pid, signal.SIGTERM)
+
+
 def _marks(marks: Path) -> list[str]:
     return sorted(marks.read_text(encoding="utf-8").split()) if marks.exists() else []
 
@@ -198,9 +237,14 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
         f"{held}\n{moving}\n{failing}\n{tmp_path / 'absent-sibling'}\n", encoding="utf-8"
     )
     cache = tmp_path / "cache"
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    graph_state = tmp_path / "oneagentgraph-state"
+    graph_state.mkdir()
+    sweeps: list[int] = []
 
     def session_start() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        started = subprocess.run(
             ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
             cwd=REPO_ROOT,
             text=True,
@@ -216,8 +260,15 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
                 # no identity to walk. The suite's copy of this host's registry names every
                 # real checkout, and sweeping their origins outlasts the held job's release.
                 "ONEVCS_HOME": str(tmp_path / "onevcs-home"),
+                # The families the sweep's second verb judges, the journey's own for the
+                # same reason: its detached job would otherwise reclaim this host's real
+                # oneagentgraph runs and scratch.
+                "ONEAGENTGRAPH_STATE_DIR": str(graph_state),
+                "TMPDIR": str(scratch),
             },
         )
+        sweeps.extend(_host_sweep_jobs(started.stderr))
+        return started
 
     try:
         first = session_start()
@@ -284,7 +335,17 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
         assert complete.outcome == "unchanged" and "completed" in complete.text, complete
         assert ReportLine.of(third.stderr, moving).outcome == "stale"
         assert _marks(marks).count(held.name) == 1
+
+        # The host sweep the first start launched ran inside this journey's sandbox: its
+        # second verb judged the journey's own state root and never this host's.
+        assert sweeps, first.stderr
+        _await_host_sweeps(sweeps)
+        swept = (cache / "ai-orchestrator" / "sweep" / "sweep.log").read_text(encoding="utf-8")
+        assert f'examined family "runs" at {graph_state} ' in swept, swept
+        assert f'examined family "temp" at {scratch} ' in swept, swept
+        assert str(Path.home() / ".local" / "state" / "oneagentgraph") not in swept, swept
     finally:
         release.write_text("", encoding="utf-8")
         for memo_dir in (state.parent for state in cache.rglob("state")):
             _await_stopped(memo_dir)
+        _await_host_sweeps(sweeps)

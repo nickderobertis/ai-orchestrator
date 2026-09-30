@@ -2619,7 +2619,7 @@ OBSERVED_DISPATCHED_NODE: PlanNode = {
 class ObservedLaunch(NamedTuple):
     """One attached launch, observed from before its observer graph died until after.
 
-    Four answers, because the journeys below ask two different questions of the same
+    Five answers, because the journeys below ask two different questions of the same
     expensive launch: what the observer member's own environment was, and whether the
     launcher ever came back once that member had gone. The second question's own
     precondition travels with them rather than failing the fixture, so a launch whose
@@ -2635,6 +2635,9 @@ class ObservedLaunch(NamedTuple):
     #: `just status` and the launcher's own captured stream together, because a failure
     #: needs both — the driver's sentence is in one and the run's state in the other.
     reported: str
+    #: The history store the launch itself carried, which the member is expected to be
+    #: handed unchanged.
+    operator_history: str
 
 
 @pytest.fixture(scope="module")
@@ -2677,6 +2680,16 @@ def observed_launch(
     environment = _environment(tmp_path, oneharness_bin)
     recorded = tmp_path / "observer-environment.json"
     environment[ENVIRONMENT_PATH_ENV] = str(recorded)
+    # The operator's history store, stated rather than inherited: a dispatch this suite
+    # runs inside, or the checkout's `.env` every recipe loads, may carry one, and an
+    # exported name beats that file, so this launch's store is the journey's own.
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This names one
+    # variable in an existing launch fixture so the host cannot decide its verdict; it adds
+    # no launch and moves none, and where this journey's project boundary sits is not this
+    # change's to redraw.
+    operator_history = str(tmp_path / "operator-history")
+    environment["ONEHARNESS_HISTORY_DIR"] = operator_history
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     graph = tmp_path / "observer.yaml"
     graph.write_text(
         "version: 4\n"
@@ -2791,6 +2804,7 @@ def _observe(
         announced in watched,
         launcher.poll() is not None,
         f"{status.stdout}\n{watched}",
+        environment["ONEHARNESS_HISTORY_DIR"],
     )
 
 
@@ -2868,8 +2882,10 @@ def test_a_launch_hands_its_observer_the_run_history_settings_the_engine_stamps(
     the engine's to provide and neither is this repository's to decide, so both are
     measured rather than restated: the engine sets `ONEHARNESS_HISTORY`, points
     `ONEHARNESS_HISTORY_POINTER_FILE` at the run's own file, and — the half a reader
-    would never notice going wrong — sets **no** `ONEHARNESS_HISTORY_DIR`, which is what
-    leaves the store where the operator already reads it.
+    would never notice going wrong — sets **no** `ONEHARNESS_HISTORY_DIR` of its own, so
+    the member is handed the store the launch carried, which is what leaves it where the
+    operator already reads it. The launch names that store itself, so the verdict does not
+    depend on whether the host running the suite sets one.
 
     Taken on the **observer** graph deliberately. It is the dispatch furthest from a
     plan node, so an engine that stamped node-scope dispatches and forgot the graphs
@@ -2890,10 +2906,11 @@ def test_a_launch_hands_its_observer_the_run_history_settings_the_engine_stamps(
         "re-measure the engine's run-history contract and correct every document "
         "that states it, in this change"
     )
-    assert "ONEHARNESS_HISTORY_DIR" not in environment, (
+    assert environment.get("ONEHARNESS_HISTORY_DIR") == observed_launch.operator_history, (
         "the engine set ONEHARNESS_HISTORY_DIR="
-        f"{environment.get('ONEHARNESS_HISTORY_DIR')!r} on the observer member, which "
-        "moves this dispatch's transcripts out of the store this host reads with "
+        f"{environment.get('ONEHARNESS_HISTORY_DIR')!r} on the observer member where the "
+        f"launch carried {observed_launch.operator_history!r}, which moves this dispatch's "
+        "transcripts out of the store this host reads with "
         "`oneharness history`. Every paragraph here that says a dispatch's sessions "
         "stay in the default store is about that, and moves in the same change"
     )

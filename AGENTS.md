@@ -1469,7 +1469,13 @@ four-hour age floor when you name none, because a host running several dispatche
 churns workspaces hourly and almost nothing provably dead is ever a day old, and
 lowering it weakens no proof. Read each verb's "Families not examined" section before
 its reclaimed figure, because `0 B reclaimed` beside an unexamined family reads as an
-all-clear. Session setup runs it. The processes meant to outlive their launcher — the driver and the
+all-clear.
+<!-- llmlint: ignore-block[no_redundant_instruction_pointers, agents_md_durable_and_terse] Where and how often the sweep runs is explained in docs/host-setup.md; this paragraph is where a manager reads about `just sweep`, so it points there, and nothing else in this document links that file. The one sentence keeps the facts a manager acts on — detached, one at a time, at most hourly, and the hook's own job rather than an engine process the next sentence forbids detaching by hand — because without them that sentence reads as forbidding this job. -->
+Session setup starts it as the hook's own detached job, one at a time and at most
+hourly, and never waits on it
+([`docs/host-setup.md`](docs/host-setup.md#the-host-sweep-detached-one-at-a-time-once-an-hour)).
+<!-- llmlint: ignore-end[no_redundant_instruction_pointers, agents_md_durable_and_terse] -->
+The processes meant to outlive their launcher — the driver and the
 dispatches and publications it forks — are the engines' to keep alive and reap: never
 work around a kill with `nohup` or `setsid` by hand. A run root is pruned by the next
 `onevcs session open`, which skips an open session's root and keeps a closed one only

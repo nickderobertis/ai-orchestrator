@@ -61,6 +61,8 @@ from nx_inputs import (
     DAG_UI_SCOPED,
     DOCS_SCOPED,
     FROM_DEPENDENCIES,
+    HOST_SWEEP_ROOT,
+    HOST_SWEEP_SCOPED,
     HOST_VIEWS_ROOT,
     HOST_VIEWS_SCOPED,
     MANAGER_ALLOWLIST_ROOT,
@@ -895,8 +897,9 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: project owns that one journey in one target, the `dag-ui` project owns the
 #: journeys over this repository's composition of the Observatory in one, the
 #: `session-setup` project owns the journey over this checkout's own provisioning in
-#: one, the `session-setup-pypi` project owns the journeys that install the published
-#: tools from PyPI in one, the
+#: one, the `host-sweep` project owns the journeys over the host sweep session setup
+#: starts detached in one, the `session-setup-pypi` project owns the journeys that
+#: install the published tools from PyPI in one, the
 #: `unwatched` project owns the journeys over the verb a `Stop` hook reads and the hook
 #: itself in one, the `merge-policy` project owns the journeys that hold
 #: the restated `merge_policy` vocabulary to the launcher in one, the `writeback-budget`
@@ -914,6 +917,12 @@ SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
     (f"{SESSION_SETUP_ROOT}/project.json", SESSION_SETUP_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the host-sweep entry sits beside the others' because the catalog is the domain.
+    (f"{HOST_SWEEP_ROOT}/project.json", HOST_SWEEP_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{SESSION_SETUP_PYPI_ROOT}/project.json", SESSION_SETUP_PYPI_SCOPED),
     *((f"{journey.root}/project.json", ASK_SEAM_SCOPED) for journey in ASK_SEAM_JOURNEYS),
     (f"{DAG_UI_ROOT}/project.json", DAG_UI_SCOPED),

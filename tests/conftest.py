@@ -34,6 +34,8 @@ from nx_inputs import (
     CODE_SCOPED,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
+    HOST_SWEEP_ROOT,
+    HOST_SWEEP_WORKSPACE,
     HOST_VIEWS_ROOT,
     HOST_VIEWS_WORKSPACE,
     MANAGER_ALLOWLIST_ROOT,
@@ -156,6 +158,11 @@ OWNED_PROJECTS = {
     RUN_END_HOOKS_ROOT: OwnedProject(key=RUN_END_HOOKS_WORKSPACE, docs_tier=False),
     HOST_VIEWS_ROOT: OwnedProject(key=HOST_VIEWS_WORKSPACE, docs_tier=False),
     SESSION_SETUP_ROOT: OwnedProject(key=SESSION_SETUP_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs
+    # every directory-owned project's key before it collects any of them, so each project's
+    # row is here beside its siblings' rather than in its own directory.
+    HOST_SWEEP_ROOT: OwnedProject(key=HOST_SWEEP_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     SESSION_SETUP_PYPI_ROOT: OwnedProject(
         key=SESSION_SETUP_PYPI_WORKSPACE, docs_tier=False, target=SESSION_SETUP_PYPI_SCOPED
     ),

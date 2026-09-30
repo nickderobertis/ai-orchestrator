@@ -496,18 +496,24 @@ _verdict verdict run *text:
 # second runs whatever the first exits, and the recipe fails if either did. The floor is
 # `--min-age-hours 4` when the caller names none, because both verbs' own 24 hours
 # reclaims almost nothing on a host that churns workspaces hourly (docs/orchestration.md,
-# "The recorded run").
+# "The recorded run"). Both run under the host sweep lock `scripts/host-sweep.sh` holds,
+# so a sweep another caller holds is named and nothing is swept beside it; session setup
+# starts this recipe detached through that script, at most once an hour.
 # llmlint: ignore[tool_output_is_signal] the two verbs' own reports are what this command is run to read.
 sweep *args:
     #!/usr/bin/env bash
-    set -uo pipefail
+    set -euo pipefail
+    . "{{repo_root}}/scripts/host-sweep.sh"
+    host_sweep_hold "$@" || exit $?
     floor=(--min-age-hours 4)
     for argument in "$@"; do
         case "$argument" in --min-age-hours | --min-age-hours=*) floor=() ;; esac
     done
     status=0
-    uv run onevcs sweep "$@" "${floor[@]}" || status=$?
-    uv run oneagentgraph sweep "$@" "${floor[@]}" || status=$?
+    # The verbs are not handed the lock: nothing they leave running may hold it.
+    uv run onevcs sweep "$@" "${floor[@]}" 9>&- || status=$?
+    uv run oneagentgraph sweep "$@" "${floor[@]}" 9>&- || status=$?
+    host_sweep_record "$status"
     exit "$status"
 
 # Three verbs, one per branch state, and between them they cover every state a

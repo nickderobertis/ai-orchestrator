@@ -1325,6 +1325,10 @@ def test_naming_no_board_reads_the_followups_board_and_launches_nothing_without_
         for name, value in board.bench.environment.items()
         if name != "GH_PROJECTS_TOKEN"
     }
+    # The store falls back to its machine-wide secrets file for a name the environment
+    # lacks, and a host that keeps the board's token there would read the live board;
+    # naming a file that does not exist keeps this host's token out of the journey.
+    environment["ONETASKGRAPH_SECRETS_FILE"] = str(board.bench.tmp / "no-secrets.env")
 
     refused = _answer(board.bench, board.checkout, board.record, environment=environment)
 

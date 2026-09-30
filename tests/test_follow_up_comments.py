@@ -959,6 +959,10 @@ def test_naming_no_board_reads_the_followups_board(
 ) -> None:
     """The default is `followups`, which no test may read, so the source that refused is named."""
     monkeypatch.delenv("GH_PROJECTS_TOKEN", raising=False)
+    # The store falls back to its machine-wide secrets file for a name the environment
+    # lacks, and a host that keeps the board's token there would read the board; naming
+    # a file that does not exist keeps this host's token out of the verdict.
+    monkeypatch.setenv("ONETASKGRAPH_SECRETS_FILE", str(drafts_root.parent / "no-secrets.env"))
     ticket = tickets.ticket_path(drafts_root, RUN, CAUSE)
     ticket.parent.mkdir(parents=True)
     ticket.write_text("x", encoding="utf-8")

@@ -66,6 +66,22 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: `REPO_ROOT` from, directly and through `tests/conftest.py`: session setup runs no
 #: other orchestrator code, so no other edit there starts a real provisioning.
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier names, one row per test project, as the block over the ask-seam
+# journeys below says: `tests/conftest.py`'s read guard, `tests/test_nx_cache_scope.py`
+# and the real-Nx selection journeys resolve every project's key, name and directory
+# from here, so the host-sweep project's row lands where each sibling's does rather than
+# in `tests/host_sweep/`, which the guard reads before collecting it.
+#: The key `host-sweep:test` is memoized on: the files its journeys copy into a fixture
+#: repository and run there — session setup, the host sweep script it starts detached,
+#: the `justfile` whose `sweep` recipe that job runs, the real `setup-llmlint.sh` and
+#: `repos-bootstrap.sh` session setup hands off to, the list reader and checkout list the
+#: latter reads, and every adopted pin (`config/*.version`, which the copied setup
+#: verifies) — beside the lock and the modules the test imports. A key of its own rather
+#: than a widening of `sessionSetupWorkspace`, so an edit to the `justfile` or a pin pays
+#: for these doubled journeys and not for that project's real re-provisioning.
+HOST_SWEEP_WORKSPACE = "hostSweepWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The key `project-store-race:test` is memoized on: the module under race, the
 #: project's own files, and the suite modules `tests/conftest.py` imports — nothing
 #: else, because the race reads a temporary root and nothing of this checkout.
@@ -363,6 +379,22 @@ SESSION_SETUP_PROJECT = "session-setup"
 SESSION_SETUP_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 SESSION_SETUP_ROOT = "tests/session_setup"
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
+# `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
+#: The project whose test target owns the journeys over the host sweep session setup
+#: starts detached: the real `scripts/session-setup.sh` and `scripts/host-sweep.sh` in a
+#: fixture repository, never waited on, one at a time and at most hourly, one of them
+#: running the real `onevcs` and `oneagentgraph` over sandboxed state roots. A project of
+#: its own for the reason `unwatched` is: those journeys wait out detached jobs and a
+#: real sweep, a cost `nx affected` can only keep off an unrelated edit where it is a
+#: separate project.
+HOST_SWEEP_PROJECT = "host-sweep"
+#: That project's one test target: nothing here reads this repository's prose.
+HOST_SWEEP_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+HOST_SWEEP_ROOT = "tests/host_sweep"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #: The project whose one target owns the journeys that run the real
 #: `scripts/session-setup.sh` in a fixture repository `tests/e2e/provisioning.py` builds,
