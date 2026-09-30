@@ -4329,6 +4329,9 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This repairs the
+# existing graceful-cancel journey's timing under the gate, and now waits only as long as
+# its dispatch runs; moving the cancellation suite to its own project is outside this task.
 @pytest.mark.xdist_group("cancellation")
 def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
     stopping_run: LiveRun,
@@ -4364,6 +4367,9 @@ def test_a_dispatch_that_ends_inside_the_grace_period_is_never_killed(
     # node settled as the cancel it was, not as work that finished on its own.
     assert stream.index(INTERRUPTED) < stream.index("node-settled"), stream
     assert "node-settled cancelled" in stream, stream
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_guard_hands_a_variant_on_to_the_stand_in_its_journey_already_declared(
