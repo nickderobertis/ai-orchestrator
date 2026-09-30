@@ -63,12 +63,6 @@ INHERITED = (
     "CLAUDE_SESSION_ID",
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
-    # Where an enclosing dispatch records its oneharness history. Inherited, every stand-in
-    # turn here queued on that host-wide history index lock, tens of seconds a turn.
-    "ONEHARNESS_HISTORY",
-    "ONEHARNESS_HISTORY_DIR",
-    "ONEHARNESS_HISTORY_LABELS",
-    "ONEHARNESS_HISTORY_POINTER_FILE",
     *follow_up_variables.all_names(),
     plan_root_variable.name(),
 )

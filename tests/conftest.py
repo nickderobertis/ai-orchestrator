@@ -204,6 +204,11 @@ DISPATCH_SELECTION_ENV = (
     "ONEHARNESS_HARNESSES",
     "ONEHARNESS_MODEL",
 )
+#: The namespace of oneharness's history settings — whether a turn is recorded, where,
+#: under which labels, and which pointer file indexes it. The engine sets them for every
+#: dispatch it runs, so this suite run from inside one inherits them; reconciled against
+#: the pinned CLI's own `run --help` by `tests/test_dispatch_environment_contract.py`.
+DISPATCH_HISTORY_ENV_PREFIX = "ONEHARNESS_HISTORY"
 
 
 #: The marker a module declares to keep one of the roots below as this checkout
@@ -292,6 +297,28 @@ def _hand_written_fixture_plans() -> Iterator[None]:
     """
     with pytest.MonkeyPatch.context() as patched:
         patched.setenv(plan_check.REQUIRE_RENDERED_ENV, "false")
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_dispatch_history() -> Iterator[None]:
+    """Keep an enclosing dispatch's oneharness history settings out of this suite.
+
+    Inherited, every `oneharness run` a journey spends — each with only the provider's
+    stand-in behind it — records into the dispatch's own history directory, a host-wide
+    one the live dispatches write to, and appends to that dispatch's pointer file. Each
+    turn then queues on that directory's index lock: one `just check-plan` journey took
+    53 s inheriting them and 3 s without. History is off unless something turns it on,
+    so dropping them is the environment a developer's own run of this suite has; a
+    journey whose subject is history states its own.
+
+    Session scope and by mutating the environment, for the reason the plan-store roots
+    above give: the launches that spend turns are set up in module-scoped fixtures.
+    """
+    with pytest.MonkeyPatch.context() as patched:
+        for key in tuple(os.environ):
+            if key.startswith(DISPATCH_HISTORY_ENV_PREFIX):
+                patched.delenv(key)
         yield
 
 

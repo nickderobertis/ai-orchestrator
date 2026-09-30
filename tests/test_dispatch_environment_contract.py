@@ -8,6 +8,9 @@ The fixture holds a copy of which spellings are live, and a copy of a contract i
 sound while something reconciles it: rename a prefix in a reader and the fixture
 silently stops dropping it, the suite reads the enclosing dispatch's base again, and
 nothing turns red. This is that reconciliation.
+
+The dispatch's oneharness history settings are the second thing the suite drops, and
+reconciled the same way: against every history variable the pinned CLI documents.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ import subprocess
 import sys
 
 import pytest
-from conftest import COMPARISON_ENV_PREFIXES
+from conftest import COMPARISON_ENV_PREFIXES, DISPATCH_HISTORY_ENV_PREFIX
+from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
@@ -110,4 +114,77 @@ def test_the_fixture_drops_the_identity_a_dispatch_really_exports(exported: str)
 
     assert result.returncode == 0, (
         f"a suite inheriting {exported} did not drop it: {result.stdout}{result.stderr}"
+    )
+
+
+#: One history option of `oneharness run --help`: its flag, then its description up to
+#: the next option.
+HISTORY_OPTION = re.compile(r"^\s+--(?:no-)?history\S*.*?(?=^\s+-|\Z)", re.MULTILINE | re.DOTALL)
+#: A variable a oneharness option says it is also settable through.
+ONEHARNESS_VARIABLE = re.compile(r"\bONEHARNESS_[A-Z0-9_]+\b")
+
+#: The history settings the engine exports to a dispatch, as a suite run inside one
+#: inherits them: recording on, into the dispatch's own directory, under its labels,
+#: indexed in its run's pointer file.
+DISPATCH_HISTORY = {
+    "ONEHARNESS_HISTORY": "1",
+    "ONEHARNESS_HISTORY_DIR": "/an/enclosing/dispatch/history",
+    "ONEHARNESS_HISTORY_LABELS": "onepipeline.run_id=an-enclosing-run",
+    "ONEHARNESS_HISTORY_POINTER_FILE": "/an/enclosing/run/oneharness-sessions.jsonl",
+}
+
+
+def test_every_history_setting_the_pinned_cli_honours_is_one_the_suite_drops(
+    oneharness_bin: str,
+) -> None:
+    """The prefix the fixture drops covers every history variable the pinned CLI reads.
+
+    Read off the CLI's own help, because a history setting renamed outside the prefix is
+    one the suite would inherit again with nothing turning red — and each inherited
+    turn queues on a host-wide history index rather than failing.
+    """
+    documented = subprocess.run(  # noqa: S603 - the pinned CLI, asked what it documents
+        [oneharness_bin, "run", "--help"],
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert documented.returncode == 0, documented.stderr
+    honoured = {
+        variable
+        for option in HISTORY_OPTION.findall(documented.stdout)
+        for variable in ONEHARNESS_VARIABLE.findall(option)
+    }
+
+    assert honoured, "the pinned oneharness documents no history variable any more"
+    outside = sorted(v for v in honoured if not v.startswith(DISPATCH_HISTORY_ENV_PREFIX))
+    assert outside == [], f"history variables the suite would still inherit: {outside}"
+    assert honoured == set(DISPATCH_HISTORY), (
+        "the polluted run below no longer exports every history variable the CLI honours: "
+        f"{sorted(honoured ^ set(DISPATCH_HISTORY))}"
+    )
+
+
+def test_this_process_carries_no_inherited_history_setting() -> None:
+    """The fixture's product: no history setting reaches a turn this suite spends."""
+    inherited = sorted(key for key in os.environ if key.startswith(DISPATCH_HISTORY_ENV_PREFIX))
+
+    assert inherited == [], f"the suite is running with inherited history settings: {inherited}"
+
+
+def test_the_fixture_drops_the_history_a_dispatch_really_exports() -> None:
+    """Run the suite polluted the way a dispatch's gate is, and prove it comes up clean."""
+    probe = f"{__file__}::test_this_process_carries_no_inherited_history_setting"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", probe, "-p", "no:cacheprovider", "-p", "no:xdist"],
+        cwd=REPO_ROOT,
+        env={**os.environ, **DISPATCH_HISTORY},
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, (
+        f"a suite inheriting {sorted(DISPATCH_HISTORY)} did not drop them: "
+        f"{result.stdout}{result.stderr}"
     )
