@@ -36,6 +36,10 @@ WRITE_BACK_SOURCE = "onepipeline-writeback"
 WRITE_BACK_REWROTE = "the dependency points into onepipeline's old write-back scratch source"
 WRITABLE_PLUGIN = "local-md"
 ORIGIN_KEY = "onetaskgraph.origin"
+#: Where a copy records, on the item it copied, the counterpart it reached at each destination
+#: source: an object mapping a source name to a qualified id there (onetaskgraph's
+#: `docs/metadata.md`).
+COPIES_KEY = "onetaskgraph.copies"
 RECORD_COMPONENT = re.compile(r"(?!\.+$)[\w.@+-]+")
 QualifiedTaskId = NewType("QualifiedTaskId", str)
 QualifiedDocumentId = NewType("QualifiedDocumentId", str)

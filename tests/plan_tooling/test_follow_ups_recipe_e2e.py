@@ -108,11 +108,11 @@ STORE_INSTRUCTION_WITNESS = "store-instruction.witness"
 VALIDATE_WITNESS = "validate-older-first.witness"
 #: The older plan store's own log of what it served during that validate, under the bench.
 VALIDATE_SERVED = "validate-older-first.served"
-#: What the task's own accepted-items listing answered, run as the task spells it; what its
-#: duplicate search by text answered for the shared root cause, run the same way; what the
+#: What the task's own duplicate search by root cause answered for the shared root cause, run
+#: as the task spells it; what its search by text answered for it, run the same way; what the
 #: validators printed for the three refused shapes; and what `board-status` printed on the
 #: re-dispatch for the ticket whose accepted item a person had un-accepted.
-ACCEPTED_WITNESS = "accepted-items.witness"
+ROOT_CAUSE_WITNESS = "root-cause-search.witness"
 SEARCH_WITNESS = "duplicate-search.witness"
 REFUSED_WITNESS = "refused-shapes.witness"
 REDERIVE_WITNESS = "rederive.witness"
@@ -359,26 +359,25 @@ def _comments(bench: Bench, qualified: str) -> list[dict[str, object]]:
 
 
 def _board_ids(bench: Bench) -> list[str]:
-    """Every item the board holds, read through the module's own every-page listing.
+    """Every item the stand-in board holds: this journey's own read of it, every page.
 
-    The board spans pages here by design, so a read of the store's first page would
-    answer a board smaller than it is: this reads it the way the agent's task does.
+    The board spans pages here by design, so a read of the store's first page would answer a
+    board smaller than it is: this follows the store's own `next` cursor until it answers
+    none. It is the journey's oracle, never an instruction the task hands the agent, which
+    is given no way to list the board whole.
     """
-    listed = _run(
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            "-m",
-            "orchestrator.follow_up_tickets",
-            "board-items",
-            "--board",
-            BOARD,
-        ],
-        bench,
-    )
-    assert listed.returncode == 0, listed.stdout + listed.stderr
-    items = json.loads(listed.stdout)["items"]
-    assert isinstance(items, list), items
-    return sorted(str(one["id"]) for one in items if isinstance(one, dict))
+    ids: list[str] = []
+    cursor: list[str] = []
+    for _page in range(100):
+        listed = _store(bench, "task", "list", "--source", BOARD, *cursor)
+        items = listed["items"]
+        assert isinstance(items, list), listed
+        ids.extend(str(one["id"]) for one in items if isinstance(one, dict))
+        following = listed.get("next")
+        if not following:
+            return sorted(ids)
+        cursor = ["--page", str(following)]
+    raise AssertionError("the stand-in board's listing never ended")
 
 
 def _draft(bench: Bench, run: str, title: str) -> Path:
@@ -1326,7 +1325,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--witness",
                     STORE_INSTRUCTION_WITNESS,
                 ],
-                # The board's accepted items, listed as the task's own step spells it.
+                # The duplicate search by root cause for the shared root cause, as the task
+                # spells it.
                 [
                     python,
                     str(RUN_TASK_STORE_INSTRUCTION),
@@ -1334,10 +1334,12 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     str(_prompt_log(bench, "first")),
                     "--board",
                     BOARD,
+                    "--root-cause",
+                    SHARED_CAUSE,
                     "--checkout",
                     str(REPO_ROOT),
                     "--witness",
-                    ACCEPTED_WITNESS,
+                    ROOT_CAUSE_WITNESS,
                 ],
                 # The duplicate search for the shared root cause, as the task spells it.
                 [
@@ -1500,14 +1502,16 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
 
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
         # by copying its ticket again, and its comment on the earlier run's issue is edited.
-        # The ticket is staged bound to the withdrawn duplicate, as the store's own
-        # correspondence names it; the copy has to rebind it to the live item.
+        # The ticket is staged bound to the withdrawn duplicate, its own origin naming it there
+        # too, so the store's own copy would follow it; the ticket has to be rebound to the
+        # live item.
         edited = _ticket(
             main, NEW_CAUSE, first_ticket.drafts, title, "Verified, examples tightened"
         )
         misbound = dataclasses.replace(
             edited,
             board_item=tickets.BoardItemId(duplicate_issue.removeprefix(f"{BOARD}:")),
+            origin=duplicate_issue,
         )
         edited_comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
@@ -1540,7 +1544,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 # Re-derived against the board as it now is: no entry, no assumption, and
                 # staged as the proposal it was first written as; the board decides.
                 _placed(
-                    _staged(bench, "new-edited.md", tickets.render(misbound, board=BOARD)),
+                    _staged(bench, "new-edited.md", tickets.render(misbound)),
                     new_ticket,
                 ),
                 # The related ticket, evaporated by the newly accepted fix: withdrawn.
@@ -2718,7 +2722,8 @@ def test_the_task_carries_every_instruction_and_both_contracts(
         "**Group what stands by root cause**",
         "-m orchestrator.follow_up_tickets validate <path of the ticket>",
         "Then delete the draft files that ticket consumed",
-        "`root_cause` and `repository`, then by titles and text",
+        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} --metadata "
+        "orchestrator.follow-up/root_cause=<root-cause>`, then by text",
         f"-m orchestrator.follow_up_tickets board-items --board {BOARD} --search <text>`",
         "every issue you created or updated with its URL",
         "every dropped draft with its reason",
@@ -3050,30 +3055,38 @@ def test_the_exemption_holds_only_while_the_stamp_names_exactly_the_one_node(
     assert "nothing was dispatched" in tampered.stderr
 
 
-def test_the_task_lists_the_boards_accepted_items_and_that_listing_selects_exactly_them(
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches
+# nothing: it reads the witness the module-scoped `followed` fixture's first pass wrote, and
+# that fixture is the one expensive part, already behind plan_tooling's installed-engine
+# edge. It replaces the accepted-listing test here one for one, adding no launch.
+def test_the_task_searches_the_board_by_root_cause_and_that_query_selects_exactly_its_items(
     followed: Followed,
 ) -> None:
-    """The step's own listing, run as the task spells it, answers every accepted item and no other.
+    """The step's search by root cause, run as the task spells it, answers that cause alone.
 
     Read off the witness the turn wrote: the argv is the one the composed task fixes — the
-    module's own every-page listing on this checkout's interpreter, its `--status` flags
-    rendered from the module's vocabulary — and what it answered is the two accepted items,
-    never the proposal, never the deferred item of the other run, never a withdrawn one.
+    module's own every-page query on this checkout's interpreter, the store's native
+    `--metadata` question for the record's `root_cause` — and what it answered is the earlier
+    run's deferred item for the shared root cause, never an item of another root cause. And
+    the task gives the agent no way to list the board whole: every `board-items` it spells
+    names a narrowing flag, and none a status filter alone.
     """
     (task,) = followed.first.prompts
     flat = " ".join(task.split())
     python = RECIPE_PYTHON
     assert (
-        "**Write each ticket as if the board's accepted fixes were already in.** List the "
-        "board's accepted items — those at `Todo` (`todo`), `Queued` (`queued`), `In Progress` "
-        f'(`in-progress`) and `Done` (`done`) — with `"{python}" -m '
-        f"orchestrator.follow_up_tickets board-items --board {BOARD} --status todo --status "
-        "queued --status in-progress --status done`, which answers every page, the whole board"
+        f'`"{python}" -m orchestrator.follow_up_tickets board-items --board {BOARD} --metadata '
+        "orchestrator.follow-up/root_cause=<root-cause>`"
     ) in flat
-    witness = followed.first_turn.directory.resolve() / ACCEPTED_WITNESS
+    spelled = re.findall(r"board-items --board [^`\s]+([^`]*)`(.{0,32})", flat)
+    assert spelled, flat
+    for flags, after in spelled:
+        narrowed = any(flag in flags for flag in tickets.NARROWING)
+        assert narrowed or after.startswith(", naming at least one of"), (flags, after)
+    witness = followed.first_turn.directory.resolve() / ROOT_CAUSE_WITNESS
     assert witness.is_file(), (
-        f"no command the turn ran wrote {ACCEPTED_WITNESS} into {followed.first_turn.directory}; "
-        f"{_ran(followed.bench)}"
+        f"no command the turn ran wrote {ROOT_CAUSE_WITNESS} into "
+        f"{followed.first_turn.directory}; {_ran(followed.bench)}"
     )
     # llmlint: ignore[boundary_inputs_validated] The witness this journey's own helper wrote,
     # at the path this journey named; every field read here is asserted on below.
@@ -3086,14 +3099,15 @@ def test_the_task_lists_the_boards_accepted_items_and_that_listing_selects_exact
         "board-items",
         "--board",
         BOARD,
-        *(word for status in tickets.Status if status.accepted for word in ("--status", status)),
+        "--metadata",
+        tickets.root_cause_query(SHARED_CAUSE),
     ], probe["command"]
     assert probe["returncode"] == 0, probe
-    listed = json.loads(probe["stdout"])["items"]
-    assert sorted(str(one["id"]) for one in listed) == sorted(
-        [followed.narrowing_item, followed.removing_item]
-    ), probe
-    assert followed.proposed_item not in {str(one["id"]) for one in listed}
+    listed = [str(one["id"]) for one in json.loads(probe["stdout"])["items"]]
+    assert listed == [f"{BOARD}:{followed.other}/tickets/{SHARED_CAUSE}"], probe
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_duplicate_search_finds_the_open_item_past_the_stores_first_page(
@@ -3308,7 +3322,8 @@ def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_th
     assert isinstance(metadata, dict), local
     assert metadata[tickets.KEY][tickets.BINDING_FIELD] == new_issue.removeprefix(f"{BOARD}:")
     assert metadata[tickets.ORIGIN_KEY] == new_issue
-    assert tickets.ORIGIN_KEY + ": " + duplicate not in followed.new_ticket_after_second
+    assert tickets.COPIES_KEY not in metadata, "the store's link was hand-written"
+    assert duplicate not in followed.new_ticket_after_second
 
     (notice,) = followed.duplicate_comments_after_second
     body = str(notice["body"]).strip()
@@ -3337,7 +3352,9 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     ) in witness
     assert "re-derive it against the board as it now is" in witness
     (task,) = followed.second.prompts
-    assert "are re-derived from the board as it now is on every pass" in " ".join(task.split())
+    assert "are re-derived from what the searches of step 7 now return on every pass" in " ".join(
+        task.split()
+    )
 
     assert followed.new_deps_after_first != []
     assert followed.new_deps_after_second == []

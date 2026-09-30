@@ -934,10 +934,11 @@ dispatch settles.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
+<!-- llmlint: ignore-block[instruction_layer_localized] These three paragraphs are the manager's own loop rather than an `orchestrator/` implementation constraint: the manager session reads them when it briefs and supervises follow-up runs and reads the board, and no nested instruction file is one the manager reads; `tests/test_follow_up_ticket_docs.py` holds the keys and commands they name to `orchestrator/follow_up_tickets.py`. The block runs to the end of the paragraph on which board item a ticket is copied onto. -->
 **Every proposal is written against the board's accepted fixes.** The follow-up agent
-reads the board's accepted tickets — `Todo`, `Queued`, `In Progress`, and `Done` where the
-fix has not reached the basis the ticket was verified at — and writes each ticket it stands
-up as if their fixes were already in: a ticket an accepted fix removes is not filed, one it
+reads the accepted tickets its searches for a ticket returned for other root causes — `Todo`,
+`Queued`, `In Progress`, and `Done` where the fix has not reached the basis the ticket was
+verified at — and writes each ticket it stands up as if their fixes were already in: a ticket an accepted fix removes is not filed, one it
 narrows is written to what remains, and one it displaces states the fix that remains right
 with the displaced one under its rejected fixes. Such a ticket depends on the accepted one
 as the store's own `depends_on` edge — outside the ticket's record, which the board
@@ -946,23 +947,27 @@ at each changed place which accepted ticket changed it, by URL. A `Proposal` or 
 fix is never assumed. The same-root-cause path is unchanged: an accepted item for a
 ticket's own root cause takes the run's evidence as a comment, never a dependency.
 
-**Every listing of the board is `python -m orchestrator.follow_up_tickets board-items`.**
-It takes `--board`, an optional `--search TEXT` and the accepted filter as repeated
-`--status` flags, reads the pinned plan store through every `next` page until none remains
-— refusing a cursor it has already followed — and prints one combined JSON result; the
-task's board inventory, its duplicate search by text and its accepted listing all name it.
-A bare `task list` answers one page and a cursor, so a search over it reads the board as
-smaller than it is.
+**The board is searched, never listed: every query of it is `python -m
+orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share
+of GitHub's hourly allowance that grows with the board and that every session here shares,
+so each query names one of the store's native narrowing questions — by root cause, by origin,
+or GitHub's own token-matched issue search, which may not yet list an item written seconds
+ago — and one naming none is refused; nothing in the task lists the board. A bare `task
+list` answers one page and a cursor, so a search over it reads the board as smaller than it
+is.
 
 **A ticket is copied onto the board item it is bound to, and nowhere else.** Its record's
 `board_item` key holds that item's native id, and
 `python -m orchestrator.follow_up_tickets board-status` and its `copy` are what write it —
 when the run creates its item or first reaches it, and again when two items carry one
 ticket's `onetaskgraph.origin`, naming the run's own open item and leaving each withdrawn
-duplicate a comment naming that item — with the store's origin naming the item beside it,
-so the store's copy follows the binding. Both refuse, naming both ids, a destination the
-store reports that differs from the binding, and every copy the task prescribes goes
-through `copy`: a bare `task copy` updates whichever carrier the store lists first.
+duplicate a comment naming that item. The store records its own link to that item and
+follows it on the next copy, so no copy searches the board, and `board_item` is held to that
+link; a ticket bound to an item already on the board that the link does not name is steered
+by its own `onetaskgraph.origin` naming the item, which `board-status` writes. Both refuse, naming both ids, a link, or a destination the store reports, that differs
+from the binding, and every copy the task prescribes goes through `copy`: a bare `task copy`
+updates whichever carrier the store lists first.
+<!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 **The `followups` board is the user's decision.** A ticket's issue is created in the
 repository its root cause lives in, which must be under the board's owner, as an item of

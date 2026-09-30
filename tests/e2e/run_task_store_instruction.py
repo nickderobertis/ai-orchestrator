@@ -69,35 +69,41 @@ def _unanswered(problem: str) -> Witness:
 
 
 def instruction(
-    task: str, *, run: str | None = None, board: str | None = None, search: str | None = None
+    task: str,
+    *,
+    run: str | None = None,
+    board: str | None = None,
+    search: str | None = None,
+    root_cause: str | None = None,
 ) -> str | None:
-    """A listing the task spells whole, as it spells it: ``run``'s drafts, or one of the board's.
+    """A query the task spells, as it spells it: ``run``'s drafts, or one of the board's searches.
 
     The drafts listing is chosen for the pin because it is the first store command the
     task hands the agent and the only one whose whole argv the task fixes: everything
     after it takes an id the agent works out. The program word is what differs between a
     pinned task and an unpinned one, and it is the first word of every store instruction
-    alike. The two board listings are the other whole argvs the task fixes, both through
-    the module's own `board-items` command, which reads every page the store answers:
-    the accepted listing — the one the agent reads the board's accepted tickets with, its
-    `--status` flags rendered from the module's own vocabulary — and, with ``search``, the
-    duplicate search by text, whose `<text>` the task leaves to the agent and this fills
-    in. Running each as spelled is how a journey reads what that step selects.
+    alike. The two board searches are the task's other spelled argvs, both through the
+    module's own `board-items` command, which reads every page the store answers: with
+    ``root_cause``, the duplicate search by the record's root cause, whose `<root-cause>` the
+    task leaves to the agent, and with ``search``, the duplicate search by text, whose
+    `<text>` it leaves the same way; this fills either in. Running each as spelled is how a
+    journey reads what that step selects.
     """
+    named = re.escape(board or "")
     if run is not None:
         found = re.search(
             rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
         )
     elif search is not None:
-        found = re.search(
-            rf"`([^`\n]*?board-items --board {re.escape(board or '')} --search) <text>`", task
-        )
+        found = re.search(rf"`([^`\n]*?board-items --board {named} --search) <text>`", task)
         return f"{found[1]} {shlex.quote(search)}" if found else None
     else:
         found = re.search(
-            rf"`([^`\n]*?board-items --board {re.escape(board or '')}(?: --status [a-z-]+)+)`",
+            rf"`([^`\n]*?board-items --board {named} --metadata [^`\s=]+/root_cause=)"
+            r"<root-cause>`",
             task,
         )
+        return f"{found[1]}{shlex.quote(str(root_cause))}" if found else None
     return found[1] if found else None
 
 
@@ -147,9 +153,11 @@ def main() -> int:
     parsed.add_argument("--prompt-log", type=Path, required=True)
     which = parsed.add_mutually_exclusive_group(required=True)
     which.add_argument("--run", help="run the listing of this run's drafts")
-    which.add_argument("--board", help="run the listing of this board's accepted items")
-    parsed.add_argument(
-        "--search", help="with --board: run the board's duplicate search for this text instead"
+    which.add_argument("--board", help="run one of this board's duplicate searches")
+    how = parsed.add_mutually_exclusive_group()
+    how.add_argument("--search", help="with --board: run the board's search for this text")
+    how.add_argument(
+        "--root-cause", help="with --board: run the board's search for this root cause"
     )
     parsed.add_argument("--checkout", type=Path, required=True)
     parsed.add_argument("--witness", type=Path, required=True)
@@ -167,7 +175,13 @@ def main() -> int:
         if line
     ]
     spelled = (
-        instruction(prompts[-1], run=arguments.run, board=arguments.board, search=arguments.search)
+        instruction(
+            prompts[-1],
+            run=arguments.run,
+            board=arguments.board,
+            search=arguments.search,
+            root_cause=arguments.root_cause,
+        )
         if prompts
         else None
     )
@@ -179,7 +193,10 @@ def main() -> int:
         elif arguments.search is not None:
             wanted = f"<board-items> --board {arguments.board} --search <text>"
         else:
-            wanted = f"<board-items> --board {arguments.board} --status <accepted>…"
+            wanted = (
+                f"<board-items> --board {arguments.board} --metadata <record>/root_cause="
+                "<root-cause>"
+            )
         record = _unanswered(f"the task names no `{wanted}` instruction")
     else:
         command = shlex.split(spelled)

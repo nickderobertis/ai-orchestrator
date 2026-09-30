@@ -297,17 +297,21 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
     for said in (
         "A dispatch briefed to pick up accepted follow-up tickets selects `Todo` items only",
         "`python -m orchestrator.follow_up_tickets statuses` prints",
-        "**Every listing of the board is `python -m orchestrator.follow_up_tickets "
-        "board-items`.** It takes `--board`, an optional `--search TEXT` and the accepted "
-        "filter as repeated `--status` flags, reads the pinned plan store through every `next` "
-        "page until none remains — refusing a cursor it has already followed — and prints one "
-        "combined JSON result",
+        "**The board is searched, never listed: every query of it is `python -m "
+        "orchestrator.follow_up_tickets board-items`.**",
+        "each query names one of the store's native narrowing questions — by root cause, by "
+        "origin, or GitHub's own token-matched issue search, which may not yet list an item "
+        "written seconds ago — and one naming none is refused; nothing in the task lists the "
+        "board",
+        "reads the accepted tickets its searches for a ticket returned for other root causes",
+        "The store records its own link to that item and follows it on the next copy, so no "
+        f"copy searches the board, and `{tickets.BINDING_FIELD}` is held to that link",
         "**A ticket is copied onto the board item it is bound to, and nowhere else.** Its "
         f"record's `{tickets.BINDING_FIELD}` key holds that item's native id, and `python -m "
         "orchestrator.follow_up_tickets board-status` and its `copy` are what write it",
         f"when two items carry one ticket's `{tickets.ORIGIN_KEY}`, naming the run's own open "
         "item and leaving each withdrawn duplicate a comment naming that item",
-        "Both refuse, naming both ids, a destination the store reports that differs from the "
-        "binding, and every copy the task prescribes goes through `copy`",
+        "Both refuse, naming both ids, a link, or a destination the store reports, that differs "
+        "from the binding, and every copy the task prescribes goes through `copy`",
     ):
         assert said in flat, said

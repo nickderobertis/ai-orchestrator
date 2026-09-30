@@ -151,7 +151,8 @@ _TICKETS = (
     "`python -m orchestrator.follow_up_tickets statuses` prints the vocabulary every agent reads"
 )
 _BOARD_ITEMS = (
-    "**Every listing of the board is `python -m orchestrator.follow_up_tickets board-items`.**"
+    "**The board is searched, never listed: every query of it is `python -m "
+    "orchestrator.follow_up_tickets board-items`.**"
 )
 _CHECK_DISPOSITIONS = (
     "`python -m orchestrator.follow_up_tickets check-dispositions` is what holds an account to that"
@@ -331,7 +332,8 @@ INVOCATIONS: tuple[Invocation, ...] = (
     ),
     _allow(
         "tickets-board-items",
-        "uv run python -m orchestrator.follow_up_tickets board-items --board followups",
+        "uv run python -m orchestrator.follow_up_tickets board-items --board followups "
+        "--search cursor",
         _BOARD_ITEMS,
     ),
     _allow(

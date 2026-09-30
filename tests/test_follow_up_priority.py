@@ -238,7 +238,7 @@ def _refacted(path: Path, **facts: object) -> None:
     frequency = facts.get("frequency", held.frequency)
     assert frequency is None or isinstance(frequency, Frequency)
     path.write_text(
-        tickets.render(dataclasses.replace(held, body=body, frequency=frequency), board=BOARD),
+        tickets.render(dataclasses.replace(held, body=body, frequency=frequency)),
         encoding="utf-8",
     )
 

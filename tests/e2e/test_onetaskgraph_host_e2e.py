@@ -10,7 +10,8 @@ import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -496,8 +497,8 @@ class _Issue:
             "title": self.title,
             "body": self.body,
             "url": f"https://github.com/{self.repository}/issues/{self.number}",
-            "createdAt": "2026-08-26T00:00:00Z",
-            "updatedAt": "2026-08-26T00:00:00Z",
+            "createdAt": ISSUE_CREATED_AT,
+            "updatedAt": self.updated_at(),
             "state": self.state,
             "stateReason": self.state_reason,
             "repository": {"nameWithOwner": str(self.repository)},
@@ -505,6 +506,14 @@ class _Issue:
             "subIssuesSummary": {"total": self.sub_issues},
             "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
         }
+
+    def updated_at(self) -> str:
+        """When this issue last changed, which GitHub moves when one of its comments changes.
+
+        The board-scoped search answering a `commented_since` query narrows on it, so an issue
+        that kept the moment it was created would never be found commented on.
+        """
+        return max([ISSUE_CREATED_AT, *(str(comment["updatedAt"]) for comment in self.comments)])
 
     def item(self) -> dict[str, object]:
         """This issue as a row of the board's own `items` connection."""
@@ -675,7 +684,13 @@ class _Board:
         the named fields, as GitHub requires of every term.
         """
         wanted = _FIELD_QUALIFIER.search(search)
-        found = [issue for issue in self.issues if wanted is None or _found_by(wanted, issue)]
+        since = _UPDATED_QUALIFIER.search(search)
+        found = [
+            issue
+            for issue in self.issues
+            if (wanted is None or _found_by(wanted, issue))
+            and (since is None or _moment(issue.updated_at()) >= _moment(since["since"]))
+        ]
         return {
             "data": {
                 "search": {
@@ -1181,8 +1196,17 @@ _FIELD_QUALIFIER = re.compile(
     r'in:(?P<fields>title,body|title|body)(?P<phrases>(?:\s+"(?:[^"\\]|\\.)*")+)'
 )
 _PHRASE = re.compile(r'"(?P<phrase>(?:[^"\\]|\\.)*)"')
+#: The qualifier a `commented_since` query narrows the board's issue search with.
+_UPDATED_QUALIFIER = re.compile(r"updated:>=(?P<since>\S+)")
+#: When every issue of the stand-in was created, and last changed before any comment.
+ISSUE_CREATED_AT = "2026-08-26T00:00:00Z"
 #: The board field filter an origin lookup narrows the board's items with.
 _ORIGIN_FILTER = re.compile(re.escape(ORIGIN_FIELD_NAME) + r':"(?P<origin>(?:[^"\\]|\\.)*)"')
+
+
+def _moment(value: str) -> datetime:
+    """An RFC 3339 instant, as GitHub compares one in an `updated:` qualifier."""
+    return datetime.fromisoformat(value)
 
 
 def _unescaped(quoted: str) -> str:
@@ -3525,6 +3549,443 @@ def test_a_queued_ticket_onto_a_followups_board_without_a_queued_option_is_refus
     assert _status_writes(_GitHubFixture.requests) == [], (
         "a board without the option had some other Status option written instead"
     )
+
+
+#: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
+#: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
+#: with the board rather than one a single item hides.
+OTHER_ITEMS = 60
+#: The body slot the adopted store keeps an item's metadata in, as it writes one.
+METADATA_SLOT = "<!-- onetaskgraph.metadata\n{}\n-->"
+
+
+class _SeededState(NamedTuple):
+    """Where a seeded item stands: its Status option, its issue state, and why it was closed."""
+
+    option: _StatusOption
+    state: Literal["OPEN", "CLOSED"] = "OPEN"
+    reason: Literal["COMPLETED", "NOT_PLANNED"] | None = None
+
+
+#: Each board status a seeded item stands at, as GitHub holds an item at it.
+SEEDED_STATES: dict[follow_up_tickets.Status, _SeededState] = {
+    follow_up_tickets.Status.PROPOSED: _SeededState(PROPOSAL),
+    follow_up_tickets.Status.ACCEPTED: _SeededState(STATUS_OPTIONS[0]),
+    follow_up_tickets.Status.DEFERRED: _SeededState(DEFERRED),
+    follow_up_tickets.Status.FINISHED: _SeededState(DONE, "CLOSED", "COMPLETED"),
+    follow_up_tickets.Status.WITHDRAWN: _SeededState(CANCELLED, "CLOSED", "NOT_PLANNED"),
+}
+
+
+def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board already holds
+    at: int,
+    *,
+    run: str,
+    cause: str,
+    status: follow_up_tickets.Status,
+    origin: str | None,
+    origin_in_body: bool,
+) -> _Issue:
+    """One follow-up item already on the `followups` stand-in, put there without a request.
+
+    Written the way the store writes one — the ticket's body, then its metadata in the body's
+    slot — with its origin in the board's origin field. ``origin_in_body`` says whether the
+    slot carries that origin too, as the adopted store writes it; an item that reached the
+    board before the adoption carries it in the board field only.
+    """
+    written = _follow_up_ticket(SIBLING_REPOSITORY, cause=cause)
+    medium, frequency = follow_up_tickets.Severity.MEDIUM, written.frequency
+    ticket = replace(
+        written,
+        created_by_run=follow_up_tickets.RunId(run),
+        owning_runs=(follow_up_tickets.RunId(run),),
+        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
+        priority_estimate=follow_up_tickets.estimate(medium, frequency, 1),
+        body=follow_up_tickets.with_estimate_line(
+            written.body, follow_up_tickets.estimate_line(medium, frequency, 1)
+        ),
+    )
+    metadata: dict[str, object] = {
+        "onetaskgraph.item_kind": "task",
+        follow_up_tickets.KEY: follow_up_tickets.record(ticket),
+    }
+    if origin is not None and origin_in_body:
+        metadata[follow_up_tickets.ORIGIN_KEY] = origin
+    slot = METADATA_SLOT.format(json.dumps(metadata, separators=(",", ":"), sort_keys=True))
+    seeded = SEEDED_STATES[status]
+    issue = _Issue(
+        item_id=_BoardItemId(f"PVTI_seeded_{at}"),
+        content_id=_IssueNodeId(f"I_seeded_{at}"),
+        number=1000 + at,
+        title=ticket.title,
+        body=f"{ticket.body}\n\n{slot}",
+        repository=SIBLING_REPOSITORY,
+        origin=origin,
+        status=seeded.option.name,
+        state=seeded.state,
+        state_reason=seeded.reason,
+    )
+    issue.board = BOARD
+    BOARD.issues.append(issue)
+    return issue
+
+
+def _board_cost(requests: list[_GraphQLRequest]) -> tuple[list[str], list[str]]:
+    """What in ``requests`` read more of the board than it asked for.
+
+    The operations that walk the board's items, and every board search — a plain one, or the
+    one an origin lookup sends beside its field filter — that names no field qualifier with a
+    phrase to narrow it by, which GitHub would answer with every issue on the board.
+    """
+    walked = [
+        str(request.operation) for request in requests if request.operation in BOARD_ENUMERATIONS
+    ]
+    unnarrowed = [
+        search
+        for request in requests
+        if request.operation in (_Operation.SEARCH, _Operation.ORIGIN_LOOKUP)
+        and _FIELD_QUALIFIER.search(search := request.string("search")) is None
+    ]
+    return walked, unnarrowed
+
+
+def _follow_up_step(
+    environment: dict[str, str], command: str, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    """One `orchestrator.follow_up_tickets` command, as the composed task has the agent run it."""
+    return _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
+        + [command, *arguments],
+    )
+
+
+def _decided_status(environment: dict[str, str], ticket: Path, *extra: str) -> str:
+    """Run `board-status`, then write the word it prints as the ticket's `status`, as told."""
+    decided = _follow_up_step(
+        environment, "board-status", "--board", follow_up_tickets.BOARD, *extra, str(ticket)
+    )
+    assert decided.returncode == follow_up_tickets.SOUND, decided.stdout + decided.stderr
+    word = decided.stdout.strip()
+    text = ticket.read_text(encoding="utf-8")
+    ticket.write_text(re.sub(r'^status: "[^"]*"$', f'status: "{word}"', text, flags=re.M), "utf-8")
+    return word
+
+
+def _validated_and_copied(environment: dict[str, str], ticket: Path) -> dict[str, object]:
+    validated = _follow_up_step(environment, "validate", str(ticket))
+    assert validated.returncode == follow_up_tickets.SOUND, validated.stdout + validated.stderr
+    copied = _follow_up_step(environment, "copy", "--board", follow_up_tickets.BOARD, str(ticket))
+    assert copied.returncode == follow_up_tickets.SOUND, copied.stdout + copied.stderr
+    answered: dict[str, object] = json.loads(copied.stdout)
+    return answered
+
+
+def _local_ticket(environment: dict[str, str]) -> dict[str, object]:
+    """The ticket as the store reads it back from the drafts root."""
+    shown = _followups_command(
+        environment, [str(ONETASKGRAPH_BIN), "task", "show", PROPOSED_ID, "--json"]
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    item: dict[str, object] = json.loads(shown.stdout)["items"][0]["item"]
+    return item
+
+
+@pytest.mark.parametrize(
+    "bound",
+    ["unbound", "bound-by-origin-to-the-withdrawn", "linked-to-the-withdrawn", "both-open"],
+)
+def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alone(
+    tmp_path: Path, bound: str
+) -> None:
+    """Two board items carry one ticket's origin; `board-status` settles them without a board walk.
+
+    One carrier the adopted store wrote, by copying the ticket, and then withdrew; the other
+    reached the board before the adoption, its origin in the board's field alone, and is the
+    run's open item. `board-status` finds both with the store's native origin query — the
+    board's own field filter finds the older one — whether the ticket is unbound, or bound to
+    the withdrawn one by its own origin, as a ticket was steered before the store kept a link:
+    it binds the ticket to the open carrier, points the ticket's origin there — the store's link
+    is the store's alone to write — and leaves the withdrawn one the duplicate comment; `copy`
+    then follows that origin onto the open carrier. A ticket whose store link names the
+    withdrawn carrier is rebound the same way, but that link is what the store follows first,
+    so `copy` refuses it as `MISBOUND` and writes nothing. With both carriers open, which one
+    survives is a person's decision, so `board-status` refuses as `MISBOUND`. None of it walks
+    the board's items or sends an unnarrowed search.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    path = _written_ticket(drafts_root, ticket)
+    with _serving_followups(environment):
+        copied = _copied_ticket(environment)
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        (adopted,) = BOARD.issues_created_and_kept()
+        assert adopted.origin == PROPOSED_ID
+        assert f'"{follow_up_tickets.ORIGIN_KEY}":"{PROPOSED_ID}"' in adopted.body, (
+            "the premise: the adopted store keeps the origin in the item's body as well"
+        )
+        if bound != "both-open":
+            withdrawn = _followups_command(
+                environment,
+                [str(ONETASKGRAPH_BIN), "task", "status", "set"]
+                + [f"{follow_up_tickets.BOARD}:{adopted.content_id}", "cancelled", "--json"],
+            )
+            assert withdrawn.returncode == 0, withdrawn.stdout + withdrawn.stderr
+        earlier = _seeded_item(
+            0,
+            run=PROPOSED_RUN,
+            cause=PROPOSED_CAUSE,
+            status=follow_up_tickets.Status.PROPOSED,
+            origin=PROPOSED_ID,
+            origin_in_body=False,
+        )
+        for at in range(1, 1 + OTHER_ITEMS):
+            _seeded_item(
+                at,
+                run="another-run",
+                cause=f"another-cause-{at}",
+                status=follow_up_tickets.Status.PROPOSED,
+                origin=f"drafts:another-run/tickets/another-cause-{at}",
+                origin_in_body=True,
+            )
+        adopted_id = f"{follow_up_tickets.BOARD}:{adopted.content_id}"
+        earlier_id = f"{follow_up_tickets.BOARD}:{earlier.content_id}"
+        to_adopted = replace(ticket, board_item=follow_up_tickets.BoardItemId(adopted.content_id))
+        staged = {
+            "bound-by-origin-to-the-withdrawn": replace(to_adopted, origin=adopted_id),
+            "linked-to-the-withdrawn": replace(
+                to_adopted, links=((follow_up_tickets.BOARD, adopted_id),)
+            ),
+        }.get(bound, ticket)
+        path.write_text(follow_up_tickets.render(staged), encoding="utf-8")
+        _GitHubFixture.requests.clear()
+
+        decided = _board_status(environment, path)
+
+        if bound == "both-open":
+            assert decided.returncode == follow_up_tickets.MISBOUND, decided.stdout + decided.stderr
+            flat = " ".join(decided.stderr.split())
+            assert "2 items of 'followups' carry this ticket's origin" in flat, flat
+            assert "and 2 of them is an open item of run" in flat, flat
+            assert (adopted.comments, earlier.comments) == ([], [])
+        else:
+            assert (decided.returncode, decided.stdout) == (0, "backlog\n"), decided.stderr
+            held = _local_ticket(environment)["metadata"]
+            assert isinstance(held, dict)
+            assert held[follow_up_tickets.KEY][follow_up_tickets.BINDING_FIELD] == (
+                earlier.content_id
+            )
+            assert held[follow_up_tickets.ORIGIN_KEY] == earlier_id
+            assert held.get(follow_up_tickets.COPIES_KEY) == (
+                {follow_up_tickets.BOARD: adopted_id}
+                if bound == "linked-to-the-withdrawn"
+                else None
+            ), "the store's link was hand-written"
+            (notice,) = adopted.comments
+            assert (
+                str(notice["body"])
+                .strip()
+                .endswith(
+                    follow_up_tickets.DUPLICATE_MARKER.format(run=PROPOSED_RUN, survivor=earlier_id)
+                )
+            )
+            assert earlier.comments == []
+            assert len(_sent(_Operation.ORIGIN_LOOKUP)) == 1, "one native origin query"
+
+            edited = path.read_text(encoding="utf-8").replace("(Examples).", "(Examples, again).")
+            path.write_text(edited, encoding="utf-8")
+            if bound == "linked-to-the-withdrawn":
+                refused = _follow_up_step(
+                    environment, "copy", "--board", follow_up_tickets.BOARD, str(path)
+                )
+                assert refused.returncode == follow_up_tickets.MISBOUND, refused.stderr
+                flat = " ".join(refused.stderr.split())
+                assert f"link names {adopted_id}" in flat and f"is {earlier_id}" in flat, flat
+                assert "(Examples, again)." not in earlier.body + adopted.body
+            else:
+                answered = _validated_and_copied(environment, path)
+                assert answered == {"action": "updated", "destination": earlier_id}, answered
+                assert "(Examples, again)." in earlier.body
+            assert "(Examples, again)." not in adopted.body, "the withdrawn carrier was written"
+            assert len(adopted.comments) == 1, "the duplicate was noted twice"
+        walked, unnarrowed = _board_cost(_GitHubFixture.requests)
+        assert (walked, unnarrowed) == ([], []), (
+            f"settling two carriers read the whole board: walked {walked}, searched {unnarrowed}"
+        )
+
+
+#: What one ticket's life on the `followups` board may send it, in requests, per step the
+#: follow-up task prescribes — filing a new ticket, re-copying it after an edit, answering a
+#: person's comment on it in feedback mode, and withdrawing it — on a board already holding
+#: :data:`OTHER_ITEMS` other items. Each is the
+#: count the journey below measured on this stand-in against the plan-store CLI release
+#: :data:`BUDGET_MEASURED_ON` names, none of whose requests walked the board; a step that
+#: sends more fails it, and a store of another release is re-measured before the bounds are
+#: trusted. Before this path moved onto the store's native queries every one of these steps
+#: read the whole board at least once, a count that grows with the board.
+FILING_REQUESTS = 12
+RECOPY_REQUESTS = 15
+ANSWER_REQUESTS = 12
+WITHDRAWAL_REQUESTS = 16
+#: The plan-store CLI release the bounds above were measured on: `onetaskgraph --version`.
+BUDGET_MEASURED_ON = "onetaskgraph 0.2.52"
+#: The words the filing's text search asks the board for, which some accepted items of other
+#: root causes carry in their titles, so the search answers the accepted fixes it is for.
+SEARCHED_WORDS = "proposal"
+
+
+def _step_cost(label: str) -> int:
+    """How many requests the step just taken sent, holding none of them to a whole-board read."""
+    requests = list(_GitHubFixture.requests)
+    walked, unnarrowed = _board_cost(requests)
+    assert (walked, unnarrowed) == ([], []), (
+        f"{label} read the whole board: walked {walked}, searched {unnarrowed}"
+    )
+    _GitHubFixture.requests.clear()
+    return len(requests)
+
+
+def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_their_budget(
+    tmp_path: Path,
+) -> None:
+    """Every step of one ticket's life costs what its own item costs, never what the board does.
+
+    Filing one ticket once spent about 1,800 of GitHub's 5,000 hourly GraphQL points, because
+    its duplicate search, its accepted listing, each `board-status` and its `copy` read the
+    whole board. Here the board already holds many other items, and one ticket is taken
+    through the sequence the follow-up task prescribes, with this checkout's real commands
+    and the provisioned plan-store CLI: filed (`board-status`, `validate`, the two
+    `board-items` searches, `board-status`, `validate`, `copy`), re-copied after an edit,
+    answered once in feedback mode after a person comments on it (the gathering's
+    `commented_since` read, the reply, `re-estimate`), and withdrawn (`board-status
+    --withdraw`, `validate`, `copy`). No step sends a request walking the board's items, the
+    filing, re-copy and withdrawal send no board search without a field qualifier to narrow
+    it — the gathering's read is narrowed by the time comments last changed instead — and
+    each step stays within the request count recorded for it.
+    """
+    installed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "--version"], text=True, capture_output=True, check=True
+    ).stdout.strip()
+    assert installed == BUDGET_MEASURED_ON, (
+        f"the request bounds were measured on {BUDGET_MEASURED_ON}, and {installed} is "
+        "installed: re-measure them on it and record them with its version"
+    )
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    path = _written_ticket(drafts_root, ticket)
+    statuses = list(SEEDED_STATES)
+    with _serving_followups(environment, fields=True):
+        for at in range(OTHER_ITEMS):
+            cause = f"an-earlier-proposal-{at}" if at % 10 == 0 else f"another-cause-{at}"
+            _seeded_item(
+                at,
+                run="another-run",
+                cause=cause,
+                status=(follow_up_tickets.Status.ACCEPTED if at % 10 == 0 else statuses[at % 5]),
+                origin=f"drafts:another-run/tickets/{cause}",
+                origin_in_body=True,
+            )
+        _GitHubFixture.requests.clear()
+
+        # Filing: validated, searched for by root cause and by text, decided, and copied.
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        validated = _follow_up_step(environment, "validate", str(path))
+        assert validated.returncode == follow_up_tickets.SOUND, validated.stderr
+        by_cause = _follow_up_step(
+            environment,
+            "board-items",
+            *("--board", follow_up_tickets.BOARD),
+            *("--metadata", follow_up_tickets.root_cause_query(PROPOSED_CAUSE)),
+        )
+        assert by_cause.returncode == 0, by_cause.stderr
+        assert json.loads(by_cause.stdout)["items"] == [], "nothing carries the root cause yet"
+        by_text = _follow_up_step(
+            environment,
+            "board-items",
+            *("--board", follow_up_tickets.BOARD),
+            *("--search", SEARCHED_WORDS),
+        )
+        assert by_text.returncode == 0, by_text.stderr
+        found = json.loads(by_text.stdout)["items"]
+        assert len(found) == OTHER_ITEMS // 10, "the text search found the accepted fixes"
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        filed = _validated_and_copied(environment, path)
+        assert filed["action"] == "created", filed
+        filing = _step_cost("filing the ticket")
+        issue = str(filed["destination"])
+
+        # A re-copy after an edit: decided, validated and copied onto its bound item.
+        edited = path.read_text(encoding="utf-8").replace("(Examples).", "(Examples, edited).")
+        path.write_text(edited, encoding="utf-8")
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        recopied = _validated_and_copied(environment, path)
+        assert recopied == {"action": "updated", "destination": issue}, recopied
+        recopy = _step_cost("re-copying the ticket")
+
+        # A person comments on it, and feedback mode answers: the gathering's read, the reply
+        # posted under the run's marker, and the item re-estimated.
+        (item,) = [held for held in BOARD.issues if held.content_id == issue.split(":", 1)[1]]
+        asked = tmp_path / "asked.md"
+        asked.write_text("Is this still happening on the latest release?\n", encoding="utf-8")
+        commented = _followups_command(
+            environment,
+            [str(ONETASKGRAPH_BIN), "task", "comment", "add", issue]
+            + ["--body-file", str(asked), "--json"],
+        )
+        assert commented.returncode == 0, commented.stdout + commented.stderr
+        (person,) = item.comments
+        _GitHubFixture.requests.clear()
+        gathering = _followups_command(
+            environment,
+            [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_comments"]
+            + ["gather", "--root", str(drafts_root), "--plan", str(tmp_path / "plan.json")]
+            + ["--to", follow_up_tickets.BOARD, "--since", str(person["createdAt"]), "--dry-run"],
+        )
+        assert gathering.returncode == 0, gathering.stdout + gathering.stderr
+        assert str(person["url"]) in gathering.stdout, gathering.stdout
+        assert "the narrowed query returned 1 item(s)" in gathering.stdout, gathering.stdout
+        reply = tmp_path / "reply.md"
+        reply.write_text(
+            follow_up_tickets.render_reply(
+                run=PROPOSED_RUN,
+                root_cause=PROPOSED_CAUSE,
+                answers=str(person["id"]),
+                url=str(person["url"]),
+                author=str(person["author"]["login"]),
+                verdict=follow_up_tickets.Verdict.DOES_NOT_CONFIRM,
+                response="It is: the verification at this run's basis reproduced it.",
+            ),
+            encoding="utf-8",
+        )
+        replied = _followups_command(
+            environment,
+            [str(ONETASKGRAPH_BIN), "task", "comment", "add", issue]
+            + ["--body-file", str(reply), "--json"],
+        )
+        assert replied.returncode == 0, replied.stdout + replied.stderr
+        estimated = _follow_up_step(
+            environment, "re-estimate", "--board", follow_up_tickets.BOARD, issue
+        )
+        assert estimated.returncode == 0, estimated.stdout + estimated.stderr
+        answering = list(_GitHubFixture.requests)
+        walked, _searched = _board_cost(answering)
+        assert walked == [], f"answering a comment walked the board's items: {walked}"
+        answer = len(answering)
+        _GitHubFixture.requests.clear()
+
+        # A withdrawal: decided with `--withdraw`, validated and copied, which closes it.
+        assert _decided_status(environment, path, "--withdraw") == (
+            follow_up_tickets.Status.WITHDRAWN
+        )
+        withdrawn = _validated_and_copied(environment, path)
+        assert withdrawn == {"action": "updated", "destination": issue}, withdrawn
+        withdrawal = _step_cost("withdrawing the ticket")
+        assert (item.status, item.state) == (CANCELLED.name, "CLOSED")
+
+    assert filing <= FILING_REQUESTS, f"filing one ticket sent {filing} requests"
+    assert recopy <= RECOPY_REQUESTS, f"re-copying one ticket sent {recopy} requests"
+    assert answer <= ANSWER_REQUESTS, f"answering one comment sent {answer} requests"
+    assert withdrawal <= WITHDRAWAL_REQUESTS, f"withdrawing one ticket sent {withdrawal} requests"
 
 
 class _BoardSource(NamedTuple):
