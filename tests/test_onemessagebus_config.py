@@ -466,6 +466,17 @@ def test_the_adopted_bus_resolves_the_configuration_to_the_four_queues_the_engin
     assert refused.stdout.strip() == "", refused.stdout
 
 
+def _verified_at(authority: Path, leaf: Path, instant: int) -> subprocess.CompletedProcess[str]:
+    """`openssl verify` of `leaf` against `authority` as of `instant`, in epoch seconds."""
+    return subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), "-attime", str(instant), str(leaf)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
 def test_the_loopback_authority_is_valid_before_the_second_it_is_minted(tmp_path: Path) -> None:
     """A client verifying the minted chain in the same or the preceding second accepts it.
 
@@ -477,17 +488,10 @@ def test_the_loopback_authority_is_valid_before_the_second_it_is_minted(tmp_path
     before = int(time.time()) - 1
     authority, _ = onejudge_bundle.mint_authority(tmp_path, {"suite.invalid"})
     minted = int(time.time())
+    leaf = tmp_path / "leaf.pem"
     for instant in (before, minted):
-        verified = subprocess.run(
-            ["openssl", "verify", "-CAfile", str(authority), "-attime", str(instant),
-             str(tmp_path / "leaf.pem")],
-            capture_output=True, text=True, timeout=60, check=False,
-        )  # fmt: skip
+        verified = _verified_at(authority, leaf, instant)
         assert verified.returncode == 0, (instant, verified.stdout + verified.stderr)
     expired = minted + int(onejudge_bundle.VALID_AFTER_MINTING.total_seconds()) + 60
-    refused = subprocess.run(
-        ["openssl", "verify", "-CAfile", str(authority), "-attime", str(expired),
-         str(tmp_path / "leaf.pem")],
-        capture_output=True, text=True, timeout=60, check=False,
-    )  # fmt: skip
+    refused = _verified_at(authority, leaf, expired)
     assert refused.returncode != 0 and "expired" in refused.stdout + refused.stderr, refused
