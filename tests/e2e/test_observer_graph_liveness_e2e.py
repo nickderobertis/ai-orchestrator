@@ -879,9 +879,21 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
     )
     # When a hold was running as the driver let go, the driver has to have cut it rather
     # than waited it out: it let go before the next turn was due. When a turn was in
-    # flight instead, there was no hold to cut and the closeout ended the turn; what the
-    # driver must not have done is let a hold run out after the run settled, so the hold
-    # before that turn has to have opened before the settlement.
+    # flight instead, the hold before it ran out on its own, and two things say that was
+    # the schedule and not the driver: the hold opened before the run settled, so it is
+    # not one begun and waited out during the closeout; and the turn opened when that
+    # hold ran out — its `every` after the close, within the scheduler's granularity — and
+    # not later, so nothing held the turn back past the hold's own deadline.
+    #
+    # That turn may have opened after the settlement. It is permitted: a hold scheduled
+    # before the settlement to run out between the settlement and the driver's let-go ran
+    # out while the closeout — the driver's own teardown, about two seconds in the
+    # journals this was measured on — was still under way, before the cancel could land,
+    # and the closeout then ended the turn it opened (the `cancelled` death discounted
+    # above). One run cannot tell that from a driver that waited out the few seconds of
+    # hold left and cancelled at the turn, because the run's journal stamps no moment for
+    # the driver requesting the cancel; a driver that waited the hold out and let the
+    # conversation go on is still caught, by the hold that would follow the turn.
     last_close = _judge_closes(events, MONITOR_MEMBER)[-1].at
     assert paced.settled is not None
     in_flight = [turn.at for turn in turns if turn.at > last_close]
@@ -891,6 +903,12 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
             f"settled at {paced.settled.isoformat()}, ran out at {in_flight[0].isoformat()} "
             f"before the driver let go at {paced.let_go.isoformat()}: the driver's cancel at "
             f"settlement is not ending the monitor's hold:\n{paced.printed}"
+        )
+        opened_after = (in_flight[0] - last_close).total_seconds()
+        assert opened_after <= PACED_HOLD_SECONDS + CLOCK_GRANULARITY_SECONDS, (
+            f"the monitor's turn in flight when the driver let go opened {opened_after:.2f}s "
+            f"after the hold before it began, later than the {PACED_HOLD_SECONDS}s hold "
+            f"allows, so something other than the schedule held it back:\n{paced.printed}"
         )
         return
     next_turn_was_due = last_close.timestamp() + PACED_HOLD_SECONDS
