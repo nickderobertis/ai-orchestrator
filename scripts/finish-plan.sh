@@ -218,9 +218,9 @@ answers = {
         f"The document is stored as a project document of `{plan}`, in the store that plan is "
         f"in, under the document id `{document}`, and is a rendering of the `{template}` "
         f"template: `{resolve}` piped into "
-        f"`onetaskgraph document create --template-loader - --no-interactive` wrote it, or "
-        f"piped into `onetaskgraph document render --template-loader - --no-interactive` where a "
-        f"document by that id already existed, so it records `onepipeline:{template}` "
+        f"`onetaskgraph document create --id {document} --template-loader - --no-interactive` "
+        f"wrote it, which replaces a document the store already holds by that id whole, the "
+        f"answers it was rendered from included, so it records `onepipeline:{template}` "
         f"provenance and the answers it was rendered from.",
         f"Every task of `{plan}` has one row in the planned-tasks answer, and each row\u2019s "
         "location is the location the plan store reports for that task, read back out of the "

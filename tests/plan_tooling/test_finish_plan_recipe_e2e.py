@@ -50,6 +50,7 @@ from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import helper, register_stand_in
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, Identity, seeded
+from test_approve_design_recipe_e2e import RETIRED_DESIGN, RETIRED_TEMPLATE
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_chain, plan_review, plan_store
@@ -741,9 +742,9 @@ WRITER_OBLIGATIONS = (
     "--json` resolves state",
     # Stored through the pinned resolve piped into the store, as that plan's document.
     "`onepipeline template resolve design-doc --json` piped into `onetaskgraph document "
-    "create --template-loader - --no-interactive`",
-    "`onetaskgraph document render --template-loader - --no-interactive` where a document "
-    "by that id",
+    "create --id ",
+    "--template-loader - --no-interactive` wrote it, which replaces a document the store "
+    "already holds by that id whole",
     # Every row's location is the store's own answer.
     "location is the location the plan store reports for that task",
     # And where the store put it is reported.
@@ -888,6 +889,29 @@ def test_the_writers_task_names_the_resolve_command_the_rule_gives_for_the_plan(
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
+def _landed(bench: Bench, drafted: Drafted) -> str:
+    """The destination's copy of ``drafted``'s plan, as the store qualifies it."""
+    listed = _just(
+        "plans",
+        "project",
+        "list",
+        "--source",
+        DESTINATION,
+        "--json",
+        environment=bench.environment,
+        seconds=120,
+    )
+    assert listed.returncode == 0, listed.stderr
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
+    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
+    (landed,) = [
+        one["id"]
+        for one in projects
+        if one["item"]["metadata"].get(ORIGIN_KEY) == drafted.qualified
+    ]
+    return str(landed)
+
+
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This reads the one flow
 # the `finished` fixture already drove, behind `plan-tooling`'s own `planToolingWorkspace` edge
 # with every other reading of it, and adds two recipe calls and no launch of its own.
@@ -901,24 +925,7 @@ def test_the_stored_design_document_is_a_rendering_a_person_can_approve_and_laun
     rendering's provenance, the real `just approve-design` records an approval for it, and
     the real launch gate then lets the approved plan through.
     """
-    listed = _just(
-        "plans",
-        "project",
-        "list",
-        "--source",
-        DESTINATION,
-        "--json",
-        environment=finished.bench.environment,
-        seconds=120,
-    )
-    assert listed.returncode == 0, listed.stderr
-    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
-    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
-    (landed,) = [
-        one["id"]
-        for one in projects
-        if one["item"]["metadata"].get(ORIGIN_KEY) == finished.drafted.qualified
-    ]
+    landed = _landed(finished.bench, finished.drafted)
     documents = _just(
         "plans",
         "document",
@@ -949,6 +956,89 @@ def test_the_stored_design_document_is_a_rendering_a_person_can_approve_and_laun
         check=False,
     )
     assert gated.returncode == OK, gated.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
+@pytest.mark.xdist_group("finish-plan")
+def test_a_document_whose_answers_no_longer_fit_is_repaired_by_the_tail_it_is_sent_to(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The refusal's repair, run: `just finish-plan` rewrites the document, which approves.
+
+    The plan holds a document rendered from answers the template in force no longer
+    declares, so `just approve-design` refuses it and names `just finish-plan <brief>`. Run
+    on the plan's brief, the tail's writer stores the document under the id it already
+    holds, as its task says, from answers to the current variables, which replaces it whole;
+    the plan and the copy that lands on the destination are then ones `just approve-design`
+    records.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    drafted = _draft("finish-plan-retired")
+    retired_root = tmp_path / "retired-templates"
+    shutil.copytree(REPO_ROOT / "templates", retired_root)
+    (retired_root / "design-doc.md.j2").write_text(RETIRED_TEMPLATE, encoding="utf-8")
+    retired_answers = tmp_path / "retired.answers.json"
+    retired_answers.write_text(json.dumps(dict(RETIRED_DESIGN)), encoding="utf-8")
+    source, _, project = drafted.qualified.partition(":")
+    seeded_document = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '"$1" template resolve design-doc --template-root "$2" --json'
+            ' | "$3" document create "$4" --project "$5" --title "$6" --id "$7"'
+            ' --template-loader - --answers "$8" --no-interactive',
+            "seed-the-retired-document",
+            str(ENGINE_BIN),
+            str(retired_root),
+            str(ONETASKGRAPH_BIN),
+            source,
+            project,
+            f"Design: {drafted.project}",
+            drafted.document,
+            str(retired_answers),
+        ],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert seeded_document.returncode == 0, seeded_document.stderr
+
+    refused = _just("approve-design", drafted.qualified, environment=bench.environment)
+    assert refused.returncode != OK, f"{refused.stdout}\n{refused.stderr}"
+    assert "just finish-plan <brief>" in refused.stderr, refused.stderr
+
+    _stores_the_document(bench, drafted)
+    run = RunId("finish-plan-retired")
+    try:
+        finish = _just(
+            "finish-plan",
+            str(_brief(tmp_path, drafted)),
+            "--name",
+            run,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+        assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
+    finally:
+        _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
+
+    # The plan refused above, and the copy a person approves, both approve now.
+    for approving in (drafted.qualified, _landed(bench, drafted)):
+        approved = _just("approve-design", approving, environment=bench.environment)
+        assert approved.returncode == OK, f"{approving}: {approved.stdout}\n{approved.stderr}"
+        assert "recorded the approval" in approved.stdout, approved.stdout
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
