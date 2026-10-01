@@ -1159,6 +1159,7 @@ was.
 - **`abandoned` marks a blocking surface nobody is waiting on *now***, never that the
   asker has gone — its next session takes its surfaces back — so read one as a finding
   to look at rather than a question to answer.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The manager's approval of the engine's receipt as this recipe's output was conditioned on this document stating, beside the receipt, how long an edit to a driven run waits and where that bound comes from, and what an applied, queued or refused receipt tells a manager while the journal stays the record; `tests/test_engine_contracts.py` holds the quoted variable and default to the pinned engine. The block runs to the end of this bullet. -->
 - **Read the receipt's `state`, then the journal.** The recipe prints the engine's
   one-line receipt at exit 0 and exits 2 on every refusal, with nothing appended.
   `applied` means the edit is committed; `queued` means the driver holding the run had
@@ -1169,6 +1170,7 @@ was.
   echoing its correlation and nothing else:
   a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
   your prose.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Task prose in an envelope is criteria, and is held to the criteria bar before any
   of it is sent** — the one validator `config/onemessagebus.yaml` declares on a reply
   carrying commands reads an `amend`, and the whole task an `add`, `retry` or `requeue`
