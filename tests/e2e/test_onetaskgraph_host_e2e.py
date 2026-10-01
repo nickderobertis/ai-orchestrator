@@ -6,22 +6,87 @@ import json
 import os
 import re
 import subprocess
-import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
-from datetime import datetime
+from dataclasses import dataclass, replace
 from enum import StrEnum
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 
-import follow_up_variables
 import jsonschema
 import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
+from github_board import (
+    ANSWER_POINTS,
+    ANSWER_REQUESTS,
+    AUTHORING_ROOT_ENV,
+    AUTHORING_SOURCE,
+    BOARD,
+    BOARD_CHECK_BUDGET,
+    BOARD_ENUMERATIONS,
+    BOARD_PROJECT_TITLE,
+    BOARD_TASK_TITLE,
+    BOUND_COPY_BUDGET,
+    BOUND_STATUS_BUDGET,
+    BUDGET_MEASURED_ON,
+    CANCELLED,
+    CONFIGURED_PROJECT_NUMBER,
+    CONFIGURED_REPOSITORY,
+    CREATE_COPY_BUDGET,
+    DEFERRED,
+    DONE,
+    EVIDENCE_POST_BUDGET,
+    FILING_POINTS,
+    FILING_REQUESTS,
+    FOLLOWUPS_ENV_PREFIX,
+    FOLLOWUPS_OPTIONS,
+    FOLLOWUPS_PROJECT_NUMBER,
+    NEEDS_ATTENTION,
+    PROPOSAL,
+    PROPOSED_CAUSE,
+    PROPOSED_RUN,
+    QUEUED,
+    RE_ESTIMATE_BUDGET,
+    RECOPY_POINTS,
+    RECOPY_REQUESTS,
+    REPOSITORY_NODE_IDS,
+    REQUEST_PRICES,
+    SIBLING_REPOSITORY,
+    STATUS_OPTIONS,
+    UNBOUND_STATUS_BUDGET,
+    WITHDRAWAL_POINTS,
+    WITHDRAWAL_REQUESTS,
+    _audit_follow_up_calls,
+    _Board,
+    _board_cost,
+    _BoardField,
+    _BoardItemId,
+    _bounded_step,
+    _decided_status,
+    _follow_up_step,
+    _follow_up_ticket,
+    _followups_command,
+    _followups_environment,
+    _GitHubFixture,
+    _GraphQLRequest,
+    _hosted,
+    _Issue,
+    _IssueNodeId,
+    _Operation,
+    _plan_environment,
+    _prepare_plan_sources,
+    _Refusal,
+    _Repository,
+    _request_points,
+    _sent,
+    _served,
+    _serving_board,
+    _serving_followups,
+    _StatusOption,
+    _written_ticket,
+)
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from plan_store_pin import (
@@ -48,92 +113,10 @@ _ProjectId = NewType("_ProjectId", str)
 #: The project `_write_local_project` renders, named once so the journeys that read it
 #: back and the helper that authors its description agree on one identifier.
 LOCAL_PROJECT = _ProjectId("launch")
-#: The same project as every recipe here names it: qualified by the `authoring` source
-#: `onetaskgraph.yaml` roots at this checkout's `.plans`, which these journeys point
-#: elsewhere per run. Derived rather than restated, so the native id has one source.
-AUTHORING_SOURCE = "authoring"
 LOCAL_QUALIFIED = f"{AUTHORING_SOURCE}:{LOCAL_PROJECT}"
-#: Where that source's root is named, for the store and for every process it spawns.
-#: One spelling, because a journey pointing it one way and a helper reading it another
-#: would leave a plan authored in one directory and approved in a second.
-AUTHORING_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__CONFIG__ROOT"
 #: The one task that project holds, named once so the copy journey can assert which
 #: issues a copy created rather than only how many.
 LOCAL_TASK_TITLE = "test: launch local project"
-
-
-@dataclass(frozen=True)
-class _Repository:
-    """One GitHub repository, in the two halves every call about it is spelled with.
-
-    Named rather than carried as a pair because both halves travel together through
-    three different spellings — the `owner/name` the configuration file holds, the two
-    variables GitHub's own repository lookup takes, and the `nameWithOwner` an issue
-    answers — and a pair says nothing about which of the two came first.
-    """
-
-    owner: str
-    name: str
-
-    @classmethod
-    def parse(cls, value: str, source: str) -> _Repository:
-        owner, _, name = value.partition("/")
-        if not owner or not name or "/" in name:
-            raise ValueError(f"{source} names {value!r}, which is not one `owner/name`")
-        return cls(owner=owner, name=name)
-
-    def __str__(self) -> str:
-        return f"{self.owner}/{self.name}"
-
-
-def _configured_repository() -> _Repository:
-    """The repository the committed `plans` source names.
-
-    Read out of the file under test rather than restated here: what the copy journeys
-    assert is that the *configured* repository is the one a create reaches, so a
-    fixture holding its own copy of that value would still pass with the file naming
-    another repository — or none.
-    """
-    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
-    named = re.search(r"^\s+repository:\s*(\S+)\s*$", text, re.MULTILINE)
-    if named is None:
-        raise ValueError("onetaskgraph.yaml names no repository for its `plans` source")
-    return _Repository.parse(named.group(1), "onetaskgraph.yaml's `plans` source")
-
-
-CONFIGURED_REPOSITORY = _configured_repository()
-
-
-def _configured_project_number() -> int:
-    """The board number the committed `plans` source names.
-
-    Read out of the file under test for the reason the repository above is: an issue
-    carries its board membership on `projectItems`, and the source keeps only the entry
-    whose `project.number` is the one it was configured with. A fixture holding its own
-    copy of that number would answer every issue as held by this board however the file
-    had been repointed, which is the one thing a membership read exists to tell apart.
-    """
-    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
-    named = re.search(r"^\s+project_number:\s*(\d+)\s*$", text, re.MULTILINE)
-    if named is None:
-        raise ValueError("onetaskgraph.yaml names no project_number for its `plans` source")
-    return int(named.group(1))
-
-
-CONFIGURED_PROJECT_NUMBER = _configured_project_number()
-
-
-def _followups_project_number() -> int:
-    """The board number the committed `followups` source names, read for the same reason."""
-    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
-    opened = text.index("\n  followups:\n")
-    named = re.compile(r"^\s+project_number:\s*(\d+)\s*$", re.MULTILINE).search(text, opened)
-    if named is None:
-        raise ValueError("onetaskgraph.yaml names no project_number for its `followups` source")
-    return int(named.group(1))
-
-
-FOLLOWUPS_PROJECT_NUMBER = _followups_project_number()
 
 
 def _configured_owner() -> str:
@@ -149,10 +132,6 @@ CONFIGURED_OWNER = _configured_owner()
 #: A repository under the same owner that the board fixture answers as invisible, which
 #: is what GitHub answers for one that does not exist or that the token cannot see.
 UNREACHABLE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="not-a-repository")
-#: A second repository of the configured owner the fixture knows, so a task naming it is
-#: filed somewhere the configured fallback is not — the placement the adopted release
-#: buys, which a fixture answering one node id for every lookup could never observe.
-SIBLING_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="oneharness")
 #: A repository under an owner the fixture has never heard of. GitHub files a sub-issue
 #: only in a repository of the same owner as its parent issue, so a task naming this one
 #: is refused before anything is created rather than looked up and found missing.
@@ -252,94 +231,6 @@ def _stored_project_content(body: str, project_id: _ProjectId) -> str | None:
     raise ValueError(f"the store holds no project {project_id!r}")
 
 
-#: The node identifiers GitHub gives the things on one board, each a type of its own
-#: because the writes under test address different ones: a field value is set on a
-#: board item, a sub-issue link names issue content, a status is chosen among one
-#: field's options, and `createIssue` takes a repository a board has none of. Spelling
-#: them all `str` would let this fixture answer a source that had confused two of them
-#: exactly as it answers one that had not, which is the confusion it exists to catch.
-_BoardNodeId = NewType("_BoardNodeId", str)
-_BoardItemId = NewType("_BoardItemId", str)
-_IssueNodeId = NewType("_IssueNodeId", str)
-_FieldOptionId = NewType("_FieldOptionId", str)
-_RepositoryNodeId = NewType("_RepositoryNodeId", str)
-#: The board field the source owns and reads a copy's origin back out of, and the
-#: `Status` field every board carries. A category this board cannot represent refuses
-#: the write naming it, so the options below are the `plans` board's own: the two the
-#: shipped mapping reaches by name, the four `onetaskgraph.yaml` states — `Queued`, and
-#: `Done` and `Cancelled`, which a `done` or `cancelled` write selects before it closes
-#: the issue, and `Needs attention`, which it sends `unknown` to — and `Backlog`.
-ORIGIN_FIELD_NAME = "onetaskgraph.origin"
-
-
-class _BoardField(StrEnum):
-    """The board fields a copy writes, as the ids GitHub answers them under.
-
-    An enum rather than bare constants because what a write *means* is decided by which
-    field it names, and that is one dispatch: `_Board.set_field` matches on it once. A bare
-    constant cannot say so, because an undotted name in a `case` pattern captures rather
-    than compares — so constants would force a repeated conditional in its place.
-    """
-
-    STATUS = "FIELD_status"
-    ORIGIN = "FIELD_origin"
-    PRIORITY = "FIELD_priority"
-
-
-@dataclass(frozen=True)
-class _StatusOption:
-    id: _FieldOptionId
-    name: str
-
-    def rendered(self) -> dict[str, str]:
-        return {"id": self.id, "name": self.name}
-
-    def rendered_in_full(self) -> dict[str, str]:
-        """The option as the guarded field setup reads it, colour and description included."""
-        return self.rendered() | {"color": "GRAY", "description": ""}
-
-
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The stand-in board answers
-# the option `onetaskgraph.yaml` names, because the journey asserts that name reaches the
-# wire. Reconciling it against the live board would take the board credential no test may use.
-NEEDS_ATTENTION = _StatusOption(id=_FieldOptionId("OPT_attention"), name="Needs attention")
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The option
-# `onetaskgraph.yaml` maps `queued` to on both sources, answered by the stand-in so the
-# journeys can assert that name reaches the wire. Reconciling it against either live board
-# would take the board credential no test may use.
-QUEUED = _StatusOption(id=_FieldOptionId("OPT_queued"), name="Queued")
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The options
-# `onetaskgraph.yaml` sends `done` and `cancelled` to on both sources, answered by the
-# stand-in so the journeys can assert that each name reaches the wire beside the close it
-# pairs with: a terminal write selects its mapped option and then closes the issue, and a
-# board lacking the option refuses by name before either. Reconciling them against either
-# live board would take the board credential no test may use.
-DONE = _StatusOption(id=_FieldOptionId("OPT_done"), name="Done")
-CANCELLED = _StatusOption(id=_FieldOptionId("OPT_cancelled"), name="Cancelled")
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-STATUS_OPTIONS: tuple[_StatusOption, ...] = (
-    _StatusOption(id=_FieldOptionId("OPT_todo"), name="Todo"),
-    QUEUED,
-    _StatusOption(id=_FieldOptionId("OPT_progress"), name="In Progress"),
-    DONE,
-    CANCELLED,
-    _StatusOption(id=_FieldOptionId("OPT_backlog"), name="Backlog"),
-    NEEDS_ATTENTION,
-)
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live `followups`
-# board's own option, which `onetaskgraph.yaml` sends a new ticket's `backlog` to. The
-# stand-in answers it so the journey can assert that name reaches the wire; reconciling it
-# against that board would take the board credential no test may use.
-PROPOSAL = _StatusOption(id=_FieldOptionId("OPT_proposal"), name="Proposal")
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The live `followups`
-# board's own option, which `onetaskgraph.yaml` sends a deferred ticket's `draft` to. The
-# stand-in answers it so the journeys can assert that name reaches the wire and reads back;
-# reconciling it against that board would take the board credential no test may use.
-DEFERRED = _StatusOption(id=_FieldOptionId("OPT_deferred"), name="Deferred")
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 #: The node id the fixture answers each repository it knows with, one per `owner/name`.
 #: The journeys assert which of these reaches `createIssue`, which is the whole of what
 #: naming a repository buys — on the source, whose configured one is the fallback a
@@ -347,203 +238,7 @@ DEFERRED = _StatusOption(id=_FieldOptionId("OPT_deferred"), name="Deferred")
 #: its issue is created. Distinct ids per repository because a fixture answering one id
 #: for every lookup would pass a source that resolved the right repository and then
 #: created every issue in the configured one.
-REPOSITORY_NODE_IDS: dict[_Repository, _RepositoryNodeId] = {
-    CONFIGURED_REPOSITORY: _RepositoryNodeId("R_ai_orchestrator"),
-    SIBLING_REPOSITORY: _RepositoryNodeId("R_oneharness"),
-}
 REPOSITORY_NODE_ID = REPOSITORY_NODE_IDS[CONFIGURED_REPOSITORY]
-
-
-def _repository_of(node_id: object) -> _Repository:
-    for repository, known in REPOSITORY_NODE_IDS.items():
-        if known == node_id:
-            return repository
-    raise ValueError(f"createIssue names repository {node_id!r}, which no lookup answered")
-
-
-#: A project somebody wrote on the board by hand, carrying one sub-issue. A board issue
-#: is a project when it has sub-issues or the source's own item-kind marker, so a board
-#: whose items were empty would answer `project list` with nothing — the board's own
-#: title is not a project and is never read as one.
-BOARD_PROJECT_TITLE = "Board-authored plan"
-BOARD_TASK_TITLE = "Read the board back"
-
-
-@dataclass
-class _Issue:
-    """One issue on the board, under the two node ids GitHub gives it.
-
-    `item_id` is the board's row and `content_id` is the issue itself, and the writes
-    address different ones: a field value is set on the row, while a sub-issue link and
-    an issue update name the content. Collapsing them into one id would let a fixture
-    pass a source that confused the two.
-    """
-
-    item_id: _BoardItemId
-    content_id: _IssueNodeId
-    #: The issue's number in its repository, which GitHub answers on every issue and the
-    #: adopted plan store reads as a board task's `key`: an issue answering none is data
-    #: the source refuses to represent, so each one here carries its own.
-    number: int
-    title: str
-    body: str
-    parent_id: _IssueNodeId | None = None
-    sub_issues: int = 0
-    #: Where this issue lives, which is what its `repository.nameWithOwner` answers. A
-    #: created issue takes the repository its `createIssue` named, because the source
-    #: reads a parent's repository back off the board to place a task naming none and to
-    #: refuse one under another owner — so an issue that answered the configured
-    #: repository whatever it was created in would hide both from the journeys.
-    repository: _Repository = CONFIGURED_REPOSITORY
-    #: Whether this issue is closed, and why, as the last write left it. Applied rather than
-    #: only recorded for the reason `status` gives: `done` and `cancelled` are closed states
-    #: on a board, each selecting its option and then closing the issue, so an issue that
-    #: answered `OPEN` for ever would report a finished ticket as unfinished to every reader
-    #: that asks the store rather than the wire.
-    state: str = "OPEN"
-    state_reason: str | None = None
-    #: The text this row's `onetaskgraph.origin` field holds, as the last copy wrote it. Kept
-    #: and answered back the way GitHub does, because that value is how a re-copy finds the
-    #: item it already made — a row that forgot it would have every re-copy create a
-    #: replacement, and a journey about updating in place would prove nothing.
-    origin: str | None = None
-    #: The Status option this row is at: where a person last moved it, or where the last
-    #: write put it. Applied rather than only recorded, because a read-back is what the
-    #: store's own `delivers` relation decides on — it computes a delivered ticket's status
-    #: and writes nothing when the board already reads that way, so a board that answered
-    #: the option it started at would report every release as `unchanged`.
-    status: str = "Todo"
-    #: The issues blocking this one, as the copy's `addBlockedBy` left them. Recorded and
-    #: answered back rather than dropped, because a plan's `deps` travel onto a board as this
-    #: relation alone: a fixture that took the write and then answered the read empty would
-    #: hand the engine a plan whose nodes all run at once.
-    blocked_by: list[_IssueNodeId] = field(default_factory=list)
-    #: The `Priority` option this row holds, `None` for no value, as the last write left it.
-    priority: str | None = None
-    #: The comments on this issue, oldest first, as GitHub lists an issue's `comments`.
-    comments: list[dict[str, object]] = field(default_factory=list)
-    #: The board holding this issue, set by that board as it takes the issue on. Two boards
-    #: are served at once for the launch journey — this repository's `plans` and its
-    #: `followups` — and both the Status options a row answers with and the project number
-    #: its membership is filed under are the *holding* board's, so an issue that read a
-    #: module-level board would answer for whichever was reset last.
-    board: _Board | None = None
-
-    @property
-    def held_by(self) -> _Board:
-        """The board holding this issue, which every answer about its row is that board's."""
-        if self.board is None:
-            raise ValueError(f"issue {self.content_id!r} was never taken on by a board")
-        return self.board
-
-    def field_values(self) -> dict[str, object]:
-        """This row's board field values, as both routes to it select them.
-
-        One method rather than a copy per route: the board's own `items` connection and
-        an issue's `projectItems` select the same field values, and the whole of what
-        the source relies on is that an issue reached either way resolves to one item.
-        """
-        origin = (
-            []
-            if self.origin is None
-            else [
-                {
-                    "text": self.origin,
-                    "field": {"id": _BoardField.ORIGIN, "name": ORIGIN_FIELD_NAME},
-                }
-            ]
-        )
-        priority = (
-            []
-            if self.priority is None
-            else [
-                {
-                    "name": self.priority,
-                    "field": {
-                        "id": _BoardField.PRIORITY,
-                        "name": "Priority",
-                        "options": [option.rendered() for option in self.held_by.priorities],
-                    },
-                }
-            ]
-        )
-        return {
-            "nodes": [
-                {
-                    "name": self.status,
-                    "field": {
-                        "id": _BoardField.STATUS,
-                        "name": "Status",
-                        "options": [option.rendered() for option in self.held_by.options],
-                    },
-                },
-                *priority,
-                *origin,
-            ],
-            "pageInfo": {"hasNextPage": False},
-        }
-
-    def content(self) -> dict[str, object]:
-        """The issue itself, as every document that reaches it selects it."""
-        return {
-            "__typename": "Issue",
-            "id": self.content_id,
-            # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] GitHub's schema
-            # has no machine-readable copy here. The installed plan store is what this is
-            # reconciled against on every journey — it refuses an issue answering no number —
-            # and its producer holds the document to a pinned schema in its `tests/schema.rs`.
-            "number": self.number,
-            # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-            "title": self.title,
-            "body": self.body,
-            "url": f"https://github.com/{self.repository}/issues/{self.number}",
-            "createdAt": ISSUE_CREATED_AT,
-            "updatedAt": self.updated_at(),
-            "state": self.state,
-            "stateReason": self.state_reason,
-            "repository": {"nameWithOwner": str(self.repository)},
-            "parent": None if self.parent_id is None else {"id": self.parent_id},
-            "subIssuesSummary": {"total": self.sub_issues},
-            "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
-        }
-
-    def updated_at(self) -> str:
-        """When this issue last changed, which GitHub moves when one of its comments changes.
-
-        The board-scoped search answering a `commented_since` query narrows on it, so an issue
-        that kept the moment it was created would never be found commented on.
-        """
-        return max([ISSUE_CREATED_AT, *(str(comment["updatedAt"]) for comment in self.comments)])
-
-    def item(self) -> dict[str, object]:
-        """This issue as a row of the board's own `items` connection."""
-        return {
-            "id": self.item_id,
-            "fieldValues": self.field_values(),
-            "content": self.content(),
-        }
-
-    def board_issue(self) -> dict[str, object]:
-        """This issue as the source reaches it away from the board's item connection.
-
-        The board half rides along on `projectItems` — the row's own id and its field
-        values — which is what lets a search, a node-id read and a sub-issue read all
-        resolve to the item a board walk would have produced. The membership is filed
-        under the configured board's number, because an entry for any other board is
-        one this source is required not to answer for.
-        """
-        return self.content() | {
-            "projectItems": {
-                "nodes": [
-                    {
-                        "id": self.item_id,
-                        "project": {"id": self.held_by.node_id, "number": self.held_by.number},
-                        "fieldValues": self.field_values(),
-                    }
-                ],
-                "pageInfo": {"hasNextPage": False},
-            }
-        }
 
 
 # llmlint: ignore-block[e2e_not_mocked] GitHub's Projects GraphQL API is the one boundary
@@ -556,691 +251,6 @@ class _Issue:
 # own documents rather than a canned reply, so a source that changed what it asks for
 # fails here naming the operation, which is how the adopted release's move off the board
 # walk was caught.
-class _Board:
-    """One Projects v2 board, mutated by the writes the source performs against it.
-
-    Stateful because the operations under test are a sequence rather than one call:
-    a copy resolves the configured repository, creates an issue in it, files that
-    issue on the board and then files the project's tasks under it as sub-issues, and
-    each of those reads the board again. A handler that answered one canned document
-    would report a board the writes never reached.
-    """
-
-    node_id: ClassVar[_BoardNodeId] = _BoardNodeId("PVT_fixture")
-    title: ClassVar[str] = "AI Orchestrator"
-
-    def __init__(self) -> None:
-        self.reset()
-
-    def reset(self) -> None:
-        parent = _Issue(
-            item_id=_BoardItemId("PVTI_board_plan"),
-            content_id=_IssueNodeId("I_board_plan"),
-            number=1,
-            title=BOARD_PROJECT_TITLE,
-            body="A plan an operator wrote on the board itself.",
-            sub_issues=1,
-        )
-        child = _Issue(
-            item_id=_BoardItemId("PVTI_board_task"),
-            content_id=_IssueNodeId("I_board_task"),
-            number=2,
-            title=BOARD_TASK_TITLE,
-            body="Its one sub-issue, which is what makes the issue above a project.",
-            parent_id=parent.content_id,
-        )
-        self.issues: list[_Issue] = [parent, child]
-        self.created: list[_Issue] = []
-        for issue in self.issues:
-            issue.board = self
-        #: The Status options this board carries, which one journey narrows.
-        self.options: tuple[_StatusOption, ...] = STATUS_OPTIONS
-        #: The number of the board being served, which an issue's membership is filed under.
-        self.number: int = CONFIGURED_PROJECT_NUMBER
-        #: The options of the board's `Priority` field, which it carries none of when empty:
-        #: what `sources fields --apply` creates, and nothing else puts there.
-        self.priorities: tuple[_StatusOption, ...] = ()
-        #: How many comments this board has taken, which numbers the next one.
-        self.commented = 0
-
-    def issues_created_and_kept(self) -> list[_Issue]:
-        return [issue for issue in self.created if issue in self.issues]
-
-    def board_fields_response(self) -> dict[str, object]:
-        """The board's id and field definitions alone, under the root alias the read names.
-
-        What the adopted source asks before a write whose item does not say which board
-        field to address: it selects no items, so it answers none.
-        """
-        # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] No test is added
-        # here: this existing double answers the read the adopted plan store now makes, so the
-        # journeys already in this module keep running; their project is not this change's.
-        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The read is the
-        # installed plan store's own, reconciled on every journey: an answer under any other
-        # root is a board it reports as not found. GitHub's schema has no machine-readable
-        # copy here; the producer holds the query to a pinned schema in its `tests/schema.rs`.
-        return {
-            "data": {"boardFields": {"projectV2": {"id": self.node_id, "fields": self._fields()}}}
-        }
-        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-        # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-
-    def _fields(self) -> dict[str, object]:
-        """Shared, so the board read and the board-fields read cannot disagree on a field."""
-        return {
-            "nodes": [
-                {
-                    "__typename": "ProjectV2SingleSelectField",
-                    "id": _BoardField.STATUS,
-                    "name": "Status",
-                    "options": [option.rendered() for option in self.options],
-                },
-                {
-                    "__typename": "ProjectV2Field",
-                    "id": _BoardField.ORIGIN,
-                    "name": ORIGIN_FIELD_NAME,
-                },
-                *(
-                    [
-                        {
-                            "__typename": "ProjectV2SingleSelectField",
-                            "id": _BoardField.PRIORITY,
-                            "name": "Priority",
-                            "options": [option.rendered() for option in self.priorities],
-                        }
-                    ]
-                    if self.priorities
-                    else []
-                ),
-            ],
-            "pageInfo": {"hasNextPage": False},
-        }
-
-    def board_response(self) -> dict[str, object]:
-        return {
-            "data": {
-                "owner": {
-                    "projectV2": {
-                        "id": self.node_id,
-                        "title": self.title,
-                        "fields": self._fields(),
-                        "items": {
-                            "nodes": [issue.item() for issue in self.issues],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        },
-                    }
-                }
-            }
-        }
-
-    def search_response(self, search: str) -> dict[str, object]:
-        """The issues of this board a search finds, narrowed the way GitHub narrows one.
-
-        The `in:title`, `in:body` and `in:title,body` qualifiers and the quoted phrases
-        after them are honoured rather than ignored: the source confirms each candidate
-        afterwards, so a fixture answering every search with the whole board would pass a
-        source that had stopped scoping its search at all — and scoping it is the whole of
-        what this read buys over walking the board. Every phrase has to appear in one of
-        the named fields, as GitHub requires of every term.
-        """
-        wanted = _FIELD_QUALIFIER.search(search)
-        since = _UPDATED_QUALIFIER.search(search)
-        found = [
-            issue
-            for issue in self.issues
-            if (wanted is None or _found_by(wanted, issue))
-            and (since is None or _moment(issue.updated_at()) >= _moment(since["since"]))
-        ]
-        return {
-            "data": {
-                "search": {
-                    "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [issue.board_issue() for issue in found],
-                }
-            }
-        }
-
-    def origin_lookup_response(self, variables: dict[str, object]) -> dict[str, object]:
-        """The rows whose origin field holds one copy origin, and the search for it in bodies.
-
-        Two reads in one document, as the source sends them: the board's own `items`
-        narrowed by its field filter — `onetaskgraph.origin:"<id>"`, matched exactly the way
-        GitHub matches a quoted field value — and the board-scoped issue search for the same
-        id in the body. The rows answered are only those the filter names, because the point
-        of the filter is that the board is not walked: a fixture that answered every row
-        would hide a source that had stopped narrowing.
-        """
-        filtered = _ORIGIN_FILTER.fullmatch(str(variables.get("filter")))
-        if filtered is None:
-            raise ValueError(f"the origin lookup sent no origin filter: {variables!r}")
-        origin = _unescaped(filtered.group("origin"))
-        search = variables.get("search")
-        if not isinstance(search, str):
-            raise ValueError("the origin lookup sent no search")
-        return {
-            "data": {
-                "originItems": {
-                    "projectV2": {
-                        "items": {
-                            "nodes": [
-                                issue.item() for issue in self.issues if issue.origin == origin
-                            ],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        }
-                    }
-                },
-                **self.search_response(search)["data"],
-            }
-        }
-
-    def node_response(self, node_id: object) -> dict[str, object]:
-        """One issue by its own node id, or the null GitHub answers an unheld one with."""
-        for issue in self.issues:
-            if issue.content_id == node_id:
-                return {"data": {"node": issue.board_issue()}}
-        return {"data": {"node": None}}
-
-    def sub_issues_response(self, node_id: object) -> dict[str, object]:
-        """One issue's sub-issues, which is how this board reports a project's tasks."""
-        for issue in self.issues:
-            if issue.content_id != node_id:
-                continue
-            children = [held for held in self.issues if held.parent_id == issue.content_id]
-            return {
-                "data": {
-                    "node": {
-                        "__typename": "Issue",
-                        "subIssues": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [child.board_issue() for child in children],
-                        },
-                    }
-                }
-            }
-        return {"data": {"node": None}}
-
-    def dependencies_response(self, node_id: object) -> dict[str, object]:
-        """One issue's dependency edges, both ways, as the copy wrote them."""
-        for issue in self.issues:
-            if issue.content_id != node_id:
-                continue
-            blocking = [held for held in self.issues if issue.content_id in held.blocked_by]
-            return {
-                "data": {
-                    "node": {
-                        "__typename": "Issue",
-                        "blockedBy": self._connection(
-                            [self._issue(held) for held in issue.blocked_by]
-                        ),
-                        "blocking": self._connection(blocking),
-                    }
-                }
-            }
-        return {"data": {"node": None}}
-
-    @staticmethod
-    def _connection(issues: list[_Issue]) -> dict[str, object]:
-        return {
-            "nodes": [issue.board_issue() for issue in issues],
-            "pageInfo": {"hasNextPage": False, "endCursor": None},
-        }
-
-    def add_blocked_by(self, variables: dict[str, object]) -> dict[str, object]:
-        """Record that one issue is blocked by another, which is how a `deps` edge lands."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("addBlockedBy requires an input object")
-        issue = self._issue(payload.get("issueId"))
-        blocking = self._issue(payload.get("blockingIssueId"))
-        if blocking.content_id not in issue.blocked_by:
-            issue.blocked_by.append(blocking.content_id)
-        return {
-            "data": {
-                "addBlockedBy": {
-                    "issue": {"id": issue.content_id},
-                    "blockingIssue": {"id": blocking.content_id},
-                }
-            }
-        }
-
-    def create_issue(self, variables: dict[str, object]) -> dict[str, object]:
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("createIssue requires an input object")
-        title = payload.get("title")
-        body = payload.get("body")
-        if not isinstance(title, str) or not isinstance(body, str):
-            raise ValueError("createIssue requires a title and a body")
-        created = _Issue(
-            item_id=_BoardItemId(f"PVTI_created_{len(self.created)}"),
-            content_id=_IssueNodeId(f"I_created_{len(self.created)}"),
-            number=3 + len(self.created),
-            title=title,
-            body=body,
-            repository=_repository_of(payload.get("repositoryId")),
-        )
-        created.board = self
-        self.created.append(created)
-        self.issues.append(created)
-        return {
-            "data": {
-                "createIssue": {
-                    "issue": {
-                        "id": created.content_id,
-                        "number": created.number,
-                        "url": created.content()["url"],
-                    }
-                }
-            }
-        }
-
-    def _issue(self, content_id: object) -> _Issue:
-        for issue in self.issues:
-            if issue.content_id == content_id:
-                return issue
-        raise ValueError(f"the board holds no issue {content_id!r}")
-
-    def update_issue(self, variables: dict[str, object]) -> dict[str, object]:
-        """Apply one issue update — its body, its title, and the state a close carries."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("updateIssue requires an input object")
-        issue = self._issue(payload.get("id"))
-        if isinstance(body := payload.get("body"), str):
-            issue.body = body
-        if isinstance(title := payload.get("title"), str):
-            issue.title = title
-        if isinstance(state := payload.get("stateInput"), dict):
-            issue.state = str(state.get("value"))
-            issue.state_reason = str(state.get("stateReason"))
-        return {"data": {"updateIssue": {"issue": {"id": issue.content_id}}}}
-
-    def add_to_board(self, variables: dict[str, object]) -> dict[str, object]:
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("addProjectV2ItemById requires an input object")
-        return {
-            "data": {
-                "addProjectV2ItemById": {
-                    "item": {"id": self._issue(payload.get("contentId")).item_id}
-                }
-            }
-        }
-
-    def set_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Set one field value on a row, keeping what an origin or a Status write puts there."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("updateProjectV2ItemFieldValue requires an input object")
-        item_id = payload.get("itemId")
-        value = payload.get("value")
-        match payload.get("fieldId"):
-            case _BoardField.STATUS:
-                self._row(item_id).status = self._option_named(value)
-            case _BoardField.ORIGIN:
-                self._row(item_id).origin = self._text(value)
-            case _BoardField.PRIORITY:
-                self._row(item_id).priority = self._option_named(value, self.priorities)
-        return {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
-
-    def snapshot_response(self) -> dict[str, object]:
-        """The board's single-select fields in full and every row's value of each.
-
-        What the guarded field setup reads before and after it writes, to plan what is
-        missing and to verify that nothing it did not create moved.
-        """
-        fields = [("Status", _BoardField.STATUS, self.options)]
-        if self.priorities:
-            fields.append(("Priority", _BoardField.PRIORITY, self.priorities))
-
-        def values(issue: _Issue) -> list[dict[str, object]]:
-            held = [("Status", _BoardField.STATUS, self.options, issue.status)]
-            if issue.priority is not None:
-                held.append(("Priority", _BoardField.PRIORITY, self.priorities, issue.priority))
-            return [
-                {
-                    "name": value,
-                    "optionId": next(option.id for option in options if option.name == value),
-                    "field": {"id": field_id, "name": name},
-                }
-                for name, field_id, options, value in held
-            ]
-
-        return {
-            "data": {
-                "owner": {
-                    "projectV2": {
-                        "id": self.node_id,
-                        "fields": {
-                            "nodes": [
-                                {
-                                    "id": field_id,
-                                    "name": name,
-                                    "options": [option.rendered_in_full() for option in options],
-                                }
-                                for name, field_id, options in fields
-                            ],
-                            "pageInfo": {"hasNextPage": False},
-                        },
-                        "items": {
-                            "nodes": [
-                                {
-                                    "id": issue.item_id,
-                                    "fieldValues": {
-                                        "nodes": values(issue),
-                                        "pageInfo": {"hasNextPage": False},
-                                    },
-                                }
-                                for issue in self.issues
-                            ],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        },
-                    }
-                }
-            }
-        }
-
-    def create_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Create the board's `Priority` field with the options the setup sends, in its order."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict) or payload.get("name") != "Priority":
-            raise ValueError(f"only the Priority field is created here, not {payload!r}")
-        options = payload.get("singleSelectOptions")
-        if not isinstance(options, list) or self.priorities:
-            raise ValueError(f"a Priority field is created once, with options: {payload!r}")
-        self.priorities = tuple(
-            _StatusOption(id=_FieldOptionId(f"OPT_priority_{at}"), name=str(option["name"]))
-            for at, option in enumerate(options)
-        )
-        created = {
-            "id": _BoardField.PRIORITY,
-            "name": "Priority",
-            "options": [option.rendered_in_full() for option in self.priorities],
-        }
-        return {"data": {"createProjectV2Field": {"projectV2Field": created}}}
-
-    def clear_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Clear one field value on a row, which is how a priority of `none` is written."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("clearProjectV2ItemFieldValue requires an input object")
-        item_id = payload.get("itemId")
-        if payload.get("fieldId") != _BoardField.PRIORITY:
-            raise ValueError(f"only the Priority field is cleared here, not {payload!r}")
-        self._row(item_id).priority = None
-        return {"data": {"clearProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
-
-    def comments_response(self, node_id: object) -> dict[str, object]:
-        """One issue's comments, oldest first, as its `comments` connection lists them."""
-        listed = {
-            "nodes": self._issue(node_id).comments,
-            "pageInfo": {"hasNextPage": False, "endCursor": None},
-        }
-        return {"data": {"node": {"__typename": "Issue", "comments": listed}}}
-
-    def add_comment(self, variables: dict[str, object]) -> dict[str, object]:
-        """Add one comment to an issue, signed as the fixture's token account."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict) or not isinstance(payload.get("body"), str):
-            raise ValueError("addComment requires an input object with a body")
-        issue = self._issue(payload.get("subjectId"))
-        self.commented += 1
-        moment = f"2026-08-26T00:{self.commented // 60:02d}:{self.commented % 60:02d}Z"
-        comment: dict[str, object] = {
-            "id": f"IC_fixture_{self.commented}",
-            "author": {"login": "fixture-token-account"},
-            "createdAt": moment,
-            "updatedAt": moment,
-            "body": payload["body"],
-            "url": f"{issue.content()['url']}#issuecomment-{self.commented}",
-        }
-        issue.comments.append(comment)
-        return {
-            "data": {
-                "addComment": {
-                    "subject": {"id": issue.content_id},
-                    "commentEdge": {"node": comment},
-                }
-            }
-        }
-
-    def _option_named(self, value: object, options: tuple[_StatusOption, ...] | None = None) -> str:
-        """The option a write names, refused when this board's field carries no such option."""
-        option = value.get("singleSelectOptionId") if isinstance(value, dict) else None
-        named = {held.id: held.name for held in (self.options if options is None else options)}
-        if option not in named:
-            raise ValueError(f"this board carries no option {option!r} for that field")
-        return named[_FieldOptionId(str(option))]
-
-    @staticmethod
-    def _text(value: object) -> str:
-        """The text an origin write carries, refused when it is not one."""
-        text = value.get("text") if isinstance(value, dict) else None
-        if not isinstance(text, str):
-            raise ValueError(f"the origin field takes a text value, and was sent {value!r}")
-        return text
-
-    def _row(self, item_id: object) -> _Issue:
-        rows = [issue for issue in self.issues if issue.item_id == item_id]
-        if len(rows) != 1:
-            raise ValueError(f"the board holds no row {item_id!r}")
-        return rows[0]
-
-    def transfer(self, content_id: _IssueNodeId, repository: _Repository) -> _Issue:
-        """Move one issue to ``repository``, as `gh issue transfer` has GitHub do.
-
-        What GitHub keeps across a transfer is what a later copy resolves the issue by: the
-        issue's node, its board row, and the text that row's origin field holds. Only the
-        repository its content answers with changes.
-        """
-        issue = self._issue(content_id)
-        issue.repository = repository
-        return issue
-
-    def add_sub_issue(self, variables: dict[str, object]) -> dict[str, object]:
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("addSubIssue requires an input object")
-        parent = self._issue(payload.get("issueId"))
-        child = self._issue(payload.get("subIssueId"))
-        child.parent_id = parent.content_id
-        parent.sub_issues += 1
-        return {
-            "data": {
-                "addSubIssue": {
-                    "issue": {"id": parent.content_id},
-                    "subIssue": {"id": child.content_id},
-                }
-            }
-        }
-
-    def delete_issue(self, variables: dict[str, object]) -> dict[str, object]:
-        """Take one issue off the board, which is how a refused copy undoes its creations.
-
-        Recorded as the issue leaving `issues` while staying in `created`, so a journey
-        can read both what a copy made and what it then took back.
-        """
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("deleteIssue requires an input object")
-        deleted = self._issue(payload.get("issueId"))
-        self.issues.remove(deleted)
-        return {
-            "data": {"deleteIssue": {"repository": {"id": REPOSITORY_NODE_IDS[deleted.repository]}}}
-        }
-
-
-@dataclass(frozen=True)
-class _GraphQLRequest:
-    """One request the source made, kept as its operation and its own variables.
-
-    The operation is derived from the document rather than sent beside it, because
-    the source names none of its operations: routing on the root field is what a
-    GraphQL server does with an anonymous document, and it is what lets one handler
-    answer a board read and a create in the sequence a copy performs them.
-    """
-
-    query: str
-    variables: dict[str, object]
-    #: When the fixture read this request, on the monotonic clock. Recorded here rather
-    #: than derived afterwards because the pacing journey below measures the *gaps*
-    #: between the mutations a copy sends, and a gap is only observable at the far end
-    #: of the wire — the source's own scheduling is invisible from outside it.
-    received: float
-
-    @classmethod
-    def from_json(cls, body: bytes) -> _GraphQLRequest:
-        payload = json.loads(body)
-        if not isinstance(payload, dict):
-            raise ValueError("GraphQL request must be an object")
-        query = payload.get("query")
-        variables = payload.get("variables")
-        if not isinstance(query, str):
-            raise ValueError("GraphQL request requires a query string")
-        if not isinstance(variables, dict):
-            raise ValueError("GraphQL request requires a variables object")
-        return cls(query=query, variables=variables, received=time.monotonic())
-
-    @property
-    def is_mutation(self) -> bool:
-        """Whether this document creates content, which is what GitHub's second limiter counts.
-
-        Read off the document the way the source reads it — a GraphQL document whose
-        first word is `mutation` — rather than from the operation table above, so a
-        document the fixture has not been taught still counts as a write here.
-        """
-        return self.query.lstrip().startswith("mutation")
-
-    @property
-    def operation(self) -> _Operation:
-        for marker, operation in _OPERATIONS.items():
-            if marker in self.query:
-                return operation
-        raise ValueError(f"no fixture operation answers {self.query!r}")
-
-    @property
-    def repository(self) -> _Repository:
-        return _Repository(owner=self.string("owner"), name=self.string("name"))
-
-    def string(self, name: str) -> str:
-        value = self.variables.get(name)
-        if not isinstance(value, str):
-            raise ValueError(f"GraphQL variable {name!r} must be a string")
-        return value
-
-    def input_value(self, name: str) -> object:
-        payload = self.variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("GraphQL request has no input object")
-        return payload.get(name)
-
-
-class _Operation(StrEnum):
-    BOARD = "board"
-    BOARD_FIELDS = "boardFields"
-    FIELD_SNAPSHOT = "fieldSnapshot"
-    CREATE_FIELD = "createField"
-    SEARCH = "search"
-    ORIGIN_LOOKUP = "originLookup"
-    ISSUE = "issue"
-    SUB_ISSUES = "subIssues"
-    COMMENTS = "comments"
-    REPOSITORY = "repository"
-    DEPENDENCIES = "dependencies"
-    CREATE_ISSUE = "createIssue"
-    ADD_TO_BOARD = "addToBoard"
-    UPDATE_FIELD = "updateField"
-    CLEAR_FIELD = "clearField"
-    ADD_COMMENT = "addComment"
-    ADD_SUB_ISSUE = "addSubIssue"
-    ADD_BLOCKED_BY = "addBlockedBy"
-    UPDATE_ISSUE = "updateIssue"
-    DELETE_ISSUE = "deleteIssue"
-
-
-#: Each operation's marker in the document the source sends, in the order they are
-#: tried. The source ships its queries as constants, so the root field is a stable
-#: substring of each one and is what tells a board read from the writes that follow it.
-_OPERATIONS: dict[str, _Operation] = {
-    # Before the board read's own marker and the search's, both of which this document
-    # also contains: it narrows the board's items by a field filter and searches beside it.
-    "originItems:repositoryOwner": _Operation.ORIGIN_LOOKUP,
-    # Before the board read's own marker, which this aliased root also contains.
-    "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
-    "optionId field{": _Operation.FIELD_SNAPSHOT,
-    "createProjectV2Field(": _Operation.CREATE_FIELD,
-    "repositoryOwner": _Operation.BOARD,
-    "search(query:": _Operation.SEARCH,
-    "subIssues(first:": _Operation.SUB_ISSUES,
-    "comments(first:": _Operation.COMMENTS,
-    "node(id:$id){__typename ...BoardIssue}": _Operation.ISSUE,
-    "{repository(owner:": _Operation.REPOSITORY,
-    "blockedBy(first:": _Operation.DEPENDENCIES,
-    "createIssue(": _Operation.CREATE_ISSUE,
-    "addProjectV2ItemById(": _Operation.ADD_TO_BOARD,
-    "updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELD,
-    "clearProjectV2ItemFieldValue(": _Operation.CLEAR_FIELD,
-    "addComment(": _Operation.ADD_COMMENT,
-    "addSubIssue(": _Operation.ADD_SUB_ISSUE,
-    "addBlockedBy(": _Operation.ADD_BLOCKED_BY,
-    "updateIssue(": _Operation.UPDATE_ISSUE,
-    "deleteIssue(": _Operation.DELETE_ISSUE,
-}
-
-#: The field qualifier the source narrows a board search with, the quoted phrases after
-#: it, and the two characters GitHub's quoting grammar gives a meaning inside a quoted
-#: phrase. All are the source's own spelling: it escapes a backslash and a double quote
-#: before it sends one, so a fixture that read the qualifier literally would find no issue
-#: whose title contains either.
-_FIELD_QUALIFIER = re.compile(
-    r'in:(?P<fields>title,body|title|body)(?P<phrases>(?:\s+"(?:[^"\\]|\\.)*")+)'
-)
-_PHRASE = re.compile(r'"(?P<phrase>(?:[^"\\]|\\.)*)"')
-#: The qualifier a `commented_since` query narrows the board's issue search with.
-_UPDATED_QUALIFIER = re.compile(r"updated:>=(?P<since>\S+)")
-#: When every issue of the stand-in was created, and last changed before any comment.
-ISSUE_CREATED_AT = "2026-08-26T00:00:00Z"
-#: The board field filter an origin lookup narrows the board's items with.
-_ORIGIN_FILTER = re.compile(re.escape(ORIGIN_FIELD_NAME) + r':"(?P<origin>(?:[^"\\]|\\.)*)"')
-
-
-def _moment(value: str) -> datetime:
-    """An RFC 3339 instant, as GitHub compares one in an `updated:` qualifier."""
-    return datetime.fromisoformat(value)
-
-
-def _unescaped(quoted: str) -> str:
-    """One quoted search phrase, as the text the source was looking for."""
-    return quoted.replace('\\"', '"').replace("\\\\", "\\")
-
-
-def _found_by(wanted: re.Match[str], issue: _Issue) -> bool:
-    """Whether every phrase ``wanted`` quotes appears in one of the fields it names."""
-    fields = wanted.group("fields").split(",")
-    searched = [issue.title if name == "title" else issue.body for name in fields]
-    return all(
-        any(_unescaped(phrase.group("phrase")) in text for text in searched)
-        for phrase in _PHRASE.finditer(wanted.group("phrases"))
-    )
-
-
-BOARD = _Board()
-
-
-@dataclass(frozen=True)
-class _Refusal:
-    """One response GitHub refuses a request with, as the status and body it sends.
-
-    Both journeys that use one send the **same** forbidden status and differ only in
-    what the body says about itself, because that is the distinction under test: a
-    forbidden status carrying none of GitHub's limiter vocabulary really is a token
-    that lacks a permission, and one carrying it is the burst limiter. A fixture that
-    varied the status too would prove the source reads the status, which is the reading
-    that sent operators to change a credential.
-    """
-
-    status: int
-    body: dict[str, object]
 
 
 #: What GitHub answers a burst of content creation with, published as prose at
@@ -1291,191 +301,6 @@ def _mutation_gaps(requests: list[_GraphQLRequest]) -> list[float]:
     return [later - earlier for earlier, later in zip(sent, sent[1:], strict=False)]
 
 
-class _GitHubFixture(BaseHTTPRequestHandler):
-    requests: ClassVar[list[_GraphQLRequest]]
-    #: What every request is refused with, or `None` to answer the board normally.
-    refusal: ClassVar[_Refusal | None] = None
-    #: One operation answered with a GraphQL error while every other is served, or `None`:
-    #: a write the store makes that GitHub refuses between two it accepted.
-    refused_operation: ClassVar[_Operation | None] = None
-    #: How many of `refused_operation` are served before the one refused, so a refusal can
-    #: land on a later write of the same kind — the record's, after the body's.
-    refused_after: ClassVar[int] = 0
-    #: The board this handler answers for. A class attribute rather than an argument
-    #: because the stdlib constructs a handler per request; a second board is served by
-    #: a subclass of this one carrying its own board and its own request log, which is
-    #: what lets one journey serve `plans` and `followups` at once without either
-    #: board's items showing up on the other.
-    board: ClassVar[_Board]
-
-    def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
-        length = int(self.headers["Content-Length"])
-        request = _GraphQLRequest.from_json(self.rfile.read(length))
-        self.requests.append(request)
-        if self.refusal is not None:
-            self._send(self.refusal.status, self.refusal.body)
-            return
-        self._send(200, self._answer(request))
-
-    def _send(self, status: int, payload: dict[str, object]) -> None:
-        body = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _answer(self, request: _GraphQLRequest) -> dict[str, object]:
-        """The document this fixture answers one operation with.
-
-        An operation it does not implement is answered as a GraphQL error naming the
-        document, so a source that starts making a call this board cannot serve fails
-        saying which call rather than on a missing field somewhere downstream.
-        """
-        try:
-            operation = request.operation
-        except ValueError as unknown:
-            return {"errors": [{"message": str(unknown)}]}
-        if operation is self.refused_operation:
-            if _GitHubFixture.refused_after == 0:
-                return {"errors": [{"message": f"{operation} refused by the fixture"}]}
-            _GitHubFixture.refused_after -= 1
-        match operation:
-            case _Operation.BOARD:
-                return self.board.board_response()
-            case _Operation.BOARD_FIELDS:
-                return self.board.board_fields_response()
-            case _Operation.FIELD_SNAPSHOT:
-                return self.board.snapshot_response()
-            case _Operation.CREATE_FIELD:
-                return self.board.create_field(request.variables)
-            case _Operation.SEARCH:
-                return self.board.search_response(request.string("search"))
-            case _Operation.ORIGIN_LOOKUP:
-                return self.board.origin_lookup_response(request.variables)
-            case _Operation.ISSUE:
-                return self.board.node_response(request.variables.get("id"))
-            case _Operation.SUB_ISSUES:
-                return self.board.sub_issues_response(request.variables.get("id"))
-            case _Operation.COMMENTS:
-                return self.board.comments_response(request.variables.get("id"))
-            case _Operation.ADD_COMMENT:
-                return self.board.add_comment(request.variables)
-            case _Operation.CLEAR_FIELD:
-                return self.board.clear_field(request.variables)
-            case _Operation.REPOSITORY:
-                return self._repository(request.repository)
-            case _Operation.DEPENDENCIES:
-                return self.board.dependencies_response(request.variables.get("id"))
-            case _Operation.CREATE_ISSUE:
-                return self.board.create_issue(request.variables)
-            case _Operation.ADD_TO_BOARD:
-                return self.board.add_to_board(request.variables)
-            case _Operation.UPDATE_ISSUE:
-                return self.board.update_issue(request.variables)
-            case _Operation.UPDATE_FIELD:
-                return self.board.set_field(request.variables)
-            case _Operation.ADD_SUB_ISSUE:
-                return self.board.add_sub_issue(request.variables)
-            case _Operation.ADD_BLOCKED_BY:
-                return self.board.add_blocked_by(request.variables)
-            case _Operation.DELETE_ISSUE:
-                return self.board.delete_issue(request.variables)
-
-    @staticmethod
-    def _repository(named: _Repository) -> dict[str, object]:
-        """What GitHub answers about one repository, and about one it will not show.
-
-        A repository that does not exist, or that the token cannot see, comes back as a
-        present and null field rather than as an error — which is the answer the source
-        turns into its refusal, so it is the answer this fixture gives. An owner the
-        fixture does not know is answered the same way, because to GitHub a repository
-        under an owner that does not exist is one more repository that is not there.
-        """
-        known = REPOSITORY_NODE_IDS.get(named)
-        if known is None:
-            return {"data": {"repository": None}}
-        return {"data": {"repository": {"id": known, "nameWithOwner": str(named)}}}
-
-    def log_message(self, format: str, *args: object) -> None:
-        return
-
-
-@contextmanager
-def _serving_board(
-    refusal: _Refusal | None = None,
-    options: tuple[_StatusOption, ...] = STATUS_OPTIONS,
-    number: int = CONFIGURED_PROJECT_NUMBER,
-) -> Iterator[dict[str, str]]:
-    """Serve the board fixture, yielding the environment that points `plans` at it.
-
-    The board is reset per journey rather than shared: it is mutated by the writes a
-    copy performs, so a second journey reading the residue of the first would report a
-    board somebody else's copy filled in.
-
-    ``refusal`` makes every request come back as one GitHub refusal instead. It is a
-    property of the server rather than of a call because what a caller sees is the
-    diagnostic the source composes, and the source retries before it composes one.
-    ``options`` are the Status options the board carries, and ``number`` the board number
-    the source being served is configured with, which an issue's membership answers under.
-    """
-    _GitHubFixture.refusal = refusal
-    try:
-        with _served(_GitHubFixture, BOARD, options, number) as endpoint:
-            yield {
-                "GH_PROJECTS_TOKEN": "fixture-token",
-                "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
-                "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": endpoint,
-            }
-    finally:
-        _GitHubFixture.refusal = None
-        _GitHubFixture.refused_operation = None
-        _GitHubFixture.refused_after = 0
-
-
-@contextmanager
-def _served(
-    handler: type[_GitHubFixture],
-    board: _Board,
-    options: tuple[_StatusOption, ...],
-    number: int,
-) -> Iterator[str]:
-    """Serve ``board`` through ``handler`` on a loopback port, yielding its endpoint.
-
-    Split out of :func:`_serving_board` so a journey needing two boards at once stands
-    the second one up the same way rather than a second way: what a board has to be reset
-    to, and how its server is stopped and waited out, are stated once.
-    """
-    board.reset()
-    board.options = options
-    board.number = number
-    handler.requests = []
-    handler.board = board
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}/graphql"
-    finally:
-        server.shutdown()
-        # The finding the two directives answer is about which Nx project owns this
-        # file, so it is scoped to the lines that drew it; the file scopes one of the
-        # two itself further down, and a second open block for one rule is refused.
-        # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
-        # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
-        # Bounded like every other wait here: `shutdown` asks the serving loop to stop
-        # and this waits for it, so a handler wedged mid-request would otherwise hold
-        # the tier rather than fail it.
-        thread.join(timeout=e2e_timeout(60))
-        assert not thread.is_alive(), (
-            "the fixture's GitHub stand-in was still serving after it was asked to stop, "
-            "so a request handler is wedged and this journey's server outlives it"
-        )
-        # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-        # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-        server.server_close()
-
-
 class _FollowUpsFixture(_GitHubFixture):
     """The second board, served beside the first so one journey can reach both.
 
@@ -1520,47 +345,6 @@ def _serving_both_boards() -> Iterator[dict[str, str]]:
 
 
 # llmlint: ignore-end[e2e_not_mocked]
-
-
-def _prepare_plan_sources(root: Path) -> dict[str, str]:
-    """Build every plan source one journey reads under ``root``, and name them.
-
-    Preparing them is two things and the name covers both: the gitignored authoring
-    root is *pointed* at ``root``, which the caller has already made, and the credential
-    file each source resolves is pointed at one under ``root`` too — away from this
-    host's own, which is what keeps a journey off the live board whatever the operator
-    has configured.
-
-    Pointing it per run rather than leaving it at `.plans` is what makes these journeys
-    say something: a `local-md` source refuses a root it cannot canonicalize and refuses
-    it for the whole read, so they would otherwise pass or fail on whether this checkout
-    happened to have run session setup.
-
-    This is separate from :func:`_plan_environment` because a journey that *launches*
-    composes these names on top of `_launch_environment`, whose whole job is isolating a
-    launch — its own runs root, its paid-provider guard, the launcher variables it
-    deliberately popped. Updating that environment with a whole ambient copy restores
-    every one of them. A dispatch of this repository exports `ONEPIPELINE_RUNS_DIR=runs`,
-    so the three journeys below that composed the two that way launched into the
-    checkout's own shared runs root rather than their own: run concurrently under
-    `-n 4`, they minted `launch`, `launch-2` and `launch-3` between them, and the one
-    that reads its run id back failed on the name it was given.
-    """
-    return {
-        "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
-        AUTHORING_ROOT_ENV: str(root),
-    }
-
-
-def _plan_environment(root: Path) -> dict[str, str]:
-    """The environment a read across the default sources runs under.
-
-    A whole ambient copy, because a read is not a launch and has nothing to isolate
-    from. A journey that launches takes :func:`_prepare_plan_sources` instead.
-    """
-    environment = os.environ.copy()
-    environment.update(_prepare_plan_sources(root))
-    return environment
 
 
 def _write_local_project(root: Path) -> None:
@@ -1720,11 +504,6 @@ def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Pa
     assert filed == {(project.content_id, task.content_id)}, (
         f"a project's tasks are its issue's sub-issues, and this copy filed {filed}"
     )
-
-
-def _hosted(repository: _Repository) -> str:
-    """``repository`` as the normalized origin a task record's `repositories` holds."""
-    return f"github.com/{repository}"
 
 
 #: The project whose tasks name where their work lands, the way a plan of this
@@ -2473,10 +1252,6 @@ FILED_ROOT_CAUSE = "stale-cache"
 FILED_PREDICATE = f"{FILED_METADATA_KEY}/root_cause={FILED_ROOT_CAUSE}"
 #: What the store records on a copied item, naming each destination it was copied to.
 COPIES_KEY = "onetaskgraph.copies"
-#: The reads that walk a board's items, which a query or a copy that knows what it wants
-#: has no reason to send: the board read and the Status snapshot are the two documents
-#: selecting `ProjectV2.items` unnarrowed.
-BOARD_ENUMERATIONS = frozenset({_Operation.BOARD, _Operation.FIELD_SNAPSHOT})
 
 
 def _store(environment: dict[str, str], *args: str) -> str:
@@ -2829,149 +1604,13 @@ def test_a_queued_task_onto_a_plans_board_without_a_queued_option_is_refused_by_
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
-#: The spelling an ambient override of any `followups` setting would take, removed from the
-#: journeys' environment so the committed file is the source applied — its mapping and its
-#: owner alike.
-FOLLOWUPS_ENV_PREFIX = "ONETASKGRAPH_SOURCES__FOLLOWUPS__"
-#: The run and root cause of the one ticket the journeys below copy.
-PROPOSED_RUN = "proposal-run"
-PROPOSED_CAUSE = "ticket-lands-as-a-proposal"
 PROPOSED_ID = follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE)
-#: The `followups` board's Status options, `Proposal`, `Deferred` and `Queued` among them.
-FOLLOWUPS_OPTIONS = (*STATUS_OPTIONS, PROPOSAL, DEFERRED)
-
-
-def _follow_up_ticket(
-    repository: _Repository,
-    status: follow_up_tickets.Status = follow_up_tickets.Status.PROPOSED,
-    evidence: str = "",
-    cause: str = PROPOSED_CAUSE,
-    frequency: follow_up_tickets.Frequency = follow_up_tickets.Frequency.INTERMITTENT,
-) -> follow_up_tickets.Ticket:
-    """One ticket about ``repository`` as the agent writes it, new and `backlog` by default.
-
-    ``evidence`` is added to its `## Evidence` section, the way a later run adds its own, and
-    ``frequency`` is the agent's judgment of the root cause. Its estimate, estimate line and
-    priority are `board-status`'s to write, so the ticket carries none of them yet.
-    """
-    host = follow_up_tickets.Host("verifier.example")
-    origin = follow_up_tickets.Origin(_hosted(repository))
-    medium = follow_up_tickets.Severity.MEDIUM
-    impact = follow_up_tickets.impact_section(
-        "Readers of the board miss the ticket's status.", medium, "none", medium
-    )
-    return follow_up_tickets.Ticket(
-        title=f"{repository.name}: {cause.replace('-', ' ')}",
-        status=status,
-        root_cause=follow_up_tickets.RootCause(cause),
-        repository=origin,
-        created_by_run=follow_up_tickets.RunId(PROPOSED_RUN),
-        owning_runs=(follow_up_tickets.RunId(PROPOSED_RUN),),
-        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{PROPOSED_RUN}/drafts/noticed"),),
-        basis=(follow_up_tickets.Basis(origin, follow_up_tickets.Commit("0" * 40)),),
-        verified_at=follow_up_tickets.Timestamp("2026-01-01T00:00:00Z"),
-        host=host,
-        body="\n\n".join(
-            f"## {heading}\n\n"
-            + (
-                impact
-                if heading == follow_up_tickets.IMPACT
-                else f"Verified on `{host}` ({heading})."
-            )
-            + (f" {evidence}" if evidence and heading == follow_up_tickets.EVIDENCE else "")
-            for heading in follow_up_tickets.HEADINGS
-        ),
-        frequency=frequency,
-    )
-
-
-def _written_ticket(root: Path, ticket: follow_up_tickets.Ticket, text: str | None = None) -> Path:
-    """Write ``ticket`` under a drafts root at ``root``, rendered unless ``text`` says otherwise."""
-    path = follow_up_tickets.ticket_path(root, ticket.created_by_run, ticket.root_cause)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(follow_up_tickets.render(ticket) if text is None else text, encoding="utf-8")
-    return path
-
-
-def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """The environment a `followups` command runs under, and the drafts root it names.
-
-    Every command runs from this checkout, so the committed `onetaskgraph.yaml` decides the
-    source's owner and where `backlog` goes; only the endpoint, the credential and the
-    drafts root are pointed elsewhere. This checkout's installed CLIs are put first on
-    `PATH`, since `board-status` resolves the plan store from it.
-    """
-    drafts_root = tmp_path / "follow-ups"
-    environment = _plan_environment(tmp_path)
-    for name in [name for name in environment if name.startswith(FOLLOWUPS_ENV_PREFIX)]:
-        del environment[name]
-    environment[follow_up_variables.root_name()] = str(drafts_root)
-    environment[follow_up_variables.plugin_name()] = plan_store.WRITABLE_PLUGIN
-    environment["PATH"] = f"{ONETASKGRAPH_BIN.parent}{os.pathsep}{environment['PATH']}"
-    return environment, drafts_root
 
 
 # llmlint: ignore[e2e_not_mocked] The live `followups` board is the one boundary these
 # journeys must not reach: every session's verified tickets accumulate there, and a write
 # needs a credential no test may use. What is doubled stops at the wire — the installed
 # CLI, `board-status` and the committed configuration are real.
-@contextmanager
-def _serving_followups(
-    environment: dict[str, str],
-    options: tuple[_StatusOption, ...] = FOLLOWUPS_OPTIONS,
-    *,
-    fields: bool = False,
-) -> Iterator[None]:
-    """Serve the board fixture as `followups`, carrying ``options``, for ``environment``.
-
-    With ``fields``, the board is first set up the way the operator sets up the live one —
-    `just plans sources fields followups --apply`, the command `AGENTS.md` names — which
-    creates the `Priority` field from the source's `priority_mapping`.
-    """
-    with _serving_board(options=options, number=FOLLOWUPS_PROJECT_NUMBER) as remote:
-        environment.update(remote)
-        environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = (
-            "0"
-        )
-        if fields:
-            set_up = _followups_command(
-                environment,
-                ["just", "plans", "sources", "fields", follow_up_tickets.BOARD, "--apply"],
-            )
-            assert set_up.returncode == 0, set_up.stdout + set_up.stderr
-            # Read back through the same verb's read-only plan, as the operator checks it.
-            planned = _followups_command(
-                environment,
-                [str(ONETASKGRAPH_BIN), "sources", "fields", follow_up_tickets.BOARD, "--json"],
-            )
-            assert planned.returncode == 0, planned.stdout + planned.stderr
-            (priority,) = [
-                field
-                for field in json.loads(planned.stdout)["fields"]
-                if field["field"] == "Priority"
-            ]
-            assert (priority["exists"], priority["missing"]) == (True, []), priority
-            assert [option["name"] for option in priority["existing"]] == [
-                "Urgent",
-                "High",
-                "Medium",
-                "Low",
-            ], "the field setup did not create the Priority field the source maps"
-        yield
-
-
-def _followups_command(
-    environment: dict[str, str], command: list[str]
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - the installed plan-store CLI and this checkout's module
-        command,
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(120),
-        check=False,
-    )
 
 
 def _copied_ticket(environment: dict[str, str], *extra: str) -> subprocess.CompletedProcess[str]:
@@ -3007,16 +1646,6 @@ def _board_status(environment: dict[str, str], ticket: Path) -> subprocess.Compl
         [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
         + ["board-status", "--board", follow_up_tickets.BOARD, str(ticket)],
     )
-
-
-def _sent(
-    operation: _Operation, requests: list[_GraphQLRequest] | None = None
-) -> list[_GraphQLRequest]:
-    return [
-        request
-        for request in (_GitHubFixture.requests if requests is None else requests)
-        if request.operation is operation
-    ]
 
 
 def _copy_proposed_ticket(
@@ -3630,48 +2259,6 @@ def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board alr
     return issue
 
 
-def _board_cost(requests: list[_GraphQLRequest]) -> tuple[list[str], list[str]]:
-    """What in ``requests`` read more of the board than it asked for.
-
-    The operations that walk the board's items, and every board search — a plain one, or the
-    one an origin lookup sends beside its field filter — that names no field qualifier with a
-    phrase to narrow it by, which GitHub would answer with every issue on the board.
-    """
-    walked = [
-        str(request.operation) for request in requests if request.operation in BOARD_ENUMERATIONS
-    ]
-    unnarrowed = [
-        search
-        for request in requests
-        if request.operation in (_Operation.SEARCH, _Operation.ORIGIN_LOOKUP)
-        and _FIELD_QUALIFIER.search(search := request.string("search")) is None
-    ]
-    return walked, unnarrowed
-
-
-def _follow_up_step(
-    environment: dict[str, str], command: str, *arguments: str
-) -> subprocess.CompletedProcess[str]:
-    """One `orchestrator.follow_up_tickets` command, as the composed task has the agent run it."""
-    return _followups_command(
-        environment,
-        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
-        + [command, *arguments],
-    )
-
-
-def _decided_status(environment: dict[str, str], ticket: Path, *extra: str) -> str:
-    """Run `board-status`, then write the word it prints as the ticket's `status`, as told."""
-    decided = _follow_up_step(
-        environment, "board-status", "--board", follow_up_tickets.BOARD, *extra, str(ticket)
-    )
-    assert decided.returncode == follow_up_tickets.SOUND, decided.stdout + decided.stderr
-    word = decided.stdout.strip()
-    text = ticket.read_text(encoding="utf-8")
-    ticket.write_text(re.sub(r'^status: "[^"]*"$', f'status: "{word}"', text, flags=re.M), "utf-8")
-    return word
-
-
 def _validated_and_copied(environment: dict[str, str], ticket: Path) -> dict[str, object]:
     validated = _follow_up_step(environment, "validate", str(ticket))
     assert validated.returncode == follow_up_tickets.SOUND, validated.stdout + validated.stderr
@@ -3814,89 +2401,6 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
         )
 
 
-#: What one ticket's life on the `followups` board may send it, in requests, per step the
-#: follow-up task prescribes — filing a new ticket, re-copying it after an edit, answering a
-#: person's comment on it in feedback mode, and withdrawing it — on a board already holding
-#: :data:`OTHER_ITEMS` other items. Each is the
-#: count the journey below measured on this stand-in against the plan-store CLI release
-#: :data:`BUDGET_MEASURED_ON` names, none of whose requests walked the board; a step that
-#: sends more fails it, and a store of another release is re-measured before the bounds are
-#: trusted. Before this path moved onto the store's native queries every one of these steps
-#: read the whole board at least once, a count that grows with the board.
-FILING_REQUESTS = 12
-RECOPY_REQUESTS = 12
-ANSWER_REQUESTS = 10
-WITHDRAWAL_REQUESTS = 13
-#: The plan-store CLI release the bounds above were measured on: `onetaskgraph --version`.
-BUDGET_MEASURED_ON = "onetaskgraph 0.2.52"
-FILING_POINTS = 20
-RECOPY_POINTS = 12
-ANSWER_POINTS = 14
-WITHDRAWAL_POINTS = 13
-
-
-class RequestBudget(NamedTuple):
-    """The requests and modelled GitHub points one journey step may spend."""
-
-    requests: int
-    points: int
-
-
-class DocumentPrice(NamedTuple):
-    """One source document and its price in the upstream PRICES table."""
-
-    document: str
-    points: int
-
-
-#: Per-command requests and modelled points measured on BUDGET_MEASURED_ON.
-UNBOUND_STATUS_BUDGET = RequestBudget(1, 1)
-BOUND_STATUS_BUDGET = RequestBudget(3, 3)
-CREATE_COPY_BUDGET = RequestBudget(8, 8)
-BOUND_COPY_BUDGET = RequestBudget(9, 9)
-RE_ESTIMATE_BUDGET = RequestBudget(4, 4)
-EVIDENCE_POST_BUDGET = RequestBudget(8, 8)
-BOARD_CHECK_BUDGET = RequestBudget(12, 12)
-LAUNCH_VALIDATION_BOARD_CHECKS = 1
-LAUNCH_REFUSAL_BUDGET = RequestBudget(15, 15)
-
-#: The source's PRICES entries used by the fixture's operations. Search uses the measured
-#: 2026-10-01 page price instead; its upstream maximum-page price is still drift-checked.
-REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
-    _Operation.SEARCH: DocumentPrice("SEARCH_ISSUES", 5),
-    _Operation.ISSUE: DocumentPrice("ISSUE", 1),
-    _Operation.SUB_ISSUES: DocumentPrice("SUB_ISSUES", 5),
-    _Operation.BOARD: DocumentPrice("BOARD", 2),
-    _Operation.ORIGIN_LOOKUP: DocumentPrice("ORIGIN_LOOKUP", 1),
-    _Operation.BOARD_FIELDS: DocumentPrice("BOARD_FIELDS", 1),
-    _Operation.FIELD_SNAPSHOT: DocumentPrice("STATUS_OPTIONS_SNAPSHOT", 1),
-    _Operation.REPOSITORY: DocumentPrice("REPOSITORY", 1),
-    _Operation.DEPENDENCIES: DocumentPrice("ISSUE_DEPENDENCIES", 1),
-    _Operation.CREATE_ISSUE: DocumentPrice("CREATE_ISSUE", 1),
-    _Operation.ADD_TO_BOARD: DocumentPrice("ADD_TO_BOARD", 1),
-    _Operation.UPDATE_ISSUE: DocumentPrice("UPDATE_ISSUE", 1),
-    _Operation.UPDATE_FIELD: DocumentPrice("UPDATE_FIELD", 1),
-    _Operation.CLEAR_FIELD: DocumentPrice("CLEAR_FIELD", 1),
-    _Operation.CREATE_FIELD: DocumentPrice("CREATE_FIELD", 1),
-    _Operation.ADD_SUB_ISSUE: DocumentPrice("ADD_SUB_ISSUE", 1),
-    _Operation.ADD_BLOCKED_BY: DocumentPrice("ADD_BLOCKED_BY", 1),
-    _Operation.DELETE_ISSUE: DocumentPrice("DELETE_ISSUE", 1),
-    _Operation.COMMENTS: DocumentPrice("ISSUE_COMMENTS", 1),
-    _Operation.ADD_COMMENT: DocumentPrice("ADD_COMMENT", 1),
-}
-
-
-def _request_points(request: _GraphQLRequest) -> int:
-    """Price every document encountered; an unpriced document fails the journey."""
-    assert request.operation in REQUEST_PRICES, f"unpriced document: {request.query}"
-    price = REQUEST_PRICES[request.operation].points
-    if request.operation is _Operation.SEARCH:
-        first = request.variables["first"]
-        assert isinstance(first, int), request.variables
-        return (first + 19) // 20
-    return price
-
-
 @pytest.mark.reads_checkouts
 def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
     """Reconcile prices with the registered checkout's adopted tag, fetching nothing."""
@@ -3926,86 +2430,6 @@ def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
             price.points,
             upstream.get(price.document),
         )
-
-
-#: Python's audit hook records the real CLI subprocesses without replacing any command.
-#: sys.orig_argv also records validators started by the real attached recipe's shell.
-STORE_CALL_AUDIT = """\
-import json, os, pathlib, sys
-trace = pathlib.Path(os.environ["FOLLOW_UP_BUDGET_TRACE"])
-def record(kind, argv):
-    with trace.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"kind": kind, "argv": argv}) + "\\n")
-if "orchestrator.follow_up_tickets" in sys.orig_argv:
-    record("module", sys.orig_argv)
-def audit(event, args):
-    if event == "subprocess.Popen" and pathlib.Path(args[0]).name == "onetaskgraph":
-        record("store", args[1])
-sys.addaudithook(audit)
-"""
-
-
-def _audit_follow_up_calls(root: Path, environment: dict[str, str]) -> Path:
-    """Install an observer in test Python processes; every store subprocess stays real."""
-    observer = root / "audit"
-    observer.mkdir()
-    (observer / "sitecustomize.py").write_text(STORE_CALL_AUDIT, encoding="utf-8")
-    trace = root / "store-calls.jsonl"
-    environment["FOLLOW_UP_BUDGET_TRACE"] = str(trace)
-    environment["PYTHONPATH"] = os.pathsep.join((str(observer), str(REPO_ROOT)))
-    return trace
-
-
-def _once_per_store_call(trace: Path) -> list[list[str]]:
-    """Assert one show/comment-list per item and one local show/dependency walk per ticket."""
-    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
-    store = [call["argv"] for call in calls if call["kind"] == "store"]
-    shows = [argv[3] for argv in store if argv[1:3] == ["task", "show"]]
-    comments = [argv[4] for argv in store if argv[1:4] == ["task", "comment", "list"]]
-    deps = [argv[3] for argv in store if argv[1:3] == ["task", "deps"]]
-    for names in (shows, comments, deps):
-        assert len(names) == len(set(names)), names
-    assert not set(shows) & set(comments), (shows, comments)
-    trace.write_text("", encoding="utf-8")
-    return store
-
-
-def _bounded_step(
-    label: str,
-    budget: RequestBudget,
-    *,
-    bound: bool = False,
-    allowed_comments: set[str] | None = None,
-    trace: Path | None = None,
-    writes: bool = False,
-) -> None:
-    """Hold command requests to their measured budget and to one read per item/connection."""
-    if trace is not None:
-        _once_per_store_call(trace)
-    requests = list(_GitHubFixture.requests)
-    cost = RequestBudget(len(requests), sum(_request_points(request) for request in requests))
-    print(f"{label}: requests={cost.requests}, points={cost.points}")
-    assert cost.requests <= budget.requests and cost.points <= budget.points, (label, cost, budget)
-    for operation in (_Operation.ISSUE, _Operation.COMMENTS):
-        identifiers = [
-            request.string("id") for request in requests if request.operation is operation
-        ]
-        # 0.2.52 resolves an item twice inside one show (the second resolution precedes
-        # its comments). Hold the orchestrator call budget separately below; adoption
-        # will remove this store-internal exception and tighten this wire bound to one.
-        ceiling = (budget.requests if writes else 2) if operation is _Operation.ISSUE else 1
-        assert all(identifiers.count(one) <= ceiling for one in identifiers), (
-            label,
-            operation,
-            identifiers,
-        )
-        if operation is _Operation.COMMENTS and allowed_comments is not None:
-            assert set(identifiers) <= allowed_comments, (label, identifiers, allowed_comments)
-    if bound:
-        assert not _sent(_Operation.SEARCH, requests), label
-        assert not _sent(_Operation.ORIGIN_LOOKUP, requests), label
-    assert _board_cost(requests) == ([], []), label
-    _GitHubFixture.requests.clear()
 
 
 def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_path: Path) -> None:
