@@ -19,9 +19,9 @@ file this module reads is in the key its tier is memoized on: `orchestrator:test
 `templates/design-doc.md.j2`, `templates/templates.yaml`, `personas/design-doc.yaml` and
 `scripts/onepipeline.sh` are all in it, and the published CLIs it spawns — through the
 wrapper a launch uses, which is the boundary this module is about — are the pinned installs
-`uv.lock` names, which is in it too. The one Markdown file it reads, the signed-off sample's
-rendering, is read by a test marked `reads_docs`, which runs in the whole-workspace tier.
-A project of its own would be keyed on the same files.
+`uv.lock` names, which is in it too, and so are the signed-off sample's answers and the
+body they render to under `tests/fixtures/design_doc/`. A project of its own would be keyed
+on the same files.
 """
 
 from __future__ import annotations
@@ -44,7 +44,8 @@ TEMPLATE = REPO_ROOT / "templates" / "design-doc.md.j2"
 PERSONA = REPO_ROOT / "personas" / "design-doc.yaml"
 WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
 
-#: The signed-off sample: answers, and the body the user approved them rendering to.
+#: The signed-off sample: answers, and the body the user approved them rendering to, kept
+#: byte for byte as the candidate the user signed off rendered it.
 SAMPLE = REPO_ROOT / "tests" / "fixtures" / "design_doc"
 
 #: The five sections, in the order the document carries them, each as the block that renders
@@ -375,7 +376,6 @@ def test_no_rendering_carries_guidance_a_comment_or_an_alert_block(
     assert not carried, f"the rendering carries the guidance for {carried}:\n{body}"
 
 
-@pytest.mark.reads_docs
 def test_the_signed_off_sample_renders_byte_for_byte(loader: str) -> None:
     """The answers the user signed off render to exactly the body they read."""
     rendered = _run(
@@ -384,7 +384,7 @@ def test_the_signed_off_sample_renders_byte_for_byte(loader: str) -> None:
         loader,
     )
     assert rendered.returncode == 0, rendered.stderr
-    assert rendered.stdout == (SAMPLE / "sample.md").read_text(encoding="utf-8")
+    assert rendered.stdout == (SAMPLE / "sample-body.txt").read_text(encoding="utf-8")
 
 
 def test_a_planned_task_answer_holding_a_delimiter_or_a_line_break_stays_in_its_cell(

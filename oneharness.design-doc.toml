@@ -1,4 +1,4 @@
-# The design-doc WRITER's harness config: WHICH harness + model writes the one short
+# The design-doc WRITER's harness config: WHICH harness + model writes the design
 # document a person reviews a plan as. Named by `graphs/design-doc.yaml`'s `worker`
 # member as its **agent** side. See docs/onejudge-integration.md.
 #

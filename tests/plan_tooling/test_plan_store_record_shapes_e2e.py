@@ -96,11 +96,21 @@ DESIGN = {
     "what": "One route, and the test that drives it.",
     "why": "The user cannot complete a purchase without it.",
     "architecture": "One route on the service that is already there.",
-    "contracts": ["The route's request and response shape."],
+    "units": [
+        {
+            "name": "Service",
+            "repository": "service",
+            "part": "",
+            "summary": "The service gains the route and its test.",
+            "reversible": [{"title": "The route", "text": "Its request and response shape."}],
+            "decisions": [],
+        }
+    ],
     "acceptance_criteria": ["A request reaches the route and is answered."],
     "planned_tasks": [
         {
             "task": "landing",
+            "unit": "Service",
             "delivers": "the route and its test",
             "depends_on": "none",
             "location": "the store's own location",

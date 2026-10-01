@@ -880,27 +880,6 @@ def test_the_writers_task_names_the_resolve_command_the_rule_gives_for_the_plan(
     assert provenance["digest"] == chain["digest"], (provenance, chain["digest"])
 
 
-#: Wordings of the rule the per-unit architecture replaced, under which a plan's document
-#: named its repositories only when the plan spanned several. The writer's task states no
-#: rule about repositories at all now: the template's guidance gives every unit its own
-#: subsection, named by its repository.
-RETIRED_REPOSITORY_RULE = (
-    "spans more than one repository",
-    "the repository each piece lives in",
-    "says nothing about repositories",
-)
-
-
-@pytest.mark.xdist_group("finish-plan")
-def test_the_writers_criteria_state_no_rule_about_repositories_of_their_own(
-    finished: Finished,
-) -> None:
-    """The writer reads where units and repositories go from the template, not from its task."""
-    criteria = " ".join(_criteria(finished.design_task["content"]).split())
-    for clause in RETIRED_REPOSITORY_RULE:
-        assert clause not in criteria, f"the writer's criteria still state {clause!r}:\n{criteria}"
-
-
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This reads the one flow
 # the `finished` fixture already drove, behind `plan-tooling`'s own `planToolingWorkspace` edge
 # with every other reading of it, and adds two recipe calls and no launch of its own.

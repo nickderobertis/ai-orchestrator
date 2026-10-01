@@ -669,13 +669,16 @@ them reach you; `manager` names the session role and is never a command.
 
    **What goes to the user is the design document, and their approval of it is what
    gates dispatch.** A plan is not a thing a person can usefully review, and walking
-   them through it node by node is a reading they cannot argue with; the one short
-   document the flow's second launch writes — what is built and why, the architecture,
-   the contracts, the criteria, the planned work as a table of links — is. Put the
-   board copy in front of them, answer what they ask, and record their decision with
+   them through it node by node is a reading they cannot argue with; the design
+   document the flow's second launch writes is. Its format — terse prose, complete
+   interfaces — is stated once, in the guidance comments of
+   [`templates/design-doc.md.j2`](templates/design-doc.md.j2), which a repository's own
+   layer may override and which defines the reversibility levels (trivial, low cost, high
+   cost) its decisions are graded by. Put the board copy in front of them, answer what they ask, and record their decision with
    `just approve-design <source>:<project>`; `just orchestrate` refuses a plan whose
    document is missing or unapproved.
-   Its **Contracts** section is where your own reading of the seams goes. A seam is
+   Its per-unit **Architecture** — each high-cost decision with its exact contract — is
+   where your own reading of the seams goes. A seam is
    wherever two parties must both hold to an agreement and one can move without the
    other, so what the user is asked to accept is as often a stored shape or an
    internal boundary as it is a call surface — a table and its columns, a document or

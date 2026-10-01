@@ -204,24 +204,32 @@ dispatched.
 [`templates/design-doc.md.j2`](../templates/design-doc.md.j2), which
 `templates/templates.yaml` registers for `onepipeline template` with the role `document`.
 The template is this host's own — it extends nothing of onepipeline's, which knows only the
-name registered here — and it is the one statement of the document: six sections in a
-fixed order, and in its front matter's descriptions the reader it is written for and every
-property each section is judged on. A writer answers its variables, which
-`onepipeline template resolve design-doc --json | onetaskgraph template variables
---template-loader -` lists with those descriptions, and the plan store renders them:
-`onepipeline template resolve design-doc --json` piped into `onetaskgraph document create
-<source> --project <project> --id <doc> --template-loader - --answers FILE`. The store
+name registered here — and it is the one statement of the document: terse prose, complete
+interfaces, in sections each rendered by a block of its own beside a `<name>_guidance` block
+whose comment says how to write it, with the data shape of every answer in its front
+matter. A repository overrides any block through its own layer,
+`.onepipeline/templates/design-doc.md.j2`, and which layer a plan's document resolves
+through is one rule, `orchestrator/design_chain.py`, that the writer's task and the approval
+both read: a plan whose tasks all name one and the same repository resolves with
+`--repository <that origin>`, and any other plan with no repository named. A writer answers
+the variables that resolve command's output lists — piped into `onetaskgraph template
+variables --template-loader -` — and the plan store renders them: the same command piped
+into `onetaskgraph document create <source> --project <project> --id <doc>
+--template-loader - --answers FILE`. The store
 records the rendering's provenance on the document — the template reference
 `onepipeline:design-doc`, the chain digest it rendered, and the digest of the body it
 produced — and keeps the answers beside the document where it was drafted, never copying
 them onto the board.
 
-*Changing one is regenerating it.* Change an answer and regenerate the document in place:
-`onepipeline template resolve design-doc --json | onetaskgraph document render <id>
+*Changing one is regenerating it.* Change an answer and regenerate the document in place,
+through the plan's resolve command: `onepipeline template resolve design-doc
+[--repository <origin>] --json | onetaskgraph document render <id>
 --template-loader - [--var NAME=VALUE]... [--answers FILE] --no-interactive`, which renders
 from the stored answers overlaid by the new ones and keeps the document's id and binding.
 A copy on the board holds no stored answers, so it is regenerated there with the whole
-answers file given as `--answers FILE`.
+answers file given as `--answers FILE`. A document whose stored answers the template in force
+no longer declares cannot be regenerated in place, and is written again by the design-document
+writer instead.
 Never edit the body by hand: an edited body is no longer the rendering its provenance
 records, and it can be neither approved nor launched until it is regenerated.
 
@@ -588,8 +596,8 @@ directions of it.
 
 **The document is written last, by a launch of its own, from a plan something has already
 reviewed.** A person cannot usefully review a plan node by node; what they can judge is
-one short document — what is being built and why, the architecture, the contracts, the
-acceptance criteria, and the planned work as a table of links, each row pointing at its
+the design document — terse prose, complete interfaces, laid out as the `design-doc`
+template's guidance states, with the planned work as a table whose every row points at its
 task. A document written before anything reviewed the plan describes content nobody read,
 which is what the review one step earlier exists to prevent, and a run cannot interject a
 review between its own nodes: a review record is written by this repository's own code and
@@ -616,17 +624,18 @@ is, through the `plan-task` template: `onepipeline template resolve plan-task --
 into `onetaskgraph task create --template-loader -`, answered from the brief's own What and
 Why, the plan's qualified id and the document's id. The brief's criteria are *not* among
 its criteria, because those are the plan's and a judge holds a dispatch to every criterion
-it finds in its task; its own require answers meeting every property the design-doc
-template's descriptions state — the architecture naming each piece's repository in a plan
-across several stated among them — the document stored through the pinned design-doc
-resolve piped into `document create` (or `document render` where it exists), every
+it finds in its task; its own require answers in the shape each variable's description
+states and meeting every rule the chain's guidance comments state, the document stored
+through the resolve command the plan's rule gives piped into `document create` (or
+`document render` where it exists), every
 planned-task row's location taken from the store, and a report of where the store put it.
 The rendered task is then held to the engine's own check of a stored item,
 `onepipeline template check plan-task --item <task>`, before anything is launched: a task
 listing no acceptance criteria, or not the rendering its provenance records, is refused,
 the flow takes back the project it wrote and exits 6, and nothing is launched. What states
-the document itself is the `design-doc` template, and nothing restates it: the node's task
-and the persona both name the command that lists its variables.
+the document itself is the `design-doc` template's chain, and nothing restates it: the
+node's task names the resolve command the plan's rule gives, and the persona sends the
+writer and its judge to it.
 
 The dispatch reads the finished plan out of the store, stores what it wrote as a
 **document of that same project**, and reports where the store says that document is — a
