@@ -79,7 +79,7 @@ runs each:
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.54.0 and the
+Three consequences, the first two re-measured against onepipeline 0.55.0 and the
 oneagentgraph it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
@@ -193,7 +193,7 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.5.3` at onepipeline v0.54.0. Read that
+oneagentgraph `onepipeline` links, which is `0.5.4` at onepipeline v0.55.0. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed wheel is the source and
@@ -201,7 +201,7 @@ not evidence of what a dispatch reads. The installed wheel is the source and
 CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
 numbers agree today and do not have to: the pin names the same release, and the linked reader is
-0.5.3. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
+0.5.4. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
 separated them is how long a cancelled process tree is left before Windows ends its
 job, that a member whose tree cannot be found is not a member proven idle, and — in
 0.3.3 — the conversation label and the oneharness-session pointer a member's turns
@@ -238,7 +238,7 @@ does. That pair has been confused once already.
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.5.3 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.5.4 refuses the
 previous shape outright, naming the field to write instead:
 
 ```

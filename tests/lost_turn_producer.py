@@ -236,6 +236,10 @@ def controlled_turn(
             "--prompt",
             LOST_PROMPT,
             "--stream",
+            # The NDJSON this reads is the stream's machine contract, which oneharness
+            # 0.20.0 writes only when asked for by name; bare, it streams readable text.
+            "--format",
+            "json",
             "--control",
             "--session",
             CONTROL_SESSION,

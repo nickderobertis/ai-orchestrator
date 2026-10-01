@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.54.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.55.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,14 +143,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.17.0/0.14.0 upgrade (`config/oneharness.version` and
+after the 0.21.1/0.17.0 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made thirteen times
+one. That re-check has now been made fourteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -266,7 +266,16 @@ sync`'s Codex target and `--exact`, confined under `crates/oneharness-core/src/d
 `sync.rs`, `harness.rs`, `config.rs`, `capability.rs` and `sdk.rs`, and
 `crates/oneharness-core/src/domain/usage.rs` is byte-identical between
 `oneharness-core-v0.18.0` and `oneharness-core-v0.19.0`, the core `oneharness-cli` 0.17.0 is
-compiled against, read off its wheel's own SBOM.
+compiled against, read off its wheel's own SBOM. The pair then moved together to
+0.21.1/0.17.0 on the same terms, without a paid turn: `crates/onejudge/src/usage.rs` is
+byte-identical between onejudge v0.14.0 and v0.17.0, whose report schema moves from 12 to
+14 by adding optional fields to each judge decision and a `posture` to
+`telemetry.attribution` — none inside a `usage` block; and
+`crates/oneharness-core/src/domain/usage.rs` is byte-identical between
+`oneharness-core-v0.19.0` and `oneharness-core-v0.24.0`, the core `oneharness-cli` 0.21.1
+is compiled against, with history `SCHEMA_VERSION` `1.9` at both. The engine wheel,
+`onejudge-cli` 0.17.0 and `oneagentgraph-cli` 0.5.4 all link `oneharness-core` 0.21.0,
+read off each wheel's own SBOM.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
@@ -355,7 +364,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.19.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.20.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

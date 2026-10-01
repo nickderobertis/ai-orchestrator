@@ -104,6 +104,11 @@ POLICY_EXCEPTIONS = {
     "github.com/petsinc/hellopatient": ("change-open", "required"),
     "github.com/petsinc/org-apps": ("change-open", "required"),
     "github.com/petsinc/referral-app": ("change-open", "required"),
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, modern_domain_modeling] One
+    # data row in this existing record, in its established `(publication, approvals)` shape;
+    # it adds no journey, and retyping the record changes every row, not this one.
+    "github.com/petsinc/skills": ("change-open", "required"),
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, modern_domain_modeling]
 }
 #: What every *other* ruled identity publishes under: a single-owner `nickderobertis`
 #: repository whose change request merges itself once its merge path passes. The

@@ -861,8 +861,11 @@ give the user the link to every follow-up issue it created or updated, the draft
 dropped with why, and anything it found that should have been surfaced during the run.
 
 **When a run ends any other way**, the failure hook launches nothing. Decide with the user
-whether to verify its drafts by hand with `just follow-ups <run-id>`. A pause on a
-decision is not an ending. A run fires at most one hook for each ending it reaches; an
+whether to verify its drafts by hand with `just follow-ups <run-id>`, which proceeds only
+on a run the engine reports settled or no longer driven: the adopted engine cannot say
+whether an unfinished run is driven, so the recipe refuses one and names `just status`
+rather than guessing. A pause on a decision is not an ending. A run fires at most one
+hook for each ending it reaches; an
 accepted edit that makes the run live again, or that carries it from one ending to a
 different one, starts a new epoch, so a recovered run fires the hook for its later ending
 too — and a failed node you `settle` `done` because its work landed another way fires the
@@ -1072,12 +1075,16 @@ watching means and what that verb is held to:
    somebody's memory anywhere else; where a watch would have to end on something the
    verb does not return on, report the missing condition rather than writing a loop.
    <!-- llmlint: ignore-block[agents_md_durable_and_terse] This is not a copy of the command's help: `onepipeline watch --help` at the pinned release names neither the `--until` words nor any exit status, so this block is the one statement a supervisor branches on, and `tests/test_watch_surface_drift.py` reads it through `tests/watch_rule.py` to hold it to the installed engine. Deleting it would leave that gate reconciling nothing. -->
-   `--until` takes `surface` (the default), `settled`, `nothing-driving`, `node-settled`
-   and `node=<ID>`; `settled` and `nothing-driving` end every wait, while a waiting
-   surface ends one only under `surface`, so name both when you want both. `--timeout
-   none` sets no bound on the wait. The watch returns `0` settled, `3` nothing-driving,
-   `4` surface-waiting, `5` elapsed and `6` node-settled. Re-arm from the `cursor
-   <cursor>` its ending line carries. Its human form is on stderr unless `--log <file>`
+   `--until` takes `surface`, `settled`, `nothing-driving`, `node-settled` and
+   `node=<ID>`; given none, a watch waits on `surface` and `node-settled`, and any it
+   names replace that pair. `settled` ends every wait, and so does a run that stops
+   being driven while the watch waits; armed on a run nothing is driving, a watch waits
+   instead, until somebody acts on the run — an `adopt`, a reply applied, a surface
+   consumed — or its bound elapses. An uncursored watch returns only on settlements after
+   it armed, a cursored one also on those past its cursor. `--timeout none` sets no bound
+   on the wait. The watch returns `0` settled, `3` nothing-driving, `4` surface-waiting,
+   `5` elapsed, `6` node-settled and `7` run-changed. Re-arm from the `cursor <cursor>`
+   its ending line carries, on every ending `7` included. Its human form is on stderr unless `--log <file>`
    names a file, which each line is appended to as it is written, so send it there — `just
    watch <run> --until surface --until settled --until nothing-driving --timeout none
    --log <file>` — never through a redirect or a pipe: a block-buffering pipe makes a

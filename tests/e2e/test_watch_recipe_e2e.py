@@ -9,12 +9,15 @@ count and the cursor a later watch resumes from. Nothing is doubled: the real re
 real launcher wrapper and the pinned engine run over a runs root this tree fixes.
 
 **What a recorded run cannot produce is held beside this, by a launch.** A recorded run
-is undriven, so every watch over one returns on its first pass — `settled` or
-`nothing-driving` — and never waits long enough to write a heartbeat; the engine proves a
-run is driven from its live driver process, which only a real launch provides. So the
-heartbeat, and the three endings only a live run reaches (`surface-waiting`, `elapsed`,
-`node-settled`), are taken by `tests/e2e/test_watch_selector_e2e.py` through this same
-recipe over a run it launches and holds live. The rule's requirement that every heartbeat
+is undriven and still, so a watch over one answers `settled` on its first pass when the
+graph is complete and otherwise waits out its bound — since onepipeline 0.55.0 a watch
+armed on a run nothing is driving waits for the run to change rather than answering
+`nothing-driving` at once — and the zero bound these journeys give it ends that wait
+`elapsed` before any heartbeat is owed. The engine proves a run is driven from its live
+driver process, which only a real launch provides. So the heartbeat, and the endings only
+a live run reaches (`surface-waiting`, `node-settled`), are taken by
+`tests/e2e/test_watch_selector_e2e.py` through this same recipe over a run it launches and
+holds live. The rule's requirement that every heartbeat
 carry the unread count is asserted there, where heartbeats exist; the helper below that
 reads a heartbeat's count is shared so both halves read it one way.
 
@@ -32,9 +35,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, NewType
 
 import pytest
 from watch_rule import ENDING_LINE, HEARTBEAT_LINE, UNREAD, rule
@@ -49,7 +53,8 @@ RECORDED_RUNS = ROOT / "tests" / "fixtures" / "timeline-runs"
 #: A recorded run that settled complete.
 SETTLED_RUN = "gate-parity-2"
 #: A recorded run nothing is driving, whose graph holds several nodes, one of them
-#: settled `failed` — which is what makes a condition naming that node answerable.
+#: settled `failed` — which is what makes a condition naming that node one the parser
+#: takes.
 UNDRIVEN_RUN = "triage-by-root-cause-2"
 #: The node of that run a selector is allowed to name, and one it does not hold.
 NAMED_NODE = "basis"
@@ -72,12 +77,18 @@ class Heartbeat(NamedTuple):
     unread: int
 
 
+#: A position in a run's merged stream, as the engine mints it on an ending line and takes
+#: back through `--cursor`. Opaque here: it is only ever read off one watch and handed to
+#: another.
+Cursor = NewType("Cursor", str)
+
+
 class Return(NamedTuple):
     """The ending: the condition, the status it returns, the cursor, and the unread count."""
 
     condition: str
     exit: int
-    cursor: str
+    cursor: Cursor
     unread: int
     #: The node a `node-settled` ending names; no other ending names one.
     node: str | None
@@ -103,7 +114,11 @@ def record_of(line: str) -> Record:
             **rest,
         } if rest.get("node") is None or isinstance(rest.get("node"), str):
             return Return(
-                condition=condition, exit=status, cursor=cursor, unread=count, node=rest.get("node")
+                condition=condition,
+                exit=status,
+                cursor=Cursor(cursor),
+                unread=count,
+                node=rest.get("node"),
             )
         case _:
             raise AssertionError(f"a machine record this module does not read: {line}")
@@ -179,10 +194,10 @@ class RecordedEnding(NamedTuple):
     condition: str
 
 
-#: The two endings a run that will not change again can answer.
+#: The two endings a run that will not change again can answer under a zero bound.
 RECORDED_ENDINGS = (
     RecordedEnding(run=SETTLED_RUN, condition="settled"),
-    RecordedEnding(run=UNDRIVEN_RUN, condition="nothing-driving"),
+    RecordedEnding(run=UNDRIVEN_RUN, condition="elapsed"),
 )
 
 
@@ -254,16 +269,18 @@ NODE_CONDITIONS = ("node-settled", f"node={NAMED_NODE}")
 def test_a_forwarded_node_condition_is_taken_and_does_not_displace_the_run_level_answer(
     condition: str,
 ) -> None:
-    """The recipe forwards `--until` to the parser, and a run nobody drives still says so.
+    """The recipe forwards `--until` to the parser, and an earlier settlement does not end it.
 
     Accepted rather than refused — the verb read the run and reported an ending — and the
-    ending is the run-level one, because `nothing-driving` is checked before any
-    condition a caller named. That is what makes a node condition safe to ask for.
+    ending is the bound's, not the node's: the node this names settled long before the
+    watch armed, and an uncursored watch returns only on settlements after it armed, so a
+    run nobody drives is waited on rather than answered out of its history. That is what
+    makes a node condition safe to ask for.
     """
     watched = watch(UNDRIVEN_RUN, "--until", condition, "--timeout", "0")
 
-    assert returned(watched).condition == "nothing-driving", watched.said
-    assert watched.status == rule().statuses["nothing-driving"], watched.said
+    assert returned(watched).condition == "elapsed", watched.said
+    assert watched.status == rule().statuses["elapsed"], watched.said
 
 
 @pytest.mark.parametrize(
@@ -307,3 +324,90 @@ def test_the_recorded_run_this_module_names_holds_the_node_it_drives_a_condition
 
     assert NAMED_NODE in ids, ids
     assert ABSENT_NODE not in ids
+
+
+#: What `just follow-ups` says when the engine cannot tell it whether a run is driven: the
+#: one recipe here that branches on a watch status to decide something.
+UNREADABLE_LIVENESS = "is still being driven could not be read on this engine"
+
+
+def follow_ups(runs: Path, run: str) -> subprocess.CompletedProcess[str]:
+    """The real `just follow-ups` recipe over a runs root this journey wrote."""
+    return subprocess.run(
+        ["just", "follow-ups", run],
+        cwd=ROOT,
+        env={**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)},
+        text=True,
+        capture_output=True,
+        timeout=BOUND_SECONDS,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] One sub-second recipe run
+# over a recorded run, launching nothing; its subject is the installed engine, which is why
+# it sits in the uncached tier this module's docstring states.
+def test_follow_ups_refuses_an_unfinished_run_nothing_drives_without_calling_it_driven(
+    tmp_path: Path,
+) -> None:
+    """The ending a zero-wait watch gives such a run is one a live run gives too.
+
+    So the recipe refuses it as liveness it cannot read and names where to read the run,
+    rather than claiming it is still driven — which would send an operator to wait on a
+    run nothing will ever finish.
+    """
+    shutil.copytree(RECORDED_RUNS / UNDRIVEN_RUN, tmp_path / UNDRIVEN_RUN)
+
+    refused = follow_ups(tmp_path, UNDRIVEN_RUN)
+
+    said = refused.stdout + refused.stderr
+    assert refused.returncode == 2, said
+    assert f"whether run '{UNDRIVEN_RUN}' {UNREADABLE_LIVENESS}" in refused.stderr, said
+    assert f"just status {UNDRIVEN_RUN}" in refused.stderr, said
+    assert f"run '{UNDRIVEN_RUN}' is still being driven," not in said
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] One sub-second recipe run
+# over a recorded run, launching nothing; its subject is the installed engine, which is why
+# it sits in the uncached tier this module's docstring states.
+def test_follow_ups_reports_a_failed_liveness_read_with_the_engines_own_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """A watch that fails, rather than ends, is not read as a liveness answer of any kind.
+
+    A run directory with no launch record is refused by the verb with an exit outside its
+    endings, and the recipe passes on the engine's own words rather than the explanation it
+    keeps for an ending that leaves liveness open.
+    """
+    (tmp_path / "broken-run").mkdir()
+
+    refused = follow_ups(tmp_path, "broken-run")
+
+    said = refused.stdout + refused.stderr
+    assert refused.returncode == 2, said
+    assert "whether run 'broken-run' is still being driven could not be read: " in said
+    assert "launch.json" in refused.stderr, said
+    assert UNREADABLE_LIVENESS not in said, said
+
+
+def test_the_statuses_follow_ups_branches_on_are_the_rules() -> None:
+    """`scripts/follow-ups.sh` names watch statuses of its own, so they are held to the rule.
+
+    It proceeds on the two endings that say nothing drives the run, and reads the span from
+    `surface-waiting` to `run-changed` as endings that leave liveness open — which holds only
+    while that span is exactly the rule's other four endings.
+    """
+    script = (ROOT / "scripts" / "follow-ups.sh").read_text(encoding="utf-8")
+    named = {name: int(value) for name, value in re.findall(r"(?m)^(WATCH_[A-Z_]+)=(\d+)$", script)}
+    statuses = rule().statuses
+
+    assert named == {
+        "WATCH_SETTLED": statuses["settled"],
+        "WATCH_NOTHING_DRIVING": statuses["nothing-driving"],
+        "WATCH_SURFACE_WAITING": statuses["surface-waiting"],
+        "WATCH_RUN_CHANGED": statuses["run-changed"],
+    }, named
+    open_endings = {"surface-waiting", "elapsed", "node-settled", "run-changed"}
+    span = range(named["WATCH_SURFACE_WAITING"], named["WATCH_RUN_CHANGED"] + 1)
+    assert {word for word, status in statuses.items() if status in span} == open_endings

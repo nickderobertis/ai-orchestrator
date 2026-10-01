@@ -20,11 +20,12 @@ either form at both ends would pass over a watch that had stopped counting, and 
 is what the watch rule calls a HARD REQUIREMENT.
 
 `node-settled` is driven over that same run, and where it is reachable is the whole of
-why it needs one. Two endings are checked before any condition a caller named and cannot
-be skipped, though either can be named — a complete graph answers `settled`, a run
-nothing is driving answers `nothing-driving` — so no recorded run can answer on a node at
-all, every one of them being undriven. A *live* run can, and only while another node holds the graph
-incomplete and its driver working. The plan below is two nodes for exactly that reason.
+why it needs one. A complete graph answers `settled` before any condition a caller named,
+and since onepipeline 0.55.0 a watch armed on a run nothing is driving waits for the run
+to change rather than answering out of its history — so no recorded run can answer on a
+node at all, every one of them being undriven and still. A *live* run can, and only while
+another node holds the graph incomplete and its driver working. The plan below is two
+nodes for exactly that reason.
 
 A waiting surface is **not** one of those two: that check is itself a selector, so it
 ends a wait only when `surface` was asked for. A bare `--until node-settled` does not ask
@@ -79,9 +80,12 @@ from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from test_watch_recipe_e2e import (
+    Cursor,
     Heartbeat,
+    Return,
     ending_line,
     heartbeats,
+    record_of,
     returned,
     unread_count,
     watch,
@@ -165,6 +169,10 @@ class LiveRun(NamedTuple):
     #: module signals: it is the one this module started, and its pid is captured here
     #: rather than matched for.
     launch: subprocess.Popen[str]
+    #: A cursor the engine minted before either node could settle, so a watch resumed
+    #: from it is owed the settlement. Since onepipeline 0.55.0 an uncursored watch
+    #: returns only on settlements after it armed, and the journey below arms after one.
+    armed: Cursor
 
 
 def _status(live: LiveRun) -> str:
@@ -206,8 +214,8 @@ def live_run(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     blocking, unanswered, and *unabandoned*, the last of which is what the engine reads.
 
     Attached rather than detached, because a detached driver exits once the graph has
-    nothing left to schedule and a run nothing is driving answers `nothing-driving` to
-    every wait — which would replace all three readings with one.
+    nothing left to schedule, and a watch over a run nothing is driving waits for the run
+    to change rather than reaching any of the three readings.
 
     Module-scoped: the watches below only read, so one launch answers both, and a launch
     is the expensive thing here. Teardown kills the launch this fixture started, by the
@@ -234,8 +242,10 @@ def live_run(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL,
     )
-    live = LiveRun(environment=environment, run=run, launch=launch)
     try:
+        live = LiveRun(
+            environment=environment, run=run, launch=launch, armed=_first_cursor(environment, run)
+        )
         yield live
     finally:
         launch.kill()
@@ -250,6 +260,29 @@ def live_run(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
             check=False,
             stdin=subprocess.DEVNULL,
         )
+
+
+def _first_cursor(environment: dict[str, str], run: str) -> Cursor:
+    """The cursor the first zero-bound watch the run answers ends on, read as soon as it can.
+
+    Taken inside the window the stand-in holds every worker's turn open, so it precedes
+    any settlement; a node that had settled already is named here rather than left to
+    read as a watch that waited out its bound.
+    """
+    limit = deadline(SURFACE_SECONDS)
+    said = ""
+    while time.monotonic() < limit:
+        watched = watch(run, "--until", "node-settled", "--timeout", "0", environment=environment)
+        said = watched.said
+        ended = [record for record in watched.records if isinstance(record, Return)]
+        if ended:
+            assert ended[-1].condition == "elapsed", (
+                f"run {run} answered before the journey could arm, so no cursor precedes its "
+                f"settlements:\n{said}"
+            )
+            return ended[-1].cursor
+        time.sleep(0.2)
+    pytest.fail(f"run {run} never answered a watch:\n{said}")
 
 
 @pytest.fixture(scope="module")
@@ -328,9 +361,16 @@ def test_a_node_settling_on_a_live_run_ends_the_watch_at_its_own_status(
 
     `--until node-settled` rather than a named node, because which of the two nodes
     claimed the question is a race the fixture deliberately does not decide.
+
+    Resumed from the cursor the launch minted before anything settled, because the
+    settlement precedes this watch: an uncursored watch returns only on settlements after
+    it armed, and a cursored one also on those past its cursor — which is what a
+    supervisor re-arming from an earlier ending line is owed.
     """
     watched = watch(
         node_settled.run,
+        "--cursor",
+        node_settled.armed,
         "--until",
         "node-settled",
         "--timeout",
@@ -423,3 +463,52 @@ def test_a_wait_that_runs_out_on_a_live_run_reports_elapsed_and_says_so_as_it_wa
             f"watch over it reports no unread planner surface: {line!r}"
         )
         assert record.unread == counted, (line, record)
+
+
+def test_a_run_that_stops_being_driven_ends_the_watch_at_its_own_status(
+    question_waiting: LiveRun,
+) -> None:
+    """`nothing-driving`, over the one transition that produces it since onepipeline 0.55.0.
+
+    A watch armed on a run nothing drives waits rather than answering, so the ending is
+    reachable only by a run that is driven when the watch arms and stops being driven
+    while it waits. This drives exactly that: the watch arms over the live run, and once
+    its first heartbeat says it is waiting, the run is ended through `just stop`, the
+    supported verb. Last in the module, because every journey above needs the run live.
+    """
+    arguments = ["--until", "nothing-driving", "--tick-interval", str(TICK_SECONDS)]
+    waiting = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        ["just", "watch", question_waiting.run, *arguments, "--timeout", str(SURFACE_SECONDS)],
+        cwd=ROOT,
+        env=question_waiting.environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+    )
+    assert waiting.stdout is not None
+    lines: list[str] = []
+    for line in waiting.stdout:
+        lines.append(line)
+        if isinstance(record_of(line), Heartbeat):
+            break
+    stopped = subprocess.run(
+        ["just", "stop", question_waiting.run],
+        cwd=ROOT,
+        env=question_waiting.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    rest, said = waiting.communicate(timeout=e2e_timeout(SURFACE_SECONDS))
+    lines.extend(rest.splitlines())
+    said = "".join(lines) + "\n" + said + "\n" + stopped.stdout + stopped.stderr
+
+    ended = [
+        record for record in map(record_of, filter(str.strip, lines)) if isinstance(record, Return)
+    ]
+    assert ended, said
+    assert ended[-1].condition == "nothing-driving", said
+    assert waiting.returncode == rule().statuses["nothing-driving"] == ended[-1].exit, said

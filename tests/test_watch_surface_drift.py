@@ -37,20 +37,24 @@ beside it the two refusals a selector makes about a run are driven as well: a no
 graph does not hold, and — for the wait that has no bound — that the verb takes the
 spelling this repository puts in front of an operator.
 
-**Three of the terminal conditions cannot be produced against a static runs root, and
-they are declared rather than skipped.** `surface-waiting`, `elapsed` and `node-settled`
-are all answers about a run that is *live* — one with a blocking surface waiting, one
-still being driven when the wait runs out, one with a node settling while another holds
-the graph incomplete — and the engine proves liveness from the driving process itself
-rather than from the ledger, which is why a run root with a forged lock still answers
-`nothing-driving`. Forging a driver to reach them would be a fixture asserting this
-repository's own guess at what the engine inspects. They are named in
-`UNDRIVABLE_CONDITIONS` with that reason and the declaration is asserted to be exactly
-those three.
+**Four of the terminal conditions cannot be produced against a static runs root, and
+they are declared rather than skipped.** `surface-waiting` and `node-settled` are answers
+about a run that is *live* — one with a blocking surface waiting, one with a node settling
+while another holds the graph incomplete — and the engine proves liveness from the
+driving process itself rather than from the ledger. `nothing-driving` and `run-changed`
+are answers about a run *moving* while the wait is armed: since onepipeline 0.55.0 a
+watch armed on a run nothing is driving waits rather than answering at once, ending
+`nothing-driving` only on a driven run going undriven during the wait and `run-changed`
+only on the run's own record moving under it. A recorded run is undriven and still, so
+over one the wait simply elapses — which is what makes `elapsed` the drivable one here.
+Forging a driver would be a fixture asserting this repository's own guess at what the
+engine inspects, so they are named in `UNDRIVABLE_CONDITIONS` and the declaration is
+asserted to be exactly those four — and `run-changed` is then driven here anyway, over a
+copy of a recorded run that the engine's own `surface` verb moves while a watch waits.
 
 What *does* drive them is a run rather than a fixture:
-`tests/e2e/test_watch_selector_e2e.py` launches one, holds it live, and takes all three
-against the installed engine through the recipe — which is where they belong, since a
+`tests/e2e/test_watch_selector_e2e.py` launches one, holds it live, and takes the live
+ones against the installed engine through the recipe — which is where they belong, since a
 static runs root is this module's subject and a launch is not.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] The
@@ -69,11 +73,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 from published_surface import surface_of
+from test_engine_contracts import ONEPIPELINE, _source
 from watch_rule import DOCUMENT, rule
 
 from orchestrator.root import REPO_ROOT
@@ -139,31 +147,15 @@ class Terminal(NamedTuple):
     exit: int
 
 
-#: The conditions no static runs root can produce, and why. Two of them are answers about
-#: a run that is **live** — one with a blocking surface waiting to be answered, one still
-#: being driven when the wait runs out — and the engine proves a run is being driven from
-#: the driving process rather than from anything in the ledger: a run root carrying a
-#: forged `owner.lock` naming a live process still answers `nothing-driving`. A fixture
-#: that got past that would be asserting this repository's own guess at what the engine
-#: inspects, which is the opposite of a reconciliation.
-#:
-#: **The third is undrivable for a sharper reason, and it is one worth knowing.** A node
-#: settling is not a state a recorded run lacks — every run here has one. Two endings are
-#: checked before any condition a caller named and cannot be skipped, though either can
-#: be named: a complete graph answers `settled`, and a run nothing is driving answers
-#: `nothing-driving`, because they are "facts *about* the run where a settlement is a
-#: fact *within* one" and a settlement read out of a run nobody is driving is not the
-#: thing to act on. A recorded run is by definition undriven, so one of those two answers
-#: every wait over one, whatever `--until` it was given — which is what makes a node
-#: condition safe to ask for and what puts this ending out of reach here.
-#:
-#: Deliberately not a fourth rung above it: a waiting surface ends a wait only when
-#: `surface` was asked for, so it does not outrank a node condition asked for on its own.
-#: `tests/e2e/test_watch_selector_e2e.py` launches a run and drives both halves of that
-#: rather than asserting either from the source.
+#: The conditions no recorded run, as it stands, can produce — the module docstring says
+#: why. Each is reconciled where it can be driven instead: `run-changed` below, by moving a
+#: copy of a recorded run while a watch waits on it; the other three by
+#: `tests/e2e/test_watch_selector_e2e.py`, over a run it launches and holds live.
 #:
 #: They are declared here so the set cannot quietly grow.
-UNDRIVABLE_CONDITIONS = frozenset({"surface-waiting", "elapsed", "node-settled"})
+UNDRIVABLE_CONDITIONS = frozenset(
+    {"surface-waiting", "node-settled", "nothing-driving", "run-changed"}
+)
 
 
 def _restated_options() -> frozenset[str]:
@@ -257,9 +249,9 @@ def _ending(run: str, *arguments: str) -> Terminal:
 #: The default — no `--until` at all — is what a caller that predates the selector gets.
 #: The second asks for a node condition as well, and is driven not because it produces a
 #: new ending here — the note on `UNDRIVABLE_CONDITIONS` says why it cannot — but because
-#: what it must not do is *change* one: a selector that suppressed `nothing-driving` on
-#: the run it was asked about would be the silence this verb exists to end, and reading
-#: the same pairing under both is what says it does not.
+#: what it must not do is *change* one: a selector that ended a wait over an undriven run
+#: on anything but its bound would be reading a node condition out of a run nobody is
+#: driving, and reading the same pairing under both is what says it does not.
 DRIVEN_SELECTIONS: tuple[tuple[str, ...], ...] = ((), ("--until", "node-settled"))
 
 
@@ -540,8 +532,86 @@ def test_the_reconciliation_names_a_swapped_and_an_unknown_exit_status() -> None
     for status in moved:
         assert any(f"exit status {status}" in entry for entry in named)
 
-    unknown = {"run-7": Terminal(condition="interrupted", exit=7)}
+    # One past every status the rule names, so the example stays unknown as the rule grows.
+    unused = max(restated) + 1
+    unknown = {f"run-{unused}": Terminal(condition="interrupted", exit=unused)}
     assert disagreements(restated, unknown) == [
-        "the verb answered `interrupted` at exit status 7 on `run-7`, and this "
+        f"the verb answered `interrupted` at exit status {unused} on `run-{unused}`, and this "
         "repository branches on no such status"
     ]
+
+
+@pytest.mark.reads_checkouts
+def test_a_run_that_changes_under_a_waiting_watch_ends_it_at_the_status_the_rule_names(
+    tmp_path: Path,
+) -> None:
+    """`run-changed`, over a copy of a recorded run moved by the engine's own `surface` verb.
+
+    A watch armed on a run nothing is driving waits for the run to change, and a surface
+    queued on its channel is one of the moves it fingerprints. The surface is raised only
+    once the watch's first heartbeat says it is waiting, so the move lands under it rather
+    than before it armed, and `--until nothing-driving` asks for no surface condition, so
+    the queued surface can end the wait only as a change.
+    """
+    runs = tmp_path / "runs"
+    shutil.copytree(RECORDED_RUNS / NAMED_NODE_RUN, runs / NAMED_NODE_RUN)
+    environment = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)}
+    waiting = subprocess.Popen(  # noqa: S603 - the installed engine, as a caller runs it
+        [str(ENGINE), *WATCH, NAMED_NODE_RUN, "--until", "nothing-driving"]
+        + ["--tick-interval", "1", "--timeout", "120"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+    assert waiting.stdout is not None
+    lines: list[str] = []
+    for line in waiting.stdout:
+        lines.append(line)
+        if '"watch":"heartbeat"' in line:
+            break
+    raised = subprocess.run(
+        [str(ENGINE), "surface", NAMED_NODE_RUN, "--kind", "planner-question"]
+        + ["--message", "moves the run under the watch"],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+        env=environment,
+    )
+    assert raised.returncode == 0, raised.stdout + raised.stderr
+    rest, said = waiting.communicate(timeout=120)
+
+    reported = terminal_record("".join(lines) + rest)
+    assert reported is not None, said
+    assert reported == Terminal(condition="run-changed", exit=waiting.returncode), said
+    assert _restated_statuses().get(reported.exit) == reported.condition, (
+        f"{DOCUMENT}'s watch rule does not give exit {reported.exit} to `{reported.condition}`, "
+        f"which the pinned onepipeline's `{WATCH[0]}` returns for a run that changed under it"
+    )
+
+
+#: The engine's own statement of what a watch given no `--until` waits on.
+DEFAULT_WATCH_UNTIL = re.compile(r"pub const DEFAULT_WATCH_UNTIL: \[WatchUntil; \d+\] = \[(.*?)\];")
+
+
+@pytest.mark.reads_checkouts
+def test_the_default_watch_conditions_the_rule_states_are_the_engines() -> None:
+    """`AGENTS.md`'s watch rule says what a bare `just watch` waits on; the engine decides it.
+
+    A supervisor arming a watch with no `--until` acts on that sentence, and no recorded run
+    can tell the default set apart from another — so the rule is held to the constant the
+    pinned engine declares it in, each variant spelled as the condition word it parses.
+    """
+    declared = DEFAULT_WATCH_UNTIL.search(_source(ONEPIPELINE, "cli.rs"))
+    assert declared is not None, (
+        f"onepipeline {ONEPIPELINE.ref} declares no `DEFAULT_WATCH_UNTIL` in src/cli.rs, so "
+        "what a bare watch waits on is no longer read from the source this checks"
+    )
+    variants = re.findall(r"WatchUntil::(\w+)", declared.group(1))
+    engine = tuple(re.sub(r"(?<!^)([A-Z])", r"-\1", name).lower() for name in variants)
+
+    assert rule().defaults == engine, (
+        f"{DOCUMENT}'s watch rule says a watch given no `--until` waits on "
+        f"{rule().defaults}, and onepipeline {ONEPIPELINE.ref} defaults to {engine}"
+    )

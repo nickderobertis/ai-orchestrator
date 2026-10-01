@@ -209,6 +209,10 @@ rules:
     publication: change-open
     approvals: required
 
+  - match: {host: github.com, owner: petsinc, name: skills}
+    publication: change-open
+    approvals: required
+
 # The policy for a repository no rule above names: reviewed, approved, and verified
 # by the host's own required checks. This is `onevcs`'s own built-in default,
 # restated so that reading this file tells you what an unlisted repository gets.

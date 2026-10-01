@@ -3035,12 +3035,26 @@ def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_
     )
 
 
+#: What the recipe says when the engine cannot tell it whether a run is driven. Since
+#: onepipeline 0.55.0 a zero-second watch elapses alike on a run still driven and on one
+#: whose driver is gone, so the refusal claims neither and names where to read the run.
+UNREADABLE_LIVENESS = "is still being driven could not be read on this engine"
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in plan_tooling's dedicated installed-engine Nx tier, and launches nothing itself: it
+# reads the refusal the module-scoped `followed` fixture already recorded. That tier's
+# workspace input covers the recipe and the engine pin this assertion depends on.
 def test_a_run_something_is_still_driving_is_refused(followed: Followed) -> None:
     driving = followed.driving
 
     assert driving.returncode == REFUSED, driving.stdout + driving.stderr
-    assert f"run '{followed.detached_run}' is still being driven" in driving.stderr
+    assert f"whether run '{followed.detached_run}' {UNREADABLE_LIVENESS}" in driving.stderr
+    assert f"just status {followed.detached_run}" in driving.stderr
     assert not (followed.bench.plans / "projects" / f"{followed.detached_run}{SUFFIX}.md").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_the_exemption_holds_only_while_the_stamp_names_exactly_the_one_node(

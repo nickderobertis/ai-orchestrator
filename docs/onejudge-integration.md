@@ -141,7 +141,7 @@ and only the real turn said so.
 
 The engine starts both sides as plain `oneharness`. `config/onejudge.base.yaml` names
 `bin: oneharness`, and a live dispatch's process tree on this host, measured against
-onepipeline 0.54.0, reads `onepipeline drive` → `oneharness run --format json --compact
+onepipeline 0.55.0, reads `onepipeline drive` → `oneharness run --format json --compact
 --events --history --config <member-scratch>/oneharness.toml` → the provider, with no
 process of this repository's between them. Which side a turn is, is which config it was
 handed: `config/onejudge.base.yaml` pins `provider.judge_config: oneharness.judge.toml`,
@@ -184,11 +184,11 @@ members:
 **This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
 `oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
 side, and every dispatch keeps its single simulated user; stacking one is a change to a
-graph and a manager's decision. The shape is stated in [onejudge v0.14.0's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.14.0/docs/judges.md)
+graph and a manager's decision. The shape is stated in [onejudge v0.17.0's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.17.0/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
-graph member, in [oneagentgraph v0.5.3's
-`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.3/docs/contract.md).
+graph member, in [oneagentgraph v0.5.4's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.4/docs/contract.md).
 `tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
@@ -284,8 +284,23 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.17.0 is
-the adopted release. What it changes
+`config/oneharness.version` release and rejects a stale binary. Version 0.21.1 is
+the adopted release. What the releases since 0.17.0 change is how a reader meets the
+CLI, and none of it moves what this host's configs select. `--config` is repeatable,
+each later file folding over the ones before it
+([oneharness#1384](https://github.com/nickderobertis/oneharness/pull/1384), 0.18.0) —
+what lets the `llmlint` this pin admits hand its judge every configured oneharness
+config as layers. `run --stream` writes readable text by default, and its NDJSON
+protocol only under an explicit `--format json`
+([oneharness#1386](https://github.com/nickderobertis/oneharness/pull/1386) and
+[oneharness#1395](https://github.com/nickderobertis/oneharness/pull/1395), 0.19.0 and
+0.20.0); nothing here parses a stream without asking for it by name, since the onejudge a
+dispatch runs sends `--format json` on its streaming path too and that `llmlint` sends it
+on every run. History is recorded into dated, append-only pointer segments, and `history`
+listings, name lookups and `show --last` read the last seven UTC days unless given
+`--days`, `--since` or `--all-time`
+([oneharness#1394](https://github.com/nickderobertis/oneharness/pull/1394), 0.21.0);
+nothing here reads history through the CLI. What 0.17.0 before them changed
 ([oneharness#1368](https://github.com/nickderobertis/oneharness/pull/1368)) is `oneharness
 sync` alone: a Codex target, `.codex/rules/oneharness.rules`, rendered from the same
 Claude-dialect `allowed_tools` and reporting per rule what Codex cannot express, and
@@ -340,8 +355,8 @@ bare reader there was what refused this adoption's first publication. A hand-run
 or `oneharness config` at a shell prints the text view, which is the point; pipe it
 into `jq` only under `--format json`, as the examples below do. The linked
 `oneharness-core` reaches a dispatch through `config/onepipeline.version` alone, and the
-engine adopted here still links a core from before the flip, which changes nothing
-either, for the same reason: no config here leaves `run_mode` to the default. The
+engine adopted here links core 0.21.0, past the flip core 0.16.0 carried, which changes
+nothing either, for the same reason: no config here leaves `run_mode` to the default. The
 adoption before this one, 0.14.0, added **how a reader asks the CLI for its output
 shape**: the `--format` flag on every verb that prints a JSON document to stdout, with
 both defaults left where they were
@@ -821,7 +836,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.17.0, a config's per-harness `model` **beats** the variable, while the `--model`
+0.21.1, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -830,11 +845,11 @@ and an upgrade fails here until this measurement is redone:
 ```
 $ ONEHARNESS_HARNESSES=claude-code:primary ONEHARNESS_MODEL=claude-opus-5 \
     oneharness run --config oneharness.judge.toml --print-command --prompt hi
-  claude-code:primary [model claude-sonnet-5]: planned   # the config won
+  claude-code:primary [model claude-sonnet-5]: planned · exit null · not run   # the config won
 $ ONEHARNESS_HARNESSES=claude-code:primary \
     oneharness run --config oneharness.judge.toml --model claude-opus-5 \
     --print-command --prompt hi
-  claude-code:primary [model claude-opus-5]: planned     # the flag won
+  claude-code:primary [model claude-opus-5]: planned · exit null · not run     # the flag won
 ```
 
 That precedence decides what the *record* names, and until
@@ -958,7 +973,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.17.0, confirmed against the binary:
+candidate it ended up running — through oneharness 0.21.1, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1411,7 +1426,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.14.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.14.0/docs/protocol.md)),
+([onejudge v0.17.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.17.0/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and
@@ -1438,7 +1453,7 @@ the adopted release through the variant-to-base fallback every override layer ma
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.17.0, a harness selected
+do not collide: re-measured against the adopted oneharness 0.21.1, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>` — the flag
 layer outranks the environment layer, and on this release a base-id `--mock-harness`
 covers a variant too — so the

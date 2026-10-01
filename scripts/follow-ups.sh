@@ -115,14 +115,20 @@ TEMPLATE_NAME="follow-up-task"
 PLAN_SOURCE="authoring"
 SUFFIX="-follow-ups"
 
-#: What `onepipeline watch --timeout 0` exits with, read once, for a run nothing drives —
-#: settled, or nothing driving it — and for one something still drives: a blocking surface
-#: waiting, or the zero-second wait elapsing on a live run. AGENTS.md's watch rule states
-#: the whole vocabulary, and `tests/test_watch_surface_drift.py` holds it to the engine.
+#: What `onepipeline watch --timeout 0 --until nothing-driving` exits with, read once, when
+#: it establishes that nothing drives the run: settled, or nothing driving it. Every other
+#: answer establishes nothing — since onepipeline 0.55.0 a watch armed on a run nothing is
+#: driving waits rather than ending `nothing-driving`, so a zero-second wait elapses alike
+#: on a run whose driver is gone and on one still driven, and no other verb of that engine
+#: answers liveness in a form a script may read. AGENTS.md's watch rule states the whole
+#: vocabulary, and `tests/test_watch_surface_drift.py` holds it to the engine.
 WATCH_SETTLED=0
 WATCH_NOTHING_DRIVING=3
+#: The verb's other endings — a surface waiting, the wait elapsing, a node settling, the
+#: run changing — each a reading of the run that leaves its liveness unknown. Any status
+#: outside these and the two above is the read failing rather than answering.
 WATCH_SURFACE_WAITING=4
-WATCH_ELAPSED=5
+WATCH_RUN_CHANGED=7
 
 #: What one count the inventory answers with is: a non-negative whole number.
 COUNT='^[0-9]+$'
@@ -252,18 +258,19 @@ fi
 # A run with no run root is a run nothing drives. One that has one is asked, once.
 if [ -e "$runs_root/$run" ]; then
     watched=0
-    "$script_dir/onepipeline.sh" watch "$run" --timeout 0 --until nothing-driving >/dev/null 2>&1 || watched=$?
-    case "$watched" in
-        "$WATCH_SETTLED" | "$WATCH_NOTHING_DRIVING") ;;
-        "$WATCH_SURFACE_WAITING" | "$WATCH_ELAPSED")
-            fail "run '$run' is still being driven, so its drafts may still be growing and no follow-up run was launched" \
-                "wait for it to settle with 'just watch $run', or stop it with 'just stop $run', then retry"
-            ;;
-        *)
-            fail "whether run '$run' is still being driven could not be read: 'onepipeline watch' exited $watched" \
-                "read the run with 'just status $run', then retry"
-            ;;
-    esac
+    said=$("$script_dir/onepipeline.sh" watch "$run" --timeout 0 --until nothing-driving 2>&1 >/dev/null) || watched=$?
+    if [ "$watched" -eq "$WATCH_SETTLED" ] || [ "$watched" -eq "$WATCH_NOTHING_DRIVING" ]; then
+        :
+    elif [ "$watched" -ge "$WATCH_SURFACE_WAITING" ] && [ "$watched" -le "$WATCH_RUN_CHANGED" ]; then
+        # The gap this answers is upstream: a machine-readable liveness read on the
+        # engine's CLI. Until one exists, an unfinished run is refused rather than
+        # guessed at, because its drafts may still be growing.
+        fail "whether run '$run' is still being driven could not be read on this engine: 'onepipeline watch' ended on exit $watched, which a run nothing drives and a run still driven both give, so no follow-up run was launched" \
+            "read the run with 'just status $run': one still driven can be retried once it settles, and one nothing drives with work unfinished stays refused here until the engine can say whether a run is driven"
+    else
+        fail "whether run '$run' is still being driven could not be read: 'onepipeline watch' exited $watched saying: ${said##*$'\n'}" \
+            "read the run with 'just status $run', then retry"
+    fi
 fi
 
 # shellcheck source=scripts/follow-up-env.sh

@@ -123,7 +123,10 @@ PACEMAKER_REPORT = "the stand-in pacemaker reported"
 RUN_TASK = re.compile(r"onepipeline run `([^`]+)`")
 
 #: Where a turn's harness config arrives, which is what says which member — and
-#: which side of it — this invocation serves.
+#: which side of it — this invocation serves. Repeatable since oneharness 0.18.0, each
+#: later file folding over the ones before it, and onejudge 0.16.0 puts its own
+#: judge-side defaults first on every evaluator call — so the member's config is the
+#: *last* one passed (see `_last_flag`).
 CONFIG_FLAG = "--config"
 
 #: Where onejudge puts the composed system prompt on the harness command line.
@@ -465,6 +468,17 @@ def _flag(argv: list[str], name: str) -> str | None:
     return None
 
 
+def _last_flag(argv: list[str], name: str) -> str | None:
+    """The last value this invocation passed for a repeatable `name`, if any.
+
+    For `--config` that is the most specific layer: onejudge layers its judge-side
+    defaults (`judge-defaults-v1.toml`) under the member's own config, and the member's
+    config is what says which member and side this turn is.
+    """
+    values = [argv[index + 1] for index, argument in enumerate(argv[:-1]) if argument == name]
+    return values[-1] if values else None
+
+
 def _prompt(argv: list[str]) -> tuple[list[str], str]:
     """This invocation's prompt, and an argv the real CLI can still be given.
 
@@ -736,7 +750,7 @@ def main(argv: list[str]) -> int:
         return 2
     original = list(argv)
     argv, prompt = _prompt(argv)
-    config = _flag(argv, CONFIG_FLAG)
+    config = _last_flag(argv, CONFIG_FLAG)
     # First, before anything records the turn: that ordering is the gate's whole promise.
     _await_turn_gate(config)
     system = _flag(argv, SYSTEM_FLAG) or ""

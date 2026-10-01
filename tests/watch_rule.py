@@ -25,6 +25,8 @@ STATUS = re.compile(r"`(\d+)` ([a-z][a-z-]*)")
 STATUS_SENTENCE = re.compile(r"The watch returns (.*?)\.", re.DOTALL)
 #: The clause the `--until` vocabulary is stated in, up to its semicolon.
 UNTIL_SENTENCE = re.compile(r"`--until` takes (.*?);", re.DOTALL)
+#: The clause the default `--until` set is stated in: what a watch given none waits on.
+DEFAULT_SENTENCE = re.compile(r"given none, a watch waits on (.*?), and")
 #: The spelling the rule gives a wait with no bound.
 UNBOUNDED = re.compile(r"`--timeout (\w+)` sets no bound on the wait")
 #: An option the rule names, in backticks.
@@ -51,6 +53,8 @@ class Rule(NamedTuple):
     statuses: dict[str, int]
     #: Every `--until` condition the rule offers, in the rule's order.
     conditions: tuple[str, ...]
+    #: The conditions a watch given no `--until` waits on, in the rule's order.
+    defaults: tuple[str, ...]
     #: The spelling of a wait with no bound.
     unbounded: str
     #: Every option the rule names.
@@ -78,6 +82,8 @@ def rule() -> Rule:
     until = UNTIL_SENTENCE.search(text)
     assert until is not None, f"{DOCUMENT}'s watch rule no longer states its `--until` vocabulary"
     conditions = tuple(re.findall(r"`([^`]+)`", until.group(1)))
+    default = DEFAULT_SENTENCE.search(text)
+    assert default is not None, f"{DOCUMENT}'s watch rule no longer states its default `--until`"
     unbounded = UNBOUNDED.search(text)
     assert unbounded is not None, f"{DOCUMENT}'s watch rule no longer spells an unbounded wait"
     cursor = CURSOR_LINE.search(text)
@@ -85,6 +91,7 @@ def rule() -> Rule:
     return Rule(
         statuses=statuses,
         conditions=conditions,
+        defaults=tuple(re.findall(r"`([^`]+)`", default.group(1))),
         unbounded=unbounded.group(1),
         options=frozenset(OPTION.findall(text)),
         cursor_word=cursor.group(1),
