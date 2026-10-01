@@ -26,6 +26,7 @@ on the same files.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -47,6 +48,13 @@ WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
 #: The signed-off sample: answers, and the body the user approved them rendering to, kept
 #: byte for byte as the candidate the user signed off rendered it.
 SAMPLE = REPO_ROOT / "tests" / "fixtures" / "design_doc"
+
+#: The sha256 of each signed-off sample file as the user signed it off in round three, so a
+#: fixture that drifted from what was signed off fails here rather than passing as itself.
+SIGNED_OFF = {
+    "sample-answers.json": "2a799ade3eed692eeb995d5f384ee86173118a5188231066f361b1efb2f3cc98",
+    "sample-body.txt": "71f0caffb18e2c9e48caa6e9d040ad380270baaafe856116411bffc0d5c466b1",
+}
 
 #: The five sections, in the order the document carries them, each as the block that renders
 #: it and the heading it renders. Stated here rather than read from the template, because a
@@ -381,6 +389,8 @@ def test_no_rendering_carries_guidance_a_comment_or_an_alert_block(
 
 def test_the_signed_off_sample_renders_byte_for_byte(loader: str) -> None:
     """The answers the user signed off render to exactly the body they read."""
+    held = {name: hashlib.sha256((SAMPLE / name).read_bytes()).hexdigest() for name in SIGNED_OFF}
+    assert held == SIGNED_OFF, f"the sample fixtures are not the files signed off: {held}"
     rendered = _run(
         [str(ONETASKGRAPH_BIN), "template", "render", "--template-loader", "-"]
         + ["--answers", str(SAMPLE / "sample-answers.json"), "--no-interactive"],
@@ -472,16 +482,16 @@ def test_the_persona_points_at_the_resolved_chain_and_restates_none_of_it() -> N
 def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
     tmp_path: Path,
 ) -> None:
-    """The installed tools render a repository guidance override without changing the body."""
+    """The installed tools render a repository guidance override without changing the body.
+
+    The repository layer extends this tree's own `templates/`, the host root a launch names;
+    only the last step, which changes the host template's text, does so on a copy of that
+    root, so no tracked file is written.
+    """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     initialized = _run(["git", "init", str(checkout)])
     assert initialized.returncode == 0, initialized.stderr
-    host = tmp_path / "host"
-    host.mkdir()
-    host_template = host / "design-doc.md.j2"
-    host_template.write_bytes(TEMPLATE.read_bytes())
-    (host / "templates.yaml").write_bytes((TEMPLATE.parent / "templates.yaml").read_bytes())
     layer = checkout / ".onepipeline" / "templates" / "design-doc.md.j2"
     layer.parent.mkdir(parents=True)
     layer.write_text(
@@ -493,16 +503,10 @@ def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
     # llmlint: ignore[suppressions_justified] The loader document is the engine's open JSON
     # contract, read here for three fields — `layer`, `chain` and `digest` — each subscripted
     # where it is read, so a moved shape fails there rather than at a model of it written here.
-    def resolve(repository: bool) -> dict[str, Any]:
-        command = [
-            str(WRAPPER),
-            "template",
-            "resolve",
-            NAME,
-            "--json",
-            "--template-root",
-            str(host),
-        ]
+    def resolve(repository: bool, root: Path | None = None) -> dict[str, Any]:
+        command = [str(WRAPPER), "template", "resolve", NAME, "--json"]
+        if root is not None:
+            command += ["--template-root", str(root)]
         if repository:
             command += ["--repo", str(checkout)]
         done = _run(command)
@@ -512,9 +516,9 @@ def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
 
     own = resolve(False)
     extending = resolve(True)
+    assert own["chain"] == [{"name": TEMPLATE.name, "layer": "host", "path": str(TEMPLATE)}], own
     assert extending["layer"] == "repository", extending
-    assert len(extending["chain"]) == 2, extending
-    assert {entry["path"] for entry in extending["chain"]} == {str(layer), str(host_template)}
+    assert [entry["path"] for entry in extending["chain"]] == [str(layer), str(TEMPLATE)], extending
     assert extending["digest"] != own["digest"]
     answers = tmp_path / "answers.json"
     answers.write_text(json.dumps(ANSWERS), encoding="utf-8")
@@ -536,5 +540,14 @@ def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
         assert rendered.returncode == 0, rendered.stderr
         bodies.append(rendered.stdout)
     assert bodies[0] == bodies[1]
+    host = tmp_path / "host"
+    host.mkdir()
+    host_template = host / TEMPLATE.name
+    host_template.write_bytes(TEMPLATE.read_bytes())
+    (host / "templates.yaml").write_bytes((TEMPLATE.parent / "templates.yaml").read_bytes())
+    assert resolve(True, host)["digest"] == extending["digest"], (
+        "a byte copy of the host root resolves to another digest, so the change below would "
+        "prove nothing about the text"
+    )
     host_template.write_text(host_template.read_text(encoding="utf-8") + "\n", encoding="utf-8")
-    assert resolve(True)["digest"] != extending["digest"]
+    assert resolve(True, host)["digest"] != extending["digest"]
