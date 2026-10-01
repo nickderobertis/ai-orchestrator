@@ -73,7 +73,6 @@ from test_orchestrate_launch_e2e import (
     _judge_command,
     _judge_side,
     _just,
-    _settling_project,
 )
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from waits import deadline
@@ -199,6 +198,31 @@ def _raised_since(environment: dict[str, str], run: str, before: set[int]) -> li
 JUDGED_RUN = "monitor-judge-side"
 
 
+def _held_project(tmp_path: Path, run: str) -> str:
+    """A one-node project whose single worker turn the stand-in holds open."""
+    plan = tmp_path / f"{run}.plan.json"
+    held = {
+        "schema_version": 2,
+        "name": run,
+        "tasks": [{"id": "held", "persona": "engineer", "task": HELD_TASK}],
+    }
+    plan.write_text(json.dumps(held), encoding="utf-8")
+    return project_from_plan(plan)
+
+
+#: The held node's task: what to do, and the criterion it is held to.
+HELD_TASK = "Report.\n\n## Acceptance criteria\n- Reported."
+
+#: How long the held worker's turn lasts: past every judge-side journey, ended by the stop.
+JUDGED_RUN_HELD_SECONDS = 3600
+
+
+def _dispatched(environment: dict[str, str], run: str) -> bool:
+    """Whether the run's merged stream, read through `just monitor`, records a dispatch."""
+    streamed = _just("monitor", run, "--all", environment=environment)
+    return "node-dispatched" in streamed.stdout + streamed.stderr
+
+
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] One real launch per
 # worker, because what the judge-side journeys below prove is this host's wiring over a
 # run directory the engine itself made rather than one this suite assembled. It sits in
@@ -210,23 +234,34 @@ def judged_run(
 ) -> Iterator[dict[str, str]]:
     """The environment a judge side runs under, over a run root the real engine made.
 
-    Launched and settled through the real recipe with nothing watching it, so the run
-    directory is the engine's own and the channel inside it is empty until a judge side
-    writes to it. The run and the asker are named by the variables the engine exports to
-    an observer member's judge side.
+    Launched through the real recipe with nothing watching it, so the run directory is the
+    engine's own and the channel inside it is empty until a judge side writes to it. The
+    run and the asker are named by the variables the engine exports to an observer
+    member's judge side.
+
+    The run is live — launched detached, its one worker's turn held open by the stand-in
+    and its driver holding it — because a monitor only ever asks while its run is, and
+    `just channel-reply`, the engine's `onepipeline reply`, refuses a reply to a run that
+    has settled: a settled run here would prove that refusal rather than a ruling.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("judge-side")
     environment = _launched_environment(tmp_path, oneharness_bin)
+    held = {**environment, AGENT_DELAY_ENV: str(JUDGED_RUN_HELD_SECONDS)}
     launch = _just(
         "orchestrate",
-        _settling_project(tmp_path, JUDGED_RUN),
+        _held_project(tmp_path, JUDGED_RUN),
+        "--detach",
         *SETTLES_UNWATCHED,
-        environment=environment,
+        environment=held,
     )
     try:
         assert launch.returncode == 0, launch.stdout + launch.stderr
+        limit = deadline(ASKED_SECONDS)
+        while not _dispatched(environment, JUDGED_RUN):
+            assert time.monotonic() < limit, f"{JUDGED_RUN}'s worker was never dispatched"
+            time.sleep(1.0)
         run_root = Path(environment["ONEPIPELINE_RUNS_DIR"]) / JUDGED_RUN
         assert (run_root / "launch.json").is_file(), f"the launch made no run root at {run_root}"
         yield {**environment, RUN_ID_ENV: JUDGED_RUN, ASKER_ENV: ASKER}
