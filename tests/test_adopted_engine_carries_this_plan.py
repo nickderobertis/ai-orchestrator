@@ -604,6 +604,12 @@ HISTORY_SEGMENTS_LANDINGS = (
 
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
+    Landing(
+        node="op-template-layers-extend",
+        change_request=614,
+        commit="8c82674c30cfec4c66e98ee90984846dca5a2d6b",
+        did="let a template layer extend the same name in a lower layer",
+    ),
     *SUPERVISION_WINDOW_LANDINGS,
     *ROOT_CAUSES_LANDINGS,
     *NOTE_PROVENANCE_LANDINGS,
