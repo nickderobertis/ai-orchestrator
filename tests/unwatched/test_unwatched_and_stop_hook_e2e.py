@@ -43,6 +43,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict
 
@@ -106,6 +107,7 @@ def _environment(owned: Owned, *, reader: Session | None = None) -> dict[str, st
     most journeys here have no reason to part the two.
     """
     environment = dict(os.environ)
+    environment.update(json.loads(SETTINGS.read_text(encoding="utf-8"))["env"])
     environment["ONEPIPELINE_RUNS_DIR"] = str(owned.root)
     environment["ONEPIPELINE_LAUNCHER"] = "claude-code"
     environment["ONEPIPELINE_LAUNCHER_SESSION"] = owned.session if reader is None else reader
@@ -133,7 +135,14 @@ def _unwatched(
     """`onepipeline unwatched` about one session, asked as some session."""
     environment = _environment(owned, reader=reader)
     session = owned.session if about is None else about
-    return _verb("unwatched", "--session", session, environment=environment)
+    return _verb(
+        "unwatched",
+        "--session",
+        session,
+        "--wake-budget",
+        environment["ONEPIPELINE_WAKE_BUDGET"],
+        environment=environment,
+    )
 
 
 def _assembled(owned: Owned, run: str, *, driver_pid: int | None = None) -> Path:
@@ -1033,8 +1042,9 @@ def _written_just_now(owned: Owned, run: str) -> None:
     """Date this run's journal to now, so a live pid reads as a run being driven.
 
     A live pid is ownership rather than progress: the engine reports a launch that has
-    not written for half an hour as parked however alive its process is, and a parked run
-    is one a watch returns from immediately. A run something is really driving has just
+    not written for half an hour as parked however alive its process is. A watch armed
+    on a parked run waits for
+    action or its bound. A run something is really driving has just
     written, so that is what this makes true of it — the records are the builder's own,
     stamped now instead of at a date chosen to be safely in the past.
     """
@@ -1089,8 +1099,9 @@ def test_the_watch_recipe_arms_a_watch_the_verb_sees_and_its_death_undoes(
     and telling them apart is `onepipeline`'s own suite's job.
 
     The run is driven by a `sleep` this journey starts, named in the launch record with
-    the start time this host reports for it. A watch returns immediately on a run nothing
-    is driving, so a run that is not driven is a run no watch can be armed on.
+    the start time this host reports for it. The live driver keeps this journey about
+    a watched process that dies;
+    a watch on an undriven run waits for action or its bound too.
     """
     _installed()
     if shutil.which("just") is None:
@@ -1113,7 +1124,7 @@ def test_the_watch_recipe_arms_a_watch_the_verb_sees_and_its_death_undoes(
 
         with streamed.open("wb") as sink:
             watch = subprocess.Popen(  # noqa: S603 - the real recipe, run as a supervisor runs it
-                ["just", "watch", "the-run", "--timeout", "none"],
+                ["just", "watch", "the-run"],
                 cwd=REPO_ROOT,
                 env=_environment(owned),
                 stdin=subprocess.DEVNULL,
@@ -1154,3 +1165,109 @@ def test_the_watch_recipe_arms_a_watch_the_verb_sees_and_its_death_undoes(
         driver.wait(timeout=e2e_timeout(30))
         if streamed.is_file() and not streamed.stat().st_size:
             streamed.unlink()
+
+
+@pytest.mark.parametrize("unbounded", [False, True], ids=["default", "unbounded"])
+def test_the_stop_hook_requires_a_bounded_watch_from_the_manager_session(
+    tmp_path: Path, state_home: Path, unbounded: bool
+) -> None:
+    """A manager's Bash environment arms the recipe, and Stop reads its actual terms.
+
+    Only CLAUDE_CODE_SESSION_ID carries identity here, as it does in a manager's Bash
+    tool. The same watch with an explicit unbounded timeout must leave the run owed.
+    """
+    _installed()
+    owned = Owned(tmp_path / "runs", Session("manager-bash-identity"))
+    owned.root.mkdir(parents=True)
+    directory = _assembled(owned, "owed-run")
+    _make_current(owned, "owed-run")
+    environment = _at_home(_environment(owned), state_home)
+    environment.pop("ONEPIPELINE_LAUNCHER_SESSION", None)
+    environment["CLAUDE_CODE_SESSION_ID"] = owned.session
+    before = _blocked(_hook(_stop_payload(owned.session), environment))
+    assert "owed-run" in before
+    assert "watch owed-run" in before, before
+    assert "DRIVER DEAD" in before, before
+
+    arguments = ["just", "watch", "owed-run"]
+    if unbounded:
+        arguments.extend(["--timeout", "none"])
+    with (tmp_path / "watch.log").open("wb") as sink:
+        watch = subprocess.Popen(
+            arguments,
+            cwd=REPO_ROOT,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            terms_dir = directory / "watch-terms"
+            _until(
+                "the watch's terms", lambda: terms_dir.is_dir() and bool(list(terms_dir.iterdir()))
+            )
+            terms = json.loads(next(terms_dir.iterdir()).read_text("utf-8"))
+            assert terms["session"] == owned.session
+            assert "surface" in terms["until"]
+            if unbounded:
+                assert terms["deadline"] is None
+                reason = _blocked(_hook(_stop_payload(owned.session), environment))
+                assert "owed-run" in reason
+                assert "--timeout none" in reason, reason
+            else:
+                deadline = datetime.fromisoformat(terms["deadline"].replace("Z", "+00:00"))
+                remaining = (deadline - datetime.now(UTC)).total_seconds()
+                assert 2070 < remaining <= 2100, terms
+                _silent(
+                    _hook(_stop_payload(owned.session), environment), "the default manager watch"
+                )
+        finally:
+            os.killpg(watch.pid, signal.SIGTERM)
+            watch.wait(timeout=e2e_timeout(60))
+
+
+def test_acknowledging_an_owed_run_through_the_recipe_satisfies_stop(
+    tmp_path: Path, state_home: Path
+) -> None:
+    """An explicit reason closes an owed run without a watch, through the public recipe."""
+    _installed()
+    owned = Owned(tmp_path / "runs", Session("acknowledging-manager"))
+    owned.root.mkdir(parents=True)
+    directory = _assembled(owned, "kept-run")
+    _make_current(owned, "kept-run")
+    environment = _at_home(_environment(owned), state_home)
+    assert "kept-run" in _blocked(_hook(_stop_payload(owned.session), environment))
+    refused = subprocess.run(
+        ["just", "unwatched", "--acknowledge", "kept-run", "--reason", ""],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert refused.returncode != 0, "a blank reason must not close the run"
+    assert _unwatched(owned).returncode == RUNS_UNWATCHED
+    assert not list((directory / "acknowledgements").glob("*.json"))
+    acknowledged = subprocess.run(
+        [
+            "just",
+            "unwatched",
+            "--acknowledge",
+            "kept-run",
+            "--reason",
+            "another run carries the work",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert acknowledged.returncode == 0, acknowledged.stdout + acknowledged.stderr
+    record = json.loads(next((directory / "acknowledgements").iterdir()).read_text("utf-8"))
+    assert record["session"] == owned.session
+    assert record["reason"] == "another run carries the work"
+    _silent(_hook(_stop_payload(owned.session), environment), "a reasoned acknowledgement")

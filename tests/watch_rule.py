@@ -2,7 +2,7 @@
 
 `just watch` is `onepipeline watch` with every argument forwarded, so the one place this
 repository restates that verb's interface is the rule a supervisor reads: the `--until`
-vocabulary, the spelling of an unbounded wait, the option names, and which exit status
+vocabulary, the spelling of a nonqualifying unbounded wait, the option names, and which exit status
 means which ending. The journeys and the drift gate that hold the engine to it read those
 facts from here rather than keeping a table of their own, because a second table is a
 copy nothing reconciles with the one a supervisor actually follows.
@@ -93,6 +93,8 @@ def rule() -> Rule:
         conditions=conditions,
         defaults=tuple(re.findall(r"`([^`]+)`", default.group(1))),
         unbounded=unbounded.group(1),
-        options=frozenset(OPTION.findall(text)),
+        options=frozenset(
+            OPTION.findall(text[until.start() : text.index("5. **The unread-surface")])
+        ),
         cursor_word=cursor.group(1),
     )

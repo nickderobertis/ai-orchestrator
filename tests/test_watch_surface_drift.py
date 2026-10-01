@@ -432,15 +432,11 @@ def test_a_condition_naming_a_node_the_run_does_not_hold_is_refused_by_the_verb(
 
 
 @pytest.mark.reads_checkouts
-def test_the_unbounded_wait_this_repository_offers_is_one_the_verb_takes() -> None:
-    """`--timeout none` is a spelling the rule puts in front of a supervisor.
+def test_the_nonqualifying_unbounded_wait_is_still_one_the_verb_takes() -> None:
+    """The engine still accepts an unbounded wait, although it cannot satisfy Stop.
 
-    It is the value that lets a supervisor write no loop at all, and it is distinct from
-    the `0` whose published meaning is to read the run once and return — so a rule
-    offering a spelling the verb dropped would compose a watch refused before it watched
-    anything. Driven over a run that has settled, which returns on the first pass
-    whatever the wait is, and under a bound of this module's own so a build that took the
-    value and then blocked fails here rather than wedging the tier.
+    Driven over a settled run, which returns on the first pass regardless of the wait,
+    and under this test's own bound so a refusal or a blocked verb fails the check.
     """
     unbounded = _restated_unbounded_wait()
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import tomllib
 from typing import Any
 
@@ -39,7 +40,8 @@ SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 #: Its one declared `--source` sits below the verb, which consults it: the preserved-branch
 #: view's own `--stop-verdict`, answering the question the verb does not ask itself.
 STOP_HOOK = (
-    '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard --format claude-code '
+    '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard '
+    "--wake-budget 2100 --format claude-code "
     """--source '"$CLAUDE_PROJECT_DIR/scripts/unpublished.sh" --stop-verdict' """
     "--source-timeout 20"
 )
@@ -455,3 +457,26 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     assert all(bound > SOURCE_TIMEOUT for bound in bounds), (
         f"the Stop hook's bound {bounds} does not outlast its source's {SOURCE_TIMEOUT}s"
     )
+
+
+@pytest.mark.reads_docs
+def test_the_watch_environment_and_stop_guard_share_the_budget() -> None:
+    settings = json.loads((REPO_ROOT / ".claude/settings.json").read_text("utf-8"))
+    budget = int(settings["env"]["ONEPIPELINE_WAKE_BUDGET"])
+    assert budget == 2100
+    commands = [
+        shlex.split(hook["command"])
+        for matcher in settings["hooks"]["Stop"]
+        for hook in matcher["hooks"]
+        if hook["type"] == "command" and "stop-guard" in hook["command"]
+    ]
+    assert len(commands) == 1
+    arguments = commands[0]
+    assert int(arguments[arguments.index("--wake-budget") + 1]) == budget
+    # AGENTS.md restates the budget for the manager who reads it; every copy there is
+    # held to the one the harness configures, so neither can move alone.
+    document = " ".join((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8").split())
+    seconds = {int(n) for n in re.findall(r"(?:WAKE_BUDGET=|--wake-budget )(\d+)", document)}
+    minutes = {int(n) for n in re.findall(r"(\d+)-minute", document)}
+    assert seconds == {budget}, f"AGENTS.md states the wake budget as {seconds}s"
+    assert minutes == {budget // 60}, f"AGENTS.md states the wake budget as {minutes} min"

@@ -72,6 +72,18 @@ class Landing(NamedTuple):
     did: str
 
 
+#: The engine landings that make this host's manager wake budget enforceable.
+WAKE_BUDGET_LANDINGS = (
+    Landing(
+        "op-decision-discharge", 591, "a36a02f", "answer a decision when an edit removes its node"
+    ),
+    Landing("op-guard-wake-budget", 592, "88c1e9d", "hold owed runs to a wake budget until closed"),
+    Landing(
+        "op-watch-wake", 599, "7d54c35", "wake on every planner surface and summarise a deadline"
+    ),
+)
+
+
 #: Every engine-side node of the supervision-window plan, in the order its work landed.
 SUPERVISION_WINDOW_LANDINGS = (
     Landing(
@@ -610,6 +622,7 @@ LANDINGS = (
         commit="8c82674c30cfec4c66e98ee90984846dca5a2d6b",
         did="let a template layer extend the same name in a lower layer",
     ),
+    *WAKE_BUDGET_LANDINGS,
     *SUPERVISION_WINDOW_LANDINGS,
     *ROOT_CAUSES_LANDINGS,
     *NOTE_PROVENANCE_LANDINGS,

@@ -1840,7 +1840,9 @@ PROBE_RUN_ROOT = REPO_ROOT / "tests" / "e2e" / "probe_run_root.py"
 #: same mistake: searching for the file name would pass because *some* accessor joins it,
 #: and searching forward from the accessor unbounded would pass on the next accessor's
 #: join if this one stopped making its own.
-RUN_PATHS_JOIN = r'pub fn {accessor}\(&self\)[^{{}}]*\{{[^}}]*?self\.dir\.join\("([^"]+)"\)'
+RUN_PATHS_JOIN = (
+    r'pub(?:\(crate\))? fn {accessor}\(&self\)[^{{}}]*\{{[^}}]*?self\.dir\.join\("([^"]+)"\)'
+)
 
 #: The runs root when the environment names none, and the variable that moves it.
 DEFAULT_RUNS_DIR = re.compile(r'pub const DEFAULT_RUNS_DIR: &(?:\'static )?str = "([^"]+)";')
@@ -2070,6 +2072,32 @@ def test_a_draft_strips_the_start_token_the_engine_stamps() -> None:
 #: source: what has to agree with the engine is the JSON that reaches disk, and a
 #: reading of the code that writes it answers a question one step away from that.
 BUILT_RECORDS = (
+    # llmlint: ignore-block[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] A
+    # data extension to this existing uncached producer drift gate, which this task requires
+    # updating. They add no tier or suite. Moving the module to a project of its own
+    # is restructuring outside this adoption; reads_checkouts already routes it to
+    # orchestrator:test-checkouts because producer state lives outside every cache key.
+    Record(
+        "the watch terms",
+        ONEPIPELINE,
+        "watchers.rs",
+        "WatchTerms",
+        lambda root: [
+            json.loads(entry.read_text("utf-8"))
+            for entry in (root / _joined_under_a_run_root("watch_terms")).iterdir()
+        ],
+    ),
+    Record(
+        "the acknowledgement",
+        ONEPIPELINE,
+        "unwatched.rs",
+        "Acknowledgement",
+        lambda root: [
+            json.loads(entry.read_text("utf-8"))
+            for entry in (root / _joined_under_a_run_root("acknowledgements")).iterdir()
+        ],
+    ),
+    # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
     Record(
         "the launch record",
         ONEPIPELINE,
@@ -2131,7 +2159,9 @@ def _built_run_root(tmp_path: Path) -> Path:
     exist for — a launch nothing is driving beside a dispatch that is still alive — and
     the only shape in which every record this builder writes is on disk at once.
     """
-    return probe_run_root.run_root(tmp_path, probe_run_root.run_name(), dispatch_pid=os.getpid())
+    root = probe_run_root.run_root(tmp_path, probe_run_root.run_name(), dispatch_pid=os.getpid())
+    probe_run_root.record_supervision(root, pid=os.getpid(), session=probe_run_root.DEFAULT_SESSION)
+    return root
 
 
 @pytest.mark.parametrize("record", BUILT_RECORDS, ids=lambda record: record.struct)
@@ -2291,6 +2321,32 @@ def _built_envelopes(root: Path) -> list[dict[str, object]]:
 
 
 BUILT_VALUES = (
+    # llmlint: ignore-block[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] A
+    # data extension to this existing uncached producer drift gate, which this task requires
+    # updating. They add no tier or suite. Moving the module to a project of its own
+    # is restructuring outside this adoption; reads_checkouts already routes it to
+    # orchestrator:test-checkouts because producer state lives outside every cache key.
+    Value(
+        "the watch terms' schema version",
+        ONEPIPELINE,
+        "watchers.rs",
+        re.compile(r"pub const WATCH_TERMS_SCHEMA_VERSION: u32 = (\d+);"),
+        lambda root: [
+            str(json.loads(entry.read_text("utf-8"))["schema_version"])
+            for entry in (root / "watch-terms").iterdir()
+        ],
+    ),
+    Value(
+        "the acknowledgement's schema version",
+        ONEPIPELINE,
+        "unwatched.rs",
+        re.compile(r"pub const ACKNOWLEDGEMENT_SCHEMA_VERSION: u32 = (\d+);"),
+        lambda root: [
+            str(json.loads(entry.read_text("utf-8"))["schema_version"])
+            for entry in (root / "acknowledgements").iterdir()
+        ],
+    ),
+    # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
     Value(
         "the plan's schema version",
         ONEPIPELINE,

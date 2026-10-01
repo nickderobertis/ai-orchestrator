@@ -194,7 +194,7 @@ _ACK_BRANCH = (
     "acknowledge work deliberately kept with `just unpublished --acknowledge <branch> "
     '--reason "<why>"`'
 )
-_ACK_RUN = 'or close it with `just unwatched --acknowledge <run> --reason "<why>"`'
+_ACK_RUN = 'or `just unwatched --acknowledge <run> --reason "<why>"`'
 _FORBIDDEN = "What stays off it is what this document forbids a manager"
 _NO_VERIFY = "a hook bypassed with `git -c core.hooksPath=…` or `--no-verify`"
 _BYPASS = "Nothing that changes what a remote or a base branch sees bypasses `onevcs`"
@@ -244,14 +244,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("status-all", "just status", _VIEWS),
     _allow(
         "watch-log",
-        "just watch {run} --until surface --until settled --until nothing-driving "
-        "--timeout none --log {log}",
+        "just watch {run} --log {log}",
         _WATCH,
     ),
     _allow(
         "watch-rearm",
-        "just watch {run} --until surface --until settled --until nothing-driving "
-        "--timeout none --cursor {cursor} --log {log}",
+        "just watch {run} --cursor {cursor} --log {log}",
         _WATCH,
     ),
     _allow("runs", "just runs", _VIEWS),
@@ -383,7 +381,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
     ),
     _allow(
         "cd-semicolon-watch",
-        "cd {checkout}; just watch {run} --timeout none --log {log}",
+        "cd {checkout}; just watch {run} --log {log}",
         _CD,
         codex=CODEX_CD,
     ),

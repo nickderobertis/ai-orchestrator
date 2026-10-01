@@ -12,15 +12,10 @@ So each shape is launched for real, through the real recipe and the real driver,
 read back through the installed engine: the run root it created, the session its launch
 record names, and the verb's own answer while that run is unsettled and unwatched.
 
-**What keeps each run unsettled is a dispatch that is still working**, and that is a
-correction worth recording rather than a detail: a run parked on somebody's approval is
-one the engine reports as *converged*, because nothing in it can advance until a person
-acts — so it is rightly excluded from this verb, and a plan of human actions alone would
-have measured that exclusion instead of what these journeys came for. The dispatch is
-this suite's stand-in for the paid model, told to take its time, so a real node is really
-running while the verb is asked. A human action does still open the adopted plan, because
-converging is exactly what makes `--adopt` reachable: the detached driver has nothing left
-to do and lets go, and attesting the action is what gives the fresh driver its work.
+**The launch journeys keep a dispatch working** so they can verify each launch shape
+while its driver is still alive. Convergence no longer excuses supervision: the adoption
+journey also asks the verb after the original driver converges on a human action and
+lets go, before attesting that action. That run remains owed until explicitly closed.
 
 `--dag-graph off` for the same reason the `just plan` recipe names it: an observer watches
 a run for its whole life and every turn it takes is another dispatch, which is real cost
@@ -163,8 +158,7 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     # The real CLI the stand-in delegates every turn to. Required rather than optional:
     # without it the stand-in cannot answer at all and the node fails `provider-failed`,
-    # which settles the run — and a settled run is one this verb rightly says nothing
-    # about, so the journey would report the absence as a defect in the verb.
+    # which settles the run and would stop this journey measuring the live-launch shape.
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
@@ -176,8 +170,8 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
     environment.update(established_indirections(__name__))
     # What keeps a run unsettled while the verb is asked: the stand-in for the paid model
     # takes its time, so a real node is really running rather than settling between the
-    # launch and the first poll. See the module docstring for why a converged run — which
-    # is what a plan of human actions alone produces — measures the wrong thing.
+    # launch and the first poll. Convergence still leaves the run owed, but would measure
+    # a different driver state.
     environment[AGENT_DELAY_ENV] = str(WORKING_SECONDS)
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
@@ -259,9 +253,8 @@ def _until_named(launch: Launch, *, seconds: float = 300) -> str:
     about how fast this host is.
     """
     limit = time.monotonic() + e2e_timeout(seconds)
-    # Every distinct answer rather than the last one, because the last one is the least
-    # informative: a run that has since settled answers with nothing at all, which reads
-    # as a verb that said nothing throughout.
+    # Keep every distinct answer so a refusal during launch is not lost behind a
+    # later answer about the completed launch.
     said: list[str] = []
     while time.monotonic() < limit:
         answered = _unwatched(launch)
@@ -391,7 +384,7 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
     human action nobody has attested and its driver lets go, which is a run nothing is
     driving with an intact ledger. Attesting the action is what gives the fresh driver
     something to do, and the agent node behind it is what is still working while the verb
-    is asked — an adopted run whose graph had converged again would rightly be excluded.
+    is asked. The converged run is also owed before adoption.
 
     **The order of those two is the whole of this fixture, and getting it wrong measures
     nothing.** The attestation has to come after the original driver is gone: attested
@@ -414,6 +407,7 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
         )
         assert started.returncode == 0, f"the launch failed:\n{started.stdout}{started.stderr}"
         _until_the_driver_lets_go(launch)
+        assert launch.run in _until_named(launch), "convergence must not close an owed run"
         _attested(launch, NodeId("approve"))
         streamed = tmp_path / "adopted.log"
         with streamed.open("w", encoding="utf-8") as sink:

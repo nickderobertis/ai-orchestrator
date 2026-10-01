@@ -449,7 +449,7 @@ instruction of its own, because a second answer in the task is the one the worke
 follows — change the producer's declaration or the host's override, never the task.
 
 Under `published` a held node never launches, never fails, never degrades, and has no
-timeout; it raises a non-blocking surface naming what it awaits, and the decision — keep
+timeout; it re-surfaces what it awaits on a slowing cadence, and the decision — keep
 waiting, flip it to `fast` by live edit, stop the run — is yours. A wait surface whose
 hold has since ended — the node unheld, adopted or dispatched at or after the surface was
 queued — is withheld when the queue is read, and stderr names the record that ended it,
@@ -720,7 +720,8 @@ them reach you; `manager` names the session role and is never a command.
    check <repo>`; a routing change is an edit to `config/onevcs.rules.yml` plus `just
    repos-apply`, never a run-only override. Start with `just orchestrate
    <source:project>` from the repository root (the graph paths resolve there), arm a
-   watch before you turn to anything else, then review each settled node and mid-run
+   bare `just watch <run>` before you turn to anything else, then review each settled
+   node and mid-run
    proposal over the live channel with `add` / `retry` / `drop` / `reparent` edits.
    Workers propose and never edit. Before you end a turn, `just unfinished` answers
    what you still owe: runs `just unwatched` names and branches `just unpublished` counts.
@@ -1072,8 +1073,18 @@ turn that launched it, and with nothing watching, the user is in the dark. `just
 is the command — the engine's own `onepipeline watch` — and these properties are what
 watching means and what that verb is held to:
 
+The observer graph's `check-in` member in `graphs/dag-scope.yaml` raises a planner
+surface about every 30 minutes, on `start`'s `--heartbeat-interval`. Any planner surface
+ends a watch: the normal wake is the run's own observer update. This host sets
+`ONEPIPELINE_WAKE_BUDGET=2100`, with `--wake-budget 2100` on its Stop guard: the
+35-minute deadline is the fallback. An elapsed deadline whose summary says no planner
+surface arrived during the wait means the observer is missing or dead. Repair it;
+do not just re-arm.
+
 1. **A watch is armed before you turn to anything else.** A launch is not finished
-   until its watch is up; the `Stop` hook `.claude/settings.json` registers — the
+   until its watch is up, belongs to this session, is bounded within the 35-minute
+   budget and ends on `surface`; a bare `just watch <run>` supplies those terms.
+   The `Stop` hook `.claude/settings.json` registers — the
    engine's own `onepipeline stop-guard` — refuses to end a turn while this session owes
    what `just unfinished` names: an unwatched run of its own, or a branch its runs left
    preserved and unpublished, the second asked of the verdict source that registration
@@ -1081,9 +1092,7 @@ watching means and what that verb is held to:
    reclaim a superseded one with the `just reclaim-branch <branch> --repo <checkout>` its
    row prints, or acknowledge work deliberately kept with `just unpublished --acknowledge
    <branch> --reason "<why>"`, until `just unfinished` answers `0`. A run is owed until
-   it is closed, not until it settles, so a watch never answers a settled run: issue
-   `complete`, `just stop` it, or close it with `just unwatched --acknowledge <run> --reason
-   "<why>"`.
+   it is closed, not until it settles; a settled run needs closure rather than a watch.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must
    never be indistinguishable from progress — a watch that greps only for success is
    silent through a crashloop.
@@ -1102,12 +1111,12 @@ watching means and what that verb is held to:
    instead, until somebody acts on the run — an `adopt`, a reply applied, a surface
    consumed — or its bound elapses. An uncursored watch returns only on settlements after
    it armed, a cursored one also on those past its cursor. `--timeout none` sets no bound
-   on the wait. The watch returns `0` settled, `3` nothing-driving, `4` surface-waiting,
+   on the wait and no longer satisfies the guard. The watch returns `0` settled,
+   `3` nothing-driving, `4` surface-waiting,
    `5` elapsed, `6` node-settled and `7` run-changed. Re-arm from the `cursor <cursor>`
    its ending line carries, on every ending `7` included. Its human form is on stderr unless `--log <file>`
    names a file, which each line is appended to as it is written, so send it there — `just
-   watch <run> --until surface --until settled --until nothing-driving --timeout none
-   --log <file>` — never through a redirect or a pipe: a block-buffering pipe makes a
+   watch <run> --log <file>` — never through a redirect or a pipe: a block-buffering pipe makes a
    healthy quiet run and a dead one read alike, and neither is one command an allowlist
    can approve.
    <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
@@ -1125,11 +1134,10 @@ watching means and what that verb is held to:
    monitor, because a planning run's plan is its own output, so each is owed the same
    watch, read to the end and re-armed from its cursor.
 
-**Exactly one exception**: supervising several runs at once, which a per-run watch
-cannot serve. An out-of-band poll that emits on state change is acceptable only while
-it meets every property above, including 5, which is the one such a poll loses first.
-Nothing else is an exception: "the loop I wrote works" is what every silent watch here
-was.
+Supervising several runs still requires a qualifying watch for each owed run. Every
+run this session launched stays owed until closed: the `complete` verdict, `just stop`,
+or `just unwatched --acknowledge <run> --reason "<why>"`. The last is a deliberate,
+reasoned escape hatch, mirroring `just unpublished --acknowledge`.
 
 ### Answering on the channel
 
@@ -1146,6 +1154,8 @@ was.
   author — its grants and the reason each other op is refused, in the channel's words —
   is this host's `authors.monitor`, so an author the file does not declare is refused
   before anything is appended.
+- **Held waits re-surface on a slowing cadence**, while their hold remains. Read
+  each as an unresolved wait, rather than a new failure.
 - **Read the queue before replying**, and confirm the `pending` surface is the one
   being answered: a reply binds by correlation, never by arrival. A question carries
   the correlation the bus stamped on it, and `just channel-reply
@@ -1188,7 +1198,8 @@ was.
   than carried when no turn took it.
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of the bullet below: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. The block runs to the end of that bullet. -->
 - **A quiet monitor is a working monitor.** It reports through the `finding` op and
-  nothing else, so read an absence of surfaces as an absence of findings, and read the
+  nothing else; the observer's `check-in` supplies the regular update even without a
+  finding. No planner surface during a 35-minute wait means the observer needs repair. Read the
   run's own state for whether anything is watching: `OBSERVER DEAD` is the window
   before the driver relaunches the observer and may clear on its own; `OBSERVER NOT
   RESTARTED` is the driver having given up, and is yours to act on. The monitor is a

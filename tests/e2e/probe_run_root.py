@@ -87,7 +87,8 @@ def run_root(
     against — `runs --mine`, `stop`'s refusal, and `unwatched`'s whole question of which
     runs to ask about. `driver_pid` inverts the paragraph above: the launch then names a
     live process **and its kernel start time**, so the run reads as one something is
-    driving, which is the only state a blocking watch can be armed on. Both halves are
+    driving, while an undriven run
+    waits for action or the watch's bound instead. Both halves are
     required for that — a pid alone is a pid the kernel may have handed round again, and
     a stamp that is not the one this host reports is a positive statement that the
     process is somebody else's.
@@ -196,3 +197,41 @@ def _started(pid: int) -> str:
     stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     # Everything after the comm field, which is the only one that can carry a bracket.
     return stat[stat.rindex(")") + 2 :].split()[19]
+
+
+def record_supervision(directory: Path, *, pid: int, session: str) -> None:
+    """Compose the two supervision records for their field-by-field contract gate.
+
+    Journeys arm watches and acknowledge through the engine; this builder supplies
+    specimens only to the drift gate, including both nullable watch fields.
+    """
+    terms = directory / "watch-terms"
+    terms.mkdir(exist_ok=True)
+    (terms / f"{pid}-probe.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": directory.name,
+                "pid": pid,
+                "started": f"linux-proc-stat:{_started(pid)}",
+                "deadline": None,
+                "until": ["surface", "settled", "nothing-driving"],
+                "session": session,
+            }
+        ),
+        encoding="utf-8",
+    )
+    acknowledgements = directory / "acknowledgements"
+    acknowledgements.mkdir(exist_ok=True)
+    (acknowledgements / "probe.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": directory.name,
+                "session": session,
+                "reason": "the contract gate's specimen",
+                "at": "2026-01-01T00:00:00.000Z",
+            }
+        ),
+        encoding="utf-8",
+    )
