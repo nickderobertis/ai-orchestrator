@@ -558,7 +558,7 @@ class SettleCommand(TypedDict):
 
 
 class SettleEnvelope(TypedDict):
-    """A commands-only envelope, which `just channel-reply` sends to the run's replies."""
+    """A commands-only envelope, which `just channel-reply` hands to the engine's `reply`."""
 
     version: int
     commands: list[SettleCommand]
@@ -574,12 +574,13 @@ def test_a_failed_run_whose_failed_node_is_settled_done_fires_its_success_hook_o
 
     The rescue this host's manager performs when a node's work landed another way: the
     run ended failed and its failure hook fired, the manager settles the failed node
-    `done` through `just channel-reply`, and the adopting driver applies it. Nothing is
-    made live again — the settle moves a recorded state and dispatches nothing — so an
-    engine that opened an epoch only on an edit that reopened work left the run complete
-    with its follow-up run never launched. On the adopted engine the success hook fires
-    for the complete ending the settle carried the run to, exactly once, and the failure
-    hook's record is labelled superseded by the settle.
+    `done` through `just channel-reply`, which applies it itself because nothing drives the
+    ended run, and a driver adopts the run afterwards. Nothing is made live again — the
+    settle moves a recorded state and dispatches nothing — so an engine that opened an
+    epoch only on an edit that reopened work left the run complete with its follow-up run
+    never launched. On the adopted engine the success hook fires for the complete ending
+    the settle carried the run to, exactly once, and the failure hook's record is labelled
+    superseded by the settle.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -606,6 +607,7 @@ def test_a_failed_run_whose_failed_node_is_settled_done_fires_its_success_hook_o
         }
         replied = _just(bench, "channel-reply", run, seconds=120, input_text=json.dumps(envelope))
         assert replied.returncode == 0, replied.stdout + replied.stderr
+        assert json.loads(replied.stdout)["state"] == "applied", replied.stdout
         adopted = _just(bench, "orchestrate", "--adopt", run)
         assert adopted.returncode == 0, adopted.stdout + adopted.stderr
         assert _settlement(Launch(adopted, run)) == {"run_id": run, "settlement": "complete"}

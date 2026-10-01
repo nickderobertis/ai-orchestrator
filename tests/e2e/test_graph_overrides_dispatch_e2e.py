@@ -186,50 +186,23 @@ RUN_EDIT = "answered under the config a set-run-node-sets edit named"
 FIRST, SECOND, THIRD = "first", "second", "third"
 
 
-def _outcome(run: Run, runs_root: Path, envelope_id: int) -> dict[str, Any]:
-    """The engine's answer to one command envelope, read through the bus."""
-    streamed = subprocess.run(
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "onemessagebus"),
-            "subscribe",
-            "command-outcomes",
-            "--until",
-            json.dumps({"field": "id", "equals": envelope_id}),
-            "--timeout",
-            "120",
-            "--config",
-            str(REPO_ROOT / "config" / "onemessagebus.yaml"),
-            "--transport-dir",
-            str(runs_root / run.run / "channel"),
-        ],
-        cwd=REPO_ROOT,
-        env=run.environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(180),
-        check=False,
-    )
-    assert streamed.returncode == 0, f"no outcome for envelope {envelope_id}:\n{streamed.stderr}"
-    # `cast` rather than a validating read: the record is the engine's command outcome,
-    # and the members read are the ones asserted.
-    return cast(dict[str, Any], json.loads(streamed.stdout.splitlines()[-1])["record"])
-
-
-def _send(run: Run, envelope: dict[str, Any]) -> int:
-    """Send one edit envelope through `just channel-reply`, answering its receipt id."""
-    sent = _just(
+def _send(run: Run, envelope: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    """Send one edit envelope through `just channel-reply`, as a manager types it."""
+    return _just(
         "channel-reply",
         run.run,
         environment=run.environment,
         seconds=120,
         stdin=json.dumps(envelope),
     )
+
+
+def _receipt(sent: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """The engine's one-line receipt for a send it accepted."""
     assert sent.returncode == 0, sent.stderr + sent.stdout
-    # `cast` rather than a validating read: the receipt is the bus's own line, and the two
-    # members read are asserted immediately below.
-    receipt = cast(dict[str, Any], json.loads(sent.stdout.splitlines()[-1]))
-    assert receipt.get("queue") == "commands", f"the edit was not queued: {sent.stdout}"
-    return int(receipt["id"])
+    # `cast` rather than a validating read: the receipt is the engine's own line, and the
+    # members read are asserted by the caller.
+    return cast(dict[str, Any], json.loads(sent.stdout.splitlines()[-1]))
 
 
 def test_plan_sets_and_both_live_edits_reach_the_next_dispatch_and_not_the_running_one(
@@ -268,7 +241,6 @@ def test_plan_sets_and_both_live_edits_reach_the_next_dispatch_and_not_the_runni
     )
     assert launched.returncode == 0, f"the launch failed:\n{launched.stdout}\n{launched.stderr}"
     run = Run(run_id, environment)
-    runs_root = Path(environment["ONEPIPELINE_RUNS_DIR"])
     try:
         until(
             f"{FIRST}'s worker turn to reach the gate",
@@ -279,16 +251,19 @@ def test_plan_sets_and_both_live_edits_reach_the_next_dispatch_and_not_the_runni
 
         refused = documented_edits()
         refused["commands"] = [{"op": "set-node-sets", "id": "no-such-node", "sets": []}]
-        took = _outcome(run, runs_root, _send(run, refused))
-        assert took["applied"] is False, f"an edit naming no node was applied: {took}"
+        turned_away = _send(run, refused)
+        assert turned_away.returncode == 2, (
+            f"an edit naming no node was not refused:\n{turned_away.stdout}{turned_away.stderr}"
+        )
+        assert "no-such-node" in turned_away.stderr, turned_away.stderr
 
         envelope = documented_edits()
         by_op = {command["op"]: command for command in envelope["commands"]}
         assert set(by_op) == {"set-node-sets", "set-run-node-sets"}, envelope
         by_op["set-node-sets"].update(id=SECOND, sets=[f"{AGENT_CONFIG}={node_edit}"])
         by_op["set-run-node-sets"].update(sets=[f"{AGENT_CONFIG}={run_edit}"])
-        took = _outcome(run, runs_root, _send(run, envelope))
-        assert took["applied"] is True, f"the documented edits were not applied: {took}"
+        took = _receipt(_send(run, envelope))
+        assert took["state"] == "applied", f"the documented edits were not applied: {took}"
 
         (gate / TURN_GATE_RELEASED).touch()
         until(

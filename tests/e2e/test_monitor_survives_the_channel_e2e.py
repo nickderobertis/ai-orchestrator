@@ -18,8 +18,8 @@ announces the loss:
    monitor's judge side whenever it got there first. Forty of this host's recorded dag-scope
    runs died on it, at the worst possible timing: it fired precisely while a manager was
    supervising, because the manager's own correction was what killed the watcher. `just
-   channel-reply` now sends a commands-only envelope to the engine's command path, and the
-   bus routes a reply by the halves it carries.
+   channel-reply` is now the engine's `onepipeline reply`, which sends a commands-only
+   envelope to the command path and routes a reply by the halves it carries.
 
 So this launches one real run and plays a manager who answers **only** with live edits, which
 is the reproduction rather than a stand-in for it: the real recipe, the real engine, the real
@@ -178,7 +178,7 @@ class ReplyAnswer(NamedTuple):
 
     #: The verb's exit status; non-zero is a refusal, which this manager ignores.
     returncode: int
-    #: Its stdout verbatim, which is the bus's one-line answer when it is zero.
+    #: Its stdout verbatim, which is the engine's one-line receipt when it is zero.
     stdout: str
 
 
@@ -728,13 +728,13 @@ def test_the_manager_live_edit_still_reached_the_engine(watched: Watched) -> Non
 def test_the_reply_verb_says_itself_that_it_sent_the_edit_to_the_command_path(
     watched: Watched,
 ) -> None:
-    """And `just channel-reply` says where the edit went, in the bus's own answer.
+    """And `just channel-reply` says where the edit went, in the engine's own receipt.
 
-    A commands-only envelope is `onemessagebus send replies`, which the planner-channel
-    layout routes to the engine's `commands` queue and answers with one `{queue, position,
-    id}` line. The event above proves the edit landed; this proves the recipe routed it
-    there rather than to the queue a question is answered on, which is the half a reader
-    checks the recipe against. Every accepted send is held to it.
+    The recipe is the engine's `onepipeline reply`, which routes a commands-only envelope
+    to the run's command path and answers with one receipt naming the commands' state and
+    no verdict. The event above proves the edit landed; this proves the receipt says the
+    commands half went to the command path rather than answering a question, which is the
+    half a reader checks the recipe against. Every accepted send is held to it.
     """
     accepted = [
         json.loads(answered.stdout)
@@ -743,14 +743,20 @@ def test_the_reply_verb_says_itself_that_it_sent_the_edit_to_the_command_path(
     ]
 
     assert accepted, f"no live edit was accepted at all:\n{watched.reply_answers}"
-    assert all(answer.get("queue") == "commands" for answer in accepted), (
+    assert all(
+        answer.get("commands") in {"applied", "queued"}
+        and answer.get("state") == answer.get("commands")
+        for answer in accepted
+    ), (
         "a live edit was sent somewhere other than the engine's command path, where "
         f"nothing applies it:\n{accepted}"
     )
-    assert all(
-        isinstance(answer.get("position"), int) and isinstance(answer.get("id"), int)
-        for answer in accepted
-    ), f"an answer no longer says where on that queue the edit was appended:\n{accepted}"
+    assert all("verdict" not in answer for answer in accepted), (
+        f"a commands-only edit was answered as though it carried a verdict:\n{accepted}"
+    )
+    assert all(isinstance(answer.get("reply"), int) for answer in accepted), (
+        f"a receipt no longer names the reply it answers for:\n{accepted}"
+    )
 
 
 @pytest.mark.xdist_group("monitor-survives-the-channel")
@@ -882,7 +888,7 @@ def test_the_planner_scores_the_completion_bar_through_the_reply_recipe(
         )
         assert sent.returncode == 0, sent.stderr + sent.stdout
         answered = json.loads(sent.stdout)
-        assert answered["correlation"] == correlation and answered["answered"], answered
+        assert answered["state"] == "delivered" and answered.get("verdict"), answered
 
         def scored() -> list[dict[str, Any]]:
             # `Any` because each verdict is the engine's own settlement record, read off the

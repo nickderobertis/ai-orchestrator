@@ -5,8 +5,9 @@ planner channel's `replies` queue, and that validator holds every node an envelo
 an `add`, a `retry`'s replacement — to the structural rules the plan tier applies, over the
 graph the envelope's own nodes form. Driven here against a live run: a real `just
 orchestrate` launch whose agent nodes wait behind a human gate nobody attests, so nothing is
-ever dispatched; the envelope a manager sends through `just channel-reply`, which the bus
-judges before appending anything to the run's `commands` queue; and the real `onevcs`
+ever dispatched; the envelope a manager sends through `just channel-reply`, the engine's
+`onepipeline reply`, which judges it under the run's recorded bus configuration before
+anything of it is appended or applied; and the real `onevcs`
 answering about a scratch registry whose `library` really declares a wheel and whose rules
 really resolve `local-direct` for both identities. Only the paid provider is doubled, as
 `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` doubles it, and no turn of it is
@@ -28,7 +29,6 @@ from typing import NamedTuple
 import pytest
 import short_state
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
-from planner_channel import BUS_CONFIG
 from project_fixtures import helper, project_from_plan
 from scratch_identity import registered
 from waits import timeout as e2e_timeout
@@ -59,8 +59,9 @@ INHERITED_ENVIRONMENT = (
 #: The wheel this host installs, which the scratch producer declares.
 WHEEL = ("pypi", "pypi:onepipeline-cli")
 
-#: What `just channel-reply` exits with when the bus's validator refuses an envelope.
-REPLY_REFUSED = 1
+#: What `just channel-reply` exits with when the validator refuses an envelope: the
+#: engine's `reply` exits 2 for every refusal.
+REPLY_REFUSED = 2
 
 
 class Live(NamedTuple):
@@ -68,7 +69,8 @@ class Live(NamedTuple):
 
     environment: dict[str, str]
     run: str
-    channel: Path
+    #: The run's own directory, whose journal says what an envelope committed.
+    root: Path
 
 
 def _declaring(*declared: tuple[str, str]) -> str:
@@ -164,70 +166,66 @@ def live(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Live]:
     )
     assert launch.returncode == 0, f"the launch failed:\n{launch.stdout}\n{launch.stderr}"
     try:
-        yield Live(environment, run, tmp_path / "runs" / run / "channel")
+        yield Live(environment, run, tmp_path / "runs" / run)
     finally:
         _just("stop", run, environment=environment, seconds=60)
 
 
 def _reply(live: Live, *commands: dict[str, object]) -> subprocess.CompletedProcess[str]:
     """Send one envelope over the live channel, as a manager types it."""
-    envelope = {"version": 2, "author": "planner", "commands": list(commands)}
+    envelope = {"version": 3, "author": "planner", "commands": list(commands)}
     return _just(
         "channel-reply", live.run, environment=live.environment, stdin=json.dumps(envelope)
     )
 
 
-def _queued(live: Live) -> int:
-    """How many command envelopes the run's `commands` queue holds, per the bus's `status`."""
-    status = subprocess.run(
-        [
-            "onemessagebus",
-            "status",
-            "commands",
-            "--config",
-            str(BUS_CONFIG),
-            "--transport-dir",
-            str(live.channel),
-        ],
-        cwd=REPO_ROOT,
-        env=live.environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(60),
-        check=False,
+def _committed(live: Live) -> int:
+    """How many edits the run's own journal records as committed."""
+    journal = live.root / "events.jsonl"
+    if not journal.exists():
+        return 0
+    return sum(
+        1
+        for line in journal.read_text(encoding="utf-8").splitlines()
+        if line.strip() and json.loads(line).get("kind") == "edit-committed"
     )
-    assert status.returncode == 0, status.stderr
-    (queue,) = json.loads(status.stdout)
-    return int(queue["records"])
 
 
-#: A second producer landing in the releasing repository, stated by the envelope itself.
-RELEASING = {
-    "id": "library-2",
-    "repo": "library",
-    "title": "feat: release the library again",
-    "deps": ["gate"],
-    "expects_no_diff": True,
-    "task": "Release.",
-}
-
-#: A consumer publishing `local-direct` in `service`, adopting `fast` behind that producer.
-ADOPTING = {
-    "id": "follow-up",
-    "repo": "service",
-    "title": "feat: record the follow-up",
-    "deps": ["library-2"],
-    "adoption": "fast",
-    "expects_no_diff": True,
-    "task": "Report.",
-}
+def _releasing(suffix: str = "") -> dict[str, object]:
+    """A second producer landing in the releasing repository, stated by the envelope itself."""
+    return {
+        "id": f"library-2{suffix}",
+        "repo": "library",
+        "title": "feat: release the library again",
+        "deps": ["gate"],
+        "expects_no_diff": True,
+        "task": "Release.\n\n## Acceptance criteria\n- Released.",
+    }
 
 
-#: The two corrections the refusal names that drop the release edge inside the envelope.
-REMEDIES: tuple[dict[str, object], ...] = (
-    {"op": "reparent", "id": "follow-up", "deps": ["gate"]},
-    {"op": "drop", "id": "library-2", "dependents": "detach"},
-)
+def _adopting(suffix: str = "") -> dict[str, object]:
+    """A consumer publishing `local-direct` in `service`, adopting `fast` behind that producer."""
+    return {
+        "id": f"follow-up{suffix}",
+        "repo": "service",
+        "title": "feat: record the follow-up",
+        "deps": [f"library-2{suffix}"],
+        "adoption": "fast",
+        "expects_no_diff": True,
+        "task": "Report.\n\n## Acceptance criteria\n- Reported.",
+    }
+
+
+def _remedies() -> tuple[tuple[str, dict[str, object]], ...]:
+    """The two corrections the refusal names that drop the release edge inside the envelope.
+
+    Each with ids of its own, because the reply applies an accepted envelope at once and the
+    second would otherwise add nodes the first already added.
+    """
+    return (
+        ("-reparented", {"op": "reparent", "id": "follow-up-reparented", "deps": ["gate"]}),
+        ("-dropped", {"op": "drop", "id": "library-2-dropped", "dependents": "detach"}),
+    )
 
 
 def test_a_node_behind_a_release_the_same_reply_states_is_refused_until_its_edge_goes(
@@ -242,11 +240,11 @@ def test_a_node_behind_a_release_the_same_reply_states_is_refused_until_its_edge
     and no judged turn is spent. "Drop the edge if the work does not need the release" is
     the refusal's own remedy: the same envelope with a `reparent` of that unstarted node
     onto the gate, or with a detaching `drop` of the producer, leaves a graph no rule
-    refuses, and each is accepted onto the queue as sent.
+    refuses, and each is applied as sent — by the reply itself, since nothing drives the run.
     """
-    before = _queued(live)
+    before = _committed(live)
 
-    refused = _reply(live, {"op": "add", "node": RELEASING}, {"op": "add", "node": ADOPTING})
+    refused = _reply(live, {"op": "add", "node": _releasing()}, {"op": "add", "node": _adopting()})
 
     assert refused.returncode == REPLY_REFUSED, refused.stdout + refused.stderr
     assert (
@@ -255,17 +253,20 @@ def test_a_node_behind_a_release_the_same_reply_states_is_refused_until_its_edge
         "dependency that releases"
     ) in refused.stderr, refused.stderr
     assert "'local-direct'" in refused.stderr, refused.stderr
-    assert "nothing was sent" in refused.stderr, refused.stderr
-    assert _queued(live) == before, "the refused envelope reached the run's command queue"
+    assert refused.stdout == "", refused.stdout
+    assert _committed(live) == before, "the refused envelope committed an edit"
     attempts = Path(live.environment["FAKE_CODEX_ATTEMPT_LOG"])
     assert not attempts.exists(), "a structural refusal spent a judged turn"
 
-    for remedy in REMEDIES:
+    for suffix, remedy in _remedies():
         landed = _reply(
-            live, {"op": "add", "node": RELEASING}, {"op": "add", "node": ADOPTING}, remedy
+            live,
+            {"op": "add", "node": _releasing(suffix)},
+            {"op": "add", "node": _adopting(suffix)},
+            remedy,
         )
 
         assert landed.returncode == 0, f"{remedy['op']}: {landed.stdout}{landed.stderr}"
-        assert json.loads(landed.stdout)["queue"] == "commands", landed.stdout
+        assert json.loads(landed.stdout)["state"] == "applied", landed.stdout
 
-    assert _queued(live) == before + 2
+    assert _committed(live) == before + 6, "each remedied envelope commits its three edits"

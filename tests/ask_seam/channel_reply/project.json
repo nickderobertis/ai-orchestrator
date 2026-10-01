@@ -65,7 +65,15 @@
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/tests/ask_seam/channel_reply/test_channel_reply_e2e.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",
-      "{workspaceRoot}/uv.lock"
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/.claude/settings.json",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/orchestrator/unfinished.py",
+      "{workspaceRoot}/orchestrator/unpublished.py",
+      "{workspaceRoot}/scripts/unfinished.sh",
+      "{workspaceRoot}/scripts/unpublished.sh"
     ]
   },
   "targets": {

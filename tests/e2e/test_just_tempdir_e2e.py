@@ -5,10 +5,10 @@ executes it, and with nothing configured that directory is the caller's
 `XDG_RUNTIME_DIR`. Harness turns remap that variable to node scratch, but the
 publication gate runs in the publishing process's inherited environment, and when the
 inherited directory was a `noexec` mount every shebang recipe failed with `Permission
-denied (os error 13)` — 110 tests of `channel-reply` refused on one publication of a
-branch nothing was wrong with. The justfile's `set tempdir` names a directory this
-repository owns instead, and the justfile creates that directory itself on every
-recipe run — `just` does not — so it exists wherever this justfile runs from: a
+denied (os error 13)` — 110 tests of `channel-reply`, a shebang recipe at the time, refused
+on one publication of a branch nothing was wrong with. The justfile's `set tempdir` names a
+directory this repository owns instead, and the justfile creates that directory itself on
+every recipe run — `just` does not — so it exists wherever this justfile runs from: a
 checkout, a worktree, a clone carrying no `.logs`, or a copy of the file alone.
 
 Nothing here is doubled: the journeys drive the real `just` over the real justfile, and
@@ -38,13 +38,14 @@ from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_recipes
 
-#: The one shebang recipe the root justfile carries, and the argument that makes its
-#: body speak before it reaches anything else: an envelope file that does not exist is
-#: refused by the recipe's own first read, with its own message and exit status, so
+#: The shebang recipe the verdict recipes encode their envelope in, reached directly so
+#: no second `just` stands between the caller and its body, and the argument that makes
+#: that body speak before it reaches anything else: an approval carrying a message is
+#: refused by the body's own first check, with its own message and exit status, so
 #: seeing that refusal is seeing the body execute. A body `just` could not execute never
 #: gets that far and fails with `just`'s own error instead.
-SHEBANG_RECIPE = ("channel-reply", "journey-run", "/nonexistent-envelope")
-BODY_RAN = "channel-reply: the envelope file '/nonexistent-envelope' could not be read"
+SHEBANG_RECIPE = ("_verdict", "approve", "journey-run", "an extra message")
+BODY_RAN = "channel-approve: approve does not accept a message"
 BODY_RAN_STATUS = 2
 #: What the publication gate reported when its inherited runtime directory was `noexec`.
 NOEXEC_REFUSAL = "Permission denied (os error 13)"
