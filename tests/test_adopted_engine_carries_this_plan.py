@@ -588,6 +588,20 @@ VERDICT_REUSE_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the history-segments plan, which relinked the harness stack —
+#: the onejudge and oneagentgraph releases and the `oneharness-core` 0.24.0 under them —
+#: whose history records into dated segments and never reads an index or walks the store
+#: to record a run. The engine records history in-process through that core;
+#: `tests/e2e/test_oneharness_history_segments_e2e.py` traces the same core's CLI.
+HISTORY_SEGMENTS_LANDINGS = (
+    Landing(
+        node="op-link-core",
+        change_request=613,
+        commit="7da30ee09e24c5c74df7e403f5a55c1e3fcbbdb4",
+        did="link the harness stack whose history never scans",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     *SUPERVISION_WINDOW_LANDINGS,
@@ -610,6 +624,7 @@ LANDINGS = (
     *COMMENT_FLOW_LANDINGS,
     *NATIVE_BOARD_QUERIES_LANDINGS,
     *VERDICT_REUSE_LANDINGS,
+    *HISTORY_SEGMENTS_LANDINGS,
 )
 
 

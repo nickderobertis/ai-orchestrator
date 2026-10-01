@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.55.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.56.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -143,7 +143,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.21.1/0.17.0 upgrade (`config/oneharness.version` and
+after the 0.21.1/0.17.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -273,9 +273,11 @@ byte-identical between onejudge v0.14.0 and v0.17.0, whose report schema moves f
 `telemetry.attribution` — none inside a `usage` block; and
 `crates/oneharness-core/src/domain/usage.rs` is byte-identical between
 `oneharness-core-v0.19.0` and `oneharness-core-v0.24.0`, the core `oneharness-cli` 0.21.1
-is compiled against, with history `SCHEMA_VERSION` `1.9` at both. The engine wheel,
-`onejudge-cli` 0.17.0 and `oneagentgraph-cli` 0.5.4 all link `oneharness-core` 0.21.0,
-read off each wheel's own SBOM.
+is compiled against, with history `SCHEMA_VERSION` `1.9` at both. The onejudge half
+then moved to 0.17.1 on the same terms: `usage.rs` is byte-identical between v0.17.0
+and v0.17.1, a release linking the `oneharness-core` 0.24.0 whose history never scans. The engine wheel, `onejudge-cli`
+0.17.1 and `oneagentgraph-cli` 0.5.5 all link `oneharness-core` 0.24.0, read off each
+wheel's own SBOM.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
@@ -364,7 +366,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.20.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.21.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and
@@ -556,7 +558,12 @@ beside this host's own `role`. So `just agents <run-id> [<node>]` answers a run'
 sessions from that file, `oneharness history pointers <run root>/oneharness-sessions.jsonl`
 reads the same file with the producing library's own verb, and
 `oneharness history watch --label onepipeline.run_id=<run-id>` follows them live in the
-default store.
+default store. Each of those reads has the adopted CLI's default window: `watch` with no
+`--after` starts at the current UTC day, and `list` reads the last seven UTC days, so pass
+`--since <YYYY-MM-DD>` or `--all-time` to reach a run that began earlier. An id recorded
+before the dated index existed is found only by `history show <history-id> --all-time`,
+and a pointer line's own `history show <history_session> --project <project>
+--history-dir <history_dir>` opens its session at any age.
 
 **Two pins decide whether that file is whole, and moving one alone shows half the
 agents.** `config/oneharness.version` is what makes this host's **two-party** turns
