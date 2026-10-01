@@ -775,6 +775,10 @@ def test_the_design_document_nodes_task_is_a_plan_task_rendering_owing_each_obli
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
 #: A second repository's origin, for a plan whose tasks name several. Registered in the
 #: bench's scratch registry as a stand-in checkout, never fetched.
 OTHER_ORIGIN = "github.com/nickderobertis/onepipeline"
@@ -878,6 +882,9 @@ def test_the_writers_task_names_the_resolve_command_the_rule_gives_for_the_plan(
     provenance = document.metadata[PROVENANCE_KEY]
     assert isinstance(provenance, dict), document.metadata
     assert provenance["digest"] == chain["digest"], (provenance, chain["digest"])
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This reads the one flow

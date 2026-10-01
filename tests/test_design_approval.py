@@ -1215,6 +1215,10 @@ def test_regenerating_a_shipped_example_with_no_new_answers_changes_nothing_and_
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell suite and not a host tool:
+# the engine and the plan-store CLI these spawn are the workspace's own locked installs, in this
+# tier's key, the store is each test's own temporary one, and these cover `fits_in_place` and
+# the writer repair under the tier's 100% coverage floor, as the resolve tests above do.
 def _designed(root: Path, monkeypatch: pytest.MonkeyPatch, answers: Mapping[str, object]) -> str:
     """Render a design document into a real local source under ``root``, and answer its id.
 
@@ -1328,15 +1332,12 @@ def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to
     document = design_approval.design_document(project)
     assert FITS(document) is False
     monkeypatch.setattr(design_approval, "fits_in_place", FITS)
+    provenance = document.metadata[design_approval.PROVENANCE]
+    assert isinstance(provenance, dict), document.metadata
     stale = dataclasses.replace(
         document,
         metadata=dict(document.metadata)
-        | {
-            design_approval.PROVENANCE: dict(
-                document.metadata[design_approval.PROVENANCE],  # type: ignore[call-overload]
-                digest=STATED,
-            )
-        },
+        | {design_approval.PROVENANCE: {**provenance, "digest": STATED}},
     )
     with pytest.raises(design_approval.Unrendered) as refused:
         design_approval.body_digest(stale, MOVED)
@@ -1344,3 +1345,6 @@ def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to
     assert "just finish-plan <brief>" in said, said
     assert design_chain.resolve_command(None) in said, said
     assert "document render" not in said, said
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

@@ -69,9 +69,12 @@ BLOCKS = (DOCUMENT_GUIDANCE,) + tuple(
     name for block, _ in SECTIONS for name in (f"{block}_guidance", block)
 )
 
+#: The keys of an object answer, each naming the keys of the objects it lists, or `None`.
+type Keys = dict[str, Keys | None]
+
 #: Each variable the template declares: its type, its item type, and for a list of objects
 #: the keys every object carries, with the keys of each nested list of objects.
-VARIABLES: dict[str, tuple[str, str | None, dict[str, Any] | None]] = {
+VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     "what": ("text", None, None),
     "why": ("text", None, None),
     "architecture": ("text", None, None),
@@ -310,7 +313,7 @@ def test_the_template_declares_each_variable_with_its_type(loader: str) -> None:
     }, declared
 
 
-def _keys(shape: dict[str, Any]) -> list[str]:
+def _keys(shape: Keys) -> list[str]:
     """Every key `shape` names, its nested objects' keys included."""
     return [key for key, nested in shape.items() for key in [key, *_keys(nested or {})]]
 

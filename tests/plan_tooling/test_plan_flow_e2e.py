@@ -729,6 +729,10 @@ def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Plan
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
 @pytest.mark.xdist_group("plan-flow")
 def test_a_plan_across_two_repositories_has_its_writer_resolve_through_no_one_layer(
     planned: Planned,
@@ -774,6 +778,9 @@ def test_a_plan_across_two_repositories_has_its_writer_resolve_through_no_one_la
             "the design-doc dispatch was sent to one repository's layer for a plan across "
             f"two of them:\n{prompt!r}"
         )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("plan-flow")

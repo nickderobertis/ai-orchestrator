@@ -164,9 +164,9 @@ def _cleared(name: str, padding: int, scratch: Path) -> str:
     """A plan of one task, its design document padded by ``padding``, and the plan reviewed.
 
     Written with the store layout's own writer and the document rendered here rather than
-    through `project_fixtures.local_project`, because that helper's document answers are
-    the template's previous shape, which the store now refuses. The document is not
-    approved: `just copy-plan` asks for no approval, and an approval would only lengthen
+    through `project_fixtures.local_project`, because the document's size is what this
+    journey turns and that helper's answers are fixed. The document is not approved:
+    `just copy-plan` asks for no approval, and an approval would only lengthen
     the map measured, which `tests/test_task_body.py` already holds is part of the body.
     """
     native = f"test-{os.getpid()}-{name}"
@@ -209,6 +209,10 @@ def _measured(project: str) -> int:
     return body.size
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
 def test_a_design_document_the_board_would_refuse_is_refused_before_anything_is_copied(
     destination: Path, tmp_path: Path
 ) -> None:
@@ -257,3 +261,6 @@ def test_a_design_document_past_the_warning_threshold_is_warned_about_and_copied
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
     ], copied.stdout + copied.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

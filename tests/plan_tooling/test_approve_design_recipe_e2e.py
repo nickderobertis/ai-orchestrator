@@ -1582,6 +1582,10 @@ def test_an_approval_travels_with_the_document_onto_the_store_the_plan_is_launch
     assert _settled(launched) == "complete", launched.stdout
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
 def _registered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, layer: str | None = None
 ) -> Path:
@@ -1685,6 +1689,14 @@ def test_a_document_whose_stored_answers_no_longer_fit_is_sent_to_the_writer(
     unfit = store.regenerating(f"{project}-design")
     assert unfit.returncode != 0, unfit.stdout + unfit.stderr
 
+    # What the writer does instead: answer the template's current variables afresh and
+    # store the document under the id it already holds, which the store replaces whole —
+    # retired answers and all — so the plan's document is one a person can approve.
+    store.document(native)
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+
 
 @pytest.mark.xdist_group("approve-design")
 def test_a_plan_in_one_layered_repository_is_approved_on_the_chain_it_was_rendered_through(
@@ -1728,3 +1740,6 @@ def test_a_plan_in_one_layered_repository_is_approved_on_the_chain_it_was_render
     assert stale.returncode == 1, stale.stdout + stale.stderr
     assert "written against a template no longer in force" in stale.stderr, stale.stderr
     assert design_chain.resolve_command(SERVICE) in stale.stderr, stale.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

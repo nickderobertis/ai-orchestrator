@@ -211,6 +211,11 @@ def _measure_documents(project: str, destination: str) -> int:
     """
     try:
         documents = plan_store.read_documents(project)
+    # llmlint: ignore[changed_behavior_has_e2e] Unreachable through the recipe as the store
+    # stands: every read before this one — the tasks, the plan and its project record — goes
+    # to the same store for the same project and refuses first with this same status, so
+    # only a store failing between two reads reaches it. `tests/test_plan_copy.py` drives the
+    # refusal by substituting the document read alone.
     except OSError as exc:
         print(
             f"copy-plan: cannot read the documents of {project} to measure them: {exc}; "

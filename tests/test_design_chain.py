@@ -10,15 +10,21 @@ Each case is read out of a real local plan store through the pinned plan-store C
 way both callers read it. The journeys that hold the two callers to it are
 `tests/plan_tooling/test_finish_plan_recipe_e2e.py` and
 `tests/plan_tooling/test_approve_design_recipe_e2e.py`.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] Not a shell suite and not a host tool: the
+plan-store CLI the SDK spawns is the workspace's own locked install, which `uv.lock` names and
+this tier's key covers, the store it reads is this test's own temporary one, and these tests
+cover `orchestrator/design_chain.py` under the tier's 100% coverage floor.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from orchestrator import design_chain
+from orchestrator import design_chain, plan_store
 
 #: The local source each plan here is written into, configured through the environment
 #: layer so the pinned CLI the SDK spawns reads it.
@@ -113,3 +119,30 @@ def test_a_plan_the_store_cannot_answer_for_is_refused_by_name(
     del store
     assert design_chain.main(["nowhere:missing"]) == 1
     assert capsys.readouterr().err.startswith("design-chain: ")
+
+
+@pytest.mark.parametrize(
+    ("held_id", "filed"),
+    [("elsewhere:task-0", "demo"), (f"{SOURCE}:task-0", "another"), (f"{SOURCE}:task-0", None)],
+    ids=["another-source", "another-project", "no-project"],
+)
+def test_a_listing_answering_outside_the_plan_is_refused_rather_than_read(
+    monkeypatch: pytest.MonkeyPatch, held_id: str, filed: str | None
+) -> None:
+    """A task the plan does not hold never decides which layer the plan resolves through.
+
+    A conforming store answers a listing filtered to one project with that project's tasks
+    alone, so the answer is substituted here, at the listing, and nowhere else.
+    """
+
+    def named(value: str) -> SimpleNamespace:
+        return SimpleNamespace(model_dump=lambda: value)
+
+    item = SimpleNamespace(
+        project=None if filed is None else named(filed), repositories=[named(ONE)]
+    )
+    page = SimpleNamespace(items=[SimpleNamespace(id=named(held_id), item=item)])
+    monkeypatch.setattr(plan_store, "client", lambda: SimpleNamespace(task_list=None))
+    monkeypatch.setattr(plan_store, "every_page", lambda *_arguments, **_keywords: [page])
+    with pytest.raises(OSError, match="outside itself"):
+        design_chain.plan_repository(f"{SOURCE}:demo")

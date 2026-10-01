@@ -151,7 +151,11 @@ other would retry "nothing has reviewed this" as an outage of the board. **Exit 
 this command's own refusal, made before the store is asked to do anything; **exit 3** is
 the destination refusing a plan every task of which carried a record; **exit 2** is a
 plan, a review bar, or a store CLI that could not be read at all, so nothing was judged
-and nothing was written.
+and nothing was written. **Exit 4** is this command's other refusal: a design document
+whose issue body, composed as the board composes a task's, would exceed GitHub's
+65,536-character limit, refused before anything is copied — shorten it where it was drafted
+and have it approved again. From 45,000 characters it is warned about and still copied;
+`orchestrator/task_body.py` holds both thresholds.
 
 *Everything it does not recognise reaches `onetaskgraph project copy` untouched* —
 `--dry-run`, `--recreate`, `--match-by <KEY>` — rather than being re-declared by a

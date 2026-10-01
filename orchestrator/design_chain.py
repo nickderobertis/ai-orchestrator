@@ -68,12 +68,17 @@ def plan_repository(project: str) -> str | None:
     pages = plan_store.every_page(
         f"project {project!r}", plan_store.client().task_list, source=[source], project=native
     )
-    return chosen(
-        [
-            [repository.model_dump() for repository in held.item.repositories]
-            for held in chain.from_iterable(page.items for page in pages)
-        ]
-    )
+    repositories = []
+    for held in chain.from_iterable(page.items for page in pages):
+        # Held to the listing's own filter, as `plan_store.read_tasks` holds it: a task of
+        # another project or source deciding this plan's chain would key its approval on a
+        # layer the plan never named.
+        held_id = held.id.model_dump()
+        filed = None if held.item.project is None else held.item.project.model_dump()
+        if not held_id.startswith(f"{source}:") or filed != native:
+            raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
+        repositories.append([repository.model_dump() for repository in held.item.repositories])
+    return chosen(repositories)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
