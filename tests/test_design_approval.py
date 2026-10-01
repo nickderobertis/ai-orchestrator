@@ -29,8 +29,8 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-import onevcs_state_snapshot
 import pytest
+from project_fixtures import ONEVCS_HOME, register_stand_in
 
 from orchestrator import design_approval, design_chain, plan_store
 from orchestrator.plan_store import (
@@ -1047,20 +1047,11 @@ def _stand_ins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projects: list[s
     is, and it is registered in a registry of this test's own.
     """
     monkeypatch.setattr(design_chain, "plan_repository", RULE)
-    monkeypatch.setenv(onevcs_state_snapshot.ONEVCS_HOME, str(tmp_path / "onevcs"))
-    origins = {RULE(project) for project in projects} - {None}
-    for index, origin in enumerate(sorted(o for o in origins if o is not None)):
-        checkout = tmp_path / f"stand-in-{index}"
-        for command in (
-            ["git", "init", "-q", "-b", "main", str(checkout)],
-            ["git", "-C", str(checkout), "remote", "add", "origin", f"https://{origin}.git"],
-            ["git", "-C", str(checkout), "-c", "user.name=Journey"]
-            + ["-c", "user.email=journey@example.invalid"]
-            + ["commit", "-q", "--allow-empty", "-m", "chore: seed"],
-            ["onevcs", "register", str(checkout)],
-        ):
-            done = subprocess.run(command, capture_output=True, text=True, check=False)
-            assert done.returncode == 0, done.stderr
+    home = tmp_path / "onevcs"
+    monkeypatch.setenv(ONEVCS_HOME, str(home))
+    origins = sorted(o for o in {RULE(project) for project in projects} if o is not None)
+    for index, origin in enumerate(origins):
+        register_stand_in(home, origin, tmp_path / f"stand-in-{index}")
 
 
 @pytest.mark.reads_docs
@@ -1316,7 +1307,7 @@ def test_a_document_whose_stored_answers_fit_regenerates_in_place(
 def test_a_document_holding_no_stored_answers_is_left_to_the_answers_supplied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A copy holds no answers, so the store refuses to name any, and its regenerate is handed them."""
+    """A copy holds no answers, so the store names none, and its regenerate is handed them."""
     root = tmp_path / "store"
     project = _designed(root, monkeypatch, CURRENT)
     record = root / "documents" / "demo-design.md"

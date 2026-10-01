@@ -101,7 +101,7 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     monkeypatch.setattr(
         design_approval,
         "resolved_digest",
-        lambda: design_approval.ChainDigest("sha256:test-template"),
+        lambda *_arguments: design_approval.ChainDigest("sha256:test-template"),
     )
     assert design_approval.main(["sdksource:demo"]) == 0
     assert design_approval.approve("sdksource:demo").held
