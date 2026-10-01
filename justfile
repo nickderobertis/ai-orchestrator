@@ -427,11 +427,11 @@ channel-next *args:
 # A verdict binds to the ask `--correlation` names, or to the one ask pending; a
 # correlation nothing pending holds, and `--correlation` on an envelope carrying no
 # verdict half, are refused. Edits to a run a driver holds are queued and waited on for
-# ONEPIPELINE_REPLY_TIMEOUT_SECONDS (the engine's default is 30); edits to a run nothing
-# drives are applied by the reply itself, and a completion verdict or a `complete` closes
-# a settled run whose driver has exited. Stdout is the engine's one-line receipt,
-# `{"reply":N,"state":"delivered|applied|queued",…}`, at exit 0 — a `queued` one included,
-# with its advice on stderr — and every refusal exits 2.
+# ONEPIPELINE_REPLY_TIMEOUT_SECONDS; edits to a run nothing drives are applied by the
+# reply itself, and a completion verdict or a `complete` closes a settled run whose
+# driver has exited. Stdout is the engine's one-line receipt,
+# `{"reply":N,"state":"delivered|applied|queued",…}`, at exit 0 — a `queued` one
+# included, with its advice on stderr — and every refusal exits 2.
 # `[no-exit-message]` because the engine's own refusal is the whole account of a failed
 # reply, and `just`'s line after it would only restate the exit status.
 # llmlint: ignore-block[tool_output_is_signal] This process is replaced by the engine's verb, so its receipt and refusals are the whole of the output; a block because `just` takes no comment between an attribute and its recipe.

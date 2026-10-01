@@ -562,6 +562,33 @@ CONSTANTS = (
         ORCHESTRATION,
         '"version":{value}',
     ),
+    # How long `just channel-reply` waits on the driver holding a run before it answers
+    # `queued`, which the manager's document and the channel's page both quote so a
+    # manager knows the recipe returns rather than hangs.
+    Constant(
+        "reply timeout default",
+        ONEPIPELINE,
+        "channel.rs",
+        re.compile(r"pub const DEFAULT_REPLY_TIMEOUT_SECONDS: u64 = (\d+);"),
+        MANAGER,
+        "{value} seconds by the engine's default",
+    ),
+    Constant(
+        "reply timeout default, as the channel's page quotes it",
+        ONEPIPELINE,
+        "channel.rs",
+        re.compile(r"pub const DEFAULT_REPLY_TIMEOUT_SECONDS: u64 = (\d+);"),
+        ORCHESTRATION,
+        "{value} seconds by the engine's default",
+    ),
+    Constant(
+        "reply timeout env",
+        ONEPIPELINE,
+        "channel.rs",
+        re.compile(r"pub const REPLY_TIMEOUT_ENV: &str = \"([A-Z_]+)\";"),
+        MANAGER,
+        "{value} — ",
+    ),
     Constant(
         "boundary attempts",
         ONEPIPELINE,

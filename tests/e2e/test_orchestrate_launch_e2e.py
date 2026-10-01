@@ -2009,6 +2009,10 @@ def graph_with_a_settled_node(
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 @pytest.mark.xdist_group("monitor-ops")
 @pytest.mark.parametrize(
     "refused_on_the_graph", MONITOR_OPS_ON_A_SETTLED_NODE, ids=lambda row: str(row.command["op"])
@@ -2041,12 +2045,19 @@ def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_autho
     assert refused_on_the_graph.refusal in reported, outcome
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 @pytest.fixture
 def monitor_edit_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """A driven run of its own, because the edit below mutates the graph it is sent to."""
     yield from _driven(tmp_path, oneharness_bin, RunId("monitor-edit-e2e"), [_node(id="only")])
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
     monitor_edit_run: LiveRun,
 ) -> None:
@@ -2121,6 +2132,9 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
     )
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 class RefusedFinding(NamedTuple):
     """A `finding` the engine refuses on its own contents, and how it words the refusal.
 
@@ -2192,6 +2206,10 @@ def monitor_finding_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun
     yield from _driven(tmp_path, oneharness_bin, RunId("monitor-finding-e2e"), [_node(id="only")])
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     monitor_finding_run: LiveRun,
 ) -> None:
@@ -2273,12 +2291,19 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     )
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 @pytest.fixture
 def blocking_first_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """A driven run of its own, since reading past a question consumes the queue."""
     yield from _driven(tmp_path, oneharness_bin, RunId("blocking-first-e2e"), [_node(id="only")])
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pending(
     blocking_first_run: LiveRun,
 ) -> None:
@@ -2334,6 +2359,9 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
         f"only {read_past} surface(s) were left to read past the question, so this run "
         "cannot show that reading past one leaves it standing"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _monitor_agent_turns(prompt_log: Path) -> list[RecordedTurn]:
@@ -4119,6 +4147,10 @@ def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[Supervis
 # on the way out, so two of them on separate workers would stop each other's run. The
 # constraint is the scheduling, never a longer deadline: the loop below is only waiting
 # for a rendezvous its own run holds open.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 @pytest.mark.xdist_group("verdict-recipes")
 @pytest.mark.parametrize(("recipe", "arguments"), VERDICT_RECIPES, ids=lambda row: str(row))
 def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
@@ -4162,6 +4194,9 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
     assert receipt["state"] == "delivered", delivered
     assert receipt.get("verdict") == "delivered", delivered
     assert "commands" not in receipt, delivered
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 #: How long the cancelled dispatch below has to stop itself before the engine reaps it.

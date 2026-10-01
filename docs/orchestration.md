@@ -1669,8 +1669,8 @@ envelope carried it:
 `delivered` is a verdict bound to its ask, or written to the run's own record; `applied`
 is an edit committed, by the driver holding the run or by the reply itself — `reply` is
 then `0`, there being no queue behind it; `queued` is an edit the driver holding the run
-had not reconciled within the reply's wait, `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` (30 by
-the engine's default). Every receipt exits 0, a `queued` one included, which says on
+had not reconciled within the reply's wait, `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30
+seconds by the engine's default. Every receipt exits 0, a `queued` one included, which says on
 stderr that the edit is durable and not to be sent again; every refusal exits 2 with its
 reason on stderr and nothing appended. A commands-only envelope sent with
 `--correlation` is such a refusal: a correlation names the question a verdict answers,
@@ -2280,8 +2280,7 @@ but the graph is still there to be edited, and the reply applies the edit itself
 once](#a-planner-writes-a-reply-once) says. Every edit is first validated against the
 graph projected from `events.jsonl`, by the reconciler's own validator. Where a driver
 holds the run, the edits are appended to the channel's durable `commands` queue and the
-reply waits — `ONEPIPELINE_REPLY_TIMEOUT_SECONDS`, 30 by default — for that driver to
-answer them; where nothing drives it, the reply applies them as the run's single writer.
+reply waits — `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — for that driver to answer them; where nothing drives it, the reply applies them as the run's single writer.
 Its exits are the engine's:
 
 | Exit | Meaning | stdout |

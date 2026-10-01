@@ -1159,18 +1159,14 @@ was.
 - **`abandoned` marks a blocking surface nobody is waiting on *now***, never that the
   asker has gone — its next session takes its surfaces back — so read one as a finding
   to look at rather than a question to answer.
-- **The recipe's one line is the engine's receipt** —
-  `{"reply":N,"state":"delivered|applied|queued","verdict":…,"commands":…}`, each half
-  named only when the envelope carried it — at exit 0, and every refusal exits 2 with
-  its reason on stderr and nothing appended. `delivered` is a verdict bound to its ask,
-  or to the run's own record; `applied` is an edit committed, by the driver holding the
-  run or, where nothing drives it, by the reply itself; `queued` is an edit the driver
-  holding the run had not reconciled within the reply's wait —
-  `ONEPIPELINE_REPLY_TIMEOUT_SECONDS`, 30 seconds by the engine's default — so the
-  recipe returns rather than hanging, the edit is durable on the run's command queue,
-  and it is never sent again. The run's `edit-committed` and `edit-rejected` records
-  stay what an edit became, and are where a `queued` one is read. The asker's answer
-  is the reply echoing its correlation and nothing else:
+- **Read the receipt's `state`, then the journal.** The recipe prints the engine's
+  one-line receipt at exit 0 and exits 2 on every refusal, with nothing appended.
+  `applied` means the edit is committed; `queued` means the driver holding the run had
+  not reconciled it within `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30 seconds by the
+  engine's default — so the recipe returned rather than hung, and the edit is durable:
+  never send it again. The run's `edit-committed` and `edit-rejected` records stay the
+  record, and are where a `queued` edit's fate is read. The asker's answer is the reply
+  echoing its correlation and nothing else:
   a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
   your prose.
 - **Task prose in an envelope is criteria, and is held to the criteria bar before any
