@@ -1054,6 +1054,10 @@ def _stand_ins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projects: list[s
         register_stand_in(home, origin, tmp_path / f"stand-in-{index}")
 
 
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker] `reads_docs` routes between this
+# project's own two targets and never out of it (`tests/conftest.py`'s `READS_DOCS_MARKER`): the
+# examples are Markdown the code tier's key leaves out, and the whole-workspace target is the
+# one keyed on them.
 @pytest.mark.reads_docs
 def test_every_shipped_example_project_carries_an_approved_design_document(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
