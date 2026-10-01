@@ -281,9 +281,9 @@ def test_the_manager_document_describes_both_modes_and_their_validators() -> Non
         "file's contents",
         "every input draft with exactly one disposition",
         "only the comments that gathering quoted",
-        "each rendered task's own acceptance criteria require its validator green",
+        "Initial dispatches correct their accounts with the local, board-less validator.",
         "`templates/follow-up-task.md.j2`",
-        "an attached `just follow-ups` re-runs it after the dispatch settles",
+        "`just follow-ups` runs the sole board disposition check after settlement",
     ):
         assert said in flat, said
 
@@ -299,7 +299,7 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
         "`python -m orchestrator.follow_up_tickets statuses` prints",
         "**The board is searched, never listed: every query of it is `python -m "
         "orchestrator.follow_up_tickets board-items`.**",
-        "each query names one of the store's native narrowing questions — by root cause, by "
+        "Each query names one of the store's native narrowing questions — by root cause, by "
         "origin, or GitHub's own token-matched issue search, which may not yet list an item "
         "written seconds ago — and one naming none is refused; nothing in the task lists the "
         "board",
@@ -309,8 +309,8 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
         "**A ticket is copied onto the board item it is bound to, and nowhere else.** Its "
         f"record's `{tickets.BINDING_FIELD}` key holds that item's native id, and `python -m "
         "orchestrator.follow_up_tickets board-status` and its `copy` are what write it",
-        f"when two items carry one ticket's `{tickets.ORIGIN_KEY}`, naming the run's own open "
-        "item and leaving each withdrawn duplicate a comment naming that item",
+        f"finds two items carrying its `{tickets.ORIGIN_KEY}`, binds the run's own open "
+        "item and leaves each withdrawn duplicate a comment naming that item",
         "Both refuse, naming both ids, a link, or a destination the store reports, that differs "
         "from the binding, and every copy the task prescribes goes through `copy`",
     ):

@@ -382,6 +382,8 @@ else
     account=$("${tickets_module[@]}" open-dispositions --root "$drafts_root" "$run") ||
         fail "the drafts of run '$run' could not be recorded as this dispatch's input set under $drafts_root" \
             "repair the account or draft file the refusal above names, keeping every answer it records, then retry 'just follow-ups $run'"
+    # The dispatch corrects its local account; this sole board check runs after settlement
+    # so a final board edit or comment cannot escape validation.
     validator=("${tickets_module[@]}" check-dispositions --root "$drafts_root" --board "$board" "$run")
 fi
 
@@ -416,7 +418,7 @@ else
     printf -v quoted_board '%q' "$board"
     printf -v quoted_run '%q' "$run"
     answering+=(--dispositions "$account"
-        --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root --board $quoted_board $quoted_run")
+        --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root $quoted_run")
 fi
 "${tickets_module[@]}" "${answering[@]}" >"$scratch" ||
     fail "the follow-up agent's task could not be answered for run '$run'" \
