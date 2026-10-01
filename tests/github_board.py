@@ -492,8 +492,6 @@ class _Board:
         What the adopted source asks before a write whose item does not say which board
         field to address: it selects no items, so it answers none.
         """
-        # here: this existing double answers the read the adopted plan store now makes, so the
-        # journeys already in this module keep running; their project is not this change's.
         # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The read is the
         # installed plan store's own, reconciled on every journey: an answer under any other
         # root is a board it reports as not found. GitHub's schema has no machine-readable
@@ -1325,15 +1323,9 @@ def _prepare_plan_sources(root: Path) -> dict[str, str]:
     it for the whole read, so they would otherwise pass or fail on whether this checkout
     happened to have run session setup.
 
-    This is separate from :func:`_plan_environment` because a journey that *launches*
-    composes these names on top of `_launch_environment`, whose whole job is isolating a
-    launch — its own runs root, its paid-provider guard, the launcher variables it
-    deliberately popped. Updating that environment with a whole ambient copy restores
-    every one of them. A dispatch of this repository exports `ONEPIPELINE_RUNS_DIR=runs`,
-    so the three journeys below that composed the two that way launched into the
-    checkout's own shared runs root rather than their own: run concurrently under
-    `-n 4`, they minted `launch`, `launch-2` and `launch-3` between them, and the one
-    that reads its run id back failed on the name it was given.
+    Launches compose these overrides onto their isolated execution environment.
+    Copying the ambient environment instead would restore the host's runs root and
+    paid-provider routing, sending concurrent journeys into shared state.
     """
     return {
         "ONETASKGRAPH_SECRETS_FILE": str(root / "no-secrets.env"),
