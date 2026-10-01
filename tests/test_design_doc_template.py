@@ -264,3 +264,71 @@ def test_the_persona_names_the_templates_variables_and_restates_none_of_it() -> 
     assert not re.search(r"config/[A-Za-z0-9_.-]+\.md", persona), (
         f"{PERSONA.name} names a configuration file as the document's shape"
     )
+
+
+def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
+    tmp_path: Path,
+) -> None:
+    """The installed tools render a repository guidance override without changing the body."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    initialized = _run(["git", "init", str(checkout)])
+    assert initialized.returncode == 0, initialized.stderr
+    host = tmp_path / "host"
+    host.mkdir()
+    host_template = host / "design-doc.md.j2"
+    host_template.write_bytes(TEMPLATE.read_bytes())
+    (host / "templates.yaml").write_bytes((TEMPLATE.parent / "templates.yaml").read_bytes())
+    layer = checkout / ".onepipeline" / "templates" / "design-doc.md.j2"
+    layer.parent.mkdir(parents=True)
+    layer.write_text(
+        '{% extends "onepipeline/host/design-doc.md.j2" %}\n'
+        "{% block what_guidance %}{# Explain the change in ordinary words. #}{% endblock %}\n",
+        encoding="utf-8",
+    )
+
+    def resolve(repository: bool) -> dict[str, Any]:
+        command = [
+            str(WRAPPER),
+            "template",
+            "resolve",
+            NAME,
+            "--json",
+            "--template-root",
+            str(host),
+        ]
+        if repository:
+            command += ["--repo", str(checkout)]
+        done = _run(command)
+        assert done.returncode == 0, done.stderr
+        resolved: dict[str, Any] = json.loads(done.stdout)
+        return resolved
+
+    own = resolve(False)
+    extending = resolve(True)
+    assert extending["layer"] == "repository", extending
+    assert len(extending["chain"]) == 2, extending
+    assert {entry["path"] for entry in extending["chain"]} == {str(layer), str(host_template)}
+    assert extending["digest"] != own["digest"]
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps(ANSWERS), encoding="utf-8")
+    bodies = []
+    for loader_document in (own, extending):
+        rendered = _run(
+            [
+                str(ONETASKGRAPH_BIN),
+                "template",
+                "render",
+                "--template-loader",
+                "-",
+                "--answers",
+                str(answers),
+                "--no-interactive",
+            ],
+            json.dumps(loader_document),
+        )
+        assert rendered.returncode == 0, rendered.stderr
+        bodies.append(rendered.stdout)
+    assert bodies[0] == bodies[1]
+    host_template.write_text(host_template.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert resolve(True)["digest"] != extending["digest"]
