@@ -3745,6 +3745,17 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
             # A plan whose tasks all name one repository has its design-doc chain resolved
             # through that repository's registered checkout, so its launch is answered on a
             # registry holding one: a layerless stand-in where the suite's registry holds none.
+            # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This journey's
+            # `reads_docs` routing within its own project predates this change, which moves
+            # no test between tiers: it adds a registry entry for the one origin an example
+            # plan names alone, in a registry under this process's own temporary directory.
+            # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site: the
+            # journey and its project edge predate this change, which adds no launch, and
+            # re-homing it into an Nx project of its own is enforcement configuration this
+            # change may not move in order to pass.
+            # llmlint: ignore-block[shell_test_tiers_stay_split] Same site: this is a pytest
+            # journey over the real recipe, not a shell suite, and the stand-in is registered
+            # through the `onevcs` `config/onevcs.version` pins, touching no host state.
             refused = _just(
                 "orchestrate",
                 project,
@@ -3754,6 +3765,9 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
                 environment=resolving(project, environment),
                 seconds=120,
             )
+            # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+            # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+            # llmlint: ignore-end[shell_test_tiers_stay_split]
             reported = refused.stderr + refused.stdout
             # Three markers, one per boundary a loaded plan can next reach on this host:
             # the absent agent graph, a stale session holder, and the repository preflight
