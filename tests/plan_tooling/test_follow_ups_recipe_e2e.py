@@ -3366,9 +3366,10 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     ) in witness
     assert "re-derive it against the board as it now is" in witness
     (task,) = followed.second.prompts
-    assert "are re-derived from what the searches of step 7 now return on every pass" in " ".join(
-        task.split()
-    )
+    assert (
+        "are re-derived from step 7 for unbound tickets and from dependency items read by id "
+        "for bound tickets"
+    ) in " ".join(task.split())
 
     assert followed.new_deps_after_first != []
     assert followed.new_deps_after_second == []
@@ -3605,6 +3606,15 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert 'title: "run-1-follow-ups"' in project
     assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
     node = _one_task_record(checkout)
+    validator_lines = [
+        line
+        for line in node.splitlines()
+        if "check-dispositions" in line and "orchestrator.follow_up_tickets" in line
+    ]
+    assert validator_lines and all("--board" not in line for line in validator_lines), (
+        "the rendered dispatch must correct its account without repeating "
+        "the post-settle board check"
+    )
     front_matter = yaml.safe_load(node.split("---\n", 2)[1])
     metadata = front_matter["metadata"]
     assert metadata["onepipeline.id"] == NODE, metadata

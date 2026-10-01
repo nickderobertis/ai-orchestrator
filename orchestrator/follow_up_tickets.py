@@ -2091,7 +2091,7 @@ def correspond(
     if missing is not None and not carriers:
         raise missing
     held = {_native(entry.id.root, board): entry for entry in carriers}
-    bound = named
+    bound = named if missing is None else None
     if len(carriers) > 1:
         survivor = _survivor(ticket, carriers, board)
         for entry in carriers:
@@ -3075,7 +3075,7 @@ def filed_board_problems(
     causes: Collection[str],
     board: str,
     tickets: Mapping[str, Ticket | None],
-    details: Sequence[str] = (),
+    details: Mapping[str, Sequence[str]] | None = None,
 ) -> list[str]:
     """Filed causes whose bound item or evidence comment did not reach the board soundly.
 
@@ -3095,8 +3095,8 @@ def filed_board_problems(
             named = tuple(
                 dict.fromkeys(
                     match[0].rstrip(".,;)")
-                    for detail in details
-                    for match in re.finditer(rf"{re.escape(board)}:[^\s`<>\"]+", detail)
+                    for detail in (details or {}).get(cause, ())
+                    for match in re.finditer(rf"(?<![\w:]){re.escape(board)}:[^\s`<>\"]+", detail)
                 )
             )
             carrier = _evidence_carrier(run, cause, board, reads, named)
@@ -4348,7 +4348,14 @@ def _accounted(arguments: argparse.Namespace) -> int:
                 filed,
                 arguments.board,
                 local,
-                [str(entry["detail"]) for entry in entries],
+                {
+                    cause: [
+                        str(entry["detail"])
+                        for entry in entries
+                        if cause in cast(list[str], entry["root_causes"])
+                    ]
+                    for cause in filed
+                },
             )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)

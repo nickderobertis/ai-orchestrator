@@ -268,7 +268,7 @@ closed one.
    ticket>`, and correct the ticket until that command reports it sound. Then delete the
    draft files that ticket consumed, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`.
 7. **Search the board for the same root cause, and for the accepted fixes that bear on it.**
-   A ticket naming `board_item` or the store's `onetaskgraph.copies` link
+   A ticket naming `{{ shape.binding_field }}` or the store's `onetaskgraph.copies` link
    is already placed: do not run metadata, text or origin searches for it, including on a
    re-dispatch. If that item is closed, missing or no longer carries the ticket,
    `{{ board_status }}` alone runs recovery discovery and applies the duplicate rule. Read its bound item through `{{ board_status }}` and copy onto that item.
@@ -487,7 +487,7 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   ticket's body does not carry. On that refusal copy nothing for the ticket, re-derive it
   against the dependency item that the refusal names, using its read by id — removing the entry and the assumption from the text
   where the item is no longer accepted — validate it again, and report what was printed.
-- **`board_item` binds the ticket to its board item**: the native id of the item it is
+- **`{{ shape.binding_field }}` binds the ticket to its board item**: the native id of the item it is
   copied onto, as `{{ copy }}` prints it after the `{{ board }}:`, in the
   `{{ shape.record_key }}` record. `{{ board_status }}` and `{{ copy }}` write it and nothing else does — when this
   run creates its item or first reaches it, and again when two board items carry the

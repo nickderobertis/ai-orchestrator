@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -17,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 
+import delegation_checkout
 import follow_up_variables
 import jsonschema
 import plan_root_variable
@@ -3824,51 +3826,72 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
 #: trusted. Before this path moved onto the store's native queries every one of these steps
 #: read the whole board at least once, a count that grows with the board.
 FILING_REQUESTS = 12
-RECOPY_REQUESTS = 15
-ANSWER_REQUESTS = 12
-WITHDRAWAL_REQUESTS = 16
+RECOPY_REQUESTS = 12
+ANSWER_REQUESTS = 10
+WITHDRAWAL_REQUESTS = 13
 #: The plan-store CLI release the bounds above were measured on: `onetaskgraph --version`.
 BUDGET_MEASURED_ON = "onetaskgraph 0.2.52"
-#: Per-command (request count, modelled points) measured on BUDGET_MEASURED_ON.
-UNBOUND_STATUS_BUDGET = (1, 1)
-BOUND_STATUS_BUDGET = (3, 3)
-CREATE_COPY_BUDGET = (8, 8)
-BOUND_COPY_BUDGET = (9, 9)
-RE_ESTIMATE_BUDGET = (4, 4)
-EVIDENCE_POST_BUDGET = (8, 8)
-BOARD_CHECK_BUDGET = (12, 12)
+FILING_POINTS = 20
+RECOPY_POINTS = 12
+ANSWER_POINTS = 14
+WITHDRAWAL_POINTS = 13
+
+
+class RequestBudget(NamedTuple):
+    """The requests and modelled GitHub points one journey step may spend."""
+
+    requests: int
+    points: int
+
+
+class DocumentPrice(NamedTuple):
+    """One source document and its price in the upstream PRICES table."""
+
+    document: str
+    points: int
+
+
+#: Per-command requests and modelled points measured on BUDGET_MEASURED_ON.
+UNBOUND_STATUS_BUDGET = RequestBudget(1, 1)
+BOUND_STATUS_BUDGET = RequestBudget(3, 3)
+CREATE_COPY_BUDGET = RequestBudget(8, 8)
+BOUND_COPY_BUDGET = RequestBudget(9, 9)
+RE_ESTIMATE_BUDGET = RequestBudget(4, 4)
+EVIDENCE_POST_BUDGET = RequestBudget(8, 8)
+BOARD_CHECK_BUDGET = RequestBudget(12, 12)
 LAUNCH_VALIDATION_BOARD_CHECKS = 1
+LAUNCH_REFUSAL_BUDGET = RequestBudget(15, 15)
 
 #: The source's PRICES entries used by the fixture's operations. Search uses the measured
 #: 2026-10-01 page price instead; its upstream maximum-page price is still drift-checked.
-REQUEST_PRICES: dict[_Operation, tuple[str, int]] = {
-    _Operation.SEARCH: ("SEARCH_ISSUES", 5),
-    _Operation.ISSUE: ("ISSUE", 1),
-    _Operation.SUB_ISSUES: ("SUB_ISSUES", 5),
-    _Operation.BOARD: ("BOARD", 2),
-    _Operation.ORIGIN_LOOKUP: ("ORIGIN_LOOKUP", 1),
-    _Operation.BOARD_FIELDS: ("BOARD_FIELDS", 1),
-    _Operation.FIELD_SNAPSHOT: ("STATUS_OPTIONS_SNAPSHOT", 1),
-    _Operation.REPOSITORY: ("REPOSITORY", 1),
-    _Operation.DEPENDENCIES: ("ISSUE_DEPENDENCIES", 1),
-    _Operation.CREATE_ISSUE: ("CREATE_ISSUE", 1),
-    _Operation.ADD_TO_BOARD: ("ADD_TO_BOARD", 1),
-    _Operation.UPDATE_ISSUE: ("UPDATE_ISSUE", 1),
-    _Operation.UPDATE_FIELD: ("UPDATE_FIELD", 1),
-    _Operation.CLEAR_FIELD: ("CLEAR_FIELD", 1),
-    _Operation.CREATE_FIELD: ("CREATE_FIELD", 1),
-    _Operation.ADD_SUB_ISSUE: ("ADD_SUB_ISSUE", 1),
-    _Operation.ADD_BLOCKED_BY: ("ADD_BLOCKED_BY", 1),
-    _Operation.DELETE_ISSUE: ("DELETE_ISSUE", 1),
-    _Operation.COMMENTS: ("ISSUE_COMMENTS", 1),
-    _Operation.ADD_COMMENT: ("ADD_COMMENT", 1),
+REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
+    _Operation.SEARCH: DocumentPrice("SEARCH_ISSUES", 5),
+    _Operation.ISSUE: DocumentPrice("ISSUE", 1),
+    _Operation.SUB_ISSUES: DocumentPrice("SUB_ISSUES", 5),
+    _Operation.BOARD: DocumentPrice("BOARD", 2),
+    _Operation.ORIGIN_LOOKUP: DocumentPrice("ORIGIN_LOOKUP", 1),
+    _Operation.BOARD_FIELDS: DocumentPrice("BOARD_FIELDS", 1),
+    _Operation.FIELD_SNAPSHOT: DocumentPrice("STATUS_OPTIONS_SNAPSHOT", 1),
+    _Operation.REPOSITORY: DocumentPrice("REPOSITORY", 1),
+    _Operation.DEPENDENCIES: DocumentPrice("ISSUE_DEPENDENCIES", 1),
+    _Operation.CREATE_ISSUE: DocumentPrice("CREATE_ISSUE", 1),
+    _Operation.ADD_TO_BOARD: DocumentPrice("ADD_TO_BOARD", 1),
+    _Operation.UPDATE_ISSUE: DocumentPrice("UPDATE_ISSUE", 1),
+    _Operation.UPDATE_FIELD: DocumentPrice("UPDATE_FIELD", 1),
+    _Operation.CLEAR_FIELD: DocumentPrice("CLEAR_FIELD", 1),
+    _Operation.CREATE_FIELD: DocumentPrice("CREATE_FIELD", 1),
+    _Operation.ADD_SUB_ISSUE: DocumentPrice("ADD_SUB_ISSUE", 1),
+    _Operation.ADD_BLOCKED_BY: DocumentPrice("ADD_BLOCKED_BY", 1),
+    _Operation.DELETE_ISSUE: DocumentPrice("DELETE_ISSUE", 1),
+    _Operation.COMMENTS: DocumentPrice("ISSUE_COMMENTS", 1),
+    _Operation.ADD_COMMENT: DocumentPrice("ADD_COMMENT", 1),
 }
 
 
 def _request_points(request: _GraphQLRequest) -> int:
     """Price every document encountered; an unpriced document fails the journey."""
     assert request.operation in REQUEST_PRICES, f"unpriced document: {request.query}"
-    _document, price = REQUEST_PRICES[request.operation]
+    price = REQUEST_PRICES[request.operation].points
     if request.operation is _Operation.SEARCH:
         first = request.variables["first"]
         assert isinstance(first, int), request.variables
@@ -3899,8 +3922,12 @@ def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
         (name, int(price))
         for name, price in re.findall(r"\(graphql::([A-Z_]+), (\d+)\)", source.stdout)
     )
-    for document, price in REQUEST_PRICES.values():
-        assert upstream.get(document) == price, (document, price, upstream.get(document))
+    for price in REQUEST_PRICES.values():
+        assert upstream.get(price.document) == price.points, (
+            price.document,
+            price.points,
+            upstream.get(price.document),
+        )
 
 
 #: Python's audit hook records the real CLI subprocesses without replacing any command.
@@ -3945,9 +3972,107 @@ def _once_per_store_call(trace: Path) -> list[list[str]]:
     return store
 
 
+def _launch_follow_up_validation(
+    tmp_path: Path,
+    environment: dict[str, str],
+    root: Path,
+    trace: Path,
+    issue: str,
+    *,
+    corrupt: bool,
+) -> None:
+    """The real attached recipe, with its engine boundary exercising the dispatch's last check.
+
+    Template resolution/rendering, the local validator, and post-settle validators are real.
+    Only the engine's launch is doubled, as in the recipe's delegated-boundary journey.
+    In the refusal case it changes board priority after the last local check: the post-settle
+    board check must catch that change, the concrete failure a pre-settle-only check misses.
+    """
+    from plan_tooling.test_follow_ups_recipe_e2e import _creates_tasks, _one_task_record
+
+    checkout, launch_trace = delegation_checkout.delegation_checkout(tmp_path)
+    _creates_tasks(checkout)
+    store = checkout / ".venv/bin/onetaskgraph"
+    store.symlink_to(ONETASKGRAPH_BIN)
+    python = ONETASKGRAPH_BIN.parent / "python3"
+    dispatch_check = tmp_path / "dispatch-check.py"
+    dispatch_check.write_text(
+        "import pathlib, re, shlex, subprocess\n"
+        f"records = sorted(pathlib.Path({str(checkout / '.plans/tasks')!r}).rglob('*.md'))\n"
+        "assert len(records) == 1, records\n"
+        "body = records[0].read_text().split('---\\n', 2)[2]\n"
+        "commands = re.findall(r'`([^`\\n]*orchestrator\\.follow_up_tickets "
+        "check-dispositions[^`\\n]*)`', body)\n"
+        "assert commands and all('--board' not in command for command in commands), commands\n"
+        "subprocess.run(shlex.split(commands[-1]), check=True)\n",
+        encoding="utf-8",
+    )
+    last = shlex.join(
+        [
+            "env",
+            f"PYTHONPATH={environment['PYTHONPATH']}",
+            f"FOLLOW_UP_BUDGET_TRACE={trace}",
+            str(python),
+            str(dispatch_check),
+        ]
+    )
+    mutate = shlex.join([str(store), "task", "priority", "set", issue, "high", "--json"])
+    engine = checkout / ".venv/bin/onepipeline"
+    # llmlint: ignore[tests_mirror_real_usage] Only the published engine CLI delegated
+    # to by the real recipe is doubled, the sanctioned boundary in AGENTS.md and the
+    # delegated recipe journeys. Real template rendering supplies the executed last
+    # validator; the attached recipe and its post-settle validator remain real. The
+    # engine's scheduling and paid worker turns are not the request-budget seam.
+    engine.write_text(
+        engine.read_text(encoding="utf-8").replace(
+            'exit "${FAKE_ENGINE_EXIT:-0}"',
+            'if [ "${1:-}" = start ]; then\n'
+            + last
+            + "\n"
+            + (mutate + "\n" if corrupt else "")
+            + 'fi\nexit "${FAKE_ENGINE_EXIT:-0}"',
+        ),
+        encoding="utf-8",
+    )
+    trace.write_text("", encoding="utf-8")
+    _GitHubFixture.requests.clear()
+    result = delegation_checkout.run_recipe(
+        checkout,
+        launch_trace,
+        "follow-ups",
+        PROPOSED_RUN,
+        env={**environment, plan_root_variable.name(): str(checkout / ".plans")},
+    )
+    assert result.returncode == (follow_up_tickets.UNSOUND if corrupt else 0), result.stderr
+    if corrupt:
+        assert "holds the priority `high`" in result.stderr, result.stderr
+    task = _one_task_record(checkout)
+    validators = re.findall(
+        r"`([^`\n]*orchestrator\.follow_up_tickets check-dispositions[^`\n]*)`",
+        task.split("---\n", 2)[2],
+    )
+    assert validators and all("--board" not in command for command in validators), validators
+    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    checks = [
+        call["argv"]
+        for call in calls
+        if call["kind"] == "module" and "check-dispositions" in call["argv"]
+    ]
+    assert len(checks) == 2 and sum("--board" in argv for argv in checks) == (
+        LAUNCH_VALIDATION_BOARD_CHECKS
+    ), checks
+    # Only one board check, plus the explicit corruption write in the refusal journey.
+    _bounded_step(
+        "launch validation",
+        LAUNCH_REFUSAL_BUDGET if corrupt else BOARD_CHECK_BUDGET,
+        bound=True,
+        writes=corrupt,
+    )
+
+
 def _bounded_step(
     label: str,
-    budget: tuple[int, int],
+    budget: RequestBudget,
     *,
     bound: bool = False,
     allowed_comments: set[str] | None = None,
@@ -3958,9 +4083,9 @@ def _bounded_step(
     if trace is not None:
         _once_per_store_call(trace)
     requests = list(_GitHubFixture.requests)
-    cost = (len(requests), sum(_request_points(request) for request in requests))
-    print(f"{label}: requests={cost[0]}, points={cost[1]}")
-    assert cost[0] <= budget[0] and cost[1] <= budget[1], (label, cost, budget)
+    cost = RequestBudget(len(requests), sum(_request_points(request) for request in requests))
+    print(f"{label}: requests={cost.requests}, points={cost.points}")
+    assert cost.requests <= budget.requests and cost.points <= budget.points, (label, cost, budget)
     for operation in (_Operation.ISSUE, _Operation.COMMENTS):
         identifiers = [
             request.string("id") for request in requests if request.operation is operation
@@ -3968,7 +4093,7 @@ def _bounded_step(
         # 0.2.52 resolves an item twice inside one show (the second resolution precedes
         # its comments). Hold the orchestrator call budget separately below; adoption
         # will remove this store-internal exception and tighten this wire bound to one.
-        ceiling = (budget[0] if writes else 2) if operation is _Operation.ISSUE else 1
+        ceiling = (budget.requests if writes else 2) if operation is _Operation.ISSUE else 1
         assert all(identifiers.count(one) <= ceiling for one in identifiers), (
             label,
             operation,
@@ -3983,7 +4108,6 @@ def _bounded_step(
     _GitHubFixture.requests.clear()
 
 
-@pytest.mark.reads_docs
 def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_path: Path) -> None:
     """Real commands over many unrelated items, including another run's evidence carrier."""
     environment, root = _followups_environment(tmp_path)
@@ -4103,8 +4227,18 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
         )
         _bounded_step(
-            "account board check", BOARD_CHECK_BUDGET, bound=True, allowed_comments=allowed
+            "account board check",
+            BOARD_CHECK_BUDGET,
+            bound=True,
+            allowed_comments=allowed,
+            trace=trace,
         )
+        for corrupt in (False, True):
+            launch_root = tmp_path / ("unsound-launch" if corrupt else "sound-launch")
+            launch_root.mkdir()
+            _launch_follow_up_validation(
+                launch_root, environment, root, trace, issue, corrupt=corrupt
+            )
 
 
 #: The words the filing's text search asks the board for, which some accepted items of other
@@ -4119,6 +4253,13 @@ def _step_cost(label: str) -> int:
     assert (walked, unnarrowed) == ([], []), (
         f"{label} read the whole board: walked {walked}, searched {unnarrowed}"
     )
+    points = sum(_request_points(request) for request in requests)
+    budget = {
+        "filing the ticket": FILING_POINTS,
+        "re-copying the ticket": RECOPY_POINTS,
+        "withdrawing the ticket": WITHDRAWAL_POINTS,
+    }[label]
+    assert points <= budget, (label, points, budget)
     _GitHubFixture.requests.clear()
     return len(requests)
 
@@ -4249,6 +4390,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         walked, _searched = _board_cost(answering)
         assert walked == [], f"answering a comment walked the board's items: {walked}"
         answer = len(answering)
+        assert sum(map(_request_points, answering)) <= ANSWER_POINTS, answering
         _GitHubFixture.requests.clear()
 
         # A withdrawal: decided with `--withdraw`, validated and copied, which closes it.
