@@ -59,6 +59,7 @@ from typing import NamedTuple
 
 import delegation_checkout
 import follow_up_variables
+import github_board as host_board
 import plan_root_variable
 import pytest
 import short_state
@@ -3366,9 +3367,10 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     ) in witness
     assert "re-derive it against the board as it now is" in witness
     (task,) = followed.second.prompts
-    assert "are re-derived from what the searches of step 7 now return on every pass" in " ".join(
-        task.split()
-    )
+    assert (
+        "are re-derived from step 7 for unbound tickets and from dependency items read by id "
+        "for bound tickets"
+    ) in " ".join(task.split())
 
     assert followed.new_deps_after_first != []
     assert followed.new_deps_after_second == []
@@ -3605,6 +3607,15 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert 'title: "run-1-follow-ups"' in project
     assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
     node = _one_task_record(checkout)
+    validator_lines = [
+        line
+        for line in node.splitlines()
+        if "check-dispositions" in line and "orchestrator.follow_up_tickets" in line
+    ]
+    assert validator_lines and all("--board" not in line for line in validator_lines), (
+        "the rendered dispatch must correct its account without repeating "
+        "the post-settle board check"
+    )
     front_matter = yaml.safe_load(node.split("---\n", 2)[1])
     metadata = front_matter["metadata"]
     assert metadata["onepipeline.id"] == NODE, metadata
@@ -3820,3 +3831,153 @@ def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_rec
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line
+
+
+def _launch_follow_up_validation(
+    tmp_path: Path,
+    environment: dict[str, str],
+    root: Path,
+    trace: Path,
+    issue: str,
+    *,
+    corrupt: bool,
+) -> None:
+    """The real attached recipe, with its engine boundary exercising the dispatch's last check.
+
+    Template resolution/rendering, the local validator, and post-settle validators are real.
+    Only the engine's launch is doubled, as in the recipe's delegated-boundary journey.
+    In the refusal case it changes board priority after the last local check: the post-settle
+    board check must catch that change, the concrete failure a pre-settle-only check misses.
+    """
+    # llmlint: ignore-block[tests_mirror_real_usage, e2e_not_mocked] Only the published engine
+    # CLI delegated to by the real recipe is doubled, the sanctioned boundary in AGENTS.md and the
+    # delegated recipe journeys. Real template rendering supplies the executed last
+    # validator; the attached recipe and its post-settle validator remain real. The
+    # engine's scheduling and paid worker turns are not the request-budget seam.
+    checkout, launch_trace = delegation_checkout.delegation_checkout(tmp_path)
+    _creates_tasks(checkout)
+    store = checkout / ".venv/bin/onetaskgraph"
+    store.symlink_to(ONETASKGRAPH_BIN)
+    python = ONETASKGRAPH_BIN.parent / "python3"
+    dispatch_check = tmp_path / "dispatch-check.py"
+    dispatch_check.write_text(
+        "import pathlib, re, shlex, subprocess\n"
+        f"records = sorted(pathlib.Path({str(checkout / '.plans/tasks')!r}).rglob('*.md'))\n"
+        "assert len(records) == 1, records\n"
+        "body = records[0].read_text().split('---\\n', 2)[2]\n"
+        "commands = re.findall(r'`([^`\\n]*orchestrator\\.follow_up_tickets "
+        "check-dispositions[^`\\n]*)`', body)\n"
+        "assert commands and all('--board' not in command for command in commands), commands\n"
+        "subprocess.run(shlex.split(commands[-1]), check=True)\n",
+        encoding="utf-8",
+    )
+    last = shlex.join(
+        [
+            "env",
+            f"PYTHONPATH={environment['PYTHONPATH']}",
+            f"FOLLOW_UP_BUDGET_TRACE={trace}",
+            str(python),
+            str(dispatch_check),
+        ]
+    )
+    mutate = shlex.join([str(store), "task", "priority", "set", issue, "high", "--json"])
+    engine = checkout / ".venv/bin/onepipeline"
+    engine.write_text(
+        engine.read_text(encoding="utf-8").replace(
+            'exit "${FAKE_ENGINE_EXIT:-0}"',
+            'if [ "${1:-}" = start ]; then\n'
+            + last
+            + "\n"
+            + (mutate + "\n" if corrupt else "")
+            + 'fi\nexit "${FAKE_ENGINE_EXIT:-0}"',
+        ),
+        encoding="utf-8",
+    )
+    trace.write_text("", encoding="utf-8")
+    host_board._GitHubFixture.requests.clear()
+    result = delegation_checkout.run_recipe(
+        checkout,
+        launch_trace,
+        "follow-ups",
+        host_board.PROPOSED_RUN,
+        env={**environment, plan_root_variable.name(): str(checkout / ".plans")},
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage, e2e_not_mocked]
+    assert result.returncode == (tickets.UNSOUND if corrupt else 0), result.stderr
+    if corrupt:
+        assert "holds the priority `high`" in result.stderr, result.stderr
+    task = _one_task_record(checkout)
+    validators = re.findall(
+        r"`([^`\n]*orchestrator\.follow_up_tickets check-dispositions[^`\n]*)`",
+        task.split("---\n", 2)[2],
+    )
+    assert validators and all("--board" not in command for command in validators), validators
+    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    checks = [
+        call["argv"]
+        for call in calls
+        if call["kind"] == "module" and "check-dispositions" in call["argv"]
+    ]
+    assert len(checks) == 2 and sum("--board" in argv for argv in checks) == (
+        host_board.LAUNCH_VALIDATION_BOARD_CHECKS
+    ), checks
+    # Only one board check, plus the explicit corruption write in the refusal journey.
+    host_board._bounded_step(
+        "launch validation",
+        host_board.LAUNCH_REFUSAL_BUDGET if corrupt else host_board.BOARD_CHECK_BUDGET,
+        bound=True,
+        writes=corrupt,
+    )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, e2e_not_mocked]  # noqa: E501 - directive rule lists occupy one line
+# This journey belongs to plan-tooling, as tests/plan_tooling/AGENTS.md requires. Its
+# delegation checkout copies the tracked workspace, so conftest requires reads_docs and
+# that project's whole-workspace key; this marker never moves it out of its project.
+# The task explicitly requires the loopback GitHub fixture with the installed store CLI:
+# the simulated remote protects the live board while requests and validators remain real.
+@pytest.mark.reads_docs
+def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_change(
+    tmp_path: Path,
+) -> None:
+    """Last dispatch check and attached closeout share one board budget, including refusal."""
+    environment, root = host_board._followups_environment(tmp_path)
+    trace = host_board._audit_follow_up_calls(tmp_path, environment)
+    ticket = host_board._follow_up_ticket(host_board.SIBLING_REPOSITORY)
+    path = host_board._written_ticket(root, ticket)
+    with host_board._serving_followups(environment, fields=True):
+        assert host_board._decided_status(environment, path) == tickets.Status.PROPOSED
+        copied = host_board._follow_up_step(
+            environment, "copy", "--board", tickets.BOARD, str(path)
+        )
+        assert copied.returncode == 0, copied.stderr
+        issue = json.loads(copied.stdout)["destination"]
+        account = tickets.dispositions_path(root, host_board.PROPOSED_RUN)
+        account.parent.mkdir(parents=True, exist_ok=True)
+        account.write_text(
+            json.dumps(
+                {
+                    "schema": tickets.DISPOSITIONS_SCHEMA,
+                    "run": host_board.PROPOSED_RUN,
+                    "drafts": list(ticket.drafts),
+                    "dispositions": [
+                        {
+                            "draft": ticket.drafts[0],
+                            "disposition": "filed",
+                            "root_causes": [ticket.root_cause],
+                            "detail": f"Copied ticket to {issue}.",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        for corrupt in (False, True):
+            launch_root = tmp_path / ("unsound-launch" if corrupt else "sound-launch")
+            launch_root.mkdir()
+            _launch_follow_up_validation(
+                launch_root, environment, root, trace, issue, corrupt=corrupt
+            )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, e2e_not_mocked]  # noqa: E501 - directive rule lists occupy one line

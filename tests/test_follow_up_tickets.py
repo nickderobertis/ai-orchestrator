@@ -2044,6 +2044,7 @@ def test_a_re_copy_past_a_withdrawn_duplicate_rebinds_to_the_open_item_and_notes
     (notice,) = _comment_bodies(duplicate)
     assert notice.strip().endswith(tickets.DUPLICATE_MARKER.format(run=RUN, survivor=live))
     assert f"continues on {live}" in notice
+    _write(drafts_root, staged)
     assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
 
     status, printed, _ = _copied(ticket, capsys)
@@ -2106,7 +2107,7 @@ def test_board_status_and_copy_refuse_a_binding_to_an_item_not_carrying_the_tick
     assert (status, printed) == (tickets.MISBOUND, "")
     flat = " ".join(reported.split())
     assert f"the ticket names {other} as its item, which does not carry this ticket's" in flat
-    assert f"where {live.removeprefix(f'{BOARD}:')} does" in flat, flat
+    assert f"where {live.removeprefix(f'{BOARD}:')} does" in flat
     status, printed, reported = _copied(ticket, capsys)
     assert (status, printed) == (tickets.MISBOUND, "")
     flat = " ".join(reported.split())
@@ -2179,7 +2180,7 @@ def test_duplicates_without_one_open_item_beside_withdrawn_ones_are_refused(
     ticket = _write(drafts_root, _ticket())
     live = _on_board(ticket)
     duplicate = _duplicated(live, status)
-    ticket = _write(drafts_root, _bound(_ticket(), live))
+    ticket = _write(drafts_root, _ticket())
 
     answered, printed, reported = _decided(ticket, capsys)
     assert (answered, printed) == (tickets.MISBOUND, "")
@@ -2188,7 +2189,7 @@ def test_duplicates_without_one_open_item_beside_withdrawn_ones_are_refused(
     assert refusal in flat, flat
 
     assert _comment_bodies(duplicate) == _comment_bodies(live) == []
-    assert tickets.read_ticket(ticket) == _bound(_ticket(), live)
+    assert tickets.read_ticket(ticket) == _ticket()
 
 
 def test_copy_refuses_a_ticket_it_cannot_read_and_a_report_naming_no_item(
@@ -3200,8 +3201,8 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "before it confirms the text, so search for words an issue would carry rather than a "
         "fragment of one, and it may not yet list an item another run wrote a few seconds ago.",
         "Neither is narrowed to a repository",
-        "These searches are the one board read this ticket's filing makes; nothing in this "
-        "task lists the board.",
+        "Only an unbound ticket needs these duplicate searches; nothing in this task lists "
+        "the board.",
         "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
         "like any other open item and still takes this run's evidence.",
         "Write each ticket as if the accepted fixes those searches returned were already in. "
@@ -3228,11 +3229,11 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "For every fate but unchanged, add the item's `depends_on` entry, say in the text "
         "where and how its fix changed the ticket with the item's URL, then validate the "
         "ticket again.",
-        "On a re-dispatch, search again and re-derive all of this from what the searches now "
-        "return, exactly as a first pass does: an accepted ticket may have appeared, moved or "
+        "On a re-dispatch of an unbound ticket, ask each distinct question once and re-derive "
+        "this from those answers: an accepted ticket may have appeared, moved or "
         "been un-accepted since the last pass, so entries are added and removed and the "
-        "ticket's claims re-derived to match, and this run's own item is edited by copying "
-        "its ticket again.",
+        "ticket's claims re-derived to match. A bound ticket skips these searches and edits "
+        "its own item by copying again.",
     ):
         assert said in flat_step, said
     assert "every ticket dropped or withdrawn under an accepted ticket with that ticket's URL" in (
@@ -3243,9 +3244,9 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
     redispatch = _flat(_section(task, REDISPATCH_SECTION))
     assert (
         "a ticket's dependencies on accepted tickets, and the claims written against their "
-        "fixes, are re-derived from what the searches of step 7 now return on every pass — an "
-        "accepted ticket "
-        "may have appeared, moved or been un-accepted since the last pass, so `depends_on` "
+        "fixes, are re-derived from step 7 for unbound tickets and from dependency items read "
+        "by id for bound tickets — an accepted ticket may have moved or been un-accepted "
+        "since the last pass, so `depends_on` "
         "entries are added and removed and the ticket's `## Impact`, `## Root cause`, "
         "`## Suggested fix` and `## Rejected fixes` re-derived to match, and "
         f"`{BOARD_STATUS} --board followups <path of the ticket>` refusing an entry is the "
@@ -5008,3 +5009,106 @@ def test_a_gathering_quoting_one_comment_twice_is_refused_as_unanswerable(
 
     assert status == tickets.UNSOUND
     assert f"it quotes comment c-1 on {QUOTED_ISSUE} 2 times" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("has_survivor", [False, True], ids=["gone", "recoverable"])
+def test_a_missing_binding_uses_origin_recovery_without_creating_another_item(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], has_survivor: bool
+) -> None:
+    live = _on_board(_write(drafts_root, _ticket())) if has_survivor else None
+    missing = f"{BOARD}:no-longer-on-the-board"
+    ticket = _write(drafts_root, _bound(_ticket(), missing, linked=False))
+    status, printed, reported = _decided(ticket, capsys)
+    if has_survivor:
+        assert (status, printed) == (tickets.SOUND, "backlog\n"), reported
+        assert tickets.read_ticket(ticket).board_item == live.removeprefix(f"{BOARD}:")
+    else:
+        assert (status, printed) == (tickets.UNRUNNABLE, "")
+        assert "no task with that id" in reported
+    assert not (board / "tasks/no-longer-on-the-board.md").exists()
+
+
+@pytest.mark.parametrize("named", ["wrong-cause", "wrong-run", "right-run"])
+def test_named_evidence_carriers_are_held_to_the_cause_and_run_marker(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], named: str
+) -> None:
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    _write(drafts_root, _carrying())
+    cause = "unrelated-cause" if named == "wrong-cause" else CAUSE
+    issue = _filed(drafts_root, OTHER_RUN, cause, "An earlier ticket")
+    comment = tickets.render_comment(
+        OTHER_RUN if named == "wrong-run" else RUN, CAUSE, "This run reproduced it."
+    )
+    plan_store.sdk(plan_store.client().task_comment_add(issue, body=comment))
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.SOUND
+    account = tickets.open_dispositions(drafts_root, RUN)
+    account.write_text(json.dumps(_account(_disposed(detail=f"Evidence on `{issue}`."))), "utf-8")
+    capsys.readouterr()
+    checked = tickets.main(
+        ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+    )
+    assert checked == (tickets.SOUND if named == "right-run" else tickets.UNSOUND)
+    if named != "right-run":
+        assert "no bound item or evidence comment" in capsys.readouterr().err
+
+
+def test_an_unreadable_filed_ticket_cannot_be_made_sound_by_board_evidence(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    _write(drafts_root, dataclasses.replace(_carrying(), host=tickets.Host("not a hostname")))
+    account = tickets.open_dispositions(drafts_root, RUN)
+    account.write_text(json.dumps(_account(_disposed())), "utf-8")
+    checked = tickets.main(
+        ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+    )
+    assert checked == tickets.UNRUNNABLE
+    assert "has no readable local ticket" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["board-status", "board-items"])
+def test_search_help_says_which_questions_are_already_answered(
+    capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    with pytest.raises(SystemExit, match="0"):
+        tickets.main([command, "--help"])
+    said = " ".join(capsys.readouterr().out.split())
+    assert "bound" in said and "origin" in said
+    assert "without searching" in said if command == "board-status" else "reuse answers" in said
+
+
+@pytest.mark.parametrize("answer_kind", ["empty", "no-comments"])
+def test_board_reads_refuse_incomplete_details_through_the_cli_protocol(
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    answer_kind: str,
+) -> None:
+    """A CLI below the typed SDK can answer no item or a source without native comments."""
+    issue = _on_board(_write(drafts_root, _ticket()))
+    detail = plan_store.sdk(plan_store.client().task_show(issue)).model_dump(mode="json")
+    if answer_kind == "empty":
+        detail["items"] = []
+    else:
+        detail.pop("comments", None)
+    response = tmp_path / "detail.json"
+    response.write_text(json.dumps(detail), "utf-8")
+    cli = tmp_path / "onetaskgraph"
+    cli.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "if sys.argv[1:3] == ['task', 'show']:\n"
+        f"    print(pathlib.Path({str(response)!r}).read_text())\n"
+        "else:\n"
+        "    print('source declares no native comments', file=sys.stderr)\n"
+        "    sys.exit(1)\n",
+        "utf-8",
+    )
+    cli.chmod(0o755)
+    monkeypatch.setattr(plan_store, "locked_binary", lambda: cli)
+    checked = tickets.main(["re-estimate", "--board", BOARD, issue])
+    assert checked == tickets.UNRUNNABLE
+    expected = "returned 0 records" if answer_kind == "empty" else "no native comments"
+    assert expected in capsys.readouterr().err

@@ -15,6 +15,7 @@
     "support-fake-codex",
     "support-fake-codex-untrusted-directory",
     "support-follow-up-variables",
+    "support-github-board",
     "support-no-paid-provider",
     "support-nx-workspace",
     "support-older-plan-store",
