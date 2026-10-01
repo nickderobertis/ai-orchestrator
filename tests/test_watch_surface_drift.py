@@ -81,7 +81,7 @@ from typing import NamedTuple
 
 import pytest
 from published_surface import surface_of
-from test_engine_contracts import ONEPIPELINE, _source
+from test_engine_contracts import ONEPIPELINE, TEST_MODULE, _source
 from watch_rule import DOCUMENT, rule
 
 from orchestrator.root import REPO_ROOT
@@ -614,4 +614,30 @@ def test_the_default_watch_conditions_the_rule_states_are_the_engines() -> None:
     assert rule().defaults == engine, (
         f"{DOCUMENT}'s watch rule says a watch given no `--until` waits on "
         f"{rule().defaults}, and onepipeline {ONEPIPELINE.ref} defaults to {engine}"
+    )
+
+
+@pytest.mark.reads_checkouts
+def test_every_status_the_rule_pairs_is_the_one_the_engine_source_declares() -> None:
+    """The whole exit-status table, read where the engine declares each ending.
+
+    The observations above reach only the endings a recorded or held run can produce, so
+    the rule's full pairing is also held to the pinned engine's own table: each ending's
+    word and exit constant in `watch.rs`, and each constant's value in `error.rs`. Every
+    status the rule names is paired here, not just the unobservable ones, so the two
+    halves of this module answer the same table.
+    """
+    watching = TEST_MODULE.sub("", _source(ONEPIPELINE, "watch.rs"))
+    errors = _source(ONEPIPELINE, "error.rs")
+    words = dict(re.findall(r'Self::(\w+)(?:\(_\))? => "([a-z-]+)",', watching))
+    constants = dict(re.findall(r"Self::(\w+)(?:\(_\))? => (EXIT_[A-Z_]+),", watching))
+    values = {
+        name: int(value)
+        for name, value in re.findall(r"const (EXIT_[A-Z_]+): i32 = (\d+);", errors)
+    }
+    assert constants, f"onepipeline {ONEPIPELINE.ref}'s watch.rs pairs no ending with a status"
+    engine = {values[constant]: words[variant] for variant, constant in constants.items()}
+    assert _restated_statuses() == engine, (
+        f"{DOCUMENT} pairs the watch's exit statuses as {_restated_statuses()}; onepipeline "
+        f"{ONEPIPELINE.ref} declares {engine}"
     )

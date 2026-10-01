@@ -721,28 +721,82 @@ later" a state rather than a lost node. See [Live graph
 edits](#live-graph-edits).
 
 The optional top-level `goal` mapping has a required non-empty
-`text` and optional `id`; when omitted, the id is derived from the text. Active
-goals and their repository identities are visible across projects with `just goals`.
-Before a recorded run starts, the launch refuses to overlap any active run that
-targets the same registered repository identity. An operator may deliberately
-proceed with `--acknowledge-concurrent`; the shared identities and active run IDs
-are then recorded as a `concurrent-acknowledged` journal event for audit. The
-reservation lasts as long as the run is unsettled and is removed when it settles.
+`text` and optional `id`; when omitted, the id is derived from the text. `just goals`
+lists what each run is for and how far it has got.
 
-The refusal says *which kind* of company each overlapping run is, because they
-call for opposite decisions. A run reported `is LIVE (owner pid N on HOST)` has a
-working owner: a second orchestration would share its checkouts. One reported
-`holds pid N ... but shows no progress (PARKED)`, or `registered but not
-observable here`, is a registration whose owner is not working — the residue
-`--acknowledge-concurrent` exists to launch past. Acknowledging never hides a
-live one: launching past it prints `proceeding alongside a live concurrent run`
-on stderr, `just goals` states each registered owner's observed state, and the
-planner's `just runs` and `just status` views carry a `CONCURRENT:` line naming
-every live run that shares this one's identities — under the same
-`--parked-after` threshold those views report parked with, so one view cannot
-call a launch parked and a live neighbour in consecutive lines. Liveness is
-observed at read time and never stored, because a recorded "this run was alive"
-is false the moment its process exits.
+### The concurrency interlock, and when to depend instead
+
+Before a run is minted, the launch asks `onevcs` who holds every repository the plan's
+nodes name, and refuses to race a **live holder** of one of those repository identities.
+A holder is a live `onevcs` session, never a registered run: a run whose next node on the
+identity has not opened a session yet holds nothing. The engine stamps every node session
+with the `onevcs` session labels `run` and `node`, which **attribute** a holder to the run
+and node it was opened for; a holder missing either — a session opened by hand, or by an
+older engine — is unattributed. A stale holder is reported on stderr and does not refuse.
+The rule's one source is onepipeline's `docs/contract.md` at the pinned tag, in its
+launch-interlock paragraph; what follows is what a manager decides with.
+
+**A dependency acknowledges the holder it waits for.** A live holder on identity I,
+attributed to run R and node N, does not refuse the launch when every node of the new plan
+on I reaches exactly `run:R#N` — as its own dependency, or through the plan's own in-plan
+edges to a node that has it. Nothing wider counts: a dependency on another node of R,
+even one downstream of N, does not (R is live-editable, so that node settling need not
+mean N has), and neither does one `run:R#N` edge while another node of the plan on I
+lacks it, because that other node still races the holder. An unattributed holder is never
+acknowledged by a dependency. Every other live holder still refuses.
+
+**The refusal names what would acknowledge each holder.** It exits 2, keeps its prefix
+`concurrent project work refused for run '<run>':`, and names each conflicting holder by
+its identity, session and owner pid; for an attributed one, its run and node, the plan's
+node ids on that identity that do not reach it, and the remedy — declare
+`run:<R>#<N>` under `onepipeline.deps` on them. It closes with both ways forward, one of
+them `pass --acknowledge-concurrent`, and the one-sentence judgment the flag's `--help`
+states too. For an unattributed holder only the flag passes it.
+
+**How a plan authored here carries the dependency.** A task's dependency on another run's
+node is the reserved `onepipeline.deps` task metadata, set when the task is created in the
+`authoring` source —
+
+```sh
+onetaskgraph task create authoring --project <project> --title <title> \
+  --metadata 'onepipeline.deps=["run:<run_id>#<node_id>"]'
+```
+
+— on every task of the plan that works the shared repository (or on a task they all
+depend on in-plan); `just check-plan` and `just review-plan` accept it, and the
+dependency also schedules the node: it stays blocked, never failed, until that node
+settles `done`. A node added to a live run carries the same reference in the `deps` of its
+`add`; the interlock runs at launch only, so there the dependency schedules the added node
+behind the holder rather than being checked against it.
+
+**What the run records.** `--acknowledge-concurrent` keeps its meaning: supplied, it
+acknowledges **every** live holder, dependency-covered ones included, says so on stderr,
+and journals `concurrent-acknowledged` with `shared_identities`, `runs` and a `holders`
+entry for every live holder, each carrying its `session` and `owner_pid` and, where
+known, its `identity`, `run` and `node`, plus a `dependency` exactly when a dependency
+also covers that holder. Every dependency-covered holder, with or without the flag, is
+named on one stderr line and journalled as `concurrent-deferred`, `{launching, holders:
+[{identity, session, owner_pid, run, node, dependency, dependents}]}`, `dependents`
+being the plan's node ids on that identity.
+
+**Known limit.** The interlock sees only live sessions. A concurrent run's work that has
+not been dispatched yet — its next node on the identity waiting on its own dependencies —
+is invisible to it, with or without a dependency, so a launch the interlock passes can
+still meet that run's later nodes on the same repository.
+
+**Which way forward is a manager's judgment**, made per conflicting holder:
+
+- **Depend** on the other run's node — `run:<id>#<node>` on every node of this plan that
+  works the shared repository — when this work actually needs that work first: it builds
+  on that change, or would otherwise redo or contradict it.
+- **Acknowledge and race it** when this work is higher priority than the concurrent run:
+  waiting would put the more important change behind the less important one.
+- **Acknowledge** when no conflict is expected between the two runs' changes — different
+  files, different concerns — **unless** concurrency on that one repository is already
+  high. Every branch that lands first makes each other live branch merge `main` and re-run
+  its gate, so on a repository already carrying several live runs, racing one more spends
+  much of its time re-running gates after repeated merges of `main`; then waiting for the
+  holder, or depending on it, is cheaper than racing.
 
 ## The agent graphs a run launches
 

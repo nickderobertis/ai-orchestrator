@@ -721,6 +721,15 @@ them reach you; `manager` names the session role and is never a command.
    proposal over the live channel with `add` / `retry` / `drop` / `reparent` edits.
    Workers propose and never edit. Before you end a turn, `just unfinished` answers
    what you still owe: runs `just unwatched` names and branches `just unpublished` counts.
+   <!-- llmlint: ignore-block[agents_md_durable_and_terse, no_redundant_instruction_pointers] The manager decides a refused launch from this loop, so the task that adopted the dependency-acknowledging interlock requires its judgment stated here tersely and pointing at the full statement beside the rule in `docs/orchestration.md`; the rule and its detail live only there. -->
+   A launch refused as `concurrent project work refused` names each holding run and node:
+   **depend** on it (`run:<id>#<node>` in `onepipeline.deps` on every node working that
+   repository) when this work needs it first; `--acknowledge-concurrent` to race it when
+   this work is higher priority, or when no conflict is expected — unless concurrency on
+   that repository already makes re-running gates after repeated `main` merges costly,
+   when waiting or depending is cheaper ([in
+   full](docs/orchestration.md#the-concurrency-interlock-and-when-to-depend-instead)).
+   <!-- llmlint: ignore-end[agents_md_durable_and_terse, no_redundant_instruction_pointers] -->
 
 **A node whose record is wrong is corrected rather than re-run.** `settle` moves a
 node's recorded state to what you can see it reached, from evidence the run never

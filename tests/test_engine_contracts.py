@@ -3528,3 +3528,80 @@ def test_the_graph_override_method_is_spelled_as_the_pinned_engine_publishes_it(
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The launch interlock's journey, which matches the refusal and reads both journal kinds.
+INTERLOCK_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_concurrency_interlock_e2e.py"
+#: The launch journey whose plan check accepts a plan refused at the interlock.
+LAUNCH_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_orchestrate_launch_e2e.py"
+
+
+class InterlockWord(NamedTuple):
+    """One string of the launch interlock this host's prose and journeys rely on."""
+
+    #: The string, exactly as the engine writes it and as the readers below match it.
+    word: str
+    #: Whether the engine writes it as a whole string literal — a journal kind's wire
+    #: spelling — rather than as part of a longer message.
+    whole: bool
+    #: The files here that match it, each of which still has to say it.
+    relied_on_by: tuple[Path, ...]
+
+
+INTERLOCK_WORDS = (
+    InterlockWord("concurrent-deferred", True, (ORCHESTRATION, INTERLOCK_JOURNEY)),
+    InterlockWord("concurrent-acknowledged", True, (ORCHESTRATION, INTERLOCK_JOURNEY)),
+    InterlockWord(
+        "concurrent project work refused for run", False, (ORCHESTRATION, INTERLOCK_JOURNEY)
+    ),
+    # The prefix the launch journey and the manager loop match, a prefix of the above.
+    InterlockWord("concurrent project work refused", False, (LAUNCH_JOURNEY, MANAGER)),
+    InterlockWord("pass --acknowledge-concurrent", False, (ORCHESTRATION, INTERLOCK_JOURNEY)),
+)
+
+
+def _written_as_literal(shipped: str, interlock: InterlockWord) -> bool:
+    """Whether the engine's shipped source carries the word inside a string literal.
+
+    Inside a literal, so a doc comment naming the word is not taken for the engine
+    writing it; anywhere in the crate rather than in one file, because what the readers
+    here depend on is the string, and the refusal has already moved between files
+    (`driver.rs` to `concurrency.rs`) with its wording unchanged.
+    """
+    body = re.escape(interlock.word)
+    pattern = rf'"{body}"' if interlock.whole else rf'"(?:[^"\\\n]|\\.)*{body}'
+    return re.search(pattern, shipped) is not None
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves
+# this into the uncached `orchestrator:test-checkouts` for the reason every gate above in
+# that tier states: its subject is the pinned engine's own source, read at its tag from the
+# checkout `config/onevcs.checkouts` registers, outside this workspace.
+@pytest.mark.parametrize("interlock", INTERLOCK_WORDS, ids=lambda item: item.word)
+def test_the_interlock_words_this_host_relies_on_are_the_engines_own(
+    interlock: InterlockWord,
+) -> None:
+    """A kind or refusal fragment the docs and journeys match is one the engine writes.
+
+    Read at the adopted pin with the engine's test modules removed: a refusal reworded or
+    a kind renamed in a release leaves the journeys matching a string nothing produces —
+    the refusal journey then fails as a "launch that proceeded" rather than as drift, and
+    a manager reading the docs greps the journal for a kind it no longer carries. Both
+    halves are held, so the day this host stops relying on a word its row goes with it.
+    """
+    shipped = "\n".join(
+        TEST_MODULE.sub("", _source(ONEPIPELINE, name)) for name in _rust_files(ONEPIPELINE)
+    )
+    assert _written_as_literal(shipped, interlock), (
+        f"onepipeline {ONEPIPELINE.ref} writes no string literal carrying "
+        f"{interlock.word!r}; re-read the launch interlock and correct every reader below "
+        "in the same change"
+    )
+    for reader in interlock.relied_on_by:
+        assert interlock.word in reader.read_text("utf-8"), (
+            f"{reader.relative_to(REPO_ROOT)} no longer says {interlock.word!r}; drop it "
+            "from this row in the same change that dropped the reliance, or restore it"
+        )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
