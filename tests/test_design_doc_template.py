@@ -490,6 +490,9 @@ def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
         encoding="utf-8",
     )
 
+    # llmlint: ignore[suppressions_justified] The loader document is the engine's open JSON
+    # contract, read here for three fields — `layer`, `chain` and `digest` — each subscripted
+    # where it is read, so a moved shape fails there rather than at a model of it written here.
     def resolve(repository: bool) -> dict[str, Any]:
         command = [
             str(WRAPPER),

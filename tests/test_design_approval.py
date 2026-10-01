@@ -1038,6 +1038,11 @@ def test_the_gate_reads_the_command_line_it_was_given_when_it_is_handed_none(
 EXAMPLES = "examples"
 
 
+# llmlint: ignore[shell_test_tiers_stay_split] The subject is the shipped examples, which only
+# this project's whole-workspace target is keyed on; what this adds is a registry entry for
+# the one origin an example plan names alone, in a registry under this test's own temporary
+# directory, through the `onevcs` this repository's session setup installs at the release
+# `config/onevcs.version` pins — no shell suite and no host state.
 def _stand_ins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projects: list[str]) -> None:
     """Register a checkout for every origin the rule picks for one of ``projects``.
 
