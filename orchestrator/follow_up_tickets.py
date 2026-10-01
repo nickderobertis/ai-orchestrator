@@ -1606,17 +1606,23 @@ def located_path(path: Path) -> tuple[str, str]:
     return run, root_cause
 
 
-def read_ticket(path: Path, *, pending: bool = False, for_copy: bool = False) -> Ticket:
-    """The ticket at ``path``, read through the installed store; :class:`Refused` otherwise.
+class Stored(NamedTuple):
+    """What the store holds for the ticket at one path: its item and its dependency edges.
 
-    ``pending`` and ``for_copy`` are :func:`problems`'s readings of it.
+    One read of a local ticket — `task show` and the `task deps` walk — taken once by a
+    command and handed to everything in it that asks about the ticket, so no command reads
+    its own ticket twice.
     """
-    resolved = path.absolute()
-    run, root_cause = located_path(resolved)
-    ticket = qualified_id(run, root_cause)
+
+    item: Mapping[str, object]
+    edges: list[Edge]
+
+
+def stored_ticket(path: Path) -> Stored:
+    """The store's item and edges for the ticket at ``path``; :class:`Refused` it cannot read."""
+    ticket = qualified_id(*located_path(path.absolute()))
     try:
-        item = plan_store.task_record(ticket)
-        edges = ticket_edges(ticket)
+        return Stored(plan_store.task_record(ticket), ticket_edges(ticket))
     except OSError as exc:
         raise Refused(
             [
@@ -1624,18 +1630,44 @@ def read_ticket(path: Path, *, pending: bool = False, for_copy: bool = False) ->
                 "environment the follow-ups launch exported, which names the drafts root"
             ]
         ) from None
-    location = item.get("location")
-    stored = location.get("path") if isinstance(location, Mapping) else None
-    if not isinstance(stored, str) or Path(stored).resolve() != resolved.resolve():
+
+
+def ticket_from(
+    path: Path, stored: Stored, *, pending: bool = False, for_copy: bool = False
+) -> Ticket:
+    """The ticket ``stored`` holds for ``path``, held to being read from that path.
+
+    :class:`Refused` for a ticket the store read from anywhere else, or one without the
+    shape; ``pending`` and ``for_copy`` are :func:`problems`'s readings of it.
+    """
+    resolved = path.absolute()
+    run, root_cause = located_path(resolved)
+    location = stored.item.get("location")
+    held = location.get("path") if isinstance(location, Mapping) else None
+    if not isinstance(held, str) or Path(held).resolve() != resolved.resolve():
         raise Refused(
             [
-                f"the store reads {ticket} from {stored!r}, not from {resolved}; validate "
-                "a ticket under the drafts root the follow-ups launch exported"
+                f"the store reads {qualified_id(run, root_cause)} from {held!r}, not from "
+                f"{resolved}; validate a ticket under the drafts root the follow-ups launch "
+                "exported"
             ]
         )
     return from_store_item(
-        item, run=run, root_cause=root_cause, edges=edges, pending=pending, for_copy=for_copy
+        stored.item,
+        run=run,
+        root_cause=root_cause,
+        edges=stored.edges,
+        pending=pending,
+        for_copy=for_copy,
     )
+
+
+def read_ticket(path: Path, *, pending: bool = False, for_copy: bool = False) -> Ticket:
+    """The ticket at ``path``, read through the installed store; :class:`Refused` otherwise.
+
+    ``pending`` and ``for_copy`` are :func:`problems`'s readings of it.
+    """
+    return ticket_from(path, stored_ticket(path), pending=pending, for_copy=for_copy)
 
 
 class Misbound(ValueError):
@@ -1729,7 +1761,9 @@ def ticket_repository(ticket: str, item: Mapping[str, object]) -> str:
     return repository
 
 
-def dependency_problems(ticket: str, item: Mapping[str, object], board: str) -> list[str]:
+def dependency_problems(
+    ticket: str, item: Mapping[str, object], board: str, edges: Sequence[Edge] | None = None
+) -> list[str]:
     """Every dependency of ``ticket`` the board does not hold as the contract says.
 
     Each edge the store reports for the ticket is resolved against ``board``: it is refused
@@ -1742,13 +1776,14 @@ def dependency_problems(ticket: str, item: Mapping[str, object], board: str) -> 
     ticket's body, which is where the text says what the accepted fix changed. An item
     the store cannot show is an :class:`OSError`, as every store failure is, and edges
     without the shape `validate` holds are :class:`Refused` before any is followed, since
-    the far end of a mis-shaped edge is nothing this asks a board about.
+    the far end of a mis-shaped edge is nothing this asks a board about. ``edges`` is the
+    walk a caller already took for the ticket, which is then not taken again.
     """
     body = item.get("content")
     text = body if isinstance(body, str) else ""
     own_cause = _held_record(item).get("root_cause")
     accepted = ", ".join(f"`{status}`" for status in Status if status.accepted)
-    edges = ticket_edges(ticket)
+    edges = ticket_edges(ticket) if edges is None else list(edges)
     shaped = edge_problems(edges)
     if edges and (not isinstance(own_cause, str) or not SLUG.fullmatch(own_cause)):
         shaped.append(f"{ticket} names no `root_cause` slug in its `{KEY}` record")
