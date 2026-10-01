@@ -421,6 +421,33 @@ def test_a_planned_task_answer_holding_a_delimiter_or_a_line_break_stays_in_its_
     ], table
 
 
+@pytest.mark.parametrize("ending", ["\r\n", "\r"], ids=["crlf", "bare-cr"])
+def test_a_planned_task_answer_ending_lines_another_way_stays_on_one_row(
+    tmp_path: Path, loader: str, ending: str
+) -> None:
+    """An answer written on another platform breaks no row: each line ending reads as a space."""
+    body = _render(
+        loader,
+        {
+            **ANSWERS,
+            "planned_tasks": [
+                {
+                    "task": "feat: page",
+                    "unit": "View",
+                    "delivers": f"the route{ending}and its view",
+                    "depends_on": "none",
+                    "location": "/plans/tasks/page.md",
+                }
+            ],
+        },
+        tmp_path,
+    )
+    table = body.split("## Planned tasks\n", 1)[1].strip().splitlines()
+    assert table[2:] == [
+        "| feat: page | View | the route and its view | none | /plans/tasks/page.md |"
+    ], table
+
+
 def test_the_persona_points_at_the_resolved_chain_and_restates_none_of_it() -> None:
     """The role's whole statement of the document is a pointer at the template's chain."""
     persona = PERSONA.read_text(encoding="utf-8")
