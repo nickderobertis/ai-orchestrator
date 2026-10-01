@@ -402,9 +402,9 @@ def fits_in_place(document: StoreDocument, repository: str | None = None) -> boo
 
     True for a document the store holds no stored answers for — a board copy, which the
     store refuses to answer for — because whether supplied answers fit is the supplier's to
-    find out, and the regenerate named for a copy supplies them. Otherwise the store is asked to regenerate it from its stored answers as
-    a dry run, writing nothing, so whether they fit is the store's answer rather than a
-    second reading of the template's variables here.
+    find out, and the regenerate named for a copy supplies them. Otherwise the store is asked
+    to regenerate it from its stored answers as a dry run, writing nothing, so whether they
+    fit is the store's answer rather than a second reading of the template's variables here.
     """
     client = plan_store.client()
     try:

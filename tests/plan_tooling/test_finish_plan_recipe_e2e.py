@@ -741,8 +741,9 @@ WRITER_OBLIGATIONS = (
     "--json` resolves state",
     # Stored through the pinned resolve piped into the store, as that plan's document.
     "`onepipeline template resolve design-doc --json` piped into `onetaskgraph document "
-    "create --template-loader -`",
-    "`onetaskgraph document render --template-loader -` where a document by that id",
+    "create --template-loader - --no-interactive`",
+    "`onetaskgraph document render --template-loader - --no-interactive` where a document "
+    "by that id",
     # Every row's location is the store's own answer.
     "location is the location the plan store reports for that task",
     # And where the store put it is reported.

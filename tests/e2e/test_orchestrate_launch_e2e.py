@@ -48,7 +48,7 @@ from harness_indirections import established_indirections
 from no_paid_provider import REFUSAL, VERSION
 from observer_environment import ENVIRONMENT_PATH_ENV
 from planner_channel import BUS_CONFIG, RUNS_OWN_PROJECTION_COMPLAINT
-from project_fixtures import project_from_plan, read_project_plan
+from project_fixtures import project_from_plan, read_project_plan, resolving
 from published_surface import surface_of
 from shared_dispatch_bar import (
     shared_agent_preamble,
@@ -3742,13 +3742,16 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
         environment = {**_environment(tmp_path, oneharness_bin), **examples.environment}
         absent_graph = str(tmp_path / "absent" / "dag-scope.yaml")
         for project in plans:
+            # A plan whose tasks all name one repository has its design-doc chain resolved
+            # through that repository's registered checkout, so its launch is answered on a
+            # registry holding one: a layerless stand-in where the suite's registry holds none.
             refused = _just(
                 "orchestrate",
                 project,
                 "--detach",
                 "--dag-graph",
                 absent_graph,
-                environment=environment,
+                environment=resolving(project, environment),
                 seconds=120,
             )
             reported = refused.stderr + refused.stdout

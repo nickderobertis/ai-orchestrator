@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -135,21 +136,26 @@ def register_stand_in(home: Path, origin: str, checkout: Path) -> Path:
     return checkout
 
 
-def _resolving(project: str) -> dict[str, str]:
-    """The environment ``project``'s design-doc chain resolves in, for its approval.
+def resolving(project: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment ``project``'s design-doc chain resolves in, from ``base``.
 
     A plan whose tasks all name one repository resolves through that repository's
     registered checkout (`orchestrator/design_chain.py`), and a fixture plan may name an
-    origin no registry here holds. Its approval then reads a registry of this process's
-    own, where that origin is a layerless stand-in — the chain the launch resolves too,
-    wherever the journey launching it registers that origin without a layer of its own.
+    origin no registry here holds. Its approval and its launch then read a registry of this
+    process's own, where that origin is a layerless stand-in — the chain such a checkout
+    without an override of its own resolves to. ``base`` defaults to this process's
+    environment, and is answered unchanged when its registry already resolves the origin.
     """
-    environment = dict(os.environ)
+    environment = dict(os.environ if base is None else base)
     repository = design_chain.plan_repository(project)
     if repository is None:
         return environment
     resolved = subprocess.run(
-        ["onevcs", "resolve", repository], text=True, capture_output=True, check=False
+        ["onevcs", "resolve", repository],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     if resolved.returncode == 0:
         return environment
@@ -172,7 +178,7 @@ def approved(project: str) -> str:
     recording = subprocess.run(
         ["just", "approve-design", project],
         cwd=REPO_ROOT,
-        env=_resolving(project),
+        env=resolving(project),
         text=True,
         capture_output=True,
         check=False,
