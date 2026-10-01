@@ -16,7 +16,6 @@
     "support-fake-backend",
     "support-fake-codex-untrusted-directory",
     "support-follow-up-variables",
-    "support-github-board",
     "support-harness-configs",
     "support-harness-indirections",
     "support-judge-protocol-double",
