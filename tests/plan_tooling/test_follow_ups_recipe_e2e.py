@@ -59,10 +59,10 @@ from typing import NamedTuple
 
 import delegation_checkout
 import follow_up_variables
+import github_board as host_board
 import plan_root_variable
 import pytest
 import short_state
-import test_onetaskgraph_host_e2e as host_board
 import yaml
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper
