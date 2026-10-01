@@ -3,8 +3,12 @@ title: 'Design: plan-example'
 project: plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:7543864a301acea3a06b63a9cda7d47b585511926f55b6d379566db4530ee0a8
-  "orchestrator.design-approval": {"approved_at":"2026-09-29T05:14:15.276278+00:00","key":"0388c7a178ae99b91e9497f1e3da9ab56f388cf814066ddaa84863ea2f9fb5df"}
-  "onetaskgraph.template": {"answers_digest":"sha256:1cfaad250196dc5e484f6a0b5f71597041f5d657c84047853812f2eb9dbd7a89","body_digest":"sha256:ab2291e5440d94097790302d6fa085735abb82dcfb21b35752f1c6eeb1cc819e","digest":"sha256:ee358d23284193c8fe3b8a0c03f79076d50584241527f148c6e00c33a8146515","template":"onepipeline:design-doc"}
+  onetaskgraph.template:
+    answers_digest: sha256:d9e0b12e23c99d355e484ed57ec15bd1197bfb30ad149e455e326ca9ebff63f5
+    body_digest: sha256:34dbf8331736c98143689caf72defbaf36bb1711d3dbe27f769aad7ff2fdd7ea
+    digest: sha256:40ceac966dad3e35698a79077e2f0faaa59d9373ca5bb912dfde7ffa0469686d
+    template: onepipeline:design-doc
+  "orchestrator.design-approval": {"approved_at":"2026-10-01T13:24:52.302482+00:00","key":"275b8085abf88a540855e75cdd478103f0ea1a9c04bd01e7bea2576cb431def5"}
 ---
 ## What
 
@@ -22,13 +26,34 @@ Three pieces, split so two of them can be built at once. One agent settles the d
 the API, the storage, and the line between the two halves — and the API and the web UI
 are then built in parallel against it. Documentation and a review follow both.
 
-## Contracts
+### API — `shortener` (`api`)
 
-- **The HTTP API.** Two operations: create a short link, and resolve one. The UI calls it
-  and nothing else does, so what it accepts and answers is the agreement between the two
-  halves of this plan.
-- **The storage schema.** What a stored link is. It outlives every version of the code that
-  writes it, so this is the decision that costs most to reverse.
+The API creates short links, stores them, and resolves them back.
+
+#### The storage schema
+
+**Reversibility: high cost** — stored links outlive every version of the code that writes them, and that data cannot be rewritten once people have shared the links.
+
+A stored link is its short code and the long URL it points at.
+
+```sql
+CREATE TABLE links (
+  code TEXT PRIMARY KEY,
+  url  TEXT NOT NULL
+);
+```
+
+**Reversible:**
+
+- **The HTTP API.** Two operations, `POST /links` to create a short link and `GET /<code>` to follow one, called only by this plan's UI.
+
+### Web UI — `shortener` (`ui`)
+
+One page creates a link through the API and shows the short form.
+
+### Documentation — `shortener` (`README.md`)
+
+The README says what the service is, how to run it, and what its API is.
 
 ## Acceptance criteria
 
@@ -38,13 +63,13 @@ are then built in parallel against it. Documentation and a review follow both.
 
 ## Planned tasks
 
-| Task | What it delivers | Depends on | Where it lives |
-| --- | --- | --- | --- |
-| design | the API, the storage, and the module boundaries | none | examples/tasks/plan-example/design.md |
-| api | the create and resolve endpoints, with tests | design | examples/tasks/plan-example/api.md |
-| ui | the page that creates a link and shows it | design | examples/tasks/plan-example/ui.md |
-| docs | the README | api, ui | examples/tasks/plan-example/docs.md |
-| review | verified, severity-ranked findings | api, ui | examples/tasks/plan-example/review.md |
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+| design | API | the API, the storage, and the module boundaries | none | examples/tasks/plan-example/design.md |
+| api | API | the create and resolve endpoints, with tests | design | examples/tasks/plan-example/api.md |
+| ui | Web UI | the page that creates a link and shows it | design | examples/tasks/plan-example/ui.md |
+| docs | Documentation | the README | api, ui | examples/tasks/plan-example/docs.md |
+| review | API | verified, severity-ranked findings | api, ui | examples/tasks/plan-example/review.md |
 
 
 <!-- onetaskgraph:template-answers
@@ -56,35 +81,63 @@ architecture: |-
   Three pieces, split so two of them can be built at once. One agent settles the design —
   the API, the storage, and the line between the two halves — and the API and the web UI
   are then built in parallel against it. Documentation and a review follow both.
-contracts:
-- |-
-  **The HTTP API.** Two operations: create a short link, and resolve one. The UI calls it
-  and nothing else does, so what it accepts and answers is the agreement between the two
-  halves of this plan.
-- |-
-  **The storage schema.** What a stored link is. It outlives every version of the code that
-  writes it, so this is the decision that costs most to reverse.
 planned_tasks:
 - delivers: the API, the storage, and the module boundaries
   depends_on: none
   location: examples/tasks/plan-example/design.md
   task: design
+  unit: API
 - delivers: the create and resolve endpoints, with tests
   depends_on: design
   location: examples/tasks/plan-example/api.md
   task: api
+  unit: API
 - delivers: the page that creates a link and shows it
   depends_on: design
   location: examples/tasks/plan-example/ui.md
   task: ui
+  unit: Web UI
 - delivers: the README
   depends_on: api, ui
   location: examples/tasks/plan-example/docs.md
   task: docs
+  unit: Documentation
 - delivers: verified, severity-ranked findings
   depends_on: api, ui
   location: examples/tasks/plan-example/review.md
   task: review
+  unit: API
+units:
+- decisions:
+  - artifact: |-
+      ```sql
+      CREATE TABLE links (
+        code TEXT PRIMARY KEY,
+        url  TEXT NOT NULL
+      );
+      ```
+    justification: stored links outlive every version of the code that writes them, and that data cannot be rewritten once people have shared the links.
+    name: The storage schema
+    summary: A stored link is its short code and the long URL it points at.
+  name: API
+  part: api
+  repository: shortener
+  reversible:
+  - text: Two operations, `POST /links` to create a short link and `GET /<code>` to follow one, called only by this plan's UI.
+    title: The HTTP API
+  summary: The API creates short links, stores them, and resolves them back.
+- decisions: []
+  name: Web UI
+  part: ui
+  repository: shortener
+  reversible: []
+  summary: One page creates a link through the API and shows the short form.
+- decisions: []
+  name: Documentation
+  part: README.md
+  repository: shortener
+  reversible: []
+  summary: The README says what the service is, how to run it, and what its API is.
 what: |-
   A URL shortener: somewhere to turn a long link into a short one, and somewhere to follow
   a short one back.

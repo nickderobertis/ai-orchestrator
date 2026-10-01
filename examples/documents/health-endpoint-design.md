@@ -3,8 +3,12 @@ title: 'Design: health-endpoint'
 project: health-endpoint
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:5697e51426246121fbc2486ca79881d3fbc11590f7b984c7514a0c1b5100a474
-  "orchestrator.design-approval": {"approved_at":"2026-09-29T05:14:15.057770+00:00","key":"c0103dfddf347b2fb8405a16586d8b9e0037103811b508c48ac457b1071f8b3b"}
-  "onetaskgraph.template": {"answers_digest":"sha256:20190b73eab0109d6159534d63fdaa729427e75ee795e149ceed7a94309e5e21","body_digest":"sha256:68e85660bc8248d52011943d5ae3be8ff6e38f9f517d36cee31886c67cf37557","digest":"sha256:ee358d23284193c8fe3b8a0c03f79076d50584241527f148c6e00c33a8146515","template":"onepipeline:design-doc"}
+  onetaskgraph.template:
+    answers_digest: sha256:f17db7c9379795d40ab1fc7d1ce835db2388f6f0dcd2cdcfc4ae0bf710e1f73c
+    body_digest: sha256:3094c1a12669c7e7f84b8d85a7a714c1bbcf5f0109d8cbf16d3e59541d5cac85
+    digest: sha256:40ceac966dad3e35698a79077e2f0faaa59d9373ca5bb912dfde7ffa0469686d
+    template: onepipeline:design-doc
+  "orchestrator.design-approval": {"approved_at":"2026-10-01T13:24:51.383128+00:00","key":"12a766a31a58d7927298da06bfa6040585521d3f0205f5a79859fc8af0cfe3c3"}
 ---
 ## What
 
@@ -21,11 +25,23 @@ which is slow at the moment it matters most.
 One route on the existing service, answered from the service itself. No new process, no
 new store, nothing else to deploy or watch.
 
-## Contracts
+### Service — `some-service`
 
-- **The endpoint's response.** `GET /health` answers a fixed shape, and anything that polls
-  it — a load balancer, a monitor, a person — depends on that shape rather than on the code
-  behind it. Adding a field later is safe; renaming or removing one is not.
+The service gains one route that answers whether it is running.
+
+#### The health response
+
+**Reversibility: high cost** — load balancers, monitors and people we cannot list poll it, and each would have to change.
+
+`GET /health` answers a fixed shape. Adding a field later is safe; renaming or removing one is not.
+
+```json
+{"status": "ok"}
+```
+
+**Reversible:**
+
+- **Answered in process.** The route is served by the service itself, with no new process or store.
 
 ## Acceptance criteria
 
@@ -34,9 +50,9 @@ new store, nothing else to deploy or watch.
 
 ## Planned tasks
 
-| Task | What it delivers | Depends on | Where it lives |
-| --- | --- | --- | --- |
-| feat(api): add /health endpoint | the endpoint and its tests | none | examples/tasks/health-endpoint/health.md |
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+| feat(api): add /health endpoint | Service | the endpoint and its tests | none | examples/tasks/health-endpoint/health.md |
 
 
 <!-- onetaskgraph:template-answers
@@ -46,16 +62,28 @@ acceptance_criteria:
 architecture: |-
   One route on the existing service, answered from the service itself. No new process, no
   new store, nothing else to deploy or watch.
-contracts:
-- |-
-  **The endpoint's response.** `GET /health` answers a fixed shape, and anything that polls
-  it — a load balancer, a monitor, a person — depends on that shape rather than on the code
-  behind it. Adding a field later is safe; renaming or removing one is not.
 planned_tasks:
 - delivers: the endpoint and its tests
   depends_on: none
   location: examples/tasks/health-endpoint/health.md
   task: 'feat(api): add /health endpoint'
+  unit: Service
+units:
+- decisions:
+  - artifact: |-
+      ```json
+      {"status": "ok"}
+      ```
+    justification: load balancers, monitors and people we cannot list poll it, and each would have to change.
+    name: The health response
+    summary: '`GET /health` answers a fixed shape. Adding a field later is safe; renaming or removing one is not.'
+  name: Service
+  part: ''
+  repository: some-service
+  reversible:
+  - text: The route is served by the service itself, with no new process or store.
+    title: Answered in process
+  summary: The service gains one route that answers whether it is running.
 what: |-
   A health endpoint on the service, so an operator can ask whether it is up without
   reading logs.

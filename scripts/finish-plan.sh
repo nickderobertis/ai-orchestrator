@@ -159,17 +159,19 @@ DEFAULT_DAG_GRAPH="off"
 DAG_GRAPH_FLAG="--dag-graph"
 
 #: The answers the writer's task is rendered from, composed from the brief, the plan's
-#: qualified id and the document id. The brief's `## What` and `## Why` are quoted into the
-#: task's own What and Why rather than the brief being embedded whole, because the brief's
+#: qualified id, the document id and the resolve command `orchestrator/design_chain.py`'s
+#: rule gives for the plan. The brief's `## What` and `## Why` are quoted into the task's
+#: own What and Why rather than the brief being embedded whole, because the brief's
 #: acceptance criteria are the *plan's* and a judge holds a dispatch to every criterion it
-#: finds in its task; the criteria below are this dispatch's, and the one property a plan
-#: across repositories turns on is stated among them so it is judged here rather than only
-#: behind the template. The note on where a direct node works is the task's additional info.
+#: finds in its task; the criteria below are this dispatch's. The resolve command is named
+#: wherever the task reaches the template, so the writer and its judge read and render
+#: through the chain the approval is keyed on. The note on where a direct node works is the
+#: task's additional info.
 # shellcheck disable=SC2016 # A Python program: its backticks are Markdown in the task it writes, never shell.
 WRITER_ANSWERS_PROGRAM='
 import json, pathlib, re, sys
 
-(brief, plan, document, template, note) = sys.argv[1:6]
+(brief, plan, document, template, note, resolve) = sys.argv[1:7]
 # Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
 # when it validates the brief, so a brief it accepted is one this composes from.
 text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -187,16 +189,19 @@ brief_what = section("What")
 brief_why = section("Why")
 if not brief_what or not brief_why:
     sys.exit(f"{brief} states no ## What or no ## Why for the task to be composed from")
-variables = f"onepipeline template resolve {template} --json | onetaskgraph template variables --template-loader -"
+variables = f"{resolve} | onetaskgraph template variables --template-loader -"
 answers = {
     "what": (
-        f"Write the one short design document a person reviews the plan `{plan}` as, instead of "
+        f"Write the design document a person reviews the plan `{plan}` as \u2014 terse prose, "
+        f"complete interfaces \u2014 instead of "
         f"reading that plan node by node, and store it beside the plan under the document id "
         f"`{document}`.\n\n"
         f"Read the whole plan out of the plan store: the project record and every one of its "
         f"tasks. `onetaskgraph` is that store\u2019s command line, and `--help` documents what it "
-        f"can do. The document is a rendering of this host\u2019s `{template}` template, and "
-        f"`{variables}` lists the answers it takes and what each is judged on.\n\n"
+        f"can do. The document is a rendering of the `{template}` template as `{resolve}` "
+        f"resolves it for this plan, which is the resolve command this task names: the "
+        f"guidance comments in that chain say how to write it, and `{variables}` lists the "
+        f"answers it takes.\n\n"
         f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
         f"\n\n{brief_what}"
     ),
@@ -206,19 +211,16 @@ answers = {
         f"wants from the plan itself, in the brief\u2019s words:\n\n{brief_why}"
     ),
     "acceptance_criteria": [
-        f"The document answers every variable `{variables}` lists, and the answers meet every "
-        f"property the template\u2019s own description and each variable\u2019s description "
-        f"state, read against `{plan}` as the store holds it.",
-        f"Where `{plan}` spans more than one repository, the architecture answer names the "
-        "repository each piece lives in, because the planned-tasks table has no column for it; "
-        "where the plan lies inside one repository, the document says nothing about "
-        "repositories.",
+        f"The document answers every variable `{variables}` lists, in the shape each "
+        f"variable\u2019s description states, and the answers meet every rule the guidance "
+        f"comments of the chain `{resolve}` resolves state, read against `{plan}` as the store "
+        f"holds it.",
         f"The document is stored as a project document of `{plan}`, in the store that plan is "
-        f"in, under the document id `{document}`, and is a rendering of the pinned `{template}` "
-        f"template: `onepipeline template resolve {template} --json` piped into `onetaskgraph "
-        f"document create --template-loader -` wrote it, or piped into `onetaskgraph document "
-        f"render --template-loader -` where a document by that id already existed, so it "
-        f"records `onepipeline:{template}` provenance and the answers it was rendered from.",
+        f"in, under the document id `{document}`, and is a rendering of the `{template}` "
+        f"template: `{resolve}` piped into `onetaskgraph document create --template-loader -` "
+        f"wrote it, or piped into `onetaskgraph document render --template-loader -` where a "
+        f"document by that id already existed, so it records `onepipeline:{template}` "
+        f"provenance and the answers it was rendered from.",
         f"Every task of `{plan}` has one row in the planned-tasks answer, and each row\u2019s "
         "location is the location the plan store reports for that task, read back out of the "
         "store and never composed by hand.",
@@ -492,6 +494,13 @@ plan_directory="$plan_root/$PLAN_RECORDS"
 mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not be created" \
     "check that the plan-authoring root is a directory this launch may write into, then retry"
 
+# The resolve command the document is rendered through, by the one rule the approval reads
+# too (`orchestrator/design_chain.py`): a plan whose tasks all name one repository resolves
+# through that repository's layer, and every other plan through this directory's.
+document_resolve=$("$python" -m orchestrator.design_chain "$plan_project") ||
+    fail "which repository's layer the design document of $plan_project resolves through could not be read out of the plan store; the diagnostic above names why" \
+        "repair what it names, then run this command again"
+
 plan_source=${plan_project%%:*}
 design_document_id="${plan_project#*:}$DESIGN_DOC_ID_SUFFIX"
 
@@ -570,7 +579,7 @@ answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
         "check that ${TMPDIR:-/tmp} is a directory this launch may write into, then retry"
 }
 "$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" "$design_document_id" \
-    "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" >"$answers_file" || {
+    "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" >"$answers_file" || {
     discard_answers
     take_back
     fail "the design-document task's answers could not be composed from '$brief' by $python; the diagnostic above names why" \

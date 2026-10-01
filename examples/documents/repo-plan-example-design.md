@@ -3,8 +3,12 @@ title: 'Design: repo-plan-example'
 project: repo-plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
-  "orchestrator.design-approval": {"approved_at":"2026-09-29T05:14:15.728218+00:00","key":"e192742c26e65866efaf2f8e104bffcb48eea142edf74c5f8cc414af2defa79d"}
-  "onetaskgraph.template": {"answers_digest":"sha256:651893d78341377652f583ab8a29ad55d5ec2f84347b63e44be46e6f68d4756b","body_digest":"sha256:117a01b426b9470d662d314c8312748f6ced1b23fabfd7ca6193bb15f12b60ea","digest":"sha256:ee358d23284193c8fe3b8a0c03f79076d50584241527f148c6e00c33a8146515","template":"onepipeline:design-doc"}
+  onetaskgraph.template:
+    answers_digest: sha256:eeb247a0bc3a0806ab94342d0fb563357b1e026c498c4e4a053e22701743c0b6
+    body_digest: sha256:c63ddbcd802a695af855645767f670afaa8e671348e65d08f9ec2c1f39b0b5a8
+    digest: sha256:40ceac966dad3e35698a79077e2f0faaa59d9373ca5bb912dfde7ffa0469686d
+    template: onepipeline:design-doc
+  "orchestrator.design-approval": {"approved_at":"2026-10-01T13:24:54.007902+00:00","key":"ba78575ae5099549e01a4c4d93facff322e73696ab5fbd616ad5feea484bfbdb"}
 ---
 ## What
 
@@ -20,17 +24,47 @@ who can.
 
 ## Architecture
 
-Four repositories, one plan. The endpoint lands first because everything else reads it;
-the client method and the dashboard are then built at the same time, each in its own
-repository, and the documentation lands beside them. The dashboard is one piece of work
-with a person's approval inside it rather than a separate node, so the approval happens
-on the branch the work is on.
+Four pieces of work across three repositories. The endpoint lands first because everything
+else reads it; the client method and the dashboard are then built at the same time, and the
+documentation lands beside them. The dashboard carries a person's approval inside its own
+work, so the approval happens on the branch the work is on.
 
-## Contracts
+### Service — `some-service`
 
-- **The health response.** One shape, published by the service and consumed by the client
-  library, the dashboard, and the documentation — three consumers in three repositories, so
-  changing it later means changing all of them at once.
+The service gains the health endpoint, and its admin dashboard shows what that endpoint returns to viewers allowed to see it.
+
+#### The health response
+
+**Reversibility: high cost** — the client library, the dashboard and the documentation all read it, and the client library's own users are people we cannot list.
+
+One response shape, published by the service and read by every other unit.
+
+```json
+{"status": "ok", "version": "1.4.2"}
+```
+
+**Reversible:**
+
+- **Dashboard access.** The admin page refuses a viewer without the `admin` role.
+
+### Client library — `some-client`
+
+The client library gains a method that calls the endpoint.
+
+#### The `health()` method
+
+**Reversibility: high cost** — the library is released, and every caller of a released method would have to change.
+
+A new public method returning the parsed health response.
+
+```diff
+ class Client:
++    def health(self) -> Health: ...
+```
+
+### Documentation — `some-docs`
+
+The published documentation describes the endpoint that actually exists.
 
 ## Acceptance criteria
 
@@ -42,12 +76,12 @@ on the branch the work is on.
 
 ## Planned tasks
 
-| Task | What it delivers | Depends on | Where it lives |
-| --- | --- | --- | --- |
-| feat(api): add /health endpoint | the endpoint | none | examples/tasks/repo-plan-example/api.md |
-| feat(client): add health() method | the client method | the endpoint | examples/tasks/repo-plan-example/client.md |
-| feat(admin): add dashboard | the page, and a person's approval of it | the endpoint | examples/tasks/repo-plan-example/dashboard.md |
-| docs(api): document /health | the published description | none | examples/tasks/repo-plan-example/docs.md |
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+| feat(api): add /health endpoint | Service | the endpoint | none | examples/tasks/repo-plan-example/api.md |
+| feat(client): add health() method | Client library | the client method | the endpoint | examples/tasks/repo-plan-example/client.md |
+| feat(admin): add dashboard | Service | the page, and a person's approval of it | the endpoint | examples/tasks/repo-plan-example/dashboard.md |
+| docs(api): document /health | Documentation | the published description | none | examples/tasks/repo-plan-example/docs.md |
 
 
 <!-- onetaskgraph:template-answers
@@ -59,33 +93,67 @@ acceptance_criteria:
   see it.
 - The documentation describes the endpoint that actually exists.
 architecture: |-
-  Four repositories, one plan. The endpoint lands first because everything else reads it;
-  the client method and the dashboard are then built at the same time, each in its own
-  repository, and the documentation lands beside them. The dashboard is one piece of work
-  with a person's approval inside it rather than a separate node, so the approval happens
-  on the branch the work is on.
-contracts:
-- |-
-  **The health response.** One shape, published by the service and consumed by the client
-  library, the dashboard, and the documentation — three consumers in three repositories, so
-  changing it later means changing all of them at once.
+  Four pieces of work across three repositories. The endpoint lands first because everything
+  else reads it; the client method and the dashboard are then built at the same time, and the
+  documentation lands beside them. The dashboard carries a person's approval inside its own
+  work, so the approval happens on the branch the work is on.
 planned_tasks:
 - delivers: the endpoint
   depends_on: none
   location: examples/tasks/repo-plan-example/api.md
   task: 'feat(api): add /health endpoint'
+  unit: Service
 - delivers: the client method
   depends_on: the endpoint
   location: examples/tasks/repo-plan-example/client.md
   task: 'feat(client): add health() method'
+  unit: Client library
 - delivers: the page, and a person's approval of it
   depends_on: the endpoint
   location: examples/tasks/repo-plan-example/dashboard.md
   task: 'feat(admin): add dashboard'
+  unit: Service
 - delivers: the published description
   depends_on: none
   location: examples/tasks/repo-plan-example/docs.md
   task: 'docs(api): document /health'
+  unit: Documentation
+units:
+- decisions:
+  - artifact: |-
+      ```json
+      {"status": "ok", "version": "1.4.2"}
+      ```
+    justification: the client library, the dashboard and the documentation all read it, and the client library's own users are people we cannot list.
+    name: The health response
+    summary: One response shape, published by the service and read by every other unit.
+  name: Service
+  part: ''
+  repository: some-service
+  reversible:
+  - text: The admin page refuses a viewer without the `admin` role.
+    title: Dashboard access
+  summary: The service gains the health endpoint, and its admin dashboard shows what that endpoint returns to viewers allowed to see it.
+- decisions:
+  - artifact: |-
+      ```diff
+       class Client:
+      +    def health(self) -> Health: ...
+      ```
+    justification: the library is released, and every caller of a released method would have to change.
+    name: The `health()` method
+    summary: A new public method returning the parsed health response.
+  name: Client library
+  part: ''
+  repository: some-client
+  reversible: []
+  summary: The client library gains a method that calls the endpoint.
+- decisions: []
+  name: Documentation
+  part: ''
+  repository: some-docs
+  reversible: []
+  summary: The published documentation describes the endpoint that actually exists.
 what: |-
   A health endpoint on the service, the client method that calls it, an admin page that
   shows what it returns, and the documentation for all three — each landing in the

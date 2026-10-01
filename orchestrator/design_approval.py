@@ -1,11 +1,13 @@
 """Record a person's approval of a plan's design document, and refuse a launch without one.
 
-A plan is not what a person can usefully review. What they can judge is the one short
-document the `design-doc` template renders — what is being built and why, the
-architecture, the contracts, the acceptance criteria, and the planned work as a table of
-links — written for a reader who has no depth in the domain. That template is this host's
-own, `templates/design-doc.md.j2`, registered for `onepipeline template` in
-`templates/templates.yaml`, and a document is always its rendering: the plan store renders
+A plan is not what a person can usefully review. What they can judge is the document the
+`design-doc` template renders — terse prose, complete interfaces, laid out as that
+template's guidance states — written for a reader who has no depth in the domain. That
+template is this host's own, `templates/design-doc.md.j2`, registered for `onepipeline
+template` in `templates/templates.yaml`, which a repository's own layer may override, and
+the chain a plan's document resolves through is the one `orchestrator/design_chain.py`'s
+rule picks for that plan — the same rule the writer rendered it through, so the digest
+approved is the digest rendered. A document is always a rendering: the plan store renders
 it from answers, records which template and which digest it rendered, and regenerates it.
 So the thing put in front of the user is that document, and **their approval of it is
 what gates dispatch**: `just approve-design` records the approval, and a launch against a
@@ -74,13 +76,14 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import NamedTuple, NewType
 
-from orchestrator import plan_store
+from orchestrator import design_chain, plan_store
 from orchestrator.plan_store import NodeId, StoreDocument
 from orchestrator.root import REPO_ROOT
 
@@ -102,7 +105,7 @@ RECORD_KEY = "orchestrator.design-approval"
 #: The name this host registers the design document's template under, in
 #: `templates/templates.yaml`, and the reference a rendering of it records. The document is
 #: this host's concept: onepipeline knows only the name registered here.
-TEMPLATE_NAME = "design-doc"
+TEMPLATE_NAME = design_chain.TEMPLATE_NAME
 TEMPLATE_REFERENCE = f"onepipeline:{TEMPLATE_NAME}"
 
 #: This host's template root, which the digest is resolved through — the same directory
@@ -116,11 +119,22 @@ TEMPLATE_ROOT = REPO_ROOT / "templates"
 #: hold for the board copy a person approves.
 PROVENANCE = "onetaskgraph.template"
 
+#: Where every repair below names the resolve command, which is the one
+#: `orchestrator/design_chain.py`'s rule gives for the document's plan.
+RESOLVE = "<resolve>"
+
 #: The regenerate every refusal of an unrendered document names: render it again through
 #: the template in force, from the answers stored where it was drafted.
-REGENERATE = (
-    f"onepipeline template resolve {TEMPLATE_NAME} --json | onetaskgraph document render "
-    "<id> --template-loader - --no-interactive"
+REGENERATE = f"{RESOLVE} | onetaskgraph document render <id> --template-loader - --no-interactive"
+
+#: The repair for a document whose stored answers the template in force no longer takes —
+#: answers written for a variable shape it has since replaced. Regenerating in place would
+#: render those answers again and the store refuses them, so the writer answers afresh.
+REWRITE = (
+    "its stored answers do not fit the variables the template in force declares, so it "
+    "cannot be regenerated in place; regenerate it with the design-document writer, `just "
+    "finish-plan <brief>` for the brief that planned it, whose writer answers the template's "
+    f"current variables through `{RESOLVE}`"
 )
 
 #: Where a document holds no stored answers a regenerate can use, the file of its design-doc
@@ -136,7 +150,7 @@ EITHER = "`{regenerate}` where it was drafted, or `{regenerate} " + SUPPLIED + "
 #: id it holds replaces that document, where a regenerate in place would lay the design-doc
 #: answers over the other template's stored ones, which the design-doc template refuses.
 REPLACE = (
-    f"onepipeline template resolve {TEMPLATE_NAME} --json | onetaskgraph document create "
+    f"{RESOLVE} | onetaskgraph document create "
     f"<source> --project <project> --title <title> --id <native> --template-loader - "
     f"{SUPPLIED} --no-interactive"
 )
@@ -245,14 +259,23 @@ class Approved(NamedTuple):
     held: bool
 
 
-def resolved_digest(root: Path = TEMPLATE_ROOT) -> ChainDigest:
+def resolved_digest(root: Path = TEMPLATE_ROOT, repository: str | None = None) -> ChainDigest:
     """The design-doc template's chain digest resolved now, through ``root`` and the pinned engine.
 
     Asked of `onepipeline template resolve` rather than hashed here, because what the chain
     is — which layer answers, what it extends — is the engine's to say, and a digest this
     module composed would be a second definition of it. The engine is this checkout's locked
-    install, the one `config/onepipeline.version` governs, run from this checkout so no
-    target repository's layer can answer for it.
+    install, the one `config/onepipeline.version` governs, run from this checkout, and
+    ``repository`` is the origin `orchestrator/design_chain.py`'s rule picks for the plan:
+    named, its registered checkout's layer answers; ``None``, this checkout's does.
+    """
+    return ChainDigest(json.loads(resolved_loader(root, repository))["digest"])
+
+
+def resolved_loader(root: Path = TEMPLATE_ROOT, repository: str | None = None) -> str:
+    """The loader document the pinned engine states for the design-doc chain, checked.
+
+    :func:`resolved_digest`'s answer whole, for the one reader that renders through it.
     """
     engine = REPO_ROOT / ".venv" / "bin" / "onepipeline"
     command = [
@@ -260,6 +283,7 @@ def resolved_digest(root: Path = TEMPLATE_ROOT) -> ChainDigest:
         "template",
         "resolve",
         TEMPLATE_NAME,
+        *design_chain.resolve_arguments(repository),
         "--json",
         "--template-root",
         str(root),
@@ -299,10 +323,10 @@ def resolved_digest(root: Path = TEMPLATE_ROOT) -> ChainDigest:
             f"form `sha256:<64 hex>`: {digest!r}"
         )
     # llmlint: ignore-end[changed_behavior_has_e2e]
-    return ChainDigest(digest)
+    return done.stdout
 
 
-def body_digest(document: StoreDocument, digest: ChainDigest) -> str:
+def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | None = None) -> str:
     """The body digest ``document`` records, once it is a rendering of the template in force.
 
     Three things make a document not one, each refused as :class:`Unrendered` naming the
@@ -312,8 +336,14 @@ def body_digest(document: StoreDocument, digest: ChainDigest) -> str:
     hashes to the body digest recorded when it was (it was edited by hand since). Like the
     plan-review record this trusts the provenance the store recorded: a writer who forges
     one is not a case this guards.
+
+    Every repair names the resolve command the rule gives for ``repository``, the origin
+    `orchestrator/design_chain.py` picked for the document's plan. A document rendered
+    under an older template whose stored answers the template in force no longer takes is
+    sent to the writer instead, because regenerating it in place would be refused.
     """
-    regenerate = REGENERATE.replace("<id>", str(document.qualified_id))
+    resolve = design_chain.resolve_command(repository)
+    regenerate = REGENERATE.replace(RESOLVE, resolve).replace("<id>", str(document.qualified_id))
     match document.metadata.get(PROVENANCE):
         case {
             "template": str() as template,
@@ -331,7 +361,8 @@ def body_digest(document: StoreDocument, digest: ChainDigest) -> str:
     if template != TEMPLATE_REFERENCE:
         source, _, native = str(document.qualified_id).partition(":")
         replace = (
-            REPLACE.replace("<source>", source)
+            REPLACE.replace(RESOLVE, resolve)
+            .replace("<source>", source)
             .replace("<project>", document.project or "<project>")
             .replace("<title>", shlex.quote(document.title))
             .replace("<native>", native)
@@ -341,6 +372,12 @@ def body_digest(document: StoreDocument, digest: ChainDigest) -> str:
             f"{TEMPLATE_REFERENCE}, so it is not a design document this host can approve; "
             f"`{regenerate}` would lay its design-doc answers over that template's stored "
             f"ones, so replace it from them with `{replace}`"
+        )
+    if recorded != digest and not fits_in_place(document, repository):
+        raise Unrendered(
+            f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
+            f"{recorded}, and that template now resolves to {digest}; "
+            + REWRITE.replace(RESOLVE, resolve)
         )
     if recorded != digest:
         raise Unrendered(
@@ -360,7 +397,37 @@ def body_digest(document: StoreDocument, digest: ChainDigest) -> str:
     return body
 
 
-def approval_key(document: StoreDocument, digest: ChainDigest) -> ApprovalKey:
+def fits_in_place(document: StoreDocument, repository: str | None = None) -> bool:
+    """Whether ``document`` can be regenerated in place through the chain in force.
+
+    True for a document the store holds no stored answers for — a board copy, which the
+    store refuses to answer for — because whether supplied answers fit is the supplier's to
+    find out, and the regenerate named for a copy supplies them. Otherwise the store is asked to regenerate it from its stored answers as
+    a dry run, writing nothing, so whether they fit is the store's answer rather than a
+    second reading of the template's variables here.
+    """
+    client = plan_store.client()
+    try:
+        plan_store.sdk(client.document_answers(str(document.qualified_id)))
+    except OSError:
+        return True
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as loader:
+        loader.write(resolved_loader(TEMPLATE_ROOT, repository))
+        loader.flush()
+        try:
+            plan_store.sdk(
+                client.document_render(
+                    str(document.qualified_id), template_loader=loader.name, dry_run=True
+                )
+            )
+        except OSError:
+            return False
+    return True
+
+
+def approval_key(
+    document: StoreDocument, digest: ChainDigest, repository: str | None = None
+) -> ApprovalKey:
     """The digest ``document`` hashes to as a rendering of the design-doc chain at ``digest``.
 
     **The title, the template, and the rendered body — and nothing else.** The body is
@@ -388,7 +455,7 @@ def approval_key(document: StoreDocument, digest: ChainDigest) -> ApprovalKey:
     and it is unchanged.
     """
     authored = {
-        "body_digest": body_digest(document, digest),
+        "body_digest": body_digest(document, digest, repository),
         "digest": digest,
         "title": document.title,
     }
@@ -569,7 +636,8 @@ def approve(project: str) -> Approved:
     approves it.
     """
     document = design_document(project)
-    key = approval_key(document, resolved_digest())
+    repository = design_chain.plan_repository(project)
+    key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
     if recorded(document) == key:
         return Approved(document.qualified_id, located(document), held=True)
     value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
@@ -616,7 +684,8 @@ def assess(project: str) -> Assessment:
                 return Assessment(exemption=exemption(project, stamped.nodes, stamped.kind))
             note = lapsed(project, beyond, unheld, documents, stamped.kind)
         document = one_document(project, documents)
-        key = approval_key(document, resolved_digest())
+        repository = design_chain.plan_repository(project)
+        key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
     except OSError as exc:
         return Assessment(refusal=stated(str(exc), note))
     if recorded(document) == key:
