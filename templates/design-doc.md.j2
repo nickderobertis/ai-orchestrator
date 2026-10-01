@@ -1,94 +1,213 @@
 ---
 onetaskgraph_template: 1
 description: >-
-  The one short document a plan is read and approved as. Its reader is a technical product
-  manager with no depth in this domain, who reads it instead of the plan and must be able to
-  accept a contract, argue with the architecture, or say the acceptance criteria do not
-  describe what was asked; a document only its author's peers can read has failed. Every
-  answer is in plain language: simple, terse, precise, with no jargon, and a term that cannot
-  be avoided defined once, in passing, in words that reader already has. The document is six
-  sections in the order What, Why, Architecture, Contracts, Acceptance criteria, Planned
-  tasks, and no other heading, so no answer carries a heading of its own.
+  The design document a plan is read and approved as. The variables below are its data; how
+  to write each answer is stated in this template's guidance comments, which no rendering
+  carries.
 variables:
   what:
     description: >-
-      What is being built, in one short passage.
+      The What section's prose.
     type: text
     required: true
   why:
     description: >-
-      The motivation in the user's own terms: what they said they wanted and why. Not the
-      handoff, and not a restatement of what is built.
+      The Why section's prose.
     type: text
     required: true
   architecture:
     description: >-
-      The pieces and how they fit, enough for the reader to picture them. It leaves out detail
-      that is easily changed later: no function names, file layout, library with many
-      equivalents, or order two steps run in. It highlights the decisions that are expensive
-      to reverse — a stored shape, a published interface, a boundary between pieces of code, a
-      dependency on another party's release — saying what each commits to and what reversing
-      it costs. Where the plan spans more than one repository it names the repository each
-      piece lives in, since the planned-tasks table has no column for it; a plan inside one
-      repository says nothing about repositories.
+      The Architecture section's overview only. Each unit's subsection is rendered from
+      `units`.
     type: text
     required: true
-  contracts:
+  units:
     description: >-
-      The agreements the plan cuts at, one per entry, each stated so the reader could accept
-      or reject it: what each party owes, and what the other may assume.
+      One object per unit that changes, in reading order, with these keys: `name` (string,
+      the unit's label, which a planned task's `unit` names); `repository` (string, the
+      repository's short name, such as `onepipeline`); `part` (string, the package or path
+      within that repository, or `""` when the unit is the whole repository); `summary`
+      (text, the unit's one paragraph); `reversible` (a list of objects, the unit's trivial and
+      low-cost decisions in reading order, or `[]` when it has none), each with the string
+      keys `title` (its short bold title) and `text` (its one sentence); and `decisions` (a
+      list of objects, the unit's high-cost decisions, or `[]` when it has none). Each decision has the keys `name`
+      (string, its heading), `justification` (string, naming who would have to act to undo
+      it), `summary` (text, its plain meaning) and `artifact` (text, one or more fenced
+      blocks, or `""` for a behavioural decision). The template renders each decision's
+      reversibility line from its `justification`; the level is not an answer.
     type: list
-    items: string
+    items: object
     required: true
   acceptance_criteria:
     description: >-
-      The document's own criteria, one per entry: what has to be true when the whole plan is
-      done, as properties of the finished thing rather than the steps taken to reach it.
+      One criterion per entry, each a string.
     type: list
     items: string
     required: true
   planned_tasks:
     description: >-
-      One entry per task of the plan, in the order the table lists them, each an object of
-      four strings: `task` (its title), `delivers` (one line), `depends_on` (the titles it
-      depends on, or `none`) and `location`. This table is where the document links out to
-      the tasks and issues that hold the detail rather than restating any of it. Each
-      `location` is the one the plan store reports for that task — a link where it lives on a
-      website, a path where it is a file on this machine — and never one composed by hand.
+      One object per task of the plan, in the order the table lists them, with five string
+      keys: `task` (its title), `unit` (the `name` of the unit it changes), `delivers` (what
+      it delivers), `depends_on` (the titles it depends on, or `none`) and `location` (where
+      the task lives). Each value is rendered as one table cell on one line.
     type: list
     items: object
     required: true
 ---
+{#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
+{% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
+{% block document_guidance %}
+{#
+  THE READER. A technical product manager with no depth in this domain. They read this
+  document instead of the plan, and must be able to accept a hard-to-reverse decision, argue
+  with the architecture, or say the acceptance criteria do not describe what was asked.
+
+  PROSE. Plain, simple, terse and precise, and no more technical than the plan's own goal
+  statement. A term that cannot be avoided is defined once, in passing.
+
+  LENGTH. A document is about as long as the design document this template replaces would
+  be for the same plan. Exactness is spent on what is hard to undo, and everything else is
+  said in a sentence.
+
+  SECTIONS. Five, in this order: What, Why, Architecture, Acceptance criteria, Planned
+  tasks. There is no separate Contracts section, and no answer adds a heading of its own.
+
+  HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
+  reversibility line is the whole of the highlighting.
+
+  THIS TEMPLATE. Each section renders inside its own block: `what`, `why`, `architecture`,
+  `acceptance_criteria` and `planned_tasks`. Each section's guidance is a Jinja comment in a
+  separate block, `<name>_guidance`, and this block, `document_guidance`, holds what applies
+  to the whole document. Guidance is always a Jinja comment, never an HTML comment, so a
+  rendered document carries none of it. The front matter states the data shape, what each
+  answer and key holds; the judgment lives here. A repository overrides any one block, a
+  section's guidance without its rendering or the other way round, through the engine's
+  repository layer: `.onepipeline/templates/design-doc.md.j2` in its checkout, a file
+  beginning `{% extends "onepipeline/host/design-doc.md.j2" %}` that redefines only the
+  blocks it names.
+#}
+{% endblock %}
+{% block what_guidance %}
+{#
+  WHAT. What is being built. What and Why are each a few plain sentences in the user's
+  terms, and carry no interface detail and no implementation detail.
+#}
+{% endblock %}
+{% block what %}
 ## What
 
 {{ what }}
 
+{% endblock %}
+{% block why_guidance %}
+{#
+  WHY. Why the user wants it, in their own words where the plan records them.
+#}
+{% endblock %}
+{% block why %}
 ## Why
 
 {{ why }}
 
+{% endblock %}
+{% block architecture_guidance %}
+{#
+  ARCHITECTURE. The `architecture` answer is a short overview, two to four sentences saying
+  how the units fit. A unit is a repository, or a part of a project. Every unit that changes
+  gets one subsection, headed `### <unit> — `<repository>` (`<package or path>`)`; the
+  parenthesis appears only when the unit is part of a repository.
+
+  Under each unit heading:
+    - One paragraph. It says in plain words what the unit is and what changes in it. It
+      does not list the unit's individual decisions; those follow.
+    - One `#### <decision>` per high-cost decision the unit owns, and only for those, so a
+      unit with none has no `####`. Each opens with `**Reversibility: high cost** —` and a
+      justification naming who would have to act to undo it. Then one or two plain
+      sentences say what the decision means. Then the literal artifact: a `diff` block for
+      a changed shape, the full shape for a new one, a `--help` diff for a CLI, a text
+      sketch for a UI. A behavioural decision with no artifact says so in one sentence.
+    - Then, after the high-cost subsections, a `**Reversible:**` line followed by one
+      bullet per trivial or low-cost decision the unit makes: an interface, a stored shape,
+      a flag, a behaviour. Each bullet is `- **<short title>.** <one sentence>`, and the
+      sentence names the thing exactly (the flag, key, field, route or command). A bullet
+      carries no level label, no artifact and no justification, because trivial and low
+      cost read the same here. A unit with no such decision has no `**Reversible:**` line.
+    - Nothing else: no Kind, Owner or Status line, no Owes or May-assume bullets, and no
+      links between sections.
+
+  REVERSIBILITY. Three levels, defined by who would have to act to undo the decision:
+    - trivial: only the unit that owns it, in one ordinary change.
+    - low cost: parties we control, changing together. For example, several of our
+      repositories or tools updated in step, a deprecation window, or a migration of data
+      we own.
+    - high cost: parties we don't control or can't list, or data we can't rewrite. For
+      example, a public flag or field other people script against, a released artifact, or
+      stored data that older installed versions or outside readers keep reading.
+  When in doubt, the stricter level. These definitions are guidance a repository may
+  override by replacing this block.
+#}
+{% endblock %}
+{% block architecture %}
 ## Architecture
 
 {{ architecture }}
 
-## Contracts
+{% for unit in units %}
+### {{ unit.name }} — `{{ unit.repository }}`{% if unit.part %} (`{{ unit.part }}`){% endif %}
 
-{% for contract in contracts %}
-- {{ contract | replace("\n", "\n  ") }}
+
+{{ unit.summary }}
+
+{% for decision in unit.decisions %}
+#### {{ decision.name }}
+
+**Reversibility: high cost** — {{ decision.justification }}
+
+{{ decision.summary }}
+
+{% if decision.artifact %}
+{{ decision.artifact }}
+
+{% endif %}
+{% endfor %}
+{% if unit.reversible %}
+**Reversible:**
+
+{% for item in unit.reversible %}
+- **{{ item.title }}.** {{ item.text | replace("\n", "\n  ") }}
 {% endfor %}
 
+{% endif %}
+{% endfor %}
+{% endblock %}
+{% block acceptance_criteria_guidance %}
+{#
+  ACCEPTANCE CRITERIA. A plain list of what must be observably true when the plan is done,
+  no longer than the plan warrants.
+#}
+{% endblock %}
+{% block acceptance_criteria %}
 ## Acceptance criteria
 
 {% for criterion in acceptance_criteria %}
 - {{ criterion | replace("\n", "\n  ") }}
 {% endfor %}
 
+{% endblock %}
+{% block planned_tasks_guidance %}
+{#
+  PLANNED TASKS. A table with the columns Task, Unit, What it delivers, Depends on, Where it
+  lives: one row per task, every cell one line, and "What it delivers" a short phrase. The
+  Unit column names the unit the task changes. Where it lives is the location the plan store
+  reports for the task, never one composed by hand.
+#}
+{% endblock %}
+{% block planned_tasks %}
 ## Planned tasks
 
-| Task | What it delivers | Depends on | Where it lives |
-| --- | --- | --- | --- |
-{# A table cell is one line holding no bare column delimiter, whatever an answer says. #}
-{% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\n", " ") }}{% endmacro %}
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
 {% for row in planned_tasks %}
-| {{ cell(row.task) }} | {{ cell(row.delivers) }} | {{ cell(row.depends_on or "none") }} | {{ cell(row.location) }} |
+| {{ cell(row.task) }} | {{ cell(row.unit) }} | {{ cell(row.delivers) }} | {{ cell(row.depends_on or "none") }} | {{ cell(row.location) }} |
 {% endfor %}
+{% endblock %}

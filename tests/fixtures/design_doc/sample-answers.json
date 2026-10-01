@@ -1,0 +1,147 @@
+{
+  "what": "Let whoever launches a run, meaning one execution of a plan, tag it with short labels like `nightly` and filter run lists by them.",
+  "why": "The user starts a dozen runs a day and cannot find this week's crozier runs without opening each. They want labels set once at launch and shown wherever runs are listed.",
+  "architecture": "The engine, `onepipeline`, runs plans. It checks tags at launch and stores them in each run's record, which every run list reads, so it ships first.",
+  "units": [
+    {
+      "name": "Run ledger",
+      "repository": "onepipeline",
+      "part": "src/ledger.rs",
+      "summary": "The ledger keeps each run's permanent record, which gains its tags.",
+      "reversible": [
+        {
+          "title": "Older runs",
+          "text": "A record written before this change reads as a run with no tags."
+        },
+        {
+          "title": "Tags are fixed",
+          "text": "Nothing changes a run's tags after launch, including resuming a stopped run, called adopting it."
+        }
+      ],
+      "decisions": [
+        {
+          "name": "Launch record",
+          "justification": "older engines on other people's machines read launch records, and all would need updating.",
+          "summary": "Each run's `launch.json`, written once at launch, gains a `tags` list.",
+          "artifact": "```diff\n {\n   \"run_id\": \"run-20260930-crozier-fern\",\n   \"plan\": \"plans:crozier-fern-parity-close\",\n   \"started_at\": \"2026-09-30T15:40:36Z\",\n+  \"tags\": [\"crozier\", \"nightly\"],\n   \"engine_version\": \"0.42.0\"\n }\n```"
+        }
+      ]
+    },
+    {
+      "name": "Command line",
+      "repository": "onepipeline",
+      "part": "src/cli.rs",
+      "summary": "The command line starts and lists runs.",
+      "reversible": [
+        {
+          "title": "Bad tags are refused early",
+          "text": "A malformed tag is refused, naming it, before anything is stored."
+        }
+      ],
+      "decisions": [
+        {
+          "name": "Tag format",
+          "justification": "tightening it would invalidate tags stored on other people's machines.",
+          "summary": "A tag is 1 to 32 lowercase letters, digits or hyphens, starting with a letter; a run has at most eight.",
+          "artifact": "```text\ntag   := [a-z][a-z0-9-]{0,31}\ntags  := at most 8 distinct tags per run\n```"
+        },
+        {
+          "name": "`start --tag` and `runs --tag`",
+          "justification": "other people's scripts will pass `--tag`; renaming it, or making `runs --tag` match any tag, silently breaks them.",
+          "summary": "`start` takes one `--tag` per tag; `runs --tag` lists only runs carrying every tag named.",
+          "artifact": "```diff\n Usage: onepipeline start [OPTIONS] <PLAN>\n\n Options:\n       --run-id <ID>        The run's id; generated when omitted\n+      --tag <TAG>          Label the run; repeatable, at most 8. Fixed for the run's life\n       --detach             Return once the driver is running\n```\n\n```diff\n Usage: onepipeline runs [OPTIONS]\n\n Options:\n       --mine               Only runs this session launched\n+      --tag <TAG>          Only runs carrying this tag; repeated, a run must carry every one\n       --json               Print one JSON object per run\n```"
+        }
+      ]
+    },
+    {
+      "name": "Read API",
+      "repository": "onepipeline-ui",
+      "part": "onepipeline-api",
+      "summary": "The read API is the server behind the browser view.",
+      "reversible": [
+        {
+          "title": "Tags in the run list",
+          "text": "`GET /runs` returns each run's `tags`, an empty list when it has none."
+        },
+        {
+          "title": "Tag filter",
+          "text": "`GET /runs` takes a repeatable `tag` parameter, and a run must carry every tag given."
+        }
+      ],
+      "decisions": []
+    },
+    {
+      "name": "Browser view",
+      "repository": "onepipeline-ui",
+      "part": "web/",
+      "summary": "The browser view is the web page listing runs.",
+      "reversible": [
+        {
+          "title": "Tag chips",
+          "text": "Each run in the list shows its tags."
+        },
+        {
+          "title": "Shareable filter",
+          "text": "A tag filter above the list is kept in the page address, so a filtered list can be shared as a link."
+        }
+      ],
+      "decisions": []
+    },
+    {
+      "name": "Launch recipe",
+      "repository": "ai-orchestrator",
+      "part": "justfile",
+      "summary": "The launch recipe is how this repository starts runs.",
+      "reversible": [
+        {
+          "title": "Pass-through",
+          "text": "`just orchestrate --tag` hands each tag to `onepipeline start` unchanged."
+        }
+      ],
+      "decisions": []
+    }
+  ],
+  "acceptance_criteria": [
+    "A run launched with `--tag crozier --tag nightly` shows both tags in every run list; filtering by both finds it.",
+    "A malformed tag is refused, creating no run.",
+    "Older runs show no tags, and adopted runs keep theirs.",
+    "`just orchestrate <plan> --tag nightly` launches a run tagged `nightly`."
+  ],
+  "planned_tasks": [
+    {
+      "task": "feat(ledger): store run tags",
+      "unit": "Run ledger",
+      "delivers": "`tags` in `launch.json`",
+      "depends_on": "none",
+      "location": "https://github.com/example/onepipeline/issues/101"
+    },
+    {
+      "task": "feat(cli): add --tag",
+      "unit": "Command line",
+      "delivers": "Both flags and the check",
+      "depends_on": "feat(ledger): store run tags",
+      "location": "https://github.com/example/onepipeline/issues/102"
+    },
+    {
+      "task": "feat(api): filter by tag",
+      "unit": "Read API",
+      "delivers": "The `GET /runs` change",
+      "depends_on": "feat(cli): add --tag",
+      "location": "https://github.com/example/onepipeline-ui/issues/55"
+    },
+    {
+      "task": "feat(ui): filter by tag",
+      "unit": "Browser view",
+      "delivers": "Tags and the filter",
+      "depends_on": "feat(api): filter by tag",
+      "location": "https://github.com/example/onepipeline-ui/issues/56"
+    },
+    {
+      "task": "feat(recipe): pass --tag through",
+      "unit": "Launch recipe",
+      "delivers": "The pass-through",
+      "depends_on": "feat(cli): add --tag",
+      "location": "https://github.com/example/ai-orchestrator/issues/900"
+    }
+  ]
+}
