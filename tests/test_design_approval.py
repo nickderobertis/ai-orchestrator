@@ -30,8 +30,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
+from project_fixtures import ONEVCS_HOME, register_stand_in
 
-from orchestrator import design_approval, plan_store
+from orchestrator import design_approval, design_chain, plan_store
 from orchestrator.plan_store import (
     NodeId,
     QualifiedDocumentId,
@@ -97,6 +98,26 @@ OTHERWISE: Mapping[str, object] = {
     "metadata": {"the destination's own bookkeeping": "authoring:demo-design"},
     "location": {"url": "https://github.invalid/users/x/projects/2?pane=issue&itemId=7"},
 }
+
+
+#: The rule and the shape check as shipped, before the fixture below holds them still, for
+#: the tests that read them against a real store.
+RULE = design_chain.plan_repository
+FITS = design_approval.fits_in_place
+
+
+@pytest.fixture(autouse=True)
+def _the_working_directory_layer_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pick no repository's layer for every plan here, and read no stored answers.
+
+    The plans these tests approve exist only in the doubled store reads above, so which
+    repository's layer their chain resolves through is answered as the rule answers a plan
+    naming none, and a document rendered under another chain is answered as one whose
+    stored answers still fit. The rule itself is `tests/test_design_chain.py`'s, and both
+    are driven against real stores in `tests/plan_tooling/test_approve_design_recipe_e2e.py`.
+    """
+    monkeypatch.setattr(design_approval.design_chain, "plan_repository", lambda _project: None)
+    monkeypatch.setattr(design_approval, "fits_in_place", lambda *_arguments: True)
 
 
 @pytest.fixture
@@ -652,7 +673,12 @@ def test_the_launch_is_refused_until_the_document_it_holds_is_the_one_approved(
     edited = design_approval.assess("authoring:demo").refusal
     assert edited is not None
     assert "was edited after it was rendered" in edited
-    assert design_approval.REGENERATE.replace("<id>", "authoring:demo-design") in edited
+    assert (
+        design_approval.REGENERATE.replace(
+            design_approval.RESOLVE, design_chain.resolve_command(None)
+        ).replace("<id>", "authoring:demo-design")
+        in edited
+    )
 
     _holds(monkeypatch, _document(metadata=dict(approved) | _provenance(more), content=more))
     regenerated = design_approval.assess("authoring:demo").refusal
@@ -1012,8 +1038,35 @@ def test_the_gate_reads_the_command_line_it_was_given_when_it_is_handed_none(
 EXAMPLES = "examples"
 
 
+# llmlint: ignore[shell_test_tiers_stay_split] The subject is the shipped examples, which only
+# this project's whole-workspace target is keyed on; what this adds is a registry entry for
+# the one origin an example plan names alone, in a registry under this test's own temporary
+# directory, through the `onevcs` this repository's session setup installs at the release
+# `config/onevcs.version` pins — no shell suite and no host state.
+def _stand_ins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projects: list[str]) -> None:
+    """Register a checkout for every origin the rule picks for one of ``projects``.
+
+    An example plan whose tasks all name one repository resolves through that repository's
+    registered checkout, so its approval is answered on a host that registers one: each
+    stand-in carries no layer of its own, which is what such a checkout without an override
+    is, and it is registered in a registry of this test's own.
+    """
+    monkeypatch.setattr(design_chain, "plan_repository", RULE)
+    home = tmp_path / "onevcs"
+    monkeypatch.setenv(ONEVCS_HOME, str(home))
+    origins = sorted(o for o in {RULE(project) for project in projects} if o is not None)
+    for index, origin in enumerate(origins):
+        register_stand_in(home, origin, tmp_path / f"stand-in-{index}")
+
+
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker] `reads_docs` routes between this
+# project's own two targets and never out of it (`tests/conftest.py`'s `READS_DOCS_MARKER`): the
+# examples are Markdown the code tier's key leaves out, and the whole-workspace target is the
+# one keyed on them.
 @pytest.mark.reads_docs
-def test_every_shipped_example_project_carries_an_approved_design_document() -> None:
+def test_every_shipped_example_project_carries_an_approved_design_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The examples are launchable, and a launch is refused without this.
 
     It fails in exactly the two cases the doctrine says it should, and both are somebody's
@@ -1025,6 +1078,7 @@ def test_every_shipped_example_project_carries_an_approved_design_document() -> 
     """
     projects = plan_store.local_projects(EXAMPLES)
     assert projects, f"the {EXAMPLES!r} source ships no project, so this proves nothing"
+    _stand_ins(tmp_path, monkeypatch, projects)
     unapproved = [
         assessed.refusal
         for assessed in (design_approval.assess(project) for project in projects)
@@ -1137,11 +1191,14 @@ def test_regenerating_a_shipped_example_with_no_new_answers_changes_nothing_and_
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT", str(copied))
     project = f"{EXAMPLES}:health-endpoint"
     document = f"{project}-design"
+    _stand_ins(tmp_path, monkeypatch, [project])
+    repository = design_chain.plan_repository(project)
+    assert repository is not None, "the example this regenerates names its one repository"
     assert design_approval.assess(project).refusal is None
 
     resolve = subprocess.run(
         [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
-        + [design_approval.TEMPLATE_NAME, "--json"]
+        + [design_approval.TEMPLATE_NAME, *design_chain.resolve_arguments(repository), "--json"]
         + ["--template-root", str(design_approval.TEMPLATE_ROOT)],
         cwd=REPO_ROOT,
         capture_output=True,
@@ -1165,3 +1222,138 @@ def test_regenerating_a_shipped_example_with_no_new_answers_changes_nothing_and_
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell suite and not a host tool:
+# the engine and the plan-store CLI these spawn are the workspace's own locked installs, in this
+# tier's key, the store is each test's own temporary one, and these cover `fits_in_place` and
+# the writer repair under the tier's 100% coverage floor, as the resolve tests above do.
+def _designed(root: Path, monkeypatch: pytest.MonkeyPatch, answers: Mapping[str, object]) -> str:
+    """Render a design document into a real local source under ``root``, and answer its id.
+
+    Rendered through the pinned engine's resolve piped into the pinned store's `document
+    create`, the way a writer renders one, from ``answers`` as the store then holds them.
+    """
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHAPED__PLUGIN", "local-md")
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHAPED__CONFIG__ROOT", str(root))
+    (root / "projects").mkdir(parents=True)
+    (root / "projects" / "demo.md").write_text(
+        '---\ntitle: "demo"\nstatus: "todo"\n---\n\nThe plan.\n', encoding="utf-8"
+    )
+    resolve = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        + [design_approval.TEMPLATE_NAME, "--json"]
+        + ["--template-root", str(design_approval.TEMPLATE_ROOT)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    path = root / "answers.json"
+    path.write_text(json.dumps(answers), encoding="utf-8")
+    created = subprocess.run(
+        [str(plan_store.locked_binary()), "document", "create", "shaped", "--project", "demo"]
+        + ["--title", "Design: demo", "--id", "demo-design", "--template-loader", "-"]
+        + ["--answers", str(path), "--no-interactive"],
+        cwd=REPO_ROOT,
+        input=resolve.stdout,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    return "shaped:demo"
+
+
+#: Answers in the shape the template in force declares.
+CURRENT: Mapping[str, object] = {
+    "what": "A paginated listing.",
+    "why": "An operator cannot see past the first screen.",
+    "architecture": "One route.",
+    "units": [
+        {
+            "name": "Route",
+            "repository": "service",
+            "part": "",
+            "summary": "The route pages.",
+            "reversible": [],
+            "decisions": [],
+        }
+    ],
+    "acceptance_criteria": ["The listing pages."],
+    "planned_tasks": [
+        {
+            "task": "feat: page",
+            "unit": "Route",
+            "delivers": "the route",
+            "depends_on": "none",
+            "location": "/plans/tasks/page.md",
+        }
+    ],
+}
+
+
+def _with_retired_answers(root: Path) -> None:
+    """Store answers for a variable the template no longer declares beside the current ones.
+
+    What a document rendered under the template this one replaced holds: its stored answers
+    are the store's own trailing block of the record, and an answer named for a retired
+    variable is the one shape a regenerate in place refuses.
+    """
+    record = root / "documents" / "demo-design.md"
+    text = record.read_text(encoding="utf-8")
+    assert "\nwhat: " in text, text
+    record.write_text(
+        text.replace("\nwhat: ", "\ncontracts:\n- The retired contract.\nwhat: ", 1),
+        encoding="utf-8",
+    )
+
+
+def test_a_document_whose_stored_answers_fit_regenerates_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _designed(tmp_path / "store", monkeypatch, CURRENT)
+    document = design_approval.design_document(project)
+    assert FITS(document) is True
+
+
+def test_a_document_holding_no_stored_answers_is_left_to_the_answers_supplied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copy holds no answers, so the store names none, and its regenerate is handed them."""
+    root = tmp_path / "store"
+    project = _designed(root, monkeypatch, CURRENT)
+    record = root / "documents" / "demo-design.md"
+    record.write_text(
+        record.read_text(encoding="utf-8").split("\n<!-- onetaskgraph:template-answers", 1)[0],
+        encoding="utf-8",
+    )
+    assert FITS(design_approval.design_document(project)) is True
+
+
+def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to_the_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regenerating in place would render the retired answers again, so the writer is named."""
+    root = tmp_path / "store"
+    project = _designed(root, monkeypatch, CURRENT)
+    _with_retired_answers(root)
+    document = design_approval.design_document(project)
+    assert FITS(document) is False
+    monkeypatch.setattr(design_approval, "fits_in_place", FITS)
+    provenance = document.metadata[design_approval.PROVENANCE]
+    assert isinstance(provenance, dict), document.metadata
+    stale = dataclasses.replace(
+        document,
+        metadata=dict(document.metadata)
+        | {design_approval.PROVENANCE: {**provenance, "digest": STATED}},
+    )
+    with pytest.raises(design_approval.Unrendered) as refused:
+        design_approval.body_digest(stale, MOVED)
+    said = str(refused.value)
+    assert "just finish-plan <brief>" in said, said
+    assert design_chain.resolve_command(None) in said, said
+    assert "document render" not in said, said
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

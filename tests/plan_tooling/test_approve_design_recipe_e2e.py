@@ -32,10 +32,11 @@ from typing import Any
 
 import pytest
 import yaml
-from project_fixtures import helper, reviewed
+from project_fixtures import ONEVCS_HOME, helper, register_stand_in, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
+from orchestrator import design_chain
 from orchestrator.design_approval import (
     PLAN_KIND,
     PLANNING,
@@ -110,6 +111,35 @@ DESIGN: Mapping[str, object] = {
     "what": "One node that changes nothing.",
     "why": "Something has to be launchable for this to be a gate at all.",
     "architecture": "One node, settled without a dispatch.",
+    "units": [
+        {
+            "name": "Handoff",
+            "repository": "ai-orchestrator",
+            "part": "",
+            "summary": "Nothing outside this plan reads it.",
+            "reversible": [],
+            "decisions": [],
+        }
+    ],
+    "acceptance_criteria": ["The run settles and nothing changed."],
+    "planned_tasks": [
+        {
+            "task": "handoff",
+            "unit": "Handoff",
+            "delivers": "the recorded no-change handoff",
+            "depends_on": "none",
+            "location": "the store's own location",
+        }
+    ],
+}
+
+#: The same document's answers as the design-doc template this host shipped before its
+#: per-unit architecture: a `contracts` list where `units` now stands, and table rows
+#: naming no unit. A document still holding these is one rendered before that change.
+RETIRED_DESIGN: Mapping[str, object] = {
+    "what": "One node that changes nothing.",
+    "why": "Something has to be launchable for this to be a gate at all.",
+    "architecture": "One node, settled without a dispatch.",
     "contracts": ["None: nothing outside this plan reads it."],
     "acceptance_criteria": ["The run settles and nothing changed."],
     "planned_tasks": [
@@ -121,6 +151,59 @@ DESIGN: Mapping[str, object] = {
         }
     ],
 }
+
+#: That template's text, as it stood before the per-unit architecture landed: the
+#: front matter and body this host shipped, cut down to what renders `RETIRED_DESIGN`.
+RETIRED_TEMPLATE = """---
+onetaskgraph_template: 1
+description: The design document a plan is read and approved as.
+variables:
+  what: {description: What, type: text, required: true}
+  why: {description: Why, type: text, required: true}
+  architecture: {description: Architecture, type: text, required: true}
+  contracts: {description: Contracts, type: list, items: string, required: true}
+  acceptance_criteria: {description: Criteria, type: list, items: string, required: true}
+  planned_tasks: {description: Tasks, type: list, items: object, required: true}
+---
+## What
+
+{{ what }}
+
+## Why
+
+{{ why }}
+
+## Architecture
+
+{{ architecture }}
+
+## Contracts
+
+{% for contract in contracts %}
+- {{ contract }}
+{% endfor %}
+
+## Acceptance criteria
+
+{% for criterion in acceptance_criteria %}
+- {{ criterion }}
+{% endfor %}
+
+## Planned tasks
+
+| Task | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- |
+{% for row in planned_tasks %}
+| {{ row.task }} | {{ row.delivers }} | {{ row.depends_on }} | {{ row.location }} |
+{% endfor %}
+"""
+
+#: The repositories a plan's tasks name below, as the normalized origins a task record
+#: holds: the one a single-repository plan names throughout, and a second for a plan that
+#: names several. Neither is a repository anything here fetches; each is registered as a
+#: stand-in checkout where a journey needs the engine to resolve it.
+SERVICE = "git.example.invalid/journey/service"
+CLIENT = "git.example.invalid/journey/client"
 
 #: Answers to this host's `plan-task` template, which renders a document here only to be
 #: one that records another template's provenance.
@@ -163,6 +246,7 @@ class Store:
         planning: bool = False,
         beyond: Sequence[str] = (),
         stamp: object = None,
+        repositories: Sequence[str] = (),
     ) -> str:
         """Write one launchable plan and answer its qualified id.
 
@@ -178,6 +262,8 @@ class Store:
         value verbatim instead, which is how a project stamped by an older `just plan` —
         one that named no nodes — is stood up as it really is, and how a stamp of any other
         shape the gate has to answer for is written as a project would really carry it.
+        ``repositories`` names, node by node in that order, the one repository each task's
+        record names; a node past its end names none.
         """
         launched = [PLANNING_NODE]
         write_plan_project(
@@ -191,13 +277,14 @@ class Store:
                         "id": node_id,
                         "title": node_id,
                         "expects_no_diff": True,
+                        **({"repo": repositories[index]} if index < len(repositories) else {}),
                         "task": (
                             "## What\n\nRecord that nothing changes.\n\n"
                             "## Why\n\nThe boundary is explicit.\n\n"
                             "## Acceptance criteria\n\n- Nothing changed.\n"
                         ),
                     }
-                    for node_id in (*launched, *beyond)
+                    for index, node_id in enumerate((*launched, *beyond))
                 ],
             },
             native_id=native,
@@ -221,6 +308,7 @@ class Store:
         named: str = "design",
         template_root: Path = REPO_ROOT / "templates",
         template: str = "design-doc",
+        repository: str | None = None,
     ) -> Path:
         """Render one document of ``native``'s plan the way the design-doc dispatch does.
 
@@ -230,7 +318,9 @@ class Store:
         what it wrote. ``template_root`` is the host root that resolve reads, which is this
         checkout's own unless a journey renders from a template that is no longer in force,
         and ``template`` the registered name resolved, which is `design-doc` unless a
-        journey renders the document from another template altogether.
+        journey renders the document from another template altogether. ``repository`` is
+        the origin the resolve names, as the writer's task names it for a plan whose tasks
+        all name that one repository.
 
         ``named`` is what distinguishes a second document *of the same project* from a
         document of another one — which is the state the ambiguity refusal is about, and
@@ -255,6 +345,7 @@ class Store:
             str(written),
             template_root=template_root,
             template=template,
+            resolving=design_chain.resolve_arguments(repository),
         )
         (record,) = created["items"]
         return Path(str(record["item"]["location"]["path"]))
@@ -332,10 +423,11 @@ class Store:
         *arguments: str,
         template_root: Path = REPO_ROOT / "templates",
         template: str = "design-doc",
+        resolving: Sequence[str] = (),
     ) -> dict[str, Any]:
         """The pinned `template resolve <template>`, piped into one pinned store command."""
         resolved = subprocess.run(
-            [str(ENGINE), "template", "resolve", template, "--json"]
+            [str(ENGINE), "template", "resolve", template, *resolving, "--json"]
             + ["--template-root", str(template_root)],
             cwd=REPO_ROOT,
             text=True,
@@ -1488,3 +1580,166 @@ def test_an_approval_travels_with_the_document_onto_the_store_the_plan_is_launch
         f"launch was refused anyway:\n{launched.stdout}\n{launched.stderr}"
     )
     assert _settled(launched) == "complete", launched.stdout
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
+def _registered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, layer: str | None = None
+) -> Path:
+    """Register a stand-in checkout for ``origin``, carrying ``layer`` as its repository layer.
+
+    In a registry of this journey's own, which every recipe below inherits, so the engine
+    resolves ``origin`` to this checkout exactly as it resolves a registered repository's
+    origin on a host. ``layer`` is the text of its `.onepipeline/templates/design-doc.md.j2`,
+    or ``None`` for a checkout carrying no layer of its own. Answers the checkout.
+    """
+    home = tmp_path / "onevcs"
+    monkeypatch.setenv(ONEVCS_HOME, str(home))
+    checkout = register_stand_in(home, origin, tmp_path / origin.replace("/", "-"))
+    if layer is not None:
+        _layered(checkout, layer)
+    return checkout
+
+
+def _layered(checkout: Path, layer: str) -> None:
+    """Write ``layer`` as ``checkout``'s repository layer of the design-doc template."""
+    path = checkout / ".onepipeline" / "templates" / "design-doc.md.j2"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(layer, encoding="utf-8")
+
+
+#: A repository layer overriding one guidance block of the host template, as a repository
+#: overrides the bar its own documents are written to.
+LAYER = (
+    '{% extends "onepipeline/host/design-doc.md.j2" %}\n'
+    "{% block what_guidance %}{# WHAT. Say what changes for the service's callers. #}"
+    "{% endblock %}\n"
+)
+
+
+@pytest.mark.xdist_group("approve-design")
+@pytest.mark.parametrize("plan", ["one repository", "several repositories", "no repository"])
+def test_every_repair_names_the_resolve_command_the_rule_gives_for_the_plan(
+    store: Store, runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan: str
+) -> None:
+    """A refusal's regenerate resolves the chain the plan's document is rendered through.
+
+    A plan whose tasks all name one repository is resolved through that repository's
+    layer, so its repair names `--repository <that origin>`; a plan whose tasks name
+    several, or none, is resolved through the working directory's, so its repair names no
+    repository. Each document is edited by hand after it was rendered, which is the
+    refusal whose repair is a regenerate.
+    """
+    native = f"approve-design-rule-{plan.split()[0]}"
+    match plan:
+        case "one repository":
+            _registered(tmp_path, monkeypatch, SERVICE)
+            project = store.plan(native, beyond=["second"], repositories=[SERVICE, SERVICE])
+            repository: str | None = SERVICE
+        case "several repositories":
+            project = store.plan(native, beyond=["second"], repositories=[SERVICE, CLIENT])
+            repository = None
+        case _:
+            project = store.plan(native, beyond=["second"])
+            repository = None
+    record = store.document(native, repository=repository)
+    store.edit(record, "One node that changes nothing.", "Something else.")
+
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "was edited after it was rendered" in refused.stderr, refused.stderr
+    named = design_chain.resolve_command(repository)
+    assert f"`{named} | onetaskgraph document render {project}-design " in refused.stderr, (
+        refused.stderr
+    )
+    if repository is None:
+        assert "--repository" not in refused.stderr, refused.stderr
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_a_document_whose_stored_answers_no_longer_fit_is_sent_to_the_writer(
+    store: Store, runs: Path, tmp_path: Path
+) -> None:
+    """A document rendered before the per-unit architecture is regenerated by the writer.
+
+    Its stored answers name a variable the template in force no longer declares, so the
+    store refuses to regenerate it in place; the repair names the design-document writer,
+    and never the in-place `document render` the store would refuse.
+    """
+    native = "approve-design-retired"
+    project = store.plan(native)
+    retired = tmp_path / "retired-templates"
+    shutil.copytree(REPO_ROOT / "templates", retired)
+    (retired / "design-doc.md.j2").write_text(RETIRED_TEMPLATE, encoding="utf-8")
+    store.document(native, RETIRED_DESIGN, template_root=retired)
+
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "do not fit the variables the template in force declares" in refused.stderr, (
+        refused.stderr
+    )
+    assert "just finish-plan <brief>" in refused.stderr, refused.stderr
+    assert design_chain.resolve_command(None) in refused.stderr, refused.stderr
+    assert "document render" not in refused.stderr, refused.stderr
+
+    # The regenerate in place the refusal declines to name is the one the store refuses.
+    unfit = store.regenerating(f"{project}-design")
+    assert unfit.returncode != 0, unfit.stdout + unfit.stderr
+
+    # What the writer does instead: answer the template's current variables afresh and
+    # store the document under the id it already holds, which the store replaces whole —
+    # retired answers and all — so the plan's document is one a person can approve.
+    store.document(native)
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_a_plan_in_one_layered_repository_is_approved_on_the_chain_it_was_rendered_through(
+    store: Store, runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The approval keys on the digest the rendering recorded, and a moved layer unapproves it.
+
+    The plan's tasks all name one repository whose checkout carries a layer, so the writer
+    renders through `--repository <that origin>` and the store records that chain's digest.
+    The approval resolves the chain by the same rule, so the digest it keys on is the one
+    the provenance records and the approval is granted; changing the layer moves the chain,
+    and the document approved under the previous one is no longer approved.
+    """
+    checkout = _registered(tmp_path, monkeypatch, SERVICE, LAYER)
+    native = "approve-design-layered"
+    project = store.plan(native, beyond=["second"], repositories=[SERVICE, SERVICE])
+    record = store.document(native, repository=SERVICE)
+
+    resolved = subprocess.run(
+        [str(ENGINE), "template", "resolve", "design-doc"]
+        + [*design_chain.resolve_arguments(SERVICE), "--json"]
+        + ["--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=True,
+    )
+    chain = json.loads(resolved.stdout)
+    assert chain["layer"] == "repository", chain
+    assert store.metadata(record)[PROVENANCE]["digest"] == chain["digest"]
+
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+    held = _just("approve-design", project, runs=runs)
+    assert "already carries an approval" in held.stdout, held.stdout + held.stderr
+
+    _layered(checkout, LAYER.replace("callers", "operators"))
+    stale = _just("approve-design", project, runs=runs)
+    assert stale.returncode == 1, stale.stdout + stale.stderr
+    assert "written against a template no longer in force" in stale.stderr, stale.stderr
+    assert design_chain.resolve_command(SERVICE) in stale.stderr, stale.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

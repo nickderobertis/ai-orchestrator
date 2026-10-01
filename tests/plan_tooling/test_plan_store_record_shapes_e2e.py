@@ -48,7 +48,7 @@ from typing import Any
 
 import pytest
 import short_state
-from project_fixtures import helper
+from project_fixtures import ONEVCS_HOME, helper, register_stand_in
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -89,6 +89,13 @@ STATES_ITS_BAR = (
     "- The dispatch closes with a completion report naming the evidence it verified."
 )
 
+#: The one repository the plan's task names, as the normalized origin its record holds.
+SERVICE_ORIGIN = "github.com/nickderobertis/some-service"
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
 #: The answers the one document a plan is read as is rendered from. Its shape is the
 #: `design-doc` template's; what matters here is only that it is a document, so these are
 #: the shortest answers that make one.
@@ -96,17 +103,30 @@ DESIGN = {
     "what": "One route, and the test that drives it.",
     "why": "The user cannot complete a purchase without it.",
     "architecture": "One route on the service that is already there.",
-    "contracts": ["The route's request and response shape."],
+    "units": [
+        {
+            "name": "Service",
+            "repository": "service",
+            "part": "",
+            "summary": "The service gains the route and its test.",
+            "reversible": [{"title": "The route", "text": "Its request and response shape."}],
+            "decisions": [],
+        }
+    ],
     "acceptance_criteria": ["A request reaches the route and is answered."],
     "planned_tasks": [
         {
             "task": "landing",
+            "unit": "Service",
             "delivers": "the route and its test",
             "depends_on": "none",
             "location": "the store's own location",
         }
     ],
 }
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _step(step_id: str, what: str) -> dict[str, str]:
@@ -138,7 +158,7 @@ STEPPED_PLAN: dict[str, object] = {
             "title": "feat: add the checkout route",
             # No `persona` beside `steps`: a stepped node takes its persona, task and turn
             # budget from the steps, and the engine's loader refuses one that states both.
-            "repo": "https://github.com/nickderobertis/some-service",
+            "repo": f"https://{SERVICE_ORIGIN}.git",
             "steps": [
                 _step("build", "Add the route."),
                 _step("prove", "Drive the route from a request-level test."),
@@ -414,7 +434,11 @@ def test_a_design_document_carrying_labels_is_approved_and_keeps_them(
     stored = store.labels(document)
     assert [label["name"] for label in stored] == expected, stored
 
+    # The plan's one task names one repository, so its document resolves through that
+    # repository's registered checkout: a layerless stand-in, in a registry of this test's own.
     environment = _environment(tmp_path)
+    environment[ONEVCS_HOME] = str(tmp_path / "onevcs")
+    register_stand_in(Path(environment[ONEVCS_HOME]), SERVICE_ORIGIN, tmp_path / "service")
     approved = _just("approve-design", project, environment=environment)
     assert approved.returncode == 0, approved.stdout + approved.stderr
     assert "recorded the approval" in approved.stdout, approved.stdout

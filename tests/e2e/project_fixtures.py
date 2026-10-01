@@ -15,12 +15,14 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
+from orchestrator import design_chain
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -103,6 +105,68 @@ def local_project(content: str, name: str) -> str:
     return project
 
 
+#: The variable naming the `onevcs` registry a process reads.
+ONEVCS_HOME = "ONEVCS_HOME"
+
+#: A registry of this process's own, holding a stand-in checkout for each origin a fixture
+#: plan names alone that the registry the suite runs under does not resolve. Removed with
+#: the interpreter that imported this module, as :data:`_HISTORY_DIR` is.
+_STAND_IN_DIR = tempfile.TemporaryDirectory(prefix="ai-orchestrator-fixture-registry-")
+
+
+def register_stand_in(home: Path, origin: str, checkout: Path) -> Path:
+    """Register a checkout at ``checkout`` whose origin is ``origin``, in the registry ``home``.
+
+    A stand-in carries no repository layer of its own, so a design-doc chain resolved
+    through it is the host template alone — the chain a repository carrying no override
+    resolves to. Nothing fetches its origin. Answers the checkout.
+    """
+    environment = {**os.environ, ONEVCS_HOME: str(home)}
+    for command in (
+        ["git", "init", "-q", "-b", "main", str(checkout)],
+        ["git", "-C", str(checkout), "remote", "add", "origin", f"https://{origin}.git"],
+        ["git", "-C", str(checkout), "-c", "user.name=Fixture"]
+        + ["-c", "user.email=fixture@example.invalid"]
+        + ["commit", "-q", "--allow-empty", "-m", "chore: seed"],
+        ["onevcs", "register", str(checkout)],
+    ):
+        done = subprocess.run(command, env=environment, text=True, capture_output=True)
+        if done.returncode != 0:
+            raise AssertionError(f"the stand-in for {origin} was not registered: {done.stderr}")
+    return checkout
+
+
+def resolving(project: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment ``project``'s design-doc chain resolves in, from ``base``.
+
+    A plan whose tasks all name one repository resolves through that repository's
+    registered checkout (`orchestrator/design_chain.py`), and a fixture plan may name an
+    origin no registry here holds. Its approval and its launch then read a registry of this
+    process's own, where that origin is a layerless stand-in — the chain such a checkout
+    without an override of its own resolves to. ``base`` defaults to this process's
+    environment, and is answered unchanged when its registry already resolves the origin.
+    """
+    environment = dict(os.environ if base is None else base)
+    repository = design_chain.plan_repository(project)
+    if repository is None:
+        return environment
+    resolved = subprocess.run(
+        ["onevcs", "resolve", repository],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if resolved.returncode == 0:
+        return environment
+    home = Path(_STAND_IN_DIR.name) / "onevcs"
+    checkout = Path(_STAND_IN_DIR.name) / re.sub(r"[^a-z0-9-]+", "-", repository.lower())
+    if not checkout.exists():
+        register_stand_in(home, repository, checkout)
+    environment[ONEVCS_HOME] = str(home)
+    return environment
+
+
 def approved(project: str) -> str:
     """Record the user's approval of ``project``'s design document, and answer its id.
 
@@ -114,6 +178,7 @@ def approved(project: str) -> str:
     recording = subprocess.run(
         ["just", "approve-design", project],
         cwd=REPO_ROOT,
+        env=resolving(project),
         text=True,
         capture_output=True,
         check=False,
@@ -156,6 +221,10 @@ def _designed(native: str) -> None:
     )
 
 
+#: The one unit a fixture's design document says changes.
+FIXTURE_UNIT = "Fixture"
+
+
 def designed(
     source: str,
     native: str,
@@ -169,15 +238,25 @@ def designed(
     reads it as a rendering of this host's template rather than a hand-written body it
     refuses. ``environment`` is the store's, for a journey that points ``source`` at a
     root of its own; the planned tasks are the one answer a journey states, because each
-    row's location is where that journey's store put the task.
+    row's location is where that journey's store put the task. Every row changes the one
+    unit the fixture is, unless it names its own.
     """
     answers = {
         "what": f"The fixture plan {native}.",
         "why": "A journey needs a project it can launch.",
         "architecture": "One project, its tasks, and this document.",
-        "contracts": ["None: nothing outside this fixture reads it."],
+        "units": [
+            {
+                "name": FIXTURE_UNIT,
+                "repository": "ai-orchestrator",
+                "part": "",
+                "summary": "Nothing outside this fixture reads it.",
+                "reversible": [],
+                "decisions": [],
+            }
+        ],
         "acceptance_criteria": ["The journey that launched it passes."],
-        "planned_tasks": planned_tasks,
+        "planned_tasks": [{"unit": FIXTURE_UNIT, **row} for row in planned_tasks],
     }
     resolved = subprocess.run(
         [str(_ENGINE), "template", "resolve", "design-doc", "--json"]

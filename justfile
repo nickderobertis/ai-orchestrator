@@ -327,7 +327,7 @@ review-plan *args:
 # approve-design <source>:<project>`.
 #
 # This is the gate on dispatch, and the one a person is actually the subject of. A plan
-# is not what somebody outside the domain can review; the one short document this host's
+# is not what somebody outside the domain can review; the design document this host's
 # `design-doc` template (`templates/design-doc.md.j2`) renders is, and a planning run's
 # `design-doc` node writes it into the plan's own project. So the document goes to the user, and this
 # command records that they approved it — after which `just orchestrate` will launch that

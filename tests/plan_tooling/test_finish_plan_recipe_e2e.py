@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
@@ -38,7 +39,6 @@ import plan_fixture_source
 import plan_root_variable
 import pytest
 import short_state
-import yaml
 from fake_backend import (
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
@@ -47,12 +47,13 @@ from fake_backend import (
     RecordedTurn,
 )
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import helper
+from project_fixtures import helper, register_stand_in
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
+from scratch_identity import PLANNING_FLOW_ORIGIN, Identity, seeded
+from test_approve_design_recipe_e2e import RETIRED_DESIGN, RETIRED_TEMPLATE
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_review, plan_store
+from orchestrator import design_chain, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -109,7 +110,7 @@ DESIGN_RUN_SUFFIX = "-design"
 
 #: The fragment only the design-doc dispatch's task carries, which is what tells its turn
 #: apart at the stand-in.
-DESIGN_TASK_MARKER = "Write the one short design document a person reviews the plan"
+DESIGN_TASK_MARKER = "Write the design document a person reviews the plan"
 
 #: The pinned engine this checkout installs, which the doubled writer runs as a real agent
 #: would: its `template resolve` is what states the design-doc template it renders.
@@ -220,6 +221,7 @@ def _draft(
     root: Path | None = None,
     source: str = FIXTURE_SOURCE,
     document_suffix: str = FIXTURE_DOCUMENT_SUFFIX,
+    repositories: Sequence[str] = (),
 ) -> Drafted:
     """Draft an unreviewed plan into a local store, with no design document yet.
 
@@ -234,7 +236,8 @@ def _draft(
 
     Written through this repository's own record renderer, so the store reads these
     records the way it reads a planner's own rather than a hand-written shape only this
-    journey would produce.
+    journey would produce. ``repositories`` gives the plan one task per origin, each naming
+    that one repository; with none, its one task names no repository.
     """
     native = f"test-{os.getpid()}-{name}"
     # Resolved here rather than as a default argument: this process's own fixture root is
@@ -248,11 +251,15 @@ def _draft(
             "name": native,
             "tasks": [
                 {
-                    "id": "decide-the-cursor",
+                    "id": "decide-the-cursor" if index == 0 else f"decide-the-cursor-{index}",
                     "persona": "engineer",
-                    "title": "feat: page the node listing",
+                    "title": "feat: page the node listing"
+                    if index == 0
+                    else f"feat: page the node listing in part {index}",
                     "task": _task(criteria),
+                    **({"repo": repositories[index]} if repositories else {}),
                 }
+                for index in range(max(1, len(repositories)))
             ],
         },
         native_id=native,
@@ -277,11 +284,21 @@ def _answers(drafted: Drafted) -> dict[str, object]:
         "what": "A paginated node listing.",
         "why": "An operator cannot see past the first screen.",
         "architecture": "One route, one view.",
-        "contracts": ["The cursor is an opaque token."],
+        "units": [
+            {
+                "name": "Listing",
+                "repository": "ai-orchestrator",
+                "part": "",
+                "summary": "The listing pages behind an opaque cursor.",
+                "reversible": [{"title": "The cursor", "text": "An opaque token."}],
+                "decisions": [],
+            }
+        ],
         "acceptance_criteria": ["The listing pages."],
         "planned_tasks": [
             {
                 "task": drafted.task_title,
+                "unit": "Listing",
                 "delivers": "the route",
                 "depends_on": "none",
                 "location": "the store's own location",
@@ -310,6 +327,8 @@ class Bench(NamedTuple):
     destination: Path
     runs: Path
     tmp_path: Path
+    #: The scratch identity of this repository's origin the bench registers.
+    identity: Identity
 
 
 def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
@@ -355,11 +374,16 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
         destination=destination,
         runs=Path(environment["ONEPIPELINE_RUNS_DIR"]),
         tmp_path=tmp_path,
+        identity=identity,
     )
 
 
-def _stores_the_document(bench: Bench, drafted: Drafted) -> None:
-    """Script the one command the design-doc dispatch runs to render and store its answers."""
+def _stores_the_document(bench: Bench, drafted: Drafted, repository: str | None = None) -> None:
+    """Script the one command the design-doc dispatch runs to render and store its answers.
+
+    ``repository`` is the origin the resolve command its task names carries, for a plan
+    whose tasks all name that one repository.
+    """
     keyed = bench.tmp_path / f"commands-{drafted.project}.json"
     answers = _staged_answers(bench.tmp_path / drafted.project, drafted)
     source, _, project = drafted.qualified.partition(":")
@@ -373,7 +397,8 @@ def _stores_the_document(bench: Bench, drafted: Drafted) -> None:
                         # The pinned engine's resolve, piped into the pinned store's own
                         # create, into the plan's own source and project: what the task
                         # tells the dispatch to run, run where the dispatch runs it.
-                        '"$1" template resolve design-doc --json | "$2" document create "$3"'
+                        '"$1" template resolve design-doc ${8:+--repository "$8"} --json'
+                        ' | "$2" document create "$3"'
                         ' --project "$4" --title "$5" --id "$6" --template-loader -'
                         ' --answers "$7" --no-interactive',
                         "store-the-document",
@@ -384,6 +409,7 @@ def _stores_the_document(bench: Bench, drafted: Drafted) -> None:
                         f"Design: {drafted.project}",
                         drafted.document,
                         str(answers),
+                        repository or "",
                     ]
                 ]
             }
@@ -708,17 +734,17 @@ def _criteria(content: str) -> str:
 #: carry. Stated here rather than read out of `scripts/finish-plan.sh`, so a recipe that
 #: stopped composing one fails this rather than agreeing with itself.
 WRITER_OBLIGATIONS = (
-    # Answers meeting every property the template's descriptions state.
+    # Answers in each variable's shape, meeting every rule the chain's guidance states.
     "The document answers every variable `onepipeline template resolve design-doc --json | "
     "onetaskgraph template variables --template-loader -` lists",
-    "property the template\u2019s own description and each variable\u2019s description state",
-    # The multi-repository architecture property, stated in the criteria as well.
-    "spans more than one repository, the architecture answer names the repository each piece "
-    "lives in",
+    "in the shape each variable\u2019s description states",
+    "every rule the guidance comments of the chain `onepipeline template resolve design-doc "
+    "--json` resolves state",
     # Stored through the pinned resolve piped into the store, as that plan's document.
     "`onepipeline template resolve design-doc --json` piped into `onetaskgraph document "
-    "create --template-loader -`",
-    "`onetaskgraph document render --template-loader -` where a document by that id",
+    "create --id ",
+    "--template-loader - --no-interactive` wrote it, which replaces a document the store "
+    "already holds by that id whole",
     # Every row's location is the store's own answer.
     "location is the location the plan store reports for that task",
     # And where the store put it is reported.
@@ -751,34 +777,139 @@ def test_the_design_document_nodes_task_is_a_plan_task_rendering_owing_each_obli
     )
 
 
-#: The clauses of the design-doc template's multi-repository architecture property, which
-#: the writer's criteria state a second time because its task requires them to.
-REPOSITORY_CLAUSES = (
-    "spans more than one repository",
-    "the repository each piece lives in",
-    "the planned-tasks table has no column for it",
-    "says nothing about repositories",
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
+#: A second repository's origin, for a plan whose tasks name several. Registered in the
+#: bench's scratch registry as a stand-in checkout, never fetched.
+OTHER_ORIGIN = "github.com/nickderobertis/onepipeline"
+
+#: A repository layer of the design-doc template, overriding one guidance block of the host
+#: template the way a repository overrides the bar its own documents are written to.
+LAYER = (
+    '{% extends "onepipeline/host/design-doc.md.j2" %}\n'
+    "{% block what_guidance %}{# WHAT. Say what changes for this repository's callers. #}"
+    "{% endblock %}\n"
 )
+
+#: The resolve command a writer's task names, as the task's prose spells it.
+RESOLVE_NAMED = re.compile(r"onepipeline template resolve design-doc(?: --repository \S+)? --json")
+
+
+def _named_resolves(content: str) -> set[str]:
+    """Every design-doc resolve command ``content`` names."""
+    return set(RESOLVE_NAMED.findall(content))
 
 
 @pytest.mark.xdist_group("finish-plan")
-def test_the_writers_repository_criterion_restates_the_templates_own_property(
+def test_a_plan_naming_no_repository_has_its_writer_resolve_through_this_directory(
     finished: Finished,
 ) -> None:
-    """The one property the writer's criteria restate is held to the template stating it.
+    """The fixture's plan names no repository, so its writer's resolve names none."""
+    content = finished.design_task["content"]
+    assert _named_resolves(content) == {design_chain.resolve_command(None)}, content
+    assert "--repository" not in content, content
 
-    The template's `architecture` description is that property's source; the writer's task
-    repeats it among its criteria so its judge reads it too. Both are read here — the
-    template's description off its front matter, the criteria off the task the store holds
-    — so a template that moved the property without the recipe, or the reverse, fails.
+
+@pytest.mark.xdist_group("finish-plan")
+@pytest.mark.parametrize("plan", ["one layered repository", "several repositories"])
+def test_the_writers_task_names_the_resolve_command_the_rule_gives_for_the_plan(
+    tmp_path: Path, oneharness_bin: str, plan: str
+) -> None:
+    """A plan in one repository resolves through that repository's layer, and no other plan does.
+
+    The whole tail on a plan whose tasks all name this repository's origin, whose
+    registered checkouts carry a layer extending the host template: the writer's task names
+    `--repository <that origin>`, the command it names resolves a chain holding that layer,
+    and the document the writer stored records that chain's digest. Then on a plan whose
+    tasks name two repositories, whose writer's task names no repository at all.
     """
-    text = (REPO_ROOT / "templates" / "design-doc.md.j2").read_text(encoding="utf-8")
-    _, front, _ = text.split("---\n", 2)
-    described = " ".join(yaml.safe_load(front)["variables"]["architecture"]["description"].split())
-    criteria = " ".join(_criteria(finished.design_task["content"]).split())
-    for clause in REPOSITORY_CLAUSES:
-        assert clause in described, f"the template's architecture property lacks {clause!r}"
-        assert clause in criteria, f"the writer's criteria lack {clause!r}:\n{criteria}"
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    layered = plan == "one layered repository"
+    if layered:
+        origins: Sequence[str] = (PLANNING_FLOW_ORIGIN, PLANNING_FLOW_ORIGIN)
+        for checkout in (bench.identity.publication, bench.identity.execution):
+            layer = checkout / ".onepipeline" / "templates" / "design-doc.md.j2"
+            layer.parent.mkdir(parents=True, exist_ok=True)
+            layer.write_text(LAYER, encoding="utf-8")
+        repository: str | None = PLANNING_FLOW_ORIGIN
+    else:
+        register_stand_in(bench.identity.home, OTHER_ORIGIN, tmp_path / "other")
+        origins = (PLANNING_FLOW_ORIGIN, OTHER_ORIGIN)
+        repository = None
+    drafted = _draft(f"finish-plan-rule-{plan.split()[0]}", repositories=origins)
+    _stores_the_document(bench, drafted, repository)
+    run = RunId(f"finish-plan-rule-{plan.split()[0]}")
+    try:
+        finish = _just(
+            "finish-plan",
+            str(_brief(tmp_path, drafted)),
+            "--name",
+            run,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+        assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
+        content = _design_task(bench, run)["content"]
+    finally:
+        _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
+
+    named = design_chain.resolve_command(repository)
+    assert _named_resolves(content) == {named}, content
+    if not layered:
+        assert "--repository" not in content, content
+        return
+    resolved = subprocess.run(
+        [str(ENGINE_BIN), *named.split()[1:], "--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    chain = json.loads(resolved.stdout)
+    assert chain["layer"] == "repository", chain
+    assert any(
+        entry["layer"] == "repository"
+        and entry["path"].endswith(".onepipeline/templates/design-doc.md.j2")
+        for entry in chain["chain"]
+    ), chain
+    (document,) = plan_store.read_documents(drafted.qualified)
+    provenance = document.metadata[PROVENANCE_KEY]
+    assert isinstance(provenance, dict), document.metadata
+    assert provenance["digest"] == chain["digest"], (provenance, chain["digest"])
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+def _landed(bench: Bench, drafted: Drafted) -> str:
+    """The destination's copy of ``drafted``'s plan, as the store qualifies it."""
+    listed = _just(
+        "plans",
+        "project",
+        "list",
+        "--source",
+        DESTINATION,
+        "--json",
+        environment=bench.environment,
+        seconds=120,
+    )
+    assert listed.returncode == 0, listed.stderr
+    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
+    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
+    (landed,) = [
+        one["id"]
+        for one in projects
+        if one["item"]["metadata"].get(ORIGIN_KEY) == drafted.qualified
+    ]
+    return str(landed)
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This reads the one flow
@@ -794,24 +925,7 @@ def test_the_stored_design_document_is_a_rendering_a_person_can_approve_and_laun
     rendering's provenance, the real `just approve-design` records an approval for it, and
     the real launch gate then lets the approved plan through.
     """
-    listed = _just(
-        "plans",
-        "project",
-        "list",
-        "--source",
-        DESTINATION,
-        "--json",
-        environment=finished.bench.environment,
-        seconds=120,
-    )
-    assert listed.returncode == 0, listed.stderr
-    # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
-    projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
-    (landed,) = [
-        one["id"]
-        for one in projects
-        if one["item"]["metadata"].get(ORIGIN_KEY) == finished.drafted.qualified
-    ]
+    landed = _landed(finished.bench, finished.drafted)
     documents = _just(
         "plans",
         "document",
@@ -842,6 +956,89 @@ def test_the_stored_design_document_is_a_rendering_a_person_can_approve_and_laun
         check=False,
     )
     assert gated.returncode == OK, gated.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
+@pytest.mark.xdist_group("finish-plan")
+def test_a_document_whose_answers_no_longer_fit_is_repaired_by_the_tail_it_is_sent_to(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The refusal's repair, run: `just finish-plan` rewrites the document, which approves.
+
+    The plan holds a document rendered from answers the template in force no longer
+    declares, so `just approve-design` refuses it and names `just finish-plan <brief>`. Run
+    on the plan's brief, the tail's writer stores the document under the id it already
+    holds, as its task says, from answers to the current variables, which replaces it whole;
+    the plan and the copy that lands on the destination are then ones `just approve-design`
+    records.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    drafted = _draft("finish-plan-retired")
+    retired_root = tmp_path / "retired-templates"
+    shutil.copytree(REPO_ROOT / "templates", retired_root)
+    (retired_root / "design-doc.md.j2").write_text(RETIRED_TEMPLATE, encoding="utf-8")
+    retired_answers = tmp_path / "retired.answers.json"
+    retired_answers.write_text(json.dumps(dict(RETIRED_DESIGN)), encoding="utf-8")
+    source, _, project = drafted.qualified.partition(":")
+    seeded_document = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '"$1" template resolve design-doc --template-root "$2" --json'
+            ' | "$3" document create "$4" --project "$5" --title "$6" --id "$7"'
+            ' --template-loader - --answers "$8" --no-interactive',
+            "seed-the-retired-document",
+            str(ENGINE_BIN),
+            str(retired_root),
+            str(ONETASKGRAPH_BIN),
+            source,
+            project,
+            f"Design: {drafted.project}",
+            drafted.document,
+            str(retired_answers),
+        ],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert seeded_document.returncode == 0, seeded_document.stderr
+
+    refused = _just("approve-design", drafted.qualified, environment=bench.environment)
+    assert refused.returncode != OK, f"{refused.stdout}\n{refused.stderr}"
+    assert "just finish-plan <brief>" in refused.stderr, refused.stderr
+
+    _stores_the_document(bench, drafted)
+    run = RunId("finish-plan-retired")
+    try:
+        finish = _just(
+            "finish-plan",
+            str(_brief(tmp_path, drafted)),
+            "--name",
+            run,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+        assert finish.returncode == OK, f"the tail failed:\n{finish.stdout}\n{finish.stderr}"
+    finally:
+        _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
+
+    # The plan refused above, and the copy a person approves, both approve now.
+    for approving in (drafted.qualified, _landed(bench, drafted)):
+        approved = _just("approve-design", approving, environment=bench.environment)
+        assert approved.returncode == OK, f"{approving}: {approved.stdout}\n{approved.stderr}"
+        assert "recorded the approval" in approved.stdout, approved.stdout
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

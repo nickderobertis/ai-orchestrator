@@ -114,8 +114,8 @@
 #
 # **The plan this launch writes is one node, and the rest of the flow is a second
 # launch.** A person cannot usefully review a plan node by node; what they can judge is
-# one short document — what is being built and why, the architecture, the contracts, the
-# acceptance criteria, and the planned work as a table of links. That document has to be
+# the design document — terse prose, complete interfaces, as the `design-doc` template's
+# guidance lays it out. That document has to be
 # written from **reviewed** content, and a run cannot interject a review between its own
 # nodes: a review record is written by this repository's own code and never by a
 # dispatched agent. So the document is not a second node of this run. When the planner

@@ -32,10 +32,10 @@ travels with them the way a review record travels with a task: it is an ordinary
 the metadata map the copy carries. Approve where you draft, then copy up.
 
 **Copying is a write, so its refusals are told apart by exit status.** :data:`UNREVIEWED`
-is this command's own refusal, made before the store is asked to do anything;
-:data:`COPY_REFUSED` is the destination refusing a plan every task of which carried a
-record. A builder that could not tell those apart would read "nothing has reviewed this"
-as an outage of the board, and retry it.
+and :data:`OVERSIZED` are this command's own refusals, made before the store is asked to
+do anything; :data:`COPY_REFUSED` is the destination refusing a plan every task of which
+carried a record. A builder that could not tell those apart would read "nothing has
+reviewed this" as an outage of the board, and retry it.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from typing import TypedDict
 
 from onetaskgraph_sdk import CopyReport, GlobalId
 
-from orchestrator import plan_review, plan_store
+from orchestrator import plan_review, plan_store, task_body
 
 #: The source a plan of this repository is copied into when the caller names none: the
 #: `plans` GitHub Projects board `onetaskgraph.yaml` configures, which is where a plan of
@@ -77,6 +77,12 @@ UNREVIEWED = 1
 #: The plan could not be read, the review bar could not be composed, or the store CLI is
 #: not installed — so nothing was judged and nothing was written.
 UNREADABLE = 2
+
+#: **This** command's refusal of a plan whose design document composes an issue body
+#: over the limit the board's issues carry, made before anything was written. Distinct
+#: from :data:`UNREVIEWED`, because the repair is to shorten the document rather than to
+#: review the plan, and from :data:`COPY_REFUSED`, because the destination was never asked.
+OVERSIZED = 4
 
 #: The **destination's** refusal: every task carried a record, the copy was attempted,
 #: and the store answered non-zero. Distinct from :data:`UNREVIEWED` so a caller can tell
@@ -186,7 +192,50 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return UNREVIEWED
+    measured = _measure_documents(args.project, args.destination)
+    if measured != OK:
+        return measured
     return copy(args.project, args.destination, passthrough)
+
+
+def _measure_documents(project: str, destination: str) -> int:
+    """Refuse ``project`` when a document's issue body is one the board would refuse.
+
+    Asked here, before the store writes anything, rather than left to the board: the
+    documents are copied *after* the project, so a body GitHub refuses would otherwise land
+    the plan on the board with nothing a person can approve it as. And asked here rather
+    than in `just check-plan`, because `just finish-plan` runs that check before the
+    document-writing launch exists and runs this copy after it — this is the one step that
+    always reads the document and always precedes the write. A document from
+    :data:`~orchestrator.task_body.WARN_FROM` up to the limit is warned about and copied.
+    """
+    try:
+        documents = plan_store.read_documents(project)
+    # llmlint: ignore[changed_behavior_has_e2e] Unreachable through the recipe as the store
+    # stands: every read before this one — the tasks, the plan and its project record — goes
+    # to the same store for the same project and refuses first with this same status, so
+    # only a store failing between two reads reaches it. `tests/test_plan_copy.py` drives the
+    # refusal by substituting the document read alone.
+    except OSError as exc:
+        print(
+            f"copy-plan: cannot read the documents of {project} to measure them: {exc}; "
+            f"nothing was copied. Run this command again once the store answers",
+            file=sys.stderr,
+        )
+        return UNREADABLE
+    for warned in task_body.document_warnings(documents):
+        print(warned, file=sys.stderr)
+    refused = task_body.document_refusals(documents)
+    if not refused:
+        return OK
+    for line in refused:
+        print(line, file=sys.stderr)
+    print(
+        f"copy-plan: nothing was copied into {destination!r}. Regenerate the design document "
+        f"shorter where it was drafted, have it approved again, then copy the plan up",
+        file=sys.stderr,
+    )
+    return OVERSIZED
 
 
 def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:

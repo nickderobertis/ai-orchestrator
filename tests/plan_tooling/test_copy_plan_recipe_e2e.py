@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, NewType
 
 import pytest
-from project_fixtures import approved, local_project, reviewed
+from project_fixtures import FIXTURE_UNIT, approved, local_project, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -634,7 +634,13 @@ def _write_design_document_pointing_at(
     del native
     document = design_approval.design_document(project)
     rows = [
-        {"task": node, "delivers": "its part", "depends_on": "none", "location": f"`{where}`"}
+        {
+            "task": node,
+            "unit": FIXTURE_UNIT,
+            "delivers": "its part",
+            "depends_on": "none",
+            "location": f"`{where}`",
+        }
         for node, where in sorted(located.items())
     ]
     resolved = subprocess.run(

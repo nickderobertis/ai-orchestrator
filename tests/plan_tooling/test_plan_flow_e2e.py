@@ -1,7 +1,7 @@
 """`just plan` drives the whole planning flow, in the order the tooling enforces.
 
 One launch writes the plan; the tail after it reviews that plan, checks it, launches the
-one short document a person reviews the plan as, copies both into the destination, and
+design document a person reviews the plan as, copies both into the destination, and
 reports where that destination holds them. What that arrangement is worth is entirely in
 those things happening in that order, and none of it can be read off the plan documents
 the recipe writes:
@@ -158,25 +158,17 @@ NODE_LABEL = "node"
 
 #: The fragment only the design-doc node's task carries, which is what tells the two
 #: dispatches apart at the stand-in: both run as `worker`, so the member cannot.
-DESIGN_TASK_MARKER = "Write the one short design document a person reviews the plan"
+DESIGN_TASK_MARKER = "Write the design document a person reviews the plan"
 
 #: The command the dispatched task names the document's template by: the registered name
-#: resolved, and its variables listed with what each is judged on. The dispatch works in the
-#: checkout the flow was launched from, which may be a checkout of the repository the
-#: *plan* is of, so the template is named rather than found underfoot.
+#: resolved, and its variables listed with the shape each answer takes. The plan here spans
+#: two repositories, so the resolve names none of them: no one repository's layer speaks
+#: for the plan (`orchestrator/design_chain.py`).
 DESIGN_TEMPLATE_VARIABLES = (
     "onepipeline template resolve design-doc --json | onetaskgraph template variables "
     "--template-loader -"
 )
 
-#: What the dispatched task has to require of the architecture: the condition, since a
-#: plan inside one repository is exempt, and the demand. Stated here rather than read out
-#: of the task's composer, which is the assertion rather than a shortcut — a journey that
-#: built its expectation from that script would pass whatever the two said.
-ARCHITECTURE_NAMES_ITS_REPOSITORIES = "spans more than one repository"
-ARCHITECTURE_NAMES_ITS_REPOSITORIES_DEMAND = (
-    "the architecture answer names the repository each piece lives in"
-)
 
 #: The pinned engine, whose `template resolve design-doc` the doubled writer pipes into the
 #: store exactly as the task tells a real one to.
@@ -362,17 +354,36 @@ def _answers(stored: Stored) -> dict[str, object]:
         "what": "A paginated node listing.",
         "why": "An operator cannot see past the first screen.",
         "architecture": "One route, one view.",
-        "contracts": ["The cursor is an opaque token."],
+        "units": [
+            {
+                "name": "Route",
+                "repository": "service",
+                "part": "",
+                "summary": "The route pages behind an opaque cursor.",
+                "reversible": [],
+                "decisions": [],
+            },
+            {
+                "name": "View",
+                "repository": "dashboard",
+                "part": "",
+                "summary": "The view follows the cursor.",
+                "reversible": [],
+                "decisions": [],
+            },
+        ],
         "acceptance_criteria": ["The listing pages."],
         "planned_tasks": [
             {
                 "task": stored.task_title,
+                "unit": "Route",
                 "delivers": "the route",
                 "depends_on": "none",
                 "location": "the store's own location",
             },
             {
                 "task": stored.second_task_title,
+                "unit": "View",
                 "delivers": "the view",
                 "depends_on": stored.task_title,
                 "location": "the store's own location",
@@ -718,20 +729,19 @@ def test_the_design_doc_dispatch_is_given_the_plan_the_brief_named(planned: Plan
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package these journeys drive, so narrowing it would memoize a verdict over a tree never run.
 @pytest.mark.xdist_group("plan-flow")
-def test_the_design_doc_dispatch_is_required_to_name_each_pieces_repository(
+def test_a_plan_across_two_repositories_has_its_writer_resolve_through_no_one_layer(
     planned: Planned,
 ) -> None:
-    """A plan across two repositories owes a reader which change lands where.
+    """The dispatch is sent to the chain no single repository's layer speaks for.
 
-    Read where the requirement is consumed, which is the dispatched task itself: the flow
-    states that criterion among the task's own acceptance criteria as well as in the
-    template's description of the architecture answer, so the dispatch meets the
-    requirement in the text its judge reads. A pointer alone was not that — the document
-    that came back obeyed everything except the part nobody had put in front of it, naming
-    each piece by role and no repository at all.
-    The plan is read back from the store too, because the requirement is conditional and a
-    journey spanning one repository would exercise the exempt case instead.
+    Read where the resolve command is consumed, which is the dispatched task itself. The
+    plan is read back from the store too, because the rule is conditional: a journey whose
+    plan lay in one repository would be exercising the case that names it.
     """
     # llmlint: ignore-block[tests_mirror_real_usage] The effective prompt is the only place
     # a dispatched task is observable; no published view carries it. The fake backend
@@ -754,8 +764,8 @@ def test_the_design_doc_dispatch_is_required_to_name_each_pieces_repository(
     }
     assert len(spanned) > 1, (
         f"the plan this dispatch was given lands in {sorted(map(str, spanned))}, so it "
-        "does not span more than one repository and this journey is exercising the case "
-        "the requirement exempts rather than the case it is about"
+        "does not span two repositories and this journey is exercising the case that "
+        "names one rather than the case it is about"
     )
 
     for prompt in dispatched:
@@ -764,16 +774,13 @@ def test_the_design_doc_dispatch_is_required_to_name_each_pieces_repository(
             f"the design-doc dispatch was never sent to `{DESIGN_TEMPLATE_VARIABLES}`, which "
             f"is the one statement of the document's shape:\n{prompt!r}"
         )
-        assert ARCHITECTURE_NAMES_ITS_REPOSITORIES in flat, (
-            "the design-doc dispatch's own task states no condition on a plan spanning "
-            "repositories, so a plan across two of them is dispatched under the same task "
-            f"as one inside a single repository:\n{prompt!r}"
+        assert "template resolve design-doc --repository" not in flat, (
+            "the design-doc dispatch was sent to one repository's layer for a plan across "
+            f"two of them:\n{prompt!r}"
         )
-        assert ARCHITECTURE_NAMES_ITS_REPOSITORIES_DEMAND in flat, (
-            "the design-doc dispatch's own task never asks the architecture to name the "
-            "repository each piece lives in, so a reader of a plan across two of them "
-            f"cannot tell which change lands where:\n{prompt!r}"
-        )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("plan-flow")

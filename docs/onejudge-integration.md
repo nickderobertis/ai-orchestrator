@@ -43,7 +43,7 @@ regression rather than a tidy-up.
 
 One role pairs those two sides the **other way round**, and it is the only one here
 that does. `graphs/design-doc.yaml` runs the role that reads a finished plan and writes
-the one short design document a person reviews it as: its agent side is
+the design document a person reviews it as: its agent side is
 `oneharness.design-doc.toml`, which leads with both Codex identities, and its judge side
 is `oneharness.design-doc-judge.toml`, which leads with both alternate Claude
 subscriptions. The reason is what that judge is asked to do — decide whether the
