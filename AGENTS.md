@@ -1132,8 +1132,10 @@ was.
 
 - **The channel is `onemessagebus` over `config/onemessagebus.yaml`**, the one place
   this host's messaging policy lives: change the policy there, never in a wrapper.
-  `just channel-reply`, the engine's `onepipeline ask` `ORCHESTRATOR_ASK_MANAGER` names
-  and the observer's judge side all run on that bus, so the rules below are the bus's.
+  `just channel-reply` — the engine's `onepipeline reply`, which opens a run's channel
+  under the bus configuration that run's launch recorded — the engine's `onepipeline
+  ask` `ORCHESTRATOR_ASK_MANAGER` names and the observer's judge side all run on that
+  bus, so the rules below are the bus's, as they stood when the run was launched.
 - **The observer's judge side is a binding this host declares**: `onemessagebus serve
   surfaces --codec monitor` runs `codecs.monitor` — what a taken turn is told, the
   `monitor-failed` and `monitor-completion` kinds it raises, what a lost turn is called
@@ -1150,24 +1152,34 @@ was.
   one pending ask and is refused naming them when none or several are. A correlation
   nothing pending holds — unknown, or already answered — is refused naming it, with
   nothing appended. A commands-only envelope answers nothing and leaves the ask
-  pending. A blocking surface is handed out first, and reading past it leaves it
-  pending.
+  pending, and one sent with `--correlation` is refused with nothing queued: to answer
+  an ask and edit in one reply, the envelope carries a verdict half — `completion`,
+  `message` or `reason`. A blocking surface is handed out first, and reading past it
+  leaves it pending.
 - **`abandoned` marks a blocking surface nobody is waiting on *now***, never that the
   asker has gone — its next session takes its surfaces back — so read one as a finding
   to look at rather than a question to answer.
-- **The verb's one line is a transport receipt** — `{answered, correlation, sent}`
-  from `reply`, `{queue, position, id}` from `send` — not a reader acting on the ruling
-  or the reconciler applying an edit, which the run records as `edit-committed` or
-  `edit-rejected`. The asker's answer is the reply echoing its correlation and nothing else:
+- **The recipe's one line is the engine's receipt** —
+  `{"reply":N,"state":"delivered|applied|queued","verdict":…,"commands":…}`, each half
+  named only when the envelope carried it — at exit 0, and every refusal exits 2 with
+  its reason on stderr and nothing appended. `delivered` is a verdict bound to its ask,
+  or to the run's own record; `applied` is an edit committed, by the driver holding the
+  run or, where nothing drives it, by the reply itself; `queued` is an edit the driver
+  holding the run had not reconciled within the reply's wait —
+  `ONEPIPELINE_REPLY_TIMEOUT_SECONDS`, 30 seconds by the engine's default — so the
+  recipe returns rather than hanging, the edit is durable on the run's command queue,
+  and it is never sent again. The run's `edit-committed` and `edit-rejected` records
+  stay what an edit became, and are where a `queued` one is read. The asker's answer
+  is the reply echoing its correlation and nothing else:
   a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
   your prose.
 - **Task prose in an envelope is criteria, and is held to the criteria bar before any
   of it is sent** — the one validator `config/onemessagebus.yaml` declares on a reply
   carrying commands reads an `amend`, and the whole task an `add`, `retry` or `requeue`
   states, as the envelope states it and reads no run state, so a `requeue` folding bad
-  fields onto a parked node is the engine's and the merge path's to refuse. The bus
-  judges the whole offer before appending any of it, so a refusal refuses the whole
-  envelope, and the escape it names is a `note`'s `text`, which touches no criterion
+  fields onto a parked node is the engine's and the merge path's to refuse. The
+  validator judges the whole offer before any of it is appended or applied, so a
+  refusal refuses the whole envelope, and the escape it names is a `note`'s `text`, which touches no criterion
   and is never read (a note's `criterion` is). A novel whole task also spends one judged
   turn under the reviewer `just review-plan` uses, because nothing holds a pass for it;
   a correction to a node a review already cleared is deterministic only, because a
@@ -1176,8 +1188,10 @@ was.
   judged`, never sent — and re-sent unchanged once the harness answers, never
   corrected. Only a pass is cached, by the bus, keyed on the envelope's bytes and the
   bar's fingerprint, so moving either tier of the bar invalidates every recorded pass.
-  A reply accepted while nothing is driving the run is **queued**, not applied, until
-  `just orchestrate --adopt <run-id>` attaches the driver that drains it.
+  An edit to a run nothing drives is **applied by the reply itself**, as the run's
+  single writer, with no adopt between; and a completion verdict or a `complete`, each
+  with a reason, closes a settled run whose driver has exited — the close `just
+  unfinished` and the Stop hook ask for.
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** A note is journalled against the node; a raw interrupt reaches the worker's
   turn alone and leaves the run unable to explain why a worker changed direction. Ask

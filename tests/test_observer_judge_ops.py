@@ -24,9 +24,11 @@ wiring has three seams each of which fails silently:
   refuses a queue other than `codecs.monitor.queue`, so a graph naming another one would
   kill the member on its first frame.
 - **It asks where the manager answers.** The monitor's question is answered with `just
-  channel-reply --correlation`, so the configuration file and the channel directory the
-  binding is spawned with have to be the ones that recipe replies over — otherwise a
-  ruling reaches a queue nobody is asking on, and every score degrades to `false`.
+  channel-reply --correlation` — the engine's `onepipeline reply`, which binds the ruling
+  in the run's own channel directory under the bus configuration the run's launch
+  recorded — so the configuration file and the channel directory the binding is spawned
+  with have to be those — otherwise a ruling reaches a queue nobody is asking on, and
+  every score degrades to `false`.
 
 The launched journeys prove the three reach a real run
 (`tests/e2e/test_monitor_survives_the_channel_e2e.py` for the score); this is the cheap
@@ -44,9 +46,11 @@ from orchestrator.root import REPO_ROOT
 #: The directory holding this repository's agent-graph documents.
 GRAPHS = REPO_ROOT / "graphs"
 
-#: This host's bus configuration, and the justfile whose `channel-reply` answers over it.
+#: This host's bus configuration, the justfile whose `channel-reply` answers over it, and
+#: the wrapper that names it on every launch, which is what the run's launch records.
 BUS_CONFIG = "config/onemessagebus.yaml"
 JUSTFILE = REPO_ROOT / "justfile"
+LAUNCH_WRAPPER = REPO_ROOT / "scripts" / "onepipeline.sh"
 
 #: The binding the monitor's judge side serves onejudge's frames with, as
 #: `config/onemessagebus.yaml` names it under `codecs`.
@@ -225,12 +229,21 @@ def test_the_binding_serves_the_queue_this_configuration_declares_for_it() -> No
         )
 
 
+#: A run's channel directory as the engine lays it out — `<run>/channel` under the runs
+#: root `ONEPIPELINE_RUNS_DIR` moves — which is the directory `onepipeline reply` opens,
+#: spelled as the binding's shell spells it, with the run named by the variable the engine
+#: exports to an observer member.
+RUN_CHANNEL_DIR = f"${{ONEPIPELINE_RUNS_DIR:-runs}}/${RUN_ID_ENV}/channel"
+
+
 def test_the_binding_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
     """The monitor's question and the manager's ruling meet in one directory, over one file.
 
-    Held against the `channel-reply` recipe's own line rather than a restated path: the
-    two are one decision made twice, and a run whose binding asked somewhere else would read
-    every manager's score as a wait that elapsed.
+    The recipe is the engine's `onepipeline reply`, through the wrapper every launch goes
+    through, and that verb binds a ruling in the run's own channel directory under the bus
+    configuration the run's launch recorded — the file that wrapper names on every `start`.
+    So the binding has to be spawned over that file, in that directory; a run whose binding
+    asked anywhere else would read every manager's score as a wait that elapsed.
     """
     body = re.search(
         r"^channel-reply run \*args:\n((?:    .*\n|\n)*?)(?=^\S)",
@@ -238,27 +251,27 @@ def test_the_binding_asks_on_the_channel_the_reply_recipe_answers_on() -> None:
         re.MULTILINE,
     )
     assert body is not None, "the justfile no longer declares `channel-reply run *args`"
-    verb = re.search(r"onemessagebus reply (\w+)", body.group(1))
-    channel = re.search(r"--config (\S+) --transport-dir (\S+)", body.group(1))
-    assert verb is not None and channel is not None, (
-        "the justfile's `channel-reply` no longer answers with `onemessagebus reply <queue>` "
-        f"over a named `--config` and `--transport-dir`:\n{body.group(1)}"
+    assert re.search(r"\./scripts/onepipeline\.sh reply \"\$@\"", body.group(1)), (
+        "the justfile's `channel-reply` is no longer the engine's `onepipeline reply` through "
+        f"`scripts/onepipeline.sh`:\n{body.group(1)}"
     )
-    replied_queue = verb.group(1)
-    replied_config = channel.group(1)
-    # The recipe names its run `$run`; the binding names the same run by the variable the
-    # engine exports to an observer member. `shlex` removes the quoting and a closing
-    # array parenthesis the recipe's shell line carries.
-    replied_dir = shlex.split(channel.group(2).rstrip(")"))[0].replace("$run", f"${RUN_ID_ENV}")
+    recorded = re.search(
+        r'set -- start --bus-config "\$\{script_dir%/scripts\}/(\S+)"',
+        LAUNCH_WRAPPER.read_text(encoding="utf-8"),
+    )
+    assert recorded is not None, (
+        f"{LAUNCH_WRAPPER.relative_to(REPO_ROOT)} no longer names a `--bus-config` on `start`"
+    )
+    assert recorded.group(1) == BUS_CONFIG, (
+        f"every launch records {recorded.group(1)!r}, not {BUS_CONFIG}"
+    )
     for command in _judge_commands():
         words = _served(command)
-        assert (words[3], _flag(words, "--config"), _flag(words, "--transport-dir")) == (
-            replied_queue,
-            replied_config,
-            replied_dir,
+        assert (_flag(words, "--config"), _flag(words, "--transport-dir")) == (
+            recorded.group(1),
+            RUN_CHANNEL_DIR,
         ), (
-            f"{command.graph}'s `{command.member}` asks on queue {words[3]!r} over "
-            f"{_flag(words, '--config')!r} in {_flag(words, '--transport-dir')!r}, while "
-            f"`just channel-reply` answers on {replied_queue!r} over {replied_config!r} in "
-            f"{replied_dir!r}"
+            f"{command.graph}'s `{command.member}` asks over {_flag(words, '--config')!r} in "
+            f"{_flag(words, '--transport-dir')!r}, while `just channel-reply` answers under "
+            f"the recorded {recorded.group(1)!r} in {RUN_CHANNEL_DIR!r}"
         )
