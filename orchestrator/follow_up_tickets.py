@@ -2006,7 +2006,14 @@ def _note_duplicate(duplicate: QualifiedTask, survivor: QualifiedTask, run: str)
     plan_store.sdk(plan_store.client().task_comment_add(duplicate.id.root, body=body))
 
 
-def bind(path: Path, board: str, item: BoardItemId, *, pending: bool = False) -> Ticket:
+def bind(
+    path: Path,
+    board: str,
+    item: BoardItemId,
+    *,
+    pending: bool = False,
+    ticket: Ticket | None = None,
+) -> Ticket:
     """Write ``item`` as the ticket's binding into ``path``, and steer the store's copy to it.
 
     The binding is the record's :data:`BINDING_FIELD`. Where the store's own link,
@@ -2017,7 +2024,9 @@ def bind(path: Path, board: str, item: BoardItemId, *, pending: bool = False) ->
     store follows by its origin rule. Nothing is written when the ticket already says all of
     it. ``pending`` reads the ticket as `board-status` does, before it writes the estimate.
     """
-    ticket = dataclasses.replace(read_ticket(path, pending=pending), board_item=item)
+    ticket = dataclasses.replace(
+        read_ticket(path, pending=pending) if ticket is None else ticket, board_item=item
+    )
     if ticket.link(board) != item:
         ticket = dataclasses.replace(ticket, origin=plan_store.QualifiedTaskId(f"{board}:{item}"))
     rendered = render(ticket)
@@ -2042,25 +2051,45 @@ def _followed(ticket: Ticket, board: str) -> BoardItemId | None:
     return ticket.board_item or linked
 
 
-def correspond(path: Path, board: str, *, pending: bool = False) -> Placement:
+def correspond(
+    path: Path,
+    board: str,
+    *,
+    pending: bool = False,
+    ticket: Ticket | None = None,
+    reads: BoardReads | None = None,
+) -> Placement:
     """Establish the item ``board`` holds for the ticket at ``path``, and the category it holds.
 
-    The ticket's own item is its binding, or else the store's link; either disagreeing with
-    the other is :class:`Misbound`. Then the board is asked one question, the store's native
-    query for every item carrying the ticket's origin, and never listed: none, for a ticket
-    naming no item, is a ticket a copy would create, decided from that alone. Two or more are
-    resolved to the run's own open item, which becomes the binding, and each withdrawn one is
-    left a comment naming it; one, for a ticket naming no item, becomes the binding. An item
-    the ticket names that does not carry its origin is :class:`Misbound`, naming both. The
-    item bound is read once by id, for its category and the record the priority is read off.
-    ``pending`` reads the ticket as `board-status` does; every other caller reads it as one
-    about to be copied.
+    An open bound item is read by id without discovery; its binding and the store's link
+    must agree, and it must still carry the ticket's origin. Unbound tickets ask the native
+    origin query once. Closed, missing or mismatched bindings use that same recovery path:
+    two carriers must have one own open survivor beside withdrawn duplicates, each noted
+    once. The item's record is reused when recovery returns to the id already read.
+    "pending" selects the pre-estimate reading of a local ticket.
     """
-    ticket = read_ticket(path, pending=pending, for_copy=not pending)
+    ticket = read_ticket(path, pending=pending, for_copy=not pending) if ticket is None else ticket
     run, root_cause = located_path(path.absolute())
     identifier = qualified_id(run, root_cause)
     named = _followed(ticket, board)
+    reads = BoardReads() if reads is None else reads
+    item: Mapping[str, object] | None = None
+    missing: OSError | None = None
+    if named is not None:
+        try:
+            item = reads.item(f"{board}:{named}")
+        except OSError as exc:
+            missing = exc
+        if item is not None:
+            metadata = item.get("metadata")
+            carries = isinstance(metadata, Mapping) and metadata.get(ORIGIN_KEY) == identifier
+            category = str(_category(item.get("status")))
+            if carries and category not in (Status.FINISHED.value, Status.WITHDRAWN.value):
+                bind(path, board, named, pending=pending, ticket=ticket)
+                return Placement(named, category, item)
     carriers = _carriers(identifier, board)
+    if missing is not None and not carriers:
+        raise missing
     held = {_native(entry.id.root, board): entry for entry in carriers}
     bound = named
     if len(carriers) > 1:
@@ -2080,8 +2109,9 @@ def correspond(path: Path, board: str, *, pending: bool = False) -> Placement:
             + (f" where {', '.join(held)} does" if held else "")
             + ": copy nothing and report it"
         )
-    bind(path, board, bound, pending=pending)
-    item = plan_store.task_record(f"{board}:{bound}")
+    bind(path, board, bound, pending=pending, ticket=ticket)
+    if bound != named or item is None:
+        item = reads.item(f"{board}:{bound}")
     return Placement(bound, str(_category(item.get("status"))), item)
 
 
@@ -2209,7 +2239,13 @@ def _record_frequency(held: Mapping[str, object], issue: str) -> Frequency | Non
     return Frequency(str(frequency))
 
 
-def estimate_before_copy(path: Path, board: str, placement: Placement) -> Ticket:
+def estimate_before_copy(
+    path: Path,
+    board: str,
+    placement: Placement,
+    ticket: Ticket | None = None,
+    reads: BoardReads | None = None,
+) -> Ticket:
     """Write the ticket's estimate, its `## Impact` estimate line and its priority into ``path``.
 
     The estimate is :func:`estimate` over the ticket's severity with the workaround, its
@@ -2217,13 +2253,13 @@ def estimate_before_copy(path: Path, board: str, placement: Placement) -> Ticket
     is :func:`follows_estimate` over what that item holds and what its record stored. The
     ticket is read as it was before this wrote anything, and written only when it changes.
     """
-    ticket = read_ticket(path, pending=True)
+    ticket = read_ticket(path, pending=True) if ticket is None else ticket
     with_workaround = stated_with_workaround(ticket.body)
     # `read_ticket` has just held the `## Impact` section to its lines, and says so otherwise.
     assert with_workaround is not None  # noqa: S101
     item = placement.record
     issue = None if item is None else f"{board}:{item.get('id')}"
-    count = occurrences(issue, ticket.created_by_run, ticket.root_cause)
+    count = occurrences(issue, ticket.created_by_run, ticket.root_cause, reads)
     estimated = estimate(with_workaround, ticket.frequency, count)
     priority = (
         estimated
@@ -2270,7 +2306,8 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     matched = QUALIFIED_ID.fullmatch(issue)
     if matched is None or matched["source"] != board:
         raise Refused([f"{issue!r} is not an item of the board {board!r}, as `<board>:<id>`"])
-    item = plan_store.task_record(issue)
+    reads = BoardReads()
+    item = reads.item(issue)
     held = _held_record(item)
     creator = held.get("created_by_run")
     schema = held.get("schema")
@@ -2331,7 +2368,7 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     if unsound := _body_problems(text, held.get("host"), None):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
     frequency = _record_frequency(held, issue)
-    count = occurrences(issue, str(creator), str(held["root_cause"]))
+    count = occurrences(issue, str(creator), str(held["root_cause"]), reads)
     estimated = estimate(with_workaround, frequency, count)
     board_priority = held_priority(item)
     priority = follows_estimate(board_priority, stored_estimate(item), estimated)
@@ -2485,7 +2522,9 @@ def counts_as_occurrence(body: str, created_by_run: str, root_cause: str) -> boo
     return owner.run != created_by_run
 
 
-def occurrences(issue: str | None, created_by_run: str, root_cause: str) -> int:
+def occurrences(
+    issue: str | None, created_by_run: str, root_cause: str, reads: BoardReads | None = None
+) -> int:
     """How many times the root cause of the ticket at ``issue`` has been seen, recounted now.
 
     One for the ticket's own evidence, plus each comment :func:`counts_as_occurrence` admits,
@@ -2495,9 +2534,9 @@ def occurrences(issue: str | None, created_by_run: str, root_cause: str) -> int:
     """
     if issue is None:
         return 1
-    listed = plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
+    reads = BoardReads() if reads is None else reads
     return 1 + sum(
-        counts_as_occurrence(comment.body, created_by_run, root_cause) for comment in listed
+        counts_as_occurrence(body, created_by_run, root_cause) for body in reads.comments(issue)
     )
 
 
@@ -2986,50 +3025,89 @@ def draft_ids(root: Path, run: str) -> list[QualifiedDraftId]:
     return sorted(found)
 
 
-def written_tickets(root: Path, run: str) -> dict[str, tuple[QualifiedDraftId, ...] | None]:
-    """Every root cause ``run`` holds a ticket for under a `drafts` root, with its `drafts`.
-
-    ``None`` stands for a ticket the store will not read: `check-run` refuses that ticket
-    in its own words, and nothing here can say which drafts it carries.
-    """
+def read_run_tickets(root: Path, run: str) -> dict[str, Ticket | None]:
+    """Read each local ticket once; a refused ticket cannot account for any draft."""
     held = (root / TASKS_DIRECTORY / run / TICKETS).glob(f"*{TICKET_SUFFIX}")
-    found: dict[str, tuple[QualifiedDraftId, ...] | None] = {}
-    # Only a file is a ticket: a directory named like one would let a `filed` disposition
-    # pass the local-ticket check with nothing written.
+    found: dict[str, Ticket | None] = {}
     for path in (one for one in held if one.is_file()):
         try:
-            found[path.stem] = read_ticket(path).drafts
+            found[path.stem] = read_ticket(path)
         except Refused:
             found[path.stem] = None
     return found
 
 
-def filed_board_problems(root: Path, run: str, causes: Collection[str], board: str) -> list[str]:
-    """Filed root causes whose ticket or evidence comment did not reach ``board`` as it should.
+@dataclass
+class BoardReads:
+    """The records and comment bodies one account check has already read.
 
-    Each filed root cause's evidence reached either this run's own bound item or another
-    run's open issue carrying this run's evidence comment, and either one carries the
-    estimate its comments recount to now (:func:`board_estimate_problems`). A ticket this run
-    copied also carries the priority its ticket file does, which is what the copy wrote. The
-    board is never listed: a bound ticket's item is read by id, and otherwise the items
-    carrying the root cause are the store's native `--metadata` query for it. An account
-    filing nothing has nothing on the board to check, so the board is not read.
+    Scoped to that check alone: a later check recounts comments afresh. Bodies are enough
+    for both marker ownership and occurrence recounting; neither asks for comment identity.
+    """
+
+    items: dict[str, Mapping[str, object]] = dataclasses.field(default_factory=dict)
+    bodies: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
+
+    def item(self, issue: str) -> Mapping[str, object]:
+        """Keep a show's record and comments together, so the recount reuses its comments."""
+        if issue not in self.items:
+            answer = plan_store.complete(plan_store.sdk(plan_store.client().task_show(issue)))
+            if len(answer.items) != 1:
+                raise OSError(f"task show for {issue!r} returned {len(answer.items)} records")
+            self.items[issue] = answer.items[0].item.model_dump(mode="python")
+            if answer.comments is not None:
+                self.bodies[issue] = tuple(comment.body for comment in answer.comments)
+        return self.items[issue]
+
+    def comments(self, issue: str) -> tuple[str, ...]:
+        """Read an item's comments once for ownership and the estimate recount."""
+        if issue not in self.bodies:
+            self.bodies[issue] = tuple(
+                comment.body
+                for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
+            )
+        return self.bodies[issue]
+
+
+def filed_board_problems(
+    root: Path,
+    run: str,
+    causes: Collection[str],
+    board: str,
+    tickets: Mapping[str, Ticket | None],
+    details: Sequence[str] = (),
+) -> list[str]:
+    """Filed causes whose bound item or evidence comment did not reach the board soundly.
+
+    Local tickets, board records and comments are shared within this check. A copied item's
+    priority still agrees with its local ticket and every carrier's estimate is recounted.
     """
     found = []
+    reads = BoardReads()
     for cause in sorted(causes):
-        ticket = read_ticket(ticket_path(root, run, cause))
-        carrier = _own_carrier(ticket, qualified_id(run, cause), board)
+        ticket = tickets[cause]
+        if ticket is None:
+            # The local shape was refused, so no board evidence can make this ticket sound.
+            raise Refused([f"the filed root cause {cause} has no readable local ticket"])
+        carrier = _own_carrier(ticket, qualified_id(run, cause), board, reads)
         copied = carrier is not None
         if carrier is None:
-            carrier = _evidence_carrier(run, cause, board)
+            named = tuple(
+                dict.fromkeys(
+                    match[0].rstrip(".,;)")
+                    for detail in details
+                    for match in re.finditer(rf"{re.escape(board)}:[^\s`<>\"]+", detail)
+                )
+            )
+            carrier = _evidence_carrier(run, cause, board, reads, named)
         if carrier is None:
             found.append(
                 f"the filed root cause {cause} has a local ticket but no bound item or "
                 f"evidence comment of run {run} on {board}, so its evidence did not reach the board"
             )
             continue
-        found.extend(board_estimate_problems(carrier))
-        if copied and (held := held_priority(plan_store.task_record(carrier))) != ticket.priority:
+        found.extend(board_estimate_problems(carrier, reads))
+        if copied and (held := held_priority(reads.item(carrier))) != ticket.priority:
             found.append(
                 f"{carrier} holds the priority `{held}`, where the ticket this run copied onto it "
                 f"carries `{ticket.priority}`; copy the ticket again after `board-status`"
@@ -3037,30 +3115,38 @@ def filed_board_problems(root: Path, run: str, causes: Collection[str], board: s
     return found
 
 
-def _own_carrier(ticket: Ticket, origin: str, board: str) -> str | None:
-    """The ticket's bound item, read by id, when it is this run's copy of it; else `None`."""
+def _own_carrier(ticket: Ticket, origin: str, board: str, reads: BoardReads) -> str | None:
+    """The bound item when its record says it is this run's own copy; else `None`."""
     if ticket.board_item is None:
         return None
     bound = f"{board}:{ticket.board_item}"
-    metadata = plan_store.task_record(bound).get("metadata")
+    metadata = reads.item(bound).get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
     if metadata.get(ORIGIN_KEY) == origin and metadata_owner(metadata) == ticket.created_by_run:
         return bound
     return None
 
 
-def _evidence_carrier(run: str, cause: str, board: str) -> str | None:
-    """The item for ``cause`` carrying ``run``'s evidence comment, of those its query selects."""
-    for item in board_items(board, metadata=[root_cause_query(cause)]):
-        comments = plan_store.sdk(plan_store.client().task_comment_list(item.id.root)).comments
+def _evidence_carrier(
+    run: str, cause: str, board: str, reads: BoardReads, named: Sequence[str] = ()
+) -> str | None:
+    """The item carrying this run's evidence marker, among the root-cause query's answers."""
+    candidates = list(named)
+    if not named:
+        for item in board_items(board, metadata=[root_cause_query(cause)]):
+            reads.items.setdefault(item.id.root, item.item.model_dump(mode="python"))
+            candidates.append(item.id.root)
+    for issue in candidates:
+        if named and _held_record(reads.item(issue)).get("root_cause") != cause:
+            continue
         if any(
-            (owner := comment_owner(comment.body)) is not None
+            (owner := comment_owner(body)) is not None
             and owner.run == run
             and owner.root_cause == cause
             and owner.kind is CommentKind.EVIDENCE
-            for comment in comments
+            for body in reads.comments(issue)
         ):
-            return item.id.root
+            return issue
     return None
 
 
@@ -3539,14 +3625,15 @@ def replies_posted(run: str, answered: Sequence[Response]) -> list[str]:
     return [problem for issue in confirmed for problem in board_estimate_problems(issue)]
 
 
-def board_estimate_problems(issue: str) -> list[str]:
+def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list[str]:
     """How the board item ``issue`` carries an estimate other than its comments recount to now.
 
     Its record's :data:`ESTIMATE_FIELD` has to be :func:`estimate` over its body's severity
     with the workaround, its record's frequency and the occurrences recounted off its
     comments at this moment; and its `## Impact` estimate line has to be that estimate's line.
     """
-    item = plan_store.task_record(issue)
+    reads = BoardReads() if reads is None else reads
+    item = reads.item(issue)
     held = _held_record(item)
     content = item.get("content")
     text = content if isinstance(content, str) else ""
@@ -3568,7 +3655,9 @@ def board_estimate_problems(issue: str) -> list[str]:
         frequency = _record_frequency(held, issue)
     except Refused as refusal:
         return list(refusal.problems)
-    count = occurrences(issue, str(creator), str(cause))
+    count = 1 + sum(
+        counts_as_occurrence(body, str(creator), str(cause)) for body in reads.comments(issue)
+    )
     estimated = estimate(with_workaround, frequency, count)
     found = []
     if held.get(ESTIMATE_FIELD) != estimated:
@@ -4046,6 +4135,11 @@ def _parser() -> _Parser:
         # journeys and AGENTS.md already publish, and the help below states both writes.
         # llmlint: ignore[names_match_behavior] see the note above this line
         "board-status",
+        description=(
+            "Read an open bound item by id without searching, including on re-dispatch. "
+            "An unbound ticket asks once by origin; a closed, missing or mismatched binding "
+            "uses that recovery query. Reuse its answer: never repeat an origin search."
+        ),
         help=(
             "print the status a ticket is copied with, decided from the board's item, after "
             "writing the ticket's binding to that item and noting any withdrawn duplicate"
@@ -4072,6 +4166,11 @@ def _parser() -> _Parser:
     estimated.add_argument("item", metavar="ITEM", help="the board item, as `<board>:<id>`")
     listing = commands.add_parser(
         "board-items",
+        description=(
+            "For an unbound ticket, ask once by root cause and once per distinct text question; "
+            "reuse answers already obtained by tooling or the agent. Never duplicate-search "
+            "a bound ticket. board-status owns its origin query."
+        ),
         help=(
             "print every item of a board one narrowing query selects, every page, as one JSON "
             f"result; the query names at least one of {', '.join(NARROWING)}"
@@ -4231,18 +4330,26 @@ def _accounted(arguments: argparse.Namespace) -> int:
                 ],
             )
         document = _artifact(path)
+        local = read_run_tickets(arguments.root, arguments.run)
         problems = disposition_problems(
             document,
             arguments.run,
             draft_ids(arguments.root, arguments.run),
-            written_tickets(arguments.root, arguments.run),
+            {cause: None if ticket is None else ticket.drafts for cause, ticket in local.items()},
         )
         if not problems and arguments.board:
             # `disposition_problems` proved every entry and every root-causes list above.
             # JSON starts as objects, so these casts carry that proof into the board read.
             entries = cast(list[dict[str, object]], document["dispositions"])
             filed = {cause for entry in entries for cause in cast(list[str], entry["root_causes"])}
-            problems = filed_board_problems(arguments.root, arguments.run, filed, arguments.board)
+            problems = filed_board_problems(
+                arguments.root,
+                arguments.run,
+                filed,
+                arguments.board,
+                local,
+                [str(entry["detail"]) for entry in entries],
+            )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
@@ -4392,16 +4499,31 @@ def _placed(arguments: argparse.Namespace) -> int:
         run, root_cause = located_path(arguments.path.absolute())
         ticket = qualified_id(run, root_cause)
         owner = board_owner(arguments.board)
-        item = plan_store.task_record(ticket)
+        stored = stored_ticket(arguments.path)
+        item = stored.item
         if owner is not None and not under_owner(
             repository := ticket_repository(ticket, item), owner
         ):
             raise OutsideOwner(repository, owner)
-        if unheld := dependency_problems(ticket, item, arguments.board):
+        if unheld := dependency_problems(ticket, item, arguments.board, stored.edges):
             raise NotAccepted(unheld)
-        placement = correspond(arguments.path, arguments.board, pending=True)
+        local = ticket_from(arguments.path, stored, pending=True)
+        reads = BoardReads()
+        placement = correspond(
+            arguments.path, arguments.board, pending=True, ticket=local, reads=reads
+        )
         status = status_before_copy(placement.category, withdraw=arguments.withdraw)
-        estimate_before_copy(arguments.path, arguments.board, placement)
+        if placement.item is not None:
+            local = dataclasses.replace(
+                local,
+                board_item=placement.item,
+                origin=(
+                    local.origin
+                    if local.link(arguments.board) == placement.item
+                    else plan_store.QualifiedTaskId(f"{arguments.board}:{placement.item}")
+                ),
+            )
+        estimate_before_copy(arguments.path, arguments.board, placement, local, reads)
     except OutsideOwner as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return OUTSIDE_OWNER

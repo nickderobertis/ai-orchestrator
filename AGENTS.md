@@ -940,9 +940,10 @@ happens to quote a board comment does not narrow the dispatch silently.
   that, reading each reply it names back off the board. The pre-launch `check-gathering` read also refuses an issue the run neither
   owns nor marked, and a comment whose marker says a run wrote it.
 
-Both bind in the two places a run can end: each rendered task's own acceptance criteria
-require its validator green, and an attached `just follow-ups` re-runs it after the
-dispatch settles.
+Initial dispatches correct their accounts with the local, board-less validator. An attached
+`just follow-ups` runs the sole board disposition check after settlement, including the
+comment recount for items this run created. Feedback dispatches require their reply validator
+green and the attached recipe re-runs that reply validator after settlement.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
@@ -962,7 +963,11 @@ ticket's own root cause takes the run's evidence as a comment, never a dependenc
 **The board is searched, never listed: every query of it is `python -m
 orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share
 of GitHub's hourly allowance that grows with the board and that every session here shares,
-so each query names one of the store's native narrowing questions — by root cause, by origin,
+so an open bound ticket carrying its origin makes no duplicate or origin search, including
+on re-dispatch. An
+unbound ticket's `board-status` asks once by origin; the agent asks once by root cause and
+once per distinct text question, reusing answers already obtained in the dispatch. Each
+query names one of the store's native narrowing questions — by root cause, by origin,
 or GitHub's own token-matched issue search, which may not yet list an item written seconds
 ago — and one naming none is refused; nothing in the task lists the board. A bare `task
 list` answers one page and a cursor, so a search over it reads the board as smaller than it
@@ -971,12 +976,15 @@ is.
 **A ticket is copied onto the board item it is bound to, and nowhere else.** Its record's
 `board_item` key holds that item's native id, and
 `python -m orchestrator.follow_up_tickets board-status` and its `copy` are what write it —
-when the run creates its item or first reaches it, and again when two items carry one
-ticket's `onetaskgraph.origin`, naming the run's own open item and leaving each withdrawn
-duplicate a comment naming that item. The store records its own link to that item and
+when the run creates its item or first reaches it. An unbound ticket whose origin query
+finds two items carrying its `onetaskgraph.origin`, binds the run's own open item and leaves
+each withdrawn duplicate a comment naming that item. The store records its own link to that item and
 follows it on the next copy, so no copy searches the board, and `board_item` is held to that
 link; a ticket bound to an item already on the board that the link does not name is steered
-by its own `onetaskgraph.origin` naming the item, which `board-status` writes. Both refuse, naming both ids, a link, or a destination the store reports, that differs
+by its own `onetaskgraph.origin` naming the item, which `board-status` writes. An open
+binding carrying the ticket is read directly. Closed, missing or mismatched items use
+origin discovery to recover; new evidence-only dispositions name `followups:<id>` in
+`detail` for a direct read, while older accounts naming no carrier retain metadata discovery. Both refuse, naming both ids, a link, or a destination the store reports, that differs
 from the binding, and every copy the task prescribes goes through `copy`: a bare `task copy`
 updates whichever carrier the store lists first.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->

@@ -2010,9 +2010,8 @@ def test_copy_creates_the_item_binds_the_ticket_to_it_and_updates_that_item_agai
     assert len(list(board.rglob("*.md"))) == 1
 
 
-@pytest.mark.parametrize("steered_by", ["origin", "unbound"])
 def test_a_re_copy_past_a_withdrawn_duplicate_rebinds_to_the_open_item_and_notes_it_once(
-    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], steered_by: str
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The incident: a withdrawn duplicate the store's own copy would reach.
 
@@ -2028,8 +2027,6 @@ def test_a_re_copy_past_a_withdrawn_duplicate_rebinds_to_the_open_item_and_notes
     duplicate = _duplicated(live, tickets.Status.WITHDRAWN)
     title = "some-service: the cursor skips its last page"
     staged = _ticket(title=title)
-    if steered_by == "origin":
-        staged = dataclasses.replace(_bound(staged, duplicate, linked=False), origin=duplicate)
     ticket = _write(drafts_root, staged)
     planned = plan_store.sdk(
         plan_store.client().task_copy([tickets.qualified_id(RUN, CAUSE)], to=BOARD, dry_run=True)
@@ -2106,7 +2103,7 @@ def test_board_status_and_copy_refuse_a_binding_to_an_item_not_carrying_the_tick
     assert (status, printed) == (tickets.MISBOUND, "")
     flat = " ".join(reported.split())
     assert f"the ticket names {other} as its item, which does not carry this ticket's" in flat
-    assert f"where {live.removeprefix(f'{BOARD}:')} does" in flat, flat
+    assert f"where {live.removeprefix(f'{BOARD}:')} does" in flat
     status, printed, reported = _copied(ticket, capsys)
     assert (status, printed) == (tickets.MISBOUND, "")
     flat = " ".join(reported.split())
@@ -2179,7 +2176,7 @@ def test_duplicates_without_one_open_item_beside_withdrawn_ones_are_refused(
     ticket = _write(drafts_root, _ticket())
     live = _on_board(ticket)
     duplicate = _duplicated(live, status)
-    ticket = _write(drafts_root, _bound(_ticket(), live))
+    ticket = _write(drafts_root, _ticket())
 
     answered, printed, reported = _decided(ticket, capsys)
     assert (answered, printed) == (tickets.MISBOUND, "")
@@ -2188,7 +2185,7 @@ def test_duplicates_without_one_open_item_beside_withdrawn_ones_are_refused(
     assert refusal in flat, flat
 
     assert _comment_bodies(duplicate) == _comment_bodies(live) == []
-    assert tickets.read_ticket(ticket) == _bound(_ticket(), live)
+    assert tickets.read_ticket(ticket) == _ticket()
 
 
 def test_copy_refuses_a_ticket_it_cannot_read_and_a_report_naming_no_item(
@@ -3200,8 +3197,8 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "before it confirms the text, so search for words an issue would carry rather than a "
         "fragment of one, and it may not yet list an item another run wrote a few seconds ago.",
         "Neither is narrowed to a repository",
-        "These searches are the one board read this ticket's filing makes; nothing in this "
-        "task lists the board.",
+        "Only an unbound ticket needs these duplicate searches; nothing in this task lists "
+        "the board.",
         "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
         "like any other open item and still takes this run's evidence.",
         "Write each ticket as if the accepted fixes those searches returned were already in. "
@@ -3228,11 +3225,11 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "For every fate but unchanged, add the item's `depends_on` entry, say in the text "
         "where and how its fix changed the ticket with the item's URL, then validate the "
         "ticket again.",
-        "On a re-dispatch, search again and re-derive all of this from what the searches now "
-        "return, exactly as a first pass does: an accepted ticket may have appeared, moved or "
+        "On a re-dispatch of an unbound ticket, ask each distinct question once and re-derive "
+        "this from those answers: an accepted ticket may have appeared, moved or "
         "been un-accepted since the last pass, so entries are added and removed and the "
-        "ticket's claims re-derived to match, and this run's own item is edited by copying "
-        "its ticket again.",
+        "ticket's claims re-derived to match. A bound ticket skips these searches and edits "
+        "its own item by copying again.",
     ):
         assert said in flat_step, said
     assert "every ticket dropped or withdrawn under an accepted ticket with that ticket's URL" in (
@@ -3243,9 +3240,9 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
     redispatch = _flat(_section(task, REDISPATCH_SECTION))
     assert (
         "a ticket's dependencies on accepted tickets, and the claims written against their "
-        "fixes, are re-derived from what the searches of step 7 now return on every pass — an "
-        "accepted ticket "
-        "may have appeared, moved or been un-accepted since the last pass, so `depends_on` "
+        "fixes, are re-derived from step 7 for unbound tickets and from dependency items read "
+        "by id for bound tickets — an accepted ticket may have moved or been un-accepted "
+        "since the last pass, so `depends_on` "
         "entries are added and removed and the ticket's `## Impact`, `## Root cause`, "
         "`## Suggested fix` and `## Rejected fixes` re-derived to match, and "
         f"`{BOARD_STATUS} --board followups <path of the ticket>` refusing an entry is the "

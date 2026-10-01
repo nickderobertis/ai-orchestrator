@@ -3829,6 +3829,284 @@ ANSWER_REQUESTS = 12
 WITHDRAWAL_REQUESTS = 16
 #: The plan-store CLI release the bounds above were measured on: `onetaskgraph --version`.
 BUDGET_MEASURED_ON = "onetaskgraph 0.2.52"
+#: Per-command (request count, modelled points) measured on BUDGET_MEASURED_ON.
+UNBOUND_STATUS_BUDGET = (1, 1)
+BOUND_STATUS_BUDGET = (3, 3)
+CREATE_COPY_BUDGET = (8, 8)
+BOUND_COPY_BUDGET = (9, 9)
+RE_ESTIMATE_BUDGET = (4, 4)
+EVIDENCE_POST_BUDGET = (8, 8)
+BOARD_CHECK_BUDGET = (12, 12)
+LAUNCH_VALIDATION_BOARD_CHECKS = 1
+
+#: The source's PRICES entries used by the fixture's operations. Search uses the measured
+#: 2026-10-01 page price instead; its upstream maximum-page price is still drift-checked.
+REQUEST_PRICES: dict[_Operation, tuple[str, int]] = {
+    _Operation.SEARCH: ("SEARCH_ISSUES", 5),
+    _Operation.ISSUE: ("ISSUE", 1),
+    _Operation.SUB_ISSUES: ("SUB_ISSUES", 5),
+    _Operation.BOARD: ("BOARD", 2),
+    _Operation.ORIGIN_LOOKUP: ("ORIGIN_LOOKUP", 1),
+    _Operation.BOARD_FIELDS: ("BOARD_FIELDS", 1),
+    _Operation.FIELD_SNAPSHOT: ("STATUS_OPTIONS_SNAPSHOT", 1),
+    _Operation.REPOSITORY: ("REPOSITORY", 1),
+    _Operation.DEPENDENCIES: ("ISSUE_DEPENDENCIES", 1),
+    _Operation.CREATE_ISSUE: ("CREATE_ISSUE", 1),
+    _Operation.ADD_TO_BOARD: ("ADD_TO_BOARD", 1),
+    _Operation.UPDATE_ISSUE: ("UPDATE_ISSUE", 1),
+    _Operation.UPDATE_FIELD: ("UPDATE_FIELD", 1),
+    _Operation.CLEAR_FIELD: ("CLEAR_FIELD", 1),
+    _Operation.CREATE_FIELD: ("CREATE_FIELD", 1),
+    _Operation.ADD_SUB_ISSUE: ("ADD_SUB_ISSUE", 1),
+    _Operation.ADD_BLOCKED_BY: ("ADD_BLOCKED_BY", 1),
+    _Operation.DELETE_ISSUE: ("DELETE_ISSUE", 1),
+    _Operation.COMMENTS: ("ISSUE_COMMENTS", 1),
+    _Operation.ADD_COMMENT: ("ADD_COMMENT", 1),
+}
+
+
+def _request_points(request: _GraphQLRequest) -> int:
+    """Price every document encountered; an unpriced document fails the journey."""
+    assert request.operation in REQUEST_PRICES, f"unpriced document: {request.query}"
+    _document, price = REQUEST_PRICES[request.operation]
+    if request.operation is _Operation.SEARCH:
+        first = request.variables["first"]
+        assert isinstance(first, int), request.variables
+        return (first + 19) // 20
+    return price
+
+
+@pytest.mark.reads_checkouts
+def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
+    """Reconcile prices with the registered checkout's adopted tag, fetching nothing."""
+    checkout = registered_checkouts()["github.com/nickderobertis/onetaskgraph"]
+    source = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "show",
+            f"v{ADOPTED}:crates/onetaskgraph-github-projects/tests/point_cost.rs",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert source.returncode == 0, (
+        f"the onetaskgraph checkout is behind its origin: cannot read v{ADOPTED}: {source.stderr}"
+    )
+    upstream = dict(
+        (name, int(price))
+        for name, price in re.findall(r"\(graphql::([A-Z_]+), (\d+)\)", source.stdout)
+    )
+    for document, price in REQUEST_PRICES.values():
+        assert upstream.get(document) == price, (document, price, upstream.get(document))
+
+
+#: Python's audit hook records the real CLI subprocesses without replacing any command.
+#: sys.orig_argv also records validators started by the real attached recipe's shell.
+STORE_CALL_AUDIT = """\
+import json, os, pathlib, sys
+trace = pathlib.Path(os.environ["FOLLOW_UP_BUDGET_TRACE"])
+def record(kind, argv):
+    with trace.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"kind": kind, "argv": argv}) + "\\n")
+if "orchestrator.follow_up_tickets" in sys.orig_argv:
+    record("module", sys.orig_argv)
+def audit(event, args):
+    if event == "subprocess.Popen" and pathlib.Path(args[0]).name == "onetaskgraph":
+        record("store", args[1])
+sys.addaudithook(audit)
+"""
+
+
+def _audit_follow_up_calls(root: Path, environment: dict[str, str]) -> Path:
+    """Install an observer in test Python processes; every store subprocess stays real."""
+    observer = root / "audit"
+    observer.mkdir()
+    (observer / "sitecustomize.py").write_text(STORE_CALL_AUDIT, encoding="utf-8")
+    trace = root / "store-calls.jsonl"
+    environment["FOLLOW_UP_BUDGET_TRACE"] = str(trace)
+    environment["PYTHONPATH"] = os.pathsep.join((str(observer), str(REPO_ROOT)))
+    return trace
+
+
+def _once_per_store_call(trace: Path) -> list[list[str]]:
+    """Assert one show/comment-list per item and one local show/dependency walk per ticket."""
+    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    store = [call["argv"] for call in calls if call["kind"] == "store"]
+    shows = [argv[3] for argv in store if argv[1:3] == ["task", "show"]]
+    comments = [argv[4] for argv in store if argv[1:4] == ["task", "comment", "list"]]
+    deps = [argv[3] for argv in store if argv[1:3] == ["task", "deps"]]
+    for names in (shows, comments, deps):
+        assert len(names) == len(set(names)), names
+    assert not set(shows) & set(comments), (shows, comments)
+    trace.write_text("", encoding="utf-8")
+    return store
+
+
+def _bounded_step(
+    label: str,
+    budget: tuple[int, int],
+    *,
+    bound: bool = False,
+    allowed_comments: set[str] | None = None,
+    trace: Path | None = None,
+    writes: bool = False,
+) -> None:
+    """Hold command requests to their measured budget and to one read per item/connection."""
+    if trace is not None:
+        _once_per_store_call(trace)
+    requests = list(_GitHubFixture.requests)
+    cost = (len(requests), sum(_request_points(request) for request in requests))
+    print(f"{label}: requests={cost[0]}, points={cost[1]}")
+    assert cost[0] <= budget[0] and cost[1] <= budget[1], (label, cost, budget)
+    for operation in (_Operation.ISSUE, _Operation.COMMENTS):
+        identifiers = [
+            request.string("id") for request in requests if request.operation is operation
+        ]
+        # 0.2.52 resolves an item twice inside one show (the second resolution precedes
+        # its comments). Hold the orchestrator call budget separately below; adoption
+        # will remove this store-internal exception and tighten this wire bound to one.
+        ceiling = (budget[0] if writes else 2) if operation is _Operation.ISSUE else 1
+        assert all(identifiers.count(one) <= ceiling for one in identifiers), (
+            label,
+            operation,
+            identifiers,
+        )
+        if operation is _Operation.COMMENTS and allowed_comments is not None:
+            assert set(identifiers) <= allowed_comments, (label, identifiers, allowed_comments)
+    if bound:
+        assert not _sent(_Operation.SEARCH, requests), label
+        assert not _sent(_Operation.ORIGIN_LOOKUP, requests), label
+    assert _board_cost(requests) == ([], []), label
+    _GitHubFixture.requests.clear()
+
+
+@pytest.mark.reads_docs
+def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_path: Path) -> None:
+    """Real commands over many unrelated items, including another run's evidence carrier."""
+    environment, root = _followups_environment(tmp_path)
+    trace = _audit_follow_up_calls(tmp_path, environment)
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    path = _written_ticket(root, ticket)
+    board = follow_up_tickets.BOARD
+    with _serving_followups(environment, fields=True):
+        for at in range(OTHER_ITEMS):
+            _seeded_item(
+                at,
+                run="another-run",
+                cause=f"other-{at}",
+                status=follow_up_tickets.Status.PROPOSED,
+                origin=f"drafts:another-run/tickets/other-{at}",
+                origin_in_body=True,
+            )
+        _GitHubFixture.requests.clear()
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _bounded_step("unbound board-status", UNBOUND_STATUS_BUDGET, trace=trace)
+        copied = _follow_up_step(environment, "copy", "--board", board, str(path))
+        assert copied.returncode == 0, copied.stderr
+        issue = json.loads(copied.stdout)["destination"]
+        _bounded_step("creating copy", CREATE_COPY_BUDGET)
+        trace.write_text("", encoding="utf-8")
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _bounded_step("bound board-status", BOUND_STATUS_BUDGET, bound=True, trace=trace)
+        copied = _follow_up_step(environment, "copy", "--board", board, str(path))
+        assert copied.returncode == 0, copied.stderr
+        _bounded_step("bound re-copy", BOUND_COPY_BUDGET, bound=True, trace=trace, writes=True)
+        estimated = _follow_up_step(environment, "re-estimate", "--board", board, issue)
+        assert estimated.returncode == 0, estimated.stderr
+        _bounded_step("re-estimate", RE_ESTIMATE_BUDGET, bound=True, trace=trace, writes=True)
+
+        other = _seeded_item(
+            OTHER_ITEMS,
+            run="earlier-run",
+            cause="shared-cause",
+            status=follow_up_tickets.Status.PROPOSED,
+            origin="drafts:earlier-run/tickets/shared-cause",
+            origin_in_body=True,
+        )
+        carrier = f"{board}:{other.content_id}"
+        evidence = tmp_path / "evidence.md"
+        evidence.write_text(
+            follow_up_tickets.render_comment(
+                PROPOSED_RUN, "shared-cause", "This run reproduced it at the recorded basis."
+            ),
+            encoding="utf-8",
+        )
+        posted = _followups_command(
+            environment,
+            [
+                str(ONETASKGRAPH_BIN),
+                "task",
+                "comment",
+                "add",
+                carrier,
+                "--body-file",
+                str(evidence),
+                "--json",
+            ],
+        )
+        assert posted.returncode == 0, posted.stderr
+        estimated = _follow_up_step(environment, "re-estimate", "--board", board, carrier)
+        assert estimated.returncode == 0, estimated.stderr
+        _bounded_step(
+            "evidence comment and re-estimate",
+            EVIDENCE_POST_BUDGET,
+            bound=True,
+            trace=trace,
+            writes=True,
+        )
+        paths = [path]
+        for cause in ("second-cause", "third-cause"):
+            added = _written_ticket(
+                root, replace(ticket, root_cause=follow_up_tickets.RootCause(cause))
+            )
+            assert _decided_status(environment, added) == follow_up_tickets.Status.PROPOSED
+            report = _follow_up_step(environment, "copy", "--board", board, str(added))
+            assert report.returncode == 0, report.stderr
+            paths.append(added)
+        shared = _written_ticket(
+            root, replace(ticket, root_cause=follow_up_tickets.RootCause("shared-cause"))
+        )
+        assert _decided_status(environment, shared) == follow_up_tickets.Status.PROPOSED
+        account = follow_up_tickets.dispositions_path(root, PROPOSED_RUN)
+        account.parent.mkdir(parents=True, exist_ok=True)
+        account.write_text(
+            json.dumps(
+                {
+                    "schema": follow_up_tickets.DISPOSITIONS_SCHEMA,
+                    "run": PROPOSED_RUN,
+                    "drafts": list(ticket.drafts),
+                    "dispositions": [
+                        {
+                            "draft": ticket.drafts[0],
+                            "disposition": "filed",
+                            "root_causes": [one.stem for one in paths] + ["shared-cause"],
+                            "detail": f"Copied own tickets and posted evidence on {carrier}.",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        _GitHubFixture.requests.clear()
+        trace.write_text("", encoding="utf-8")
+        checked = _follow_up_step(
+            environment, "check-dispositions", "--root", str(root), "--board", board, PROPOSED_RUN
+        )
+        assert checked.returncode == 0, checked.stderr
+        allowed = {other.content_id}
+        allowed.update(
+            one.content_id
+            for one in BOARD.issues
+            if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
+        )
+        _bounded_step(
+            "account board check", BOARD_CHECK_BUDGET, bound=True, allowed_comments=allowed
+        )
+
+
 #: The words the filing's text search asks the board for, which some accepted items of other
 #: root causes carry in their titles, so the search answers the accepted fixes it is for.
 SEARCHED_WORDS = "proposal"
