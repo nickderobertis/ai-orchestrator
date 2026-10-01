@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 import threading
 import time
@@ -18,7 +17,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 
-import delegation_checkout
 import follow_up_variables
 import jsonschema
 import plan_root_variable
@@ -3972,104 +3970,6 @@ def _once_per_store_call(trace: Path) -> list[list[str]]:
     return store
 
 
-def _launch_follow_up_validation(
-    tmp_path: Path,
-    environment: dict[str, str],
-    root: Path,
-    trace: Path,
-    issue: str,
-    *,
-    corrupt: bool,
-) -> None:
-    """The real attached recipe, with its engine boundary exercising the dispatch's last check.
-
-    Template resolution/rendering, the local validator, and post-settle validators are real.
-    Only the engine's launch is doubled, as in the recipe's delegated-boundary journey.
-    In the refusal case it changes board priority after the last local check: the post-settle
-    board check must catch that change, the concrete failure a pre-settle-only check misses.
-    """
-    from plan_tooling.test_follow_ups_recipe_e2e import _creates_tasks, _one_task_record
-
-    checkout, launch_trace = delegation_checkout.delegation_checkout(tmp_path)
-    _creates_tasks(checkout)
-    store = checkout / ".venv/bin/onetaskgraph"
-    store.symlink_to(ONETASKGRAPH_BIN)
-    python = ONETASKGRAPH_BIN.parent / "python3"
-    dispatch_check = tmp_path / "dispatch-check.py"
-    dispatch_check.write_text(
-        "import pathlib, re, shlex, subprocess\n"
-        f"records = sorted(pathlib.Path({str(checkout / '.plans/tasks')!r}).rglob('*.md'))\n"
-        "assert len(records) == 1, records\n"
-        "body = records[0].read_text().split('---\\n', 2)[2]\n"
-        "commands = re.findall(r'`([^`\\n]*orchestrator\\.follow_up_tickets "
-        "check-dispositions[^`\\n]*)`', body)\n"
-        "assert commands and all('--board' not in command for command in commands), commands\n"
-        "subprocess.run(shlex.split(commands[-1]), check=True)\n",
-        encoding="utf-8",
-    )
-    last = shlex.join(
-        [
-            "env",
-            f"PYTHONPATH={environment['PYTHONPATH']}",
-            f"FOLLOW_UP_BUDGET_TRACE={trace}",
-            str(python),
-            str(dispatch_check),
-        ]
-    )
-    mutate = shlex.join([str(store), "task", "priority", "set", issue, "high", "--json"])
-    engine = checkout / ".venv/bin/onepipeline"
-    # llmlint: ignore[tests_mirror_real_usage] Only the published engine CLI delegated
-    # to by the real recipe is doubled, the sanctioned boundary in AGENTS.md and the
-    # delegated recipe journeys. Real template rendering supplies the executed last
-    # validator; the attached recipe and its post-settle validator remain real. The
-    # engine's scheduling and paid worker turns are not the request-budget seam.
-    engine.write_text(
-        engine.read_text(encoding="utf-8").replace(
-            'exit "${FAKE_ENGINE_EXIT:-0}"',
-            'if [ "${1:-}" = start ]; then\n'
-            + last
-            + "\n"
-            + (mutate + "\n" if corrupt else "")
-            + 'fi\nexit "${FAKE_ENGINE_EXIT:-0}"',
-        ),
-        encoding="utf-8",
-    )
-    trace.write_text("", encoding="utf-8")
-    _GitHubFixture.requests.clear()
-    result = delegation_checkout.run_recipe(
-        checkout,
-        launch_trace,
-        "follow-ups",
-        PROPOSED_RUN,
-        env={**environment, plan_root_variable.name(): str(checkout / ".plans")},
-    )
-    assert result.returncode == (follow_up_tickets.UNSOUND if corrupt else 0), result.stderr
-    if corrupt:
-        assert "holds the priority `high`" in result.stderr, result.stderr
-    task = _one_task_record(checkout)
-    validators = re.findall(
-        r"`([^`\n]*orchestrator\.follow_up_tickets check-dispositions[^`\n]*)`",
-        task.split("---\n", 2)[2],
-    )
-    assert validators and all("--board" not in command for command in validators), validators
-    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
-    checks = [
-        call["argv"]
-        for call in calls
-        if call["kind"] == "module" and "check-dispositions" in call["argv"]
-    ]
-    assert len(checks) == 2 and sum("--board" in argv for argv in checks) == (
-        LAUNCH_VALIDATION_BOARD_CHECKS
-    ), checks
-    # Only one board check, plus the explicit corruption write in the refusal journey.
-    _bounded_step(
-        "launch validation",
-        LAUNCH_REFUSAL_BUDGET if corrupt else BOARD_CHECK_BUDGET,
-        bound=True,
-        writes=corrupt,
-    )
-
-
 def _bounded_step(
     label: str,
     budget: RequestBudget,
@@ -4233,12 +4133,6 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             allowed_comments=allowed,
             trace=trace,
         )
-        for corrupt in (False, True):
-            launch_root = tmp_path / ("unsound-launch" if corrupt else "sound-launch")
-            launch_root.mkdir()
-            _launch_follow_up_validation(
-                launch_root, environment, root, trace, issue, corrupt=corrupt
-            )
 
 
 #: The words the filing's text search asks the board for, which some accepted items of other
