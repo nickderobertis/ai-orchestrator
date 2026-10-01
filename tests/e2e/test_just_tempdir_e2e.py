@@ -44,8 +44,13 @@ pytestmark = pytest.mark.reads_recipes
 #: refused by the body's own first check, with its own message and exit status, so
 #: seeing that refusal is seeing the body execute. A body `just` could not execute never
 #: gets that far and fails with `just`'s own error instead.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These two lines only
+# name which shebang recipe the journeys below already ran; each journey is one `just`
+# invocation that finishes in seconds and spends no launch or provider turn, in the tier
+# whose `recipeWorkspace` key already reads the justfile it copies.
 SHEBANG_RECIPE = ("_verdict", "approve", "journey-run", "an extra message")
 BODY_RAN = "channel-approve: approve does not accept a message"
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 BODY_RAN_STATUS = 2
 #: What the publication gate reported when its inherited runtime directory was `noexec`.
 NOEXEC_REFUSAL = "Permission denied (os error 13)"

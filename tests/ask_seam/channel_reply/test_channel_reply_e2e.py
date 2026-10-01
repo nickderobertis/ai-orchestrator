@@ -237,7 +237,7 @@ def _launched(
     tmp_path: Path,
     environment: dict[str, str],
     run: RunId,
-    tasks: list[dict[str, Any]],
+    tasks: list[dict[str, object]],
     *flags: str,
 ) -> Replying:
     """Launch `tasks` as run `run` through the real `just orchestrate`, and hand it back.
