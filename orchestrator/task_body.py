@@ -19,6 +19,17 @@ then adds or drops is small and is what the warning threshold covers, and
 
 GitHub's refusal counts *characters*, so :func:`measure` counts Unicode code points —
 ``len()`` of the composed ``str`` — rather than bytes.
+
+**A plan's design document becomes an issue on that board too, and is measured the same
+way.** The plugin writes a document through the same `write_item` as a task — its content,
+and its metadata map in the same slot `compose_body` appends — so :func:`compose` is its
+composition as well, and `tests/test_task_body.py` holds the document write to that path.
+It is measured by `just copy-plan` rather than by `just check-plan`, because in the flow
+`just finish-plan` runs the check *before* the document-writing launch and the copy after
+it: the copy's pre-flight is the one step that always has the document in front of it and
+always precedes the write to the board. :func:`document_refusals` and
+:func:`document_warnings` are its two faces, under the same :data:`BODY_LIMIT` and
+:data:`WARN_FROM`.
 """
 
 from __future__ import annotations
@@ -27,7 +38,7 @@ import json
 from collections.abc import Iterable, Iterator, Mapping
 from typing import NamedTuple
 
-from orchestrator.plan_store import NodeId, StoreTask
+from orchestrator.plan_store import NodeId, QualifiedDocumentId, StoreDocument, StoreTask
 from orchestrator.publication_guard import Refusal
 
 #: The destination's refusal: an issue body over this many characters is one GitHub
@@ -72,6 +83,16 @@ UNMEASURED = (
     + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
 )
 
+#: The same account for a design document, whose map carries the template provenance
+#: and the design approval rather than `onepipeline.*` keys and a review record; the keys
+#: left out are the same, because the plugin's `slot_metadata` is the same call.
+DOCUMENT_UNMEASURED = (
+    "measured as the document's content followed by the metadata slot the "
+    "`github-projects` source appends — its template provenance and its design approval, "
+    "as compact key-sorted JSON — and leaving out what the copy itself adds or routes "
+    "elsewhere: " + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
+)
+
 
 class BodyError(ValueError):
     """A plan task whose composed issue body the destination board would refuse."""
@@ -81,6 +102,13 @@ class Body(NamedTuple):
     """One task's composed issue body, as its node and its size in characters."""
 
     node: NodeId
+    size: int
+
+
+class DocumentBody(NamedTuple):
+    """One design document's composed issue body, as its qualified id and its size."""
+
+    document: QualifiedDocumentId
     size: int
 
 
@@ -210,3 +238,44 @@ def check_records(records: Iterable[StoreTask]) -> None:
         refused = refusal(body)
         if refused is not None:
             raise BodyError(f"{refused.node}: {refused.field}: {refused.reason}")
+
+
+def document_bodies(documents: Iterable[StoreDocument]) -> Iterator[DocumentBody]:
+    """Every document's body, measured from the content and the map the store reads back.
+
+    The content is what the source answers as the document's own — a `local-md` record's
+    stored template answers are not part of it, and the board keeps none either — and the
+    map is the record's whole metadata map, which is what the store's `document copy`
+    hands the destination.
+    """
+    for document in documents:
+        yield DocumentBody(document.qualified_id, measure(document.content, document.metadata))
+
+
+def document_refusals(documents: Iterable[StoreDocument]) -> list[str]:
+    """One refusal per document of ``documents`` whose composed body is over the limit.
+
+    Inclusive at the limit, as :func:`refusal` is. Each line names the document, its size,
+    the limit and what the figure leaves out, prefixed for the `just copy-plan` that prints
+    it.
+    """
+    return [
+        f"copy-plan: {body.document}: its composed issue body measures {body.size:,} "
+        f"characters, over the {BODY_LIMIT:,}-character limit GitHub puts on an issue "
+        f"body, so the board would refuse this design document after the plan had landed "
+        f"without it. Shorten the document ({DOCUMENT_UNMEASURED})."
+        for body in document_bodies(documents)
+        if body.size > BODY_LIMIT
+    ]
+
+
+def document_warnings(documents: Iterable[StoreDocument]) -> list[str]:
+    """One warning per document measuring from :data:`WARN_FROM` up to the limit."""
+    return [
+        f"copy-plan: warning: {body.document}: its composed issue body measures "
+        f"{body.size:,} characters, {100 * body.size // BODY_LIMIT}% of the "
+        f"{BODY_LIMIT:,}-character limit the `plans` board's issues carry; a design "
+        f"document there is one ordinary edit from uncopyable ({DOCUMENT_UNMEASURED})"
+        for body in document_bodies(documents)
+        if WARN_FROM <= body.size <= BODY_LIMIT
+    ]

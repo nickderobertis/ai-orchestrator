@@ -1,9 +1,11 @@
 """The issue body a task becomes on the `plans` board, measured before the copy.
 
 `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the real recipe over a plan
-whose task's body crosses the limit, one between the thresholds, and one below. What is
-here is the composition itself — held to the plugin's `compose_body` in the registered
-`onetaskgraph` checkout — and the two faces of the reading the recipe reaches it through.
+whose task's body crosses the limit, one between the thresholds, and one below, and
+`tests/plan_tooling/test_design_document_body_limit_e2e.py` drives `just copy-plan` over a
+design document past each threshold. What is here is the composition itself — held to the
+plugin's `compose_body` in the registered `onetaskgraph` checkout, for a task and for a
+design document — and the faces of the reading the recipes reach it through.
 """
 
 from __future__ import annotations
@@ -168,6 +170,56 @@ def test_warnings_are_read_off_the_records_the_wrapper_re_reads() -> None:
     )
 
 
+def _document(native: str, content: str, **metadata: object) -> plan_store.StoreDocument:
+    return plan_store.StoreDocument(
+        qualified_id=plan_store.QualifiedDocumentId(f"authoring:{native}"),
+        title=f"Design: {native}",
+        content=content,
+        project="probe",
+        labels=[],
+        repositories=[],
+        metadata=metadata,
+        location=None,
+    )
+
+
+def test_a_document_is_measured_as_its_content_and_its_whole_map_the_way_a_task_is() -> None:
+    """The template provenance and the approval are in the map, so they are in the body."""
+    provenance = {"onetaskgraph.template": {"template": "onepipeline:design-doc"}}
+    approval = {"orchestrator.design-approval": {"key": "k"}}
+    designed = _document("probe-design", "## What\n\nProbe.\n", **provenance, **approval)
+
+    (body,) = task_body.document_bodies([designed])
+
+    assert body == task_body.DocumentBody(
+        plan_store.QualifiedDocumentId("authoring:probe-design"),
+        len(task_body.compose("## What\n\nProbe.\n", {**provenance, **approval})),
+    )
+    assert body.size > len("## What\n\nProbe.\n") + len(task_body.METADATA_OPEN)
+
+
+def test_a_document_over_the_limit_is_refused_and_one_from_the_threshold_warned_about() -> None:
+    """The task thresholds, inclusive at the limit, with the document's own account."""
+    over = _document("over", _sized(task_body.BODY_LIMIT + 1))
+    at = _document("at", _sized(task_body.BODY_LIMIT))
+    warned = _document("warned", _sized(task_body.WARN_FROM))
+    below = _document("below", _sized(task_body.WARN_FROM - 1))
+    documents = [over, at, warned, below]
+
+    (refused,) = task_body.document_refusals(documents)
+    assert refused.startswith("copy-plan: authoring:over: its composed issue body measures ")
+    assert f"{task_body.BODY_LIMIT + 1:,} characters" in refused
+    assert f"{task_body.BODY_LIMIT:,}-character limit" in refused
+    assert task_body.DOCUMENT_UNMEASURED in refused
+
+    warnings = task_body.document_warnings(documents)
+    assert [line.split(": ")[2] for line in warnings] == ["authoring:at", "authoring:warned"]
+    assert "100% of the" in warnings[0]
+    assert all(task_body.DOCUMENT_UNMEASURED in line for line in warnings)
+    assert task_body.document_refusals([below]) == []
+    assert task_body.document_warnings([below]) == []
+
+
 def _plugin_source(source: Path = PLUGIN_SOURCE) -> tuple[str, str]:
     """One file of the plugin's source and where it was read; a skip where the checkout is absent.
 
@@ -286,6 +338,43 @@ def test_the_keys_the_measurement_leaves_out_are_the_ones_the_plugin_adds_or_dro
         f"UNMEASURED_KEYS names {set(task_body.UNMEASURED_KEYS) - spelled}, which no held "
         f"line of the plugin spells"
     )
+
+
+#: The lines of the plugin that put a design document through the task's composition: its
+#: `write_document` hands `write_item` the document's own content and metadata map, and
+#: `write_item` — the one write of all three kinds — composes the body from them with
+#: `compose_body` after `slot_metadata`, which for a document drops the item-kind marker
+#: rather than adding it. A plugin that composed a document's body any other way fails
+#: here rather than leaving `just copy-plan` measuring a body the board never sees.
+DOCUMENT_COMPOSITION = (
+    "    async fn write_document(&self, write: &ItemWrite<Document>) "
+    "-> Result<NativeId, SourceError> {",
+    "            &Incoming {\n"
+    "                written: Written::Document,\n"
+    "                title: &write.item.title,\n"
+    "                content: write.item.content.as_deref(),\n"
+    "                labels: &write.item.labels,\n"
+    "                metadata: &write.item.metadata,",
+    "        let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);\n"
+    "        let body = compose_body(incoming.content, &slot)?;",
+    "        BoardKind::Document => metadata.remove(ItemKind::METADATA_KEY),",
+)
+
+
+@pytest.mark.reads_checkouts
+def test_a_document_s_body_is_composed_by_the_plugin_exactly_as_a_task_s_is() -> None:
+    """What `task_body.document_bodies` measures is what the board's document write sends.
+
+    Held line by line, beside the composition the task gate above holds: a document that
+    reached the board some other way — its own composer, a slot of its own, content
+    re-rendered on the way — would be measured here against a body it never becomes.
+    """
+    source, read_from = _plugin_source()
+    for line in DOCUMENT_COMPOSITION:
+        assert line in source, (
+            f"{read_from} no longer writes a design document's body the way "
+            f"orchestrator/task_body.py measures it; it lacks:\n{line}"
+        )
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 from onetaskgraph_sdk import CopyReport
 
-from orchestrator import plan_copy, plan_review, plan_store
+from orchestrator import plan_copy, plan_review, plan_store, task_body
 from orchestrator.plan_store import (
     NodeId,
     QualifiedDocumentId,
@@ -50,12 +50,12 @@ def _reviewed(node_id: str) -> StoreTask:
     return _task(node_id, {plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}})
 
 
-def _document(native: str) -> StoreDocument:
+def _document(native: str, content: str = "## What\n\nIt.\n") -> StoreDocument:
     """A document in the shape the store reader returns."""
     return StoreDocument(
         qualified_id=QualifiedDocumentId(f"authoring:{native}"),
         title=f"Design: {native}",
-        content="## What\n\nIt.\n",
+        content=content,
         project="demo",
         labels=[],
         repositories=[],
@@ -82,6 +82,9 @@ def _reads(monkeypatch: pytest.MonkeyPatch, *tasks: StoreTask, planned: bool = T
     monkeypatch.setattr(plan_store, "read_tasks", lambda _project: list(tasks))
     monkeypatch.setattr(plan_store, "read_plan", lambda _project, _records: plan)
     monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
+    # The document measure reads the plan's documents before the copy; none by default, and
+    # `_holds` answers with some where a test is about them.
+    _holds(monkeypatch)
 
 
 def _holds(monkeypatch: pytest.MonkeyPatch, *documents: StoreDocument) -> None:
@@ -292,3 +295,59 @@ def test_a_review_bar_this_checkout_cannot_compose_stops_before_it_judges_anythi
     reported = capsys.readouterr().err
     assert "cannot fingerprint the review bar" in reported, reported
     assert "just bootstrap" in reported, reported
+
+
+def test_a_design_document_over_the_limit_refuses_the_copy_before_the_store_is_asked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Refused under its own status, naming the document, and with nothing written.
+
+    The journey is `tests/plan_tooling/test_design_document_body_limit_e2e.py`; what this
+    adds is that the refusal precedes the copy itself, which a journey sees only as an
+    empty destination.
+    """
+    _reads(monkeypatch, _reviewed("route"))
+    _holds(
+        monkeypatch,
+        _document("demo-design", "x" * (task_body.BODY_LIMIT + 1)),
+        _document("demo-notes", "x" * task_body.WARN_FROM),
+    )
+    monkeypatch.setattr(plan_copy, "copy", lambda *_: pytest.fail("the copy ran"))
+
+    assert plan_copy.main(["authoring:demo", "--to", "elsewhere"]) == plan_copy.OVERSIZED
+    reported = capsys.readouterr().err
+    assert "copy-plan: authoring:demo-design: its composed issue body" in reported, reported
+    assert "copy-plan: warning: authoring:demo-notes:" in reported, reported
+    assert "nothing was copied into 'elsewhere'" in reported, reported
+
+
+def test_a_design_document_within_the_limit_is_warned_about_and_copied(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _reads(monkeypatch, _reviewed("route"))
+    _holds(monkeypatch, _document("demo-design", "x" * task_body.WARN_FROM))
+    copied: list[str] = []
+    monkeypatch.setattr(
+        plan_copy, "copy", lambda project, _d, _t: copied.append(project) or plan_copy.OK
+    )
+
+    assert plan_copy.main(["authoring:demo"]) == plan_copy.OK
+    assert copied == ["authoring:demo"]
+    assert "copy-plan: warning: authoring:demo-design:" in capsys.readouterr().err
+
+
+def test_documents_the_store_cannot_answer_are_neither_measured_nor_copied(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _reads(monkeypatch, _reviewed("route"))
+    monkeypatch.setattr(
+        plan_store,
+        "read_documents",
+        lambda _project: (_ for _ in ()).throw(OSError("lost the source")),
+    )
+    monkeypatch.setattr(plan_copy, "copy", lambda *_: pytest.fail("the copy ran"))
+
+    assert plan_copy.main(["authoring:demo"]) == plan_copy.UNREADABLE
+    reported = capsys.readouterr().err
+    assert "cannot read the documents of authoring:demo to measure them" in reported, reported
+    assert "lost the source" in reported, reported
