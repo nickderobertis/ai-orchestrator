@@ -84,6 +84,8 @@ from nx_inputs import (
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_SCOPED,
     SELECTED_TARGETS,
+    SESSION_OPEN_CONFLICT_ROOT,
+    SESSION_OPEN_CONFLICT_SCOPED,
     SESSION_SETUP_PYPI_PROJECT,
     SESSION_SETUP_PYPI_ROOT,
     SESSION_SETUP_PYPI_SCOPED,
@@ -917,7 +919,9 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: whose dispatch ends inside its grace period in one, the `manager-allowlist` project owns the
 #: journeys over `just sync-allowlist` and `just probe-allowlist` in one, the `host-views`
 #: project owns the journeys
-#: over `just status` and `just host` in one, and the orchestrator project owns the rest
+#: over `just status` and `just host` in one, the `session-open-conflict` project owns the
+#: journey over a continued branch's conflict with its moved base in one, and the
+#: orchestrator project owns the rest
 #: in four.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
@@ -961,6 +965,11 @@ SUITE_TIERS = (
     (f"{MANAGER_ALLOWLIST_ROOT}/project.json", MANAGER_ALLOWLIST_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{HOST_VIEWS_ROOT}/project.json", HOST_VIEWS_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, which this module partitions the whole suite across, so every
+    # project's entry sits here; the session-open-conflict entry is one row of it.
+    (f"{SESSION_OPEN_CONFLICT_ROOT}/project.json", SESSION_OPEN_CONFLICT_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),

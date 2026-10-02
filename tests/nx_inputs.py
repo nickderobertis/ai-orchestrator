@@ -147,6 +147,21 @@ BOARD_COPY_APPROVAL_WORKSPACE = "boardCopyApprovalWorkspace"
 #: stand-ins and helpers it imports reach it as test-support dependencies.
 GRACEFUL_CANCEL_WORKSPACE = "gracefulCancelWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per test
+# project, as the block over the ask-seam journeys says: `tests/conftest.py`'s read guard,
+# `tests/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every project's key,
+# name and directory from here before collecting any of them, so this project's row cannot live in
+# its own directory.
+#: The key `session-open-conflict:test` is memoized on. Files rather than trees, for the
+#: reason `unwatchedWorkspace` names, and measured the same way: the tier traced under
+#: `strace -f -e trace=openat,execve`, each opened path normalized and intersected with
+#: what git tracks, with the `orchestrator/` modules it loads from bytecode named by their
+#: source. So the key is the launch machinery `just orchestrate` and `just repos-apply`
+#: reach, the graphs, harness configs and pins the engine reads at launch, and the
+#: project's own files; the stand-ins and helpers it imports reach it as test-support
+#: dependencies.
+SESSION_OPEN_CONFLICT_WORKSPACE = "sessionOpenConflictWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
 # a project's tests fall outside the tiers it describes; the manager-allowlist entry sits beside the
@@ -519,6 +534,20 @@ GRACEFUL_CANCEL_PROJECT = "graceful-cancel"
 GRACEFUL_CANCEL_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 GRACEFUL_CANCEL_ROOT = "tests/graceful_cancel"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
+# `SESSION_OPEN_CONFLICT_WORKSPACE`: this module holds one row per test project, read before any
+# project is collected.
+#: The project whose test target owns the journey over a continued branch whose base moved
+#: to conflict with it: two real launches through `just orchestrate`, one whose worker
+#: concludes the merge and one that spends the node's publication budget. A project of its
+#: own for the reason `unwatched` is: real launches waited to settlement are a cost `nx
+#: affected` can only keep off an unrelated edit where it is a separate project.
+SESSION_OPEN_CONFLICT_PROJECT = "session-open-conflict"
+#: That project's one test target: nothing here reads this repository's prose.
+SESSION_OPEN_CONFLICT_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+SESSION_OPEN_CONFLICT_ROOT = "tests/session_open_conflict"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog

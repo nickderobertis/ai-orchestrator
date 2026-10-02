@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.57.2 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.57.3 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -341,7 +341,8 @@ counters; `surfaces_read` is what resets the planner-update pacemaker.
    alike: a refusal by something that judged the publication is terminal and settles
    `publication-failed`, while a base that moved under the publication is
    `sync-conflict` — a word of its own, reached
-   only after the node was dispatched again on that branch. The detail is still where
+   only after the node was dispatched again on that branch and handed the merge to
+   conclude until its budget was spent. The detail is still where
    each of them says what happened.
 
 ## Seeing the supervisory tier
@@ -375,7 +376,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.22.2**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.22.3**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

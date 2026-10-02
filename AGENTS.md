@@ -195,7 +195,12 @@ evidence and where the branch stands on its remote, to be grown with new commits
 until its budget was spent. Read a refusal among them as a branch that exists,
 carries a tree the merge path would not pass, and has been worked several times — never
 as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
-committed work with the refusal still standing. A `push-rejected` whose merge path
+committed work with the refusal still standing. **A conflict between a continued branch
+and its moved base is the dispatched worker's to resolve, under its judge**: the session
+opens with the merge in progress and the task hands it over. A blocking
+`session-conflict` finding means the worker was dispatched into it until the node's
+publication budget was spent and did not converge, so decide how the node goes on — a
+`retry` with an amended task, say — and never merge it by hand. A `push-rejected` whose merge path
 wrote nothing says so and names how the push itself ended — its exit status, or the
 signal that terminated it — so read that line before re-running any gate to learn what
 failed. `checks-unsettled` is not a verdict on the tree: a required check with no

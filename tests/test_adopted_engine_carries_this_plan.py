@@ -628,6 +628,20 @@ NARROW_SEARCH_PAGES_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the session-open-conflict plan, which dispatches the worker into
+#: a session `onevcs` opened with its base's conflicting merge in progress, and raises the
+#: blocking `session-conflict` finding only once the node's publication budget is spent on
+#: it. `tests/session_open_conflict/test_session_open_conflict_e2e.py` drives both endings
+#: on this host.
+SESSION_OPEN_CONFLICT_LANDINGS = (
+    Landing(
+        node="op-dispatch-conflicted",
+        change_request=653,
+        commit="f3bd37917dd024dae865cbdfbfbaeacbf51fd174",
+        did="dispatch the worker into a session that opened with a merge conflict",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -659,6 +673,7 @@ LANDINGS = (
     *VERDICT_REUSE_LANDINGS,
     *HISTORY_SEGMENTS_LANDINGS,
     *NARROW_SEARCH_PAGES_LANDINGS,
+    *SESSION_OPEN_CONFLICT_LANDINGS,
 )
 
 

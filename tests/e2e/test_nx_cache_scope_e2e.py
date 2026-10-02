@@ -100,6 +100,8 @@ from nx_inputs import (
     RUN_END_HOOKS_PROJECT,
     RUN_END_HOOKS_SCOPED,
     SELECTED_TARGETS,
+    SESSION_OPEN_CONFLICT_PROJECT,
+    SESSION_OPEN_CONFLICT_SCOPED,
     SESSION_SETUP_PROJECT,
     SESSION_SETUP_PYPI_PROJECT,
     SESSION_SETUP_PYPI_SCOPED,
@@ -719,6 +721,11 @@ SKIPPABLE_TIERS = frozenset(
         # describes; the manager-allowlist entry sits beside the others' rather than in a domain of
         # its own because the catalog is the domain.
         (MANAGER_ALLOWLIST_PROJECT, MANAGER_ALLOWLIST_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
+        # tiers a documentation push may skip, derived again from the graph by this journey, so
+        # every project's entry sits here; the session-open-conflict entry is one row of it.
+        (SESSION_OPEN_CONFLICT_PROJECT, SESSION_OPEN_CONFLICT_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     }
 )

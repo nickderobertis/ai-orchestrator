@@ -54,6 +54,8 @@ from nx_inputs import (
     RECIPE_WORKSPACE,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_WORKSPACE,
+    SESSION_OPEN_CONFLICT_ROOT,
+    SESSION_OPEN_CONFLICT_WORKSPACE,
     SESSION_SETUP_PYPI_ROOT,
     SESSION_SETUP_PYPI_SCOPED,
     SESSION_SETUP_PYPI_WORKSPACE,
@@ -193,6 +195,11 @@ OWNED_PROJECTS = {
     # describes; the manager-allowlist entry sits beside the others' rather than in a domain of its
     # own because the catalog is the domain.
     MANAGER_ALLOWLIST_ROOT: OwnedProject(key=MANAGER_ALLOWLIST_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs every
+    # directory-owned project's key before it collects any of them, so this project's row is here
+    # beside its siblings' rather than in its own directory.
+    SESSION_OPEN_CONFLICT_ROOT: OwnedProject(key=SESSION_OPEN_CONFLICT_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 }
 #: The marker that moves a test out of every memoized tier and into the uncached one.

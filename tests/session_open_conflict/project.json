@@ -1,0 +1,107 @@
+{
+  "name": "session-open-conflict",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/session_open_conflict",
+  "tags": [
+    "scope:session-open-conflict",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-follow-up-variables",
+    "support-harness-indirections",
+    "support-no-paid-provider",
+    "support-nx-workspace",
+    "support-plan-root-variable",
+    "support-project-fixtures",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "sessionOpenConflictWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.dispatch.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/oneharness.orchestrator.toml",
+      "{workspaceRoot}/oneharness.check-in.toml",
+      "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/config/onejudge.base.yaml",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onepipeline.maintenance.yaml",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/config/onevcs.workspaces.yml",
+      "{workspaceRoot}/config/pr-author-body.schema.json",
+      "{workspaceRoot}/graphs/dag-scope.yaml",
+      "{workspaceRoot}/graphs/node-scope.yaml",
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/personas/check-in.yaml",
+      "{workspaceRoot}/personas/orchestrator.yaml",
+      "{workspaceRoot}/personas/pr-author.yaml",
+      "{workspaceRoot}/templates/design-doc.md.j2",
+      "{workspaceRoot}/templates/templates.yaml",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/ask-manager-env.sh",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/dispatch-env-hook.sh",
+      "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/follow-up-env.sh",
+      "{workspaceRoot}/scripts/follow-ups.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/orchestrate.sh",
+      "{workspaceRoot}/scripts/plan-brief.sh",
+      "{workspaceRoot}/scripts/plan-root-env.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/run-ended.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/orchestrator/adoption_guard.py",
+      "{workspaceRoot}/orchestrator/criteria_guard.py",
+      "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/follow_up_drafts.py",
+      "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/plan_check.py",
+      "{workspaceRoot}/orchestrator/plan_review.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/publication_guard.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/structural_guard.py",
+      "{workspaceRoot}/orchestrator/task_body.py",
+      "{workspaceRoot}/tests/session_open_conflict/project.json",
+      "{workspaceRoot}/tests/session_open_conflict/test_session_open_conflict_e2e.py"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_open_conflict --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "sessionOpenConflictWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

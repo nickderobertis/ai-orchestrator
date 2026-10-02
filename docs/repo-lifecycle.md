@@ -13,13 +13,13 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.57.2**
+that source on every `just check` rather than restated: **`onepipeline` v0.57.3**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.36.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.37.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through — and the copy `just publish-branch` and `just
 repo-recover` land through, since both run the engine's own landing verbs. The other
 manager verbs — `just recoverable`, `just work-status`, `just integrate` — run the
-`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.36.0** as well at this
+`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.37.0** as well at this
 pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
@@ -72,7 +72,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `checks-failed` | A required check the host reports concluded red, and the publication budget is spent. |
 | `failed` | `checks-unsettled` | The bound on watching the host elapsed with the change still outstanding, and the budget is spent. |
 | `failed` | `push-rejected` | The publishing push was refused by the merge path, and the budget is spent. |
-| `failed` | `sync-conflict` | The base moved under the publication and the bounded resolve-and-requeue did not converge, and the budget is spent. |
+| `failed` | `sync-conflict` | The branch conflicts with its moved base and the budget is spent. Each dispatch whose session opened over the conflict was handed the merge to conclude (see [Merge-path verification](#merge-path-verification)), and the last publication found it unconcluded. Where any dispatch was handed it, a blocking `session-conflict` finding follows, asking for a `retry` and never for a hand merge. |
 | `failed` | `pushed-unverified` | The publishing push **reached the remote** and the merge path could not then be read, and the budget is spent. The one failure word whose work is already on the origin: its reason names both the commit it landed at and what stopped the read, and a further attempt re-reads that path rather than re-pushing. |
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
@@ -636,6 +636,28 @@ Before publication, `onevcs` fetches `origin` and merges the current change base
 into the dispatched branch. A sync conflict that the bounded resolve-and-requeue
 cannot converge aborts before any push, as `FailureKind::SyncConflict`.
 
+**A conflict is handed to the worker, never to a person.** Since onevcs 0.37.0 a
+session that continues a branch whose base has moved to conflict with it opens **with
+the merge left in progress**, and reports it as the session's `conflict` (`paths`,
+`base_commit`, `branch_tip`), which is also an optional `conflict` key on
+`session-opened`. `onevcs session open --refuse-conflicts` is the one way to ask for
+the refusal at open that used to be the only answer, and nothing on this host asks for
+it. A publication over a merge nobody concluded is refused as a
+sync conflict before anything is committed or pushed, and a session's teardown aborts
+the merge and keeps every commit. onepipeline 0.57.3 dispatches the worker into that
+session — a node's first step, a pinned continuation, or the re-dispatch after a
+`sync-conflict` — with the conflict under `## Planner context` and one engine-written
+criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the
+worker's own judge reviews the merge commit that concludes it. A worker that does not
+conclude it publishes into that refusal, which is dispatched again and spends the same
+`ONEPIPELINE_PUBLICATION_ATTEMPTS` budget and nothing else. When the budget is spent the
+node settles `failed`/`sync-conflict`, and only then does the run raise one blocking
+`session-conflict` finding, naming how many dispatches were handed the conflict and
+asking for a `retry`, with an amended task where the worker needs direction. Nobody
+merges by hand at any point.
+`tests/session_open_conflict/test_session_open_conflict_e2e.py` drives both endings
+through `just orchestrate`.
+
 **`onevcs` runs no gate of its own.** onevcs 0.11.0 removed the concept: there is no
 `gate:` on a rule, no `GateKind`, no `gate.rs`, and no `gate-started` / `gate-verdict`
 pair on a session's stream. The verifier is the repository's own merge path, and
@@ -685,7 +707,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.57.2 and is refused **by its own name**, at every schema version and on a live
+v0.57.3 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1242,7 +1264,9 @@ The resolved branch takes a new ticket at the queue tail; it never holds the hea
 while authoring. Resolve-and-requeue attempts are bounded before the publication
 fails with `FailureKind::SyncConflict`, which is one of the four a further attempt
 could answer: the branch is retained, the node is dispatched again onto it with that
-reason, and only a spent publication budget settles it `sync-conflict`. A push
+reason, and only a spent publication budget settles it `sync-conflict`. That re-dispatch
+opens its session with the conflicting merge in progress and is handed it to conclude,
+as [Merge-path verification](#merge-path-verification) describes. A push
 declined because the branch moved on the host since this run last had it is the same
 failure kind, and its reason names the two shas and the `just publish-branch` that
 lands it after a reconcile.
@@ -1549,7 +1573,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.57.2.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.57.3.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1625,8 +1649,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.36.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.57.2 settles the node that
+`onevcs` 0.37.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.57.3 settles the node that
 made one `complete-but-draft` where a release is awaited — so "no notion of one" is no
 longer why. A draft is a **publication** outcome, reached once the last step has settled and
 the publication starts, because a release the node adopted early has not happened yet,
@@ -2358,7 +2382,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.57.2 — so every number in it was a
+journey it named are absent from `onepipeline` v0.57.3 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.
