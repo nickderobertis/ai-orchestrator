@@ -642,6 +642,20 @@ SESSION_OPEN_CONFLICT_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the channel-reply-completion plan, which gives a verdict that
+#: answers a correlated question to that question as its ruling — on a live run and on a
+#: settled one nothing drives — rather than taking it as the run's completion request.
+#: `tests/ask_seam/settled_correlated_ruling/test_settled_correlated_ruling_e2e.py` drives
+#: it on this host.
+CORRELATED_RULING_LANDINGS = (
+    Landing(
+        node="op-reply-correlated-ruling",
+        change_request=667,
+        commit="9102e12e77a8154e9f6bf8a36c2985f5de2bf42f",
+        did="give a correlated ruling to its question, settled or live",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -674,6 +688,7 @@ LANDINGS = (
     *HISTORY_SEGMENTS_LANDINGS,
     *NARROW_SEARCH_PAGES_LANDINGS,
     *SESSION_OPEN_CONFLICT_LANDINGS,
+    *CORRELATED_RULING_LANDINGS,
 )
 
 

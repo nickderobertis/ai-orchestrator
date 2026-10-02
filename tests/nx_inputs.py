@@ -333,6 +333,11 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
         "askSeamPlannerFallbackAsk",
     ),
     AskSeamJourney(
+        "ask-seam-settled-correlated-ruling",
+        f"{ASK_SEAM_ROOT}/settled_correlated_ruling",
+        "askSeamSettledCorrelatedRuling",
+    ),
+    AskSeamJourney(
         "ask-seam-structural-reply", f"{ASK_SEAM_ROOT}/structural_reply", "askSeamStructuralReply"
     ),
 )
