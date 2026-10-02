@@ -614,6 +614,20 @@ HISTORY_SEGMENTS_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the narrow-search-pages plan, which linked the onetaskgraph
+#: release whose board searches size their first page to twenty rows and fetch a further
+#: page only when one is needed. The engine's write-back reads the board through that
+#: store; `tests/e2e/test_onetaskgraph_host_e2e.py` holds the same release's CLI to the
+#: follow-up budget.
+NARROW_SEARCH_PAGES_LANDINGS = (
+    Landing(
+        node="op-link-store",
+        change_request=651,
+        commit="03d93fe46635552b08eb6957a75eb74bd64d1f6e",
+        did="link the onetaskgraph release whose board searches fetch only the pages they need",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -644,6 +658,7 @@ LANDINGS = (
     *NATIVE_BOARD_QUERIES_LANDINGS,
     *VERDICT_REUSE_LANDINGS,
     *HISTORY_SEGMENTS_LANDINGS,
+    *NARROW_SEARCH_PAGES_LANDINGS,
 )
 
 

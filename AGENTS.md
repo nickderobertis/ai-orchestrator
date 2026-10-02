@@ -180,11 +180,13 @@ from an undeclared node means the base carries the work, and `empty-branch` is t
 word that says nothing was produced. Either way, look for the work before concluding
 there was none — that checkout's branches, its `main` against `origin/main`, the
 repository's open change requests — because a worker dispatched without a worktree
-works wherever it can see. `done` as `change-review-draft` is finished, green work
-waiting on its user's review, not on the run, and distinct from `change-draft`, a draft
-the plan asked for. A node that settled
+works wherever it can see. A node that settled
 `failed` may still have published: `task-failed-change-open` carries the URL, and
-re-running that work duplicates a change already waiting to be read. The retryable
+re-running that work duplicates a change already waiting to be read. A node settled
+`done` can be unlanded by design, its dependents proceeding: `change-draft` is a draft
+the plan asked for, and `change-review-draft` is a change whose required checks are green,
+on a `change-open` identity whose approvals are required, kept as a draft for its user's
+review until that person lifts it on the host or with `onevcs change ready <session>`. The retryable
 failure words — `checks-failed` and its siblings in the outcome vocabulary
 `tests/test_engine_contracts.py` holds to the engine — say the publication reached the
 merge path and got no verdict it could act on, and they arrive already retried, the

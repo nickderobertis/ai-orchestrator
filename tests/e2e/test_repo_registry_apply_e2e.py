@@ -951,9 +951,10 @@ def test_the_resolved_policy_is_publication_and_approvals_and_nothing_else(
 def test_a_gate_at_the_migrated_schema_version_is_refused_by_name(tmp_path: Path) -> None:
     """The half of Contract A that keeps this file from drifting back.
 
-    At `version: 3` a rule is `{publication, approvals}` exactly and `gate:` is an
-    unknown field, so a rules file carrying one does not load. Driven through the real
-    recipe because that is where an operator meets it: an apply that installed a file
+    At `version: 3` a rule is `{publication, approvals}` — with an optional `drafts:`
+    since onevcs 0.36.0 — and `gate:` is an unknown field, so a rules file carrying one
+    does not load. Driven through the real recipe because that is where an operator
+    meets it: an apply that installed a file
     the engine cannot read would leave every publication resolving the previous rules.
     """
     present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")

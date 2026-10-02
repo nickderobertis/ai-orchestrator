@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.57.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.57.2 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -104,6 +104,10 @@ does not know — one a newer `onevcs` emits, or one that ends the session — l
 where it was rather than stopping its clock. Where two sessions disagree about a
 millisecond the more specific state wins, blocked before working: `lock_wait`, then
 `gate`, then `publication_wait`, then `setup`.
+
+The five draft kinds are onevcs 0.36.0's draft lifecycle, which onepipeline 0.57.0
+adopted: a change request now waits as a draft while its required checks run and is
+lifted or kept once they settle, and that wait is the publication's.
 
 That table and that order are reconciled against `telemetry.rs`'s own `Phase::of`,
 `Phase::bucket`, and `Phase::PRECEDENCE` on every `just check`, in both directions.
@@ -371,13 +375,16 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.22.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.22.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 11,
-   where 0.21.1 served 10 and 0.7.3 served
-   8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
+   where 0.21.1 served 10 — 11 carries each change request's `review` record from
+   onevcs 0.36.0's draft lifecycle (`change-drafted`, `change-check`,
+   `checks-settled`, `draft-lifted`, `draft-lifted-early`, `draft-kept-for-review`),
+   and a `publication` left open now closes where the watch of it ended — and 0.7.3
+   served 8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
    answer); spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`
    and an `ended_at` that is `null` while it is open. The `run` span carries `phase`,

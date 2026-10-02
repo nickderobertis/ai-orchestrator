@@ -31,10 +31,16 @@
 #
 # This file used to carry a third field. A `gate:` named a command `onevcs` ran in
 # the branch's own clone before it would publish, and **onevcs 0.11.0 removed the
-# concept**: a rule and the default are `{publication, approvals}` exactly, and a
-# stray `gate:` at `version: 3` is refused by name as an unknown field. Versions 1
-# and 2 still parse — a `gate:` there is accepted, ignored, and reported once on
-# stderr — so a host that has not migrated keeps publishing rather than breaking.
+# concept**: a rule and the default are `{publication, approvals}`, and a stray
+# `gate:` at `version: 3` is refused by name as an unknown field. Versions 1 and 2
+# still parse — a `gate:` there is accepted, ignored, and reported once on stderr — so
+# a host that has not migrated keeps publishing rather than breaking.
+#
+# Since onevcs 0.36.0 a rule may also carry an optional `drafts:` mapping. This file
+# names none, because no identity on this host is known to skip CI on drafts, so every
+# change request a publication opens is a draft while its required checks run and what
+# a green one becomes follows from `publication` and `approvals`, as onevcs's
+# `docs/contract.md` states (`onevcs rules check <repo>` prints the resolved lines).
 #
 # The verifier that remains is the repository's own, and it is the one that could
 # always refuse the merge:
@@ -65,13 +71,6 @@
 # `onevcs repos`'s third column is `Identity.gate`, the registry's own detection of
 # what a checkout verifies with. That is a property of a checkout rather than a
 # policy this file sets, and it stays.
-#
-# ## What a publication leaves on the host
-#
-# A remote identity's change request starts as a draft while its checks run, and what a
-# green one becomes follows from `publication` and `approvals` alone, as onevcs's
-# `docs/contract.md` states. A rule may carry an optional `drafts:` block; none here
-# does, because no identity on this host is known to skip CI on drafts.
 version: 3
 
 # The prefix every provenance trailer key on a preserved branch is spelled under.

@@ -52,15 +52,26 @@ from github_board import (
     PROPOSED_RUN,
     QUEUED,
     RE_ESTIMATE_BUDGET,
+    REALISTIC_BOARD_CHECK_POINTS,
+    REALISTIC_MEASURED_BOARD_CHECK_POINTS,
+    REALISTIC_MEASURED_RUN_POINTS,
+    REALISTIC_MEASURED_SEARCH_POINTS,
+    REALISTIC_MEASURED_WRITE_POINTS,
+    REALISTIC_OTHER_ITEMS,
+    REALISTIC_RUN_POINTS,
+    REALISTIC_SEARCH_POINTS,
+    REALISTIC_WRITE_POINTS,
     RECOPY_POINTS,
     RECOPY_REQUESTS,
     REPOSITORY_NODE_IDS,
     REQUEST_PRICES,
     SIBLING_REPOSITORY,
     STATUS_OPTIONS,
+    STORE_FIRST_SEARCH_PAGE,
     UNBOUND_STATUS_BUDGET,
     WITHDRAWAL_POINTS,
     WITHDRAWAL_REQUESTS,
+    RequestBudget,
     _audit_follow_up_calls,
     _Board,
     _board_cost,
@@ -68,6 +79,8 @@ from github_board import (
     _BoardItemId,
     _bounded_step,
     _decided_status,
+    _field_clears,
+    _field_writes,
     _follow_up_step,
     _follow_up_ticket,
     _followups_command,
@@ -89,6 +102,7 @@ from github_board import (
     _serving_board,
     _serving_followups,
     _StatusOption,
+    _wide_pages,
     _written_ticket,
 )
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
@@ -1683,11 +1697,9 @@ def test_a_new_follow_up_ticket_is_written_to_the_followups_boards_proposal_opti
     assert copied.returncode == 0, copied.stdout + copied.stderr
     (created,) = [issue for issue in BOARD.created if issue.title == ticket.title]
     status_writes = [
-        request.input_value("value")
-        for request in _GitHubFixture.requests
-        if request.operation is _Operation.UPDATE_FIELD
-        and request.input_value("fieldId") == _BoardField.STATUS
-        and request.input_value("itemId") == created.item_id
+        written.get("value")
+        for written in _field_writes(_GitHubFixture.requests)
+        if written.get("fieldId") == _BoardField.STATUS and written.get("itemId") == created.item_id
     ]
     assert status_writes == [{"singleSelectOptionId": PROPOSAL.id}], (
         f"a new ticket has to be written to the {PROPOSAL.name!r} option; the copy wrote "
@@ -1704,10 +1716,9 @@ def test_a_followups_board_without_a_proposal_option_refuses_the_copy_by_name(
     assert copied.returncode != 0, copied.stdout + copied.stderr
     assert PROPOSAL.name in copied.stderr, copied.stderr
     assert not [
-        request
-        for request in _GitHubFixture.requests
-        if request.operation is _Operation.UPDATE_FIELD
-        and request.input_value("fieldId") == _BoardField.STATUS
+        written
+        for written in _field_writes(_GitHubFixture.requests)
+        if written.get("fieldId") == _BoardField.STATUS
     ], "a board without the option had some other Status option written instead"
 
 
@@ -1717,9 +1728,9 @@ def test_a_followups_board_without_a_proposal_option_refuses_the_copy_by_name(
 def _status_writes(requests: list[_GraphQLRequest]) -> list[object]:
     """The value of every Status field write among ``requests``."""
     return [
-        request.input_value("value")
-        for request in _sent(_Operation.UPDATE_FIELD, requests)
-        if request.input_value("fieldId") == _BoardField.STATUS
+        written.get("value")
+        for written in _field_writes(requests)
+        if written.get("fieldId") == _BoardField.STATUS
     ]
 
 
@@ -1836,15 +1847,13 @@ def _decided_and_copied(environment: dict[str, str], ticket: Path) -> str:
 def _priority_writes(requests: list[_GraphQLRequest], item_id: object = None) -> list[object]:
     """Every write of the `Priority` field among ``requests``, to ``item_id`` when named."""
     selected = [
-        request.input_value("value")
-        for request in _sent(_Operation.UPDATE_FIELD, requests)
-        if request.input_value("fieldId") == _BoardField.PRIORITY
-        and item_id in (None, request.input_value("itemId"))
+        written.get("value")
+        for written in _field_writes(requests)
+        if written.get("fieldId") == _BoardField.PRIORITY
+        and item_id in (None, written.get("itemId"))
     ]
     cleared = [
-        None
-        for request in _sent(_Operation.CLEAR_FIELD, requests)
-        if item_id in (None, request.input_value("itemId"))
+        None for written in _field_clears(requests) if item_id in (None, written.get("itemId"))
     ]
     return selected + cleared
 
@@ -2420,6 +2429,19 @@ def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
     assert source.returncode == 0, (
         f"the onetaskgraph checkout is behind its origin: cannot read v{ADOPTED}: {source.stderr}"
     )
+    library = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "show",
+            f"v{ADOPTED}:crates/onetaskgraph-github-projects/src/lib.rs",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert library.returncode == 0, library.stderr
     upstream = dict(
         (name, int(price))
         for name, price in re.findall(r"\(graphql::([A-Z_]+), (\d+)\)", source.stdout)
@@ -2430,6 +2452,11 @@ def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
             price.points,
             upstream.get(price.document),
         )
+    page = re.search(r"pub const SEARCH_PAGE_SIZE: u32 = (\d+);", library.stdout)
+    assert page is not None and int(page.group(1)) == STORE_FIRST_SEARCH_PAGE, (
+        f"v{ADOPTED} sizes a board search's first page at {page and page.group(1)}, and the "
+        f"page-width check holds searches to {STORE_FIRST_SEARCH_PAGE}"
+    )
     measured = {first: _search_points(first) for first in MEASURED_SEARCH_PAGE_PRICES}
     assert measured == MEASURED_SEARCH_PAGE_PRICES, (measured, MEASURED_SEARCH_PAGE_PRICES)
     assert _search_points(LARGEST_PAGE) == upstream["SEARCH_ISSUES"], upstream["SEARCH_ISSUES"]
@@ -2567,9 +2594,16 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
 SEARCHED_WORDS = "proposal"
 
 
-def _step_cost(label: str) -> int:
-    """How many requests the step just taken sent, holding none of them to a whole-board read."""
+def _step_cost(label: str, *, bound: bool = False) -> int:
+    """How many requests the step just taken sent, holding none of them to a whole-board read.
+
+    With ``bound``, the step is a ticket already bound to its item, which reads that item
+    directly: any board search or origin lookup it sends fails the step.
+    """
     requests = list(_GitHubFixture.requests)
+    if bound:
+        searched = _sent(_Operation.SEARCH, requests) + _sent(_Operation.ORIGIN_LOOKUP, requests)
+        assert searched == [], f"{label} searched for a ticket bound to its item: {searched}"
     walked, unnarrowed = _board_cost(requests)
     assert (walked, unnarrowed) == ([], []), (
         f"{label} read the whole board: walked {walked}, searched {unnarrowed}"
@@ -2581,6 +2615,7 @@ def _step_cost(label: str) -> int:
         "withdrawing the ticket": WITHDRAWAL_POINTS,
     }[label]
     assert points <= budget, (label, points, budget)
+    assert _wide_pages(requests) == [], f"{label} asked for a page wider than its answer"
     _GitHubFixture.requests.clear()
     return len(requests)
 
@@ -2660,7 +2695,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
         recopied = _validated_and_copied(environment, path)
         assert recopied == {"action": "updated", "destination": issue}, recopied
-        recopy = _step_cost("re-copying the ticket")
+        recopy = _step_cost("re-copying the ticket", bound=True)
 
         # A person comments on it, and feedback mode answers: the gathering's read, the reply
         # posted under the run's marker, and the item re-estimated.
@@ -2712,6 +2747,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         assert walked == [], f"answering a comment walked the board's items: {walked}"
         answer = len(answering)
         assert sum(map(_request_points, answering)) <= ANSWER_POINTS, answering
+        assert _wide_pages(answering) == [], "answering asked for a page wider than its answer"
         _GitHubFixture.requests.clear()
 
         # A withdrawal: decided with `--withdraw`, validated and copied, which closes it.
@@ -2720,13 +2756,302 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         )
         withdrawn = _validated_and_copied(environment, path)
         assert withdrawn == {"action": "updated", "destination": issue}, withdrawn
-        withdrawal = _step_cost("withdrawing the ticket")
+        withdrawal = _step_cost("withdrawing the ticket", bound=True)
         assert (item.status, item.state) == (CANCELLED.name, "CLOSED")
 
     assert filing <= FILING_REQUESTS, f"filing one ticket sent {filing} requests"
     assert recopy <= RECOPY_REQUESTS, f"re-copying one ticket sent {recopy} requests"
     assert answer <= ANSWER_REQUESTS, f"answering one comment sent {answer} requests"
     assert withdrawal <= WITHDRAWAL_REQUESTS, f"withdrawing one ticket sent {withdrawal} requests"
+
+
+#: Words only the accepted items of one area carry, one per new ticket of the realistic run,
+#: so each new ticket's text search answers the few accepted fixes it is for: words an issue
+#: would carry, which GitHub's whole-word search can match, and that no other text here holds.
+REALISTIC_AREAS = (
+    "quokka",
+    "narwhal",
+    "axolotl",
+    "pangolin",
+    "okapi",
+    "tapir",
+    "ibex",
+    "gecko",
+    "lemur",
+    "marmot",
+    "oryx",
+    "quoll",
+)
+#: Every this-many-th other item is an accepted fix in one of :data:`REALISTIC_AREAS`.
+ACCEPTED_EVERY = 25
+#: How many tickets an earlier dispatch of the run already bound, and how many other runs'
+#: items take this run's evidence.
+REALISTIC_BOUND_TICKETS = 4
+REALISTIC_EVIDENCE_COMMENTS = 4
+
+
+class _RunPhase(StrEnum):
+    """The parts of a follow-up run the user's ceilings price separately."""
+
+    SEARCHES = "searches"
+    WRITES = "write path"
+    BOARD_CHECK = "board check"
+
+
+class _DocumentCost(NamedTuple):
+    """What one document cost a phase of the run."""
+
+    requests: int
+    points: int
+
+
+class _Filed(NamedTuple):
+    """One draft's `filed` disposition, as the account written for the board check holds it."""
+
+    draft: follow_up_tickets.QualifiedDraftId
+    root_cause: follow_up_tickets.RootCause
+    detail: str
+
+    def entry(self) -> dict[str, object]:
+        return {
+            "draft": self.draft,
+            "disposition": follow_up_tickets.Disposition.FILED.value,
+            "root_causes": [self.root_cause],
+            "detail": self.detail,
+        }
+
+
+def _charged(
+    spent: dict[_RunPhase, list[_GraphQLRequest]],
+    phase: _RunPhase,
+    label: str,
+    *,
+    bound: bool = False,
+) -> None:
+    """Charge the requests the step just taken sent to ``phase``, holding each to the rules.
+
+    No step walks the board, sends an unnarrowed search, or asks for a page wider than its
+    answer; with ``bound``, the step is about an item already bound, which is read directly
+    and never searched for.
+    """
+    requests = list(_GitHubFixture.requests)
+    assert _board_cost(requests) == ([], []), f"{label} read the whole board"
+    assert _wide_pages(requests) == [], f"{label} asked for a page wider than its answer"
+    if bound:
+        searched = _sent(_Operation.SEARCH, requests) + _sent(_Operation.ORIGIN_LOOKUP, requests)
+        assert searched == [], f"{label} searched for an item it is bound to: {searched}"
+    spent[phase].extend(requests)
+    _GitHubFixture.requests.clear()
+
+
+def _draft(name: str) -> tuple[follow_up_tickets.QualifiedDraftId]:
+    return (follow_up_tickets.QualifiedDraftId(f"drafts:{PROPOSED_RUN}/drafts/{name}"),)
+
+
+def _breakdown(requests: list[_GraphQLRequest]) -> dict[str, _DocumentCost]:
+    """Requests and points per document, for a failure message a person can act on."""
+    priced: dict[str, _DocumentCost] = {}
+    for request in requests:
+        held = priced.get(request.operation.value, _DocumentCost(0, 0))
+        priced[request.operation.value] = _DocumentCost(
+            held.requests + 1, held.points + _request_points(request)
+        )
+    return priced
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python journey
+# spawning the installed plan-store CLI beside every other journey in this module, as the
+# block around the rate-limit journeys above says, so there is no shell suite to split.
+def test_a_realistic_follow_up_run_stays_within_its_point_budget(  # noqa: PLR0915 - one run, in the order the task prescribes it
+    tmp_path: Path,
+) -> None:
+    """A whole follow-up run, shaped like the one that spent about 500 points, held to its budget.
+
+    The shelved run `onepipeline-link-onetaskgraph-plan-follow-ups-5` handled 16 tickets and 4
+    evidence comments and spent roughly 500 of the 5,000 GraphQL points an hour every session
+    on this host shares. Here the same run is driven through this checkout's real
+    `orchestrator.follow_up_tickets` commands and the provisioned plan-store CLI against a
+    loopback `followups` board already holding hundreds of other items: 12 new tickets, each
+    decided, validated, searched for by root cause and by text as the rendered task directs,
+    decided again and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
+    items, edited and re-copied; 4 evidence comments on other runs' items, each followed by
+    its `re-estimate`; and the launch's one `check-dispositions --board`. Every request is
+    priced with the drift-checked prices, and each phase is held to its ceiling and to what
+    it measured on the adopted store.
+    """
+    installed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "--version"], text=True, capture_output=True, check=True
+    ).stdout.strip()
+    assert installed == BUDGET_MEASURED_ON, (
+        f"the realistic run was measured on {BUDGET_MEASURED_ON}, and {installed} is "
+        "installed: re-measure it on it and record it with its version"
+    )
+    environment, root = _followups_environment(tmp_path)
+    trace = _audit_follow_up_calls(tmp_path, environment)
+    board = follow_up_tickets.BOARD
+    base = _follow_up_ticket(SIBLING_REPOSITORY)
+    statuses = list(SEEDED_STATES)
+    spent: dict[_RunPhase, list[_GraphQLRequest]] = {phase: [] for phase in _RunPhase}
+    filed: list[_Filed] = []
+    with _serving_followups(environment, fields=True):
+        accepted: dict[str, int] = {}
+        for at in range(REALISTIC_OTHER_ITEMS):
+            area = REALISTIC_AREAS[(at // ACCEPTED_EVERY) % len(REALISTIC_AREAS)]
+            fix = at % ACCEPTED_EVERY == 0
+            cause = f"accepted-{area}-fix-{at}" if fix else f"another-cause-{at}"
+            accepted[area] = accepted.get(area, 0) + fix
+            _seeded_item(
+                at,
+                run="another-run",
+                cause=cause,
+                status=follow_up_tickets.Status.ACCEPTED if fix else statuses[at % len(statuses)],
+                origin=f"drafts:another-run/tickets/{cause}",
+                origin_in_body=True,
+            )
+        carriers = [
+            _seeded_item(
+                REALISTIC_OTHER_ITEMS + at,
+                run=f"earlier-run-{at}",
+                cause=f"shared-cause-{at}",
+                status=follow_up_tickets.Status.PROPOSED,
+                origin=f"drafts:earlier-run-{at}/tickets/shared-cause-{at}",
+                origin_in_body=True,
+            )
+            for at in range(REALISTIC_EVIDENCE_COMMENTS)
+        ]
+        # The earlier dispatch's copies are setup, so their requests are not this run's.
+        bound = []
+        for at in range(REALISTIC_BOUND_TICKETS):
+            ticket = replace(
+                base,
+                root_cause=follow_up_tickets.RootCause(f"bound-cause-{at}"),
+                drafts=_draft(f"bound-{at}"),
+            )
+            path = _written_ticket(root, ticket)
+            _decided_status(environment, path)
+            assert _validated_and_copied(environment, path)["action"] == "created"
+            bound.append(path)
+            filed.append(_Filed(ticket.drafts[0], ticket.root_cause, "Copied onto its item."))
+        _GitHubFixture.requests.clear()
+
+        for at, area in enumerate(REALISTIC_AREAS):
+            cause = follow_up_tickets.RootCause(f"new-{area}-cause")
+            ticket = replace(base, root_cause=cause, drafts=_draft(f"new-{at}"))
+            path = _written_ticket(root, ticket)
+            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+            _charged(spent, _RunPhase.WRITES, f"deciding new ticket {cause}")
+            validated = _follow_up_step(environment, "validate", str(path))
+            assert validated.returncode == follow_up_tickets.SOUND, validated.stderr
+            by_cause = _follow_up_step(
+                environment,
+                "board-items",
+                *("--board", board),
+                *("--metadata", follow_up_tickets.root_cause_query(cause)),
+            )
+            assert by_cause.returncode == 0, by_cause.stderr
+            assert json.loads(by_cause.stdout)["items"] == [], cause
+            by_text = _follow_up_step(
+                environment, "board-items", "--board", board, "--search", area
+            )
+            assert by_text.returncode == 0, by_text.stderr
+            assert len(json.loads(by_text.stdout)["items"]) == accepted[area], by_text.stdout
+            _charged(spent, _RunPhase.SEARCHES, f"searching for {cause}")
+            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+            assert _validated_and_copied(environment, path)["action"] == "created"
+            _charged(spent, _RunPhase.WRITES, f"filing {cause}")
+            filed.append(_Filed(ticket.drafts[0], cause, "Copied onto its item."))
+
+        for path in bound:
+            edited = path.read_text(encoding="utf-8").replace("(Examples).", "(Examples, edited).")
+            path.write_text(edited, encoding="utf-8")
+            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+            assert _validated_and_copied(environment, path)["action"] == "updated"
+            _charged(spent, _RunPhase.WRITES, f"re-copying {path.stem}", bound=True)
+
+        for at, carrier in enumerate(carriers):
+            cause = follow_up_tickets.RootCause(f"shared-cause-{at}")
+            ticket = replace(base, root_cause=cause, drafts=_draft(f"evidence-{at}"))
+            path = _written_ticket(root, ticket)
+            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+            _charged(spent, _RunPhase.WRITES, f"deciding evidence ticket {cause}")
+            qualified = f"{board}:{carrier.content_id}"
+            evidence = tmp_path / f"evidence-{at}.md"
+            evidence.write_text(
+                follow_up_tickets.render_comment(
+                    PROPOSED_RUN, cause, "This run reproduced it at the recorded basis."
+                ),
+                encoding="utf-8",
+            )
+            posted = _followups_command(
+                environment,
+                [str(ONETASKGRAPH_BIN), "task", "comment", "add", qualified]
+                + ["--body-file", str(evidence), "--json"],
+            )
+            assert posted.returncode == 0, posted.stderr
+            estimated = _follow_up_step(environment, "re-estimate", "--board", board, qualified)
+            assert estimated.returncode == 0, estimated.stderr
+            _charged(spent, _RunPhase.WRITES, f"evidence on {qualified}", bound=True)
+            filed.append(_Filed(ticket.drafts[0], cause, f"Posted evidence on {qualified}."))
+
+        account = follow_up_tickets.dispositions_path(root, PROPOSED_RUN)
+        account.parent.mkdir(parents=True, exist_ok=True)
+        account.write_text(
+            json.dumps(
+                {
+                    "schema": follow_up_tickets.DISPOSITIONS_SCHEMA,
+                    "run": PROPOSED_RUN,
+                    "drafts": [one.draft for one in filed],
+                    "dispositions": [one.entry() for one in filed],
+                }
+            ),
+            encoding="utf-8",
+        )
+        trace.write_text("", encoding="utf-8")
+        checked = _follow_up_step(
+            environment, "check-dispositions", "--root", str(root), "--board", board, PROPOSED_RUN
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        spent[_RunPhase.BOARD_CHECK].extend(_GitHubFixture.requests)
+        allowed = {carrier.content_id for carrier in carriers}
+        allowed.update(
+            one.content_id
+            for one in BOARD.issues
+            if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
+        )
+        # One read per item and per comment connection, no search for a bound item: the
+        # phase's points are held below with the whole run's breakdown.
+        _bounded_step(
+            "realistic board check",
+            RequestBudget(REALISTIC_BOARD_CHECK_POINTS, REALISTIC_BOARD_CHECK_POINTS),
+            bound=True,
+            allowed_comments=allowed,
+            trace=trace,
+        )
+
+    measured = {phase: sum(map(_request_points, spent[phase])) for phase in _RunPhase}
+    total = sum(measured.values())
+    report = {phase.value: (measured[phase], _breakdown(spent[phase])) for phase in _RunPhase}
+    bounds = {
+        _RunPhase.SEARCHES: (REALISTIC_SEARCH_POINTS, REALISTIC_MEASURED_SEARCH_POINTS),
+        _RunPhase.WRITES: (REALISTIC_WRITE_POINTS, REALISTIC_MEASURED_WRITE_POINTS),
+        _RunPhase.BOARD_CHECK: (
+            REALISTIC_BOARD_CHECK_POINTS,
+            REALISTIC_MEASURED_BOARD_CHECK_POINTS,
+        ),
+    }
+    for phase, (ceiling, recorded) in bounds.items():
+        assert measured[phase] <= min(ceiling, recorded), (
+            f"the realistic run's {phase.value} spent {measured[phase]} modelled points, over "
+            f"its ceiling of {ceiling} or the {recorded} it measured on {BUDGET_MEASURED_ON}: "
+            f"{report[phase.value]}"
+        )
+    assert total <= min(REALISTIC_RUN_POINTS, REALISTIC_MEASURED_RUN_POINTS), (
+        f"the realistic run spent {total} modelled points, over its ceiling of "
+        f"{REALISTIC_RUN_POINTS} or the {REALISTIC_MEASURED_RUN_POINTS} it measured: {report}"
+    )
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 class _BoardSource(NamedTuple):

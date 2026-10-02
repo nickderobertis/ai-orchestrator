@@ -323,6 +323,19 @@ class _Issue:
             raise ValueError(f"issue {self.content_id!r} was never taken on by a board")
         return self.board
 
+    def priority_value(self) -> dict[str, object] | None:
+        """This row's `Priority` value as GitHub selects one, or `None` for no value."""
+        if self.priority is None:
+            return None
+        return {
+            "name": self.priority,
+            "field": {
+                "id": _BoardField.PRIORITY,
+                "name": "Priority",
+                "options": [option.rendered() for option in self.held_by.priorities],
+            },
+        }
+
     def field_values(self) -> dict[str, object]:
         """This row's board field values, as both routes to it select them.
 
@@ -340,20 +353,8 @@ class _Issue:
                 }
             ]
         )
-        priority = (
-            []
-            if self.priority is None
-            else [
-                {
-                    "name": self.priority,
-                    "field": {
-                        "id": _BoardField.PRIORITY,
-                        "name": "Priority",
-                        "options": [option.rendered() for option in self.held_by.priorities],
-                    },
-                }
-            ]
-        )
+        held = self.priority_value()
+        priority = [] if held is None else [held]
         return {
             "nodes": [
                 {
@@ -437,6 +438,28 @@ class _Issue:
 # real API would read or write the live followups board shared by all runs. This
 # stateful wire fixture answers the installed store's real GraphQL documents; the
 # store CLI, follow-up commands, recipes and shell remain real.
+class _BatchedWrite(NamedTuple):
+    """One field write the source's batched document may carry, under an alias of its own."""
+
+    #: The root field's alias in the answer, which is where the source reads it back.
+    alias: str
+    #: The variable carrying the write's input.
+    variable: str
+    #: The boolean variable its `@include(if:)` reads, or `None` for the write always sent.
+    flag: str | None
+
+    def included(self, variables: dict[str, object]) -> bool:
+        return self.flag is None or variables.get(self.flag) is True
+
+
+#: The three field writes of the source's batched document, in the order it lists them.
+BATCHED_WRITES = (
+    _BatchedWrite("updateProjectV2ItemFieldValue", "input", None),
+    _BatchedWrite("second", "second", "writeSecond"),
+    _BatchedWrite("third", "third", "writeThird"),
+)
+
+
 class _Board:
     """One Projects v2 board, mutated by the writes the source performs against it.
 
@@ -550,7 +573,20 @@ class _Board:
             }
         }
 
-    def search_response(self, search: str) -> dict[str, object]:
+    def found(self, search: str) -> list[_Issue]:
+        """Every issue of this board ``search`` matches, before any page is cut from it."""
+        wanted = _FIELD_QUALIFIER.search(search)
+        since = _UPDATED_QUALIFIER.search(search)
+        return [
+            issue
+            for issue in self.issues
+            if (wanted is None or _found_by(wanted, issue))
+            and (since is None or _moment(issue.updated_at()) >= _moment(since["since"]))
+        ]
+
+    def search_response(
+        self, search: str, first: object = None, after: object = None
+    ) -> dict[str, object]:
         """The issues of this board a search finds, narrowed the way GitHub narrows one.
 
         The `in:title`, `in:body` and `in:title,body` qualifiers and the quoted phrases
@@ -560,19 +596,22 @@ class _Board:
         what this read buys over walking the board. Every phrase has to appear in one of
         the named fields, as GitHub requires of every term.
         """
-        wanted = _FIELD_QUALIFIER.search(search)
-        since = _UPDATED_QUALIFIER.search(search)
-        found = [
-            issue
-            for issue in self.issues
-            if (wanted is None or _found_by(wanted, issue))
-            and (since is None or _moment(issue.updated_at()) >= _moment(since["since"]))
-        ]
+        found = self.found(search)
+        # Paged the way GitHub pages a connection when the request names a page size: the
+        # cursor is the offset the next page starts at, and `hasNextPage` says whether rows
+        # remain. A fixture answering every match on one page would hide a source that asks
+        # for a page wider than its answer needs, or one that pages past what it was asked.
+        start = int(after) if isinstance(after, str) else 0
+        end = start + first if isinstance(first, int) else len(found)
         return {
             "data": {
                 "search": {
-                    "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [issue.board_issue() for issue in found],
+                    "issueCount": len(found),
+                    "pageInfo": {
+                        "hasNextPage": end < len(found),
+                        "endCursor": str(end) if end < len(found) else None,
+                    },
+                    "nodes": [issue.board_issue() for issue in found[start:end]],
                 }
             }
         }
@@ -744,9 +783,8 @@ class _Board:
             }
         }
 
-    def set_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Set one field value on a row, keeping what an origin or a Status write puts there."""
-        payload = variables.get("input")
+    def _applied(self, payload: object) -> object:
+        """Apply one field write's input to its row, and name the row it wrote."""
         if not isinstance(payload, dict):
             raise ValueError("updateProjectV2ItemFieldValue requires an input object")
         item_id = payload.get("itemId")
@@ -758,7 +796,56 @@ class _Board:
                 self._row(item_id).origin = self._text(value)
             case _BoardField.PRIORITY:
                 self._row(item_id).priority = self._option_named(value, self.priorities)
-        return {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
+        return item_id
+
+    def _cleared(self, payload: object) -> object:
+        """Clear one field value on a row, which is how a priority of `none` is written."""
+        if not isinstance(payload, dict):
+            raise ValueError("clearProjectV2ItemFieldValue requires an input object")
+        item_id = payload.get("itemId")
+        if payload.get("fieldId") != _BoardField.PRIORITY:
+            raise ValueError(f"only the Priority field is cleared here, not {payload!r}")
+        self._row(item_id).priority = None
+        return item_id
+
+    def set_field(self, variables: dict[str, object]) -> dict[str, object]:
+        """Set one field value on a row, keeping what an origin or a Status write puts there."""
+        item_id = self._applied(variables.get("input"))
+        return {
+            "data": {
+                "updateProjectV2ItemFieldValue": {
+                    "projectV2Item": self._written(variables, item_id)
+                }
+            }
+        }
+
+    def _written(self, variables: dict[str, object], item_id: object) -> dict[str, object]:
+        """The row a field write answers with, carrying its `Priority` when the write asks.
+
+        A standalone priority write selects the stored value in its own response
+        (`fieldValueByName` under `@include(if:$readPriority)`), which is the read-back the
+        source takes instead of resolving the issue again.
+        """
+        written: dict[str, object] = {"id": item_id}
+        if variables.get("readPriority") is True:
+            written["fieldValueByName"] = self._row(item_id).priority_value()
+        return written
+
+    def set_fields(self, variables: dict[str, object]) -> dict[str, object]:
+        """Several field writes on one row in one request, as the source batches a copy's.
+
+        The source's document carries every write as an alias of its own, each included only
+        when its `write…` flag is set, so only the writes it asked for are applied and only
+        their aliases are answered, which is what GitHub does with an `@include(if:)`.
+        """
+        answer: dict[str, object] = {}
+        for write in BATCHED_WRITES:
+            if write.included(variables):
+                applied = self._applied(variables.get(write.variable))
+                answer[write.alias] = {"projectV2Item": {"id": applied}}
+        if variables.get("writeClear") is True:
+            answer["cleared"] = {"projectV2Item": {"id": self._cleared(variables.get("clear"))}}
+        return {"data": answer}
 
     def snapshot_response(self) -> dict[str, object]:
         """The board's single-select fields in full and every row's value of each.
@@ -837,15 +924,13 @@ class _Board:
         return {"data": {"createProjectV2Field": {"projectV2Field": created}}}
 
     def clear_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Clear one field value on a row, which is how a priority of `none` is written."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict):
-            raise ValueError("clearProjectV2ItemFieldValue requires an input object")
-        item_id = payload.get("itemId")
-        if payload.get("fieldId") != _BoardField.PRIORITY:
-            raise ValueError(f"only the Priority field is cleared here, not {payload!r}")
-        self._row(item_id).priority = None
-        return {"data": {"clearProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}}
+        """Clear one field value on a row, as a standalone write answers it."""
+        item_id = self._cleared(variables.get("input"))
+        return {
+            "data": {
+                "clearProjectV2ItemFieldValue": {"projectV2Item": self._written(variables, item_id)}
+            }
+        }
 
     def comments_response(self, node_id: object) -> dict[str, object]:
         """One issue's comments, oldest first, as its `comments` connection lists them."""
@@ -947,6 +1032,15 @@ class _Board:
         }
 
 
+@dataclass
+class _Answered:
+    """What the fixture answered one request with, recorded as it answers."""
+
+    #: For a search, how many issues matched in all, which is what says whether the page
+    #: it asked for was wider than the answer needed; `None` for anything else.
+    matched: int | None = None
+
+
 @dataclass(frozen=True)
 class _GraphQLRequest:
     """One request the source made, kept as its operation and its own variables.
@@ -964,6 +1058,8 @@ class _GraphQLRequest:
     #: between the mutations a copy sends, and a gap is only observable at the far end
     #: of the wire — the source's own scheduling is invisible from outside it.
     received: float
+    #: What the fixture answered, recorded as it answers.
+    answered: _Answered = field(default_factory=lambda: _Answered(), compare=False)
 
     @classmethod
     def from_json(cls, body: bytes) -> _GraphQLRequest:
@@ -1027,6 +1123,7 @@ class _Operation(StrEnum):
     CREATE_ISSUE = "createIssue"
     ADD_TO_BOARD = "addToBoard"
     UPDATE_FIELD = "updateField"
+    UPDATE_FIELDS = "updateFields"
     CLEAR_FIELD = "clearField"
     ADD_COMMENT = "addComment"
     ADD_SUB_ISSUE = "addSubIssue"
@@ -1055,6 +1152,8 @@ _OPERATIONS: dict[str, _Operation] = {
     "blockedBy(first:": _Operation.DEPENDENCIES,
     "createIssue(": _Operation.CREATE_ISSUE,
     "addProjectV2ItemById(": _Operation.ADD_TO_BOARD,
+    # Before the single field write's own marker, which every write it batches also carries.
+    "second:updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELDS,
     "updateProjectV2ItemFieldValue(": _Operation.UPDATE_FIELD,
     "clearProjectV2ItemFieldValue(": _Operation.CLEAR_FIELD,
     "addComment(": _Operation.ADD_COMMENT,
@@ -1188,7 +1287,13 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.CREATE_FIELD:
                 return self.board.create_field(request.variables)
             case _Operation.SEARCH:
-                return self.board.search_response(request.string("search"))
+                answer = self.board.search_response(
+                    request.string("search"),
+                    request.variables.get("first"),
+                    request.variables.get("after"),
+                )
+                request.answered.matched = len(self.board.found(request.string("search")))
+                return answer
             case _Operation.ORIGIN_LOOKUP:
                 return self.board.origin_lookup_response(request.variables)
             case _Operation.ISSUE:
@@ -1213,6 +1318,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.update_issue(request.variables)
             case _Operation.UPDATE_FIELD:
                 return self.board.set_field(request.variables)
+            case _Operation.UPDATE_FIELDS:
+                return self.board.set_fields(request.variables)
             case _Operation.ADD_SUB_ISSUE:
                 return self.board.add_sub_issue(request.variables)
             case _Operation.ADD_BLOCKED_BY:
@@ -1517,6 +1624,40 @@ def _sent(
     ]
 
 
+def _field_writes(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
+    """The input of every field-value write among ``requests``, batched or standalone.
+
+    The source writes one field with `updateProjectV2ItemFieldValue` alone, and several of
+    a copy's together as aliases of one request, each included by its `write…` flag; either
+    way, each write GitHub would apply is one input here, in the order the request lists it.
+    """
+    written: list[dict[str, object]] = []
+    for request in requests:
+        carried = {
+            _Operation.UPDATE_FIELD: BATCHED_WRITES[:1],
+            _Operation.UPDATE_FIELDS: BATCHED_WRITES,
+        }.get(request.operation, ())
+        for write in carried:
+            payload = request.variables.get(write.variable)
+            if write.included(request.variables) and isinstance(payload, dict):
+                written.append(payload)
+    return written
+
+
+def _field_clears(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
+    """The input of every field-value clear among ``requests``, batched or standalone."""
+    cleared: list[dict[str, object]] = []
+    for request in requests:
+        name = {_Operation.CLEAR_FIELD: "input", _Operation.UPDATE_FIELDS: "clear"}.get(
+            request.operation
+        )
+        if name == "clear" and request.variables.get("writeClear") is not True:
+            continue
+        if name is not None and isinstance(payload := request.variables.get(name), dict):
+            cleared.append(payload)
+    return cleared
+
+
 def _board_cost(requests: list[_GraphQLRequest]) -> tuple[list[str], list[str]]:
     """What in ``requests`` read more of the board than it asked for.
 
@@ -1576,7 +1717,7 @@ class DocumentPrice(NamedTuple):
 #: The plan-store CLI release every request bound below was measured on, held to
 #: `onetaskgraph --version`. Each bound is one named constant so a later release is
 #: re-measured one step at a time.
-BUDGET_MEASURED_ON = "onetaskgraph 0.2.52"
+BUDGET_MEASURED_ON = "onetaskgraph 0.2.54"
 #: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
 #: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
 #: with the board rather than one a single item hides.
@@ -1588,27 +1729,49 @@ OTHER_ITEMS = 60
 #: board; a phase that sends more fails the journey. Before this path moved onto the store's
 #: native queries every one of these phases read the whole board at least once, a count that
 #: grows with the board.
-FILING_REQUESTS = 12
-RECOPY_REQUESTS = 12
-ANSWER_REQUESTS = 10
-WITHDRAWAL_REQUESTS = 13
-FILING_POINTS = 20
-RECOPY_POINTS = 12
-ANSWER_POINTS = 14
-WITHDRAWAL_POINTS = 13
+FILING_REQUESTS = 10
+RECOPY_REQUESTS = 7
+ANSWER_REQUESTS = 9
+WITHDRAWAL_REQUESTS = 8
+FILING_POINTS = 10
+RECOPY_POINTS = 7
+ANSWER_POINTS = 9
+WITHDRAWAL_POINTS = 8
 #: Per-command requests and modelled points: one `check-dispositions --board`, then each
 #: write-path step for one ticket.
-BOARD_CHECK_BUDGET = RequestBudget(12, 12)
+BOARD_CHECK_BUDGET = RequestBudget(8, 8)
 UNBOUND_STATUS_BUDGET = RequestBudget(1, 1)
-BOUND_STATUS_BUDGET = RequestBudget(3, 3)
-CREATE_COPY_BUDGET = RequestBudget(8, 8)
-BOUND_COPY_BUDGET = RequestBudget(9, 9)
-RE_ESTIMATE_BUDGET = RequestBudget(4, 4)
-EVIDENCE_POST_BUDGET = RequestBudget(8, 8)
+BOUND_STATUS_BUDGET = RequestBudget(2, 2)
+CREATE_COPY_BUDGET = RequestBudget(6, 6)
+BOUND_COPY_BUDGET = RequestBudget(5, 5)
+RE_ESTIMATE_BUDGET = RequestBudget(3, 3)
+EVIDENCE_POST_BUDGET = RequestBudget(7, 7)
 #: Board checks one follow-up launch's whole validation runs, dispatch through post-settle.
 LAUNCH_VALIDATION_BOARD_CHECKS = 1
 #: The one board check of a launch whose account the post-settle validator refuses.
-LAUNCH_REFUSAL_BUDGET = RequestBudget(15, 15)
+LAUNCH_REFUSAL_BUDGET = RequestBudget(4, 4)
+
+
+#: A realistic follow-up run's ceilings, in modelled points, shaped like the shelved run
+#: `onepipeline-link-onetaskgraph-plan-follow-ups-5`: 16 tickets — 12 new, each searched for
+#: by root cause and by text and filed to `Proposal`, and 4 already bound and re-copied after
+#: an edit — 4 evidence comments on other runs' items each with its `re-estimate`, and the
+#: launch's one board check, on a board holding :data:`REALISTIC_OTHER_ITEMS` other items.
+#: The write path (`board-status`, `copy`, `re-estimate` and the evidence comments) has its
+#: own ceiling so cutting reads and searches cannot leave it free to spend what the original
+#: run spent. Each ceiling is the figure measured on :data:`BUDGET_MEASURED_ON`, held as a
+#: regression guard: no run on this store may spend more than it does today.
+REALISTIC_RUN_POINTS = 220
+REALISTIC_SEARCH_POINTS = 30
+REALISTIC_BOARD_CHECK_POINTS = 40
+REALISTIC_WRITE_POINTS = 156
+#: How many other items the realistic run's board holds before the run starts.
+REALISTIC_OTHER_ITEMS = 400
+#: What the realistic run measured on :data:`BUDGET_MEASURED_ON`, per phase and in total.
+REALISTIC_MEASURED_SEARCH_POINTS = 24
+REALISTIC_MEASURED_WRITE_POINTS = 156
+REALISTIC_MEASURED_BOARD_CHECK_POINTS = 40
+REALISTIC_MEASURED_RUN_POINTS = 220
 
 
 #: The source's PRICES entries used by the fixture's operations, each priced upstream at
@@ -1627,6 +1790,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.ADD_TO_BOARD: DocumentPrice("ADD_TO_BOARD", 1),
     _Operation.UPDATE_ISSUE: DocumentPrice("UPDATE_ISSUE", 1),
     _Operation.UPDATE_FIELD: DocumentPrice("UPDATE_FIELD", 1),
+    _Operation.UPDATE_FIELDS: DocumentPrice("UPDATE_FIELDS", 1),
     _Operation.CLEAR_FIELD: DocumentPrice("CLEAR_FIELD", 1),
     _Operation.CREATE_FIELD: DocumentPrice("CREATE_FIELD", 1),
     _Operation.ADD_SUB_ISSUE: DocumentPrice("ADD_SUB_ISSUE", 1),
@@ -1643,6 +1807,40 @@ LARGEST_PAGE = 100
 #: Search prices by page size the manager measured on 2026-10-01 against the `followups`
 #: board with onetaskgraph CLI 0.2.52; :func:`_search_points` is drift-checked against them.
 MEASURED_SEARCH_PAGE_PRICES = {20: 1, 30: 2, 50: 3, 100: 5}
+
+
+#: The rows the adopted store asks for on a board search's first page — its
+#: `SEARCH_PAGE_SIZE`, drift-checked against the adopted tag's source — and the widest page
+#: a search whose whole answer fits on one may ask for.
+STORE_FIRST_SEARCH_PAGE = 20
+
+
+class WidePage(NamedTuple):
+    """One board search that asked for a page wider than its whole answer."""
+
+    #: The rows it asked for.
+    first: int
+    #: The rows that matched in all.
+    matched: int
+
+
+def _wide_pages(requests: list[_GraphQLRequest]) -> list[WidePage]:
+    """Each board search that asked for a page wider than its answer needed.
+
+    A search is priced by the rows it asks for rather than the rows it gets, so a page wider
+    than the store's first-page size is points spent on rows that were never there whenever
+    the whole answer fits in that first page.
+    """
+    wide: list[WidePage] = []
+    for request in requests:
+        if request.operation is not _Operation.SEARCH:
+            continue
+        first = request.variables.get("first")
+        matched = request.answered.matched
+        assert isinstance(first, int) and matched is not None, request
+        if first > STORE_FIRST_SEARCH_PAGE and matched <= STORE_FIRST_SEARCH_PAGE:
+            wide.append(WidePage(first, matched))
+    return wide
 
 
 def _search_points(first: int) -> int:
@@ -1722,10 +1920,9 @@ def _bounded_step(
         identifiers = [
             request.string("id") for request in requests if request.operation is operation
         ]
-        # 0.2.52 resolves an item twice inside one show (the second resolution precedes
-        # its comments). Hold the orchestrator call budget separately below; adoption
-        # will remove this store-internal exception and tighten this wire bound to one.
-        ceiling = (budget.requests if writes else 2) if operation is _Operation.ISSUE else 1
+        # A write step runs several store processes (a read, then each write), and each
+        # process resolves the item it writes once; a read-only step resolves it once.
+        ceiling = budget.requests if writes and operation is _Operation.ISSUE else 1
         assert all(identifiers.count(one) <= ceiling for one in identifiers), (
             label,
             operation,
@@ -1737,4 +1934,5 @@ def _bounded_step(
         assert not _sent(_Operation.SEARCH, requests), label
         assert not _sent(_Operation.ORIGIN_LOOKUP, requests), label
     assert _board_cost(requests) == ([], []), label
+    assert _wide_pages(requests) == [], (label, "a search asked for a page wider than its answer")
     _GitHubFixture.requests.clear()

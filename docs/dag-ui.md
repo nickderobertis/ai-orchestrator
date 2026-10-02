@@ -126,7 +126,11 @@ which is the arrangement an operator acts through.
 run is driven by the engine `onepipeline-ui` links — not by the CLI
 `config/onepipeline.version` installs. The driver runs in a process group of its
 own, survives the server being stopped or restarted, and is read back off the run
-record like any other. So on this host `config/onepipeline-ui.version` is a pin that
+record like any other. Since 0.22.1 the binary retained on Linux is the server's own
+running image — a verified hard link to, or a copy of, `/proc/self/exe` — so an
+upgrade that replaces the installed executable under a live server does not change
+the engine an adopt hands the run to, and an image that cannot be retained refuses
+the adopt naming why rather than returning a receipt. So on this host `config/onepipeline-ui.version` is a pin that
 **can** govern a dispatch, which is why the suite holds the two pins to linking one
 engine — see [Which release is answering](#which-release-is-answering) for the gate and
 for the one question it leaves to `/healthz`.
@@ -232,7 +236,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.22.1**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.22.2**, the release `config/onepipeline-ui.version` pins, carries
 what made this a supervising surface: the project list and per-project page are the
 landing view, the run page carries the channel with its byte-for-byte reply composer,
 `attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its

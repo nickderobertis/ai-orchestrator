@@ -224,6 +224,8 @@ class OpenedChange(NamedTuple):
     title: str
     #: The description a reviewer reads, and the whole point of drafting.
     body: str
+    #: Whether the host still holds it as a draft once the publication answered.
+    draft: bool = False
 
 
 class Hosted(NamedTuple):
@@ -620,6 +622,13 @@ def test_a_landing_still_drafts_where_the_policy_opens_a_change_request(
     assert [change.body for change in opened] == [DRAFTED_BODY], (
         f"the workflow read that skips drafting for `local-direct` also skipped it for "
         f"`change-open`, whose change request is exactly what a body is for: {opened}"
+    )
+    # onevcs 0.36.0's draft lifecycle, as the adopted engine reports it: the change opened
+    # as a draft while its checks ran, and on a `change-open` identity whose approvals are
+    # required a green draft is kept for its user's review rather than lifted.
+    assert [change.draft for change in opened] == [True], opened
+    assert "change-review-draft" in published.stdout + published.stderr, (
+        published.stdout + published.stderr
     )
 
 
@@ -1158,6 +1167,7 @@ def _opened_change_requests(hosted: Hosted) -> list[OpenedChange]:
                 url=change["url"],
                 title=change["title"],
                 body=body.read_text(encoding="utf-8") if body.exists() else "",
+                draft=bool(change.get("isDraft")),
             )
         )
     return opened
