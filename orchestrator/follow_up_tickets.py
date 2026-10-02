@@ -464,14 +464,16 @@ _RUBRIC_ROWS = {
     Severity.CRITICAL: (
         "a large outage, substantial functionality unavailable to many or all users, or data "
         "or work lost or corrupted",
-        "**blocks a regularly used development workflow completely**, or slows it **2× or "
-        "more** (by lengthening it, repeating gates, and so on)",
+        "**blocks a regularly used development workflow completely, for everyone working "
+        "through it**, or slows it **2× or more** (by lengthening it, repeating gates, and so "
+        "on)",
         "see the resources rule below",
     ),
     Severity.HIGH: (
         "a capability fails or is unusable for some users or in some situations, with real "
         "consequence",
-        "slows a regularly used development workflow by **more than 1.1× and under 2×**",
+        "slows a regularly used development workflow by **more than 1.1× and under 2×**, or "
+        "blocks it **only for some developers or in some situations**",
         "see the resources rule below",
     ),
     Severity.MEDIUM: (
@@ -502,8 +504,10 @@ RUBRIC = "\n".join(
         *(f"| `{severity}` | " + " | ".join(row) + " |" for severity, row in _RUBRIC_ROWS.items()),
         "",
         "A slowdown is measured against the affected workflow, for the work that regularly "
-        "passes through it. Doubling a rarely used side path is not `critical`. A test "
-        "improvement reaches `high` only when it blocks or very substantially slows work.",
+        "passes through it. Doubling a rarely used side path is not `critical`. A block that "
+        "holds only on some hosts, in some setups or in some situations is never `critical`: "
+        "it is `high` at most, and lower when that situation is uncommon. A test improvement "
+        "reaches `high` only when it blocks or very substantially slows work.",
         "",
         "**Resources rule.** Measure the **extra** spend the root cause causes, projected per "
         "month at the rate it is seen. That includes dollars, and subscription quota as a share "
@@ -532,11 +536,16 @@ RUBRIC = "\n".join(
         "**Severity with the workaround** is the severity of what remains once the workaround "
         "is taken. It is judged only on the workaround's own costs, rated on the same scale:",
         "",
-        "- the cost of applying it;",
+        "- the cost of applying it, counted per occurrence: a step done once per host or "
+        "checkout, such as an install or a bootstrap, is cheap however many failures it ends;",
         "- its side effects on the outcome;",
         "- discovery: when the person or agent who hits the problem is reliably directed to "
-        "the workaround (the failure names it), discovery costs nothing. Otherwise, how long "
-        "finding it takes, and whether a person has to get involved, are costs.",
+        "the workaround (the failure names it, or names what is missing so that providing it "
+        "is the obvious response), discovery costs nothing. Otherwise, how long finding it "
+        "takes, and whether a person has to get involved, are costs.",
+        "",
+        "A one-time setup step with no side effects on the outcome, which the failure points "
+        "to, leaves `low` with the workaround.",
         "",
         "It equals the raw severity **only when there is no acceptable workaround**. An "
         "acceptable workaround **always lowers** the severity, at least one level unless the "
