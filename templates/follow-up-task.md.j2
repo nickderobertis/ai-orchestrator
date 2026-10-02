@@ -267,18 +267,17 @@ closed one.
    situations, and record that as the ticket's `{{ shape.frequency_field }}`. That judgment and the
    severities are the facts its priority is estimated from; the estimate and the priority
    themselves are never yours to write.
-6. **Validate each ticket, then delete the drafts it consumed.** Run
-   `{{ board_status }} --board {{ board }} <path of the ticket>`, which writes the ticket's
-   priority estimate, its estimate line and its priority, then `{{ validate }} <path of the
-   ticket>`, and correct the ticket until that command reports it sound. Then delete the
-   draft files that ticket consumed, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`.
+6. **Write each ticket, then delete the drafts it consumed.** Leave its priority estimate,
+   its estimate line and its priority to step 8's `{{ board_status }}`, which writes them, and
+   validate it only after that: `{{ validate }}` refuses a ticket without them. Then delete
+   the draft files that ticket consumed, under `{{ drafts_root }}/{{ shape.tasks_directory }}/{{ run }}/{{ shape.drafts_directory }}/`.
 7. **Search the board for the same root cause, and for the accepted fixes that bear on it.**
    A ticket naming `{{ shape.binding_field }}` or the store's `onetaskgraph.copies` link
    is already placed: do not run metadata, text or origin searches for it, including on a
    re-dispatch. If that item is closed, missing or no longer carries the ticket,
    `{{ board_status }}` alone runs recovery discovery and applies the duplicate rule. Read its bound item through `{{ board_status }}` and copy onto that item.
-   For an unbound ticket, ask each distinct question once. `{{ board_status }}` already
-   asks by origin; never repeat that query. Ask once by its root cause,
+   For an unbound ticket, ask each distinct question once, and never by origin: step 8's
+   `{{ board_status }}` asks by origin, and nothing else does. Ask once by its root cause,
    `{{ board_items }} --board {{ board }} --metadata {{ shape.record_key }}/root_cause=<root-cause>`,
    then by text, `{{ board_items }} --board {{ board }} --search <text>`, once per distinct question about
    its failing function, file, command or message. Reuse every answer tooling or an earlier
@@ -321,16 +320,21 @@ closed one.
    clearly related one may be mentioned as related, as "The verified ticket" states.
    <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 
-   For every fate but unchanged, add the item's `{{ shape.dependency_field }}` entry, say in the text where
-   and how its fix changed the ticket with the item's URL, then validate the ticket again. On a
+   For every fate but unchanged, add the item's `{{ shape.dependency_field }}` entry, and say in the text where
+   and how its fix changed the ticket with the item's URL; step 8 checks the entry. On a
    re-dispatch of an unbound ticket, ask each distinct question once and re-derive this from
    those answers: an accepted ticket may have appeared, moved or been
    un-accepted since the last pass, so entries are added and removed and the ticket's claims
    re-derived to match. A bound ticket skips these searches and edits its own item by copying again.
-8. **Decide each ticket's status from the board, before every copy.** Run
-   `{{ board_status }} --board {{ board }} <path of the ticket>`, adding `--withdraw` for a ticket
-   this run withdraws, and write the word it prints as the ticket's `status`, then validate
-   the ticket again. When it refuses, copy nothing for that ticket and keep what it printed
+8. **Decide each ticket's status from the board, before every copy.** For every ticket
+   step 7 left, run `{{ board_status }} --board {{ board }} <path of the ticket>`, adding
+   `--withdraw` for a ticket this run withdraws, which binds it, checks its
+   `{{ shape.dependency_field }}` entries, and writes the ticket's priority estimate, its
+   estimate line and its priority; write the word it prints as the ticket's `status`, then
+   run `{{ validate }} <path of the ticket>` and correct the ticket until that command reports
+   it sound. Whenever you change a ticket's `## {{ shape.impact }}`, `{{ shape.frequency_field }}` or
+   `{{ shape.dependency_field }}` after that, run `{{ board_status }}` on it again, then validate it,
+   before you copy it. When it refuses, copy nothing for that ticket and keep what it printed
    for your report.
 9. **Put each ticket on the board.** Where no open item carries the root cause, or the
    item that does is this run's own, copy the ticket with
@@ -423,7 +427,7 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   it and why. No issue is ever deleted.
 - **Before every copy, run `{{ board_status }} --board {{ board }} <path of the ticket>`** (adding
   `--withdraw` for a ticket this run withdraws, before you change that ticket), write the
-  word it prints as the ticket's `status`, and validate the ticket again. It reads the
+  word it prints as the ticket's `status`, then validate the ticket. It reads the
   board item's `{{ shape.priority_field }}`, its record's `{{ shape.estimate_field }}` and its comments in the
   same step, and writes the ticket's `{{ shape.estimate_field }}`, its estimate line and its
   `{{ shape.priority_field }}` as the rule above decides, which the copy carries onto the board. It exits
@@ -503,7 +507,8 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   rule's; names an item the board reports no `url` for; or names an item whose URL the
   ticket's body does not carry. On that refusal copy nothing for the ticket, re-derive it
   against the dependency item that the refusal names, using its read by id — removing the entry and the assumption from the text
-  where the item is no longer accepted — validate it again, and report what was printed.
+  where the item is no longer accepted — run `{{ board_status }}` on it again, validate it, and
+  report what was printed.
 - **`{{ shape.binding_field }}` binds the ticket to its board item**: the native id of the item it is
   copied onto, as `{{ copy }}` prints it after the `{{ board }}:`, in the
   `{{ shape.record_key }}` record. `{{ board_status }}` and `{{ copy }}` write it and nothing else does — when this

@@ -668,8 +668,9 @@ def _decided_and_copied(python: str, ticket: Path, *extra: str) -> list[str]:
 
 
 def _estimated_and_validated(python: str, *written: Path) -> list[str]:
-    """The task's step validating each ticket: `board-status`, which writes the estimate, then
-    `validate`, which refuses a ticket until it is sound."""
+    """The task's status step for a ticket this run keeps local, its evidence going on another
+    run's item: `board-status`, which writes the estimate, then `validate`, which refuses a
+    ticket until it is sound, and no copy."""
     module = f"{python} -m orchestrator.follow_up_tickets"
     lines = [f"set -euo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"]
     for ticket in written:
@@ -690,10 +691,11 @@ def _re_estimate(python: str, issue: str) -> list[str]:
 def _refused_shapes(python: str, witness: Path, shaped: dict[str, Path]) -> list[str]:
     """The agent's commands over the three shapes the tooling refuses, and their removal.
 
-    Each is validated as the task says; the one whose shape passes is then asked
-    `board-status` as the task says; what every command printed and exited with is kept
-    in ``witness``; and the three files are removed, as an agent rewrites a refused
-    ticket. Nothing copies, because nothing was let through.
+    Each carries the estimate an earlier `board-status` wrote, so `validate` reads its shape
+    alone; the one whose shape passes is then asked `board-status` as the task says; what
+    every command printed and exited with is kept in ``witness``; and the three files are
+    removed, as an agent rewrites a refused ticket. Nothing copies, because nothing was let
+    through.
     """
     validate = shlex.join([python, "-m", "orchestrator.follow_up_tickets", "validate"])
     decide = shlex.join(
@@ -1370,7 +1372,6 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
                 _placed(_staged(bench, "related.md", tickets.render(related)), related_ticket),
-                _estimated_and_validated(python, new_ticket, shared_ticket, related_ticket),
                 # The draft the accepted removing fix evaporates: no ticket, the draft gone.
                 ["rm", str(evaporated_draft)],
                 # The three refused shapes, written, refused, and removed.
@@ -1379,6 +1380,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     for name, text in refused_texts.items()
                 ],
                 _refused_shapes(python, refused_witness, shaped),
+                # The one `board-status` each ticket is asked, at the step deciding its status:
+                # the shared ticket's here, since it is never copied, and the other two's
+                # immediately before their copies below.
+                _estimated_and_validated(python, shared_ticket),
                 # The same validate instruction, under the search path the incident's
                 # shell had: the older plan store first and this checkout's `.venv/bin`
                 # absent. The helper says what it records and why.
@@ -2755,6 +2760,10 @@ def test_the_task_carries_every_instruction_and_both_contracts(
     assert decided.start() < steps.index("**Put each ticket on the board.**"), steps
     validated = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets validate) <path", steps)
     assert validated is not None, steps
+    # A ticket is asked `board-status` first at the step deciding its status, and validated
+    # only after it has written the estimate `validate` holds the ticket to.
+    deciding = steps.index("**Decide each ticket's status from the board, before every copy.**")
+    assert deciding < decided.start() < validated.start(), steps
     listed = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets board-items) --board", task)
     assert listed is not None, task
     copied = re.search(r"`(\S+ -m orchestrator\.follow_up_tickets copy) --board", task)

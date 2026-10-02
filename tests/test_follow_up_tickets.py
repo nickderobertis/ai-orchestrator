@@ -1385,6 +1385,24 @@ def test_the_tracked_template_carries_the_ticket_sequence_in_order() -> None:
     searched = steps.index("**Search the board for the same root cause")
     assumed = steps.index("**The accepted fixes.** Write each ticket as if")
     assert searched < assumed < decided, steps
+    # One `board-status` per ticket before its copy, at the step that decides its status:
+    # nothing earlier asks it or validates a ticket it has not yet estimated, and it runs
+    # again only after a change to what it decides from.
+    written = steps.index("**Write each ticket, then delete the drafts it consumed.**")
+    validated = f"`{VALIDATE} <path of the ticket>`"
+    assert written < searched, steps
+    assert steps.index(asked) > decided, "a step before the status decision asks `board-status`"
+    assert steps.index(validated) > steps.index(asked), "a ticket is validated before its estimate"
+    assert _flat(steps).count(_flat(asked)) == 1, "the steps ask `board-status` more than once"
+    flat_steps = _flat(steps)
+    assert (
+        "Leave its priority estimate, its estimate line and its priority to step 8's "
+        f"`{BOARD_STATUS}`, which writes them, and validate it only after that"
+    ) in flat_steps
+    assert (
+        "Whenever you change a ticket's `## Impact`, `frequency` or `depends_on` after that, "
+        f"run `{BOARD_STATUS}` on it again, then validate it, before you copy it."
+    ) in flat_steps
 
     flat = _flat(task)
     assert flat.count(_flat(tickets.status_vocabulary())) == 1, (
@@ -1454,7 +1472,8 @@ def test_the_re_dispatch_brings_an_older_ticket_to_one_fix_and_no_repository() -
         "removed, any path the ticket still needs moved into `## Root cause`; its "
         "`## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the ticket's "
         "evidence supports; and every other option it offered moved into `## Rejected fixes`, "
-        "with why each was not chosen; then it is validated again."
+        "with why each was not chosen; then it is validated once "
+        f"`{BOARD_STATUS}` has written its estimate, as the rule below states."
     ) in flat
 
 
@@ -3476,6 +3495,52 @@ def test_board_status_refuses_edges_without_the_validated_shape_before_asking_th
     assert "names no `root_cause` slug in its `orchestrator.follow-up` record" in reported
 
 
+@pytest.mark.parametrize(
+    ("held", "accepted"),
+    [(tickets.Status.ACCEPTED, True), (tickets.Status.PROPOSED, False)],
+    ids=["accepted-then-copied", "not-accepted-copies-nothing"],
+)
+def test_a_dependency_added_after_board_status_is_copied_only_after_a_further_board_status(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    held: tickets.Status,
+    accepted: bool,
+) -> None:
+    """Step 7 may add a `depends_on` entry after the ticket's status was decided.
+
+    `validate` reads no board, so only a further `board-status` checks the entry, as the task
+    directs before the copy: one the board holds accepted is copied onto the board as its
+    dependency, and one it does not is refused and nothing is copied.
+    """
+    _accepted_item(board, NARROWING, held.value, NARROWING_URL)
+    ticket = _write(drafts_root, _ticket(body=DEPENDENT_BODY))
+    assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
+    ticket.write_text(
+        ticket.read_text(encoding="utf-8").replace(
+            "metadata:\n", _dependency_lines(f"{{id: {NARROWING}, item: task}}") + "metadata:\n"
+        ),
+        encoding="utf-8",
+    )
+    assert tickets.main(["validate", str(ticket)]) == tickets.SOUND, "validate reads no board"
+    capsys.readouterr()
+
+    status, printed, reported = _decided(ticket, capsys)
+
+    if not accepted:
+        assert (status, printed) == (tickets.NOT_ACCEPTED, ""), reported
+        assert f"entry {NARROWING!r} names an item the board holds at 'backlog'" in reported
+        assert not any(board.rglob(f"tasks/{RUN}/**/*.md")), "a refused ticket reached the board"
+        return
+    assert (status, printed) == (tickets.SOUND, "backlog\n"), reported
+    assert tickets.main(["validate", str(ticket)]) == tickets.SOUND
+    capsys.readouterr()
+    copied, out, err = _copied(ticket, capsys)
+    assert copied == tickets.SOUND, err
+    destination = json.loads(out)["destination"]
+    assert tickets.ticket_edges(destination) == [tickets.Edge(NARROWING, "task", "blocks")]
+
+
 def test_board_status_resolves_dependencies_after_the_owner_check_and_before_the_dry_run_copy(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3571,9 +3636,10 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "A `Done` item's fix is assumed only where it has not reached the basis recorded in "
         "step 1 — read the tree; where it has, the verification at the basis already accounts "
         "for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed",
-        "For every fate but unchanged, add the item's `depends_on` entry, say in the text "
-        "where and how its fix changed the ticket with the item's URL, then validate the "
-        "ticket again.",
+        "For every fate but unchanged, add the item's `depends_on` entry, and say in the text "
+        "where and how its fix changed the ticket with the item's URL; step 8 checks the entry.",
+        "For an unbound ticket, ask each distinct question once, and never by origin: step 8's "
+        f"`{BOARD_STATUS}` asks by origin, and nothing else does.",
         "On a re-dispatch of an unbound ticket, ask each distinct question once and re-derive "
         "this from those answers: an accepted ticket may have appeared, moved or "
         "been un-accepted since the last pass, so entries are added and removed and the "
@@ -4764,8 +4830,9 @@ def test_each_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority(
         "**judge from the original evidence whether the root cause fires consistently**",
         "record that as the ticket's `frequency`",
         "the estimate and the priority themselves are never yours to write",
-        f"`{BOARD_STATUS} --board followups <path of the ticket>`, which writes the ticket's "
-        "priority estimate, its estimate line and its priority, then",
+        f"`{BOARD_STATUS} --board followups <path of the ticket>`, adding `--withdraw` for a "
+        "ticket this run withdraws, which binds it, checks its `depends_on` entries, and "
+        "writes the ticket's priority estimate, its estimate line and its priority;",
         f"**after every such comment, re-estimate that item** with {re_estimate} <that item's id>`",
         "**Its priority is estimated from facts, never chosen.**",
         f"`{VALIDATE}` refuses a ticket without it",

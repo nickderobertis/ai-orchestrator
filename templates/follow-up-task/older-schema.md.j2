@@ -18,7 +18,8 @@
   section removed, any path the ticket still needs moved into `## Root cause`; its
   `## {{ shape.retired_headings[1] }}` rewritten as `## {{ shape.suggested_fix }}`, stating the one fix the ticket's
   evidence supports; and every other option it offered moved into `## {{ shape.rejected_fixes }}`,
-  with why each was not chosen; then it is validated again.
+  with why each was not chosen; then it is validated once `{{ board_status }}` has written its
+  estimate, as the rule below states.
 - a ticket of this run older than schema {{ shape.schema }} is brought to it by writing its
   `## {{ shape.impact }}` prose as its labelled parts, {{ shape.impact_parts }}, from the evidence it already
   carries, with both severities judged again by the rubric — an acceptable workaround

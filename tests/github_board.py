@@ -1760,18 +1760,21 @@ LAUNCH_REFUSAL_BUDGET = RequestBudget(4, 4)
 #: The write path (`board-status`, `copy`, `re-estimate` and the evidence comments) has its
 #: own ceiling so cutting reads and searches cannot leave it free to spend what the original
 #: run spent. Each ceiling is the figure measured on :data:`BUDGET_MEASURED_ON`, held as a
-#: regression guard: no run on this store may spend more than it does today.
-REALISTIC_RUN_POINTS = 220
+#: regression guard: no run on this store may spend more than it does today. The write path
+#: and the total were 156 and 220 while the task asked each unbound ticket's `board-status`
+#: twice, once before its searches and once before its copy; asking it once, before the
+#: copy, spends one origin lookup fewer per new ticket.
+REALISTIC_RUN_POINTS = 208
 REALISTIC_SEARCH_POINTS = 30
 REALISTIC_BOARD_CHECK_POINTS = 40
-REALISTIC_WRITE_POINTS = 156
+REALISTIC_WRITE_POINTS = 144
 #: How many other items the realistic run's board holds before the run starts.
 REALISTIC_OTHER_ITEMS = 400
 #: What the realistic run measured on :data:`BUDGET_MEASURED_ON`, per phase and in total.
 REALISTIC_MEASURED_SEARCH_POINTS = 24
-REALISTIC_MEASURED_WRITE_POINTS = 156
+REALISTIC_MEASURED_WRITE_POINTS = 144
 REALISTIC_MEASURED_BOARD_CHECK_POINTS = 40
-REALISTIC_MEASURED_RUN_POINTS = 220
+REALISTIC_MEASURED_RUN_POINTS = 208
 
 
 #: The source's PRICES entries used by the fixture's operations, each priced upstream at

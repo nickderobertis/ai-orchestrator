@@ -2629,8 +2629,8 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
     its duplicate search, its accepted listing, each `board-status` and its `copy` read the
     whole board. Here the board already holds many other items, and one ticket is taken
     through the sequence the follow-up task prescribes, with this checkout's real commands
-    and the provisioned plan-store CLI: filed (`board-status`, `validate`, the two
-    `board-items` searches, `board-status`, `validate`, `copy`), re-copied after an edit,
+    and the provisioned plan-store CLI: filed (the two `board-items` searches, then
+    `board-status`, `validate`, `copy`), re-copied after an edit,
     answered once in feedback mode after a person comments on it (the gathering's
     `commented_since` read, the reply, `re-estimate`), and withdrawn (`board-status
     --withdraw`, `validate`, `copy`). No step sends a request walking the board's items, the
@@ -2662,10 +2662,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
             )
         _GitHubFixture.requests.clear()
 
-        # Filing: validated, searched for by root cause and by text, decided, and copied.
-        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
-        validated = _follow_up_step(environment, "validate", str(path))
-        assert validated.returncode == follow_up_tickets.SOUND, validated.stderr
+        # Filing: searched for by root cause and by text, then decided once, validated, copied.
         by_cause = _follow_up_step(
             environment,
             "board-items",
@@ -2872,8 +2869,8 @@ def test_a_realistic_follow_up_run_stays_within_its_point_budget(  # noqa: PLR09
     on this host shares. Here the same run is driven through this checkout's real
     `orchestrator.follow_up_tickets` commands and the provisioned plan-store CLI against a
     loopback `followups` board already holding hundreds of other items: 12 new tickets, each
-    decided, validated, searched for by root cause and by text as the rendered task directs,
-    decided again and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
+    searched for by root cause and by text as the rendered task directs, then decided once,
+    validated and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
     items, edited and re-copied; 4 evidence comments on other runs' items, each followed by
     its `re-estimate`; and the launch's one `check-dispositions --board`. Every request is
     priced with the drift-checked prices, and each phase is held to its ceiling and to what
@@ -2938,10 +2935,8 @@ def test_a_realistic_follow_up_run_stays_within_its_point_budget(  # noqa: PLR09
             cause = follow_up_tickets.RootCause(f"new-{area}-cause")
             ticket = replace(base, root_cause=cause, drafts=_draft(f"new-{at}"))
             path = _written_ticket(root, ticket)
-            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
-            _charged(spent, _RunPhase.WRITES, f"deciding new ticket {cause}")
-            validated = _follow_up_step(environment, "validate", str(path))
-            assert validated.returncode == follow_up_tickets.SOUND, validated.stderr
+            # Searched for first, and asked `board-status` once, at the step deciding its
+            # status: that call's origin lookup is the only one the ticket sends.
             by_cause = _follow_up_step(
                 environment,
                 "board-items",

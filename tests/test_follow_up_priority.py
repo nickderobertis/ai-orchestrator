@@ -475,6 +475,52 @@ def test_a_ticket_with_no_board_item_takes_its_estimate(
     assert _held(issue)[tickets.ESTIMATE_FIELD] == "high"
 
 
+@pytest.mark.parametrize(
+    ("facts", "expected"),
+    [
+        ({"with_workaround": Severity.HIGH}, Priority.HIGH),
+        ({"frequency": Frequency.CONSISTENT}, Priority.HIGH),
+    ],
+    ids=["impact-changed", "frequency-changed"],
+)
+def test_a_ticket_changed_after_its_board_status_is_copied_only_after_a_further_one(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    facts: dict[str, object],
+    expected: Priority,
+) -> None:
+    """The task's one `board-status` per ticket, and the further one a later change owes.
+
+    A ticket is written with no estimate, which `validate` refuses until `board-status` writes
+    it. A change to its `## Impact` or `frequency` after that leaves the estimate line stale,
+    so `validate` and the copy refuse it and nothing reaches the board, until a further
+    `board-status` rewrites the estimate the copy then carries.
+    """
+    written = _ticket()
+    body = re.sub(r"^- Priority estimate:[^\n]*\n", "", written.body, flags=re.MULTILINE)
+    path = _write(drafts_root, written)
+    _replace_record(path, priority_estimate=None)
+    path.write_text(path.read_text(encoding="utf-8").replace(written.body, body), encoding="utf-8")
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "record is missing priority_estimate" in " ".join(capsys.readouterr().err.split())
+    assert _decided(path, capsys) == "backlog\n"
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND
+    capsys.readouterr()
+
+    _refacted(path, **facts)
+
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "estimate line" in capsys.readouterr().err
+    assert tickets.main(["copy", "--board", BOARD, str(path)]) == tickets.UNRUNNABLE
+    capsys.readouterr()
+    assert not any(board.rglob("*.md")), "a ticket whose estimate is stale reached the board"
+    issue = _copied(path, capsys)
+    assert _held(issue)[tickets.ESTIMATE_FIELD] == expected.value
+    assert _shown(issue)["priority"] == expected.value
+    assert f"- Priority estimate: {expected.value} (" in _line(_shown(issue)["content"])
+
+
 def test_a_board_priority_at_the_stored_estimate_follows_a_changed_estimate(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
