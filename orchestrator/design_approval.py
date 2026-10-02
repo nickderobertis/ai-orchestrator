@@ -333,7 +333,8 @@ def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | 
     regenerate that repairs it: it records no design-doc provenance at all (written by hand,
     or rendered from another template); it was rendered from a chain whose digest is not the
     one resolved now (the template changed after it was rendered); or its content no longer
-    hashes to the body digest recorded when it was (it was edited by hand since). Like the
+    hashes to the body digest recorded when it was (it was edited by hand since, or — for a
+    copy — an earlier plan store's copy left it so, which :func:`edited` names). Like the
     plan-review record this trusts the provenance the store recorded: a writer who forges
     one is not a case this guards.
 
@@ -390,11 +391,34 @@ def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | 
     if held != body:
         raise Unrendered(
             f"{document.qualified_id}'s content is not the rendering its provenance records "
-            f"(it hashes to {held}, the rendering to {body}), so it was edited after it was "
-            f"rendered; change its answers and regenerate it with "
+            f"(it hashes to {held}, the rendering to {body}), so "
+            + edited(document)
+            + "; change its answers and regenerate it with "
             + EITHER.format(regenerate=regenerate)
         )
     return body
+
+
+def edited(document: StoreDocument) -> str:
+    """How a document whose content left its recorded rendering got that way, as far as it says.
+
+    A document carrying the store's `onetaskgraph.origin` record is a copy, and a copy made
+    by a plan store before onetaskgraph 0.2.53 rewrote its references to the plan's tasks
+    without re-recording the digest — so the likeliest cause is that copy rather than an
+    edit, and copying it again from its origin is what re-records it. An origin that is not
+    a qualified id names no source to copy from, so it is read as no copy. Neither is
+    accepted here: the digest is still the store's to keep true, and this only names who can.
+    """
+    origin = document.metadata.get(plan_store.ORIGIN_KEY)
+    if not isinstance(origin, str) or not QUALIFIED.fullmatch(origin):
+        return "it was edited after it was rendered"
+    source = origin.partition(":")[0]
+    return (
+        f"either it is a copy of {origin} made by an earlier plan store, which rewrote its "
+        f"references without re-recording its digest — copy it again from its origin with "
+        f"`just copy-plan {source}:<project>` for the plan {origin} belongs to, which "
+        f"re-records it — or it was edited after it was rendered"
+    )
 
 
 def fits_in_place(document: StoreDocument, repository: str | None = None) -> bool:

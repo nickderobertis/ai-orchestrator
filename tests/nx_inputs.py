@@ -123,6 +123,19 @@ UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 #: `scripts/**` or `tests/unwatched/**`, because an edit this recipe never reaches must not
 #: pay for its real sessions.
 UNFINISHED_WORKSPACE = "unfinishedWorkspace"
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+# catalog of test projects, where every project has its entry, and
+# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# describes; the board-copy-approval entry sits beside the others' because the catalog is
+# the domain.
+#: The key `board-copy-approval:test` is memoized on. Files rather than trees, measured as
+#: `unpublishedViewWorkspace` was: the tier traced under `strace -f -e trace=openat,execve`,
+#: each opened path intersected with what git tracks, and the `orchestrator` modules taken
+#: from the bytecode it loaded — the recipes' scripts, the plan store and review configs,
+#: the templates the documents render through, the planner bar, and the `justfile` every
+#: recipe is read from, which `just` reaches without an `openat` the trace records.
+BOARD_COPY_APPROVAL_WORKSPACE = "boardCopyApprovalWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
 #: The key `graceful-cancel:test` is memoized on. Files rather than trees, for the reason
@@ -476,6 +489,23 @@ UNFINISHED_PROJECT = "unfinished"
 UNFINISHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 UNFINISHED_ROOT = "tests/unfinished"
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+# catalog of test projects, where every project has its entry, and
+# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# describes; the board-copy-approval entry sits beside the others' because the catalog is
+# the domain.
+#: The project whose test target owns the journeys approving a design document on the
+#: `plans` board: the real `just copy-plan`, `just approve-design` and launch gate, the
+#: installed plan store and engine, against the GitHub Projects double. A project of its
+#: own for the reason `unwatched` is: a real recipe chain per assertion is a cost `nx
+#: affected` can only keep off an unrelated edit where it is a separate project.
+BOARD_COPY_APPROVAL_PROJECT = "board-copy-approval"
+#: That project's one test target: nothing here reads this repository's prose.
+BOARD_COPY_APPROVAL_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+BOARD_COPY_APPROVAL_ROOT = "tests/e2e/board_copy_approval"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.

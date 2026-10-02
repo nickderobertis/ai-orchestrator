@@ -298,6 +298,11 @@ document cannot be decided, so it is refused rather than guessed at. A document 
 not the rendering in force — one recording no design-doc provenance, one rendered from a
 template since changed, or one whose body was edited after it was rendered — is refused by
 both `just approve-design` and the launch, each naming the regenerate above as the repair.
+A board copy whose body no longer hashes to its recorded digest is refused the same way,
+and because it carries the store's `onetaskgraph.origin`, the refusal also names the other
+way it gets there: a copy made by a plan store before onetaskgraph 0.2.53 rewrote its
+references to the plan's tasks without re-recording the digest, and copying it again from
+its origin with `just copy-plan` re-records it.
 
 *The one exemption, and it is a **launch** rather than a project.* A planning launch is
 exempt, because its output *is* the plan and the document it will be reviewed as does not

@@ -1,0 +1,81 @@
+{
+  "name": "board-copy-approval",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/board_copy_approval",
+  "tags": [
+    "scope:board-copy-approval",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-codex",
+    "support-follow-up-variables",
+    "support-github-board",
+    "support-no-paid-provider",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "boardCopyApprovalWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.plan-review.toml",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/config/plan-review-verdict.schema.json",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/follow-up-env.sh",
+      "{workspaceRoot}/scripts/plan-root-env.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/review-plan.sh",
+      "{workspaceRoot}/templates/design-doc.md.j2",
+      "{workspaceRoot}/templates/dispatch-appendix.md",
+      "{workspaceRoot}/templates/plan-task.md.j2",
+      "{workspaceRoot}/templates/templates.yaml",
+      "{workspaceRoot}/orchestrator/adoption_guard.py",
+      "{workspaceRoot}/orchestrator/criteria_guard.py",
+      "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/follow_up_drafts.py",
+      "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/plan_check.py",
+      "{workspaceRoot}/orchestrator/plan_copy.py",
+      "{workspaceRoot}/orchestrator/plan_review.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/publication_guard.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/structural_guard.py",
+      "{workspaceRoot}/orchestrator/task_body.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/project.json",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_design_approval_e2e.py"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/board_copy_approval --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "boardCopyApprovalWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

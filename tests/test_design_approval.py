@@ -329,6 +329,53 @@ def test_a_document_that_is_not_the_rendering_in_force_has_no_key(
     assert "authoring:demo-design --template-loader -" in reason, reason
 
 
+#: The content a copy holds once an earlier plan store rewrote its references, under the
+#: provenance of the rendering it was copied from.
+RECOPIED = _provenance("## What\n\nWhat was rendered, naming /home/someone/tasks/demo.md.\n")
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [None, "", 7, "no-source-here"],
+    ids=["no origin", "an empty origin", "an origin that is no string", "an unqualified origin"],
+)
+def test_a_mismatched_document_that_is_no_copy_is_refused_as_edited_as_it_always_was(
+    origin: object,
+) -> None:
+    """A document carrying no readable `onetaskgraph.origin` keeps the refusal it always had."""
+    stated = {} if origin is None else {plan_store.ORIGIN_KEY: origin}
+    with pytest.raises(design_approval.Unrendered) as refused:
+        design_approval.approval_key(_document(metadata=RECOPIED | stated), STATED)
+    reason = str(refused.value)
+    assert "rendering to sha256:" in reason, reason
+    assert "), so it was edited after it was rendered; change its answers and regenerate" in (
+        reason
+    ), reason
+    assert "earlier plan store" not in reason and "just copy-plan" not in reason, reason
+
+
+def test_a_mismatched_copy_has_no_key_and_is_sent_to_its_origin_beside_the_regenerate() -> None:
+    """A copy is refused like any mismatch, naming the re-copy that re-records its digest.
+
+    It is still refused: whatever left the content off its recorded digest, a document that
+    is not the rendering its provenance records has no approval key.
+    """
+    copied = _document(
+        qualified_id="plans:I_1",
+        metadata=RECOPIED | {plan_store.ORIGIN_KEY: "authoring:demo-design"},
+    )
+    with pytest.raises(design_approval.Unrendered) as refused:
+        design_approval.approval_key(copied, STATED)
+    reason = str(refused.value)
+    assert "a copy of authoring:demo-design made by an earlier plan store" in reason, reason
+    assert "rewrote its references without re-recording its digest" in reason, reason
+    assert "`just copy-plan authoring:<project>`" in reason, reason
+    assert "or it was edited after it was rendered; change its answers and regenerate" in (
+        reason
+    ), reason
+    assert "plans:I_1 --template-loader -" in reason, reason
+
+
 @pytest.mark.parametrize("field", EXCLUDED)
 def test_the_key_covers_no_field_but_those(field: str) -> None:
     """The other half, and what lets a record travel between stores at all.
