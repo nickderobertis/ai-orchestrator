@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NamedTuple, cast
 
@@ -227,12 +228,17 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             180,
         )
         before = _journal(root)
-        sent = just(
+        # Sent beside the reads below rather than ahead of them: the reply waits on the
+        # driver's decision about the note for up to its reply timeout, and the note is
+        # only decided once the busy turn ends — the window those reads are about.
+        sending = ThreadPoolExecutor(max_workers=1)
+        sending_note = sending.submit(
+            just,
             "channel-reply",
             RUN_NAME,
             stdin=json.dumps(
                 {
-                    "version": 2,
+                    "version": 3,
                     "author": "planner",
                     "commands": [
                         {"op": "note", "id": NODE_ID, "addressee": "worker", "text": NOTE}
@@ -240,7 +246,7 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
                 }
             ),
         )
-        assert sent.returncode == 0, sent.stdout + sent.stderr
+        sending.shutdown(wait=False)
         heartbeats = _count(before, "member-heartbeat")
         activity = _count(before, "turn-activity")
 
@@ -272,6 +278,8 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
         assert not _note_recorded(during), (
             "the busy turn ended before the run was read while the note waited; lengthen the turn"
         )
+        sent = sending_note.result(timeout=e2e_timeout(300))
+        assert sent.returncode == 0, sent.stdout + sent.stderr
         _until(
             "the node to settle",
             lambda: any(event.get("kind") == "node-settled" for event in _journal(root)),

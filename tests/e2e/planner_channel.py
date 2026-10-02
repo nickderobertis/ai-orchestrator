@@ -10,7 +10,8 @@ here rather than in each module because it is the same loop, and two copies of i
 into two different ideas of what answering means.
 
 It is written as the recipes a manager types, deliberately: `channel-next` is what hands a
-surface out, and `channel-reply` is the bus's `reply` over this host's configuration.
+surface out, and `channel-reply` is the engine's `onepipeline reply`, which binds the verdict
+under the bus configuration the run's launch recorded.
 """
 
 from __future__ import annotations
@@ -204,8 +205,7 @@ def answer_each(
 
     A surface that is not a blocking question the bus asked is read and passed over: this
     host's monitor and pacemaker raise their own on the same channel. Hands back what
-    `channel-reply` answered each send, which is the bus's own `{answered, correlation,
-    sent}` line.
+    `channel-reply` answered each send, which is the engine's one-line receipt.
     """
     limit = deadline(seconds)
     answered: list[subprocess.CompletedProcess[str]] = []

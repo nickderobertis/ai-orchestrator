@@ -418,50 +418,27 @@ channel-next *args:
 # FILE, or from stdin when none is named. It carries a verdict, versioned live graph
 # edits, or both.
 #
-# It is one `onemessagebus` verb over config/onemessagebus.yaml and the run's own channel
-# directory, and the choice of verb is all it adds. An envelope carrying a verdict, or sent
-# with `--correlation`, is `onemessagebus reply surfaces`: the bus binds it to the pending
-# question the correlation names — or to the one question pending — refuses one naming a
-# correlation nothing pending holds, and answers `{answered, correlation, sent}`. An
-# envelope carrying commands and no verdict is `onemessagebus send replies`, which the
-# layout routes to `commands` and answers one `{queue, position, id}` line for: `reply`
-# refuses such an envelope whenever no question is pending, which is most of a run, and a
-# live edit binds to no question anyway. Either way the configuration's envelope validator
-# holds any task prose to the criteria bar before anything is appended, and the bus's own
-# answer is the whole of stdout. An envelope this cannot read as JSON goes to `reply`,
-# whose refusal names what it received; an envelope file that cannot be read at all is
-# refused here, naming the file.
-# llmlint: ignore[tool_output_is_signal] The bus's own answer and refusal are this recipe's whole output; the only lines it adds are its own refusals, each naming what it could not read and the fix.
+# It is the engine's own submission verb, `onepipeline reply`, through
+# `scripts/onepipeline.sh` so the acting session is named as every other verb names it,
+# and it adds nothing: the engine routes the envelope by its halves. It opens the run's
+# channel under the bus configuration the run's launch recorded — this host's
+# config/onemessagebus.yaml, as it stood at that launch — so the declared authors, their
+# grants and the criteria validator refuse an envelope whole before anything is appended.
+# A verdict binds to the ask `--correlation` names, or to the one ask pending; a
+# correlation nothing pending holds, and `--correlation` on an envelope carrying no
+# verdict half, are refused. Edits to a run a driver holds are queued and waited on for
+# ONEPIPELINE_REPLY_TIMEOUT_SECONDS; edits to a run nothing drives are applied by the
+# reply itself, and a completion verdict or a `complete` closes a settled run whose
+# driver has exited. Stdout is the engine's one-line receipt,
+# `{"reply":N,"state":"delivered|applied|queued",…}`, at exit 0 — a `queued` one
+# included, with its advice on stderr — and every refusal exits 2.
+# `[no-exit-message]` because the engine's own refusal is the whole account of a failed
+# reply, and `just`'s line after it would only restate the exit status.
+# llmlint: ignore-block[tool_output_is_signal] This process is replaced by the engine's verb, so its receipt and refusals are the whole of the output; a block because `just` takes no comment between an attribute and its recipe.
+[no-exit-message]
 channel-reply run *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    run="$1"; shift
-    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then set -- --file "$@"; fi
-    command -v jq >/dev/null || { echo "channel-reply: jq is not on PATH, so whether this envelope carries a verdict cannot be read; install jq, then send it again" >&2; exit 2; }
-    channel=(--config config/onemessagebus.yaml --transport-dir "${ONEPIPELINE_RUNS_DIR:-runs}/$run/channel")
-    file="" bound=""
-    for ((at = 1; at <= $#; at++)); do
-        case "${!at}" in
-            --correlation | --correlation=*) bound=yes ;;
-            --file) next=$((at + 1)); file="${!next-}" ;;
-        esac
-    done
-    if [ -z "$file" ]; then
-        if ! envelope=$(cat); then
-            echo "channel-reply: the envelope could not be read from stdin; pipe it in again, or name it as a file" >&2
-            exit 2
-        fi
-    elif ! envelope=$(cat -- "$file"); then
-        echo "channel-reply: the envelope file '$file' could not be read; check the path, then send it again" >&2
-        exit 2
-    fi
-    edits_alone=$(jq -r 'if type == "object" and (has("completion") | not) and ((.commands // []) | length > 0) then "yes" else "no" end' <<<"$envelope" 2>/dev/null) || edits_alone=no
-    if [ -z "$bound" ] && [ "$edits_alone" = yes ]; then
-        if [ -n "$file" ]; then exec uv run onemessagebus send replies "${channel[@]}" --file "$file"; fi
-        exec uv run onemessagebus send replies "${channel[@]}" <<<"$envelope"
-    fi
-    if [ -n "$file" ]; then exec uv run onemessagebus reply surfaces "${channel[@]}" "$@"; fi
-    exec uv run onemessagebus reply surfaces "${channel[@]}" "$@" <<<"$envelope"
+    @./scripts/onepipeline.sh reply "$@"
+# llmlint: ignore-end[tool_output_is_signal]
 
 # Raise a non-blocking planner status update: `just channel-surface <run-id> [TEXT]`.
 channel-surface *args:

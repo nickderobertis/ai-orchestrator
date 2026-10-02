@@ -1159,7 +1159,8 @@ or updated; for a run that ended any other way, that the planner has decided wit
 user whether to verify its drafts by hand with `just follow-ups <run-id>`. See
 [the run-end hooks](#follow-ups-are-drafted-not-surfaced) for both. See [Live graph
 edits](#live-graph-edits) to change the graph, which never waits for anything: the
-reconciler applies an accepted edit on its next pass.
+reconciler applies an accepted edit on its next pass, and with nothing driving the run
+the reply applies it itself.
 
 The planner-facing recipes are:
 
@@ -1654,16 +1655,18 @@ none.
 ### A planner writes a reply once
 
 **Acceptance means delivery for a reply, exactly as it does for an edit.** `just
-channel-reply` is one `onemessagebus` verb over `config/onemessagebus.yaml` and the
-run's own channel directory, and choosing the verb is all it adds. An envelope carrying
-a verdict, or sent with `--correlation`, is `onemessagebus reply surfaces`. An envelope
-carrying commands and no verdict, sent with no `--correlation`, is `onemessagebus send
-replies`, because `reply` refuses such an envelope whenever no question is pending —
-most of a run — and a live edit binds to no question anyway. Either way the layout
-appends it durably — a verdict to `replies`, bound to the ask it answers, and commands
-to `commands`, which the reconciler drains — so nothing has to be listening at the
-moment the planner writes, and there is no boundary at which the listener changes: the
-reconciler runs for as long as the run does.
+channel-reply` is the engine's own submission verb, `onepipeline reply <run> [FILE]
+[--correlation C]`, reached through `scripts/onepipeline.sh` and adding nothing: the
+envelope is read from the file or from stdin, and the engine routes it by its halves.
+The engine opens the run's channel under the bus configuration that run's launch
+recorded — every launch here records `config/onemessagebus.yaml` — so the declared
+authors, their grants and the criteria validator below are this host's, as they stood
+at that launch. A verdict is appended durably to `replies`, bound to the ask it answers;
+commands go to the run's `commands` queue when a driver holds the run, and the reply
+waits for that driver to reconcile them. When nothing drives the run, the reply takes
+the run itself, as its single writer, and applies the commands there and then — no
+adopt is needed, and nothing waits on the queue for one. So nothing has to be listening
+at the moment the planner writes.
 
 **A verdict binds by correlation, never by arrival** (onemessagebus's `ask.md`).
 `--correlation <c>` names the ask it answers; with none, the verdict binds to the one
@@ -1672,20 +1675,27 @@ correlation nothing pending holds — unknown, or already answered — is refuse
 it, with nothing appended. So a reply cannot reach a reader that did not ask for it,
 and a question that has not yet been handed out is still answerable by its correlation.
 
-The command reports what happened, on stdout, as the bus's one line — from `reply`, and
-from `send` for a commands-only envelope:
+The command reports what happened, on stdout, as the engine's one-line receipt
+(onepipeline's `docs/contract-divergences.md`, entry 64), naming each half only when the
+envelope carried it:
 
 ```json
-{"answered": 3, "correlation": "c-…", "sent": […]}
-{"queue": "commands", "position": 7, "id": 7}
+{"reply": 3, "state": "delivered", "verdict": "delivered"}
+{"reply": 7, "state": "applied", "commands": "applied"}
+{"reply": 8, "state": "queued", "commands": "queued"}
 ```
 
-`answered` is the question answered and `sent` every record appended; a commands-only
-envelope sent with `--correlation` goes to `reply` and answers nothing — `answered` is
-`null` — leaving the ask pending. **Either line is a transport receipt, not a receipt
-that anybody acted on the reply**:
-whether the reconciler applied an edit is the run's record to say, as an
-`edit-committed` or `edit-rejected` event.
+`delivered` is a verdict bound to its ask, or written to the run's own record; `applied`
+is an edit committed, by the driver holding the run or by the reply itself — `reply` is
+then `0`, there being no queue behind it; `queued` is an edit the driver holding the run
+had not reconciled within the reply's wait, `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30
+seconds by the engine's default. Every receipt exits 0, a `queued` one included, which says on
+stderr that the edit is durable and not to be sent again; every refusal exits 2 with its
+reason on stderr and nothing appended. A commands-only envelope sent with
+`--correlation` is such a refusal: a correlation names the question a verdict answers,
+so an envelope answering an ask and editing in one reply carries a verdict half —
+`completion`, `message` or `reason`. The run's `edit-committed` and `edit-rejected`
+events stay the record of what an edit became, and are where a `queued` one is read.
 
 Replies used to depend on a live rendezvous, so `channel-reply` failed with
 `channel rendezvous timed out` whenever nothing held the endpoint open — which was
@@ -1694,8 +1704,11 @@ Delivering one ruling took retry loops of up to ten attempts during live
 supervision on 2026-08-05. No reply class requires a rendezvous now.
 
 **One reply class is refused, immediately and by name.** A settled run has no
-reader left, now or later, so queuing a reply to it would park it where nothing
-drains it:
+reader left, now or later, so queuing a verdict to it would park it where nothing
+drains it. The one verdict a settled run is still owed is the exception: a completion
+verdict carrying a `reason` and naming no ask, sent once the run's driver has exited, is
+written to the run's own journal as `completion-requested`, which closes the run for
+`just unfinished` and the Stop hook. Every other verdict to a settled run is refused:
 
 ```
 onepipeline: refused: run 'demo' has settled, so nothing will ever read a reply to
@@ -2253,7 +2266,11 @@ envelope with graph edits:
 ```
 
 Completion is decoupled from scheduling: the reconciler journals it for audit
-and replay, while the graph continues to settle its frontier.
+and replay, while the graph continues to settle its frontier. Sent through `just
+channel-reply` to a settled run whose driver has exited, either spelling is journalled
+by the reply itself as `completion-requested` with the reason it carried, and that
+record is what closes the run for `just unfinished` and the Stop hook —
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives both.
 
 Every delta is validated against the live frontier before commit. The resulting
 graph must still satisfy the normal plan schema: ids and referenced dependencies
@@ -2279,21 +2296,19 @@ acknowledged JSON lines and are not limited to a FIFO's atomic-write size.
 for an edit to be inside of: the desired graph is what an edit changes, and it outlives
 any one dispatch. That is why an `add` is still accepted against a run whose driver has
 exited, while a *verdict* to a settled run is refused — nothing will read the verdict,
-but the graph is still there to be edited and an adopted driver will act on it.
+but the graph is still there to be edited, and the reply applies the edit itself.
 
-`just channel-reply` appends accepted edits to the channel's durable `commands` queue —
-through `onemessagebus send replies` when the envelope carries commands alone and names
-no `--correlation`, through `onemessagebus reply surfaces` otherwise, as [A planner
-writes a reply once](#a-planner-writes-a-reply-once) says — and the reconciler drains
-them from there, validating each against the graph projected from `events.jsonl` and
-answering each claimed command. The verb does not wait for that answer; its exits are
-the bus's (onemessagebus's `cli.md`):
+`just channel-reply` is the engine's `onepipeline reply`, as [A planner writes a reply
+once](#a-planner-writes-a-reply-once) says. Every edit is first validated against the
+graph projected from `events.jsonl`, by the reconciler's own validator. Where a driver
+holds the run, the edits are appended to the channel's durable `commands` queue and the
+reply waits — `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — for that driver to answer them; where nothing drives it, the reply applies them as the run's single writer.
+Its exits are the engine's:
 
 | Exit | Meaning | stdout |
 | --- | --- | --- |
-| 0 | the envelope was appended; the reconciler applies or rejects its edits from the queue | `{"queue":…,"position":…,"id":…}` from `send`, `{"answered":…,"correlation":…,"sent":[…]}` from `reply` |
-| 1 | the bus said no, with nothing appended: the validator refused or could not judge the envelope, or — through `reply` — its correlation binds no pending ask | the reason, on stderr |
-| 2 | the envelope was not a JSON object, its correlation was malformed, or the invocation was a usage error | the reason, on stderr |
+| 0 | the envelope was taken: its verdict delivered, its edits applied — by the driver or by the reply — or still queued for the driver holding the run once the wait elapsed | `{"reply":…,"state":"delivered\|applied\|queued",…}` |
+| 2 | refused, with nothing appended or applied: a malformed envelope, an undeclared author or an ungranted op, the validator refusing or not judging the envelope, an edit the graph refuses, a correlation no pending ask holds, or a correlation on an envelope with no verdict | the reason, on stderr |
 
 Before anything is appended, an envelope carrying commands is held by the one validator
 `config/onemessagebus.yaml` declares on `replies` — `scripts/envelope-review.sh`, which
@@ -2306,8 +2321,9 @@ depended on the run's journal would make that cache unsound.
 of the `just review-plan` reviewer reads a **novel whole task** — an added node, a
 retry's replacement, a requeued node's amended task. A correction — a bare `amend`, a
 note's `criterion` — is matched and never judged; a note's `text` is never read at all.
-The bus judges the whole offer before appending any of it, so a refusal by either tier
-sends nothing and its findings are the reason on stderr; a judged turn that answered
+The engine has the validator judge the whole offer before any of it is appended or
+applied — on the queued path and on the path that applies an edit to a run nothing
+drives alike — so a refusal by either tier sends nothing and its findings are the reason on stderr; a judged turn that answered
 nothing is **unjudged**, saying `could not be judged`, and is never sent — send the same
 envelope again once the harness answers rather than correcting it. Only a pass is
 cached, by the bus, under `.cache/envelope-passes` keyed on the envelope's bytes and on
@@ -3848,9 +3864,10 @@ way to learn which of the two things happened. Five words the run records —
 
 — plus one more a caller reads back from the verb rather than from the run: the reply
 was accepted durably without the reconciler having answered within the reply timeout.
-That is still queued rather than a refusal, and **never** an instruction to send the
-note again. `just channel-reply` answers the bus's receipt alone, so the recorded word
-is read off the run: the `reached` of the note's operation in its `edit-committed`
+That is the engine's `queued` receipt rather than a refusal, and **never** an
+instruction to send the note again. `just channel-reply`'s receipt says `applied` or
+`queued` and never which of the five a note reached, so the recorded word is read off
+the run: the `reached` of the note's operation in its `edit-committed`
 event, which `just monitor` renders.
 
 The first four are the note reaching the running dispatch's conversation and `carried`
@@ -3913,12 +3930,13 @@ pins, and each recipe named above is a thin wrapper over one of their verbs.
 
 - **`onepipeline`** — the plan and its validation, the continuous reconciler that
   schedules and settles it, the run ledger and its journal, the planner channel
-  (surfaces, replies, live edits and their authorship, attestation), the read-time
+  (surfaces, replies through `reply` — which `just channel-reply` is — live edits and
+  their authorship, attestation), the read-time
   filter profiles, the read-only views, and the driver `just orchestrate`
   launches.
 - **`onemessagebus`** — the channel's transport and the verbs this host speaks it
-  through: `ask` (the shim `ORCHESTRATOR_ASK_MANAGER` names), `reply` and `send` (`just
-  channel-reply`), `serve --codec monitor` (the observer's judge side) and `status`,
+  through: `ask` (the shim `ORCHESTRATOR_ASK_MANAGER` names), `send` (the monitor's own
+  edits), `serve --codec monitor` (the observer's judge side) and `status`,
   with the validator, its pass cache, the monitor's author and binding, and the schema
   link the binding validates frames against configured once in
   `config/onemessagebus.yaml`.

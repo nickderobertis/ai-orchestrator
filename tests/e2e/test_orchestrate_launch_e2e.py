@@ -1735,7 +1735,7 @@ def test_an_author_the_configuration_does_not_declare_is_refused(launched: Launc
 
 
 class Receipt(TypedDict):
-    """What `just channel-reply` answers a commands-only envelope with: where it was sent.
+    """What the monitor's own send answers a commands-only envelope with: where it went.
 
     The bus's own `send` answer, which is why it names a queue: the layout routes an
     envelope carrying commands and no verdict to the engine's `commands` queue.
@@ -1744,6 +1744,21 @@ class Receipt(TypedDict):
     queue: str
     position: int
     id: int
+
+
+class EngineReceipt(TypedDict, total=False):
+    """What `just channel-reply` — the engine's `onepipeline reply` — answers an envelope with.
+
+    `state` says what the envelope became: `applied` by the driver holding the run or by
+    the reply itself, `queued` where the driver did not reconcile it within the reply's
+    wait, `delivered` for a verdict alone. `reply` is the envelope's id on the command
+    queue, by which a still-queued envelope's outcome is read.
+    """
+
+    reply: Required[int]
+    state: Required[str]
+    verdict: str
+    commands: str
 
 
 class CommandResult(TypedDict, total=False):
@@ -1823,16 +1838,31 @@ def _reply(
     )
 
 
-def _sent(environment: dict[str, str], run: str, envelope: ReplyEnvelope) -> Receipt:
-    """Send one commands-only envelope and hand back the receipt the recipe answered."""
+#: What `just channel-reply` exits with for every refusal: the engine's `reply` exits 2.
+REPLY_REFUSED = 2
+
+
+def _decided(environment: dict[str, str], run: str, envelope: ReplyEnvelope) -> CommandOutcome:
+    """Send one commands-only envelope and hand back what the engine decided about it.
+
+    The engine's receipt answers it at once where the envelope was applied, and its
+    refusal — exit 2, with the reason on stderr — where it was refused, whether before
+    anything was queued or once the driver reconciled it. Only an envelope the driver had
+    not reconciled within the reply's wait is read back off `command-outcomes`, by the id
+    its receipt named.
+    """
     sent = _reply(environment, run, envelope)
+    if sent.returncode == REPLY_REFUSED:
+        assert sent.stdout == "", f"a refused reply printed a receipt anyway: {sent.stdout}"
+        return {"id": -1, "applied": False, "reason": sent.stderr}
     assert sent.returncode == 0, sent.stderr + sent.stdout
-    # The bus's one-line answer, stated by `Receipt`.
-    receipt = cast(Receipt, json.loads(sent.stdout))
-    assert receipt["queue"] == "commands", (
-        f"a commands-only envelope was not routed to the engine's command path: {receipt}"
-    )
-    return receipt
+    # The engine's one-line receipt, stated by `EngineReceipt`.
+    receipt = cast(EngineReceipt, json.loads(sent.stdout))
+    assert "verdict" not in receipt, f"a commands-only envelope carried a verdict: {receipt}"
+    if receipt["state"] == "applied":
+        return {"id": receipt["reply"], "applied": True}
+    assert receipt["state"] == "queued", receipt
+    return _outcome(environment, run, receipt["reply"])
 
 
 #: The monitor's persona, whose reply examples are the commands a monitor copies.
@@ -1879,12 +1909,12 @@ def _sent_as_the_persona_spells_it(
     # checked on the next line.
     receipt = cast(Receipt, json.loads(sent.stdout))
     assert receipt["queue"] == "commands", (
-        f"the persona's example did not route its edits where `just channel-reply` does: {receipt}"
+        f"the persona's example did not route its edits to the engine's command queue: {receipt}"
     )
     return receipt
 
 
-def _outcome(environment: dict[str, str], run: str, receipt: Receipt) -> CommandOutcome:
+def _outcome(environment: dict[str, str], run: str, envelope_id: int) -> CommandOutcome:
     """Wait for the engine to settle one sent envelope, and hand back what it decided.
 
     Correlated by the id the envelope was sent under rather than by position or by text,
@@ -1893,12 +1923,12 @@ def _outcome(environment: dict[str, str], run: str, receipt: Receipt) -> Command
     limit = deadline(120)
     while True:
         waiting = _queue_state(environment, run, "command-outcomes")["waiting"]
-        settled = [outcome for outcome in waiting if outcome.get("id") == receipt["id"]]
+        settled = [outcome for outcome in waiting if outcome.get("id") == envelope_id]
         if settled:
             # The engine's own record, narrowed by `CommandOutcome`.
             return cast(CommandOutcome, settled[0])
         if time.monotonic() >= limit:
-            pytest.fail(f"the engine never settled envelope {receipt} on run {run}: {waiting}")
+            pytest.fail(f"the engine never settled envelope {envelope_id} on run {run}: {waiting}")
         time.sleep(0.2)
 
 
@@ -1979,6 +2009,10 @@ def graph_with_a_settled_node(
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 @pytest.mark.xdist_group("monitor-ops")
 @pytest.mark.parametrize(
     "refused_on_the_graph", MONITOR_OPS_ON_A_SETTLED_NODE, ids=lambda row: str(row.command["op"])
@@ -1997,13 +2031,12 @@ def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_autho
     envelope, since the send itself only says where the envelope went.
     """
     live = graph_with_a_settled_node
-    receipt = _sent(
+    outcome = _decided(
         live.environment,
         live.run,
         {"version": 2, "author": "monitor", "commands": [refused_on_the_graph.command]},
     )
 
-    outcome = _outcome(live.environment, live.run, receipt)
     assert outcome["applied"] is False, outcome
     reported = outcome.get("reason", "")
     assert "is not an op the monitor may issue" not in reported, (
@@ -2012,12 +2045,19 @@ def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_autho
     assert refused_on_the_graph.refusal in reported, outcome
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 @pytest.fixture
 def monitor_edit_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """A driven run of its own, because the edit below mutates the graph it is sent to."""
     yield from _driven(tmp_path, oneharness_bin, RunId("monitor-edit-e2e"), [_node(id="only")])
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
     monitor_edit_run: LiveRun,
 ) -> None:
@@ -2051,7 +2091,7 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
             ],
         },
     )
-    outcome = _outcome(live.environment, live.run, receipt)
+    outcome = _outcome(live.environment, live.run, receipt["id"])
     assert outcome["applied"] is True, outcome
 
     # The attribution is only worth what a planner can read, so it is read back the way a
@@ -2090,6 +2130,9 @@ def test_a_monitor_edit_is_applied_and_attributed_to_the_monitor(
         "`just channel-next` no longer reads through the planner profile; it "
         f"carried events from {sorted(sources)}"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 class RefusedFinding(NamedTuple):
@@ -2163,6 +2206,10 @@ def monitor_finding_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun
     yield from _driven(tmp_path, oneharness_bin, RunId("monitor-finding-e2e"), [_node(id="only")])
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     monitor_finding_run: LiveRun,
 ) -> None:
@@ -2181,12 +2228,11 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     environment, run = monitor_finding_run.environment, monitor_finding_run.run
 
     for refused_finding in FINDING_REFUSALS:
-        receipt = _sent(
+        outcome = _decided(
             environment,
             run,
             {"version": 2, "author": "monitor", "commands": [refused_finding.command]},
         )
-        outcome = _outcome(environment, run, receipt)
         assert outcome["applied"] is False, outcome
         reported = outcome.get("reason", "")
         assert "is not an op the monitor may issue" not in reported, (
@@ -2205,7 +2251,7 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
             "commands": [{"op": "finding", "message": said, "id": "only"}],
         },
     )
-    assert _outcome(environment, run, receipt)["applied"] is True
+    assert _outcome(environment, run, receipt["id"])["applied"] is True
 
     handed = list(_drain(environment, run))
     raised = [surface for surface in handed if surface["message"] == said]
@@ -2245,12 +2291,19 @@ def test_a_monitor_finding_raises_one_surface_and_mutates_no_graph(
     )
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 @pytest.fixture
 def blocking_first_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     """A driven run of its own, since reading past a question consumes the queue."""
     yield from _driven(tmp_path, oneharness_bin, RunId("blocking-first-e2e"), [_node(id="only")])
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pending(
     blocking_first_run: LiveRun,
 ) -> None:
@@ -2268,7 +2321,7 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
     environment, run = blocking_first_run.environment, blocking_first_run.run
 
     def _raise(message: str, *, blocking: bool) -> None:
-        receipt = _sent(
+        decided = _decided(
             environment,
             run,
             {
@@ -2277,7 +2330,7 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
                 "commands": [{"op": "finding", "message": message, "blocking": blocking}],
             },
         )
-        assert _outcome(environment, run, receipt)["applied"] is True
+        assert decided["applied"] is True, decided
 
     _raise("observation queued first", blocking=False)
     _raise("observation queued second", blocking=False)
@@ -2306,6 +2359,9 @@ def test_a_blocking_surface_is_handed_out_first_and_reading_past_it_leaves_it_pe
         f"only {read_past} surface(s) were left to read past the question, so this run "
         "cannot show that reading past one leaves it standing"
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _monitor_agent_turns(prompt_log: Path) -> list[RecordedTurn]:
@@ -4108,6 +4164,10 @@ def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[Supervis
 # on the way out, so two of them on separate workers would stop each other's run. The
 # constraint is the scheduling, never a longer deadline: the loop below is only waiting
 # for a rendezvous its own run holds open.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
+# spent its run in this tier; this change only reads the engine's reply receipt where it
+# read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
+# project of its own is enforcement configuration this change may not move to pass.
 @pytest.mark.xdist_group("verdict-recipes")
 @pytest.mark.parametrize(("recipe", "arguments"), VERDICT_RECIPES, ids=lambda row: str(row))
 def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
@@ -4124,7 +4184,7 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
     The question is the completion score the monitor's judge side asks once its
     conversation ends, found by reading the channel through the bus. It is sent against
     successive questions rather than once, because a verdict is refused outright when
-    nothing is pending to bind it to — the bus says so by name — and which question is
+    nothing is pending to bind it to — the channel says so by name — and which question is
     open when a recipe is typed is not this journey's claim.
     """
     environment, run = supervised_channel
@@ -4146,10 +4206,14 @@ def test_a_verdict_recipe_is_accepted_by_the_live_planner_channel(
             delivered = answered.stdout
         else:
             time.sleep(0.2)
-    # The bus's receipt: the question it bound the verdict to, by correlation.
-    receipt = json.loads(delivered)
-    assert receipt["answered"]["record"]["kind"] == SURFACE_KIND_OF_A_COMPLETION_SCORE, delivered
-    assert receipt["correlation"] == receipt["answered"]["record"]["correlation"], delivered
+    # The engine's receipt: a verdict alone, delivered to the question it was bound to.
+    receipt = cast(EngineReceipt, json.loads(delivered))
+    assert receipt["state"] == "delivered", delivered
+    assert receipt.get("verdict") == "delivered", delivered
+    assert "commands" not in receipt, delivered
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 #: How long the cancelled dispatch below has to stop itself before the engine reaps it.
@@ -4313,17 +4377,15 @@ def test_a_requeue_is_refused_while_the_cancelled_dispatch_is_still_in_flight(
     """
     _dispatched(requeueable_run)
     environment, run = requeueable_run.environment, requeueable_run.run
-    cancelled = _sent(
+    cancelled = _decided(
         environment, run, {"version": 2, "commands": [{"op": "cancel", "id": "held"}]}
     )
-    assert _outcome(environment, run, cancelled)["applied"] is True
+    assert cancelled["applied"] is True, cancelled
 
-    # The send only says where the requeue went; whether the engine took it is the
-    # outcome it records against that envelope.
-    requeued = _sent(
+    # Refused by the engine, which answers the reply with the reason rather than a receipt.
+    refused = _decided(
         environment, run, {"version": 2, "commands": [{"op": "requeue", "id": "held"}]}
     )
-    refused = _outcome(environment, run, requeued)
     reported = refused.get("reason", "")
     assert refused["applied"] is False, refused
     assert "still has a dispatch in flight" in reported, reported

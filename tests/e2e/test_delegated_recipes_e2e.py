@@ -393,15 +393,13 @@ DELEGATIONS = (
         "uv run onepipeline monitor run-1 --filter detailed",
     ),
     Delegation("monitor", ("run-1", "--all"), "uv run onepipeline monitor run-1 --all"),
-    # A verdict named as a file is `onemessagebus reply`, which binds it to the pending
-    # question; the table's runner writes the envelope a row names. A commands-only envelope
-    # is `onemessagebus send replies` instead, and an envelope file that cannot be read is
-    # refused before the bus; the `test_the_reply_recipe_*` journeys below state both.
+    # An envelope named as a file is handed to the engine's own `reply` as the caller
+    # named it; the table's runner writes the envelope a row names. Every other shape goes
+    # the same way, which the `test_the_reply_recipe_*` journeys below state.
     Delegation(
         "channel-reply",
         ("run-1", "reply.json"),
-        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
-        "--transport-dir runs/run-1/channel --file reply.json",
+        "uv run onepipeline reply run-1 reply.json",
     ),
     # The text is handed over on the verb's stdin rather than as `--message`, so no
     # prose this recipe was given is ever a command-line word — the hazard the two
@@ -619,8 +617,8 @@ def _gated(published: str) -> tuple[str, ...]:
     return (f"{LAUNCH_GATE} {typed}", ENGINE_VERSION)
 
 
-#: The envelope a row naming a reply file hands the recipe: a verdict, so it is
-#: `onemessagebus reply` it reaches.
+#: The envelope a row naming a reply file hands the recipe: a verdict, which the engine's
+#: `reply` reads from the file the row names.
 REPLY_ENVELOPE = '{"version":3,"completion":true,"message":"main"}'
 
 
@@ -630,8 +628,8 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     tmp_path: Path, delegation: Delegation
 ) -> None:
     checkout, trace = _checkout(tmp_path)
-    # A row naming an envelope file names one a manager wrote: `channel-reply` reads it to
-    # choose its verb, and refuses a file it cannot read before reaching the bus.
+    # A row naming an envelope file names one a manager wrote, so the file exists for the
+    # verb the row reaches to read.
     for argument in delegation.arguments:
         if argument.endswith(".json"):
             (checkout / argument).write_text(REPLY_ENVELOPE, encoding="utf-8")
@@ -1319,110 +1317,47 @@ def test_the_finish_plan_recipe_refuses_a_brief_stating_a_section_twice(
 
 #: A commands-only envelope, the shape a manager sends all run long: no verdict to bind.
 LIVE_EDIT = (
-    '{"version":2,"author":"planner","commands":[{"op":"cancel","id":"api","reason":"park"}]}'
+    '{"version":3,"author":"planner","commands":[{"op":"cancel","id":"api","reason":"park"}]}'
 )
+
+#: A verdict, the shape that answers a question or closes a settled run.
+VERDICT = '{"version":3,"completion":true,"message":"main"}'
 
 
 @pytest.mark.reads_recipes
-def test_the_reply_recipe_sends_a_live_edit_rather_than_binding_it(tmp_path: Path) -> None:
-    """Commands with no verdict and no correlation are `onemessagebus send replies`.
+@pytest.mark.parametrize("envelope", [LIVE_EDIT, VERDICT], ids=("commands", "verdict"))
+@pytest.mark.parametrize(
+    "bound", [(), ("--correlation", "c-1"), ("--correlation=c-1",)], ids=("free", "bound", "joined")
+)
+def test_the_reply_recipe_hands_every_envelope_to_the_engine_unchanged(
+    tmp_path: Path, envelope: str, bound: tuple[str, ...]
+) -> None:
+    """Every envelope, piped or named as a file, bound or not, is the engine's `reply`.
 
-    `onemessagebus reply` binds a reply to a pending question and refuses one with nothing
-    to bind to, which is most of a run for a live edit; `send replies` is routed to the
-    run's `commands` queue by the layout and judged by the same validators. The envelope
-    reaches the bus byte for byte on stdin, piped or named as a file.
+    The recipe chooses nothing: the engine routes an envelope by its halves, binds a
+    verdict to the question `--correlation` names, and refuses a correlation on an
+    envelope with no verdict half. So whatever the envelope carries, the recipe's whole
+    product is the engine's verb with the caller's arguments in the caller's order and
+    the envelope's bytes on its stdin — or the file named, which the engine reads.
     """
     checkout, trace = _checkout(tmp_path)
 
-    piped = _run(checkout, trace, "channel-reply", "run-1", stdin=f"{LIVE_EDIT}\n")
+    piped = _run(checkout, trace, "channel-reply", "run-1", *bound, stdin=f"{envelope}\n")
 
     assert piped.returncode == 0, piped.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onemessagebus send replies --config config/onemessagebus.yaml "
-        "--transport-dir runs/run-1/channel",
-        f"stdin {LIVE_EDIT}",
+        " ".join(("uv run onepipeline reply run-1", *bound)),
+        f"stdin {envelope}",
     ]
 
     trace.unlink()
-    (checkout / "edit.json").write_text(LIVE_EDIT, encoding="utf-8")
-    named = _run(checkout, trace, "channel-reply", "run-1", "edit.json")
+    (checkout / "reply.json").write_text(envelope, encoding="utf-8")
+    named = _run(checkout, trace, "channel-reply", "run-1", "reply.json", *bound)
 
     assert named.returncode == 0, named.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onemessagebus send replies --config config/onemessagebus.yaml "
-        "--transport-dir runs/run-1/channel --file edit.json",
+        " ".join(("uv run onepipeline reply run-1 reply.json", *bound)),
     ]
-
-
-@pytest.mark.reads_recipes
-def test_the_reply_recipe_binds_a_verdict_and_a_named_correlation(tmp_path: Path) -> None:
-    """A verdict, or a caller naming the question, is `onemessagebus reply surfaces`.
-
-    The correlation is forwarded as the caller typed it, so the bus binds the reply to that
-    question and no other; an envelope carrying commands beside it goes the same way,
-    because `--correlation` is a statement about which question it answers.
-    """
-    checkout, trace = _checkout(tmp_path)
-    verdict = '{"version":3,"completion":true,"message":"main"}'
-
-    bound = _run(
-        checkout, trace, "channel-reply", "run-1", "--correlation", "c-1", stdin=f"{verdict}\n"
-    )
-
-    assert bound.returncode == 0, bound.stderr
-    assert trace.read_text().splitlines() == [
-        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
-        "--transport-dir runs/run-1/channel --correlation c-1",
-        f"stdin {verdict}",
-    ]
-
-    trace.unlink()
-    steered = _run(
-        checkout, trace, "channel-reply", "run-1", "--correlation", "c-1", stdin=f"{LIVE_EDIT}\n"
-    )
-
-    assert steered.returncode == 0, steered.stderr
-    assert trace.read_text().splitlines()[0].startswith("uv run onemessagebus reply surfaces")
-
-
-@pytest.mark.reads_recipes
-def test_the_reply_recipe_names_an_envelope_file_it_cannot_read(tmp_path: Path) -> None:
-    """An envelope file that cannot be read is refused by name, and the bus is not reached.
-
-    Which verb an envelope needs is read off its content, so a file that cannot be opened
-    has no content to read. Sending it anyway would leave the bus to report something else
-    as the fault; the recipe names the file and stops instead.
-    """
-    checkout, trace = _checkout(tmp_path)
-
-    unreadable = _run(checkout, trace, "channel-reply", "run-1", "absent.json")
-
-    assert unreadable.returncode == 2, f"{unreadable.stdout}{unreadable.stderr}"
-    assert "the envelope file 'absent.json' could not be read" in unreadable.stderr, (
-        unreadable.stderr
-    )
-    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
-    assert "onemessagebus" not in traced, f"an unreadable envelope reached the bus:\n{traced}"
-
-
-@pytest.mark.reads_recipes
-def test_the_reply_recipe_names_an_envelope_it_cannot_read_from_stdin(tmp_path: Path) -> None:
-    """A stdin that cannot be read is refused by name, and the bus is not reached.
-
-    A directory handed over as stdin opens and then fails every read. That is a read that
-    failed rather than an empty envelope, so the recipe says so instead of sending nothing.
-    """
-    checkout, trace = _checkout(tmp_path)
-    unreadable = os.open(checkout, os.O_RDONLY)
-    try:
-        refused = _run(checkout, trace, "channel-reply", "run-1", stdin_fd=unreadable)
-    finally:
-        os.close(unreadable)
-
-    assert refused.returncode == 2, f"{refused.stdout}{refused.stderr}"
-    assert "the envelope could not be read from stdin" in refused.stderr, refused.stderr
-    traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
-    assert "onemessagebus" not in traced, f"an unreadable envelope reached the bus:\n{traced}"
 
 
 #: Records argv one word per line rather than as one joined string. The shared trace
@@ -1513,9 +1448,9 @@ def test_a_verdict_recipe_sends_its_envelope_through_the_reply_recipe(
 ) -> None:
     """The three verdicts are spellings of one envelope, and `channel-reply` sends it.
 
-    So a verdict reaches the channel by the one route every reply takes — the bus's
-    `reply surfaces` over this host's configuration and the run's own channel — rather
-    than by a second path beside it.
+    So a verdict reaches the channel by the one route every reply takes — the engine's
+    `onepipeline reply` over the run's own channel, under the bus configuration its launch
+    recorded — rather than by a second path beside it.
     """
     checkout, trace = _checkout(tmp_path)
 
@@ -1523,8 +1458,7 @@ def test_a_verdict_recipe_sends_its_envelope_through_the_reply_recipe(
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
-        "--transport-dir runs/run-1/channel",
+        "uv run onepipeline reply run-1",
         f"stdin {envelope}",
     ]
 
@@ -1544,8 +1478,7 @@ def test_a_verdict_message_reaches_the_envelope_as_json_rather_than_as_text(
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        "uv run onemessagebus reply surfaces --config config/onemessagebus.yaml "
-        "--transport-dir runs/run-1/channel",
+        "uv run onepipeline reply run-1",
         'stdin {"version":3,"completion":false,"reason":"it said \\"no\\"; try\\nagain",'
         '"message":"it said \\"no\\"; try\\nagain"}',
     ]

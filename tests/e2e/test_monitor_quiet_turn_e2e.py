@@ -193,6 +193,22 @@ def _raised_since(environment: dict[str, str], run: str, before: set[int]) -> li
     return [one for one in _held(environment, run) if one["id"] not in before]
 
 
+def _completions_requested(environment: dict[str, str], run: str) -> int:
+    """How many `completion-requested` records the run's own journal holds now.
+
+    Read as the channel-reply journeys read the journal: the engine's own record, one JSON
+    object per line, with only the member asserted on here checked.
+    """
+    journal = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "events.jsonl"
+    assert journal.is_file(), f"the run has no journal at {journal} to read a close from"
+    lines = journal.read_text(encoding="utf-8").splitlines()
+    return sum(
+        1
+        for line in lines
+        if line.strip() and json.loads(line).get("kind") == "completion-requested"
+    )
+
+
 #: The run whose directory the judge-side journeys drive against. One per worker the
 #: module lands on, and every such journey shares its xdist group, so each reads the
 #: records it appended rather than another's.
@@ -379,6 +395,10 @@ RULINGS = (
 )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey drives
+# the `judged_run` fixture's one real launch, and sits in `tests/e2e` for the reason that
+# fixture's block and this file's block over the whole-run journeys state: which Nx project
+# owns that tree pre-dates this change and is not this change's to move.
 @pytest.mark.xdist_group("monitor-judge-side")
 @pytest.mark.parametrize("ruling", RULINGS, ids=["met", "unmet-by-message"])
 def test_the_bar_is_asked_once_non_blocking_and_the_ruling_is_the_score(
@@ -392,6 +412,7 @@ def test_the_bar_is_asked_once_non_blocking_and_the_ruling_is_the_score(
     --correlation` — under this host's own configuration and reply window.
     """
     before = _records(judged_run, JUDGED_RUN)
+    closed_before = _completions_requested(judged_run, JUDGED_RUN)
     running = monitor_conversation.start(
         Conversation(Taken(SAID_ON_A_QUIET_TURN), _judge_command(), max_turns=1),
         judged_run,
@@ -422,6 +443,13 @@ def test_the_bar_is_asked_once_non_blocking_and_the_ruling_is_the_score(
     ]
     raised = _raised_since(judged_run, JUDGED_RUN, before)
     assert [one["kind"] for one in raised] == [SURFACE_KIND_OF_A_COMPLETION_SCORE], raised
+    # A correlated ruling is the asker's score, never a close of the settled run it sits on.
+    assert _completions_requested(judged_run, JUDGED_RUN) == closed_before, (
+        "a correlated ruling on the monitor's question was journalled as closing the run"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("monitor-judge-side")

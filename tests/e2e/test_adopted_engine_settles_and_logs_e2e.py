@@ -171,81 +171,32 @@ def _waited_for[Found](what: str, look: Callable[[], Found | None]) -> Found:
         time.sleep(0.2)
 
 
-def _reply(held: HeldRun, *commands: dict[str, Any]) -> int:
+def _reply(held: HeldRun, *commands: dict[str, Any]) -> dict[str, Any]:
     """Send one edit envelope over the live channel, as a manager types it, and read its receipt.
 
-    The receipt is the bus's transport answer — `{queue, position, id}` — and says where
-    the envelope went, not that the graph took it: a run handed back at its gate has
-    nothing driving it, so the edit waits on the run's `commands` queue until a driver
-    attached with `just orchestrate --adopt` drains it. The id is what the engine's answer
-    on `command-outcomes` is keyed on.
+    The recipe is the engine's `onepipeline reply`, and its receipt says what became of
+    the commands: a run handed back at its gate has nothing driving it, so the reply
+    applies the edit itself as the run's single writer — and were the launch's driver
+    still letting go, that driver would apply it within the reply's wait. Either way the
+    receipt reads `applied`, and nothing waits on an adopt.
     """
     sent = _just(
         "channel-reply",
         held.run,
         environment=held.environment,
         seconds=120,
-        stdin=json.dumps({"version": 2, "commands": list(commands)}),
+        stdin=json.dumps({"version": 3, "commands": list(commands)}),
     )
     assert sent.returncode == 0, sent.stderr + sent.stdout
     printed = sent.stdout.splitlines()
-    assert len(printed) == 1, f"the bus's answer is not the whole of stdout:\n{sent.stdout}"
-    # `cast` rather than a validating read: the bus owns this shape, and the members read
-    # here are the ones asserted.
+    assert len(printed) == 1, f"the engine's receipt is not the whole of stdout:\n{sent.stdout}"
+    # `cast` rather than a validating read: the engine owns this shape, and the members
+    # read here are the ones asserted.
     receipt = cast(dict[str, Any], json.loads(printed[0]))
-    assert receipt.get("queue") == "commands", (
-        f"the edit was not sent to the run's command queue: {sent.stdout}\n{sent.stderr}"
+    assert receipt.get("state") == "applied" and receipt.get("commands") == "applied", (
+        f"the edit was not applied: {sent.stdout}\n{sent.stderr}"
     )
-    assert "state" not in receipt, f"a transport receipt claimed to have applied: {receipt}"
-    return int(receipt["id"])
-
-
-def _adopted(held: HeldRun, *, seconds: float = 300) -> None:
-    """Attach a driver to the handed-back run, once the launch's own has let go, and let it drain.
-
-    `just orchestrate --adopt` is for a run nothing is driving and refuses one that still
-    is, so only that refusal is retried; the adopted driver reconciles the queued edits in
-    the order they were sent and returns once the run has settled.
-    """
-    limit = deadline(seconds)
-    refused = ""
-    while time.monotonic() < limit:
-        adopted = _just("orchestrate", "--adopt", held.run, environment=held.environment)
-        if adopted.returncode == 0:
-            return
-        refused = adopted.stdout + adopted.stderr
-        assert "is still being driven" in refused, f"the adoption failed:\n{refused}"
-        time.sleep(1.0)
-    raise AssertionError(f"run {held.run} was still being driven after {seconds}s:\n{refused}")
-
-
-def _outcome(held: HeldRun, envelope_id: int) -> dict[str, Any]:
-    """The engine's answer to the command envelope `envelope_id`, read through the bus."""
-    streamed = subprocess.run(
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "onemessagebus"),
-            "subscribe",
-            "command-outcomes",
-            "--until",
-            json.dumps({"field": "id", "equals": envelope_id}),
-            "--timeout",
-            "120",
-            "--config",
-            str(REPO_ROOT / "config" / "onemessagebus.yaml"),
-            "--transport-dir",
-            str(held.root / "channel"),
-        ],
-        cwd=REPO_ROOT,
-        env=held.environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(180),
-        check=False,
-    )
-    assert streamed.returncode == 0, f"no outcome for envelope {envelope_id}:\n{streamed.stderr}"
-    # The last line is the one `--until` admitted. `cast` rather than a validating read:
-    # the record is the engine's own command outcome, and the journey asserts `applied`.
-    return cast(dict[str, Any], json.loads(streamed.stdout.splitlines()[-1])["record"])
+    return receipt
 
 
 def _results(held: HeldRun) -> str | None:
@@ -271,10 +222,10 @@ def test_a_node_settled_after_a_park_ends_the_park_and_the_run_reports_itself_co
     reporting a node idle for a decision nobody had made.
 
     The launch hands the run back at its gate, so the three edits are sent to a run
-    nothing is driving: each waits on the command queue, and the driver `--adopt` attaches
-    drains them in order — the park first, so opening the gate dispatches nothing.
+    nothing is driving, and each reply applies its edit before the next is sent — the
+    park first, so opening the gate dispatches nothing.
     """
-    sent = [
+    for receipt in (
         _reply(
             held,
             {
@@ -294,14 +245,8 @@ def test_a_node_settled_after_a_park_ends_the_park_and_the_run_reports_itself_co
                 "evidence": "the report is on the issue; nothing is left for a dispatch to do",
             },
         ),
-    ]
-    assert len(set(sent)) == len(sent), f"the bus answered one id for several envelopes: {sent}"
-
-    _adopted(held)
-
-    for envelope_id in sent:
-        took = _outcome(held, envelope_id)
-        assert took["applied"] is True, f"the adopted driver did not apply the edit: {took}"
+    ):
+        assert "verdict" not in receipt, receipt
 
     results = _waited_for("the run to report itself complete", lambda: _results(held))
     assert f"{WORK_NODE}" in results and "done (settled-from-evidence)" in results, results

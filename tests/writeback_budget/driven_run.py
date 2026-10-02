@@ -239,35 +239,37 @@ def just(
     )
 
 
-def reply(driven: DrivenRun, *commands: dict[str, object]) -> int:
+def reply(driven: DrivenRun, *commands: dict[str, object]) -> dict[str, object]:
     """Send one envelope of commands to the run through the real channel recipe.
 
-    Answers the id the bus's receipt gave the envelope — a transport receipt, saying where
-    the envelope went and not that the graph took it — which is what `outcome` reads the
-    engine's decision by.
+    Answers the engine's receipt: `applied` once the driver holding the run — or the reply
+    itself, where nothing drives it — has applied the envelope, and `queued` where the
+    driver did not reconcile it within the reply's wait, in which case `reply` is the id
+    `outcome` reads the engine's later decision by. A refusal fails here, naming it.
     """
     replied = just(
         "channel-reply",
         driven.run,
         environment=driven.environment,
         seconds=120,
-        stdin=json.dumps({"version": 2, "commands": list(commands)}),
+        stdin=json.dumps({"version": 3, "commands": list(commands)}),
     )
     assert replied.returncode == 0, replied.stdout + replied.stderr
     receipt = json.loads(replied.stdout.splitlines()[-1])
-    assert isinstance(receipt, dict) and receipt.get("queue") == "commands", replied.stdout
-    identifier = receipt.get("id")
-    assert isinstance(identifier, int), replied.stdout
-    return identifier
+    assert isinstance(receipt, dict) and receipt.get("state") in {"applied", "queued"}, (
+        replied.stdout
+    )
+    assert isinstance(receipt.get("reply"), int), replied.stdout
+    return receipt
 
 
 def outcome(driven: DrivenRun, envelope: int) -> dict[str, object]:
     """The engine's answer to the command envelope `envelope`, read through the bus.
 
-    Correlated by the id the envelope was sent under, so a journey reading two outcomes
-    cannot read one twice; a `retry` the engine refused — one sent while the cancelled
-    dispatch it names is still in flight — is answered `applied: false` with its reason,
-    which is what a journey reads before it waits on a projection that will never come.
+    Read for an envelope the reply left `queued`, correlated by the id its receipt
+    named, so a journey reading two outcomes cannot read one twice; an edit the engine
+    refused once reconciled is answered `applied: false` with its reason, which is what a
+    journey reads before it waits on a projection that will never come.
     """
 
     def look() -> dict[str, object] | None:
@@ -298,7 +300,12 @@ def outcome(driven: DrivenRun, envelope: int) -> dict[str, object]:
 
 def apply(driven: DrivenRun, *commands: dict[str, object]) -> None:
     """Send one envelope and require the engine to have applied it."""
-    decided = outcome(driven, reply(driven, *commands))
+    receipt = reply(driven, *commands)
+    if receipt["state"] == "applied":
+        return
+    identifier = receipt["reply"]
+    assert isinstance(identifier, int), receipt
+    decided = outcome(driven, identifier)
     assert decided.get("applied") is True, decided
 
 
