@@ -100,14 +100,14 @@ rather than two. That is the rule a real turn applies, and it shapes the layout 
 
 "The parent's mask minus one name" is written by stating what remains, which is what the
 three roles that reach the plan store — the design-document pair and the follow-up agent
-— do to leave `GH_PROJECTS_TOKEN` travelling.
+— do to leave `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY` travelling.
 
 But `codex:primary`'s mask cannot live in a parent at all. That identity honours an
-ambient `CODEX_HOME` and masks nothing except the board credential, so for those three
+ambient `CODEX_HOME` and masks nothing except the plan store's two credentials, so for those three
 roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
 an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
-state no mask at that variant, and each of the seven roles that masks the board
-credential says so itself. It is the one place the six-identity block is not the whole
+state no mask at that variant, and each of the seven roles that masks them says so
+itself. It is the one place the six-identity block is not the whole
 story, and both parents carry a note at that variant explaining why.
 
 Every variant also keeps its own `model` line even where it matches the harness-level

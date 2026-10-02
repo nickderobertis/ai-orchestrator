@@ -49,12 +49,12 @@ harnesses = [
 ]
 
 # **Each variant below restates a whole `unset_env` to leave `GH_PROJECTS_TOKEN`
-# travelling, which is this role's whole point** — it supervises a turn whose task reads the plan out of the store. A child replaces the parent's
-# mask only with a non-empty list, so "the parent's mask minus one name" is written by
+# and `HELLOPATIENT_LINEAR_API_KEY` travelling, which is this role's whole point** — it supervises a turn whose task reads the plan out of the store. A child replaces the parent's
+# mask only with a non-empty list, so "the parent's mask minus two names" is written by
 # stating what remains. Do NOT fold these into `oneharness.identities.toml`: each is
-# the parent's list with the board credential taken out.
+# the parent's list with both plan-store credentials taken out.
 # No `unset_env`: its parent states none either, precisely so this role can leave the
-# board credential travelling. An empty list would not help — it inherits rather than
+# plan-store credentials travelling. An empty list would not help — it inherits rather than
 # clears.
 [harness.codex.variant.primary]
 model = "gpt-6.1-sol"

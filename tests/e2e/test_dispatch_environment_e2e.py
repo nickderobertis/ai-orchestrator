@@ -3,8 +3,9 @@
 A dispatch inherits the launching session's process environment whole, and two of the
 names in it were doing harm.
 
-The **board credential** `scripts/credentials-env.sh` exports reached every provider a
-run started, whatever that role's job was. A worker running a sibling repository's own
+The **plan store's credentials** `scripts/credentials-env.sh` exports — the board token,
+and the production Linear key beside it — reached every provider a run started, whatever
+that role's job was. A worker running a sibling repository's own
 crate suite inherited it and opened a real credentialed GitHub session it never asked
 for — six reconciliations against the API, on a run whose whole subject was what that
 source spends on GitHub's rate limit. Only the roles that read the plan store have any
@@ -90,8 +91,8 @@ def _configs_named_by(graph: str) -> tuple[str, ...]:
 #: recipes, so these are the ones that repoint the runtime directory.
 DISPATCH_CONFIGS = _configs_named_by("graphs/node-scope.yaml")
 
-#: The configs of the members whose dispatch reads the plan store, so these keep the board
-#: credential: the two sides `graphs/design-doc.yaml` names, because
+#: The configs of the members whose dispatch reads the plan store, so these keep its
+#: credentials: the two sides `graphs/design-doc.yaml` names, because
 #: `scripts/finish-plan.sh` composes a task telling that member to read the whole plan out
 #: of the store through `onetaskgraph`; and the one `graphs/follow-up.yaml` names, because
 #: `scripts/follow-ups.sh` composes a task whose whole deliverable is reading and writing
@@ -101,20 +102,24 @@ PLAN_STORE_CONFIGS = (
     *_configs_named_by("graphs/follow-up.yaml"),
 )
 
-#: The credential a dispatch must not carry unless its role reads the plan store, and
-#: the nomination that travels with it either way. Keeping the second is deliberate: a
+#: The credentials a dispatch must not carry unless its role reads the plan store — the
+#: board token, and the production Linear workspace's key, which a sibling's live Linear
+#: lane must never see in place of its own test-scoped `LINEAR_API_KEY` — and the board
+#: nomination that travels either way. Keeping the second is deliberate: a
 #: sibling's live lane handed the board's owner, number and repository but no token
 #: skips and prints its reason, where one handed nothing at all cannot tell a
 #: misconfigured lane from a deliberate one.
-CREDENTIAL = "GH_PROJECTS_TOKEN"
+CREDENTIALS = ("GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY")
 NOMINATION = ("GH_PROJECTS_OWNER", "GH_PROJECTS_NUMBER", "GH_PROJECTS_REPOSITORY")
 
-#: The configs whose role reaches no plan store, so the credential stops at the config.
+#: The configs whose role reaches no plan store, so the credentials stop at the config.
 MASKED_CONFIGS = tuple(name for name in ROLE_CONFIGS if name not in PLAN_STORE_CONFIGS)
 
-#: A value the stand-in would report if the credential reached it. Not a real token, and
-#: never asserted as one — what is asserted is that the name is absent.
-PLANTED_CREDENTIAL = "not-a-real-token-planted-by-this-journey"
+#: A value per credential the stand-in would report if it reached it. Not a real token,
+#: and never asserted as one — what is asserted is that the name is absent.
+PLANTED_CREDENTIALS = {
+    name: f"not-a-real-{name.lower()}-planted-by-this-journey" for name in CREDENTIALS
+}
 PLANTED_NOMINATION = {
     "GH_PROJECTS_OWNER": "nickderobertis",
     "GH_PROJECTS_NUMBER": "1",
@@ -228,7 +233,7 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
 
     Only the provider process is a stand-in. The config is the committed one, the chain
     resolution is `oneharness`'s own, and the environment below is the one a dispatch
-    arrives with: the launching session's names, the board credential among them.
+    arrives with: the launching session's names, the plan store's credentials among them.
     """
     record = tmp_path / "environment.json"
     scratch = tmp_path / "node-scratch"
@@ -240,7 +245,7 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
         # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
         **_provider(front, record),
         **PLANTED_NOMINATION,
-        CREDENTIAL: PLANTED_CREDENTIAL,
+        **PLANTED_CREDENTIALS,
         # What the engine hands a dispatch, and what the repoint reads.
         "ONEPIPELINE_NODE_SCRATCH_DIR": str(scratch),
         # Somewhere that is emphatically not this dispatch's own scratch, standing in
@@ -279,7 +284,7 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
 
 
 @pytest.mark.parametrize("candidate", MASKED_CANDIDATES, ids=_identifiers(MASKED_CANDIDATES))
-def test_a_role_that_does_not_read_the_plan_store_is_handed_no_board_credential(
+def test_a_role_that_does_not_read_the_plan_store_is_handed_no_plan_store_credential(
     tmp_path: Path, oneharness_bin: str, candidate: Candidate
 ) -> None:
     """Every candidate of every chain, because a rule stated for one leaves the rest carrying it.
@@ -291,10 +296,11 @@ def test_a_role_that_does_not_read_the_plan_store_is_handed_no_board_credential(
     """
     recorded = _turn(tmp_path, oneharness_bin, candidate)
 
-    assert CREDENTIAL not in recorded, (
-        f"{candidate.config} handed {candidate.identity} the board credential, which "
-        f"nothing this role does reaches: a turn holding it can open a real credentialed "
-        f"session on somebody's account"
+    handed = [name for name in CREDENTIALS if name in recorded]
+    assert not handed, (
+        f"{candidate.config} handed {candidate.identity} {handed}, which nothing this "
+        f"role does reaches: a turn holding one can open a real credentialed session on "
+        f"somebody's account"
     )
 
 
@@ -321,7 +327,7 @@ def test_the_board_nomination_still_reaches_a_role_that_carries_no_credential(
 @pytest.mark.parametrize(
     "candidate", PLAN_STORE_CANDIDATES, ids=_identifiers(PLAN_STORE_CANDIDATES)
 )
-def test_a_role_that_reads_the_plan_store_keeps_the_board_credential(
+def test_a_role_that_reads_the_plan_store_keeps_its_credentials(
     tmp_path: Path, oneharness_bin: str, candidate: Candidate
 ) -> None:
     """The other direction: the mask must not have been written everywhere.
@@ -335,9 +341,10 @@ def test_a_role_that_reads_the_plan_store_keeps_the_board_credential(
     """
     recorded = _turn(tmp_path, oneharness_bin, candidate)
 
-    assert recorded.get(CREDENTIAL) == PLANTED_CREDENTIAL, (
-        f"{candidate.config} no longer hands {candidate.identity} the board credential, "
-        f"and this role's task is to read the plan out of the store"
+    withheld = [name for name in CREDENTIALS if recorded.get(name) != PLANTED_CREDENTIALS[name]]
+    assert not withheld, (
+        f"{candidate.config} no longer hands {candidate.identity} {withheld}, and this "
+        f"role's task is to read the plan out of the store"
     )
 
 

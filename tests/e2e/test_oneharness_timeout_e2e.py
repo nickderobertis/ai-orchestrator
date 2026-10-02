@@ -138,7 +138,7 @@ PRIMARY_INDIRECTION = "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"
 
 #: What each side's primary Claude identity masks: exactly what it masked while it read
 #: Claude's default directory, less `CLAUDE_CONFIG_DIR` itself, which it now maps in. The
-#: board credential stays unmasked on the three sides that read the plan store.
+#: plan-store credentials stay unmasked on the three sides that read the plan store.
 ANTHROPIC_SELECTORS = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -150,16 +150,17 @@ PLAN_STORE_SIDES = {"design-doc writer", "design-doc reviewer", "follow-up"}
 #: The follow-up agent's graph and its one single-sided member, whose config is the judge's
 #: routing verbatim — chain order and every identity's model — with four chosen
 #: differences: a finite deadline, because it runs after settlement with nothing watching
-#: it; streaming, so its turns reach the views; no mask on the board credential, since its
-#: whole deliverable is the `followups` board; and `bypass` mode, because its working
+#: it; streaming, so its turns reach the views; no mask on the plan-store credentials,
+#: since its whole deliverable is the `followups` board; and `bypass` mode, because its working
 #: directory is no repository. `oneharness.follow-up.toml` says why.
 FOLLOW_UP_GRAPH = REPO_ROOT / "graphs" / "follow-up.yaml"
 FOLLOW_UP_MEMBER = "worker"
 FOLLOW_UP_DEADLINE_SECONDS = 3600
 
-#: The credential that config alone leaves unmasked, and the one field besides the four
-#: above it may differ from the judge's in: the history labels that say which side ran.
-BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
+#: The credentials that config alone leaves unmasked — the board token and the production
+#: Linear key — and the one field besides the four above it may differ from the judge's in:
+#: the history labels that say which side ran.
+PLAN_STORE_CREDENTIALS = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]
 FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness", "mode"}
 
 
@@ -248,14 +249,14 @@ def _without_sources(node: Any) -> Any:
             return node
 
 
-def _unmasked(node: Any, name: str) -> Any:
-    """``node`` with ``name`` taken out of every `unset_env` list it holds."""
+def _unmasked(node: Any, names: list[str]) -> Any:
+    """``node`` with ``names`` taken out of every `unset_env` list it holds."""
     match node:
         case {"unset_env": {"value": list(masked)}, **rest}:
-            kept = [one for one in masked if one != name]
-            return {**_unmasked(rest, name), "unset_env": {"value": kept}}
+            kept = [one for one in masked if one not in names]
+            return {**_unmasked(rest, names), "unset_env": {"value": kept}}
         case dict():
-            return {key: _unmasked(value, name) for key, value in node.items()}
+            return {key: _unmasked(value, names) for key, value in node.items()}
         case _:
             return node
 
@@ -447,7 +448,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         assert primary["env_from"]["CLAUDE_CONFIG_DIR"] == {"value": PRIMARY_INDIRECTION}, (
             f"{config.name}'s primary does not read its directory from {PRIMARY_INDIRECTION}"
         )
-        masked = ANTHROPIC_SELECTORS + ([] if side in PLAN_STORE_SIDES else [BOARD_CREDENTIAL])
+        masked = ANTHROPIC_SELECTORS + ([] if side in PLAN_STORE_SIDES else PLAN_STORE_CREDENTIALS)
         assert primary["unset_env"]["value"] == masked, (
             f"{config.name}'s primary masks {primary['unset_env']['value']}, not {masked}"
         )
@@ -562,16 +563,21 @@ def test_every_side_resolves_its_intended_effective_deadline(
     }
     assert differing <= FOLLOW_UP_DIFFERENCES, (
         "oneharness.follow-up.toml must be oneharness.judge.toml's routing with only the "
-        f"deadline, streaming, labels, mode and board-credential masks changed; these also differ: "
-        f"{sorted(differing - FOLLOW_UP_DIFFERENCES)}"
+        "deadline, streaming, labels, mode and plan-store credential masks changed; these "
+        f"also differ: {sorted(differing - FOLLOW_UP_DIFFERENCES)}"
     )
-    assert _unmasked(judge_routing["harness"], BOARD_CREDENTIAL) == follow_up_routing["harness"], (
+    assert (
+        _unmasked(judge_routing["harness"], PLAN_STORE_CREDENTIALS) == follow_up_routing["harness"]
+    ), (
         "every identity of oneharness.follow-up.toml must carry oneharness.judge.toml's model, "
-        "environment and masks exactly, less the mask on the board credential alone"
+        "environment and masks exactly, less the masks on the plan-store credentials alone"
     )
-    assert BOARD_CREDENTIAL not in json.dumps(follow_up_routing["harness"]), (
-        "an identity of oneharness.follow-up.toml still masks the board credential, which "
-        "the follow-up agent copies its tickets onto the board with"
+    still_masked = [
+        name for name in PLAN_STORE_CREDENTIALS if name in json.dumps(follow_up_routing["harness"])
+    ]
+    assert not still_masked, (
+        f"an identity of oneharness.follow-up.toml still masks {still_masked}, which the "
+        "follow-up agent reads and writes the plan store with"
     )
 
     # The split duplicated a routing, so hold the copy to one intended difference.

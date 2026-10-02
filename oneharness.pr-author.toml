@@ -95,8 +95,8 @@ model = "gpt-6-astra"
 # where `oneharness config` reports a variant's tier from.
 [harness.codex.variant.primary]
 model = "gpt-6-astra"
-unset_env = ["GH_PROJECTS_TOKEN"]
+unset_env = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]
 
 [harness.codex.variant.alternate]
 model = "gpt-6-astra"
-unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN"]
+unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]

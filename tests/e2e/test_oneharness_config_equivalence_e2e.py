@@ -58,12 +58,13 @@ SHARED_PARENTS = ("oneharness.identities.toml", "oneharness.dispatch.toml")
 #: with a node scratch directory for `oneharness.dispatch.toml`'s repoint to name.
 DISPATCHED_ROLES = ("oneharness.toml", "oneharness.judge.toml", "oneharness.follow-up.toml")
 
-#: The board credential, and the three roles whose turn must still carry it: the
-#: design-document pair, whose composed task reads the plan out of the store, and the
-#: follow-up agent, whose whole deliverable is writing the `followups` board. Every
-#: other role masks it. What is held here is that the layering did not move which side
-#: of that line a role sits on.
-BOARD_CREDENTIAL = "GH_PROJECTS_TOKEN"
+#: The plan store's credentials — the board token and the production Linear key — and
+#: the three roles whose turn must still carry them: the design-document pair, whose
+#: composed task reads the plan out of the store, and the follow-up agent, whose whole
+#: deliverable is writing the `followups` board. Every other role masks both. What is
+#: held here is that the layering did not move which side of that line a role sits on,
+#: and that no variant masks one without the other.
+PLAN_STORE_CREDENTIALS = ("GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY")
 PLAN_STORE_CONFIGS = (
     "oneharness.design-doc.toml",
     "oneharness.design-doc-judge.toml",
@@ -75,7 +76,7 @@ PLAN_STORE_CONFIGS = (
 #: so this test still fails on a mask emptied in a shared parent after somebody has
 #: regenerated them. `codex:primary` is deliberately absent from the codex list: it
 #: honours an ambient `CODEX_HOME`, which AGENTS.md explains, and masks nothing but the
-#: board credential.
+#: plan store's credentials.
 ANTHROPIC_CREDENTIALS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -271,7 +272,7 @@ def test_no_variant_lost_a_credential_it_must_mask(oneharness_bin: str, config: 
     `tests/e2e/test_dispatch_environment_e2e.py` is what answers that, from a real turn.
     """
     resolved = _effective_config(oneharness_bin, REPO_ROOT / config)
-    masks_board = config not in PLAN_STORE_CONFIGS
+    masks_store = config not in PLAN_STORE_CONFIGS
 
     lost: list[str] = []
     for (harness_id, variant_id), masked in _variants(resolved).items():
@@ -280,8 +281,8 @@ def test_no_variant_lost_a_credential_it_must_mask(oneharness_bin: str, config: 
             required.extend(ANTHROPIC_CREDENTIALS)
         if harness_id == "codex" and variant_id == "alternate":
             required.append(CODEX_ALTERNATE_CREDENTIAL)
-        if masks_board:
-            required.append(BOARD_CREDENTIAL)
+        if masks_store:
+            required.extend(PLAN_STORE_CREDENTIALS)
         lost.extend(
             f"{harness_id}:{variant_id} no longer masks {name}"
             for name in required
@@ -298,30 +299,31 @@ def test_no_variant_lost_a_credential_it_must_mask(oneharness_bin: str, config: 
 
 
 @pytest.mark.parametrize("config", PLAN_STORE_CONFIGS)
-def test_the_plan_store_roles_still_carry_the_board_credential(
+def test_the_plan_store_roles_still_carry_the_plan_store_credentials(
     oneharness_bin: str, config: str
 ) -> None:
-    """The three roles that read the board are not masked out of doing their job.
+    """The three roles that read the store are not masked out of doing their job.
 
     The other half of the mask property, and the reason the three files restate a whole
     `unset_env` rather than inheriting one: folding those lists back into
     `oneharness.identities.toml` would look like deleting duplication and would leave
     each of these roles unable to reach the store it exists to write.
 
-    `codex:primary` is the variant this nearly broke. Its only mask anywhere here is the
-    board credential, so for these three roles the correct mask is EMPTY — and an empty
+    `codex:primary` is the variant this nearly broke. Its only masks anywhere here are the
+    plan store's credentials, so for these three roles the correct mask is EMPTY — and an empty
     child list inherits rather than clears, so no child can say it. Both parents
     therefore state no mask at that variant and the seven roles that mask it say so
     themselves.
     """
     still_masked = [
-        f"{harness_id}:{variant_id}"
+        f"{harness_id}:{variant_id} masks {name}"
         for (harness_id, variant_id), masked in _variants(
             _effective_config(oneharness_bin, REPO_ROOT / config)
         ).items()
-        if BOARD_CREDENTIAL in masked
+        for name in PLAN_STORE_CREDENTIALS
+        if name in masked
     ]
     assert not still_masked, (
-        f"{config} masks {BOARD_CREDENTIAL} on {still_masked}, so this role's turn "
-        f"cannot reach the plan store it exists to read and write."
+        f"{config}: {still_masked}, so this role's turn cannot reach the plan store it "
+        f"exists to read and write."
     )

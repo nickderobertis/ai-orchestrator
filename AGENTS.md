@@ -1322,8 +1322,8 @@ its intended order. **Every identity in every chain is spelled as a variant**, t
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
 candidate no per-identity environment rule reaches — the credential masks and the
 `XDG_RUNTIME_DIR` repoint, each explained beside its rule. `codex:primary`'s
-`GH_PROJECTS_TOKEN` mask is the one no parent may hold, so each of the seven roles that
-masks it declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
+plan-store credential mask is the one no parent may hold, so each of the seven roles that
+masks them declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
 which is ambient configuration a developer may export and this is the identity that
 honours it; `tests/e2e/test_dispatch_environment_e2e.py` reads what a turn is handed
 off the turn's own provider rather than off the configs. Each side's order is a
@@ -1493,9 +1493,10 @@ environment already defines; so do the board recipes — `just plans`, `just che
 `just copy-plan`, `just approve-design` — through `scripts/plan-store.sh`, which names
 that file when the store refuses for a credential this process does not hold, because
 a board read needs the board's token where a run view needs nothing and loads nothing.
-A dispatch is handed none of it: every `oneharness.*.toml` masks `GH_PROJECTS_TOKEN`
-from its chain except the design-document pair, whose composed task reads the plan out
-of the store, while the board nomination travels so a lane handed it and no token
+A dispatch is handed none of it: every `oneharness.*.toml` masks the plan store's two
+credentials, `GH_PROJECTS_TOKEN` and the production Linear key
+`HELLOPATIENT_LINEAR_API_KEY`, from its chain except the design-document pair and the
+follow-up role, which read and write the store, while the board nomination travels so a lane handed it and no token
 skips and says why. That file wins over onetaskgraph's machine-wide `secrets.env` by
 intent, and nothing detects the two drifting apart, so a value changed only in the
 machine-wide file reads as lost. Its `GH_PROJECTS_*` names nominate the board

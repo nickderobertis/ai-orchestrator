@@ -55,12 +55,12 @@ harnesses = [
 [harness.codex]
 args = ["-c", 'sandbox_permissions=["disk-full-read-access","network-full-access"]']
 
-# The board credential is the plan store's and this role never reaches the store, so it
-# stops here rather than travelling to the provider. Stated per role rather than in the
+# The plan store's credentials — the board token and the Linear key — are the store's,
+# and this role never reaches the store, so they stop here rather than travelling to the provider. Stated per role rather than in the
 # shared parent because it is a per-role policy and a parent's mask is one no child can
 # remove — `oneharness.identities.toml` says so at this same variant. The board
 # *nomination* is left travelling on purpose: a live lane handed the owner, number and
 # repository but no token skips and says why, where one handed nothing cannot tell a
 # misconfigured lane from a deliberate one.
 [harness.codex.variant.primary]
-unset_env = ["GH_PROJECTS_TOKEN"]
+unset_env = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]

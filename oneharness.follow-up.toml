@@ -8,8 +8,9 @@
 #
 #   * a finite `timeout`, because the turn runs after settlement and nothing else is
 #     watching it — an unbounded deadline would leave a wedged verification alive forever;
-#   * `GH_PROJECTS_TOKEN` is unmasked on every identity, because this role's whole
-#     deliverable is reading and writing the `followups` board through `onetaskgraph`.
+#   * `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY` are unmasked on every
+#     identity, because this role's whole deliverable is reading and writing the
+#     `followups` board through `onetaskgraph`.
 #     Every other mask is kept;
 #   * its turns stream to the views, so a manager can watch the verification as it goes;
 #   * the turn runs in `bypass` mode, which the judge file does not declare at all.
@@ -59,13 +60,13 @@ harnesses = [
 ]
 
 # **Each variant below restates a whole `unset_env` to leave `GH_PROJECTS_TOKEN`
-# travelling, which is this role's whole point** — the board credential is this role's deliverable and a masked one writes no ticket. A child replaces the parent's
-# mask only with a non-empty list, so "the parent's mask minus one name" is written by
+# and `HELLOPATIENT_LINEAR_API_KEY` travelling, which is this role's whole point** — the board credential is this role's deliverable and a masked one writes no ticket. A child replaces the parent's
+# mask only with a non-empty list, so "the parent's mask minus two names" is written by
 # stating what remains. Do NOT fold these into `oneharness.identities.toml`: each is
-# the parent's list with the board credential taken out.
+# the parent's list with both plan-store credentials taken out.
 # The Claude identities also carry the judge file's cheaper Sonnet tier.
 # No `unset_env`: its parent states none either, precisely so this role can leave the
-# board credential travelling. An empty list would not help — it inherits rather than
+# plan-store credentials travelling. An empty list would not help — it inherits rather than
 # clears.
 [harness.codex.variant.primary]
 model = "gpt-6.1-sol"

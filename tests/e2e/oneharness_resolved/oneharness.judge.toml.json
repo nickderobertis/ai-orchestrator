@@ -90,7 +90,8 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "GH_PROJECTS_TOKEN"
+              "GH_PROJECTS_TOKEN",
+              "HELLOPATIENT_LINEAR_API_KEY"
             ]
           }
         },
@@ -137,7 +138,8 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "GH_PROJECTS_TOKEN"
+              "GH_PROJECTS_TOKEN",
+              "HELLOPATIENT_LINEAR_API_KEY"
             ]
           }
         },
@@ -184,7 +186,8 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "GH_PROJECTS_TOKEN"
+              "GH_PROJECTS_TOKEN",
+              "HELLOPATIENT_LINEAR_API_KEY"
             ]
           }
         },
@@ -231,7 +234,8 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "GH_PROJECTS_TOKEN"
+              "GH_PROJECTS_TOKEN",
+              "HELLOPATIENT_LINEAR_API_KEY"
             ]
           }
         }
@@ -304,7 +308,8 @@
           "unset_env": {
             "value": [
               "OPENAI_API_KEY",
-              "GH_PROJECTS_TOKEN"
+              "GH_PROJECTS_TOKEN",
+              "HELLOPATIENT_LINEAR_API_KEY"
             ]
           }
         },
@@ -344,7 +349,8 @@
           },
           "unset_env": {
             "value": [
-              "GH_PROJECTS_TOKEN"
+              "GH_PROJECTS_TOKEN",
+              "HELLOPATIENT_LINEAR_API_KEY"
             ]
           }
         }
