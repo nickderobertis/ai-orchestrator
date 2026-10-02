@@ -3424,7 +3424,11 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
     """A missing remote token costs `plans`, not a local project's execution."""
     _write_local_project(tmp_path)
     environment = _plan_environment(tmp_path)
-    environment.pop("GH_PROJECTS_TOKEN", None)
+    # Held set and empty rather than removed: both recipes below load this checkout's
+    # gitignored `.env` for every name the environment leaves *unset*, so a removed token
+    # comes back from that file in a checkout that has one. An empty value is one the
+    # loader never overrides, and the store refuses it exactly as it refuses an absent one.
+    environment["GH_PROJECTS_TOKEN"] = ""
     result = subprocess.run(
         ["just", "plans", "project", "list", "--allow-partial", "--json"],
         cwd=REPO_ROOT,
@@ -3450,7 +3454,7 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
             PROMPT_LOG_ENV: str(tmp_path / "turns.jsonl"),
         }
     )
-    launched_environment.pop("GH_PROJECTS_TOKEN", None)
+    launched_environment["GH_PROJECTS_TOKEN"] = ""
     launched = subprocess.run(
         [
             "just",
