@@ -91,19 +91,27 @@ BOARD = "followups"
 #: :data:`BINDING_FIELD`, the board item a ticket corresponds to. Schema 7 added the required
 #: :data:`ESTIMATE_FIELD`, the priority :func:`estimate` computes, the optional
 #: :data:`FREQUENCY_FIELD`, and the `## Impact` line stating the estimate and its reason.
-SCHEMA = 7
+#: Schema 8 added the structure the severity rubric is judged through: the `## Impact`
+#: section's labelled parts (:data:`IMPACT_PARTS`, :data:`WORKAROUND_COSTS`), the
+#: `## Suggested fix` section's opening paragraph and unit subsections, and the rule that an
+#: acceptable workaround lowers a severity above `low`.
+SCHEMA = 8
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
-#: board item's record of one of these as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6)
-#: The schema just before, which `re-estimate` also reads as carrying no stored estimate and
-#: no frequency judgment, bringing it to :data:`SCHEMA` as it writes.
+#: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7)
+#: The schema just before, which every reader still accepts as sound: its body predates
+#: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
-#: The schemas that added what a ticket of an earlier one lacks: `host`, `repositories`, and
-#: the body's `## Impact` section, as :data:`SCHEMA`'s history states; :data:`RETIRED_AT` is
-#: the one that retired headings.
+#: The schema that added the stored estimate, and the one before it, which `board-status` and
+#: `re-estimate` also read as carrying no stored estimate and no frequency judgment.
+ESTIMATE_AT = 7
+UNESTIMATED_SCHEMA = ESTIMATE_AT - 1
 HOST_AT, REPOSITORIES_AT, IMPACT_AT = 2, 3, 4
+#: The schema whose `## Impact` and `## Suggested fix` carry the structure the rubric is judged
+#: through, and whose acceptable workaround always lowers a severity above `low`.
+STRUCTURE_AT = 8
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -432,21 +440,12 @@ IMPACT = "Impact"
 
 
 class Severity(StrEnum):
-    """How bad a root cause's impact is, most severe first.
-
-    Repository-neutral, because a ticket may be filed against any repository: each meaning
-    speaks of what the affected repository's users and artifacts suffer.
-    """
+    """How bad a root cause's impact is, most severe first, as :data:`RUBRIC` judges it."""
 
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
-
-    @property
-    def meaning(self) -> str:
-        """What this severity says about the impact."""
-        return _SEVERITY_MEANINGS[self]
 
     def above(self, other: Severity) -> bool:
         """Whether this severity is more severe than ``other``."""
@@ -454,16 +453,105 @@ class Severity(StrEnum):
         return order.index(self) < order.index(other)
 
 
-_SEVERITY_MEANINGS = {
+#: The three impact areas a severity is judged across, as the rubric's table heads them.
+IMPACT_AREAS = (
+    "Users (the people who use what the repository ships)",
+    "Development (people and agents working on it)",
+    "Resources (money, subscription quota)",
+)
+#: What each severity means in each of :data:`IMPACT_AREAS`, in that order.
+_RUBRIC_ROWS = {
     Severity.CRITICAL: (
-        "data or work is lost or corrupted, or the affected thing cannot be used at all"
+        "a large outage, substantial functionality unavailable to many or all users, or data "
+        "or work lost or corrupted",
+        "**blocks a regularly used development workflow completely**, or slows it **2× or "
+        "more** (by lengthening it, repeating gates, and so on)",
+        "see the resources rule below",
     ),
     Severity.HIGH: (
-        "the affected thing fails, or a person must intervene, every time the root cause fires"
+        "a capability fails or is unusable for some users or in some situations, with real "
+        "consequence",
+        "slows a regularly used development workflow by **more than 1.1× and under 2×**",
+        "see the resources rule below",
     ),
-    Severity.MEDIUM: "it costs time, resources or quality, but recovers without a person",
-    Severity.LOW: "cosmetic, or rare with negligible cost",
+    Severity.MEDIUM: (
+        "a degraded experience or recurring friction",
+        "a recurring slowdown under 1.1×, or a real risk to output quality",
+        "see the resources rule below",
+    ),
+    Severity.LOW: (
+        "cosmetic, or rare with negligible cost",
+        "a test or tooling improvement that blocks nothing",
+        "see the resources rule below",
+    ),
 }
+
+#: **The severity rubric the user approved**, the one statement of how a ticket's two
+#: severities are judged and how its priority is estimated from them. It reaches a follow-up
+#: agent through the example ticket's `## Impact` guidance (:data:`_HEADING_GUIDANCE`), and
+#: `AGENTS.md` and `docs/orchestration.md` restate only its estimate, which
+#: `tests/test_follow_up_ticket_docs.py` holds to :func:`estimate`.
+RUBRIC = "\n".join(
+    [
+        "**Severity** is judged from the product owner's perspective across three impact "
+        "areas: users, development and resources. The most severe area decides. Users come "
+        "first: an impact on users is never ranked below an equal impact on development.",
+        "",
+        "| | " + " | ".join(IMPACT_AREAS) + " |",
+        "|---|" + "---|" * len(IMPACT_AREAS),
+        *(f"| `{severity}` | " + " | ".join(row) + " |" for severity, row in _RUBRIC_ROWS.items()),
+        "",
+        "A slowdown is measured against the affected workflow, for the work that regularly "
+        "passes through it. Doubling a rarely used side path is not `critical`. A test "
+        "improvement reaches `high` only when it blocks or very substantially slows work.",
+        "",
+        "**Resources rule.** Measure the **extra** spend the root cause causes, projected per "
+        "month at the rate it is seen. That includes dollars, and subscription quota as a share "
+        "of the provider's weekly allowance across this host's identities. The ticket's "
+        "`## Impact` prose states that estimate and its basis. Apply the first step that "
+        "matches:",
+        "",
+        "1. **Negligible means `low` whatever the multiple:** under $25/month **and** under 2% "
+        "of weekly quota.",
+        "2. **Large in absolute terms means `critical` whatever the multiple, even if nothing "
+        "is blocked:** $1,000/month or more, **or** 25% or more of weekly quota, **or** a quota "
+        "or budget exhausted so that work stops.",
+        "3. **Otherwise, the higher of:**",
+        "   - absolute: $250–1,000/month or 10–25% of weekly quota is `high`; $25–250/month "
+        "or 2–10% is `medium`",
+        "   - relative to the affected work's normal spend: 2× or more is `high`; over 1.1× "
+        "and under 2× is `medium`; under 1.1× is `low`",
+        "",
+        "The resources area is judged only by dollars and by subscription quota as a share of "
+        "the provider's weekly allowance, with the negligible floor applied first. A shared API "
+        "rate allowance (GitHub GraphQL or REST, hourly) is neither. Judge what exhausting or "
+        "straining it does in the users or development area instead: work that stops or slows, "
+        "and by how much. Never infer a spend multiple where no absolute estimate is "
+        "established.",
+        "",
+        "**Severity with the workaround** is the severity of what remains once the workaround "
+        "is taken. It is judged only on the workaround's own costs, rated on the same scale:",
+        "",
+        "- the cost of applying it;",
+        "- its side effects on the outcome;",
+        "- discovery: when the person or agent who hits the problem is reliably directed to "
+        "the workaround (the failure names it), discovery costs nothing. Otherwise, how long "
+        "finding it takes, and whether a person has to get involved, are costs.",
+        "",
+        "It equals the raw severity **only when there is no acceptable workaround**. An "
+        "acceptable workaround **always lowers** the severity, at least one level unless the "
+        "raw severity is already `low`. A workaround too costly to lower it is not acceptable, "
+        "and the ticket says `none`. This rule also covers an exhausted quota that a wait or an "
+        "identity switch works around.",
+        "",
+        "**Priority estimate.** The severity with the workaround maps one level for one level "
+        "(`critical` gives `urgent`). The `consistent` raise and the 3-or-more-occurrences "
+        "raise are kept, but each is **capped at `high`**. So `urgent` comes only from a "
+        "severity that is still `critical` with the workaround. Under this rule, a ticket "
+        "reading raw `high`, `low` with the workaround, and firing consistently has the "
+        "priority estimate `medium`.",
+    ]
+)
 
 #: The three lines an `## Impact` section carries after its prose, in this order, and the
 #: workaround that says there is none.
@@ -473,7 +561,7 @@ MITIGATED_LINE = "Severity with the workaround"
 IMPACT_LINES = (SEVERITY_LINE, WORKAROUND_LINE, MITIGATED_LINE)
 NO_WORKAROUND = "none"
 IMPACT_LINE = re.compile(r"^- (?P<label>[^:\n]+):(?P<value>[^\n]*)$", re.MULTILINE)
-#: The fourth line of a schema-7 `## Impact` section, after the three above: the priority
+#: The fourth line of an `## Impact` section from schema 7 on, after the three above: the priority
 #: :func:`estimate` computed and why, as :func:`estimate_line` renders it.
 ESTIMATE_LINE = "Priority estimate"
 #: What a section holds from its first line on: the three lines in order, then the estimate
@@ -482,6 +570,23 @@ IMPACT_TAIL = re.compile(
     "\n".join(rf"- {re.escape(label)}:[^\n]*" for label in IMPACT_LINES)
     + rf"(?:\n- {re.escape(ESTIMATE_LINE)}:[^\n]*)?\s*"
 )
+
+
+#: The labelled parts a schema-8 `## Impact` section's prose carries before its lines, in
+#: this order, each opening a line as `**<part>.**` and carrying content: who is affected, what
+#: it costs them, the deciding impact area and its measure, and what the workaround costs.
+IMPACT_PARTS = (
+    "Who is affected",
+    "What it costs them",
+    "What it costs the product owner",
+    "Cost of the workaround",
+)
+#: The last part, whose content is :data:`WORKAROUND_COSTS` as bullets, or with a workaround
+#: of :data:`NO_WORKAROUND` a statement carrying :data:`NO_ACCEPTABLE_WORKAROUND` and why.
+WORKAROUND_COST = IMPACT_PARTS[-1]
+WORKAROUND_COSTS = ("Applying it", "Side effects on the outcome", "Discovery")
+NO_ACCEPTABLE_WORKAROUND = "no acceptable workaround"
+_IMPACT_PART = re.compile(r"^\*\*(?P<part>[^*\n]+)\.\*\*", re.MULTILINE)
 
 
 def impact_section(prose: str, severity: str, workaround: str, with_workaround: str) -> str:
@@ -535,16 +640,30 @@ class Frequency(StrEnum):
 RAISE_AT = 3
 
 
-def estimate(with_workaround: Severity, frequency: Frequency | None, occurrences: int) -> Priority:
+#: The level a raise is capped at: a raise never makes an estimate `urgent`, which only a
+#: severity still `critical` with the workaround estimates.
+RAISE_CAP = Priority.HIGH
+
+
+def estimate(
+    with_workaround: Severity,
+    frequency: Frequency | None,
+    occurrences: int,
+    *,
+    capped: bool = True,
+) -> Priority:
     """The priority a ticket's facts estimate, which is the only way one is decided.
 
     The base is the severity with the workaround, one level for one level. It is raised one
-    level, capped at `urgent`, when the root cause fires consistently or has been seen
-    :data:`RAISE_AT` or more times, and in no other case.
+    level, capped at :data:`RAISE_CAP`, when the root cause fires consistently or has been
+    seen :data:`RAISE_AT` or more times, and in no other case; both together raise it once.
+    ``capped`` false is the rule before :data:`STRUCTURE_AT`, whose raise reached `urgent`,
+    and is only ever how an estimate line a ticket of that schema carries is read back.
     """
     base = ESTIMATES.index(_BASE_PRIORITY[with_workaround])
+    cap = ESTIMATES.index(RAISE_CAP) if capped else 0
     raised = frequency is Frequency.CONSISTENT or occurrences >= RAISE_AT
-    return ESTIMATES[max(base - 1, 0) if raised else base]
+    return ESTIMATES[max(base - 1, cap) if raised and base > cap else base]
 
 
 def _occurrence_words(occurrences: int) -> str:
@@ -559,25 +678,39 @@ _FREQUENCY_WORDS = {
 }
 
 
-def estimate_line(with_workaround: Severity, frequency: Frequency | None, occurrences: int) -> str:
+def estimate_line(
+    with_workaround: Severity,
+    frequency: Frequency | None,
+    occurrences: int,
+    *,
+    capped: bool = True,
+) -> str:
     """The `## Impact` estimate line for these facts: the level, then why.
 
     The one rendering, which every writer uses and :func:`parse_estimate_line` reads back: it
     names the severity with the workaround, the frequency judgment, the recounted occurrences,
-    and whether the raise applied and why.
+    and whether the raise applied and why — and, where a cause held but nothing was raised,
+    that the base was already at or above :data:`RAISE_CAP`. ``capped`` is :func:`estimate`'s.
     """
-    level = estimate(with_workaround, frequency, occurrences)
+    level = estimate(with_workaround, frequency, occurrences, capped=capped)
+    base = _BASE_PRIORITY[with_workaround]
     causes = []
     if frequency is Frequency.CONSISTENT:
         causes.append("it fires consistently")
     if occurrences >= RAISE_AT:
         causes.append(f"it has {RAISE_AT} or more occurrences")
-    if not causes:
-        raise_words = "not raised"
-    elif _BASE_PRIORITY[with_workaround] is Priority.URGENT:
-        raise_words = f"already {Priority.URGENT}, so not raised though " + " and ".join(causes)
-    else:
-        raise_words = "raised one level because " + " and ".join(causes)
+    held = " and ".join(causes)
+    match base:
+        case _ if not causes:
+            raise_words = "not raised"
+        case Priority.URGENT:
+            raise_words = f"already {Priority.URGENT}, so not raised though {held}"
+        case _ if capped and base is RAISE_CAP:
+            raise_words = (
+                f"already {RAISE_CAP}, where a raise is capped, so not raised though {held}"
+            )
+        case _:
+            raise_words = f"raised one level because {held}"
     return (
         f"- {ESTIMATE_LINE}: {level} (severity with the workaround {with_workaround}; "
         f"{_FREQUENCY_WORDS[frequency]}; {_occurrence_words(occurrences)}; {raise_words})"
@@ -603,11 +736,14 @@ class EstimateFacts(NamedTuple):
     occurrences: int
 
 
-def parse_estimate_line(line: str) -> EstimateFacts | None:
+def parse_estimate_line(line: str, *, prior: bool = False) -> EstimateFacts | None:
     """The facts ``line`` states, or `None` when it is not what :func:`estimate_line` renders.
 
     Read back by rendering again: a line is accepted only when it is byte for byte the line
     its own facts render, so a hand-edited level, count or reason is not an estimate line.
+    ``prior`` reads a line of a ticket recorded before :data:`STRUCTURE_AT`, which carries
+    either the uncapped rule's line it was written with or the current one a later
+    `board-status` or `re-estimate` wrote over it.
     """
     matched = _ESTIMATE_VALUE.fullmatch(line.strip())
     if matched is None or matched["severity"] not in tuple(Severity):
@@ -617,11 +753,11 @@ def parse_estimate_line(line: str) -> EstimateFacts | None:
         return None
     severity, frequency = Severity(matched["severity"]), judged[matched["frequency"]]
     occurrences = int(matched["occurrences"])
-    if estimate_line(severity, frequency, occurrences) != line.strip():
-        return None
-    return EstimateFacts(
-        estimate(severity, frequency, occurrences), severity, frequency, occurrences
-    )
+    for capped in (True, False) if prior else (True,):
+        if estimate_line(severity, frequency, occurrences, capped=capped) == line.strip():
+            level = estimate(severity, frequency, occurrences, capped=capped)
+            return EstimateFacts(level, severity, frequency, occurrences)
+    return None
 
 
 #: The `## Impact` heading and the lines a body's estimate line is placed among.
@@ -1067,18 +1203,20 @@ def _record_problems(
 ) -> list[str]:
     """Every way a record is not the current one.
 
-    ``pending`` reads it as `board-status` does before writing the estimate: a schema-6
-    record, and one with no :data:`ESTIMATE_FIELD` yet, are both what it is about to bring
-    forward. ``for_copy`` holds a ticket about to be copied to carrying a frequency judgment.
+    A :data:`PRIOR_SCHEMA` record is sound as it stands: its body predates :data:`SCHEMA`'s
+    structure, which a run that rewrites it brings it to. ``pending`` reads it as
+    `board-status` does before writing the estimate: a :data:`UNESTIMATED_SCHEMA` record, and
+    one with no :data:`ESTIMATE_FIELD` yet, are both what it is about to bring forward.
+    ``for_copy`` holds a ticket about to be copied to carrying a frequency judgment.
     """
     found = []
-    readable = (SCHEMA, PRIOR_SCHEMA) if pending else (SCHEMA,)
+    readable = (SCHEMA, PRIOR_SCHEMA, UNESTIMATED_SCHEMA) if pending else (SCHEMA, PRIOR_SCHEMA)
     # Named before the missing keys, because a ticket of an older schema lacks the keys its
     # successor added, and the schema is what says why.
     if "schema" in held and (type(held["schema"]) is not int or held["schema"] not in readable):
         found.append(
-            f"the record is schema {held['schema']!r}, and this reads schema {SCHEMA}; bring "
-            "the ticket to the current shape"
+            f"the record is schema {held['schema']!r}, and this reads schema {PRIOR_SCHEMA} "
+            f"or {SCHEMA}; bring the ticket to the current shape"
         )
     owed = [key for key in RECORD_KEYS if not (pending and key == ESTIMATE_FIELD)]
     missing = [key for key in owed if key not in held]
@@ -1228,18 +1366,24 @@ def _repositories_problems(repositories: object, repository: object) -> list[str
             ]
 
 
-def _impact_problems(text: str, held: Mapping[str, object] | None) -> list[str]:
+def _impact_problems(
+    text: str, held: Mapping[str, object] | None, *, structured: bool = True
+) -> list[str]:
     """Every way an `## Impact` section's content is not prose followed by its lines.
 
     ``held`` is the record the estimate line is held to — present exactly once after the three
     severity lines, rendered as :func:`estimate_line` renders it, and stating the record's
     estimate from the severity with the workaround and the record's frequency. `None` reads
     the section as `board-status` does before writing that line, leaving it unchecked.
+    ``structured`` holds a :data:`STRUCTURE_AT` ticket to its labelled parts and to the rule
+    that an acceptable workaround lowers a severity above `low`, and its estimate line to the
+    capped raise; an older ticket predates all three, so its line may be the uncapped rule's.
     """
     where = f"the body's `## {IMPACT}` section"
     lines = [line for line in IMPACT_LINE.finditer(text) if line["label"] in IMPACT_LINES]
     found = []
-    if not (text[: lines[0].start()] if lines else text).strip():
+    prose = text[: lines[0].start()] if lines else text
+    if not prose.strip():
         found.append(
             f"{where} carries no prose before its lines; state there the negative outcome when "
             "the root cause fires, and what it affects"
@@ -1277,25 +1421,109 @@ def _impact_problems(text: str, held: Mapping[str, object] | None) -> list[str]:
             f"{where}'s `- {WORKAROUND_LINE}:` line is empty; name the workaround in place and "
             f"how it is applied, or write `{NO_WORKAROUND}`"
         )
+    if structured and prose.strip():
+        found.extend(_impact_parts_problems(prose, workaround))
     if held is not None:
-        found.extend(_estimate_problems(text, held, severities.get(MITIGATED_LINE)))
+        found.extend(
+            _estimate_problems(text, held, severities.get(MITIGATED_LINE), prior=not structured)
+        )
     if len(severities) == len((SEVERITY_LINE, MITIGATED_LINE)):
-        severity, mitigated = severities[SEVERITY_LINE], severities[MITIGATED_LINE]
-        if mitigated.above(severity):
-            found.append(
-                f"{where}'s severity with the workaround `{mitigated}` is above its severity "
-                f"`{severity}`; a workaround never makes the impact worse"
+        found.extend(
+            _workaround_problems(
+                severities[SEVERITY_LINE], severities[MITIGATED_LINE], workaround, structured
             )
-        if workaround == NO_WORKAROUND and mitigated is not severity:
-            found.append(
-                f"{where}'s workaround is `{NO_WORKAROUND}`, so its severity with the "
-                f"workaround `{mitigated}` has to be its severity `{severity}`"
-            )
+        )
     return found
 
 
+def _workaround_problems(
+    severity: Severity, mitigated: Severity, workaround: str | None, structured: bool
+) -> list[str]:
+    """How a section's two severities break the workaround rule :data:`RUBRIC` states.
+
+    A workaround never makes the impact worse; with none, the two are equal; and on a
+    ``structured`` ticket an acceptable workaround lowers a severity above `low` at least one
+    level, since a workaround too costly to lower it is no acceptable workaround.
+    """
+    where = f"the body's `## {IMPACT}` section"
+    if mitigated.above(severity):
+        return [
+            f"{where}'s severity with the workaround `{mitigated}` is above its severity "
+            f"`{severity}`; a workaround never makes the impact worse"
+        ]
+    if workaround == NO_WORKAROUND:
+        if mitigated is not severity:
+            return [
+                f"{where}'s workaround is `{NO_WORKAROUND}`, so its severity with the "
+                f"workaround `{mitigated}` has to be its severity `{severity}`"
+            ]
+        return []
+    if structured and workaround and mitigated is severity and severity is not Severity.LOW:
+        return [
+            f"{where}'s severity with the workaround `{mitigated}` equals its severity "
+            f"`{severity}`, but an acceptable workaround always lowers a severity above "
+            f"`{Severity.LOW}` at least one level; rate what remains on the workaround's own "
+            f"costs, or, where it is too costly to lower it, write the workaround as "
+            f"`{NO_WORKAROUND}`"
+        ]
+    return []
+
+
+def _impact_parts_problems(prose: str, workaround: str | None) -> list[str]:
+    """How a :data:`STRUCTURE_AT` section's prose is not its :data:`IMPACT_PARTS`, in order.
+
+    Each part opens a line as `**<part>.**` and has content up to the next part. The last,
+    :data:`WORKAROUND_COST`, carries the bullets :data:`WORKAROUND_COSTS` in order, each with
+    content — or, with a workaround of :data:`NO_WORKAROUND`, says there is
+    :data:`NO_ACCEPTABLE_WORKAROUND`, and why, in their place.
+    """
+    where = f"the body's `## {IMPACT}` section"
+    labelled = list(_IMPACT_PART.finditer(prose))
+    named = [part["part"].strip() for part in labelled]
+    if named != list(IMPACT_PARTS) or prose[: labelled[0].start()].strip():
+        return [
+            f"{where} does not open with its labelled parts, each once, in this order and "
+            "before its lines: "
+            + ", ".join(f"`**{part}.**`" for part in IMPACT_PARTS)
+            + ", the last with the bullets "
+            + ", ".join(f"`- {cost}:`" for cost in WORKAROUND_COSTS)
+            + f", or, with a workaround of `{NO_WORKAROUND}`, saying there is "
+            f"{NO_ACCEPTABLE_WORKAROUND} and why"
+        ]
+    ends = [part.start() for part in labelled[1:]] + [len(prose)]
+    contents = {
+        part: prose[found.end() : end].strip()
+        for part, found, end in zip(IMPACT_PARTS, labelled, ends, strict=True)
+    }
+    empty = [f"`**{part}.**`" for part, content in contents.items() if not content]
+    if empty:
+        return [f"{where}'s part {', '.join(empty)} carries no content"]
+    cost = contents[WORKAROUND_COST]
+    if workaround == NO_WORKAROUND:
+        if NO_ACCEPTABLE_WORKAROUND not in cost.lower():
+            return [
+                f"{where}'s workaround is `{NO_WORKAROUND}`, so its `**{WORKAROUND_COST}.**` "
+                f"part says there is {NO_ACCEPTABLE_WORKAROUND}, and why"
+            ]
+        return []
+    bullets = [
+        (bullet["label"].strip(), bullet["value"].strip())
+        for bullet in IMPACT_LINE.finditer(cost)
+        if bullet["label"].strip() in WORKAROUND_COSTS
+    ]
+    if [label for label, _ in bullets] != list(WORKAROUND_COSTS) or not all(
+        value for _, value in bullets
+    ):
+        return [
+            f"{where}'s `**{WORKAROUND_COST}.**` part does not carry its bullets, each once, in "
+            "this order and with content: "
+            + ", ".join(f"`- {label}:`" for label in WORKAROUND_COSTS)
+        ]
+    return []
+
+
 def _estimate_problems(
-    text: str, held: Mapping[str, object], mitigated: Severity | None
+    text: str, held: Mapping[str, object], mitigated: Severity | None, *, prior: bool
 ) -> list[str]:
     """How an `## Impact` section's estimate line disagrees with the record it sits beside."""
     where = f"the body's `## {IMPACT}` section"
@@ -1305,7 +1533,7 @@ def _estimate_problems(
             f"{where} carries its `- {ESTIMATE_LINE}:` line {len(written)} times, not once; "
             "`board-status` writes it"
         ]
-    facts = parse_estimate_line(written[0])
+    facts = parse_estimate_line(written[0], prior=prior)
     if facts is None:
         return [
             f"{where}'s `- {ESTIMATE_LINE}:` line is not as `board-status` renders it; leave it "
@@ -1333,7 +1561,11 @@ def _estimate_problems(
     return found
 
 
-def _body_problems(body: object, host: object, held: Mapping[str, object] | None) -> list[str]:
+def _body_problems(
+    body: object, host: object, held: Mapping[str, object] | None, *, structured: bool = True
+) -> list[str]:
+    """Every way a body is not a ticket's; ``structured`` is :func:`_impact_problems`'s, and
+    also holds `## Suggested fix` to its opening paragraph and unit subsections."""
     if not isinstance(body, str):
         return ["the ticket has no body"]
     found = drafts.sections(body)
@@ -1357,8 +1589,12 @@ def _body_problems(body: object, host: object, held: Mapping[str, object] | None
             ]
         if not found[at][1].strip():
             return [f"the body's `## {required}` section is empty"]
-        if required == IMPACT and (impact := _impact_problems(found[at][1], held)):
+        if required == IMPACT and (
+            impact := _impact_problems(found[at][1], held, structured=structured)
+        ):
             return impact
+        if required == SUGGESTED_FIX and structured and (fix := _fix_problems(found[at][1])):
+            return fix
         if required == EVIDENCE and is_host(host) and str(host) not in found[at][1]:
             return [
                 f"the body's `## {EVIDENCE}` section does not name the host {host!r} the "
@@ -1366,6 +1602,51 @@ def _body_problems(body: object, host: object, held: Mapping[str, object] | None
             ]
         after = at + 1
     return _rejected_fixes_problems(found)
+
+
+#: A level-3 heading inside a section, and the form a unit subsection of `## Suggested fix`
+#: is headed in, as the design document heads a unit: the unit, an em dash, its repository,
+#: and the package or path only when the unit is part of a repository.
+_SUBHEADING = re.compile(r"^###(?:[ \t][^\n]*)?$", re.MULTILINE)
+UNIT_HEADING = re.compile(r"### (?P<unit>\S[^\n]*?) — `(?P<repository>[^`\n]+)`(?: \(`[^`\n]+`\))?")
+_FENCE = re.compile(
+    r"^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$", re.MULTILINE | re.DOTALL
+)
+
+
+def _fix_problems(text: str) -> list[str]:
+    """How a :data:`STRUCTURE_AT` `## Suggested fix` is not a paragraph, then its units.
+
+    It opens with a high-level paragraph, then carries one or more level-3 subsections, each
+    headed as :data:`UNIT_HEADING` heads a unit and each with content. A fenced block is
+    content, so a heading-shaped line inside one is not a subsection.
+    """
+    where = f"the body's `## {SUGGESTED_FIX}` section"
+    # Blanked to the same length, so a position in it is the same position in ``text``.
+    unfenced = _FENCE.sub(lambda block: re.sub(r"[^\n]", " ", block[0]), text)
+    headings = list(_SUBHEADING.finditer(unfenced))
+    shape = "`### <unit> — `<repository>``, with `` (`<package or path>`)`` after it when the "
+    shape += "unit is part of a repository"
+    if not headings:
+        return [
+            f"{where} carries no unit subsection; open it with one paragraph saying what changes "
+            f"and why that removes the root cause, then one subsection per unit headed {shape}"
+        ]
+    if not unfenced[: headings[0].start()].strip():
+        return [
+            f"{where} does not open with a paragraph before its first unit subsection; say "
+            "there what changes overall and why that removes the root cause"
+        ]
+    ends = [heading.start() for heading in headings[1:]] + [len(text)]
+    for heading, end in zip(headings, ends, strict=True):
+        if not UNIT_HEADING.fullmatch(heading[0].rstrip()):
+            return [f"{where}'s subsection {heading[0].strip()!r} is not headed {shape}"]
+        if not text[heading.end() : end].strip():
+            return [
+                f"{where}'s subsection {heading[0].strip()!r} is empty; say what changes in that "
+                "unit and show each contract that changes"
+            ]
+    return []
 
 
 def _rejected_fixes_problems(found: Sequence[tuple[str, str]]) -> list[str]:
@@ -1494,9 +1775,16 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
         )
     found.extend(_title_problems(item.get("title"), repository))
     checked = None if pending or not isinstance(held, Mapping) else held
-    found.extend(_body_problems(item.get("content"), host, checked))
+    structured = isinstance(held, Mapping) and _structured(held)
+    found.extend(_body_problems(item.get("content"), host, checked, structured=structured))
     found.extend(edge_problems(edges))
     return found
+
+
+def _structured(held: Mapping[str, object]) -> bool:
+    """Whether ``held`` is a record whose body carries :data:`STRUCTURE_AT`'s structure."""
+    schema = held.get("schema")
+    return type(schema) is int and schema >= STRUCTURE_AT
 
 
 def _category(status: object) -> object:
@@ -2179,18 +2467,19 @@ def copied_to(report: CopyReport, board: str, bound: BoardItemId | None) -> Copi
 
 
 def stored_estimate(item: Mapping[str, object]) -> Priority | None:
-    """The estimate a board item's record stored, or `None` for a :data:`PRIOR_SCHEMAS` record.
+    """The estimate a board item's record stored, or `None` for a record from before one was.
 
-    :class:`Refused` for a record of any schema neither those nor :data:`SCHEMA`, and for a
-    schema-7 record storing none, or no level: every schema-7 record is written by
-    `board-status` or `re-estimate` with one, so such a record is one edited by hand, and
-    reading either as an older record would hand a person's priority back to the estimate.
+    `None` for a :data:`PRIOR_SCHEMAS` record before :data:`ESTIMATE_AT`. :class:`Refused` for
+    a record of any schema neither those nor one from :data:`ESTIMATE_AT` to :data:`SCHEMA`,
+    and for such a record storing none, or no level: every one is written by `board-status`
+    or `re-estimate` with one, so such a record is one edited by hand, and reading either as
+    an older record would hand a person's priority back to the estimate.
     """
     held = _held_record(item)
     schema = held.get("schema")
-    if type(schema) is int and schema in PRIOR_SCHEMAS:
+    if type(schema) is int and schema in PRIOR_SCHEMAS and schema < ESTIMATE_AT:
         return None
-    if type(schema) is not int or schema != SCHEMA:
+    if type(schema) is not int or schema not in range(ESTIMATE_AT, SCHEMA + 1):
         raise Refused(
             [
                 f"the board item {item.get('id')!r} carries a `{KEY}` record of schema "
@@ -2201,7 +2490,7 @@ def stored_estimate(item: Mapping[str, object]) -> Priority | None:
     if stored not in ESTIMATES:
         raise Refused(
             [
-                f"the board item {item.get('id')!r} carries a schema-{SCHEMA} `{KEY}` record "
+                f"the board item {item.get('id')!r} carries a schema-{schema} `{KEY}` record "
                 f"storing the `{ESTIMATE_FIELD}` {stored!r}, which is no estimate `board-status` "
                 "or `re-estimate` writes; report it rather than copying over it"
             ]
@@ -2299,8 +2588,9 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     :func:`follows_estimate` has it follow to a new value, so a priority a person holds is
     never rewritten; then the content just read, with its estimate line replaced — or added
     after the severity lines where a schema-6 content has none — with `task content set`; and
-    last the record, brought to :data:`SCHEMA`, with `task metadata set`. Nothing else about
-    the item, its status included, is written. :class:`Refused` for an item that is no
+    last the record, brought to :data:`ESTIMATE_AT` where it is older, with `task metadata
+    set`. Nothing else about the item, its status and its schema's structure included, is
+    written. :class:`Refused` for an item that is no
     follow-up ticket this reads.
     """
     matched = QUALIFIED_ID.fullmatch(issue)
@@ -2311,11 +2601,13 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     held = _held_record(item)
     creator = held.get("created_by_run")
     schema = held.get("schema")
-    if type(schema) is not int or schema not in (SCHEMA, PRIOR_SCHEMA):
+    readable = (UNESTIMATED_SCHEMA, *range(ESTIMATE_AT, SCHEMA + 1))
+    if type(schema) is not int or schema not in readable:
         raise Refused(
             [
                 f"{issue} carries a `{KEY}` record of schema {schema!r}, and this reads schema "
-                f"{PRIOR_SCHEMA} or {SCHEMA}; report it rather than estimating over it"
+                + ", ".join(str(one) for one in readable[:-1])
+                + f" or {readable[-1]}; report it rather than estimating over it"
             ]
         )
     if not _is_run(creator):
@@ -2365,7 +2657,7 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     # section in its place with content, and the `## Impact` section to its lines: prose, the
     # three severity lines once each and in order, and at most one estimate line after them —
     # and a malformed one is refused rather than written back.
-    if unsound := _body_problems(text, held.get("host"), None):
+    if unsound := _body_problems(text, held.get("host"), None, structured=_structured(held)):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
     frequency = _record_frequency(held, issue)
     count = occurrences(issue, str(creator), str(held["root_cause"]), reads)
@@ -2386,7 +2678,9 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
             written = Path(scratch) / "content.md"
             written.write_text(rewritten, encoding="utf-8")
             plan_store.sdk(client.task_content_set(issue, file=str(written)))
-    record = {**held, "schema": SCHEMA, ESTIMATE_FIELD: estimated.value}
+    # Brought forward only as far as the estimate this writes: restructuring a body is the
+    # owning run's, so a schema the estimate already reaches stays what it is.
+    record = {**held, "schema": max(schema, ESTIMATE_AT), ESTIMATE_FIELD: estimated.value}
     plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(record)))
     return ReEstimated(issue, estimated, count, priority)
 
@@ -3640,16 +3934,16 @@ def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list
     with_workaround = stated_with_workaround(text)
     creator = held.get("created_by_run")
     schema = held.get("schema")
-    if type(schema) is not int or schema != SCHEMA:
+    if type(schema) is not int or schema not in range(ESTIMATE_AT, SCHEMA + 1):
         return [
-            f"{issue} carries no schema-{SCHEMA} `{KEY}` record: it declares schema "
-            f"{schema!r}; run `re-estimate` on it"
+            f"{issue} carries no `{KEY}` record of schema {ESTIMATE_AT} or later: it declares "
+            f"schema {schema!r}; run `re-estimate` on it"
         ]
     cause = held.get("root_cause")
     if with_workaround is None or not _is_run(creator) or not _is_slug(cause):
         return [
-            f"{issue} carries no schema-{SCHEMA} `{KEY}` record with a severity to estimate "
-            "from; run `re-estimate` on it"
+            f"{issue} carries no `{KEY}` record of schema {ESTIMATE_AT} or later with a "
+            "severity to estimate from; run `re-estimate` on it"
         ]
     try:
         frequency = _record_frequency(held, issue)
@@ -3676,33 +3970,118 @@ def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list
     return found
 
 
+#: The concision rule every `## Impact` part and `## Suggested fix` unit is written to.
+_CONCISION = (
+    "Leave out line numbers, internal or private functions, refactoring steps, test names and "
+    "implementation walkthroughs: those are for whoever picks the ticket up to work out"
+)
+
 _HEADING_GUIDANCE = (
     "<a simple explanation of the root cause, naming the paths inside the repository where it "
     "lives>",
-    "<the negative outcome when the root cause fires, and what it affects: which users, "
-    "people, systems or artifacts of the repository. Then the three lines below, each exactly "
-    "once, in this order, with nothing between or after them. A severity is one of these "
-    "words, most severe first: "
-    + "; ".join(f"`{severity}`, {severity.meaning}" for severity in Severity)
-    + ". The severity with the workaround is never above the severity, and a workaround of "
-    f"exactly `{NO_WORKAROUND}` leaves the two the same. The fourth line, the priority "
-    "estimate and why, is written by `board-status` and never by you>\n\n"
+    "<the four labelled parts below, each in one or two sentences, in this order; then the "
+    "three lines below, each exactly once, in this order, with nothing between or after them. "
+    "Both severities are judged by this rubric:\n\n"
+    + RUBRIC
+    + "\n\nThe severity with the workaround follows from the three workaround costs you state, "
+    "rated on the rubric's scale, and is never above the severity. A workaround of exactly "
+    f"`{NO_WORKAROUND}` leaves the two the same, and its `**{WORKAROUND_COST}.**` part says "
+    f"there is {NO_ACCEPTABLE_WORKAROUND} and why, in place of the three bullets. Any other "
+    f"workaround lowers a severity above `{Severity.LOW}` at least one level. The fourth line, "
+    "the priority estimate and why, is written by `board-status` and never by you>\n\n"
     + impact_section(
-        "",
+        f"**{IMPACT_PARTS[0]}.** <each affected group by name: users of X, developers of Y, or "
+        "spend only>\n"
+        f"**{IMPACT_PARTS[1]}.** <the concrete cost per occurrence, and how often it happens>\n"
+        f"**{IMPACT_PARTS[2]}.** <the deciding area (users, development or resources) and its "
+        "measure: how many users lose what, the slowdown multiple, or $/month and quota "
+        "share>\n"
+        f"**{IMPACT_PARTS[3]}.**\n"
+        f"- {WORKAROUND_COSTS[0]}: <effort, and who does it>\n"
+        f"- {WORKAROUND_COSTS[1]}: <what is lost or degraded, or none>\n"
+        f"- {WORKAROUND_COSTS[2]}: <the failure names it (free), or how long finding it takes "
+        "and whether a person must step in>",
         "<the severity with no workaround applied>",
         "<the workaround in place and how it is applied, or none>",
-        "<the severity that remains once the workaround is accounted for>",
+        "<the severity that remains once the workaround is taken>",
     )
     + f"- {ESTIMATE_LINE}: <written by `board-status`: the estimate and why>",
     "<one or more examples of it>",
     "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
     "the qualified draft id, its run and node, the verified claim with `path:line` at the "
     "basis commit, and the transcript command from the draft>",
-    "<the one fix this ticket recommends: a single change, or a single set of changes that "
-    "together remove the root cause, concrete enough that whoever picks it up has nothing left "
-    "to choose. Never a list of options or alternatives to choose between>",
+    "<one paragraph: what changes overall, and why that removes the root cause. The one fix "
+    "this ticket recommends, concrete enough that whoever picks it up has nothing left to "
+    "choose; never a list of options or alternatives to choose between>\n\n"
+    "### <unit> — `<repository>` (`<package or path>`)\n\n"
+    "<one subsection per unit that changes, headed as the design document heads a unit: a "
+    "unit is a repository, or a part of a project, and the parenthesis appears only when the "
+    "unit is part of a repository. Say what changes in this unit in a sentence or two, then "
+    "show only the contracts that change — public interfaces, CLI flags, schemas, output "
+    "shapes and documented behaviour — each as a diff or the full shape. A fix that changes "
+    f"behaviour with no interface change says so in one sentence. {_CONCISION}>",
     "<every run whose evidence this ticket carries>",
 )
+
+#: **A ticket at the level the user approved**: onepipeline#625's `## Impact` and
+#: `## Suggested fix`, verbatim as the user approved them, shown to a follow-up agent beside
+#: the example ticket's placeholders. `tests/test_follow_up_tickets.py` holds it to the
+#: validator, so the level an agent is shown is one the validator accepts.
+WORKED_EXAMPLE = """## Impact
+
+**Who is affected.** Managers who verify follow-ups by hand (`just follow-ups <run>`) for a \
+run that ended without every node done. Also any program that needs to ask onepipeline \
+whether a run is still being driven.
+
+**What it costs them.** onepipeline has no direct way to answer "is this run being \
+driven?". So the recipe can't tell an abandoned run from a live one, and refuses to verify \
+its drafts. This happens every time (2 recorded). Nothing is lost; verification is blocked \
+until the run is settled.
+
+**What it costs the product owner.** The users area decides: one capability is unusable in \
+that situation. That capability is verifying the follow-ups of a run nothing is driving. \
+It's not an outage and nothing is lost, so `high`.
+
+**Cost of the workaround.**
+- Applying it: adopt and settle the run, then re-run the recipe. That's a few minutes of a \
+manager's time.
+- Side effects on the outcome: none. Verification just runs later.
+- Discovery: free. The refusal points to `just status`, which says "adopt it or stop it".
+
+- Severity: high
+- Workaround: Recover and settle the run before launching its manual follow-up verification.
+- Severity with the workaround: low
+- Priority estimate: medium (severity with the workaround low; fires consistently; 2 \
+occurrences; raised one level because it fires consistently)
+
+## Suggested fix
+
+Give onepipeline a machine-readable answer to whether one run is being driven. \
+ai-orchestrator's follow-up recipe then reads that answer, instead of guessing from a \
+zero-second `watch`.
+
+### Status CLI — `onepipeline`
+
+`status` gains a `--json` flag for one named run, and the contract records the new form:
+
+```diff
+-onepipeline status [RUN] [--no-providers]
++onepipeline status [RUN [--json]] [--no-providers]
+```
+
+```json
+{"run": "<id>", "liveness": "ACTIVE | DRIVER DEAD | PARKED", "driven": true, \
+"settled": false, "owner": "<label>", "mine": true}
+```
+
+`liveness` uses the words the views already print. `settled` is the same condition `watch` \
+ends `settled` on.
+
+### Follow-up recipe — `ai-orchestrator` (`scripts/follow-ups.sh`)
+
+The recipe reads `status <run> --json`, and refuses only when `driven` is true and \
+`settled` is false. ai-orchestrator adopts the onepipeline release that carries the flag.
+"""
 
 #: What the optional `## Rejected fixes` section of the example ticket says to write.
 _REJECTED_FIXES_GUIDANCE = (
@@ -3860,6 +4239,19 @@ def shape(run: str) -> dict[str, object]:
             f"`{severity}` is `{level}`" for severity, level in _BASE_PRIORITY.items()
         ),
         "urgent": Priority.URGENT.value,
+        "raise_cap": RAISE_CAP.value,
+        "unestimated_schema": UNESTIMATED_SCHEMA,
+        "estimate_at": ESTIMATE_AT,
+        "impact_parts": ", ".join(f"`**{part}.**`" for part in IMPACT_PARTS),
+        "workaround_cost": WORKAROUND_COST,
+        "workaround_costs": ", ".join(f"`- {cost}:`" for cost in WORKAROUND_COSTS),
+        "no_workaround": NO_WORKAROUND,
+        "no_acceptable_workaround": NO_ACCEPTABLE_WORKAROUND,
+        "unit_heading": "`### <unit> — `<repository>`` (`` (`<package or path>`)`` only when "
+        "the unit is part of a repository)",
+        "concision": _CONCISION,
+        "worked_example": WORKED_EXAMPLE,
+        "rubric": RUBRIC,
         "raise_at": RAISE_AT,
         "confirms": Verdict.CONFIRMS.value,
         "does_not_confirm": Verdict.DOES_NOT_CONFIRM.value,

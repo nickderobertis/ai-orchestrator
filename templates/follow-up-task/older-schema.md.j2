@@ -19,12 +19,18 @@
   `## {{ shape.retired_headings[1] }}` rewritten as `## {{ shape.suggested_fix }}`, stating the one fix the ticket's
   evidence supports; and every other option it offered moved into `## {{ shape.rejected_fixes }}`,
   with why each was not chosen; then it is validated again.
-- a schema-{{ shape.prior_schema }} ticket of this run is brought to schema {{ shape.schema }} by recording its `{{ shape.frequency_field }}` from
-  the evidence it already carries, then running `{{ board_status }} --board {{ board }} <path of
-  the ticket>`, which writes its `{{ shape.estimate_field }}`, its `## {{ shape.impact }}` estimate line and its
-  `{{ shape.priority_field }}` and reads its schema-{{ shape.prior_schema }} board item as storing no estimate; validate it and copy
-  it. Another run's schema-{{ shape.prior_schema }} item is brought forward by `{{ re_estimate }} --board {{ board }} <its
+- a ticket of this run older than schema {{ shape.schema }} is brought to it by writing its
+  `## {{ shape.impact }}` prose as its labelled parts, {{ shape.impact_parts }}, from the evidence it already
+  carries, with both severities judged again by the rubric — an acceptable workaround
+  lowers a severity above `low`, and one too costly to lower it is `{{ shape.no_workaround }}` — and its
+  `## {{ shape.suggested_fix }}` as one opening paragraph and its unit subsections, headed
+  {{ shape.unit_heading }}; then `{{ board_status }} --board {{ board }} <path of the ticket>` records it at
+  schema {{ shape.schema }}. A schema-{{ shape.unestimated_schema }} ticket also records its `{{ shape.frequency_field }}` from that evidence first, and
+  `{{ board_status }}` writes its `{{ shape.estimate_field }}`, its `## {{ shape.impact }}` estimate line and its
+  `{{ shape.priority_field }}`, reading its schema-{{ shape.unestimated_schema }} board item as storing no estimate; validate it and
+  copy it. Another run's schema-{{ shape.unestimated_schema }} item is brought to schema {{ shape.estimate_at }} by `{{ re_estimate }} --board {{ board }} <its
   id>` alone, and only when this run adds or edits its evidence comment there, or posts a
-  reply there marked `verdict="{{ shape.confirms }}"`.
+  reply there marked `verdict="{{ shape.confirms }}"`; another run's item of schema {{ shape.estimate_at }} or later keeps its
+  schema, and its body is that run's to restructure.
 {%- endmacro %}
 <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->

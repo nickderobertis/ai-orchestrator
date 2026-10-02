@@ -29,10 +29,12 @@ from types import SimpleNamespace
 
 import follow_up_variables
 import pytest
+from follow_up_ticket_shape import FIX, impact_prose
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_comments as comments
+from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
@@ -47,19 +49,24 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 HOST = "verifier-01.build.example"
 
 
-IMPACT_PROSE = "Every reader of a listing misses its last page, and the export built on it too."
+OUTCOME = "Every reader of a listing misses its last page, and the export built on it too."
 WORKAROUND = "readers request the last page by its number"
+IMPACT_PROSE = impact_prose(OUTCOME, workaround=WORKAROUND)
 #: The frequency the sound ticket records, which its estimate line states.
 FREQUENCY = tickets.Frequency.INTERMITTENT
 
 
 def _impact(
-    prose: str = IMPACT_PROSE,
+    prose: str | None = None,
     severity: str = tickets.Severity.HIGH,
     workaround: str = WORKAROUND,
     with_workaround: str = tickets.Severity.MEDIUM,
 ) -> str:
-    """An `## Impact` section, closed by the estimate line its facts render where they can."""
+    """An `## Impact` section, closed by the estimate line its facts render where they can.
+
+    Its prose is the labelled parts for ``workaround`` unless ``prose`` says otherwise.
+    """
+    prose = impact_prose(OUTCOME, workaround=workaround) if prose is None else prose
     section = tickets.impact_section(prose, severity, workaround, with_workaround)
     if with_workaround not in tuple(tickets.Severity):
         return section
@@ -76,7 +83,13 @@ def _body(host: str = HOST, impact: str = IMPACT_TEXT, rejected: str | None = No
     for heading in tickets.HEADINGS:
         sections.append(
             f"## {heading}\n\n"
-            + (impact if heading == tickets.IMPACT else f"What this ticket says under {heading}.")
+            + (
+                impact
+                if heading == tickets.IMPACT
+                else FIX
+                if heading == tickets.SUGGESTED_FIX
+                else f"What this ticket says under {heading}."
+            )
             + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
         )
         if heading == tickets.SUGGESTED_FIX and rejected is not None:
@@ -87,7 +100,7 @@ def _body(host: str = HOST, impact: str = IMPACT_TEXT, rejected: str | None = No
 BODY = _body()
 EVIDENCE_TEXT = f"What this ticket says under {tickets.EVIDENCE}. Verified on `{HOST}`."
 REJECTED_TEXT = "Paging by offset: it skips a page whenever an item is inserted mid-listing."
-FIX_TEXT = f"What this ticket says under {tickets.SUGGESTED_FIX}."
+FIX_TEXT = FIX
 
 #: A body as schema 4 wrote it: a `## Repository` section, and several suggested fixes.
 SCHEMA_4_BODY = BODY.replace(
@@ -128,8 +141,44 @@ FIX_REFUSALS = [
         SCHEMA_4_BODY,
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired",
     ),
+    (
+        BODY.replace(FIX_TEXT, "Page the listing by cursor."),
+        "`## Suggested fix` section carries no unit subsection; open it with one paragraph",
+    ),
+    (
+        BODY.replace(FIX_TEXT, FIX_TEXT.split("\n\n", 1)[1]),
+        "`## Suggested fix` section does not open with a paragraph before its first unit",
+    ),
+    (
+        BODY.replace(
+            "### Listing — `some-service` (`src/cursor.py`)", "### Listing in src/cursor.py"
+        ),
+        "`## Suggested fix` section's subsection '### Listing in src/cursor.py' is not headed "
+        "`### <unit> — `<repository>``",
+    ),
+    (
+        BODY.replace(
+            "### Listing — `some-service` (`src/cursor.py`)", "### Listing - `some-service`"
+        ),
+        "is not headed `### <unit> — `<repository>``",
+    ),
+    (
+        BODY.replace(FIX_TEXT, f"{FIX_TEXT}\n\n### Docs — `some-service`\n"),
+        "`## Suggested fix` section's subsection '### Docs — `some-service`' is empty",
+    ),
+    (
+        # A heading-shaped line inside a fence is content, and no subsection.
+        BODY.replace(FIX_TEXT, "Page by cursor.\n\n```diff\n### Listing — `some-service`\n```"),
+        "`## Suggested fix` section carries no unit subsection",
+    ),
 ]
 
+#: What a schema-8 section whose labelled parts are not each once and in order is told.
+IMPACT_PARTS_ORDER = (
+    "does not open with its labelled parts, each once, in this order and before its lines: "
+    "`**Who is affected.**`, `**What it costs them.**`, `**What it costs the product owner.**`, "
+    "`**Cost of the workaround.**`"
+)
 #: Every way a body's `## Impact` section is refused, and what the refusal names.
 IMPACT_ORDER = "does not end with its three lines, in this order and with nothing between or after"
 IMPACT_REFUSALS = [
@@ -173,6 +222,96 @@ IMPACT_REFUSALS = [
     ),
     (_body(impact=IMPACT_TEXT.replace("- Workaround:", "A note.\n- Workaround:")), IMPACT_ORDER),
     (_body(impact=IMPACT_TEXT + "\nA paragraph after the lines.\n"), IMPACT_ORDER),
+    *[
+        (
+            _body(
+                impact=_impact(
+                    prose=re.sub(
+                        rf"^\*\*{re.escape(part)}\.\*\*", "", IMPACT_PROSE, flags=re.MULTILINE
+                    )
+                )
+            ),
+            IMPACT_PARTS_ORDER,
+        )
+        for part in tickets.IMPACT_PARTS
+    ],
+    (
+        _body(impact=_impact(prose=IMPACT_PROSE.replace("**Who is affected.**", "**Who.**"))),
+        IMPACT_PARTS_ORDER,
+    ),
+    (
+        _body(
+            impact=_impact(
+                prose=IMPACT_PROSE.replace(
+                    "**What it costs them.**", "**What it costs the product owner.**", 1
+                ).replace(
+                    "**What it costs the product owner.** The users",
+                    "**What it costs them.** The users",
+                )
+            )
+        ),
+        IMPACT_PARTS_ORDER,
+    ),
+    (_body(impact=_impact(prose=f"An opening line.\n{IMPACT_PROSE}")), IMPACT_PARTS_ORDER),
+    (
+        _body(impact=_impact(prose=IMPACT_PROSE.replace(OUTCOME, ""))),
+        "part `**What it costs them.**` carries no content",
+    ),
+    *[
+        (
+            _body(
+                impact=_impact(
+                    prose=re.sub(
+                        rf"^- {re.escape(cost)}:[^\n]*\n?", "", IMPACT_PROSE, flags=re.MULTILINE
+                    )
+                )
+            ),
+            "`**Cost of the workaround.**` part does not carry its bullets, each once, in this "
+            "order and with content: `- Applying it:`, `- Side effects on the outcome:`, "
+            "`- Discovery:`",
+        )
+        for cost in tickets.WORKAROUND_COSTS
+    ],
+    (
+        _body(
+            impact=_impact(
+                prose=re.sub(
+                    r"^- Discovery:[^\n]*", "- Discovery:", IMPACT_PROSE, flags=re.MULTILINE
+                )
+            )
+        ),
+        "`**Cost of the workaround.**` part does not carry its bullets",
+    ),
+    (
+        _body(
+            impact=_impact(
+                prose=IMPACT_PROSE,
+                workaround="none",
+                with_workaround=tickets.Severity.HIGH,
+            )
+        ),
+        "workaround is `none`, so its `**Cost of the workaround.**` part says there is no "
+        "acceptable workaround, and why",
+    ),
+    *[
+        (
+            _body(impact=_impact(severity=level, with_workaround=level)),
+            f"severity with the workaround `{level}` equals its severity `{level}`, but an "
+            "acceptable workaround always lowers a severity above `low` at least one level",
+        )
+        for level in (tickets.Severity.CRITICAL, tickets.Severity.HIGH, tickets.Severity.MEDIUM)
+    ],
+    (
+        _body(
+            impact=_impact(severity=tickets.Severity.LOW, with_workaround=tickets.Severity.MEDIUM)
+        ),
+        "severity with the workaround `medium` is above its severity `low`",
+    ),
+    (
+        _body(impact=_impact(workaround="none", severity=tickets.Severity.CRITICAL)),
+        "workaround is `none`, so its severity with the workaround `medium` has to be its "
+        "severity `critical`",
+    ),
 ]
 
 
@@ -230,7 +369,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 7
+    assert held["schema"] == tickets.SCHEMA == 8
     keys = list(held)
     assert keys == [*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD]
     assert held[tickets.ESTIMATE_FIELD] == "medium"
@@ -298,11 +437,11 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 7"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 7"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 7"),
-        (_set_record("schema", 4), "is schema 4, and this reads schema 7"),
-        (_set_record("schema", 6), "is schema 6, and this reads schema 7"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 7 or 8"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 7 or 8"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 7 or 8"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 7 or 8"),
+        (_set_record("schema", 6), "is schema 6, and this reads schema 7 or 8"),
         (_drop_record("priority_estimate"), "record is missing priority_estimate; `priority"),
         (_set_record("priority_estimate", "critical"), "`priority_estimate` 'critical' is not"),
         (_set_record("priority_estimate", "none"), "`priority_estimate` 'none' is not one of"),
@@ -433,7 +572,7 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 4, and this reads schema 7"), found
+    assert found[0].startswith("the record is schema 4, and this reads schema 7 or 8"), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
         "ticket to the current shape" in problem
@@ -463,8 +602,14 @@ def test_a_body_with_one_fix_and_rejected_fixes_once_after_it_or_none_is_sound(b
         IMPACT_TEXT,
         _impact(workaround="none", with_workaround=tickets.Severity.HIGH),
         _impact(severity=tickets.Severity.LOW, with_workaround=tickets.Severity.LOW),
-        # Prose may run to several paragraphs, and a bullet of its own is prose, not a line.
-        _impact(prose="Operators of the service lose a day.\n\n- Users: everyone paging."),
+        # A part may run to several paragraphs, and a bullet of its own is prose, not a line.
+        _impact(prose=IMPACT_PROSE.replace(OUTCOME, f"{OUTCOME}\n\n- Users: everyone paging.")),
+        # A raw `low` stays `low` with an acceptable workaround: there is no level below it.
+        _impact(
+            severity=tickets.Severity.LOW, with_workaround=tickets.Severity.LOW, workaround="retry"
+        ),
+        _impact(severity=tickets.Severity.CRITICAL, with_workaround=tickets.Severity.HIGH),
+        _impact(workaround="none", severity=tickets.Severity.LOW, with_workaround="low"),
     ],
 )
 def test_an_impact_section_of_prose_and_one_of_each_line_is_accepted(impact: str) -> None:
@@ -487,17 +632,78 @@ def test_an_impact_section_is_told_every_problem_it_has_at_once() -> None:
     assert "carries its `- Priority estimate:` line 0 times" in found[-1]
 
 
-def test_the_severity_vocabulary_is_ordered_and_means_what_the_contract_states() -> None:
-    assert {severity.value: severity.meaning for severity in tickets.Severity} == {
-        "critical": (
-            "data or work is lost or corrupted, or the affected thing cannot be used at all"
-        ),
-        "high": (
-            "the affected thing fails, or a person must intervene, every time the root cause fires"
-        ),
-        "medium": "it costs time, resources or quality, but recovers without a person",
-        "low": "cosmetic, or rare with negligible cost",
-    }
+#: The approved rubric's determinations, verbatim, each of which the shipped one states.
+RUBRIC_STATES = (
+    "**Severity** is judged from the product owner's perspective across three impact areas: "
+    "users, development and resources. The most severe area decides. Users come first: an "
+    "impact on users is never ranked below an equal impact on development.",
+    "| | Users (the people who use what the repository ships) | Development (people and agents "
+    "working on it) | Resources (money, subscription quota) |",
+    "| `critical` | a large outage, substantial functionality unavailable to many or all users, "
+    "or data or work lost or corrupted | **blocks a regularly used development workflow "
+    "completely**, or slows it **2× or more** (by lengthening it, repeating gates, and so on) "
+    "| see the resources rule below |",
+    "| `high` | a capability fails or is unusable for some users or in some situations, with "
+    "real consequence | slows a regularly used development workflow by **more than 1.1× and "
+    "under 2×** | see the resources rule below |",
+    "| `medium` | a degraded experience or recurring friction | a recurring slowdown under "
+    "1.1×, or a real risk to output quality | see the resources rule below |",
+    "| `low` | cosmetic, or rare with negligible cost | a test or tooling improvement that "
+    "blocks nothing | see the resources rule below |",
+    "A slowdown is measured against the affected workflow, for the work that regularly passes "
+    "through it. Doubling a rarely used side path is not `critical`. A test improvement "
+    "reaches `high` only when it blocks or very substantially slows work.",
+    "**Resources rule.** Measure the **extra** spend the root cause causes, projected per month "
+    "at the rate it is seen. That includes dollars, and subscription quota as a share of the "
+    "provider's weekly allowance across this host's identities. The ticket's `## Impact` prose "
+    "states that estimate and its basis. Apply the first step that matches:",
+    "1. **Negligible means `low` whatever the multiple:** under $25/month **and** under 2% of "
+    "weekly quota.",
+    "2. **Large in absolute terms means `critical` whatever the multiple, even if nothing is "
+    "blocked:** $1,000/month or more, **or** 25% or more of weekly quota, **or** a quota or "
+    "budget exhausted so that work stops.",
+    "3. **Otherwise, the higher of:**",
+    "- absolute: $250–1,000/month or 10–25% of weekly quota is `high`; $25–250/month or 2–10% "
+    "is `medium`",
+    "- relative to the affected work's normal spend: 2× or more is `high`; over 1.1× and under "
+    "2× is `medium`; under 1.1× is `low`",
+    "A shared API rate allowance (GitHub GraphQL or REST, hourly) is neither. Judge what "
+    "exhausting or straining it does in the users or development area instead: work that "
+    "stops or slows, and by how much. Never infer a spend multiple where no absolute estimate "
+    "is established.",
+    "**Severity with the workaround** is the severity of what remains once the workaround is "
+    "taken. It is judged only on the workaround's own costs, rated on the same scale:",
+    "- the cost of applying it;",
+    "- its side effects on the outcome;",
+    "- discovery: when the person or agent who hits the problem is reliably directed to the "
+    "workaround (the failure names it), discovery costs nothing. Otherwise, how long finding "
+    "it takes, and whether a person has to get involved, are costs.",
+    "It equals the raw severity **only when there is no acceptable workaround**.",
+    "An acceptable workaround **always lowers** the severity, at least one level unless the "
+    "raw severity is already `low`. A workaround too costly to lower it is not acceptable, and "
+    "the ticket says `none`.",
+    "This rule also covers an exhausted quota that a wait or an identity switch works around.",
+    "The `consistent` raise and the 3-or-more-occurrences raise are kept, but each is "
+    "**capped at `high`**. So `urgent` comes only from a severity that is still `critical` "
+    "with the workaround.",
+)
+
+
+def test_the_rubric_states_every_approved_determination_and_its_numbers_are_the_modules() -> None:
+    """The shipped rubric carries each determination the user approved, word for word.
+
+    The numbers its estimate paragraph names — the cap and the occurrence count — are the ones
+    :func:`~orchestrator.follow_up_tickets.estimate` computes with, so neither drifts alone.
+    """
+    flat = _flat(tickets.RUBRIC)
+
+    for stated in RUBRIC_STATES:
+        assert _flat(stated) in flat, stated
+    assert f"{tickets.RAISE_AT}-or-more-occurrences raise" in flat
+    assert f"capped at `{tickets.RAISE_CAP}`" in flat
+    assert tickets.estimate(tickets.Severity.HIGH, tickets.Frequency.CONSISTENT, 9) is (
+        tickets.RAISE_CAP
+    )
     assert (
         list(tickets.Severity)
         == sorted(
@@ -517,9 +723,8 @@ def test_the_impact_guidance_and_severities_speak_of_the_repository_not_of_orche
     guidance = guidance.split("\n## Examples\n", 1)[0]
 
     assert ORCHESTRATION_WORDS.findall(guidance) == [], guidance
-    for severity in tickets.Severity:
-        assert ORCHESTRATION_WORDS.findall(severity.meaning) == [], severity
-    for spoken in ("users", "artifacts of the repository"):
+    assert ORCHESTRATION_WORDS.findall(tickets.RUBRIC) == []
+    for spoken in ("users", "development", "resources", tickets.RUBRIC):
         assert spoken in guidance, guidance
 
 
@@ -912,6 +1117,9 @@ INITIAL_SECTIONS = (
     *tickets.HEADINGS[: tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1],
     tickets.REJECTED_FIXES,
     *tickets.HEADINGS[tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 :],
+    # The approved example's two sections, shown after the example's placeholders.
+    tickets.IMPACT,
+    tickets.SUGGESTED_FIX,
     "Ownership on the board",
     "Acceptance criteria",
 )
@@ -922,6 +1130,7 @@ FEEDBACK_SECTIONS = (
     "Why",
     "Where everything is",
     "Investigating what a comment asks",
+    "A comment disputing a severity or a priority",
     "What to do, in order",
     "Ownership on the board",
     "The account of every comment",
@@ -1197,9 +1406,18 @@ def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> Non
         "after `## Suggested fix` and gives each rejected fix with why it was rejected",
         "<a simple explanation of the root cause, naming the paths inside the repository where "
         "it lives>",
-        "<the one fix this ticket recommends: a single change, or a single set of changes that "
-        "together remove the root cause, concrete enough that whoever picks it up has nothing "
-        "left to choose. Never a list of options or alternatives to choose between>",
+        "<one paragraph: what changes overall, and why that removes the root cause. The one "
+        "fix this ticket recommends, concrete enough that whoever picks it up has nothing left "
+        "to choose; never a list of options or alternatives to choose between>",
+        "### <unit> — `<repository>` (`<package or path>`)",
+        "It opens with one paragraph saying what changes overall and why that removes the root "
+        "cause, then one subsection per unit that changes, headed `### <unit> — `<repository>`` "
+        "(`` (`<package or path>`)`` only when the unit is part of a repository). Each says what "
+        "changes in a sentence or two, then shows only the contracts that change — public "
+        "interfaces, CLI flags, schemas, output shapes and documented behaviour — each as a "
+        "diff or the full shape. Leave out line numbers, internal or private functions, "
+        "refactoring steps, test names and implementation walkthroughs",
+        "each in one or two sentences",
     ):
         assert said in flat, said
     headings = re.findall(r"^## (.+)$", example, re.MULTILINE)
@@ -1329,16 +1547,18 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     for label in ("Severity", "Workaround", "Severity with the workaround"):
         assert re.search(rf"^- {label}: <", impact, re.MULTILINE), label
     flat_impact = _flat(impact)
-    assert "the negative outcome when the root cause fires, and what it affects" in flat_impact
     assert (
-        "Then the three lines below, each exactly once, in this order, with nothing between or "
-        "after them"
+        "<the four labelled parts below, each in one or two sentences, in this order; then the "
+        "three lines below, each exactly once, in this order, with nothing between or after them"
     ) in flat_impact
-    for severity in tickets.Severity:
-        assert f"`{severity}`, {severity.meaning}" in flat_impact, severity
-    assert "`critical`, " in flat_impact.split("`high`, ", 1)[0], "most severe first"
-    assert "The severity with the workaround is never above the severity" in flat_impact
-    assert "a workaround of exactly `none` leaves the two the same" in flat_impact
+    assert _flat(tickets.RUBRIC) in flat_impact
+    for part in tickets.IMPACT_PARTS:
+        assert re.search(rf"^\*\*{re.escape(part)}\.\*\*", impact, re.MULTILINE), part
+    for cost in tickets.WORKAROUND_COSTS:
+        assert re.search(rf"^- {re.escape(cost)}: <", impact, re.MULTILINE), cost
+    assert "never above the severity" in flat_impact
+    assert "A workaround of exactly `none` leaves the two the same" in flat_impact
+    assert "Any other workaround lowers a severity above `low` at least one level" in flat_impact
 
 
 def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
@@ -1534,6 +1754,123 @@ def test_validate_reads_a_rendered_ticket_through_the_store_as_sound(
     assert tickets.main(["validate", str(path)]) == tickets.SOUND
     assert tickets.read_ticket(path) == _ticket(body=body)
     assert "is a sound ticket" in capsys.readouterr().out
+
+
+#: A body as schema 7 wrote it: bare `## Impact` prose, a workaround that left a `high`
+#: severity where it was — which schema 7 accepted — and a fix with no unit subsection.
+SCHEMA_7_BODY = _body(
+    impact=_impact(
+        prose=OUTCOME, severity=tickets.Severity.HIGH, with_workaround=tickets.Severity.HIGH
+    )
+).replace(FIX_TEXT, "Page the listing by cursor.")
+
+
+def _at_schema(ticket: tickets.Ticket, schema: int) -> str:
+    """``ticket`` rendered with its record declaring ``schema``."""
+    rendered = tickets.render(ticket)
+    current = f'"schema": {tickets.SCHEMA},'
+    assert rendered.count(current) == 1
+    return rendered.replace(current, f'"schema": {schema},')
+
+
+def test_a_schema_7_ticket_still_validates_and_the_same_ticket_at_schema_8_is_refused(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The structure and the lowering rule bind the schema that added them, and no older one.
+
+    A schema-7 ticket on the board keeps validating until a run rewrites it, which brings it
+    to schema 8; the rules both schemas share — a workaround never raises the severity, and
+    `none` leaves it where it was — still bind it.
+    """
+    older = _ticket(body=SCHEMA_7_BODY, priority_estimate=tickets.Priority.HIGH)
+    path = _write(drafts_root, older, _at_schema(older, tickets.PRIOR_SCHEMA))
+
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    assert tickets.read_ticket(path).body == SCHEMA_7_BODY
+    capsys.readouterr()
+
+    _write(drafts_root, older)
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    refused = _flat(capsys.readouterr().err)
+    assert IMPACT_PARTS_ORDER in refused, refused
+
+    raised = SCHEMA_7_BODY.replace(
+        "- Severity with the workaround: high", "- Severity with the workaround: critical"
+    )
+    _write(drafts_root, older, _at_schema(dataclasses.replace(older, body=raised), 7))
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "is above its severity `high`" in _flat(capsys.readouterr().err)
+
+
+#: The estimate line schema 7 wrote for a `high` severity with the workaround that fires
+#: consistently, verbatim: its raise reached `urgent`, which schema 8 caps at `high`.
+SCHEMA_7_RAISED_LINE = (
+    "- Priority estimate: urgent (severity with the workaround high; fires consistently; "
+    "1 occurrence; raised one level because it fires consistently)"
+)
+
+
+def test_a_schema_7_ticket_keeps_the_uncapped_estimate_it_was_written_with(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The cap binds schema 8, so a schema-7 ticket's raise to `urgent` still reads back.
+
+    Its line also reads back once `board-status` or `re-estimate` writes the capped one over
+    it, and the uncapped line in a schema-8 ticket is refused as not what the command writes.
+    """
+    estimated = tickets.estimate_line(tickets.Severity.HIGH, FREQUENCY, 1)
+    body = SCHEMA_7_BODY.replace(estimated, SCHEMA_7_RAISED_LINE)
+    assert SCHEMA_7_RAISED_LINE in body
+    older = _ticket(
+        body=body,
+        priority_estimate=tickets.Priority.URGENT,
+        frequency=tickets.Frequency.CONSISTENT,
+    )
+    path = _write(drafts_root, older, _at_schema(older, tickets.PRIOR_SCHEMA))
+
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    capsys.readouterr()
+
+    capped = tickets.estimate_line(tickets.Severity.HIGH, tickets.Frequency.CONSISTENT, 1)
+    assert capped.startswith("- Priority estimate: high (")
+    rewritten = dataclasses.replace(
+        older,
+        body=body.replace(SCHEMA_7_RAISED_LINE, capped),
+        priority_estimate=tickets.Priority.HIGH,
+    )
+    _write(drafts_root, rewritten, _at_schema(rewritten, tickets.PRIOR_SCHEMA))
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    capsys.readouterr()
+
+    _write(drafts_root, older, _at_schema(older, tickets.SCHEMA))
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "line is not as `board-status` renders it" in _flat(capsys.readouterr().err)
+
+
+def test_the_approved_example_is_a_sound_ticket_and_reaches_the_task_verbatim(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The level of detail an agent is shown is one `validate` accepts, and it is shown whole.
+
+    onepipeline#625's `## Impact` and `## Suggested fix`, as the user approved them, put into a
+    ticket's body in place of its own: raw `high`, `low` with the workaround, firing
+    consistently and seen twice, which estimates `medium`.
+    """
+    sections = dict(drafts.sections(tickets.WORKED_EXAMPLE))
+    assert list(sections) == [tickets.IMPACT, tickets.SUGGESTED_FIX]
+    body = BODY.replace(IMPACT_TEXT.strip(), sections[tickets.IMPACT].strip()).replace(
+        FIX_TEXT, sections[tickets.SUGGESTED_FIX].strip()
+    )
+    approved = _ticket(
+        body=body, frequency=tickets.Frequency.CONSISTENT, priority_estimate=tickets.Priority.MEDIUM
+    )
+    path = _write(drafts_root, approved)
+
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    assert tickets.stated_with_workaround(body) is tickets.Severity.LOW
+    task = _task()
+    assert tickets.WORKED_EXAMPLE in task
+    assert task.index(tickets.WORKED_EXAMPLE) > task.index("The shape, with every placeholder")
 
 
 @pytest.mark.parametrize("status", list(tickets.Status))
@@ -3217,8 +3554,9 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "naming the accepted item's URL. On a re-dispatch where the board already holds this "
         "run's own item for it, withdraw that item instead, under the withdrawal rules",
         "- **shrinks** — the fix removes part of the impact or narrows where the root cause "
-        "bites: write `## Impact` (its prose and its severity lines) and, where the scope "
-        "narrows, `## Root cause` to what remains;",
+        "bites: write `## Impact` to what remains — its labelled parts, and both severities "
+        "re-judged by the rubric against that remainder, so a smaller impact or a cheaper "
+        "workaround lowers them — and, where the scope narrows, `## Root cause` too;",
         "- **needs a different fix** — the fix the evidence would otherwise support conflicts "
         "with, duplicates or is superseded by the accepted one: `## Suggested fix` states what "
         "remains right once the accepted fix is in, and the fix it would otherwise have "
@@ -4300,15 +4638,30 @@ def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
 
 
 def test_the_older_schema_rule_names_the_schemas_and_headings_the_module_reads() -> None:
-    """The rule's last clause is written for the step from :data:`PRIOR_SCHEMA` to
-    :data:`SCHEMA`, and its first for the headings :data:`RETIRED_HEADINGS` names."""
+    """The rule's clauses name the schemas the module reads: the structure :data:`SCHEMA`
+    added, the estimate :data:`ESTIMATE_AT` added, and the headings :data:`RETIRED_HEADINGS`
+    names."""
     rule = _older_schema_rule(_task(redispatch=True))
 
     assert (
-        f"a schema-{tickets.PRIOR_SCHEMA} ticket of this run is brought to schema "
-        f"{tickets.SCHEMA} by recording its `{tickets.FREQUENCY_FIELD}`"
+        f"a ticket of this run older than schema {tickets.SCHEMA} is brought to it by writing "
+        f"its `## {tickets.IMPACT}` prose as its labelled parts, "
+        + ", ".join(f"`**{part}.**`" for part in tickets.IMPACT_PARTS)
     ) in rule, rule
-    assert f"Another run's schema-{tickets.PRIOR_SCHEMA} item" in rule, rule
+    assert (
+        f"its `## {tickets.SUGGESTED_FIX}` as one opening paragraph and its unit subsections"
+    ) in rule, rule
+    assert (
+        f"A schema-{tickets.UNESTIMATED_SCHEMA} ticket also records its "
+        f"`{tickets.FREQUENCY_FIELD}` from that evidence first"
+    ) in rule, rule
+    assert (
+        f"Another run's schema-{tickets.UNESTIMATED_SCHEMA} item is brought to schema "
+        f"{tickets.ESTIMATE_AT} by"
+    ) in rule, rule
+    assert (
+        f"another run's item of schema {tickets.ESTIMATE_AT} or later keeps its schema" in rule
+    ), rule
     assert f"its `## {tickets.RETIRED_HEADINGS[0]}` section removed" in rule, rule
     assert (
         f"its `## {tickets.RETIRED_HEADINGS[1]}` rewritten as `## {tickets.SUGGESTED_FIX}`" in rule
@@ -4410,7 +4763,14 @@ def test_each_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority(
         "**Its priority is estimated from facts, never chosen.**",
         f"`{VALIDATE}` refuses a ticket without it",
         "Run it on the issue each time this run adds or edits an evidence comment there",
-        "a schema-6 ticket of this run is brought to schema 7 by recording its `frequency`",
+        "A schema-6 ticket also records its `frequency` from that evidence first",
+        "**judge both severities by the rubric** in the example's `## Impact` guidance, from "
+        "the product owner's perspective across users, development and resources",
+        "the severity with the workaround follows from the workaround costs you state there, "
+        "and an acceptable workaround always lowers a severity above `low`",
+        "raised one level, capped at `high`, when `frequency` is `consistent` or the root cause "
+        "has 3 or more occurrences — once, when both hold — so `urgent` comes only from a "
+        "severity still `critical` with the workaround",
     ):
         assert required in initial, required
     for required in (
@@ -4423,6 +4783,11 @@ def test_each_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority(
         '"verdict": "<confirms or does-not-confirm: the verdict the reply\'s marker carries>"',
         "and every issue a `confirms` reply sits on stores the estimate its comments recount to",
         'each time it posts a reply marked `verdict="confirms"` there',
+        "a comment saying a ticket's priority or severity is wrong is answered on its "
+        "severities. Judge both again by the rubric below",
+        "Where the rubric supports another severity, change the `## Impact` section's labelled "
+        "parts and severity lines to match, and nothing else",
+        _flat(tickets.RUBRIC),
     ):
         assert required in feedback, required
 

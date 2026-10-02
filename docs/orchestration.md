@@ -1998,11 +1998,14 @@ paragraph to them.
 
 **A ticket's priority is estimated from its facts, and a person's override stands.** A
 follow-up agent records facts and never a priority: the `## Impact` severity with the
-workaround, and whether the root cause fires consistently as the record's `frequency`. The
-estimate is that severity one level for one level, raised one level, capped at urgent, when
-it fires consistently or has 3 or more occurrences — the ticket's own evidence, plus each
-other run's evidence comment and each reply marked as confirming, recounted off the issue's
-comments every time and stored nowhere. `board-status` writes it before every copy, as the
+workaround, and whether the root cause fires consistently as the record's `frequency`. Both
+severities are judged by the rubric `orchestrator/follow_up_tickets.py` states — the product
+owner's view across users, development and resources, users first — and an acceptable
+workaround always lowers a severity above low. The estimate is that severity one level for
+one level, raised one level, capped at high, when it fires consistently or has 3 or more
+occurrences — the ticket's own evidence, plus each other run's evidence comment and each
+reply marked as confirming, recounted off the issue's comments every time and stored
+nowhere — so only a severity still critical with the workaround estimates urgent. `board-status` writes it before every copy, as the
 record's `priority_estimate`, the `## Impact` estimate line and the ticket's priority; a run
 that comments on another run's issue, or replies confirming one, runs `re-estimate` on it.
 The item's priority follows the estimate only while the board holds the estimate its record

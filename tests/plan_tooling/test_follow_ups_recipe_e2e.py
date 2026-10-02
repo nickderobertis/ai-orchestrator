@@ -64,6 +64,7 @@ import plan_root_variable
 import pytest
 import short_state
 import yaml
+from follow_up_ticket_shape import impact_prose
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
@@ -220,6 +221,10 @@ REPLACEMENT_FIX = (
     "pages the export by cursor, so nothing here pages it again."
 )
 NARROWED_SEVERITY = (tickets.Severity.MEDIUM, tickets.Severity.LOW)
+#: The workaround every ticket names, and the unit subsection its `## Suggested fix` closes
+#: with after its opening paragraph, as schema 8 requires.
+WORKAROUND = "readers request the last page by its number"
+UNIT = "### Listing — `some-service` (`src/cursor.py`)\n\n`list` returns every page."
 FULL_SEVERITY = (tickets.Severity.HIGH, tickets.Severity.MEDIUM)
 RELATED = f"Related: {PROPOSED_URL} proposes the sweep fix, and is not assumed."
 WITHDRAWN = f"Withdrawn: the accepted fix in {PROPOSED_URL} removes this root cause too."
@@ -457,17 +462,21 @@ def _ticket(
             f"## {heading}\n\n"
             + (
                 tickets.impact_section(
-                    f"{body}: some-service's readers lose the last page of every listing. "
-                    f"{impact_note}".rstrip(),
+                    impact_prose(
+                        f"{body}: some-service's readers lose the last page of every listing. "
+                        f"{impact_note}".rstrip(),
+                        workaround=WORKAROUND,
+                    ),
                     severity[0],
-                    "readers request the last page by its number",
+                    WORKAROUND,
                     severity[1],
                 )
                 + line
                 if heading == tickets.IMPACT
                 else (
-                    suggested_fix
-                    if suggested_fix is not None and heading == tickets.SUGGESTED_FIX
+                    (suggested_fix if suggested_fix is not None else f"{body} ({heading}).")
+                    + f"\n\n{UNIT}"
+                    if heading == tickets.SUGGESTED_FIX
                     else f"{body} ({heading})."
                 )
                 + (f" {root_cause_note}" if root_cause_note and heading == "Root cause" else "")
@@ -2988,13 +2997,13 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
             "Owning runs",
         ], headings
         fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
-        assert fix == ONE_FIX
+        assert fix == f"{ONE_FIX}\n\n{UNIT}"
         assert REJECTED in ticket.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1]
         assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 7
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 8
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3193,7 +3202,9 @@ def test_a_ticket_narrowed_by_an_accepted_fix_lands_depending_on_it_with_the_url
     cause = landed.body.split("## Root cause\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert NARROWED_CAUSE in cause, "the narrowed root cause did not land"
     fix = landed.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
-    assert fix == REPLACEMENT_FIX, "the fix that remains right once the accepted one is in"
+    assert fix == f"{REPLACEMENT_FIX}\n\n{UNIT}", (
+        "the fix that remains right once the accepted one is in"
+    )
     assert NARROWING_URL in fix, "the replacement does not say which accepted fix it is chosen on"
     rejected = landed.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert rejected == REFIXED, "the fix the accepted one displaced was not recorded as rejected"

@@ -218,9 +218,15 @@ def test_each_follow_up_section_writes_every_ticket_against_the_boards_accepted_
 #: the occurrence count that does.
 ESTIMATE_RULE = (
     "The estimate is that severity one level for one level, raised one level, capped at "
-    f"{tickets.ESTIMATES[0]}, when it fires {tickets.Frequency.CONSISTENT}ly or has "
+    f"{tickets.RAISE_CAP}, when it fires {tickets.Frequency.CONSISTENT}ly or has "
     f"{tickets.RAISE_AT} or more occurrences"
 )
+#: What the cap leaves `urgent` to, and the workaround rule, as the prose states them.
+URGENT_RULE = (
+    f"so only a severity still {tickets.Severity.CRITICAL} with the workaround estimates "
+    f"{tickets.Priority.URGENT}"
+)
+LOWERING_RULE = f"an acceptable workaround always lowers a severity above {tickets.Severity.LOW}"
 
 
 @pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
@@ -236,7 +242,8 @@ def test_each_follow_up_section_states_the_estimate_the_module_computes(
     flat = " ".join(section(document, heading).split())
     stated = {int(number) for number in re.findall(r"(\d+) or more occurrences", flat)}
 
-    assert ESTIMATE_RULE in flat, f"{document}'s section {heading!r} does not say {ESTIMATE_RULE!r}"
+    for rule in (ESTIMATE_RULE, URGENT_RULE, LOWERING_RULE):
+        assert rule in flat, f"{document}'s section {heading!r} does not say {rule!r}"
     assert stated == {tickets.RAISE_AT}, (
         f"{document}'s section {heading!r} states the raise at {sorted(stated)} occurrences, "
         f"where the module raises at {tickets.RAISE_AT}"
@@ -248,12 +255,15 @@ def test_the_estimate_is_what_the_stated_rule_says(severity: tickets.Severity) -
     """`estimate` maps each severity to the level at its own rank, and raises as the rule says.
 
     One level for one level: the severities, most severe first, take the estimate levels in
-    order. Raised one level, capped at the first level, by a consistent judgment or by
+    order. Raised one level, capped at :data:`~orchestrator.follow_up_tickets.RAISE_CAP`, so
+    that only a severity still critical is urgent, by a consistent judgment or by
     :data:`~orchestrator.follow_up_tickets.RAISE_AT` occurrences, and by nothing short of
     either.
     """
     rank = list(tickets.Severity).index(severity)
-    base, raised = tickets.ESTIMATES[rank], tickets.ESTIMATES[max(rank - 1, 0)]
+    cap = tickets.ESTIMATES.index(tickets.RAISE_CAP)
+    base = tickets.ESTIMATES[rank]
+    raised = tickets.ESTIMATES[max(rank - 1, cap)] if rank > cap else base
     below = tickets.RAISE_AT - 1
 
     for frequency in (tickets.Frequency.INTERMITTENT, None):

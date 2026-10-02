@@ -20,8 +20,9 @@ string, a `fail` diagnostic, the re-dispatch an account's refusal suggests). A P
 is parsed, because Python launches by argument list and names the recipe in docstrings: a
 `"just", "follow-ups"` pair in a list or tuple, or a string that names
 `scripts/follow-ups.sh` outside a docstring, is a launch. Markdown is prose and is
-skipped. A launch spelled through a variable is missed, which is the gap a
-reviewer reading a new launcher is left to close.
+skipped, and so is a Python constant `PROSE` names: Markdown a module hands an agent to
+read, which names the script as a reader would. A launch spelled through a variable is
+missed, which is the gap a reviewer reading a new launcher is left to close.
 """
 
 from __future__ import annotations
@@ -56,7 +57,14 @@ ALLOWED = {
 }
 
 
-def _python_launches(source: str) -> list[str]:
+#: Module-level constants that hold Markdown an agent reads rather than run, as file → names.
+#: `WORKED_EXAMPLE` is the user-approved onepipeline#625 ticket shown verbatim to a follow-up
+#: agent; its unit heading names `scripts/follow-ups.sh` as the unit a fix changes, and a
+#: change to that wording would no longer be the text the user approved.
+PROSE = {"orchestrator/follow_up_tickets.py": frozenset({"WORKED_EXAMPLE"})}
+
+
+def _python_launches(source: str, prose: frozenset[str] = frozenset()) -> list[str]:
     """Each launch a Python file makes, as the source segment that makes it."""
     tree = ast.parse(source)
     docstrings = {
@@ -66,6 +74,11 @@ def _python_launches(source: str) -> list[str]:
         and node.body
         and isinstance(node.body[0], ast.Expr)
         and isinstance(node.body[0].value, ast.Constant)
+    } | {
+        id(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id in prose for target in node.targets)
     }
     found = []
     for node in ast.walk(tree):
@@ -101,7 +114,8 @@ def _launches() -> dict[str, list[str]]:
             except UnicodeDecodeError:
                 continue
             if path.suffix == ".py":
-                lines = _python_launches(text)
+                name = str(Path(path).relative_to(REPO_ROOT))
+                lines = _python_launches(text, PROSE.get(name, frozenset()))
             else:
                 lines = [
                     line.strip()
@@ -123,3 +137,24 @@ def test_only_the_success_hook_and_the_recipe_itself_launch_the_follow_ups_recip
         "a finished run's follow-ups are verified by the success hook or by a manager "
         "typing the recipe, never by a chain after another launch returns"
     )
+
+
+def test_each_prose_exemption_is_a_constant_that_still_names_the_script() -> None:
+    for name, constants in PROSE.items():
+        source = (REPO_ROOT / name).read_text(encoding="utf-8")
+        assigned = {
+            target.id: node.value
+            for node in ast.parse(source).body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        for constant in constants:
+            value = assigned.get(constant)
+            assert isinstance(value, ast.Constant) and isinstance(value.value, str), (
+                f"{name} assigns no string constant {constant}, so its PROSE entry is stale"
+            )
+            assert LAUNCH.search(value.value), (
+                f"{name}'s {constant} no longer names the follow-ups recipe, so its PROSE "
+                "entry exempts nothing and should go"
+            )

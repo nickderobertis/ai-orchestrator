@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import ClassVar, NamedTuple, NewType
 
 import follow_up_variables
+from follow_up_ticket_shape import FIX, impact_prose
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -1389,7 +1390,10 @@ def _follow_up_ticket(
     origin = follow_up_tickets.Origin(_hosted(repository))
     medium = follow_up_tickets.Severity.MEDIUM
     impact = follow_up_tickets.impact_section(
-        "Readers of the board miss the ticket's status.", medium, "none", medium
+        impact_prose("Readers of the board miss the ticket's status.", workaround="none"),
+        medium,
+        "none",
+        medium,
     )
     return follow_up_tickets.Ticket(
         title=f"{repository.name}: {cause.replace('-', ' ')}",
@@ -1407,6 +1411,8 @@ def _follow_up_ticket(
             + (
                 impact
                 if heading == follow_up_tickets.IMPACT
+                else FIX
+                if heading == follow_up_tickets.SUGGESTED_FIX
                 else f"Verified on `{host}` ({heading})."
             )
             + (f" {evidence}" if evidence and heading == follow_up_tickets.EVIDENCE else "")

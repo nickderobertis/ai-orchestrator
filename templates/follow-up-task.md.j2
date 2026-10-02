@@ -257,11 +257,16 @@ closed one.
    Report it, naming the draft, its author and why it was blocking, rather than filing it
    quietly as a ticket.
 5. **Group what stands by root cause**, and write one ticket per root cause, to the shape
-   under "The verified ticket" below. For each, **judge from the original evidence whether
-   the root cause fires consistently** — every time its conditions hold — or only
-   intermittently or in certain situations, and record that as the ticket's `{{ shape.frequency_field }}`.
-   That judgment and the severities are the facts its priority is estimated from; the
-   estimate and the priority themselves are never yours to write.
+   under "The verified ticket" below. For each, **judge both severities by the rubric** in
+   the example's `## {{ shape.impact }}` guidance, from the product owner's perspective across
+   users, development and resources, and write the parts that judgment rests on — {{ shape.impact_parts }}
+   — before the severity lines: the severity with the workaround follows from the
+   workaround costs you state there, and an acceptable workaround always lowers a severity
+   above `low`. Then **judge from the original evidence whether the root cause fires
+   consistently** — every time its conditions hold — or only intermittently or in certain
+   situations, and record that as the ticket's `{{ shape.frequency_field }}`. That judgment and the
+   severities are the facts its priority is estimated from; the estimate and the priority
+   themselves are never yours to write.
 6. **Validate each ticket, then delete the drafts it consumed.** Run
    `{{ board_status }} --board {{ board }} <path of the ticket>`, which writes the ticket's
    priority estimate, its estimate line and its priority, then `{{ validate }} <path of the
@@ -301,8 +306,9 @@ closed one.
        item for it, withdraw that item instead, under the withdrawal rules of "The verified
        ticket", with the reason in its text naming the accepted item;
      - **shrinks** — the fix removes part of the impact or narrows where the root cause
-       bites: write `## Impact` (its prose and its severity lines) and, where the scope
-       narrows, `## Root cause` to what remains;
+       bites: write `## Impact` to what remains — its labelled parts, and both severities
+       re-judged by the rubric against that remainder, so a smaller impact or a cheaper
+       workaround lowers them — and, where the scope narrows, `## Root cause` too;
      - **needs a different fix** — the fix the evidence would otherwise support conflicts
        with, duplicates or is superseded by the accepted one: `## Suggested fix` states what
        remains right once the accepted fix is in, and the fix it would otherwise have
@@ -443,17 +449,28 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   `- {{ shape.estimate_line }}:` line and the front matter's `{{ shape.priority_field }}` are `{{ board_status }}`'s to
   write and never yours; when you rewrite a ticket, keep them as it wrote them. The
   estimate is the severity with the workaround, one level for one level
-  ({{ shape.estimate_levels }}), raised one level, capped at `{{ shape.urgent }}`, when `{{ shape.frequency_field }}` is
-  `{{ shape.consistent }}` or the root cause has {{ shape.raise_at }} or more occurrences: the ticket's own
+  ({{ shape.estimate_levels }}), raised one level, capped at `{{ shape.raise_cap }}`, when `{{ shape.frequency_field }}` is
+  `{{ shape.consistent }}` or the root cause has {{ shape.raise_at }} or more occurrences — once, when both hold —
+  so `{{ shape.urgent }}` comes only from a severity still `critical` with the workaround: the ticket's own
   evidence, plus each evidence comment another run left on its board issue and each reply
   whose marker carries `verdict="{{ shape.confirms }}"`, recounted off the issue's comments every time
   and stored nowhere. The board item's priority follows the estimate while it holds the
   estimate its record stored — or holds none, where its record stored none — and is
   otherwise a person's decision, which every copy keeps: a person who sets it back to the
   estimate hands it back to the estimate.
+- **`## {{ shape.impact }}` states what the severities rest on, concisely**: its labelled parts,
+  {{ shape.impact_parts }}, in that order before its lines, each in one or two sentences, the last
+  carrying {{ shape.workaround_costs }} — or, with a workaround of `{{ shape.no_workaround }}`, saying there is
+  {{ shape.no_acceptable_workaround }} and why. `{{ validate }}` refuses a schema-{{ shape.schema }} ticket without them, and
+  one whose workaround is not `{{ shape.no_workaround }}` but whose severity with the workaround equals a
+  severity above `low`.
 - **`## {{ shape.suggested_fix }}` states one concrete fix**: a single change, or a single set of changes
   that together remove the root cause, never a list of options or alternatives to choose
-  between. `## {{ shape.rejected_fixes }}` is optional: when another fix was considered, it comes directly
+  between. It opens with one paragraph saying what changes overall and why that removes the
+  root cause, then one subsection per unit that changes, headed {{ shape.unit_heading }}. Each says
+  what changes in a sentence or two, then shows only the contracts that change — public
+  interfaces, CLI flags, schemas, output shapes and documented behaviour — each as a diff
+  or the full shape. {{ shape.concision }}. `## {{ shape.rejected_fixes }}` is optional: when another fix was considered, it comes directly
   after `## {{ shape.suggested_fix }}` and gives each rejected fix with why it was rejected; otherwise it
   is left out.
 - **`host` is read, never typed.** Run `hostname` on the machine you run on and write
@@ -515,6 +532,12 @@ The shape, with every placeholder to fill:
 
 ````markdown
 {{ ticket_example }}````
+
+A ticket's `## {{ shape.impact }}` and `## {{ shape.suggested_fix }}` at the level of detail to write, as the
+user approved them for onepipeline#625:
+
+````markdown
+{{ shape.worked_example }}````
 
 {% include "follow-up-task/ownership.md.j2" %}
 
@@ -591,6 +614,21 @@ item, or edit any repository. A comment that asks nothing an investigation answe
 investigated. Where running something is not enough to settle the question, the reply says
 exactly what would settle it — what to run, where, and with what access — rather than that
 it needs a separate verification.
+<!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+
+## A comment disputing a severity or a priority
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether the rubric supports another severity is the agent's judgment of a ticket's evidence, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling decides is driven: `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py` holds that a real feedback dispatch is handed this section with the rubric, and `tests/test_follow_up_priority.py` drives `board-status` and `re-estimate` through the store recomputing the estimate from changed severities while a person's priority stands. -->
+A ticket's priority is estimated from its facts and never set by hand here, so a comment
+saying a ticket's priority or severity is wrong is answered on its severities. Judge both
+again by the rubric below, against the ticket's own evidence and what the comment adds. Where
+the rubric supports another severity, change the `## {{ shape.impact }}` section's labelled parts and
+severity lines to match, and nothing else; `{{ board_status }}` then recomputes the estimate,
+and the board item's priority follows it only while nobody has set it by hand. Where it does
+not, change nothing. Either way the reply names the impact area and the rubric's row or
+step that decided, and the workaround costs where the severity with the workaround is
+what the comment disputes.
+
+{{ shape.rubric }}
 <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 
 ## What to do, in order

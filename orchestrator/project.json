@@ -15,6 +15,7 @@
     "support-example-records",
     "support-fake-backend",
     "support-fake-codex-untrusted-directory",
+    "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
     "support-harness-configs",

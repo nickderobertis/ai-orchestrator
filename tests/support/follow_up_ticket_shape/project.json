@@ -1,20 +1,14 @@
 {
-  "name": "support-github-board",
+  "name": "support-follow-up-ticket-shape",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [
-    "support-follow-up-ticket-shape",
-    "support-follow-up-variables",
-    "support-published-tools",
-    "support-waits"
-  ],
+  "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/github_board.py",
-      "{workspaceRoot}/onetaskgraph.yaml"
+      "{workspaceRoot}/tests/follow_up_ticket_shape.py"
     ]
   },
   "targets": {

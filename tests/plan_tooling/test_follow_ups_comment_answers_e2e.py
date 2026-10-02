@@ -10,10 +10,11 @@ checkout are `tests/plan_tooling/test_follow_ups_recipe_e2e.py`'s and
 restated. **`tests/e2e/fake_codex.py` stands in for the paid model alone**, running the
 commands the answering agent would choose through the real programs.
 
-The module fixture answers ten comments in one dispatch: one clearly retiring the run's own
+The module fixture answers eleven comments in one dispatch: one clearly retiring the run's own
 `Proposal`, one only asking about another, the retiring one again on an item a person
 deferred, one asking for a corrected fix on a ticket of each older schema — schema 5 being the
-shape onepipeline#438 met — and one on another run's older item. The credential journeys drive
+shape onepipeline#438 met, and schema 7 the one `validate` still reads as sound — and one on
+another run's older item. The credential journeys drive
 the recipe in both modes from a mirror checkout whose `.env` alone holds the board credential.
 """
 
@@ -49,6 +50,8 @@ from test_follow_ups_recipe_e2e import (
     REFUSED,
     REPOSITORY,
     SUFFIX,
+    UNIT,
+    WORKAROUND,
     Bench,
     Stored,
     _bench,
@@ -81,7 +84,8 @@ pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 #: feedback task brings forward, keyed by that schema — 1, with no `host`, no `repositories`
 #: and no `## Impact`; 2, with a `host` but neither of the others; 3, with `repositories` but no
 #: `## Impact`; 4, the last with the headings schema 5 retired; 5, which the onepipeline#438
-#: ticket carried; and 6, the one before the current.
+#: ticket carried; 6, the last with no stored estimate; and 7, the one before the current,
+#: which still validates and is brought to the rubric's structure when it is rewritten.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -97,6 +101,7 @@ OLDER_CAUSES = dict(
             "report-drops-a-footer",
             "export-drops-a-column",
             "retry-loop-never-backs-off",
+            "cache-never-expires",
         ),
         strict=True,
     )
@@ -114,6 +119,8 @@ CORRECTING = (
 ASKING = "Is this still needed once the listing rewrite lands? I can't tell from the evidence.\n"
 SEEN_AGAIN = "Seen again on the current release: the watcher missed a rename under `src/`.\n"
 REQUESTED_FIX = "Page the export by cursor in `src/export.py`, as the listing already does."
+#: The whole `## Suggested fix` the agent writes from that request: its paragraph and its unit.
+REQUESTED_SECTION = f"{REQUESTED_FIX}\n\n{UNIT}"
 
 WITHDREW = "Withdrew this run's proposal: the comment says the listing rewrite handles it."
 KEPT_UNSURE = (
@@ -157,6 +164,11 @@ if not re.search(r"(?m)^repositories: ", text):
 if f"## {tickets.IMPACT}\\n" not in text:
     examples = "## Examples\\n"
     text = text.replace(examples, f"## {tickets.IMPACT}\\n\\n{impact}\\n\\n{examples}", 1)
+else:
+    text = re.sub(
+        rf"(## {tickets.IMPACT}\\n\\n).*?(\\n\\n## )", lambda held: held[1] + impact + held[2],
+        text, count=1, flags=re.DOTALL,
+    )
 text = re.sub(r"## Repository\\n\\n.*?\\n\\n(?=## )", "", text, count=1, flags=re.DOTALL)
 text = text.replace("## Suggested fixes\\n", f"## {tickets.SUGGESTED_FIX}\\n", 1)
 record[tickets.FREQUENCY_FIELD] = str(tickets.Frequency.INTERMITTENT)
@@ -331,16 +343,18 @@ def _gathered(bench: Bench, run: str, board: str = BOARD) -> Path:
 # llmlint: ignore-end[tests_mirror_real_usage]
 
 
-def test_the_older_tickets_are_refused_by_validate_as_the_schema_history_says(
+def test_the_older_tickets_are_read_by_validate_as_the_schema_history_says(
     tmp_path: Path,
 ) -> None:
-    """Each older ticket, run through the real `validate`, is refused as its schema's history says.
+    """Each older ticket, run through the real `validate`, is read as its schema's history says.
 
-    So the tickets the journeys file are what a run at each older schema wrote: the validator
-    names the schema, a `host` missing before :data:`tickets.HOST_AT`, no `repositories`
-    before :data:`tickets.REPOSITORIES_AT`, and the headings :data:`tickets.RETIRED_AT`
-    retired before it. :data:`tickets.IMPACT_AT` is not told apart here, because below
-    :data:`tickets.RETIRED_AT` the retired headings are what the body is refused for.
+    So the tickets the journeys file are what a run at each older schema wrote: a schema-7
+    ticket is sound as it stands, with neither the rubric's structure nor a workaround that
+    lowers its severity; for the others the validator names the schema, a `host` missing
+    before :data:`tickets.HOST_AT`, no `repositories` before :data:`tickets.REPOSITORIES_AT`,
+    and the headings :data:`tickets.RETIRED_AT` retired before it. :data:`tickets.IMPACT_AT`
+    is not told apart here, because below :data:`tickets.RETIRED_AT` the retired headings are
+    what the body is refused for.
     """
     bench = _bench(tmp_path)
     run = f"ca-history-{os.getpid()}"
@@ -368,8 +382,15 @@ def test_the_older_tickets_are_refused_by_validate_as_the_schema_history_says(
             bench,
         )
         said = validated.stdout + validated.stderr
+        if schema == tickets.PRIOR_SCHEMA:
+            assert validated.returncode == 0, said
+            assert "is a sound ticket" in said, said
+            continue
         assert validated.returncode == 1, said
-        assert f"the record is schema {schema}, and this reads schema {tickets.SCHEMA}" in said
+        assert (
+            f"the record is schema {schema}, and this reads schema {tickets.PRIOR_SCHEMA} or "
+            f"{tickets.SCHEMA}"
+        ) in said
         missing = said.split(" record is missing ", 1)[1].split("\n", 1)[0]
         assert ("host" in missing) == (schema < tickets.HOST_AT), (schema, said)
         assert ("carries no `repositories`" in said) == (schema < tickets.REPOSITORIES_AT), (
@@ -390,7 +411,10 @@ def _impact(body: str) -> str:
 def _older(ticket: tickets.Ticket, schema: int) -> str:
     """``ticket`` as ``schema`` stored it: no estimate, frequency or item binding.
 
-    ``ticket`` carries no estimate line, which schema 7 added. Before
+    ``ticket`` carries no estimate line, which schema 7 added; a schema-7 ticket has the
+    estimate `board-status` wrote for one occurrence, and an intermittent judgment. Before
+    :data:`tickets.STRUCTURE_AT` its `## Impact` is bare prose and a workaround that leaves
+    the severity where it was, and its `## Suggested fix` the paragraph alone. Before
     :data:`tickets.IMPACT_AT` its body has no `## Impact`, before
     :data:`tickets.REPOSITORIES_AT` it names no `repositories`, and before
     :data:`tickets.HOST_AT` its record names no `host` and its `## Evidence` no machine. From
@@ -400,7 +424,15 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     """
     assert tickets.PRIOR_SCHEMAS[0] <= schema < tickets.SCHEMA, schema
     assert f"- {tickets.ESTIMATE_LINE}:" not in ticket.body, ticket.body
-    body = ticket.body
+    severity = tickets.Severity.HIGH
+    estimated = tickets.estimate(severity, tickets.Frequency.INTERMITTENT, 1)
+    plain = tickets.impact_section(
+        f"{ticket.root_cause}: readers lose the last page.", severity, WORKAROUND, severity
+    )
+    if schema >= tickets.ESTIMATE_AT:
+        plain += tickets.estimate_line(severity, tickets.Frequency.INTERMITTENT, 1) + "\n"
+    body = ticket.body.replace(f"{_impact(ticket.body)}\n", plain, 1).replace(f"\n\n{UNIT}", "", 1)
+    assert UNIT not in body and "**" not in body, body
     if schema < tickets.IMPACT_AT:
         body = body.replace(f"## {tickets.IMPACT}\n\n{_impact(body)}\n\n\n", "", 1)
         assert f"## {tickets.IMPACT}\n" not in body, body
@@ -420,6 +452,10 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
         dropped.add("host")
     record = {key: value for key, value in tickets.record(ticket).items() if key not in dropped}
     held: dict[str, object] = {"title": ticket.title, "status": ticket.status.value}
+    if schema >= tickets.ESTIMATE_AT:
+        record[tickets.ESTIMATE_FIELD] = estimated.value
+        record[tickets.FREQUENCY_FIELD] = tickets.Frequency.INTERMITTENT.value
+        held[tickets.PRIORITY_FIELD] = estimated.value
     if schema >= tickets.REPOSITORIES_AT:
         held["repositories"] = [ticket.repository]
     held["metadata"] = {tickets.KEY: record | {"schema": schema}}
@@ -491,7 +527,7 @@ def _brought_forward(bench: Bench, python: str, witness: Path, held: Filed) -> l
         f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
         f"{validate} >> {quoted} 2>&1\n"
         f'echo "exit $?" >> {quoted}\n'
-        f"{shlex.join([python, str(helper), str(ticket), REQUESTED_FIX, held.impact])}\n",
+        f"{shlex.join([python, str(helper), str(ticket), REQUESTED_SECTION, held.impact])}\n",
     ]
 
 
@@ -547,7 +583,7 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
         }
         # Another run's item, which this run marked with an evidence comment of its own.
         other_run = _file_older(
-            bench, f"ca-other-{os.getpid()}", OTHER_RUN_CAUSE, tickets.PRIOR_SCHEMA
+            bench, f"ca-other-{os.getpid()}", OTHER_RUN_CAUSE, tickets.UNESTIMATED_SCHEMA
         )
         _commented(
             bench,
@@ -749,11 +785,16 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     before = older.before["metadata"]
     assert isinstance(before, dict)
     assert before[tickets.KEY]["schema"] == schema
-    assert (
-        f"the record is schema {schema}, and this reads schema {tickets.SCHEMA}; bring "
-        "the ticket to the current shape"
-    ) in older.witness, older.witness
-    assert f"exit {tickets.UNSOUND}" in older.witness, older.witness
+    if schema == tickets.PRIOR_SCHEMA:
+        # Sound as it stands: the rewrite the comment asks for is what brings it forward.
+        assert "is a sound ticket" in older.witness, older.witness
+        assert f"exit {tickets.SOUND}" in older.witness, older.witness
+    else:
+        assert (
+            f"the record is schema {schema}, and this reads schema {tickets.PRIOR_SCHEMA} or "
+            f"{tickets.SCHEMA}; bring the ticket to the current shape"
+        ) in older.witness, older.witness
+        assert f"exit {tickets.UNSOUND}" in older.witness, older.witness
     retired = [f"## {heading}\n" for heading in tickets.RETIRED_HEADINGS]
     held_before = str(older.before["content"])
     assert all((heading in held_before) is (schema < tickets.RETIRED_AT) for heading in retired), (
@@ -773,7 +814,7 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
     ticket = tickets.from_store_item(after)
     fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
-    assert fix == REQUESTED_FIX, ticket.body
+    assert fix == REQUESTED_SECTION, ticket.body
     assert f"Filed at schema {schema} (Examples)." in ticket.body, "the rest of the ticket moved"
     assert not any(heading in ticket.body for heading in retired), ticket.body
     assert ticket.frequency is tickets.Frequency.INTERMITTENT
@@ -795,8 +836,8 @@ def test_another_runs_older_item_a_comment_asks_about_is_re_estimated_after_the_
 ) -> None:
     """The rule's last clause on another run's item: `re-estimate` alone, after a confirming reply.
 
-    The item is brought to the current schema with its estimate, and nothing else of it moves:
-    its body is the other run's, less the estimate line `re-estimate` adds.
+    The item is brought to the schema that stores an estimate, given one, and nothing else of
+    it moves: its body is the other run's, less the estimate line `re-estimate` adds.
     """
     _settled(answered)
     before = answered.other_run.before
@@ -804,8 +845,8 @@ def test_another_runs_older_item_a_comment_asks_about_is_re_estimated_after_the_
     held_before = before["metadata"]
     held_after = after["metadata"]
     assert isinstance(held_before, dict) and isinstance(held_after, dict)
-    assert held_before[tickets.KEY]["schema"] == tickets.PRIOR_SCHEMA
-    assert held_after[tickets.KEY]["schema"] == tickets.SCHEMA
+    assert held_before[tickets.KEY]["schema"] == tickets.UNESTIMATED_SCHEMA
+    assert held_after[tickets.KEY]["schema"] == tickets.ESTIMATE_AT
     assert held_after[tickets.KEY][tickets.ESTIMATE_FIELD] is not None
     assert {
         key: value
@@ -820,10 +861,13 @@ def test_another_runs_older_item_a_comment_asks_about_is_re_estimated_after_the_
     assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
 
 
-def test_the_dispatched_task_carries_the_investigation_bound_the_exception_and_the_schema_rule(
+def test_the_dispatched_task_carries_the_investigation_exception_schema_and_dispute_rules(
     answered: Answered,
 ) -> None:
-    """The node's task, read back out of the store: the feedback mode, carrying all three rules.
+    """The node's task, read back out of the store: the feedback mode, carrying all four rules.
+
+    The fourth is how a comment disputing a severity is answered, with the rubric it is judged
+    by, rendered whole from the one source the validator also holds tickets to.
 
     The engine's own check of the stored item passes, so it is the rendering its provenance
     records, and the store regenerates the same body from the answers it kept.
@@ -840,6 +884,8 @@ def test_the_dispatched_task_carries_the_investigation_bound_the_exception_and_t
     assert "a ticket of an older schema is brought to the current shape before it is copied" in (
         flat
     )
+    assert "## A comment disputing a severity or a priority" in task
+    assert tickets.RUBRIC in task
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

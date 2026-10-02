@@ -29,6 +29,7 @@ from pathlib import Path
 import follow_up_variables
 import onetaskgraph_sdk
 import pytest
+from follow_up_ticket_shape import FIX, impact_prose
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
@@ -50,27 +51,39 @@ Priority = tickets.Priority
 Frequency = tickets.Frequency
 
 
-def _impact(with_workaround: Severity, line: str | None) -> str:
-    """An `## Impact` section at ``with_workaround``, closed by ``line`` when there is one."""
+#: The outcome every test ticket's `## Impact` states, and the workaround a schema-7 one names.
+OUTCOME = "Every reader of a listing misses its last page."
+OLD_WORKAROUND = "readers retry the last page by its number"
+
+
+def _impact(with_workaround: Severity, line: str | None, *, structured: bool = True) -> str:
+    """An `## Impact` section at ``with_workaround``, closed by ``line`` when there is one.
+
+    ``structured`` writes it as schema 8 does, with no acceptable workaround; otherwise as
+    schema 7 did: bare prose, and a workaround that leaves the severity where it was, which
+    that schema's validator accepted.
+    """
     section = tickets.impact_section(
-        "Every reader of a listing misses its last page.",
+        impact_prose(OUTCOME, workaround="none") if structured else OUTCOME,
         with_workaround,
-        "none",
+        "none" if structured else OLD_WORKAROUND,
         with_workaround,
     )
     return section if line is None else f"{section}{line}\n"
 
 
-def _body(with_workaround: Severity, line: str | None) -> str:
+def _body(with_workaround: Severity, line: str | None, *, structured: bool = True) -> str:
     sections = []
     for heading in tickets.HEADINGS:
-        text = (
-            _impact(with_workaround, line)
-            if heading == tickets.IMPACT
-            else f"What this ticket says under {heading}."
-        )
-        if heading == tickets.EVIDENCE:
-            text += f" Verified on `{HOST}`."
+        match heading:
+            case tickets.IMPACT:
+                text = _impact(with_workaround, line, structured=structured)
+            case tickets.SUGGESTED_FIX if structured:
+                text = FIX
+            case tickets.EVIDENCE:
+                text = f"What this ticket says under {heading}. Verified on `{HOST}`."
+            case _:
+                text = f"What this ticket says under {heading}."
         sections.append(f"## {heading}\n\n{text}")
     return "\n\n".join(sections)
 
@@ -81,8 +94,10 @@ def _ticket(
     with_workaround: Severity = Severity.MEDIUM,
     frequency: Frequency | None = Frequency.INTERMITTENT,
     cause: str = CAUSE,
+    structured: bool = True,
 ) -> tickets.Ticket:
-    """A sound schema-7 ticket of ``run``, its estimate what its facts give one occurrence."""
+    """A sound current ticket of ``run``, its estimate what its facts give one occurrence."""
+    line = tickets.estimate_line(with_workaround, frequency, 1)
     return tickets.Ticket(
         title=f"some-service: {cause}",
         status=tickets.Status.PROPOSED,
@@ -94,28 +109,42 @@ def _ticket(
         basis=(tickets.Basis(tickets.Origin(REPOSITORY), tickets.Commit(COMMIT)),),
         verified_at=tickets.Timestamp("2026-01-01T00:00:00Z"),
         host=tickets.Host(HOST),
-        body=_body(with_workaround, tickets.estimate_line(with_workaround, frequency, 1)),
+        body=_body(with_workaround, line, structured=structured),
         priority_estimate=tickets.estimate(with_workaround, frequency, 1),
         frequency=frequency,
     )
 
 
-def _schema_6(ticket: tickets.Ticket) -> str:
-    """``ticket`` as schema 6 stored it: no estimate, no frequency, no estimate line."""
+def _older(ticket: tickets.Ticket, schema: int) -> str:
+    """``ticket`` as an older ``schema`` stored it: the current record but for its schema.
+
+    From schema 7 on its priority is the estimate `board-status` wrote; schema 6 stored no
+    estimate, no frequency and no estimate line, so those go too.
+    """
     record = tickets.record(ticket)
-    del record[tickets.ESTIMATE_FIELD]
-    record.pop(tickets.FREQUENCY_FIELD, None)
-    record["schema"] = tickets.PRIOR_SCHEMA
-    body = re.sub(r"^- Priority estimate:[^\n]*\n?", "", ticket.body, flags=re.MULTILINE)
+    record["schema"] = schema
+    body = ticket.body
+    fields: dict[str, object] = {"priority": str(ticket.priority_estimate)}
+    if schema < tickets.ESTIMATE_AT:
+        fields = {}
+        del record[tickets.ESTIMATE_FIELD]
+        record.pop(tickets.FREQUENCY_FIELD, None)
+        body = re.sub(r"^- Priority estimate:[^\n]*\n?", "", body, flags=re.MULTILINE)
     return frontmatter(
         {
             "title": ticket.title,
             "status": ticket.status.value,
             "repositories": [ticket.repository],
+            **fields,
             "metadata": {tickets.KEY: record},
         },
         body,
     )
+
+
+def _schema_6(ticket: tickets.Ticket) -> str:
+    """``ticket`` as schema 6 stored it: no estimate, no frequency, no estimate line."""
+    return _older(ticket, tickets.UNESTIMATED_SCHEMA)
 
 
 @pytest.fixture
@@ -255,9 +284,10 @@ def test_the_estimate_is_the_severity_with_the_workaround_raised_one_level_only_
         Severity.MEDIUM: Priority.MEDIUM,
         Severity.LOW: Priority.LOW,
     }[severity]
+    # One level, capped at `high`: only a severity still critical estimates `urgent`.
     raised = {
         Priority.URGENT: Priority.URGENT,
-        Priority.HIGH: Priority.URGENT,
+        Priority.HIGH: Priority.HIGH,
         Priority.MEDIUM: Priority.HIGH,
         Priority.LOW: Priority.MEDIUM,
     }[base]
@@ -280,8 +310,19 @@ def test_the_estimate_line_says_why_it_was_raised_or_not() -> None:
         "judged; 3 occurrences; raised one level because it has 3 or more occurrences)"
     )
     assert tickets.estimate_line(Severity.HIGH, Frequency.CONSISTENT, 1) == (
-        "- Priority estimate: urgent (severity with the workaround high; fires consistently; "
-        "1 occurrence; raised one level because it fires consistently)"
+        "- Priority estimate: high (severity with the workaround high; fires consistently; "
+        "1 occurrence; already high, where a raise is capped, so not raised though it fires "
+        "consistently)"
+    )
+    assert tickets.estimate_line(Severity.HIGH, None, 3) == (
+        "- Priority estimate: high (severity with the workaround high; frequency not judged; "
+        "3 occurrences; already high, where a raise is capped, so not raised though it has 3 "
+        "or more occurrences)"
+    )
+    assert tickets.estimate_line(Severity.MEDIUM, Frequency.CONSISTENT, 3) == (
+        "- Priority estimate: high (severity with the workaround medium; fires consistently; "
+        "3 occurrences; raised one level because it fires consistently and it has 3 or more "
+        "occurrences)"
     )
     assert tickets.estimate_line(Severity.CRITICAL, Frequency.CONSISTENT, 5) == (
         "- Priority estimate: urgent (severity with the workaround critical; fires "
@@ -509,7 +550,7 @@ def test_a_schema_6_item_follows_only_while_its_priority_is_none(
     destination = copied.items[0].root.destination
     assert destination is not None
     issue = destination.model_dump()
-    assert _held(issue)["schema"] == tickets.PRIOR_SCHEMA
+    assert _held(issue)["schema"] == tickets.UNESTIMATED_SCHEMA
     if person is not None:
         _person_sets(issue, person)
 
@@ -522,6 +563,134 @@ def test_a_schema_6_item_follows_only_while_its_priority_is_none(
     assert _shown(issue)["priority"] == expected.value
     assert _held(issue)["schema"] == tickets.SCHEMA
     assert _held(issue)[tickets.ESTIMATE_FIELD] == "medium"
+
+
+def _rubric_ticket(
+    severity: Severity, with_workaround: Severity, frequency: Frequency | None
+) -> tickets.Ticket:
+    """A current ticket whose two severities are ``severity`` and ``with_workaround``.
+
+    Its workaround is acceptable — it states the three costs — where the two differ, and
+    `none` where they are equal, as the rubric's workaround rule requires.
+    """
+    workaround = "none" if severity is with_workaround else "adopt and settle the run first"
+    impact = tickets.impact_section(
+        impact_prose(OUTCOME, workaround=workaround), severity, workaround, with_workaround
+    )
+    ticket = _ticket(frequency=frequency)
+    held = ticket.body.split("## Impact\n\n", 1)[1].split("\n\n## ", 1)[0]
+    return dataclasses.replace(ticket, body=ticket.body.replace(held, impact.strip()))
+
+
+def test_the_approved_625_facts_estimate_medium_and_a_persons_priority_stands(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """onepipeline#625 as the user approved it: raw `high`, `low` with the workaround,
+    firing consistently, seen twice — estimated `medium`, one level for its consistency.
+
+    Driven through `board-status`, `validate` and `copy`, the commands an agent runs, and
+    then a person's priority on the item survives the next copy.
+    """
+    path = _write(drafts_root, _rubric_ticket(Severity.HIGH, Severity.LOW, Frequency.CONSISTENT))
+    issue = _copied(path, capsys)
+    _evidence(issue, LATER_RUN)
+
+    _copied(path, capsys)
+
+    assert _line(_shown(issue)["content"]) == (
+        "- Priority estimate: medium (severity with the workaround low; fires consistently; "
+        "2 occurrences; raised one level because it fires consistently)"
+    )
+    assert _shown(issue)["priority"] == "medium"
+    assert _held(issue)[tickets.ESTIMATE_FIELD] == "medium"
+    _person_sets(issue, Priority.URGENT)
+    _copied(path, capsys)
+    assert _shown(issue)["priority"] == "urgent", "a person's priority was rewritten"
+    assert _held(issue)[tickets.ESTIMATE_FIELD] == "medium"
+
+
+@pytest.mark.parametrize(
+    ("with_workaround", "frequency", "others", "expected", "why"),
+    [
+        (Severity.HIGH, Frequency.INTERMITTENT, 1, Priority.HIGH, "not raised"),
+        (
+            Severity.HIGH,
+            Frequency.INTERMITTENT,
+            2,
+            Priority.HIGH,
+            "already high, where a raise is capped, so not raised though it has 3 or more "
+            "occurrences",
+        ),
+        (
+            Severity.HIGH,
+            Frequency.CONSISTENT,
+            2,
+            Priority.HIGH,
+            "already high, where a raise is capped, so not raised though it fires consistently "
+            "and it has 3 or more occurrences",
+        ),
+        (Severity.CRITICAL, Frequency.INTERMITTENT, 1, Priority.URGENT, "not raised"),
+        (
+            Severity.CRITICAL,
+            Frequency.CONSISTENT,
+            2,
+            Priority.URGENT,
+            "already urgent, so not raised though it fires consistently and it has 3 or more "
+            "occurrences",
+        ),
+        (Severity.MEDIUM, Frequency.INTERMITTENT, 1, Priority.MEDIUM, "not raised"),
+        (
+            Severity.MEDIUM,
+            Frequency.INTERMITTENT,
+            2,
+            Priority.HIGH,
+            "raised one level because it has 3 or more occurrences",
+        ),
+        (
+            Severity.MEDIUM,
+            Frequency.CONSISTENT,
+            2,
+            Priority.HIGH,
+            "raised one level because it fires consistently and it has 3 or more occurrences",
+        ),
+    ],
+    ids=[
+        "high-2-occurrences",
+        "high-3-occurrences-capped",
+        "high-both-raises-capped",
+        "critical-2-occurrences",
+        "critical-both-raises-urgent",
+        "medium-2-occurrences",
+        "medium-3-occurrences-raised",
+        "medium-both-raises-once",
+    ],
+)
+def test_board_status_caps_a_raise_at_high_and_only_a_critical_residual_is_urgent(  # noqa: PLR0913 - one case's facts
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    with_workaround: Severity,
+    frequency: Frequency,
+    others: int,
+    expected: Priority,
+    why: str,
+) -> None:
+    """The ticket's own evidence plus ``others`` runs' comments, recounted by `board-status`."""
+    path = _write(drafts_root, _rubric_ticket(with_workaround, with_workaround, frequency))
+    issue = _copied(path, capsys)
+    for run in (LATER_RUN, OTHER_RUN)[:others]:
+        _evidence(issue, run)
+
+    _copied(path, capsys)
+
+    occurrences = 1 + others
+    assert _line(_shown(issue)["content"]) == (
+        f"- Priority estimate: {expected} (severity with the workaround {with_workaround}; "
+        f"{'fires consistently' if frequency is Frequency.CONSISTENT else 'fires intermittently'}"
+        f"; {occurrences} occurrences; {why})"
+    )
+    assert _shown(issue)["priority"] == expected.value
+    assert tickets.read_ticket(path).priority_estimate is expected
 
 
 def test_board_status_prints_the_status_alone_whatever_it_writes(
@@ -538,12 +707,25 @@ def test_board_status_prints_the_status_alone_whatever_it_writes(
 
 
 def _owned_elsewhere(
-    drafts_root: Path, capsys: pytest.CaptureFixture[str], *, schema_6: bool = False
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    schema_6: bool = False,
+    schema: int = tickets.SCHEMA,
 ) -> str:
-    """An item another run filed, at `todo`, carrying a metadata key of its own: its id."""
-    older = _ticket(OTHER_RUN, frequency=None if schema_6 else Frequency.INTERMITTENT)
-    if schema_6:
-        path = _write(drafts_root, older, _schema_6(older))
+    """An item another run filed, at `todo`, carrying a metadata key of its own: its id.
+
+    An item of an older ``schema`` is copied by the store itself, as that schema's run left
+    it; ``schema_6`` is that for schema 6.
+    """
+    schema = tickets.UNESTIMATED_SCHEMA if schema_6 else schema
+    older = _ticket(
+        OTHER_RUN,
+        frequency=None if schema < tickets.ESTIMATE_AT else Frequency.INTERMITTENT,
+        structured=schema >= tickets.STRUCTURE_AT,
+    )
+    if schema != tickets.SCHEMA:
+        path = _write(drafts_root, older, _older(older, schema))
         run, cause = tickets.located_path(path)
         copied = plan_store.sdk(
             plan_store.client().task_copy([tickets.qualified_id(run, cause)], to=BOARD)
@@ -573,11 +755,29 @@ def _metadata_but_the_record(qualified: str) -> dict[str, object]:
     return {key: value for key, value in metadata.items() if key != tickets.KEY}
 
 
-@pytest.mark.parametrize("schema_6", [False, True], ids=["schema-7", "schema-6"])
+#: Every schema `re-estimate` reads, as the item's record declares it, and what it writes.
+RE_ESTIMATED_SCHEMAS = pytest.mark.parametrize(
+    ("schema", "written"),
+    [
+        (tickets.SCHEMA, tickets.SCHEMA),
+        (tickets.PRIOR_SCHEMA, tickets.PRIOR_SCHEMA),
+        (tickets.UNESTIMATED_SCHEMA, tickets.ESTIMATE_AT),
+    ],
+    ids=["schema-8", "schema-7", "schema-6"],
+)
+
+
+@RE_ESTIMATED_SCHEMAS
 def test_re_estimate_raises_a_following_priority_and_changes_only_the_estimate(
-    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], schema_6: bool
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    schema: int,
+    written: int,
 ) -> None:
-    issue = _owned_elsewhere(drafts_root, capsys, schema_6=schema_6)
+    """A schema-7 item keeps its schema: restructuring its body is its own run's to do."""
+    schema_6 = schema == tickets.UNESTIMATED_SCHEMA
+    issue = _owned_elsewhere(drafts_root, capsys, schema=schema)
     if schema_6:
         _person_sets(issue, Priority.NONE)
     before = _shown(issue)
@@ -595,7 +795,7 @@ def test_re_estimate_raises_a_following_priority_and_changes_only_the_estimate(
         "occurrences": 3,
         "priority": "high",
     }
-    assert _held(issue)["schema"] == tickets.SCHEMA
+    assert _held(issue)["schema"] == written
     assert _held(issue)[tickets.ESTIMATE_FIELD] == "high"
     content = before["content"]
     assert isinstance(content, str)
@@ -614,11 +814,15 @@ def test_re_estimate_raises_a_following_priority_and_changes_only_the_estimate(
     assert _shown(issue) == after, "a re-estimate with nothing new to count wrote something"
 
 
-@pytest.mark.parametrize("schema_6", [False, True], ids=["schema-7", "schema-6"])
+@RE_ESTIMATED_SCHEMAS
 def test_re_estimate_leaves_a_persons_priority_and_still_moves_the_estimate(
-    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], schema_6: bool
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    schema: int,
+    written: int,
 ) -> None:
-    issue = _owned_elsewhere(drafts_root, capsys, schema_6=schema_6)
+    issue = _owned_elsewhere(drafts_root, capsys, schema=schema)
     _person_sets(issue, Priority.LOW)
     _evidence(issue, RUN)
     _reply(issue, LATER_RUN, tickets.Verdict.CONFIRMS)
@@ -628,7 +832,7 @@ def test_re_estimate_leaves_a_persons_priority_and_still_moves_the_estimate(
     assert printed["priority"] == "low"
     assert _shown(issue)["priority"] == "low"
     assert _held(issue)[tickets.ESTIMATE_FIELD] == "high"
-    assert _held(issue)["schema"] == tickets.SCHEMA
+    assert _held(issue)["schema"] == written
     assert "; 3 occurrences; raised one level" in _line(_shown(issue)["content"])
 
 
@@ -705,7 +909,7 @@ def test_re_estimate_refuses_an_item_it_cannot_estimate(
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 5}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert "record of schema 5, and this reads schema 6 or 7" in refused
+    assert "record of schema 5, and this reads schema 6, 7 or 8" in refused
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 7}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     assert "no follow-up ticket this can estimate" in capsys.readouterr().err
@@ -788,7 +992,7 @@ def test_re_estimate_refuses_a_body_it_would_otherwise_write_back_malformed(
 
 @pytest.mark.parametrize(
     "schema",
-    [0, -1, 8, "7", 7.0, True, None],
+    [0, -1, tickets.SCHEMA + 1, "7", 7.0, True, None],
     ids=["zero", "a-negative-schema", "a-later-schema", "a-word", "a-float", "a-boolean", "none"],
 )
 def test_board_status_refuses_a_bound_items_record_of_no_schema_it_reads(
@@ -809,7 +1013,7 @@ def test_board_status_refuses_a_bound_items_record_of_no_schema_it_reads(
     assert f"record of schema {schema!r}, which no follow-up tool reads" in refused
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert f"record of schema {schema!r}, and this reads schema 6 or 7" in refused
+    assert f"record of schema {schema!r}, and this reads schema 6, 7 or 8" in refused
     assert _shown(issue)["priority"] == "low"
 
 
@@ -1027,9 +1231,10 @@ def test_check_dispositions_refuses_evidence_left_on_a_schema_6_item_it_did_not_
 
     status, refused = _dispositions(drafts_root, capsys)
     assert status == tickets.UNSOUND
-    assert f"{issue} carries no schema-7 `orchestrator.follow-up` record: it declares schema 6" in (
-        refused
-    )
+    assert (
+        f"{issue} carries no `orchestrator.follow-up` record of schema 7 or later: it declares "
+        "schema 6"
+    ) in refused
     assert "run `re-estimate` on it" in refused
 
     _re_estimated(issue, capsys)
@@ -1041,9 +1246,9 @@ def test_check_dispositions_refuses_evidence_left_on_a_schema_6_item_it_did_not_
     )
     status, refused = _dispositions(drafts_root, capsys)
     assert status == tickets.UNSOUND
-    assert f"{issue} carries no schema-7 `orchestrator.follow-up` record with a severity" in (
-        refused
-    )
+    assert (
+        f"{issue} carries no `orchestrator.follow-up` record of schema 7 or later with a severity"
+    ) in refused
 
 
 def test_check_dispositions_holds_another_runs_item_to_the_line_its_record_renders(
