@@ -69,6 +69,23 @@ not the routing. The four published `merge_policy` names are `local-direct`,
 identities cannot use local workflow or direct integration, and `change-open` forces
 remote open-PR publication for one run without changing stored workflow.
 
+<!-- llmlint: ignore-block[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] The task that adopted the draft lifecycle requires this document to state each of these policies, exceptions and levers once, and this is that one statement, deferring the mechanics to onevcs's `docs/contract.md`; the `onevcs change ready <session>` line it restates is reconciled against the pinned CLI's own `--help` by `tests/test_cli_surface_drift.py`, which refuses a verb or flag that release lacks. -->
+**Every change request a remote lifecycle publication opens starts as a draft** while its
+required checks run, and what a green draft becomes is derived from the identity's policy:
+lifted to ready under `change-auto`, `change-direct` and `change-open` with `approvals:
+none`, and kept as a draft for the user's own review under `change-open` with `approvals:
+required` — the team case, settled `done` as `change-review-draft` and lifted by that user
+on the host or with `onevcs change ready <session>`. `change-open` watches its checks, so
+red there arrives as `checks-failed` and is retried onto the same branch. Lifting is
+one-way: later commits never re-draft a lifted change. A draft somebody asked for —
+`onepipeline.draft: true`, a release-awaiting pin, a worker's own `--draft` while it holds
+it — is never lifted by green checks. A repository whose CI skips drafts is lifted before
+green, with a warning, so its checks run. The rules file's two per-identity levers are
+`drafts: {disabled: true}`, opening change requests ready as before, and `drafts:
+{warn_on_early_lift: false}`, silencing that warning; onevcs's `docs/contract.md` is the
+authority, and `onevcs rules check <repo>` shows the resolved behaviour.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] -->
+
 **No host-run gate exists, and that is deliberate.** A verifier run beside the real one
 throws its answer away, and where it ran less than the merge path it read as
 verification while a branch sat blocked on a required check it never ran. What verifies
@@ -163,7 +180,9 @@ from an undeclared node means the base carries the work, and `empty-branch` is t
 word that says nothing was produced. Either way, look for the work before concluding
 there was none — that checkout's branches, its `main` against `origin/main`, the
 repository's open change requests — because a worker dispatched without a worktree
-works wherever it can see. A node that settled
+works wherever it can see. `done` as `change-review-draft` is finished, green work
+waiting on its user's review, not on the run, and distinct from `change-draft`, a draft
+the plan asked for. A node that settled
 `failed` may still have published: `task-failed-change-open` carries the URL, and
 re-running that work duplicates a change already waiting to be read. The retryable
 failure words — `checks-failed` and its siblings in the outcome vocabulary
@@ -180,7 +199,9 @@ signal that terminated it — so read that line before re-running any gate to le
 failed. `checks-unsettled` is not a verdict on the tree: a required check with no
 verdict ends there, whether it was still pending when the watch's bound elapsed or
 completed `cancelled` or `stale`, which the linked `onevcs` reads as no verdict rather
-than as red. A change request the host merged after that watch stopped is reconciled on
+than as red. A check concluded `skipped` is its own state, never read as passed: a
+publication a skipped required check let through records `checks-settled` with the
+verdict `passed-with-skipped`, naming that check, and its settlement says so. A change request the host merged after that watch stopped is reconciled on
 the next `status`, `release status` or publication that meets it — `onevcs` asks the
 host once and records the merge as the landing — so read `just work-status` before
 anything else; only a change still open or closed unmerged there is one whose check to

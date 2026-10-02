@@ -181,7 +181,7 @@ TURN_USAGE_FIGURES = (
 #: here rather than read from the response, because reading it from the response is what
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
-TIMELINE_SCHEMA_VERSION = 10
+TIMELINE_SCHEMA_VERSION = 11
 #: The envelope's telemetry schema, restated for the same reason and moved with the same
 #: paragraph.
 TELEMETRY_SCHEMA_VERSION = 21

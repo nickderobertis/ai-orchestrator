@@ -8,9 +8,13 @@ git into a real bare origin — judged by a real `pre-push` hook where the journ
 for one — and the change request this records is opened by the real `onevcs` from the
 real recipe.
 
-What it answers is the four calls opening a change request makes: who is
-authenticated, which changes already exist for a head and base, the `pr create`
-itself, and the head commit of what was just created. Every call is appended to
+What it answers is the calls opening a change request makes: who is authenticated,
+which changes already exist for a head and base, the `pr create` itself, the head
+commit of what was just created, whether it is a draft, which checks its base
+requires, and the `pr ready` that lifts one. The base is unprotected — no ruleset and
+no classic protection — because these journeys are about what a publication drafts and
+opens, and a host that says completely that nothing is required is one `onevcs`'s
+watch reads as green at once rather than waiting a grace window out. Every call is appended to
 `FAKE_GH_CALLS` as JSON argv, and the body of each opened change request is written
 to `FAKE_GH_STATE/pr-<n>.body` — byte for byte, because "the change request carries
 exactly the drafted body" is a claim about characters and an assertion against
@@ -51,8 +55,9 @@ def _record(argv: list[str]) -> None:
 class Call(NamedTuple):
     """The `--name value` pairs of one call, named rather than looked up by string.
 
-    `gh` is given nothing else here, and every option the four answered calls carry has
-    a field: a name this host does not answer to is read and dropped, which is what
+    `gh` is given nothing else here, and every valued option the answered calls carry
+    has a field — `--draft`, the one bare flag among them, is read off the argv
+    instead: a name this host does not answer to is read and dropped, which is what
     keeps an unrecognized option from reaching a record as a key nothing reads back.
     """
 
@@ -80,6 +85,9 @@ class Change(TypedDict):
     url: str
     state: str
     headRefOid: str
+    #: Whether the host is holding it as a draft: opened as one when `pr create` was
+    #: given `--draft`, and lifted by `pr ready`, which is the one way back out.
+    isDraft: bool
     head: str
     base: str
     title: str
@@ -90,6 +98,9 @@ def _call(argv: list[str]) -> Call:
     read: dict[str, str] = {}
     index = 0
     while index < len(argv):
+        if argv[index] == "--draft":
+            index += 1
+            continue
         if argv[index].startswith("--") and index + 1 < len(argv):
             read[argv[index][2:]] = argv[index + 1]
             index += 2
@@ -129,7 +140,8 @@ def _head_sha(head: str) -> str:
     return done.stdout.strip() or "unknown"
 
 
-def _create(call: Call) -> int:
+# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
+def _create(call: Call, *, draft: bool) -> int:
     state = _state()
     number = 1
     while (state / f"pr-{number}.json").exists():
@@ -140,6 +152,7 @@ def _create(call: Call) -> int:
         "url": f"https://github.com/{REPOSITORY}/pull/{number}",
         "state": "OPEN",
         "headRefOid": _head_sha(call.head),
+        "isDraft": draft,
         "head": call.head,
         "base": call.base,
         "title": call.title,
@@ -147,6 +160,9 @@ def _create(call: Call) -> int:
     (state / f"pr-{number}.json").write_text(json.dumps(opened), encoding="utf-8")
     sys.stdout.write(f"https://github.com/{REPOSITORY}/pull/{number}\n")
     return 0
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 def _view(number: str, call: Call) -> int:
@@ -158,6 +174,20 @@ def _view(number: str, call: Call) -> int:
     remembered = dict(record)
     sys.stdout.write(json.dumps({field: remembered.get(field) for field in call.fields}) + "\n")
     return 0
+
+
+# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
+def _ready(number: str) -> int:
+    """Lift a draft, as `gh pr ready` does: the record says so from then on."""
+    path = _state() / f"pr-{number}.json"
+    # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    record["isDraft"] = False
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return 0
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 def _list(call: Call) -> int:
@@ -176,6 +206,7 @@ def _list(call: Call) -> int:
     return 0
 
 
+# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
 def main(argv: list[str]) -> int:
     _record(argv)
     call = _call(argv)
@@ -183,14 +214,29 @@ def main(argv: list[str]) -> int:
         case ["api", "user", *_]:
             sys.stdout.write("tester\n")
             return 0
+        case ["api", path, *_] if path.startswith(f"repos/{REPOSITORY}/rules/branches/"):
+            # No ruleset applies to the base, so none of its rules requires a check.
+            sys.stdout.write("[]\n")
+            return 0
+        case ["api", path, *_] if path.startswith(
+            f"repos/{REPOSITORY}/branches/"
+        ) and path.endswith("/protection/required_status_checks"):
+            # GitHub's own 404 for a branch with no classic protection, which is an answer.
+            sys.stderr.write("gh: Branch not protected (HTTP 404)\n")
+            return 1
         case ["pr", "create", *_]:
-            return _create(call)
+            return _create(call, draft="--draft" in argv)
         case ["pr", "list", *_]:
             return _list(call)
         case ["pr", "view", number, *_]:
             return _view(number, call)
+        case ["pr", "ready", number, *_]:
+            return _ready(number)
     sys.stderr.write(f"fake gh: nothing here answers {argv}\n")
     return 1
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 if __name__ == "__main__":

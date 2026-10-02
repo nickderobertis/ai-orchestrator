@@ -232,7 +232,10 @@ def test_claims_about_the_adopted_release_name_the_adopted_release(
 #: statements. Naming the sentence gates the claim about today's release and leaves both
 #: of those alone.
 ADOPTED_ONEPIPELINE_CLAIMS = {
-    "docs/onejudge-integration.md": ("measured against onepipeline {version}",),
+    # `docs/onejudge-integration.md`'s process-tree sentence is deliberately absent: it
+    # names the release a live dispatch's tree was read on, and nothing in the suite
+    # re-takes that reading, so holding it to the pin would make a bump retype a
+    # measurement nobody took. It moves when somebody reads a dispatch's tree again.
     "personas/README.md": (
         "measured against onepipeline {version}",
         # Which oneagentgraph a dispatch reads a persona with, which is what decides

@@ -195,9 +195,18 @@ def _definition_of(name: str) -> re.Pattern[str]:
     return re.compile(rf"fn {re.escape(name)}\(.*?\n\}}", re.DOTALL)
 
 
-PUBLICATION_STATUS_ARM = re.compile(
-    r"(?:onevcs::)?PublishOutcome::(\w+)[^=]*?=>\s*NodeStatus::(\w+)"
-)
+#: The status one arm of that function answers. The function is split on it, so the
+#: text before each is that arm's **whole** pattern rather than its first variant:
+#: onepipeline 0.57.0 matches on `(ending, reason)` and joins several endings in one
+#: arm with `|`, and reading only the first left `ChangeOpen`, `Queued` and their
+#: neighbours paired with nothing.
+PUBLICATION_STATUS_ARM = re.compile(r"=>\s*NodeStatus::(\w+)\s*,?")
+#: A publication ending an arm's pattern names.
+PUBLICATION_ENDING = re.compile(r"(?:onevcs::)?PublishOutcome::(\w+)")
+#: What makes an arm match only **part** of an ending: a draft reason, or a guard. An
+#: ending every arm of which is partial also reaches the arms below it — the default
+#: among them — so the gate pairs it with those too rather than with its first arm only.
+PARTIAL_ARM = re.compile(r"\bSome\(|\bNone\b|\bif\b")
 PUBLICATION_STATUS_DEFAULT = re.compile(r"\n\s*_\s*=>\s*NodeStatus::(\w+)")
 
 #: How the engine spells each status where a reader meets one. Read from the engine
@@ -462,6 +471,33 @@ VOCABULARIES = (
         re.compile(r"`([a-z][a-z_]*)`"),
     ),
     Vocabulary(
+        # The five states a check is read in, `skipped` among them as its own state
+        # rather than folded into passed — the distinction the draft lifecycle's
+        # `checks-settled` rests on, so a sixth state or a fold comes due here.
+        "onevcs CheckState",
+        ONEVCS,
+        "host.rs",
+        re.compile(r"(?:#\[[^\]]*\]\s*)*pub enum CheckState \{.*?\n\}", re.DOTALL),
+        re.compile(r"^\s{4}([A-Z][A-Za-z]*),", re.MULTILINE),
+        TELEMETRY,
+        re.compile(r"carries one of five states —\s*(.*?) — and", re.DOTALL),
+        re.compile(r"`([a-z][a-z-]*)`"),
+    ),
+    Vocabulary(
+        # The rules file's per-identity draft levers the manager's document names; a key
+        # onevcs adds or renames inside `drafts:` is refused by name where the file is
+        # loaded, so a lever the prose names that the struct lacks would break a rules
+        # file written from it.
+        "onevcs drafts levers",
+        ONEVCS,
+        "rules.rs",
+        re.compile(r"(?:#\[[^\]]*\]\s*)*pub struct Drafts \{.*?\n\}", re.DOTALL),
+        re.compile(r"^\s{4}pub ([a-z_]+):", re.MULTILINE),
+        MANAGER,
+        re.compile(r"two per-identity levers are\s*(.*?); onevcs", re.DOTALL),
+        re.compile(r"`drafts:\s*\{([a-z_]+):"),
+    ),
+    Vocabulary(
         "onepipeline telemetry Usage fields",
         ONEPIPELINE,
         "telemetry.rs",
@@ -538,6 +574,34 @@ def _wire_spelling(variant: str, rename_all: str | None) -> str:
 
 
 CONSTANTS = (
+    # The verdict `checks-settled` carries when a skipped required check let a
+    # publication through: the one word that says a green publication was not all passes.
+    Constant(
+        "skipped-check verdict",
+        ONEVCS,
+        "publish.rs",
+        re.compile(r'"passed"\s*\}\s*else\s*\{\s*"(passed-with-[a-z]+)"'),
+        TELEMETRY,
+        "checks-settled records the watch's verdict, {value} where",
+    ),
+    # The same word where the manager's document and the lifecycle document say what a
+    # publication past a skipped required check records: each copy is held on its own.
+    Constant(
+        "skipped-check verdict in AGENTS.md",
+        ONEVCS,
+        "publish.rs",
+        re.compile(r'"passed"\s*\}\s*else\s*\{\s*"(passed-with-[a-z]+)"'),
+        MANAGER,
+        "records checks-settled with the verdict {value}, naming that check",
+    ),
+    Constant(
+        "skipped-check verdict in the lifecycle document",
+        ONEVCS,
+        "publish.rs",
+        re.compile(r'"passed"\s*\}\s*else\s*\{\s*"(passed-with-[a-z]+)"'),
+        LIFECYCLE,
+        "records checks-settled with the verdict {value}, naming it",
+    ),
     Constant(
         "write-back retry ceiling",
         ONEPIPELINE,
@@ -1180,7 +1244,16 @@ def _publication_pairings(
     preserving read in the caller.
     """
     body = _region(shipped, _definition_of(status_fn), f"`{status_fn}`")
-    per_ending = dict(PUBLICATION_STATUS_ARM.findall(body))
+    match_body = body[body.index("{", body.index("match ")) + 1 :]
+    per_ending: dict[str, set[str]] = {}
+    whole: set[str] = set()
+    split = PUBLICATION_STATUS_ARM.split(match_body)
+    for pattern, status in zip(split[0::2], split[1::2], strict=False):
+        endings = PUBLICATION_ENDING.findall(pattern)
+        for ending in endings:
+            per_ending.setdefault(ending, set()).add(status)
+        if not PARTIAL_ARM.search(pattern):
+            whole.update(endings)
     default = PUBLICATION_STATUS_DEFAULT.search(body)
     assert per_ending or default, (
         f"onepipeline {ONEPIPELINE.ref}'s `{status_fn}` names no status this gate can "
@@ -1195,14 +1268,14 @@ def _publication_pairings(
                 # The `Failed` ending, whose word comes from `failure_of`. Its status
                 # is read from the failure relay instead; see the docstring.
                 continue
-            status = per_ending.get(ending)
-            if status is None:
+            statuses = set(per_ending.get(ending, ()))
+            if ending not in whole:
                 assert default, (
                     f"onepipeline {ONEPIPELINE.ref} settles `{word}` on a publication "
-                    f"ending `{ending}` that `{status_fn}` neither names nor defaults"
+                    f"ending `{ending}` that `{status_fn}` neither names whole nor defaults"
                 )
-                status = default.group(1)
-            pairings.add((word_for(status), word))
+                statuses.add(default.group(1))
+            pairings.update((word_for(status), word) for status in statuses)
     assert pairings, (
         f"onepipeline {ONEPIPELINE.ref} no longer turns a publication ending into one of "
         "this crate's words where this gate reads it"

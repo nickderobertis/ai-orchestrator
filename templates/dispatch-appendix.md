@@ -253,8 +253,8 @@ result another way, name in your report what was refused and what you tried, and
 retry to a person.
 
 **Publication goes through the harness.** The session branch reaches its remote only
-through `onevcs publish "$ONEVCS_SESSION"`, and its change request is lifted and landed
-by the lifecycle after you settle. No `git push` of the session branch, no `gh pr create`
+through `onevcs publish "$ONEVCS_SESSION"`, and its change request is lifted, landed or
+kept for the user's review by the lifecycle after you settle. No `git push` of the session branch, no `gh pr create`
 for it, no `gh pr ready`, no `gh pr merge`. Finish the branch, commit everything, leave
 the tree clean, and report. Landing it is explicitly **not** yours to perform and **not**
 part of your acceptance criteria. Two things are yours, and each only when this task's
@@ -268,8 +268,9 @@ own `## Additional info` — its own words above these notes — says so:
   `onevcs change describe "$ONEVCS_SESSION" --body-file PATH` replaces its description
   and `onevcs change show "$ONEVCS_SESSION"` reads it back. The description you leave is
   what the drafter finishes from, so start it with what only you know — the evidence and
-  where it is. Never mark the draft ready; the lifecycle does, after the description is
-  finished. `ONEVCS_SESSION` is in every lifecycle dispatch's environment.
+  where it is. Never mark the draft ready yourself; after you finish, the lifecycle lifts
+  it or keeps it as a draft for the user's review according to the repository's policy.
+  `ONEVCS_SESSION` is in every lifecycle dispatch's environment.
 - **Only when the task's `## Additional info` authorizes a throwaway demonstration change
   request**: after the draft is open, cut a branch from the session branch, commit the
   demonstration on it, push it with `git push -u origin <branch>`, open it with

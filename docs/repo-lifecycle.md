@@ -13,13 +13,13 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.56.0**
+that source on every `just check` rather than restated: **`onepipeline` v0.57.0**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.35.0** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.36.0** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through — and the copy `just publish-branch` and `just
 repo-recover` land through, since both run the engine's own landing verbs. The other
 manager verbs — `just recoverable`, `just work-status`, `just integrate` — run the
-`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.35.0** as well at this
+`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.36.0** as well at this
 pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
@@ -62,6 +62,8 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
 | `failed` | `empty-branch` | A lifecycle dispatch left its branch level with its base, having committed nothing to it, and the node declared no `expects_no_diff` — settled before any drafting or publication is spent, naming the branch and what it was compared against (https://github.com/nickderobertis/onepipeline/pull/229). The other reading `no-changes` used to cover: a worker asked for a change that produced none. A retry carrying `expects_no_diff` accepts it as that deterministic success, which settles without a dispatch; an amended task sends it back to produce a diff. |
 | `complete-but-draft` | `change-draft` | Every step ran and the branch is published, and the host is holding its change request as a **draft** because a release the node adopted early has not happened yet. Deliberately neither `done` nor a failure and deliberately not settled: merging now would make the node's temporary git pin permanent in a base branch, so no dependent starts on it and no run holding one has settled. What clears it is the release arriving, which puts a new worker on the branch this node already has. |
+| `done` | `change-draft` | The node declared `draft: true`, so its change request is left as a draft for a person to lift, whatever its checks said; no landing, and its dependents proceed. |
+| `done` | `change-review-draft` | The required checks are **green** and the change request is kept as a draft for its user's review, because the identity resolves `change-open` with `approvals: required`. Finished and verified, with no landing; its dependents proceed, and its user lifts it on the host or with the verb the settlement names. Distinct from both `change-draft` rows: nothing asked for this draft but the policy, and a red one never reaches it, settling `checks-failed` instead. |
 | `done` | *(none)* | A direct agent node — no publication to name. |
 | `waiting` | *(none)* | A `kind: human` step is ready and the branch is held for a person. |
 | `failed` | `publication-failed` | The publication started and did not land, and **nothing a further attempt could answer** ended it: a request `onevcs` refused, a seam with no implementation, or something that judged the publication turning it down where no narrower kind says which — the repository's own `commit-msg` hook refusing the composed subject, or a host that took a merge and then reported it unperformed. |
@@ -681,7 +683,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.56.0 and is refused **by its own name**, at every schema version and on a live
+v0.57.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1204,13 +1206,16 @@ enumerates what it accepts in the refusal it writes for what it does not, and
 repository — here, in `AGENTS.md`, and in `docs/orchestration.md` — to that
 enumeration.
 
-- **Team** — always effective workflow `remote`. Omitted policy opens an ordinary
-  ready-for-review PR and returns `change-open` immediately, without polling checks.
-  Explicit `change-auto` or `change-direct` merges the PR by that policy. Team
+- **Team** — always effective workflow `remote`. Omitted policy opens the PR as a
+  draft, watches its required checks, and — with approvals required — keeps it a draft
+  when green for its own user's review, settling `done` as `change-review-draft`; red
+  settles `checks-failed`. Explicit `change-auto` or `change-direct` lifts the green
+  draft and merges the PR by that policy. Team
   plus local registration/workflow migration/direct integration is rejected.
 - **Single owner** — omitted policy preserves `local-direct` publication or
   `remote` auto-merge. Explicit `change-open` forces remote PR publication for
-  that run and leaves the PR open without mutating a stored local workflow.
+  that run and leaves the PR open — lifted when green, or kept as a draft for review
+  where its approvals are required — without mutating a stored local workflow.
   Because the local strategy only supports direct publication, an explicit
   `change-auto` is reported as the effective `local-direct` policy when the stored
   workflow remains local.
@@ -1242,13 +1247,21 @@ lands it after a reconcile.
 
 - **The change-request path** (`change-*`, GitHub repos) — `publish_as_change`
   pushes the branch, then adopts an existing change request for the same head and
-  base or opens one, then asks the host to land it. `change-open` returns there.
+  base or opens one **as a draft**, watches its required checks, and on green lifts it
+  or keeps it as onevcs's draft lifecycle derives from `publication` and `approvals`,
+  then asks the host to land it.
+  `change-open` stops after the lift — or with the green draft kept for its user's
+  review — and settles `change-open` or `change-review-draft`; red, under any policy,
+  leaves the draft and settles `checks-failed`. A required check concluded `skipped`
+  is never read as passed: a publication it let through records `checks-settled`
+  with the verdict `passed-with-skipped`, naming it. `drafts: {disabled: true}` in the rules file opens
+  the change request ready instead, as before the lifecycle.
   The rest take a ticket in the identity's merge queue first. The default policy is
   GitHub **native auto-merge** (`gh pr merge --auto`), which by construction gates
   on required checks and ignores optional ones — so a non-blocking check never
   triggers or holds a merge. Policies: `change-auto` (native auto-merge; falls
   back to merging directly if the repo disallows it), `change-direct` (merge it
-  ourselves), `change-open` (open the change request and stop).
+  ourselves), `change-open` (open the change request, watch its checks, and stop).
 
   **What `onevcs` watches follows the merge policy, and never a gate.** That is the
   correction onevcs 0.10.0 made, and the old rule is worth knowing because it silently
@@ -1484,11 +1497,14 @@ https://github.com/nickderobertis/onevcs/pull/138):
    drafted none, `body-not-drafted` is recorded as below and the description stays as
    the worker left it, said on the settlement.
 5. One publication — `onevcs publish` with no body where the session holds the change
-   request, and with the drafted body where it opens one — which lifts the adopted draft
-   (`draft-lifted`) and lands under the resolved policy. The node settles on the
-   publication's own words, and its detail says the worker opened the change request as
-   a draft, that the closeout wrote the description onto it, and that it was marked
-   ready for review.
+   request, and with the drafted body where it opens one — which watches the draft's
+   checks and lands under the resolved policy. The closeout lifts nothing itself:
+   `onevcs`'s draft lifecycle lifts the draft when green (`draft-lifted`) or keeps it
+   for its user's review (`draft-kept-for-review`), and a draft the plan or a release
+   asked for is never lifted by green checks. The node settles on the publication's
+   own words, and its detail says the worker opened the change request as a draft, that
+   the closeout wrote the description onto it, and what the publication answered for
+   the draft: lifted, lifted and merged, kept for review, or left as asked.
 
 The drafted body is read out of `results[].structured.body` of the retained member
 report. Stack metadata is appended as usual. It costs one turn per published change
@@ -1527,7 +1543,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.56.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.57.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1603,12 +1619,13 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.35.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.56.0 settles the node that
+`onevcs` 0.36.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.57.0 settles the node that
 made one `complete-but-draft` — so "no notion of one" is no longer why. A draft is a
 **publication** outcome, reached once the last step has settled and the publication
-starts, because a release the node adopted early has not happened yet or because the
-node declared `draft: true` — or a **worker's** outcome, reached from inside a step
+starts, because a release the node adopted early has not happened yet, because the
+node declared `draft: true`, or because a green change on a `change-open` identity with
+`approvals: required` is kept for its user's review — or a **worker's** outcome, reached from inside a step
 under the appendix's carve-out; nothing on the pause path itself can produce one, on a
 local or a remote identity. A pause is still purely local branch state, and the
 difference now matters: a node holding a draft is neither paused nor settled, and
@@ -2335,7 +2352,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.56.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.57.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

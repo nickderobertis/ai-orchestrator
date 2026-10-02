@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.56.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.57.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -92,7 +92,12 @@ session stream:
 | `setup` | `session-opened`, `fetch`, `commit-preserved`, `lock-acquired`, `recovery-attested` |
 | `lock_wait` | `lock-wait` |
 | `gate` | `gate-started` (reachable only from a store an older release wrote) |
-| `publication_wait` | `gate-verdict`, `push`, `change-opened`, `change-check`, `merge-queued`, `change-merged`, `merge-completed`, `sync-conflict` |
+| `publication_wait` | `gate-verdict`, `push`, `change-opened`, `change-drafted`, `change-check`, `checks-settled`, `draft-lifted`, `draft-lifted-early`, `draft-kept-for-review`, `merge-queued`, `change-merged`, `merge-completed`, `sync-conflict` |
+
+A `change-check` carries one of five states — `passed`, `failed`, `skipped`, `pending`,
+`no-verdict` — and `skipped` is its own state, never read as passed; `checks-settled`
+records the watch's verdict, `passed-with-skipped` where a skipped required check let
+the publication through.
 
 A session's last record is what it is doing until the next one, and a kind this build
 does not know — one a newer `onevcs` emits, or one that ends the session — leaves it
@@ -366,12 +371,12 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.21.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.22.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and
-   0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 10,
-   unmoved across this bump too, where 0.7.3 served
+   0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 11,
+   where 0.21.1 served 10 and 0.7.3 served
    8 (`tests/dag_ui/test_dag_ui_serving_e2e.py` holds both numbers to the reader's
    answer); spans of kind `run`, `dispatch`, `node`,
    `rollup`, `verification`, `publication`, and `human-wait`, each with `started_at`

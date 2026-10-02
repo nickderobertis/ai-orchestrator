@@ -844,6 +844,57 @@ def test_local_direct_repositories_publish_locally(ruled: Path, identity: str) -
     assert reported(checked.stdout, "approvals") == "none"
 
 
+class DraftLifecycle(NamedTuple):
+    """What `onevcs rules check` resolves for one identity's draft lifecycle."""
+
+    #: Whether a publication opens its change request as a draft: `on` or `off`.
+    drafts: str
+    #: What a green draft becomes: `lift`, `keep for review`, or `not applicable`.
+    green_draft: str
+
+
+#: What the pinned `onevcs` resolves this host's rules file into, per kind of identity.
+#: One identity of each publication this file routes — a single-owner `change-auto`
+#: sibling, a `petsinc` team repository, and this one.
+DRAFT_LIFECYCLE: dict[RepoIdentity, DraftLifecycle] = {
+    "github.com/nickderobertis/onevcs": DraftLifecycle("on", "lift"),
+    "github.com/petsinc/org-apps": DraftLifecycle("on", "keep for review"),
+    "github.com/nickderobertis/ai-orchestrator": DraftLifecycle("on", "not applicable"),
+}
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# Every journey of `just repos-apply` lives in this module, in the tier it already runs in,
+# and shares its `ruled` fixture, as the module's file-scoped reason says; giving them a
+# project of their own is one change to the project graph for all of them at once, not
+# one more journey's to make.
+@pytest.mark.parametrize(("key", "expected"), sorted(DRAFT_LIFECYCLE.items()))
+def test_each_identity_resolves_the_intended_draft_lifecycle(
+    ruled: Path, key: RepoIdentity, expected: DraftLifecycle
+) -> None:
+    """A green change is lifted, kept for its user's review, or never a change at all.
+
+    The publication lifecycle itself is the engines' to prove, against their own
+    testing hosts; what this host owns is that the rules file it installs reads into
+    the behaviour the user asked for. A team repository's green draft has to stay a
+    draft until its own user has looked at it, a sibling that merges automatically has
+    to be lifted so it can, and a `local-direct` identity opens no change request to
+    draft. An `onevcs` that predates the lifecycle prints neither line, so this fails
+    there rather than passing on a silence.
+    """
+    checked = onevcs(ruled, "rules", "check", key)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+    resolved = DraftLifecycle(
+        drafts=reported(checked.stdout, "drafts"),
+        green_draft=reported(checked.stdout, "green draft"),
+    )
+    assert resolved == expected, checked.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
 def test_the_tracked_rules_declare_the_migrated_schema_and_name_no_gate() -> None:
     """The file itself: version 3, and no `gate:` anywhere in it.
 
