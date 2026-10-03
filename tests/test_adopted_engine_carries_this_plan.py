@@ -656,6 +656,45 @@ CORRELATED_RULING_LANDINGS = (
     ),
 )
 
+#: The engine-side nodes of the run-ending-liveness plan: a run's ending read from its
+#: run-end hook verdict and printed by `status --json`, which `scripts/follow-ups.sh` decides
+#: from; an envelope that does not decode refused rather than discarded; a live, quiet
+#: driver read as `PARKED` and driven; a new hook epoch when an adoption finds the graph
+#: live; and the `driver-exited` journal record.
+#: `tests/plan_tooling/test_follow_ups_recipe_e2e.py` drives the reading on this host.
+RUN_ENDING_LIVENESS_LANDINGS = (
+    Landing(
+        node="op-run-ending-reading",
+        change_request=694,
+        commit="bd3c851f205e51001744a06db188e948cc953f31",
+        did="read a run's ending from its hook verdict and print it as JSON",
+    ),
+    Landing(
+        node="op-refuse-undecodable-envelopes",
+        change_request=685,
+        commit="aeb6acb533b75e1d162f72e293bda479f785b8c9",
+        did="refuse an envelope that does not decode instead of discarding it",
+    ),
+    Landing(
+        node="op-parked-liveness",
+        change_request=701,
+        commit="d83bf636e2b7bc5560ba21977dc73ea4d63be595",
+        did="read a live, quiet driver as parked and driven",
+    ),
+    Landing(
+        node="op-hook-epoch-after-adoption",
+        change_request=699,
+        commit="36740cc8f79df8e47e34a4aab17d649359c52fcf",
+        did="start a new hook epoch when an adoption finds the graph live",
+    ),
+    Landing(
+        node="op-driver-exit-record",
+        change_request=691,
+        commit="1474a2f8dce1e268e5b8a10ff508af933930481c",
+        did="record every driver's ending in the journal",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -688,6 +727,7 @@ LANDINGS = (
     *HISTORY_SEGMENTS_LANDINGS,
     *NARROW_SEARCH_PAGES_LANDINGS,
     *SESSION_OPEN_CONFLICT_LANDINGS,
+    *RUN_ENDING_LIVENESS_LANDINGS,
     *CORRELATED_RULING_LANDINGS,
 )
 

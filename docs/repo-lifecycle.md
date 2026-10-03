@@ -1822,7 +1822,7 @@ Journal appends and result writes are atomic, and a second process cannot drive 
 same run. If a driver died, inspect its recorded worktrees and then use `just
 orchestrate --adopt <run-id>`; recovery is explicit and never silently overwrites a
 result. `just runs` and `just status` report a run whose recorded driver no longer
-exists as `DRIVER DEAD` rather than as in flight, so a lifecycle node that lost its
+exists, with work that can still move, as `DRIVER DEAD` rather than as in flight, so a lifecycle node that lost its
 executor is visibly waiting for that recovery rather than looking like work in
 progress. A fresh unique run id comes from the plan's top-level `name` or filename;
 `ONEPIPELINE_RUNS_DIR` moves the ledger. There is no unrecorded mode, which is what

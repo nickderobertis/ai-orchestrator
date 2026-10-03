@@ -205,6 +205,11 @@ CREATED_RECORD = "tasks/write-the-design-document.md"
 #: when a journey names it: how a journey states which of the two the engine said.
 CHECK_OUTPUT_ENV = "FAKE_CHECK_OUTPUT"
 
+#: What the doubled engine's `status <run> --json` prints instead of the engine's reading of
+#: the run, when a journey names one; nothing when none is named: how a journey states an
+#: engine whose answer is not that document.
+STATUS_ANSWER_ENV = "FAKE_STATUS_ANSWER"
+
 #: Where both doubled engines below record the template root each call was handed, one
 #: `<root> <argv>` line per call, when a journey names the file; `<unset>` when none was.
 TEMPLATE_ROOT_TRACE_ENV = "FAKE_TEMPLATE_ROOT_TRACE"
@@ -279,6 +284,8 @@ case "$*" in
       printf '{"reference":"onepipeline:plan-task","entry":"plan-task.md.j2",'
       printf '"templates":[{"name":"plan-task.md.j2","source":"## Acceptance criteria"}]}'
     fi ;;
+  "run onepipeline status "*" --json")
+    printf '%s' "${FAKE_STATUS_ANSWER-}" ;;
   "run onepipeline template check plan-task --item "*)
     if [ -n "${FAKE_CHECK_OUTPUT-}" ]; then
       printf '%s\\n' "$FAKE_CHECK_OUTPUT" >&2

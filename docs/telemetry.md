@@ -358,10 +358,16 @@ served them.
 
 1. **`just status <run-id>` and `just runs`** report two independent liveness
    verdicts, and confusing them is the common mistake. The **driver** verdict is
-   one of `ACTIVE`, `DRIVER DEAD`, `PARKED`, or `UNDRIVEN`; `just orchestrate
-   --adopt` is the way back from the two that mean nothing is driving the run
-   (`DRIVER DEAD` and `PARKED`), and a run stopped and then adopted reads `ACTIVE`
-   under its adopting driver rather than carrying the stop forward. The **observer** verdict is separate and prints
+   one of `ACTIVE`, `PARKED`, `DRIVER DEAD`, or `UNDRIVEN`; `just orchestrate
+   --adopt` is the way back from `DRIVER DEAD`, now only a driver gone with work
+   that can still move and no stop, while `ACTIVE` and `PARKED` — a live driver
+   whose journal has gone quiet — are driven, and a run stopped and then adopted
+   reads `ACTIVE` under its adopting driver rather than carrying the stop forward.
+   The word printed for the run puts its ending first: `SETTLED` for a run whose
+   every node is `done`, `ENDED failed`, `ENDED unfinished` or `ENDED stopped` for
+   one that ended another way, and `PAUSED` for an undriven run waiting on a
+   decision, each in place of the driver verdict (`just status <run-id> --json` is
+   the same reading as one document). The **observer** verdict is separate and prints
    beside it: `OBSERVER DEAD` when the launch named an observer graph whose run has
    ended, `OBSERVER NOT RESTARTED` when it named one, that graph run is over, and the
    driver has stopped starting another, `NO OBSERVER` when it named none,

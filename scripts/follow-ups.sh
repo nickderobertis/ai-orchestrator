@@ -57,9 +57,12 @@
 #
 # Four refusals and endings come before anything is written, each told apart:
 #
-#   * a run something is still driving is refused (exit 2), because its drafts may still be
-#     growing — `onepipeline watch --timeout 0` reads the run once and answers whether a
-#     driver is live, which is the engine's own answer rather than a guess from its ledger;
+#   * a run that has not ended is refused (exit 2), because its drafts may still be growing
+#     — `onepipeline status <run> --json` is read once, and only a run whose reading carries
+#     an `ending`, of any kind, goes on: one still driven is retried once it ends, one paused
+#     is refused naming each waiting human action and a blocking surface, and one nothing
+#     drives with neither is to be adopted or stopped. That is the engine's own reading
+#     rather than a guess from its ledger, and a run with no run root is one nothing drives;
 #   * a run whose draft project holds no drafts and no tickets ends at one line naming it
 #     and launches nothing (exit 0);
 #   * `--to` names the board the tickets are copied onto, for a journey standing a local
@@ -114,21 +117,6 @@ TEMPLATE_NAME="follow-up-task"
 #: The source the project is written into, and what its native id and run id append.
 PLAN_SOURCE="authoring"
 SUFFIX="-follow-ups"
-
-#: What `onepipeline watch --timeout 0 --until nothing-driving` exits with, read once, when
-#: it establishes that nothing drives the run: settled, or nothing driving it. Every other
-#: answer establishes nothing — since onepipeline 0.55.0 a watch armed on a run nothing is
-#: driving waits rather than ending `nothing-driving`, so a zero-second wait elapses alike
-#: on a run whose driver is gone and on one still driven, and no other verb of that engine
-#: answers liveness in a form a script may read. AGENTS.md's watch rule states the whole
-#: vocabulary, and `tests/test_watch_surface_drift.py` holds it to the engine.
-WATCH_SETTLED=0
-WATCH_NOTHING_DRIVING=3
-#: The verb's other endings — a surface waiting, the wait elapsing, a node settling, the
-#: run changing — each a reading of the run that leaves its liveness unknown. Any status
-#: outside these and the two above is the read failing rather than answering.
-WATCH_SURFACE_WAITING=4
-WATCH_RUN_CHANGED=7
 
 #: What one count the inventory answers with is: a non-negative whole number.
 COUNT='^[0-9]+$'
@@ -255,22 +243,41 @@ if [ -e "$runs_root" ] && { [ ! -d "$runs_root" ] || [ ! -r "$runs_root" ] || [ 
         "fix its permissions, or point $PLAN_RUNS_ROOT_ENV at a directory this launch can read, then retry"
 fi
 
-# A run with no run root is a run nothing drives. One that has one is asked, once.
+# A run with no run root is a run nothing drives. One that has one is asked, once, for the
+# engine's reading of it, and only a run that ended is followed up.
 if [ -e "$runs_root/$run" ]; then
-    watched=0
-    said=$("$script_dir/onepipeline.sh" watch "$run" --timeout 0 --until nothing-driving 2>&1 >/dev/null) || watched=$?
-    if [ "$watched" -eq "$WATCH_SETTLED" ] || [ "$watched" -eq "$WATCH_NOTHING_DRIVING" ]; then
-        :
-    elif [ "$watched" -ge "$WATCH_SURFACE_WAITING" ] && [ "$watched" -le "$WATCH_RUN_CHANGED" ]; then
-        # The gap this answers is upstream: a machine-readable liveness read on the
-        # engine's CLI. Until one exists, an unfinished run is refused rather than
-        # guessed at, because its drafts may still be growing.
-        fail "whether run '$run' is still being driven could not be read on this engine: 'onepipeline watch' ended on exit $watched, which a run nothing drives and a run still driven both give, so no follow-up run was launched" \
-            "read the run with 'just status $run': one still driven can be retried once it settles, and one nothing drives with work unfinished stays refused here until the engine can say whether a run is driven"
-    else
-        fail "whether run '$run' is still being driven could not be read: 'onepipeline watch' exited $watched saying: ${said##*$'\n'}" \
+    # The engine's own diagnostic reaches stderr as it writes it, so a read that fails is
+    # explained in its words above the recipe's line.
+    asked=0
+    answered=$("$script_dir/onepipeline.sh" status "$run" --json) || asked=$?
+    if [ "$asked" -ne 0 ]; then
+        fail "whether run '$run' has ended could not be read: 'onepipeline status --json' exited $asked, with the engine's diagnostic above" \
             "read the run with 'just status $run', then retry"
     fi
+    # `orchestrator/run_reading.py` checks the answer against the engine's published
+    # document and prints the one decision this recipe acts on.
+    decision=$(printf '%s' "$answered" | "$python" -m orchestrator.run_reading "$run") ||
+        fail "the reading of run '$run' could not be checked" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+    case "$decision" in
+        ended) ;;
+        "driven "*)
+            fail "run '$run' is still driven (it reads ${decision#driven }), so its drafts may still be growing and no follow-up run was launched" \
+                "retry once it ends; 'just watch $run' says when"
+            ;;
+        "paused "*)
+            fail "run '$run' is paused, not ended, so no follow-up run was launched: ${decision#paused }" \
+                "attest each waiting human action, or retire it with 'drop' (\"dependents\": \"detach\" and a reason), and answer a blocking surface — each through 'just channel-next $run' and 'just channel-reply $run' — or stop the run with 'just stop $run' to end it, then retry"
+            ;;
+        "crashed "*)
+            fail "run '$run' has not ended and nothing is driving it (it reads ${decision#crashed })" \
+                "adopt it with 'just orchestrate --adopt $run' to finish it, or stop it with 'just stop $run' to end it, then retry"
+            ;;
+        *)
+            fail "whether run '$run' has ended could not be read: 'onepipeline status --json' answered something other than the engine's reading (${decision#unreadable })" \
+                "read the run with 'just status $run', then retry"
+            ;;
+    esac
 fi
 
 # shellcheck source=scripts/follow-up-env.sh

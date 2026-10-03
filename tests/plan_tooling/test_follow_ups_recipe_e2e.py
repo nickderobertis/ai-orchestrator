@@ -66,15 +66,16 @@ import short_state
 import yaml
 from follow_up_ticket_shape import impact_prose
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
-from project_fixtures import helper
+from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_check
-from orchestrator.plan_store import WRITABLE_PLUGIN
+from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
+from orchestrator.run_reading import RunId
 
 #: A real launch holds this checkout's toolchain for as long as it runs, so it is scheduled
 #: with every other journey that does — which also keeps this module's one fixture on one
@@ -3061,12 +3062,6 @@ def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_
     )
 
 
-#: What the recipe says when the engine cannot tell it whether a run is driven. Since
-#: onepipeline 0.55.0 a zero-second watch elapses alike on a run still driven and on one
-#: whose driver is gone, so the refusal claims neither and names where to read the run.
-UNREADABLE_LIVENESS = "is still being driven could not be read on this engine"
-
-
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
 # runs in plan_tooling's dedicated installed-engine Nx tier, and launches nothing itself: it
 # reads the refusal the module-scoped `followed` fixture already recorded. That tier's
@@ -3075,9 +3070,291 @@ def test_a_run_something_is_still_driving_is_refused(followed: Followed) -> None
     driving = followed.driving
 
     assert driving.returncode == REFUSED, driving.stdout + driving.stderr
-    assert f"whether run '{followed.detached_run}' {UNREADABLE_LIVENESS}" in driving.stderr
-    assert f"just status {followed.detached_run}" in driving.stderr
+    assert (
+        f"run '{followed.detached_run}' is still driven (it reads ACTIVE), so its drafts may "
+        "still be growing"
+    ) in driving.stderr
+    assert f"retry once it ends; 'just watch {followed.detached_run}' says when" in driving.stderr
     assert not (followed.bench.plans / "projects" / f"{followed.detached_run}{SUFFIX}.md").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: The node every ending run below waits on, and the agent node one of them gates. Neither
+#: is ever dispatched: the human node is attested, settled, stopped or left waiting, and the
+#: agent node behind it is parked or left ready with nothing driving it.
+GATE = NodeId("gate")
+WORK = NodeId("work")
+
+
+class Ending(NamedTuple):
+    """One run left in one state by the real engine, and what `just follow-ups` said of it."""
+
+    #: The run, under the bench's runs root.
+    run: RunId
+    #: `onepipeline status <run> --json` as the recipe was about to read it.
+    reading: dict[str, object]
+    #: The recipe's answer.
+    answered: subprocess.CompletedProcess[str]
+
+
+class Endings(NamedTuple):
+    """Every run state the recipe decides on, each read once through the recipe."""
+
+    bench: Bench
+    endings: dict[str, Ending]
+
+
+def _plan_task(what: str) -> str:
+    return f"## What\n{what}\n\n## Why\nHold the run.\n\n## Acceptance criteria\n- Done."
+
+
+def _left_in(bench: Bench, run: RunId, tasks: list[dict[str, object]]) -> None:
+    """Launch ``tasks`` as ``run`` through the real `just orchestrate`, which hands it back.
+
+    Every plan here leads with a human node, so the launch returns once the driver has
+    handed the run back at it, with no observer graph, and nothing is dispatched.
+    """
+    plan = bench.tmp / f"{run}.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "goal": {"text": "leave a run in one state for the follow-ups recipe"},
+                "name": run,
+                "tasks": tasks,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Hand-written tasks, so the launch names the flag the bench's environment no longer
+    # carries for the suite: what is under test is the run's state, not how a task renders.
+    launched = _run(
+        ["just", "orchestrate", project_from_plan(plan)]
+        + ["--dag-graph", "off", "--require-rendered", "false"],
+        bench,
+    )
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+
+def _edited(bench: Bench, run: RunId, *commands: dict[str, object]) -> None:
+    """Apply ``commands`` to a run nothing drives, as a manager types them on the channel."""
+    sent = subprocess.run(  # noqa: S603 - this checkout's own recipe
+        ["just", "channel-reply", run],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        input=json.dumps({"version": 3, "commands": list(commands)}),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert sent.returncode == 0, sent.stdout + sent.stderr
+    assert '"state":"applied"' in sent.stdout.replace(" ", ""), sent.stdout
+
+
+def _reading(bench: Bench, run: RunId) -> dict[str, object]:
+    """The engine's own reading of ``run``, which is what the recipe decides from."""
+    read = _run([str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "status", run, "--json"], bench)
+    assert read.returncode == 0, read.stdout + read.stderr
+    reading: object = json.loads(read.stdout)
+    assert isinstance(reading, dict), read.stdout
+    return reading
+
+
+def _followed_up(bench: Bench, run: RunId) -> Ending:
+    """Draft one follow-up against ``run``, then ask the recipe to verify it, detached."""
+    _draft(bench, run, f"A draft left by {run}")
+    reading = _reading(bench, run) if (bench.runs / run).exists() else {}
+    answered = _run(["just", "follow-ups", run, "--detach", "--to", BOARD], bench)
+    return Ending(run, reading, answered)
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `tests/plan_tooling` is
+# the Nx project edge this repository keeps for journeys that launch the installed engine,
+# keyed on `planToolingWorkspace`, which covers the recipe, the engine pin and every file
+# these launches read. The fixture is module-scoped: eight launches whose every node is a
+# human node or an agent node nothing dispatches, and five detached follow-up launches
+# whose one turn is the provider's stand-in.
+@pytest.fixture(scope="module")
+def endings(tmp_path_factory: pytest.TempPathFactory) -> Endings:  # noqa: PLR0915 - one journey
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    tmp = tmp_path_factory.mktemp("follow-ups-endings")
+    bench = _bench(tmp)
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp / "commands.json")
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp / "commands-ran.jsonl")
+    _script(bench, "nothing-matches-this-marker", [])
+    pid = os.getpid()
+    gate = {"id": GATE, "kind": "human", "task": _plan_task("Approve.")}
+    work = {"id": WORK, "persona": "engineer", "deps": [GATE], "task": _plan_task("Report.")}
+    runs = {
+        name: RunId(f"fu-{name}-{pid}")
+        for name in (
+            "failed",
+            "stopped",
+            "complete",
+            "unfinished",
+            "unlaunched",
+            "human",
+            "surface",
+            "crashed",
+        )
+    }
+    endings: dict[str, Ending] = {}
+    asker: subprocess.Popen[str] | None = None
+    try:
+        # Ended `failed`: its one node settled to a failure.
+        _left_in(bench, runs["failed"], [gate])
+        _edited(
+            bench,
+            runs["failed"],
+            {"op": "settle", "id": GATE, "outcome": "failed", "evidence": "nobody approved it"},
+        )
+        # Ended `stopped`, with two human nodes still waiting when it was stopped.
+        _left_in(bench, runs["stopped"], [gate, {**gate, "id": "second-gate"}])
+        stopped = _run(["just", "stop", runs["stopped"]], bench)
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        # Settled: every node `done`.
+        _left_in(bench, runs["complete"], [gate])
+        _edited(bench, runs["complete"], {"op": "attest", "ref": GATE})
+        # Ended `unfinished`: the gate attested, and the one node behind it parked.
+        for run in (runs["unfinished"], runs["surface"]):
+            _left_in(bench, run, [gate, work])
+            _edited(
+                bench, run, {"op": "cancel", "id": WORK, "reason": "its report is already filed"}
+            )
+            _edited(bench, run, {"op": "attest", "ref": GATE})
+        # Paused on a human node nobody has attested.
+        _left_in(bench, runs["human"], [gate])
+        # Driver gone with the work behind the gate ready, and no stop.
+        _left_in(bench, runs["crashed"], [gate, work])
+        _edited(bench, runs["crashed"], {"op": "attest", "ref": GATE})
+
+        for name in ("failed", "stopped", "complete", "unfinished", "unlaunched", "human"):
+            endings[name] = _followed_up(bench, runs[name])
+        endings["crashed"] = _followed_up(bench, runs["crashed"])
+
+        # Paused on a blocking question its asker is still waiting on: the ended run above,
+        # asked something it cannot end without.
+        asker = subprocess.Popen(  # noqa: S603 - the engine's own ask, as a dispatch asks
+            [str(REPO_ROOT / "scripts" / "ask-manager.sh"), "--timeout", "600"],
+            cwd=REPO_ROOT,
+            env=bench.environment | {"ONEPIPELINE_RUN_ID": runs["surface"]},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert asker.stdin is not None
+        asker.stdin.write("Should the parked work be dispatched after all?\n")
+        asker.stdin.close()
+        limit = time.monotonic() + e2e_timeout(60)
+        while _reading(bench, runs["surface"]).get("paused") is None:
+            assert asker.poll() is None, "the asker ended before its question was outstanding"
+            assert time.monotonic() < limit, "the question never held the run paused"
+            time.sleep(0.5)
+        endings["surface"] = _followed_up(bench, runs["surface"])
+        return Endings(bench, endings)
+    finally:
+        if asker is not None and asker.poll() is None:
+            asker.terminate()
+            asker.communicate(timeout=30)
+        for run in [*runs.values(), *(RunId(f"{run}{SUFFIX}") for run in runs.values())]:
+            if (bench.runs / run).exists():
+                _run(["just", "stop", run], bench)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These journeys read what
+# the module-scoped `endings` fixture recorded and launch nothing themselves. That fixture is
+# the one expensive part, behind plan_tooling's installed-engine edge with every other launch
+# of this recipe, whose `planToolingWorkspace` key covers the recipe, the reading module and
+# the engine pin these assertions depend on; a project of its own would key on the same files.
+@pytest.mark.parametrize(
+    ("name", "word"),
+    [
+        ("failed", "ENDED failed"),
+        ("stopped", "ENDED stopped"),
+        ("complete", "SETTLED"),
+        ("unfinished", "ENDED unfinished"),
+        ("unlaunched", None),
+    ],
+)
+def test_a_run_that_ended_any_way_is_followed_up(
+    endings: Endings, name: str, word: str | None
+) -> None:
+    """Any ending launches the follow-up run, as does a run id no run root holds."""
+    ending = endings.endings[name]
+
+    assert ending.reading.get("word") == word, ending.reading
+    assert ending.answered.returncode == OK, ending.answered.stdout + ending.answered.stderr
+    assert ending.answered.stdout.splitlines() == [
+        f"follow-up run: {ending.run}{SUFFIX}",
+        f"watch it with: just watch {ending.run}{SUFFIX}",
+    ]
+
+
+def test_a_stopped_run_with_waiting_human_nodes_reads_ended_and_launches(
+    endings: Endings,
+) -> None:
+    """A stop ends the run even while two human nodes are waiting, so it is followed up."""
+    ending = endings.endings["stopped"]
+    ended = ending.reading["ending"]
+
+    assert isinstance(ended, dict), ending.reading
+    assert ended["kind"] == "stopped"
+    assert {node["id"]: node["status"] for node in ended["nodes"]} == {
+        GATE: "waiting",
+        "second-gate": "waiting",
+    }
+    assert ending.answered.returncode == OK, ending.answered.stderr
+
+
+def test_a_run_paused_on_a_human_node_is_refused_naming_it(endings: Endings) -> None:
+    ending = endings.endings["human"]
+
+    assert ending.reading["paused"] == {"human_actions": [GATE], "blocking_surface": False}
+    assert ending.answered.returncode == REFUSED, ending.answered.stdout + ending.answered.stderr
+    assert (
+        f"run '{ending.run}' is paused, not ended, so no follow-up run was launched: "
+        f'human action "{GATE}" is waiting;'
+    ) in ending.answered.stderr
+    assert "attest each waiting human action, or retire it with 'drop'" in ending.answered.stderr
+    assert f"stop the run with 'just stop {ending.run}' to end it" in ending.answered.stderr
+    assert not (endings.bench.runs / f"{ending.run}{SUFFIX}").exists()
+
+
+def test_a_run_paused_on_a_blocking_surface_is_refused_naming_it(endings: Endings) -> None:
+    ending = endings.endings["surface"]
+
+    assert ending.reading["paused"] == {"human_actions": [], "blocking_surface": True}
+    assert ending.answered.returncode == REFUSED, ending.answered.stdout + ending.answered.stderr
+    assert (
+        f"run '{ending.run}' is paused, not ended, so no follow-up run was launched: "
+        "a blocking surface is waiting;"
+    ) in ending.answered.stderr
+    assert "answer a blocking surface" in ending.answered.stderr
+    assert not (endings.bench.runs / f"{ending.run}{SUFFIX}").exists()
+
+
+def test_a_run_whose_driver_is_gone_with_work_ready_is_refused_naming_adopt_and_stop(
+    endings: Endings,
+) -> None:
+    ending = endings.endings["crashed"]
+
+    assert ending.reading["word"] == "DRIVER DEAD", ending.reading
+    assert (ending.reading["ending"], ending.reading["paused"]) == (None, None)
+    assert ending.answered.returncode == REFUSED, ending.answered.stdout + ending.answered.stderr
+    assert (
+        f"run '{ending.run}' has not ended and nothing is driving it (it reads DRIVER DEAD)"
+    ) in ending.answered.stderr
+    assert f"'just orchestrate --adopt {ending.run}'" in ending.answered.stderr
+    assert f"'just stop {ending.run}' to end it" in ending.answered.stderr
+    assert not (endings.bench.runs / f"{ending.run}{SUFFIX}").exists()
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -3566,6 +3843,213 @@ def _template_lines(checkout: Path, project: str) -> tuple[str, ...]:
         f"{engine} template resolve {TEMPLATE_NAME} --repo {resolved} --json",
         f"{engine} template check {TEMPLATE_NAME} --repo {resolved} --item {project}",
     )
+
+
+#: A reading of `run-1` in every respect the engine's document is, ended `failed`, which the
+#: unreadable answers below each depart from in one way.
+WELL_FORMED = {
+    "schema_version": 1,
+    "run_id": "run-1",
+    "word": "ENDED failed",
+    "liveness": "DRIVER DEAD",
+    "driven": False,
+    "ending": {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "outcome": None}]},
+    "paused": None,
+}
+
+
+def _malformed(**changed: object) -> str:
+    """The well-formed reading with ``changed`` fields replaced, as the engine would print it."""
+    return json.dumps(WELL_FORMED | changed)
+
+
+#: An ending as the engine prints one, for the shapes below that depart from it within.
+FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "outcome": None}]}
+
+
+@pytest.mark.parametrize(
+    ("answer", "exit_status", "said"),
+    [
+        ("", 0, "the answer is not one JSON document"),
+        ("ENDED failed", 0, "the answer is not one JSON document"),
+        (_malformed(schema_version=2), 0, "it is schema 2, not 1"),
+        (_malformed(run_id="run-2"), 0, 'it reads run "run-2", not run-1'),
+        (_malformed(word="FINISHED"), 0, 'its word is "FINISHED", which is not one the engine'),
+        (_malformed(word=["SETTLED"]), 0, 'its word is ["SETTLED"], which is not one the engine'),
+        (_malformed(liveness="GONE"), 0, 'its liveness is "GONE", which is not one the engine'),
+        (_malformed(driven="no"), 0, "its driven field is not true or false"),
+        (_malformed(ending={"kind": "failed"}), 0, "its ending does not carry exactly"),
+        (
+            _malformed(ending={**FAILED_ENDING, "kind": "crashed"}),
+            0,
+            'its ending kind is "crashed", which is not one the engine',
+        ),
+        (_malformed(ending={**FAILED_ENDING, "nodes": {}}), 0, "its ending's nodes are not a list"),
+        (
+            _malformed(ending={**FAILED_ENDING, "nodes": [{"id": "a", "status": "failed"}]}),
+            0,
+            "a node of its ending does not carry exactly",
+        ),
+        (
+            _malformed(
+                ending={**FAILED_ENDING, "nodes": [{"id": "a", "status": "done", "outcome": None}]}
+            ),
+            0,
+            'the status of a node of its ending is "done", which is not one the engine',
+        ),
+        (
+            _malformed(ending=None, paused={"human_actions": [], "blocking_surface": "yes"}),
+            0,
+            "its pause's blocking_surface is not true or false",
+        ),
+        (
+            _malformed(ending=None, paused={"human_actions": [], "blocking_surface": False}),
+            0,
+            "its pause names nothing waiting",
+        ),
+        (
+            _malformed(paused={"human_actions": [], "blocking_surface": True}),
+            0,
+            "it reads both ended and paused",
+        ),
+        (_malformed(driven=True, liveness="ACTIVE"), 0, "it reads driven and yet ended or paused"),
+        (_malformed(extra=1), 0, "the reading does not carry exactly"),
+        (_malformed(schema_version=True), 0, "it is schema true, not 1"),
+        (
+            _malformed(
+                ending={**FAILED_ENDING, "nodes": [{"id": 1, "status": "failed", "outcome": None}]}
+            ),
+            0,
+            "a node of its ending has an id that is not a string",
+        ),
+        (
+            _malformed(
+                ending={**FAILED_ENDING, "nodes": [{"id": "a", "status": "failed", "outcome": 3}]}
+            ),
+            0,
+            "a node of its ending has an outcome that is not a string",
+        ),
+        (
+            _malformed(ending=None, paused={"human_actions": []}),
+            0,
+            "its pause does not carry exactly",
+        ),
+        (
+            _malformed(ending=None, paused={"human_actions": [1], "blocking_surface": False}),
+            0,
+            "its pause's human actions are not a list of node ids",
+        ),
+        (
+            _malformed(
+                ending=None,
+                driven=True,
+                paused={"human_actions": ["a"], "blocking_surface": False},
+            ),
+            0,
+            "it reads driven and yet ended or paused",
+        ),
+        ("", 3, "'onepipeline status --json' exited 3, with the engine's diagnostic above"),
+    ],
+    ids=[
+        "empty",
+        "words",
+        "schema",
+        "other-run",
+        "unknown-word",
+        "word-not-a-string",
+        "unknown-liveness",
+        "driven-not-a-boolean",
+        "ending-fields",
+        "ending-kind",
+        "ending-nodes",
+        "node-fields",
+        "node-status",
+        "pause-surface",
+        "pause-empty",
+        "ended-and-paused",
+        "driven-and-ended",
+        "extra-field",
+        "schema-boolean",
+        "node-id",
+        "node-outcome",
+        "pause-fields",
+        "pause-actions",
+        "driven-and-paused",
+        "exit",
+    ],
+)
+def test_a_status_answer_that_is_not_the_engines_reading_is_refused_as_unreadable(
+    tmp_path: Path, answer: str, exit_status: int, said: str
+) -> None:
+    """The recipe launches on the engine's document alone, and refuses anything else.
+
+    The engine is the doubled boundary here, because the installed one answers its document
+    or fails: what is under test is that a half-matching answer is never read as an ending.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    (checkout / "runs" / "run-1").mkdir(parents=True)
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+
+    refused = delegation_checkout.run_recipe(
+        checkout,
+        trace,
+        "follow-ups",
+        "run-1",
+        env={
+            delegation_checkout.STATUS_ANSWER_ENV: answer,
+            "FAKE_UV_EXIT": str(exit_status),
+        },
+    )
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert "follow-ups: whether run 'run-1' has ended could not be read: " in refused.stderr
+    assert said in refused.stderr, refused.stderr
+    assert "read the run with 'just status run-1', then retry" in refused.stderr
+    traced = trace.read_text(encoding="utf-8").splitlines()
+    assert "uv run onepipeline status run-1 --json" in traced, traced
+    assert not any(" start " in line for line in traced), traced
+
+
+def test_a_reading_the_toolchain_cannot_check_is_refused_naming_bootstrap(
+    tmp_path: Path,
+) -> None:
+    """A checkout whose `orchestrator` package lacks the reading module refuses, unlaunched.
+
+    The engine answers its well-formed document, but the package the recipe's interpreter
+    imports is a stale one without `orchestrator.run_reading` — what a checkout not yet
+    re-provisioned onto this tree looks like. The checker cannot run, so the recipe says
+    the reading could not be checked, names `just bootstrap`, leaves Python's own
+    diagnostic above its line, and launches nothing.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    (checkout / "runs" / "run-1").mkdir(parents=True)
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+    stale = tmp_path / "stale-toolchain"
+    (stale / "orchestrator").mkdir(parents=True)
+    (stale / "orchestrator" / "__init__.py").write_text("", encoding="utf-8")
+
+    refused = delegation_checkout.run_recipe(
+        checkout,
+        trace,
+        "follow-ups",
+        "run-1",
+        env={
+            delegation_checkout.STATUS_ANSWER_ENV: json.dumps(WELL_FORMED),
+            "PYTHONPATH": str(stale),
+        },
+    )
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert "No module named orchestrator.run_reading" in refused.stderr, refused.stderr
+    assert "follow-ups: the reading of run 'run-1' could not be checked" in refused.stderr
+    assert "restore the pinned toolchain with 'just bootstrap', then retry" in refused.stderr
+    traced = trace.read_text(encoding="utf-8").splitlines()
+    assert "uv run onepipeline status run-1 --json" in traced, traced
+    assert not any(" start " in line for line in traced), traced
 
 
 def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(

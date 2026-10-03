@@ -75,6 +75,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
@@ -537,6 +538,22 @@ def test_the_reconciliation_names_a_swapped_and_an_unknown_exit_status() -> None
     ]
 
 
+def _claimed_by_a_driver_gone_from_this_host(launch: Path) -> None:
+    """Re-point a copied run's driver claim at a process this host has seen exit.
+
+    The recorded run names a driver on the host it was recorded on, and a pid recorded on
+    another host is never proved over: from onepipeline 0.60.1 such a run reads `PARKED`,
+    which is driven, so a watch on it never sees the run nothing drives that this case is
+    about. A child this process started and reaped is a driver this host proves gone.
+    """
+    reaped = subprocess.Popen(["true"])  # noqa: S607 - its pid, once reaped, is gone
+    reaped.wait()
+    record = json.loads(launch.read_text(encoding="utf-8"))
+    record["host"] = socket.gethostname()
+    record["pid"] = reaped.pid
+    launch.write_text(json.dumps(record), encoding="utf-8")
+
+
 @pytest.mark.reads_checkouts
 def test_a_run_that_changes_under_a_waiting_watch_ends_it_at_the_status_the_rule_names(
     tmp_path: Path,
@@ -551,6 +568,7 @@ def test_a_run_that_changes_under_a_waiting_watch_ends_it_at_the_status_the_rule
     """
     runs = tmp_path / "runs"
     shutil.copytree(RECORDED_RUNS / NAMED_NODE_RUN, runs / NAMED_NODE_RUN)
+    _claimed_by_a_driver_gone_from_this_host(runs / NAMED_NODE_RUN / "launch.json")
     environment = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)}
     waiting = subprocess.Popen(  # noqa: S603 - the installed engine, as a caller runs it
         [str(ENGINE), *WATCH, NAMED_NODE_RUN, "--until", "nothing-driving"]

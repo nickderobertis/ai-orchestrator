@@ -77,11 +77,12 @@ PATIENCE_SECONDS = 240
 #: The engine's own refusal of an adoption while a driver still holds the run.
 REFUSED = 2
 
-#: The verdict `just status` gives a driven run, and the two it gives a run nothing is
-#: driving — `docs/telemetry.md` names the four. A stopped-then-adopted run read as one
-#: of the latter two is the defect.
+#: The verdict `just status` gives a driven run, and the words it gives a run nothing is
+#: driving — `docs/telemetry.md` names them: a driver gone with work that can still move,
+#: a run that ended, and an undriven run paused on a decision. `PARKED` is a live, quiet
+#: driver and so driven. A stopped-then-adopted run read as any of these is the defect.
 ACTIVE = "ACTIVE"
-NOT_DRIVEN = ("DRIVER DEAD", "PARKED")
+NOT_DRIVEN = ("DRIVER DEAD", "ENDED", "PAUSED")
 #: The status `just unwatched` answers when a run the session owns has nothing watching
 #: it, which is what an adopted run nobody armed a watch on is.
 RUNS_UNWATCHED = 6

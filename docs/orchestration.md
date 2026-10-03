@@ -1940,9 +1940,9 @@ blocking surface is `pending`, reading the non-blocking surfaces behind it leave
 pending: only a verdict answers it, so reading a queue down never consumes the
 question. Measured on a real run — a blocking surface queued fourth was handed out
 first, and three further reads handed out the older non-blocking ones while
-`pending` stayed on it throughout. A run reported `DRIVER DEAD` or `PARKED` keeps
+`pending` stayed on it throughout. A run reported `DRIVER DEAD` or `ENDED` keeps
 the line saying why it stopped rather than an invitation to read updates nothing
-will follow up on.
+will follow up on; a `PARKED` run's live driver still reads them.
 
 That wait describes a *live* launch only. A queued surface outlives the work that
 queued it, so a run whose driver is gone never wears it as its `just runs` summary:
@@ -2244,7 +2244,7 @@ The accepted commands are:
 | `op` | Required fields | Effect |
 | --- | --- | --- |
 | `add` | `node`: full node mapping | Add a new node. Its `deps`, if any, must name graph nodes or valid cross-DAG references. |
-| `drop` | `id`; `dependents`: `"drop"` or `"detach"` | Remove the node and recursively drop its dependents, or detach its direct dependents. |
+| `drop` | `id`; `dependents`: `"drop"` or `"detach"`; optional `reason` | Remove the node and recursively drop its dependents, or detach its direct dependents. How a superseded `waiting` human action is retired — with `"detach"` and a `reason` — since a `cancel` on a waiting node is refused. |
 | `reparent` | `id`; `deps`: list of dependency references | Replace an unstarted node's dependencies. |
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
 | `cancel` | `id`; optional `reason` | Park a pending or running node: [interrupt its live turn, kill the dispatch if it has not exited by the grace period](#what-a-cancellation-does-to-a-live-dispatch), and hold the node out of the frontier until a `requeue`. `reason` is the parking author's own words, recorded on the park beside who issued it. It is optional so every `cancel` written before the field existed parks exactly as it did, and **present-and-blank is refused** rather than recorded: a park carrying only a node id is indistinguishable downstream from a node idle for no reason anybody decided, and observers have requeued deliberate decisions read that way. |
@@ -3037,9 +3037,9 @@ that leaves, and for the leaked worker nothing collects any more.
 **A driver that stops is derived, not trusted.** `launch.json` records
 `{"pid": ..., "host": ...}` once and is never rewritten, so a process that crashed
 or was killed would otherwise leave a run reading exactly like ordinary finished
-work. When this host can prove that pid gone and the graph is not terminal, `just
-runs` and `just status` report the run as `DRIVER DEAD` with the command that
-attaches a fresh driver:
+work. When this host can prove that pid gone, the run has not ended, no decision is
+outstanding and its work can still move, `just runs` and `just status` report the
+run as `DRIVER DEAD` with the command that attaches a fresh driver:
 
 ```
 * probe-live               [mine]                   0/2 done  DRIVER DEAD
@@ -3049,15 +3049,17 @@ attaches a fresh driver:
 Every unknown withholds that verdict instead — an owner that cannot be probed, or
 an unreadable record — because sending a planner to tear down live work is the
 worse error. Withholding it is not the same as saying nothing: a record that still
-claims an owner this host could not refute keeps its run listed as `ACTIVE`, and an
-owner on **another host** is exactly that case, since a pid means nothing across
+claims an owner this host could not refute keeps its run listed as driven — `ACTIVE`,
+or `PARKED` once its journal has been quiet past the threshold below — and an owner on
+**another host** is exactly that case, since a pid means nothing across
 machines. A run another driver is working therefore reads as the live work it is.
 Only a record this host cannot read at all drops out of both views, having
 supported no claim either way.
 
 A live pid is ownership, not progress. A driver that keeps its pid while doing
 nothing — no child process, no planner surface, and no ledger write — is *parked*,
-and the read-only views report it as `PARKED (...)` rather than as running. All
+and the read-only views report it as `PARKED (...)` rather than as running — still
+driven, so it is never adopted, and stopped if it is judged wedged. All
 three signals must be absent past the threshold, which is derived from the
 planner-update interval (1800 seconds by default), and
 `ONEPIPELINE_PARKED_AFTER_SECONDS` moves it. Every unreadable input resolves
@@ -3643,14 +3645,14 @@ Three conditions say it, and nothing else does:
 | --- | --- | --- |
 | `complete` | the graph completed successfully | 0 |
 | `awaiting-planner` | the run cannot move without the planner: a **blocking** surface is pending, or a human action is waiting to be attested | 0 |
-| `unattended` | nothing is driving the run — parked, or a driver that is gone with the graph unfinished | 3 |
+| `unattended` | the driver let go of a run that is neither complete nor waiting on a decision, so nothing drives it now: an `ENDED` run, or one with work still able to move. Never a `PARKED` run, whose live driver is still driving it and has not let go | 3 |
 
 A *non-blocking* surface is deliberately not `awaiting-planner`: the run continues
 past a heartbeat update or a monitor observation without waiting for a reply, so
 returning there would walk away from working work. `unattended` exits non-zero
-because it is the state a planner must intervene in, and because a launch that
-parked reads exactly like one that is merely quiet to anyone who is not watching
-the stream.
+because it is the state a planner must intervene in, and because a driver that let
+go with work unfinished reads exactly like one that is merely quiet to anyone who is
+not watching the stream.
 
 This ending is why `just orchestrate` can be run on a terminal and off one alike:
 it ends itself rather than needing a reader to end it. `--detach` asks for the

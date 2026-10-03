@@ -783,7 +783,10 @@ release correlation joins a release to work through the landing, and a settlemen
 naming none is work that never landed to a dependent held on that release, with no
 timeout. A `retry` instead cuts a fresh branch beside work that already landed. `cancel`
 takes a `reason`, because a park carrying only a node id is indistinguishable downstream
-from a node idle for no reason and observers have requeued deliberate decisions. An
+from a node idle for no reason and observers have requeued deliberate decisions. **A
+superseded `kind: human` node is retired with `drop`, `"dependents": "detach"` and a
+`reason`** — never settled to an outcome it did not reach, and never `cancel`led, which
+the engine refuses on a waiting node. An
 accepted edit needs no carrying forward, because the graph of record is the live
 graph, projected from the run's own journal.
 
@@ -833,14 +836,25 @@ Keep the user informed at each milestone and never let thirty minutes pass betwe
 updates; a completion report for a node that published includes the change request's
 link. Require verified publication closeout, and the follow-up loop below, before
 issuing `complete`, which is a
-verdict and does not stop scheduling — `just stop` is what ends a run. A run the views
-report `PARKED` is alive and not working: treat it as stopped and intervene, which is
-unrelated to a node you parked with `cancel`. A run whose driver is dead over an intact
-ledger is adopted with `just orchestrate --adopt <run-id>`, never relaunched under a new
-id — and so is one you stopped: a recorded stop is evidence about the driver it ended,
-cleared at `driver-adopted`, so a stopped-then-adopted run is judged by the driver
-driving it now — `ACTIVE` in `just status`, a watch that stays armed, a run `just
-unwatched` names (`tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all
+verdict and does not stop scheduling — `just stop` is what ends a run.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted the engine reading a run's ending requires this document to state each run-state word and what it means, because a manager decides from the word alone whether to adopt, attest, answer, stop or follow up a run, and before it this document told managers an ended run read `DRIVER DEAD`; the words are the engine's, and `orchestrator/run_reading.py`, which `tests/test_run_reading.py` holds to the pinned engine's published schema, is where they are reconciled. -->
+**The word a view
+prints for a run says whether it ended**, and `just status <run> --json` is that reading
+as one document: `SETTLED` is every node `done`; `ENDED failed` (a node failed or
+skipped), `ENDED unfinished` (a node not `done` and nothing left to decide) and `ENDED
+stopped` (a recorded stop, waiting human nodes and all) are a run that ended; `PAUSED`
+is an undriven run waiting on a decision — a human action to `attest` or retire, or a
+blocking surface to answer; `DRIVER DEAD` is now only a driver gone with work that can
+still move and no stop. `ACTIVE` and `PARKED` are driven: `PARKED` is a live driver
+whose journal has gone quiet, never adopted — `just stop` it if you judge it wedged,
+which is unrelated to a node you parked with `cancel`.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+A run whose driver is dead over
+an intact ledger is adopted with `just orchestrate --adopt <run-id>`, never relaunched
+under a new id — and so is one you stopped: a recorded stop is evidence about the
+driver it ended, cleared at `driver-adopted`, so a stopped-then-adopted run is judged
+by the driver driving it now — `ACTIVE` in `just status`, a watch that stays armed, a
+run `just unwatched` names (`tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all
 three). **Runs are owned**: act only on runs you launched — `just runs` shows `[mine]`, the
 owning session, or `[unknown]`, and `unknown` is never yours — and never derive a
 process list from `ps` and signal it, which has interrupted another manager
@@ -913,10 +927,8 @@ give the user the link to every follow-up issue it created or updated, the draft
 dropped with why, and anything it found that should have been surfaced during the run.
 
 **When a run ends any other way**, the failure hook launches nothing. Decide with the user
-whether to verify its drafts by hand with `just follow-ups <run-id>`, which proceeds only
-on a run the engine reports settled or no longer driven: the adopted engine cannot say
-whether an unfinished run is driven, so the recipe refuses one and names `just status`
-rather than guessing. A pause on a decision is not an ending. A run fires at most one
+whether to verify its drafts by hand with `just follow-ups <run-id>`, which verifies the
+drafts of any run that ended. A pause on a decision is not an ending. A run fires at most one
 hook for each ending it reaches; an
 accepted edit that makes the run live again, or that carries it from one ending to a
 different one, starts a new epoch, so a recovered run fires the hook for its later ending

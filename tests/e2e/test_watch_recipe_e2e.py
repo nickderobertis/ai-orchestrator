@@ -35,7 +35,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import NamedTuple, NewType
@@ -326,11 +325,6 @@ def test_the_recorded_run_this_module_names_holds_the_node_it_drives_a_condition
     assert ABSENT_NODE not in ids
 
 
-#: What `just follow-ups` says when the engine cannot tell it whether a run is driven: the
-#: one recipe here that branches on a watch status to decide something.
-UNREADABLE_LIVENESS = "is still being driven could not be read on this engine"
-
-
 def follow_ups(runs: Path, run: str) -> subprocess.CompletedProcess[str]:
     """The real `just follow-ups` recipe over a runs root this journey wrote."""
     return subprocess.run(
@@ -348,37 +342,13 @@ def follow_ups(runs: Path, run: str) -> subprocess.CompletedProcess[str]:
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] One sub-second recipe run
 # over a recorded run, launching nothing; its subject is the installed engine, which is why
 # it sits in the uncached tier this module's docstring states.
-def test_follow_ups_refuses_an_unfinished_run_nothing_drives_without_calling_it_driven(
-    tmp_path: Path,
-) -> None:
-    """The ending a zero-wait watch gives such a run is one a live run gives too.
-
-    So the recipe refuses it as liveness it cannot read and names where to read the run,
-    rather than claiming it is still driven — which would send an operator to wait on a
-    run nothing will ever finish.
-    """
-    shutil.copytree(RECORDED_RUNS / UNDRIVEN_RUN, tmp_path / UNDRIVEN_RUN)
-
-    refused = follow_ups(tmp_path, UNDRIVEN_RUN)
-
-    said = refused.stdout + refused.stderr
-    assert refused.returncode == 2, said
-    assert f"whether run '{UNDRIVEN_RUN}' {UNREADABLE_LIVENESS}" in refused.stderr, said
-    assert f"just status {UNDRIVEN_RUN}" in refused.stderr, said
-    assert f"run '{UNDRIVEN_RUN}' is still being driven," not in said
-
-
-# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] One sub-second recipe run
-# over a recorded run, launching nothing; its subject is the installed engine, which is why
-# it sits in the uncached tier this module's docstring states.
 def test_follow_ups_reports_a_failed_liveness_read_with_the_engines_own_diagnostic(
     tmp_path: Path,
 ) -> None:
-    """A watch that fails, rather than ends, is not read as a liveness answer of any kind.
+    """A reading the engine could not give is not read as an ending of any kind.
 
-    A run directory with no launch record is refused by the verb with an exit outside its
-    endings, and the recipe passes on the engine's own words rather than the explanation it
-    keeps for an ending that leaves liveness open.
+    A run directory with no launch record is refused by `status --json`, and the recipe
+    passes on the engine's own words and launches nothing.
     """
     (tmp_path / "broken-run").mkdir()
 
@@ -386,28 +356,6 @@ def test_follow_ups_reports_a_failed_liveness_read_with_the_engines_own_diagnost
 
     said = refused.stdout + refused.stderr
     assert refused.returncode == 2, said
-    assert "whether run 'broken-run' is still being driven could not be read: " in said
+    assert "whether run 'broken-run' has ended could not be read: " in said
+    assert "'onepipeline status --json' exited 2, with the engine's diagnostic above" in said
     assert "launch.json" in refused.stderr, said
-    assert UNREADABLE_LIVENESS not in said, said
-
-
-def test_the_statuses_follow_ups_branches_on_are_the_rules() -> None:
-    """`scripts/follow-ups.sh` names watch statuses of its own, so they are held to the rule.
-
-    It proceeds on the two endings that say nothing drives the run, and reads the span from
-    `surface-waiting` to `run-changed` as endings that leave liveness open — which holds only
-    while that span is exactly the rule's other four endings.
-    """
-    script = (ROOT / "scripts" / "follow-ups.sh").read_text(encoding="utf-8")
-    named = {name: int(value) for name, value in re.findall(r"(?m)^(WATCH_[A-Z_]+)=(\d+)$", script)}
-    statuses = rule().statuses
-
-    assert named == {
-        "WATCH_SETTLED": statuses["settled"],
-        "WATCH_NOTHING_DRIVING": statuses["nothing-driving"],
-        "WATCH_SURFACE_WAITING": statuses["surface-waiting"],
-        "WATCH_RUN_CHANGED": statuses["run-changed"],
-    }, named
-    open_endings = {"surface-waiting", "elapsed", "node-settled", "run-changed"}
-    span = range(named["WATCH_SURFACE_WAITING"], named["WATCH_RUN_CHANGED"] + 1)
-    assert {word for word, status in statuses.items() if status in span} == open_endings
