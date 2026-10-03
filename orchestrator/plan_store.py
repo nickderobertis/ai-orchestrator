@@ -22,6 +22,7 @@ from onetaskgraph_sdk import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
 )
+from onetaskgraph_sdk._generated.query_response_of_qualified_task import QualifiedTask
 
 from orchestrator.project_store import (
     CROSS_DAG_DEPS,
@@ -36,6 +37,7 @@ WRITE_BACK_SOURCE = "onepipeline-writeback"
 WRITE_BACK_REWROTE = "the dependency points into onepipeline's old write-back scratch source"
 WRITABLE_PLUGIN = "local-md"
 ORIGIN_KEY = "onetaskgraph.origin"
+MEMBERS_KEY = "onetaskgraph.members"
 #: Where a copy records, on the item it copied, the counterpart it reached at each destination
 #: source: an object mapping a source name to a qualified id there (onetaskgraph's
 #: `docs/metadata.md`).
@@ -249,24 +251,84 @@ def authored_deps(task: StoreTask) -> list[str]:
     return sorted([*own, *(x for x in listed if isinstance(x, str) and x not in own)])
 
 
-def read_tasks(project: str) -> list[StoreTask]:
+def members(project: str) -> frozenset[QualifiedProjectId]:
+    """The member projects the home ``project`` names, by qualified id; none for any other.
+
+    A plan whose tasks the store routed to several sources is one **home** project plus a
+    member project in each other source, tied by the home's :data:`MEMBERS_KEY`. Read off
+    the home on every call, as the store reads it, because nothing about a plan's members is
+    kept anywhere else.
+    """
+    return _named_members(project, project_record(project).get("metadata"))
+
+
+def _named_members(project: str, metadata: object) -> frozenset[QualifiedProjectId]:
+    """The members ``project``'s record ``metadata`` names, held to being qualified ids."""
+    named = metadata.get(MEMBERS_KEY) if isinstance(metadata, Mapping) else None
+    if named is None:
+        return frozenset()
+    if not isinstance(named, list) or not all(
+        isinstance(member, str) and qualified_id(member) is not None for member in named
+    ):
+        raise OSError(
+            f"project {project!r} names its members as {named!r}, which is not a list of "
+            f"qualified project ids"
+        )
+    return frozenset(QualifiedProjectId(member) for member in named)
+
+
+def plan_listing(project: str) -> list[QualifiedTask]:
+    """Every task of ``project`` and of each member project it names, each held to being one.
+
+    Which read is decided by what the store states about the project, never by catching a
+    refusal: its record, from its own source's project listing, names the members a routed
+    copy tied to it, and only then is the store's own members read asked for (`task list
+    --project <home> --members`) — so a plan whose petsinc tasks the store routed to Linear
+    is read as one plan wherever its home lives, and any failure of that read is the plan's
+    refusal, never an empty or partial plan. A project the store holds no record of names
+    no members and is read by its plain listing, as it always was. A task in the home's own
+    source is held to the home, and one anywhere else to a member its record names.
+    """
     source, native = qualified(project)
-    listed = every_page(f"project {project!r}", client().task_list, source=[source], project=native)
-    records = []
-    for held in chain.from_iterable(page.items for page in listed):
-        held_id = held.id.model_dump()
+    recorded = next((held for held in read_projects(source) if held.qualified_id == project), None)
+    named = frozenset() if recorded is None else _named_members(project, recorded.metadata)
+    if named:
+        listed = every_page(
+            f"project {project!r}",
+            client().task_list,
+            source=[source],
+            project=project,
+            members=True,
+        )
+    else:
+        listed = every_page(
+            f"project {project!r}", client().task_list, source=[source], project=native
+        )
+    held = list(chain.from_iterable(page.items for page in listed))
+    for task in held:
+        held_id = task.id.model_dump()
         # Membership is the item's own `project`, never its id: a task created by the
         # store — from a template, say — is named by the source, and a `local-md` source
         # names it after its title rather than under a directory of its project.
-        filed = None if held.item.project is None else held.item.project.model_dump()
+        filed = None if task.item.project is None else task.item.project.model_dump()
+        if held_id.startswith(f"{source}:") and filed == native:
+            continue
         # llmlint: ignore-block[changed_behavior_has_e2e] A trust-boundary guard no conforming
-        # store reaches: a listing filtered to one project answers only its own items, so
+        # store reaches: a members read answers only the home's tasks and its members', so
         # `tests/test_plan_store_sdk.py` reads a real store's template-created task through
         # it and substitutes only the listing to drive the refusal, as it does for the
         # source guard beside it.
-        if not held_id.startswith(f"{source}:") or filed != native:
+        if filed is None or f"{held_id.partition(':')[0]}:{filed}" not in named:
             raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
         # llmlint: ignore-end[changed_behavior_has_e2e]
+    return held
+
+
+def read_tasks(project: str) -> list[StoreTask]:
+    records = []
+    for held in plan_listing(project):
+        held_id = held.id.model_dump()
+        filed = None if held.item.project is None else held.item.project.model_dump()
         item, metadata = held.item, held.item.metadata
         node_id = metadata.get("onepipeline.id")
         if not isinstance(node_id, str):
@@ -284,7 +346,7 @@ def read_tasks(project: str) -> list[StoreTask]:
                 repositories,
                 (),
                 tuple(x.model_dump() for x in item.delivers),
-                native,
+                filed,
             )
         )
     ids = {record.qualified_id: record.node_id for record in records}
@@ -423,6 +485,27 @@ def configured_settings() -> dict[str, object]:
     return {
         setting.key.model_dump(): setting.value for setting in sdk(client().config_show()).settings
     }
+
+
+def routed_sources(source: str) -> tuple[str, ...]:
+    """The sources ``source``'s `routes` send an item to, in the order its entries name them.
+
+    Read off the store's own resolution of every layer, which prints a document's list as
+    one setting and an environment or flag layer's entries one setting per field: a plan
+    copied into ``source`` may have its home in any of these, and in no other.
+    """
+    values = configured_settings()
+    listed = values.get(f"sources.{source}.routes")
+    entries = listed if isinstance(listed, list) else []
+    named = [entry.get("to") for entry in entries if isinstance(entry, dict)]
+    field = re.compile(rf"sources\.{re.escape(source)}\.routes\.(\d+)\.to")
+    indexed = sorted(
+        (int(matched.group(1)), value)
+        for key, value in values.items()
+        if (matched := field.fullmatch(key)) is not None
+    )
+    named.extend(value for _, value in indexed)
+    return tuple(dict.fromkeys(to for to in named if isinstance(to, str) and to))
 
 
 def source_root(source: str) -> Path:

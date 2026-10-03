@@ -2692,6 +2692,58 @@ def test_a_board_refusal_names_each_absent_credential_once_and_no_present_one(
     assert PLANTED_CREDENTIAL not in result.stderr, "a credential value reached a diagnostic"
 
 
+#: A Linear source's credential name. Not a name this host defines, for the reason above.
+LINEAR_CREDENTIAL = "PLAN_STORE_LINEAR_API_KEY"
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_refusal_names_an_absent_linear_api_key_as_it_names_an_absent_board_token(
+    tmp_path: Path,
+) -> None:
+    """A Linear source's `api_key_env` is a credential name the note reads, beside `token_env`.
+
+    A plan routed to Linear reads the Linear source's key, so a store refusing it as missing
+    is the same refusal an operator cannot place as a board token's — and the note has to
+    name it, and the file that supplies it, while staying silent about the board token this
+    process does hold.
+    """
+    checkout, trace = _board_checkout(tmp_path, "SOMETHING_ELSE=unrelated\n")
+    (checkout / "onetaskgraph.yaml").write_text(
+        "default_sources: [plans, linear]\n"
+        "sources:\n"
+        "  plans:\n"
+        "    plugin: github-projects\n"
+        "    config:\n"
+        f"      token_env: {SECOND_BOARD_CREDENTIAL}\n"
+        "  linear:\n"
+        "    plugin: linear\n"
+        "    config:\n"
+        f"      api_key_env: {LINEAR_CREDENTIAL}\n"
+        "      team: ENG\n",
+        encoding="utf-8",
+    )
+    (checkout / "bin/uv").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    (checkout / "bin/uv").chmod(0o755)
+
+    result = _run(
+        checkout,
+        trace,
+        "check-plan",
+        "plans:example",
+        env={SECOND_BOARD_CREDENTIAL: PLANTED_CREDENTIAL},
+    )
+
+    assert result.returncode != 0
+    notes = [line for line in result.stderr.splitlines() if line.startswith("plan-store:")]
+    assert notes == [
+        f"plan-store: {LINEAR_CREDENTIAL} is not set in this environment, and "
+        f"{checkout / '.env'} — the file this checkout supplies it from — defines no such "
+        f"name; add '{LINEAR_CREDENTIAL}=<value>' to that file, then retry"
+    ], f"an absent Linear key was not named, or a present token was:\n{result.stderr}"
+    assert PLANTED_CREDENTIAL not in result.stderr, "a credential value reached a diagnostic"
+
+
 @pytest.mark.reads_recipes
 @pytest.mark.usefixtures("without_the_board_credential")
 def test_a_board_refusal_tells_an_empty_credential_line_apart_from_an_absent_one(

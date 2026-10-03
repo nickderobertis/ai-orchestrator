@@ -24,7 +24,6 @@ import argparse
 import shlex
 import sys
 from collections.abc import Sequence
-from itertools import chain
 
 from orchestrator import plan_store
 
@@ -64,20 +63,13 @@ def resolve_command(repository: str | None) -> str:
 
 def plan_repository(project: str) -> str | None:
     """The origin the rule picks for the plan ``project``, read out of the plan store."""
-    source, native = plan_store.qualified(project)
-    pages = plan_store.every_page(
-        f"project {project!r}", plan_store.client().task_list, source=[source], project=native
-    )
-    repositories = []
-    for held in chain.from_iterable(page.items for page in pages):
-        # Held to the listing's own filter, as `plan_store.read_tasks` holds it: a task of
-        # another project or source deciding this plan's chain would key its approval on a
-        # layer the plan never named.
-        held_id = held.id.model_dump()
-        filed = None if held.item.project is None else held.item.project.model_dump()
-        if not held_id.startswith(f"{source}:") or filed != native:
-            raise OSError(f"project {project!r} returned task {held_id!r} outside itself")
-        repositories.append([repository.model_dump() for repository in held.item.repositories])
+    # The home's tasks and its members', as `plan_store.read_tasks` reads them: a plan the
+    # store spread across sources keys its approval on the repositories of all of them, the
+    # same chain wherever the home landed and the same one it had where it was drafted.
+    repositories = [
+        [repository.model_dump() for repository in held.item.repositories]
+        for held in plan_store.plan_listing(project)
+    ]
     return chosen(repositories)
 
 

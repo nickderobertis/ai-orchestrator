@@ -561,6 +561,17 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/test_plan_store_guidance.py holds this paragraph's state names and route to the configured mapping and route. -->
+**A task of a `github.com/petsinc/*` repository lands in Hello Patient's Linear,
+`hellopatient`, by the `plans` route and never by choice**, so author a plan spanning both orgs
+as one project. Its home goes to `hellopatient` only when every task is petsinc's, and
+otherwise stays on `plans` beside a `hellopatient` member project; approve and launch the
+home id `just finish-plan` reports. There a plan task reads Todo once copied,
+Queued once a run claims it, In Progress while its node works, Needs Attention when that node
+failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
+proposed, deferred and withdrawn.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+
 **A board field — a `Status` option, or the `Priority` field a source's
 `priority_mapping` names — is set up through the plan-store verb, never by a
 hand-written mutation.** Read the plan with `just plans sources fields <source>`, which

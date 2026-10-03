@@ -67,6 +67,8 @@ def _holds(
     """Answer the destination with ``projects``, and each project's own ``documents``."""
     monkeypatch.setattr(plan_store, "read_projects", lambda _source: list(projects))
     monkeypatch.setattr(plan_store, "read_documents", lambda _project: list(documents or []))
+    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
+    monkeypatch.setattr(plan_store, "members", lambda _project: frozenset())
 
 
 def test_the_landed_plan_is_found_by_the_stamp_the_store_wrote_rather_than_by_its_name(
@@ -189,6 +191,7 @@ def test_a_destination_whose_store_cannot_be_read_is_the_same_refusal_as_a_missi
         raise OSError("the board answered nothing")
 
     monkeypatch.setattr(plan_store, "read_projects", refuses)
+    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
 
     assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
     refusal = capsys.readouterr().err
@@ -247,3 +250,44 @@ def test_the_two_locations_are_read_through_the_one_renderer_the_store_answer_ha
     assert plan_store.located({"path": "/x"}, "fallback") == "/x"
     assert plan_store.located({"url": ""}, "fallback") == "fallback"
     assert plan_store.located(None, "fallback") == "fallback"
+
+
+def test_a_home_the_store_routed_away_is_found_there_and_names_its_id_and_members(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A plan copied to a board whose routes sent its home elsewhere is found where it went.
+
+    The store puts a plan's home in a routed source when every task routes there, so the
+    destination the copy named holds nothing of it; and a mixed plan's home names the member
+    project its routed tasks are in. Both are reported, and the home's own id is the one the
+    approval and the launch are handed.
+    """
+    held = {
+        "board": [_project("board:9", origin="authoring:something-else")],
+        "linear": [
+            StoreProject(
+                qualified_id=QualifiedProjectId("linear:abc"),
+                title="Deliver the checkout route",
+                metadata={plan_store.ORIGIN_KEY: DRAFTED},
+                location={"url": "https://linear.invalid/project/abc"},
+            )
+        ],
+    }
+    monkeypatch.setattr(plan_store, "read_projects", lambda source: list(held[source]))
+    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ("linear",))
+    monkeypatch.setattr(
+        plan_store, "members", lambda _project: frozenset({QualifiedProjectId("board:77")})
+    )
+    monkeypatch.setattr(
+        plan_store,
+        "read_documents",
+        lambda _project: [_document("linear:doc", {"url": "https://linear.invalid/doc"})],
+    )
+
+    assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.OK
+    reported = capsys.readouterr().out
+    assert "linear holds the plan at https://linear.invalid/project/abc" in reported, reported
+    assert "linear holds its design document at https://linear.invalid/doc" in reported, reported
+    assert "its tasks routed to board are in board:77" in reported, reported
+    assert "`just approve-design linear:abc`" in reported, reported
+    assert "`just orchestrate linear:abc`" in reported, reported

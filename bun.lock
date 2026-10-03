@@ -5,7 +5,7 @@
     "": {
       "name": "ai-orchestrator",
       "dependencies": {
-        "onepipeline-ui": "0.22.4",
+        "onepipeline-ui": "0.23.1",
       },
       "devDependencies": {
         "nx": "23.1.0",
@@ -205,7 +205,7 @@
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
-    "onepipeline-ui": ["onepipeline-ui@0.22.4", "", {}, "sha512-LgZA6iYJqvq7b/nkq9kId6Ami85Ft4xzuGovbTSN/voPZiLQZRMcQy2APeBK4YDEITEyP5p+59fiumKLcEToZQ=="],
+    "onepipeline-ui": ["onepipeline-ui@0.23.1", "", {}, "sha512-oxYhHi16KeSppaZuXwm0eDVYfJrw9R/wUhZweMHDBBgH5W0kQwfQhmdPaH24CEOdVQvm6h+WIOMjEip5Tqn3iQ=="],
 
     "onetime": ["onetime@5.1.2", "", { "dependencies": { "mimic-fn": "^2.1.0" } }, "sha512-kbpaSSGJTWdAY5KPVeMOKXSrPtr8C8C7wodJbcsd51jRnmD+GZu8Y0VoU6Dm5Z4vWr0Ig/1NKuWRKf7j5aaYSg=="],
 

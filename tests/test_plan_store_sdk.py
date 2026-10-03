@@ -18,7 +18,7 @@ from onetaskgraph_sdk import QueryResponseOfQualifiedTask
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import design_approval, follow_up_comments, plan_copy, plan_store
+from orchestrator import design_approval, design_chain, follow_up_comments, plan_copy, plan_store
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -440,11 +440,17 @@ def test_a_later_page_a_source_failed_to_answer_refuses_the_whole_listing(
     monkeypatch.setattr(plan_store, "sdk", lambda _answer: pages.pop(0))
 
     with pytest.raises(OSError, match="source sdksource could not answer"):
-        plan_store.read_tasks("sdksource:demo")
+        plan_store.every_page(
+            "project 'sdksource:demo'",
+            plan_store.client().task_list,
+            source=["sdksource"],
+            project="sdksource:demo",
+            members=True,
+        )
 
     assert asked == [
-        {"source": ["sdksource"], "project": "demo", "page": None},
-        {"source": ["sdksource"], "project": "demo", "page": "ab"},
+        {"source": ["sdksource"], "project": "sdksource:demo", "members": True, "page": None},
+        {"source": ["sdksource"], "project": "sdksource:demo", "members": True, "page": "ab"},
     ]
 
 
@@ -590,15 +596,21 @@ def test_a_page_cursor_already_followed_is_refused_naming_it(
     monkeypatch.setattr(plan_store, "sdk", lambda _answer: pages.pop(0))
 
     with pytest.raises(OSError) as refused:
-        plan_store.read_tasks("sdksource:demo")
+        plan_store.every_page(
+            "project 'sdksource:demo'",
+            plan_store.client().task_list,
+            source=["sdksource"],
+            project="sdksource:demo",
+            members=True,
+        )
 
     assert str(refused.value) == (
         "listing project 'sdksource:demo' answered the page cursor 'ab' again after it was "
         "already followed; refusing to read the same page twice"
     )
     assert asked == [
-        {"source": ["sdksource"], "project": "demo", "page": None},
-        {"source": ["sdksource"], "project": "demo", "page": "ab"},
+        {"source": ["sdksource"], "project": "sdksource:demo", "members": True, "page": None},
+        {"source": ["sdksource"], "project": "sdksource:demo", "members": True, "page": "ab"},
     ]
     assert len(pages) == 1, "a third page was asked for after the cursor repeated"
 
@@ -705,7 +717,9 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     monkeypatch.setattr(
         plan_store,
         "client",
-        lambda: SimpleNamespace(task_list=lambda **_kwargs: object()),
+        lambda: SimpleNamespace(
+            task_list=lambda **_kwargs: object(), project_list=lambda **_kwargs: object()
+        ),
     )
     monkeypatch.setattr(plan_store, "sdk", lambda _answer: duplicate)
     with pytest.raises(OSError, match="duplicate task or node identities"):
@@ -719,6 +733,9 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     )
     with pytest.raises(OSError, match="not one of its ids"):
         follow_up_comments.commented_issues("sdksource", datetime(2026, 1, 1, tzinfo=UTC))
+    # The project listing is the store's own record and has its guard above; this is the
+    # task listing's, so the project holds no record and the plain listing answers.
+    monkeypatch.setattr(plan_store, "read_projects", lambda _source: [])
     with pytest.raises(OSError, match="outside itself"):
         plan_store.read_tasks("sdksource:demo")
 
@@ -843,3 +860,182 @@ def test_a_defaulted_task_field_decodes_to_its_default_and_an_explicit_null_is_r
     [held] = plan_store.read_tasks("sdksource:demo")
     assert held.repositories == ["github.com/acme/service"]
     assert held.delivers == ("followups:I_1",)
+
+
+#: The repository a routed source takes, and the one that stays in the plan's own source.
+ROUTED_REPOSITORY = "github.com/petsinc/hp-api"
+HOME_REPOSITORY = "github.com/nickderobertis/onevcs"
+
+
+def _routed_sources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A draft source, a home source routing petsinc repositories, and the member source."""
+    for name in ("draft", "home", "member"):
+        (tmp_path / name).mkdir()
+        _source(monkeypatch, name, tmp_path / name)
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__HOME__ROUTES__0__TO", "member")
+    monkeypatch.setenv(
+        "ONETASKGRAPH_SOURCES__HOME__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
+    )
+
+
+def _copied_home(name: str, tasks: list[PlanNode], tmp_path: Path) -> str:
+    """Draft ``tasks`` as one plan and copy it to the routing source, answering its home."""
+    write_plan_project(tmp_path / "draft", {"name": name, "tasks": tasks})
+    report = plan_store.sdk(plan_store.client().project_copy(f"draft:{name}", to="home"))
+    (home,) = [
+        str(item.root.destination.root)
+        for item in report.items
+        if item.root.source.root == f"draft:{name}" and item.root.destination is not None
+    ]
+    return home
+
+
+def test_a_plan_the_store_routed_across_sources_is_read_as_one_with_its_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The home's tasks and its member's are one plan, with edges both ways between them.
+
+    The real store routes the petsinc task into a member project of the second source; the
+    read names every node once, each under its own source and project, and resolves the
+    dependency edges that cross sources in either direction.
+    """
+    _routed_sources(monkeypatch, tmp_path)
+    home = _copied_home(
+        "mixed",
+        [
+            PlanNode(id="library", title="Library", task="Do it.", repo=HOME_REPOSITORY),
+            PlanNode(
+                id="consumer",
+                title="Consumer",
+                task="Do it.",
+                deps=["library"],
+                repo=ROUTED_REPOSITORY,
+            ),
+            PlanNode(
+                id="rollout",
+                title="Rollout",
+                task="Do it.",
+                deps=["consumer"],
+                repo=HOME_REPOSITORY,
+            ),
+        ],
+        tmp_path,
+    )
+
+    read = {task.node_id: task for task in plan_store.read_tasks(home)}
+
+    assert home.startswith("home:"), home
+    assert plan_store.routed_sources("home") == ("member",)
+    assert plan_store.members(home) == {f"member:{home.partition(':')[2]}"}
+    assert {node: task.qualified_id.partition(":")[0] for node, task in read.items()} == {
+        "library": "home",
+        "consumer": "member",
+        "rollout": "home",
+    }
+    assert {node: task.deps for node, task in read.items()} == {
+        "library": (),
+        "consumer": ("library",),
+        "rollout": ("consumer",),
+    }
+    assert design_chain.plan_repository(home) is None
+
+
+def test_a_plan_every_task_of_which_routes_away_lands_whole_in_the_routed_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An all-petsinc plan's home is the routed source's, resolving through that repository."""
+    _routed_sources(monkeypatch, tmp_path)
+    home = _copied_home(
+        "routed",
+        [
+            PlanNode(id="first", title="First", task="Do it.", repo=ROUTED_REPOSITORY),
+            PlanNode(
+                id="second",
+                title="Second",
+                task="Do it.",
+                deps=["first"],
+                repo=ROUTED_REPOSITORY,
+            ),
+        ],
+        tmp_path,
+    )
+
+    assert home.startswith("member:"), home
+    assert plan_store.members(home) == frozenset()
+    assert {task.node_id for task in plan_store.read_tasks(home)} == {"first", "second"}
+    assert design_chain.plan_repository(home) == ROUTED_REPOSITORY
+
+
+def test_a_home_naming_its_members_in_any_other_shape_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `onetaskgraph.members` that is not a list of qualified ids names nothing to read."""
+    _source(monkeypatch, "home", tmp_path)
+    write_plan_project(tmp_path, {"name": "odd", "tasks": []})
+    record = tmp_path / "projects" / "odd.md"
+    text = record.read_text(encoding="utf-8")
+    record.write_text(
+        text.replace("metadata:\n", 'metadata:\n  onetaskgraph.members: ["not qualified"]\n', 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="not a list of qualified project ids"):
+        plan_store.members("home:odd")
+
+
+def test_the_routes_of_a_source_are_read_in_every_shape_the_store_resolves_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A document's list and an environment layer's per-field entries both name a route."""
+    monkeypatch.setattr(
+        plan_store,
+        "configured_settings",
+        lambda: {
+            "sources.plans.routes": [{"repositories": ["github.com/a/*"], "to": "linear"}, 3],
+            "sources.plans.routes.1.to": "other",
+            "sources.plans.routes.0.to": "linear",
+            "sources.elsewhere.routes.0.to": "unrelated",
+        },
+    )
+
+    assert plan_store.routed_sources("plans") == ("linear", "other")
+    assert plan_store.routed_sources("followups") == ()
+
+
+def test_a_project_the_store_holds_no_record_of_reads_as_no_tasks_and_no_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The members read refuses a project nothing holds; the plan reads empty, as it did."""
+    _source(monkeypatch, "home", tmp_path)
+
+    assert plan_store.read_tasks("home:nothing-here") == []
+
+
+def test_a_home_with_no_tasks_of_its_own_refuses_when_its_member_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A routed task the store cannot read is a refusal, never an empty or partial plan.
+
+    The real routed copy files the petsinc task in the member source and records the member
+    on the home. The home's own task is then removed, so its own listing is empty, and the
+    member source is pointed at a directory that is not there: the read of the home asks for
+    its members because its record names them, and reports the member's refusal.
+    """
+    _routed_sources(monkeypatch, tmp_path)
+    home = _copied_home(
+        "unreadable",
+        [
+            PlanNode(id="library", title="Library", task="Do it.", repo=HOME_REPOSITORY),
+            PlanNode(id="consumer", title="Consumer", task="Do it.", repo=ROUTED_REPOSITORY),
+        ],
+        tmp_path,
+    )
+    native = home.partition(":")[2]
+    for task in (tmp_path / "home" / "tasks").rglob("*.md"):
+        task.unlink()
+    listed = plan_store.sdk(plan_store.client().task_list(source=["home"], project=native))
+    assert listed.items == [], "the home still lists a task of its own"
+    _source(monkeypatch, "member", tmp_path / "gone")
+
+    with pytest.raises(OSError, match="source member could not answer"):
+        plan_store.read_tasks(home)

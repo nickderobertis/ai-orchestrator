@@ -41,6 +41,13 @@ AUTHORING_SOURCE = "authoring"
 AUTHORING_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__CONFIG__ROOT"
 
 
+#: The credential the tracked `hellopatient` Linear source names.
+LINEAR_KEY_ENV = "HELLOPATIENT_LINEAR_API_KEY"
+#: Where every board journey points that source: a loopback port nothing listens on, so a
+#: request to it is refused on this machine and never reaches the production workspace.
+UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
+
+
 @dataclass(frozen=True)
 class _Repository:
     """One GitHub repository, in the two halves every call about it is spelled with.
@@ -650,10 +657,29 @@ class _Board:
         }
 
     def node_response(self, node_id: object) -> dict[str, object]:
-        """One issue by its own node id, or the null GitHub answers an unheld one with."""
+        """One issue by its own node id, or the null GitHub answers an unheld one with.
+
+        The adopted store's item read carries what a write of the issue needs beside it: the
+        field definitions of the board holding it, under the `boards` alias, and the issues
+        blocking it, so neither costs a second request.
+        """
         for issue in self.issues:
             if issue.content_id == node_id:
-                return {"data": {"node": issue.board_issue()}}
+                board = issue.held_by
+                project = {"id": board.node_id, "number": board.number, "fields": board._fields()}
+                blockers = [self._issue(held).content() for held in issue.blocked_by]
+                return {
+                    "data": {
+                        "node": issue.board_issue()
+                        | {
+                            "boards": {"nodes": [{"project": project}]},
+                            "blockedBy": {
+                                "nodes": blockers,
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            },
+                        }
+                    }
+                }
         return {"data": {"node": None}}
 
     def sub_issues_response(self, node_id: object) -> dict[str, object]:
@@ -940,6 +966,31 @@ class _Board:
         }
         return {"data": {"node": {"__typename": "Issue", "comments": listed}}}
 
+    def _detail(self, node_id: object, comments: bool) -> dict[str, object] | None:
+        """One issue by its own node id with, when asked, the first page of its comments."""
+        for issue in self.issues:
+            if issue.content_id == node_id:
+                answered = issue.board_issue()
+                if comments:
+                    answered["comments"] = {
+                        "nodes": issue.comments,
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                return answered
+        return None
+
+    def detail_response(self, node_id: object) -> dict[str, object]:
+        """One issue and its first page of comments, which `task show` reads in one request."""
+        return {"data": {"node": self._detail(node_id, comments=True)}}
+
+    def details_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """A fixed batch of aliased issue reads, `i<n>` answering the issue `$id<n>` names."""
+        comments = variables.get("comments") is True
+        slots = sorted(int(name[2:]) for name in variables if re.fullmatch(r"id\d+", name))
+        return {
+            "data": {f"i{n}": self._detail(variables[f"id{n}"], comments=comments) for n in slots}
+        }
+
     def add_comment(self, variables: dict[str, object]) -> dict[str, object]:
         """Add one comment to an issue, signed as the fixture's token account."""
         payload = variables.get("input")
@@ -1093,7 +1144,17 @@ class _GraphQLRequest:
 
     @property
     def repository(self) -> _Repository:
+        """The repository this request looks up: alone, or beside the board's fields."""
+        if self.operation is _Operation.CREATION_CONTEXT:
+            return _Repository(
+                owner=self.string("repositoryOwner"), name=self.string("repositoryName")
+            )
         return _Repository(owner=self.string("owner"), name=self.string("name"))
+
+    @property
+    def looks_up_repository(self) -> bool:
+        """Whether this request resolves a repository's node id, which a create needs."""
+        return self.operation in (_Operation.REPOSITORY, _Operation.CREATION_CONTEXT)
 
     def string(self, name: str) -> str:
         value = self.variables.get(name)
@@ -1111,11 +1172,14 @@ class _GraphQLRequest:
 class _Operation(StrEnum):
     BOARD = "board"
     BOARD_FIELDS = "boardFields"
+    CREATION_CONTEXT = "creationContext"
     FIELD_SNAPSHOT = "fieldSnapshot"
     CREATE_FIELD = "createField"
     SEARCH = "search"
     ORIGIN_LOOKUP = "originLookup"
     ISSUE = "issue"
+    ISSUE_DETAIL = "issueDetail"
+    ISSUE_DETAILS = "issueDetails"
     SUB_ISSUES = "subIssues"
     COMMENTS = "comments"
     REPOSITORY = "repository"
@@ -1139,6 +1203,9 @@ _OPERATIONS: dict[str, _Operation] = {
     # Before the board read's own marker and the search's, both of which this document
     # also contains: it narrows the board's items by a field filter and searches beside it.
     "originItems:repositoryOwner": _Operation.ORIGIN_LOOKUP,
+    # Before the board-fields read's own marker, which this document carries beside the
+    # repository it reads in the same request.
+    "repository(owner:$repositoryOwner": _Operation.CREATION_CONTEXT,
     # Before the board read's own marker, which this aliased root also contains.
     "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
     "optionId field{": _Operation.FIELD_SNAPSHOT,
@@ -1146,8 +1213,14 @@ _OPERATIONS: dict[str, _Operation] = {
     "repositoryOwner": _Operation.BOARD,
     "search(query:": _Operation.SEARCH,
     "subIssues(first:": _Operation.SUB_ISSUES,
+    # Before the dependency read's own marker, which this read of one item also carries: it
+    # answers the item's `blockedBy` beside the boards it sits on.
+    "boards:projectItems(": _Operation.ISSUE,
+    # Both before the comment listing's own marker, which each also carries: the issue read
+    # with its first page of comments, alone and in a fixed batch of aliased reads.
+    "i0:node(id:$id0)": _Operation.ISSUE_DETAILS,
+    "node(id:$id){__typename ...BoardIssue ... on Issue{comments(": _Operation.ISSUE_DETAIL,
     "comments(first:": _Operation.COMMENTS,
-    "node(id:$id){__typename ...BoardIssue}": _Operation.ISSUE,
     "{repository(owner:": _Operation.REPOSITORY,
     "blockedBy(first:": _Operation.DEPENDENCIES,
     "createIssue(": _Operation.CREATE_ISSUE,
@@ -1282,6 +1355,11 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.board_response()
             case _Operation.BOARD_FIELDS:
                 return self.board.board_fields_response()
+            case _Operation.CREATION_CONTEXT:
+                fields = self.board.board_fields_response()["data"]
+                answered = self._repository(request.repository)["data"]
+                assert isinstance(fields, dict) and isinstance(answered, dict)
+                return {"data": {**fields, **answered}}
             case _Operation.FIELD_SNAPSHOT:
                 return self.board.snapshot_response()
             case _Operation.CREATE_FIELD:
@@ -1298,6 +1376,10 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.origin_lookup_response(request.variables)
             case _Operation.ISSUE:
                 return self.board.node_response(request.variables.get("id"))
+            case _Operation.ISSUE_DETAIL:
+                return self.board.detail_response(request.variables.get("id"))
+            case _Operation.ISSUE_DETAILS:
+                return self.board.details_response(request.variables)
             case _Operation.SUB_ISSUES:
                 return self.board.sub_issues_response(request.variables.get("id"))
             case _Operation.COMMENTS:
@@ -1371,6 +1453,11 @@ def _serving_board(
                 "GH_PROJECTS_TOKEN": "fixture-token",
                 "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
                 "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": endpoint,
+                # A copy onto `plans` builds the source its route names, `hellopatient`, which
+                # refuses to build without its key; a journey that ever routed a task there
+                # fails on the refused connection instead of reaching the production workspace.
+                LINEAR_KEY_ENV: "fixture-linear-key",
+                "ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__ENDPOINT": UNSERVED_LINEAR,
             }
     finally:
         _GitHubFixture.refusal = None
@@ -1717,7 +1804,7 @@ class DocumentPrice(NamedTuple):
 #: The plan-store CLI release every request bound below was measured on, held to
 #: `onetaskgraph --version`. Each bound is one named constant so a later release is
 #: re-measured one step at a time.
-BUDGET_MEASURED_ON = "onetaskgraph 0.2.54"
+BUDGET_MEASURED_ON = "onetaskgraph 0.2.57"
 #: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
 #: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
 #: with the board rather than one a single item hides.
@@ -1786,6 +1873,9 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.BOARD: DocumentPrice("BOARD", 2),
     _Operation.ORIGIN_LOOKUP: DocumentPrice("ORIGIN_LOOKUP", 1),
     _Operation.BOARD_FIELDS: DocumentPrice("BOARD_FIELDS", 1),
+    _Operation.CREATION_CONTEXT: DocumentPrice("CREATION_CONTEXT", 1),
+    _Operation.ISSUE_DETAIL: DocumentPrice("ISSUE_DETAIL", 1),
+    _Operation.ISSUE_DETAILS: DocumentPrice("ISSUE_DETAILS", 1),
     _Operation.FIELD_SNAPSHOT: DocumentPrice("STATUS_OPTIONS_SNAPSHOT", 1),
     _Operation.REPOSITORY: DocumentPrice("REPOSITORY", 1),
     _Operation.DEPENDENCIES: DocumentPrice("ISSUE_DEPENDENCIES", 1),

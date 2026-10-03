@@ -19,11 +19,12 @@ import json
 import os
 import subprocess
 
+import jsonschema
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import follow_up_drafts, follow_up_tickets, plan_copy, plan_review
+from orchestrator import follow_up_drafts, follow_up_tickets, plan_copy, plan_review, plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -411,3 +412,174 @@ def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:
         check=False,
     )
     assert ignored.returncode == 0, "a draft under .follow-ups/ is not gitignored"
+
+
+#: The values the `hellopatient` Linear source is declared with, which are never repointed:
+#: a plan's tasks of a `petsinc` repository are routed there, and a live run's settlements are
+#: projected back to the item each lives on. Literals for the reason :data:`BOARDS` gives.
+HELLOPATIENT = {
+    "plugin": "linear",
+    "team": "ENG",
+    "api_key_env": "HELLOPATIENT_LINEAR_API_KEY",
+}
+#: Linear's own API, which the source reaches when its configuration names no endpoint.
+LINEAR_ENDPOINT = "https://api.linear.app/graphql"
+#: The ENG workflow state each category is written as, which the user decided.
+HELLOPATIENT_STATES = {
+    "backlog": "Proposed",
+    "draft": "Backlog",
+    "todo": "Todo",
+    "queued": "Queued",
+    "in-progress": "In Progress",
+    "unknown": "Needs Attention",
+    "done": "Done",
+    "cancelled": "Canceled",
+}
+#: Where the `plans` source sends a task whose repositories are all Hello Patient's.
+PLANS_ROUTES = [{"repositories": ["github.com/petsinc/*"], "to": "hellopatient"}]
+
+
+@pytest.mark.parametrize(("setting", "expected"), sorted(HELLOPATIENT.items()))
+def test_the_linear_source_is_left_exactly_as_it_was(setting: str, expected: str) -> None:
+    """`hellopatient` keeps its plugin, its team and the credential it names.
+
+    The credential is named by its own variable rather than the plugin's default name,
+    which is onetaskgraph's test key: a source falling back to that would write a plan's
+    tasks into the test workspace.
+    """
+    source = read_plan_sources(_configuration())["hellopatient"]
+    actual = source.plugin if setting == "plugin" else source.settings.get(setting)
+    assert actual == expected, (
+        f"onetaskgraph.yaml's `hellopatient` source names {setting} {actual!r} where it "
+        f"carried {expected!r}; it is never repointed"
+    )
+
+
+def test_a_plan_home_may_live_in_the_linear_source() -> None:
+    """`hellopatient` is a default source, because an all-petsinc plan's home lives there."""
+    assert "hellopatient" in read_default_sources(_configuration()), (
+        "the hellopatient source is not among default_sources, so a plan whose home the "
+        "store routed there is unlisted by every read that names no source"
+    )
+
+
+def _linear_schema() -> dict[str, object]:
+    """The `linear` plugin's configuration schema, as the installed store CLI reports it."""
+    result = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "schema"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    schema = json.loads(result.stdout)["plugin_config"]["linear"]
+    assert isinstance(schema, dict), schema
+    return schema
+
+
+def _resolved_block(resolved: dict[str, object], prefix: str) -> dict[str, object]:
+    """One dotted block of resolved settings, nested back into the document it came from."""
+    block: dict[str, object] = {}
+    for key, value in resolved.items():
+        if not key.startswith(prefix):
+            continue
+        *parents, leaf = key[len(prefix) :].split(".")
+        nested = block
+        for parent in parents:
+            child = nested.setdefault(parent, {})
+            assert isinstance(child, dict), (key, child)
+            nested = child
+        nested[leaf] = value
+    return block
+
+
+def _schema_refusals(config: dict[str, object]) -> list[str]:
+    validator = jsonschema.Draft202012Validator(_linear_schema())
+    return sorted(error.message for error in validator.iter_errors(config))
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python check of the
+# installed plan-store CLI, in the `reads_checkouts` tier the sibling checks of this file's
+# board sources already use, which keeps it out of every memoized tier.
+@pytest.mark.reads_checkouts
+def test_the_linear_source_resolves_its_states_endpoint_and_the_plans_route() -> None:
+    """The installed CLI resolves the eight states, Linear's endpoint and the one route.
+
+    Read through the CLI's own resolution for the reason the board mappings above are.
+    The endpoint is held to the schema's default and to no setting of this file's, so the
+    source reaches Linear itself and never a fixture address left behind.
+    """
+    resolved = _resolved_configuration()
+    config = _resolved_block(resolved, "sources.hellopatient.config.")
+
+    assert config.get("status_mapping") == HELLOPATIENT_STATES, config
+    assert "endpoint" not in config, config
+    properties = _linear_schema()["properties"]
+    assert isinstance(properties, dict)
+    assert properties["endpoint"]["default"] == LINEAR_ENDPOINT, properties["endpoint"]
+    assert resolved["sources.plans.routes"] == PLANS_ROUTES, resolved["sources.plans.routes"]
+    assert plan_store.routed_sources("plans") == ("hellopatient",)
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python check of the
+# installed plan-store CLI, in the `reads_checkouts` tier the sibling checks of this file's
+# board sources already use, which keeps it out of every memoized tier.
+@pytest.mark.reads_checkouts
+def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts() -> None:
+    """`hellopatient`'s `config` validates against the plugin's own published schema.
+
+    The other party is Linear, which no check here may reach, so the configuration is held
+    to the schema the installed store reports for its `linear` plugin: a key it does not
+    take, or a mapping key that is no status category, fails here rather than at the first
+    write. A configuration carrying one of each is refused, which says a green here is a
+    validation rather than a reader that found nothing to check.
+    """
+    config = _resolved_block(_resolved_configuration(), "sources.hellopatient.config.")
+    assert config, "the installed CLI resolves no `hellopatient` configuration"
+
+    assert _schema_refusals(config) == []
+    mapping = config["status_mapping"]
+    assert isinstance(mapping, dict)
+    refused = _schema_refusals(
+        config | {"workspace": "hello-patient", "status_mapping": mapping | {"triage": "Triage"}}
+    )
+    assert len(refused) == 2 and any("workspace" in one for one in refused), refused
+    assert any("triage" in one for one in refused), refused
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+#: The `linear` plugin's default credential name, which onetaskgraph reserves for its own
+#: test workspace's key. Read off the installed schema's default by the test below, and
+#: spelled in two halves here so this file is not itself a tracked file naming it.
+RESERVED_LINEAR_KEY = "LINEAR" + "_API_KEY"
+
+
+@pytest.mark.reads_docs
+def test_no_tracked_file_names_the_store_s_test_linear_key() -> None:
+    """Nothing here names the key onetaskgraph's own live lane reads.
+
+    This host's Linear key is `HELLOPATIENT_LINEAR_API_KEY`. A tracked file naming the bare
+    default — in a config, a mask, an `.env` template — is one edit away from a source or a
+    dispatch reading the test workspace's key in place of the production one, or handing the
+    production one to a lane that expects the test one.
+    """
+    properties = _linear_schema()["properties"]
+    assert isinstance(properties, dict)
+    assert properties["api_key_env"]["default"] == RESERVED_LINEAR_KEY, properties["api_key_env"]
+    named = subprocess.run(
+        ["git", "grep", "--line-number", "--word-regexp", "--fixed-strings", RESERVED_LINEAR_KEY],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert named.returncode == 1, (
+        f"tracked files name {RESERVED_LINEAR_KEY}, onetaskgraph's test key:\n"
+        f"{named.stdout}{named.stderr}"
+    )

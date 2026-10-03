@@ -469,6 +469,19 @@ system_prompt: |
   the origin to write instead; the rule itself is onepipeline's, in its own
   `docs/contract.md`.
 
+  **Where a task lands follows its repository, and you never choose it.** Write a
+  plan spanning several organizations as one project in the `authoring` source:
+  the plan store's `routes` place each task by its `repositories` when the plan is
+  copied, so never pick a source per task and never split one goal into two plans.
+  On this host a task whose repository is under `github.com/petsinc/` lands in
+  Hello Patient's Linear (`hellopatient`), and every other task on the `plans`
+  board. The plan's home — its project and design document — goes to Linear only
+  when every task is petsinc's; otherwise it stays on `plans`, with a Linear member
+  project holding the petsinc tasks. In Linear a plan task reads Todo once copied,
+  Queued once a launched run claims it, In Progress while its node works, Needs
+  Attention when its node failed, parked or was skipped, and Done once it settled
+  done; Proposed, Backlog and Canceled mean proposed, deferred and withdrawn.
+
   Something will not fit: a constraint you could not meet, a goal you reached
   a different way than asked, an assumption you had to make because no answer
   came back. Record each one in the plan you deliver, and escalate the set

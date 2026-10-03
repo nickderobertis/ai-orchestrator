@@ -144,5 +144,12 @@ def test_a_listing_answering_outside_the_plan_is_refused_rather_than_read(
     page = SimpleNamespace(items=[SimpleNamespace(id=named(held_id), item=item)])
     monkeypatch.setattr(plan_store, "client", lambda: SimpleNamespace(task_list=None))
     monkeypatch.setattr(plan_store, "every_page", lambda *_arguments, **_keywords: [page])
+    home = plan_store.StoreProject(
+        qualified_id=plan_store.QualifiedProjectId(f"{SOURCE}:demo"),
+        title="demo",
+        metadata={plan_store.MEMBERS_KEY: ["other:demo"]},
+        location=None,
+    )
+    monkeypatch.setattr(plan_store, "read_projects", lambda _source: [home])
     with pytest.raises(OSError, match="outside itself"):
         design_chain.plan_repository(f"{SOURCE}:demo")

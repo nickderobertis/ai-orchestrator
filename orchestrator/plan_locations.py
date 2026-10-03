@@ -58,6 +58,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         landed = copied(args.project, args.destination)
         document = design_approval.design_document(str(landed.qualified_id))
+        members = plan_store.members(str(landed.qualified_id))
     # Every way this cannot answer is driven in `tests/test_plan_locations.py`, and the
     # answer it gives is read back off a real destination in both flow journeys. What no
     # journey can reach is the pairing itself: this runs after a copy the same command
@@ -73,44 +74,53 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return UNREADABLE
+    home = str(landed.qualified_id)
+    held_in = home.partition(":")[0]
     print(
-        f"plan-locations: {args.destination} holds the plan at "
-        f"{plan_store.located(landed.location, str(landed.qualified_id))}"
+        f"plan-locations: {held_in} holds the plan at {plan_store.located(landed.location, home)}"
     )
+    document_at = design_approval.located(document)
+    print(f"plan-locations: {held_in} holds its design document at {document_at}")
+    for member in sorted(members):
+        print(f"plan-locations: its tasks routed to {member.partition(':')[0]} are in {member}")
     print(
-        f"plan-locations: {args.destination} holds its design document at "
-        f"{design_approval.located(document)}"
+        f"plan-locations: its home is {home}; approve it with `just approve-design {home}` "
+        f"and launch it with `just orchestrate {home}`"
     )
     return OK
 
 
 def copied(project: str, destination: str) -> plan_store.StoreProject:
-    """The record in ``destination`` that ``project`` was copied onto.
+    """The home project ``project`` was copied onto, in ``destination`` or a source it routes to.
 
     Found by :data:`~orchestrator.plan_store.ORIGIN_KEY` rather than by name, because a
     destination names its own records: the store stamps what it copied from, and that
-    stamp is the whole of the correspondence. Several matches are refused rather than
-    picked between — two copies of one plan into one destination is a state somebody has
-    to resolve, and reporting one of them would send a reviewer to whichever this walked
-    into first.
+    stamp is the whole of the correspondence. Looked for in ``destination`` and in every
+    source its routes name, because the store puts a plan's home in a routed source when
+    every task routes there — and a member project carries no origin stamp, so only the
+    home answers. Several matches are refused rather than picked between — two copies of
+    one plan is a state somebody has to resolve, and reporting one of them would send a
+    reviewer to whichever this walked into first.
     """
     plan_store.qualified(project)
     matched = [
         held
-        for held in plan_store.read_projects(destination)
+        for source in (destination, *plan_store.routed_sources(destination))
+        for held in plan_store.read_projects(source)
         if held.metadata.get(plan_store.ORIGIN_KEY) == project
     ]
     if not matched:
         raise OSError(
-            f"source {destination!r} holds no project the store records as copied from "
-            f"{project}, so there is nothing there to point a reviewer at"
+            f"source {destination!r}, and every source it routes to, holds no project the "
+            f"store records as copied from {project}, so there is nothing there to point a "
+            f"reviewer at"
         )
     if len(matched) > 1:
         named = ", ".join(str(held.qualified_id) for held in matched)
         raise OSError(
-            f"source {destination!r} holds {len(matched)} projects the store records as "
-            f"copied from {project} ({named}), so which one a reviewer should open is not "
-            f"this command's to guess"
+            f"source {destination!r} and the sources it routes to hold {len(matched)} "
+            f"projects the store records as copied from {project} ({named}), so which one a "
+            f"reviewer should open is not this command's to guess"
         )
     return matched[0]
 

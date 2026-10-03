@@ -565,20 +565,30 @@ def _reaped(started: subprocess.Popen[str]) -> None:
         started.communicate(timeout=e2e_timeout(60))
 
 
-def _undriven(replying: Replying) -> str:
-    """Wait until the run itself says nothing drives it, and hand back how it says so.
+def _undriven(replying: Replying) -> dict[str, Any]:
+    """Wait until the run itself says nothing drives it, and hand back its reading.
 
-    Read off `just status`'s first line, which names a run nothing drives `DRIVER DEAD` —
-    or `SETTLED`, once a driver has written the run's result and exited.
+    Read off `just status --json`, the engine's one-object reading of the run: `driven` is
+    whether anything drives it, `ending` how it ended, and `paused` the decision it waits on.
+    The field rather than the printed word, because the word for one standing has moved
+    between engine releases while `driven` says the one thing this premise is about.
     """
     limit = deadline(120)
     while True:
-        status = _just("status", replying.run, "--no-providers", environment=replying.environment)
-        first = (status.stdout.splitlines() or [""])[0]
-        if "DRIVER DEAD" in first or "SETTLED" in first:
-            return first
+        status = _just("status", replying.run, "--json", environment=replying.environment)
+        assert status.returncode == 0, f"`just status --json` failed:\n{status.stderr}"
+        # `cast` and no validation: the reading is the engine's own document, and each
+        # journey asserts the members it is about.
+        reading = cast(dict[str, Any], json.loads(status.stdout))
+        if reading["driven"] is False:
+            return reading
         assert time.monotonic() < limit, f"run {replying.run} is still driven:\n{status.stdout}"
         time.sleep(0.5)
+
+
+def _unfinished_and_undriven(replying: Replying) -> bool:
+    """Whether nothing drives the run and it has not ended — held at its gate, not settled."""
+    return _undriven(replying)["ending"] is None
 
 
 def _asking(replying: Replying, question: str) -> subprocess.Popen[str]:
@@ -717,7 +727,7 @@ def test_task_prose_the_validator_refuses_is_refused_whole_where_nothing_drives_
     With nothing driving the run, an accepted edit is applied by the reply itself, so this
     is the path on which a validator that ran after the apply would be no validator at all.
     """
-    assert "DRIVER DEAD" in _undriven(replying), "the premise is a run nothing drives"
+    assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
 
     _refused_whole(replying, WORK_NODE)
 
@@ -786,7 +796,7 @@ def test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself(
     planner's, on a stream other than the one the launch's driver wrote, and the run is
     still one nothing drives.
     """
-    assert "DRIVER DEAD" in _undriven(replying), "the premise is a run nothing drives"
+    assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
     node = "added-undriven"
     commands = _records(replying, "commands")
 
@@ -797,7 +807,7 @@ def test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself(
     assert _authored_by_the_planner(replying, node) != _driver_stream(replying, "node-held"), (
         "the edit was journalled on the launch driver's stream, which had exited"
     )
-    assert "DRIVER DEAD" in _undriven(replying), "the reply left something driving the run"
+    assert _unfinished_and_undriven(replying), "the reply left something driving the run"
 
 
 def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
@@ -810,7 +820,7 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
     `complete`, so an envelope of its asking for one is refused for the op. Neither appends
     anything or leaves a record in the run's journal.
     """
-    assert "DRIVER DEAD" in _undriven(replying), "the premise is a run nothing drives"
+    assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
     commands = _records(replying, "commands")
     written = len(_recorded(replying, *WRITTEN_BY_A_REPLY))
 
@@ -960,7 +970,7 @@ def test_a_complete_command_closes_a_settled_run_whose_driver_has_exited(
     the run nothing afterwards — with nothing adopting, acknowledging, stopping or watching
     the run in between.
     """
-    assert "SETTLED" in _undriven(settled), "the premise is a settled run"
+    assert _undriven(settled)["word"] == "SETTLED", "the premise is a settled run"
     _owed(settled)
     reason = "every node settled done and the report is on the issue"
 
@@ -982,7 +992,7 @@ def test_a_completion_verdict_closes_a_settled_run_whose_driver_has_exited(
     a verdict and nothing else: the receipt says the verdict was delivered — to the run's
     own record, since no question is pending for it to answer.
     """
-    assert "SETTLED" in _undriven(settled), "the premise is a settled run"
+    assert _undriven(settled)["word"] == "SETTLED", "the premise is a settled run"
     _owed(settled)
     reason = "verified: every node settled done and nothing is left to land"
 

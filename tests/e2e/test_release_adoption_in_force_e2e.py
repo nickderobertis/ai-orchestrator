@@ -157,6 +157,8 @@ DECLARING_IDENTITIES = {
     "github.com/nickderobertis/onevcs": 4,
     # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
     "github.com/nickderobertis/printobserver": 17,
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
+    "github.com/nickderobertis/skilltest": 6,
 }
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 

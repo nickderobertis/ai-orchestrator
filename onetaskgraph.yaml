@@ -1,4 +1,4 @@
-default_sources: [authoring, examples, plans, test-fixtures]
+default_sources: [authoring, examples, plans, hellopatient, test-fixtures]
 sources:
   examples:
     plugin: local-md
@@ -45,6 +45,15 @@ sources:
         done: Done
         cancelled: Cancelled
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    # A task whose repositories are all Hello Patient's (`petsinc`) lands in that team's
+    # Linear, where its work is planned; every other task stays on this board. A plan's home
+    # goes there only when every task it carries does, and otherwise stays here with a
+    # member project in `hellopatient` for the routed tasks. Beside `plugin` and `config`
+    # because it is the store's, not the plugin's, and it repoints none of the five values
+    # above.
+    routes:
+      - repositories: ["github.com/petsinc/*"]
+        to: hellopatient
   followups:
     plugin: github-projects
     config:
@@ -90,3 +99,37 @@ sources:
         high: High
         medium: Medium
         low: Low
+  # Hello Patient's Linear team, which a plan task of a `petsinc` repository is routed to by
+  # the `plans` route above. Below `plans` and `followups` because readers here take the
+  # first `owner:`, `repository:` and `project_number:` lines as `plans`'.
+  hellopatient:
+    plugin: linear
+    config:
+      # The production key, from this checkout's `.env`. Named here so the source never
+      # falls back to the plugin's default name, which is onetaskgraph's own test key.
+      api_key_env: HELLOPATIENT_LINEAR_API_KEY
+      team: ENG
+      status_mapping:
+        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
+        # source of the workflow states each category is written as; its other party is the
+        # ENG team's live workflow, which no check here may read, since that needs the
+        # production key. A state the team lacks is refused by name at the first write that
+        # names it. Every category is mapped to a named state, so no write picks the first
+        # state of a type, and `Triage`, which has its own meaning in Linear, is never written.
+        # A proposal nobody has accepted yet: what a new copy is filed at.
+        backlog: Proposed
+        # Deferred for later by a person, and picked up by no agent.
+        draft: Backlog
+        # Accepted, and nothing has claimed it.
+        todo: Todo
+        # Claimed by a launched run whose node has not started.
+        queued: Queued
+        # A node is working on it.
+        in-progress: In Progress
+        # A node failed, parked or was skipped, and a person has to look.
+        unknown: Needs Attention
+        # Finished: the node settled done.
+        done: Done
+        # Withdrawn.
+        cancelled: Canceled
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]

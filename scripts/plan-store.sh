@@ -39,7 +39,8 @@ if ! . "$credentials_helper"; then
 fi
 export_host_credentials plan-store || exit "$?"
 
-# Which names the configured sources take their credential from, read out of the file
+# Which names the configured sources take their credential from — a board's `token_env`,
+# a Linear source's `api_key_env` — read out of the file
 # that configures them rather than spelled here: a source repointed at a different
 # variable has to move this note with it, and reading `onetaskgraph.yaml` is what makes
 # that automatic. A checkout with no such file — or one whose sources name none — leaves
@@ -47,7 +48,7 @@ export_host_credentials plan-store || exit "$?"
 # report absent.
 credential_names() {
     [ -r "$repo_root/onetaskgraph.yaml" ] || return 0
-    sed -n 's/^[[:space:]]*token_env:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*$/\1/p' \
+    sed -nE 's/^[[:space:]]*(token_env|api_key_env):[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$/\2/p' \
         "$repo_root/onetaskgraph.yaml" | sort -u
 }
 

@@ -13,7 +13,9 @@ document classifies that way actually touch, measured on the binary this checkou
 installed. The operator rule for adding a board `Status` option is read both ways: the
 prose has to state the verb and its `--apply` flag once, and the installed CLI has to
 carry them, because a rule naming a verb the binary lacks sends an operator back to the
-hand-written mutation the rule exists to forbid.
+hand-written mutation the rule exists to forbid. The Linear routing prose in the manager's
+document, the operator's and the planner's prompt is held to the configured route and to
+every state the `hellopatient` mapping writes.
 """
 
 from __future__ import annotations
@@ -341,4 +343,72 @@ def test_the_packages_plan_store_reads_run_the_locked_install_the_roster_names()
     )
     assert re.search(r"\b\d{4}-\d{2}-\d{2}\b", entry) is None, (
         "the roster entry carries a bare date, which reads as a measurement to re-take"
+    )
+
+
+#: The documents that tell a reader where a plan's petsinc tasks land and what each Linear
+#: state means for one: the manager's, the operator's, and the planner's own prompt.
+PLANNER = "personas/planner.yaml"
+ROUTED_DOCUMENTS = (MANAGER, ORCHESTRATION, PLANNER)
+#: The Linear source a `plans` route sends a petsinc task to.
+LINEAR = "hellopatient"
+
+
+def _linear_states() -> dict[str, str]:
+    """The workflow state each category is written as, as the store resolves the mapping."""
+    prefix = f"sources.{LINEAR}.config.status_mapping."
+    states = {
+        key[len(prefix) :]: str(value)
+        for key, value in plan_store.configured_settings().items()
+        if key.startswith(prefix)
+    }
+    assert states, f"onetaskgraph.yaml maps no workflow state for `{LINEAR}`"
+    return states
+
+
+def _route_patterns() -> list[str]:
+    """Each repository pattern a `plans` route sends to the Linear source."""
+    routes = plan_store.configured_settings().get(f"sources.{BOARD}.routes")
+    assert isinstance(routes, list), routes
+    patterns = [
+        str(pattern)
+        for route in routes
+        if isinstance(route, dict) and route.get("to") == LINEAR
+        for pattern in route.get("repositories", [])
+    ]
+    assert patterns, f"`{BOARD}` routes nothing to `{LINEAR}`"
+    return patterns
+
+
+@pytest.mark.parametrize("name", ROUTED_DOCUMENTS)
+def test_each_document_names_every_linear_state_and_the_route_the_store_applies(
+    name: str,
+) -> None:
+    """The prose's state names and route are the configuration's, not remembered ones.
+
+    A state renamed in the mapping, or a route moved to another organization, leaves a
+    document telling a manager to look for a state or a repository nothing writes.
+    """
+    text = _flat(_document(name))
+    missing = [
+        state
+        for state in _linear_states().values()
+        if re.search(rf"\b{re.escape(state)}\b", text) is None
+    ]
+    assert not missing, f"{name} never names the Linear state(s) {missing} a plan task reads"
+    for pattern in _route_patterns():
+        assert pattern in text or pattern.removesuffix("*") in text, (
+            f"{name} never names {pattern}, the repositories `{BOARD}` routes to `{LINEAR}`"
+        )
+    assert f"`{LINEAR}`" in text, f"{name} never names the `{LINEAR}` source"
+
+
+def test_the_orchestration_table_gives_each_state_the_category_the_source_writes_it_for() -> None:
+    """Every row of the state table is one entry of the mapping, and every entry has a row."""
+    rows = dict(
+        re.findall(r"^\| ([A-Z][A-Za-z ]+?) \| `([a-z-]+)` \|", _document(ORCHESTRATION), re.M)
+    )
+    expected = {state: category for category, state in _linear_states().items()}
+    assert rows == expected, (
+        f"{ORCHESTRATION}'s Linear state table reads {rows}, and onetaskgraph.yaml maps {expected}"
     )

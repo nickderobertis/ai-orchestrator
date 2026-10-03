@@ -104,7 +104,7 @@ PLAN_STORE_CONFIGS = (
 
 #: The credentials a dispatch must not carry unless its role reads the plan store — the
 #: board token, and the production Linear workspace's key, which a sibling's live Linear
-#: lane must never see in place of its own test-scoped `LINEAR_API_KEY` — and the board
+#: lane must never see in place of its own test-scoped key — and the board
 #: nomination that travels either way. Keeping the second is deliberate: a
 #: sibling's live lane handed the board's owner, number and repository but no token
 #: skips and prints its reason, where one handed nothing at all cannot tell a
