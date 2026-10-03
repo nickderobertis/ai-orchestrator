@@ -52,6 +52,7 @@ from fake_backend import (
     TURN_GATE_RELEASED,
 )
 from github_board import LINEAR_KEY_ENV, _serving_board
+from linear_stand_in import provisioned, stand_in
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
@@ -126,81 +127,6 @@ LINEAR_ENVIRONMENT = (LINEAR_KEY_ENV, f"ONETASKGRAPH_SOURCES__{LINEAR.upper()}__
 COPIES_THE_TRACKED_TREE = pytest.mark.reads_docs
 
 
-def _tracked_linear_states() -> dict[str, str]:
-    """The workflow state each category is written as, resolved out of the tracked file."""
-    environment = {
-        name: value for name, value in os.environ.items() if not name.startswith("ONETASKGRAPH_")
-    }
-    shown = subprocess.run(
-        [str(ONETASKGRAPH_BIN), "--json", "config", "show"],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert shown.returncode == 0, shown.stderr
-    prefix = f"sources.{LINEAR}.config.status_mapping."
-    states = {
-        str(setting["key"])[len(prefix) :]: str(setting["value"])
-        for setting in json.loads(shown.stdout)["settings"]
-        if str(setting["key"]).startswith(prefix)
-    }
-    assert states, f"the tracked configuration maps no state for {LINEAR}"
-    return states
-
-
-def _stand_in_for_linear(checkout: Path, root: Path) -> None:
-    """Declare the copy's `hellopatient` as a folder reading the tracked Linear state names.
-
-    The block is located by the shape the tracked file has, so a configuration that moved
-    fails here before anything could reach the real workspace.
-    """
-    configuration = checkout / "onetaskgraph.yaml"
-    lines = configuration.read_text(encoding="utf-8").splitlines()
-    opens = f"  {LINEAR}:"
-    assert opens in lines, f"{configuration} declares no {LINEAR!r} source opening {opens!r}"
-    start = lines.index(opens)
-    end = start + 1
-    while end < len(lines) and (lines[end].startswith("    ") or not lines[end].strip()):
-        end += 1
-    mapping = [
-        f"        {json.dumps(state)}: {category}"
-        for category, state in _tracked_linear_states().items()
-    ]
-    # llmlint: ignore-block[e2e_not_mocked] This node's amended acceptance criteria require a
-    # local `local-md` source to stand in for `hellopatient` in every journey, because no check
-    # may reach the production Linear workspace; the tracked Linear configuration is held to the
-    # plugin's own schema by `tests/test_plan_source_roots.py` instead.
-    lines[start:end] = [
-        opens,
-        "    plugin: local-md",
-        "    config:",
-        f"      root: {root}",
-        "      status_mapping:",
-        *mapping,
-    ]
-    # llmlint: ignore-end[e2e_not_mocked]
-    configuration.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _provisioned(checkout: Path) -> None:
-    """Give the copied checkout the locked toolchain a session start would give it."""
-    environment = dict(os.environ)
-    for named in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
-        environment.pop(named, None)
-    synced = subprocess.run(
-        ["uv", "sync", "--locked"],
-        cwd=checkout,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(600),
-        check=False,
-    )
-    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
-
-
 class Routed(NamedTuple):
     """A copy of this checkout whose `hellopatient` is a folder, and that folder."""
 
@@ -220,8 +146,9 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
     answering_this_checkouts_origin(checkout)
     linear = tmp_path / LINEAR
     linear.mkdir()
-    _stand_in_for_linear(checkout, linear)
-    _provisioned(checkout)
+    # llmlint: ignore[e2e_not_mocked] A `local-md` source stands in for `hellopatient`, because no check may reach the production Linear workspace; `tests/test_plan_source_roots.py` holds the tracked source to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    stand_in(checkout, LINEAR, linear)
+    provisioned(checkout)
     return Routed(checkout=checkout, linear=linear)
 
 

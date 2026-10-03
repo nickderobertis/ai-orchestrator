@@ -977,8 +977,8 @@ happens to quote a board comment does not narrow the dispatch silently.
   comment no quoted comment names. Where a comment asks what only an investigation answers,
   it investigates that one ticket, read-only but for targeted tests and builds, and says
   what would settle a question it cannot. It never changes a board item's status except
-  by one withdrawal: this run's own item at `Proposal`, when a quoted comment clearly says
-  its ticket is not needed. The template's feedback mode states both bounds.
+  by one withdrawal: this run's own item at `Proposal` (`Proposed` on Linear), when a quoted
+  comment clearly says its ticket is not needed. The template's feedback mode states both bounds.
   `python -m orchestrator.follow_up_tickets check-responses` is what holds an account to
   that, reading each reply it names back off the board. The pre-launch `check-gathering` read also refuses an issue the run neither
   owns nor marked, and a comment whose marker says a run wrote it.
@@ -1035,7 +1035,9 @@ updates whichever carrier the store lists first.
 **The `followups` board is the user's decision.** A ticket's issue is created in the
 repository its root cause lives in, which must be under the board's owner, as an item of
 the one board; a ticket naming a repository outside that owner is refused and reported,
-never filed. A ticket's record's `host` names the
+never filed — unless the board's route sends it elsewhere: a `github.com/petsinc/*` root
+cause's ticket is filed in Hello Patient's Linear, `hellopatient-followups`, an issue of its
+Agent Follow-ups project, where that team triages it under the same contract. A ticket's record's `host` names the
 machine its verification ran on, and its evidence states the same host. A new ticket
 reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item
@@ -1048,32 +1050,38 @@ prints the vocabulary every agent reads, copied here:
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
 <!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
-- **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
-  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by
-  an agent sent to pick up accepted tickets.
-- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an
-  item there: only a person, which is what accepting a ticket is. **Selected** by an agent
-  sent to pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, written `draft`: deferred for later by a person: not
-  accepted, picked up by no agent, and still taking new evidence. Who moves an item there:
-  only a person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `Queued`**, written `queued`: accepted, and claimed by a launched DAG
-  whose node has not started, so it returns to `Todo` if that work does not happen. Who
-  moves an item there: no person — a launched run's first projection, over the store's
-  `delivers` relation. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
-  an item there: a person, or a dispatch whose own task says to. Not selected by an agent
-  sent to pick up accepted tickets.
-- **Closed as completed at Status `Done`**, written `done`: accepted and finished. Who
-  moves an item there: a person, or a dispatch whose own task says to. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Closed as not planned at Status `Cancelled`**, written `cancelled`: withdrawn. Who
-  moves an item there: a follow-up run withdrawing its own ticket that nobody accepted or
-  deferred, or a person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Proposal`**, Linear state `Proposed`, written `backlog`: a proposal
+  awaiting the user's decision. Who moves an item there: a follow-up run's first copy of a
+  new ticket. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Todo`**, Linear state `Todo`, written `todo`: accepted, and not yet
+  taken up. Who moves an item there: only a person, which is what accepting a ticket is.
+  **Selected** by an agent sent to pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, Linear state `Backlog`, written `draft`: deferred for later
+  by a person: not accepted, picked up by no agent, and still taking new evidence. Who
+  moves an item there: only a person. Not selected by an agent sent to pick up accepted
+  tickets.
+- **Board status `Queued`**, Linear state `Queued`, written `queued`: accepted, and
+  claimed by a launched DAG whose node has not started, so it returns to `Todo` if that
+  work does not happen. Who moves an item there: no person — a launched run's first
+  projection, over the store's `delivers` relation. Not selected by an agent sent to pick
+  up accepted tickets.
+- **Board status `In Progress`**, Linear state `In Progress`, written `in-progress`:
+  accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
+  says to. Not selected by an agent sent to pick up accepted tickets.
+- **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
+  and finished. Who moves an item there: a person, or a dispatch whose own task says to.
+  Not selected by an agent sent to pick up accepted tickets.
+- **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
+  `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
+  ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to
+  pick up accepted tickets.
 
 A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
-else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
-closed one.
+else, on either destination: never an item at `Proposal`, `Deferred`, `Queued` or
+`In Progress` — on Linear `Proposed`, `Backlog`, `Queued` or `In Progress` — and never a
+closed one, which on Linear is one at `Done` or `Canceled`. No follow-up run writes
+Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Reviewed`,
+`Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
@@ -1097,9 +1105,10 @@ hold the board to the recount.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 **A brief for a run that works accepted tickets has each node's task record name its
-ticket** in the store's `delivers` field, as a qualified `followups:<native-id>`, one
-ticket per node of a plan. Name a ticket only once it is at `Todo`: one at `Proposal` or
-`Deferred` is left alone. The ticket's status follows its node by the store's rule over
+ticket** in the store's `delivers` field, as a qualified `followups:<native-id>` — or
+`hellopatient-followups:<native-id>` for a ticket filed in Hello Patient's Linear — one
+ticket per node of a plan. Name a ticket only once it is at `Todo`, on either destination:
+one at `Proposal` or `Deferred` (Linear's `Proposed` or `Backlog`) is left alone. The ticket's status follows its node by the store's rule over
 every task delivering it, which onetaskgraph's documentation states. A failed first
 projection lets the run dispatch before `Queued` reaches the board, and says so on the
 planner channel.

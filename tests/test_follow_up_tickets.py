@@ -970,6 +970,8 @@ CHECK_RESPONSES = "python -m orchestrator.follow_up_tickets check-responses"
 FEEDBACK_FILE = Path("/drafts-root/feedback/listing-run/20260101T000000Z.md")
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
 BOARD_ITEMS = "python -m orchestrator.follow_up_tickets board-items"
+#: What every search the task spells names, so it asks the board the ticket is filed on.
+ON_ITS_BOARD = "--repository <the ticket's repository>"
 COPY = "python -m orchestrator.follow_up_tickets copy"
 RE_ESTIMATE = "python -m orchestrator.follow_up_tickets re-estimate"
 VALIDATE = "python -m orchestrator.follow_up_tickets validate"
@@ -1237,10 +1239,10 @@ def test_the_initial_task_fills_every_value_and_carries_both_contracts() -> None
     ), task
     assert f"{COPY} --board followups <path of the ticket>" in task
     assert (
-        f"`{BOARD_ITEMS} --board followups --metadata orchestrator.follow-up/root_cause="
-        "<root-cause>`"
+        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --metadata "
+        "orchestrator.follow-up/root_cause=<root-cause>`"
     ) in flat
-    assert f"`{BOARD_ITEMS} --board followups --search <text>`" in flat
+    assert f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --search <text>`" in flat
     asked = re.findall(rf"`{re.escape(BOARD_ITEMS)} --board followups([^`]*)`(.{{0,32}})", flat)
     assert asked, "the task never asks the board"
     for flags, after in asked:
@@ -1282,7 +1284,7 @@ TEMPLATE_PROSE = (
     "**Every comment this feedback quotes is accounted for, exactly once",
     "- **Board status `Proposal`**",
     'A brief to pick up "accepted" follow-up tickets',
-    "a proposal awaiting the user's decision",
+    "awaiting the user's decision. Who moves an",
     "its claim holds, and its evidence reached the board",
 )
 
@@ -1409,7 +1411,7 @@ def test_the_tracked_template_carries_the_ticket_sequence_in_order() -> None:
         "the task does not carry the status vocabulary once"
     )
     for rule in (
-        "a ticket the board holds at `Deferred` is copied carrying `draft`",
+        "a ticket the board holds at `Deferred` (Linear's `Backlog`) is copied carrying `draft`",
         "this run never withdraws a deferred item",
         "an item at `Deferred` receives this run's one comment like any other open item",
         "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
@@ -1540,8 +1542,13 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
         "**Its `repositories` names exactly one normalized origin, its record's `repository`**"
     ) in flat
     assert (
-        "Its issue is created in that one repository and added to the board as an item, and "
-        "that repository must belong to the board's owner"
+        "On a GitHub board its issue is created in that one repository and added to the board "
+        "as an item, and that repository must belong to the board's owner"
+    ) in flat
+    assert (
+        "A repository one of the board's routes names — `github.com/petsinc/*`, which goes to "
+        "Hello Patient's Linear — is filed as an issue of the source that route names instead, "
+        "whatever its owner."
     ) in flat
     assert f"{tickets.OUTSIDE_OWNER} when the ticket's repository is not one of the board's" in flat
     assert (
@@ -2595,8 +2602,12 @@ def test_copy_refuses_a_ticket_it_cannot_read_and_a_report_naming_no_item(
 
     for via in tickets.FOLLOWED:
         followed = report("updated", via)
-        assert tickets.copied_to(followed, BOARD, tickets.BoardItemId("b")) == ("updated", "b")
-    assert tickets.copied_to(report("created", "created"), BOARD, None) == ("created", "b")
+        assert tickets.copied_to(followed, BOARD, tickets.BoardItemId("b")) == (
+            "updated",
+            "b",
+            BOARD,
+        )
+    assert tickets.copied_to(report("created", "created"), BOARD, None) == ("created", "b", BOARD)
     orphaned = CopyReport.model_validate(
         {"items": [{"source": "drafts:a", "action": "orphaned", "destination": f"{BOARD}:b"}]}
     )
@@ -2678,19 +2689,24 @@ def test_board_status_over_a_queued_item_prints_queued_and_refuses_to_withdraw_i
 def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_picked_up() -> None:
     vocabulary = tickets.status_vocabulary()
     bullets = [line for line in vocabulary.splitlines() if line.startswith("- ")]
+    # Each status's place on the GitHub board and its state in Hello Patient's Linear, as the
+    # user decided them.
     shown = [
-        "Board status `Proposal`",
-        "Board status `Todo`",
-        "Board status `Deferred`",
-        "Board status `Queued`",
-        "Board status `In Progress`",
-        "Closed as completed at Status `Done`",
-        "Closed as not planned at Status `Cancelled`",
+        ("Board status `Proposal`", "Proposed"),
+        ("Board status `Todo`", "Todo"),
+        ("Board status `Deferred`", "Backlog"),
+        ("Board status `Queued`", "Queued"),
+        ("Board status `In Progress`", "In Progress"),
+        ("Closed as completed at Status `Done`", "Done"),
+        ("Closed as not planned at Status `Cancelled`", "Canceled"),
     ]
 
     assert len(bullets) == len(tickets.Status) == len(shown)
-    for bullet, status, place in zip(bullets, tickets.Status, shown, strict=True):
-        assert bullet.startswith(f"- **{place}**, written `{status.value}`: "), bullet
+    for bullet, status, (place, linear) in zip(bullets, tickets.Status, shown, strict=True):
+        assert bullet.startswith(
+            f"- **{place}**, Linear state `{linear}`, written `{status.value}`: "
+        ), bullet
+        assert tickets.linear_state(status) == linear
         assert status.meaning in bullet, bullet
         assert "Who moves an item there: " in bullet, bullet
     selected = [
@@ -2709,8 +2725,11 @@ def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_pi
         assert said in deferred, said
     assert vocabulary.rstrip("\n").splitlines()[-1] == (
         'A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing '
-        "else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a "
-        "closed one."
+        "else, on either destination: never an item at `Proposal`, `Deferred`, `Queued` or "
+        "`In Progress` — on Linear `Proposed`, `Backlog`, `Queued` or `In Progress` — and never "
+        "a closed one, which on Linear is one at `Done` or `Canceled`. No follow-up run writes "
+        "Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Reviewed`, "
+        "`Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people."
     )
 
 
@@ -3604,12 +3623,17 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
     flat_step = " ".join(step.split())
 
     for said in (
-        f"`{BOARD_ITEMS} --board followups --metadata orchestrator.follow-up/root_cause="
-        f"<root-cause>`, then by text, `{BOARD_ITEMS} --board followups --search <text>`",
-        "The text search is GitHub's own search of the board's issues: it matches whole words "
-        "before it confirms the text, so search for words an issue would carry rather than a "
-        "fragment of one, and it may not yet list an item another run wrote a few seconds ago.",
-        "Neither is narrowed to a repository",
+        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --metadata "
+        "orchestrator.follow-up/root_cause=<root-cause>`, then by text, "
+        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --search <text>`",
+        "On a GitHub board the text search is GitHub's own search of the board's issues: it "
+        "matches whole words before it confirms the text, so search for words an issue would "
+        "carry rather than a fragment of one, and it may not yet list an item another run "
+        "wrote a few seconds ago.",
+        "On Linear it is Linear's own search of the project's issue titles and descriptions, "
+        "matched regardless of case.",
+        "`--repository` asks the board the ticket is filed on, and neither search is narrowed "
+        "further",
         "Only an unbound ticket needs these duplicate searches; nothing in this task lists "
         "the board.",
         "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
@@ -4639,7 +4663,7 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
     for said in (
         "**Never change a board item's status except by one withdrawal.**",
         "clearly says the ticket of the issue it sits on is not needed",
-        "that issue is this run's own item at `Proposal`, withdraw it",
+        "that issue is this run's own item at `Proposal` (`Proposed` on Linear), withdraw it",
         "run `board-status` with `--withdraw` on its ticket, write the word it prints as the "
         "ticket's `status`, validate the ticket and copy it",
         "say in that comment's account entry that the item was withdrawn",
@@ -4658,7 +4682,8 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
     agents = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
     assert (
         "It never changes a board item's status except by one withdrawal: this run's own item "
-        "at `Proposal`, when a quoted comment clearly says its ticket is not needed."
+        "at `Proposal` (`Proposed` on Linear), when a quoted comment clearly says its ticket is "
+        "not needed."
     ) in agents
 
 
@@ -5551,3 +5576,298 @@ def test_board_reads_refuse_incomplete_details_through_the_cli_protocol(
     assert checked == tickets.UNRUNNABLE
     expected = "returned 0 records" if answer_kind == "empty" else "no native comments"
     assert expected in capsys.readouterr().err
+
+
+#: A second local store the stand-in board's route sends a `petsinc` root cause to, as the
+#: committed `followups` sends one to `hellopatient-followups`, and a repository it routes.
+ROUTED = "ticketrouted"
+ROUTED_REPOSITORY = "github.com/petsinc/hp-api"
+ROUTED_CAUSE = "intake-form-drops-a-field"
+
+
+@pytest.fixture
+def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The routed store's root, with the stand-in board routing every `petsinc` repository to it.
+
+    The route is stated through the store's own environment layer, whose entries replace the
+    document's list whole, so it is the stand-in board's one route.
+    """
+    root = tmp_path / "routed"
+    root.mkdir()
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__PLUGIN", WRITABLE_PLUGIN)
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__CONFIG__ROOT", str(root))
+    monkeypatch.setenv(
+        f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
+    )
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__TO", ROUTED)
+    return root
+
+
+def _routed_ticket(**departures: object) -> tickets.Ticket:
+    """The sound ticket, about a root cause in the repository the stand-in board routes."""
+    origin = tickets.Origin(ROUTED_REPOSITORY)
+    return _ticket(
+        root_cause=tickets.RootCause(ROUTED_CAUSE),
+        repository=origin,
+        title="hp-api: the intake form drops a field",
+        basis=(tickets.Basis(origin, tickets.Commit(COMMIT)),),
+        drafts=(tickets.QualifiedDraftId(DRAFT),),
+        **departures,
+    )
+
+
+def test_the_family_is_the_board_and_every_source_its_routes_name(routed: Path) -> None:
+    assert tickets.boards(BOARD) == (BOARD, ROUTED)
+    assert tickets.ticket_board(BOARD, ROUTED_REPOSITORY) == ROUTED
+    assert tickets.ticket_board(BOARD, REPOSITORY) == BOARD
+
+
+def test_a_routed_ticket_is_filed_bound_decided_and_searched_on_the_board_its_route_names(
+    routed: Path, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every per-ticket command takes the root board and acts at the ticket's routed board."""
+    ticket = _write(drafts_root, _routed_ticket())
+    destination = f"{ROUTED}:{RUN}/tickets/{ROUTED_CAUSE}"
+
+    assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
+    status, printed, _ = _copied(ticket, capsys)
+
+    assert status == tickets.SOUND
+    assert json.loads(printed) == {"action": "created", "destination": destination}
+    assert not any(board.rglob("*.md")), "the routed ticket was filed on the root board"
+    assert len(list(routed.rglob("*.md"))) == 1
+    bound = tickets.read_ticket(ticket)
+    assert (bound.board_item, bound.link(ROUTED), bound.link(BOARD)) == (
+        tickets.BoardItemId(f"{RUN}/tickets/{ROUTED_CAUSE}"),
+        tickets.BoardItemId(f"{RUN}/tickets/{ROUTED_CAUSE}"),
+        None,
+    )
+
+    _moved(destination, tickets.Status.ACCEPTED.value)
+    assert _decided(ticket, capsys) == (tickets.SOUND, "todo\n", "")
+    _moved(destination, tickets.Status.PROPOSED.value)
+    status, printed, _ = _copied(ticket, capsys)
+    assert json.loads(printed) == {"action": "updated", "destination": destination}
+    assert len(list(routed.rglob("*.md"))) == 1, "a re-copy filed a second routed item"
+
+    query = ("--metadata", tickets.root_cause_query(ROUTED_CAUSE))
+    assert _listed(capsys, *query, "--repository", ROUTED_REPOSITORY) == (
+        tickets.SOUND,
+        [destination],
+        "",
+    )
+    assert _listed(capsys, *query) == (tickets.SOUND, [], ""), "the root board alone was asked"
+    assert _listed(capsys, *query, "--repository", "petsinc/hp-api")[0] == tickets.UNRUNNABLE
+
+
+def test_a_ticket_no_route_names_stays_on_the_root_board(
+    routed: Path, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ticket = _write(drafts_root, _carrying())
+
+    status, printed, _ = _copied(ticket, capsys)
+
+    assert status == tickets.SOUND
+    assert json.loads(printed)["destination"] == f"{BOARD}:{RUN}/tickets/{CAUSE}"
+    assert not any(routed.rglob("*.md"))
+
+
+@pytest.mark.parametrize(
+    "held", [None, *[status for status in tickets.Status if status.protected_from_withdrawal]]
+)
+def test_a_routed_ticket_is_withdrawn_on_its_routed_board_unless_a_person_decided_on_it(
+    routed: Path,
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    held: tickets.Status | None,
+) -> None:
+    """A withdrawal reads and closes the item where the ticket was filed, and nowhere else.
+
+    A routed proposal is withdrawn there and its copy closes it; one a person accepted or
+    deferred there is refused, and its item stays where the person put it.
+    """
+    ticket = _write(drafts_root, _routed_ticket())
+    destination = f"{ROUTED}:{RUN}/tickets/{ROUTED_CAUSE}"
+    assert _copied(ticket, capsys)[0] == tickets.SOUND
+    if held is not None:
+        _moved(destination, held.value)
+
+    status, printed, reported = _decided(ticket, capsys, "--withdraw")
+
+    if held is None:
+        assert (status, printed, reported) == (tickets.SOUND, "cancelled\n", "")
+        # The word it printed is written as the ticket's status, as the task says.
+        text = ticket.read_text(encoding="utf-8")
+        ticket.write_text(
+            re.sub(r"^status: .*$", 'status: "cancelled"', text, count=1, flags=re.M), "utf-8"
+        )
+        assert _copied(ticket, capsys)[0] == tickets.SOUND
+        assert _board_category(destination) == tickets.Status.WITHDRAWN.value
+    else:
+        assert (status, printed) == (tickets.PROTECTED, "")
+        assert "this run never withdraws it" in reported
+        assert _board_category(destination) == held.value
+    assert not any(board.rglob("*.md")), "the withdrawal reached the root board"
+
+
+def test_the_dispositions_check_and_a_re_estimate_read_a_routed_ticket_where_it_was_filed(
+    routed: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The account names the root board; each filed cause is read on its own ticket's board."""
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    ticket = _write(drafts_root, _routed_ticket())
+    tickets.open_dispositions(drafts_root, RUN).write_text(
+        json.dumps(_account(_disposed(causes=[ROUTED_CAUSE]))), encoding="utf-8"
+    )
+    check = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+
+    assert tickets.main(check) == tickets.UNSOUND
+    assert f"evidence comment of run {RUN} on {ROUTED}" in capsys.readouterr().err
+    assert _decided(ticket, capsys)[0] == tickets.SOUND
+    assert _copied(ticket, capsys)[0] == tickets.SOUND
+
+    assert tickets.main(check) == tickets.SOUND
+    assert "accounts for every draft" in capsys.readouterr().out
+    issue = f"{ROUTED}:{RUN}/tickets/{ROUTED_CAUSE}"
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.SOUND
+    assert json.loads(capsys.readouterr().out)["item"] == issue
+    assert tickets.main(["re-estimate", "--board", BOARD, f"elsewhere:{RUN}"]) == tickets.UNSOUND
+    assert "is not an item of the board" in capsys.readouterr().err
+
+
+#: An accepted ticket on the routed board, with the issue URL Linear reports for one, which a
+#: ticket written against its fix names in its body; and a source outside the family.
+ROUTED_ACCEPTED = tickets.QualifiedBoardId(f"{ROUTED}:{OTHER_RUN}/tickets/intake-schema-renames")
+ROUTED_ACCEPTED_URL = "https://linear.app/acme/issue/ENG-1"
+OUTSIDE_FAMILY = tickets.QualifiedBoardId(f"elsewhere:{OTHER_RUN}/tickets/intake-schema-renames")
+
+
+@pytest.mark.parametrize(
+    ("far", "reason"),
+    [
+        (ROUTED_ACCEPTED, None),
+        (
+            OUTSIDE_FAMILY,
+            f"entry {OUTSIDE_FAMILY!r} names a source other than the boards `{BOARD}`, `{ROUTED}`",
+        ),
+    ],
+    ids=["routed", "outside"],
+)
+def test_a_dependency_on_any_board_of_the_family_is_held_and_one_outside_it_is_refused(
+    routed: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    far: tickets.QualifiedBoardId,
+    reason: str | None,
+) -> None:
+    """A ticket on the root board may be written against an accepted fix filed on a routed one."""
+    _accepted_item(routed, ROUTED_ACCEPTED, tickets.Status.ACCEPTED.value, ROUTED_ACCEPTED_URL)
+    body = _body(
+        impact=_impact(
+            prose=f"{IMPACT_PROSE} Assuming the fix in {ROUTED_ACCEPTED_URL} lands, the export "
+            "is unaffected."
+        )
+    )
+    ticket = _write(drafts_root, _ticket(depends_on=(far,), body=body))
+
+    status, printed, reported = _decided(ticket, capsys)
+
+    if reason is None:
+        assert (status, printed, reported) == (tickets.SOUND, "backlog\n", "")
+    else:
+        assert (status, printed) == (tickets.NOT_ACCEPTED, "")
+        assert reason in reported
+
+
+def test_a_petsinc_root_cause_passes_the_owner_rule_by_its_route_and_an_outsider_is_refused() -> (
+    None
+):
+    """Against the committed `followups`: its route files a `petsinc` repository in Linear.
+
+    A repository neither of the board's owner nor matched by a route is still refused, naming
+    the owner; the route is read from configuration alone, so nothing reaches either board.
+    """
+    owner = tickets.board_owner(tickets.BOARD)
+    linear = tickets.ticket_board(tickets.BOARD, ROUTED_REPOSITORY)
+
+    assert linear == "hellopatient-followups"
+    assert tickets.boards(tickets.BOARD) == (tickets.BOARD, linear)
+    assert tickets.owner_refusal(tickets.BOARD, owner, ROUTED_REPOSITORY, linear) is None
+    assert tickets.owner_refusal(tickets.BOARD, owner, REPOSITORY, tickets.BOARD) is None
+    outside = tickets.ticket_board(tickets.BOARD, FOREIGN_REPOSITORY)
+    refusal = tickets.owner_refusal(tickets.BOARD, owner, FOREIGN_REPOSITORY, outside)
+    assert outside == tickets.BOARD
+    assert isinstance(refusal, tickets.OutsideOwner)
+    assert "no route of the board sends it elsewhere" in str(refusal)
+
+
+#: A run id `just follow-ups` launches that Linear's Markdown normalization would rewrite in a
+#: description, where `_x_` reads back as `*x*`; and that rewrite, as onetaskgraph-linear
+#: recorded it of an issue's description.
+UNDERSCORED_RUN = "fu_linear_run"
+
+
+def _as_linear_description(text: str) -> str:
+    return re.sub(r"_([^_\s]+)_", r"*\1*", text)
+
+
+def test_a_runs_markers_read_back_as_its_own_from_a_linear_comment_and_are_never_in_a_body() -> (
+    None
+):
+    """The marker form survives where a run writes it on Linear, a comment's body.
+
+    onetaskgraph-linear recorded that a comment's body keeps every HTML comment byte for byte,
+    so evidence and a reply read back as the run's own exactly as GitHub's do. It recorded that
+    an issue's description does not, which is why a ticket's body carries no marker: the same
+    marker normalized as a description is no run's.
+    """
+    evidence = tickets.render_comment(UNDERSCORED_RUN, CAUSE, "The listing skipped page 9.")
+    reply = tickets.render_reply(
+        UNDERSCORED_RUN,
+        CAUSE,
+        answers="c2",
+        url="https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c2",
+        author="ada",
+        response="It does, at this run's basis.",
+        verdict=tickets.Verdict.CONFIRMS,
+    )
+
+    assert tickets.comment_owner(evidence) == tickets.CommentOwner(
+        tickets.RunId(UNDERSCORED_RUN), tickets.RootCause(CAUSE)
+    )
+    replied = tickets.comment_owner(reply)
+    assert replied is not None
+    assert (replied.run, replied.kind, replied.answers, replied.verdict) == (
+        UNDERSCORED_RUN,
+        tickets.CommentKind.REPLY,
+        "c2",
+        tickets.Verdict.CONFIRMS,
+    )
+    assert tickets.counts_as_occurrence(reply, RUN, CAUSE)
+    assert tickets.comment_owner(_as_linear_description(evidence)) is None
+    assert "<!--" not in SOUND_TICKET.body
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python check of the
+# installed plan-store CLI's resolution of the tracked configuration, in the `reads_checkouts`
+# tier `tests/test_plan_source_roots.py`'s source checks use.
+@pytest.mark.reads_checkouts
+def test_each_statuss_linear_state_is_the_one_the_linear_source_writes_it_as() -> None:
+    """The vocabulary's Linear names are the tracked `hellopatient-followups` mapping's.
+
+    And none of the states a run never writes is one the mapping writes a status as.
+    """
+    settings = plan_store.configured_settings()
+    prefix = "sources.hellopatient-followups.config.status_mapping."
+    mapping = {
+        key.removeprefix(prefix): value for key, value in settings.items() if key.startswith(prefix)
+    }
+
+    assert {status.value: tickets.linear_state(status) for status in tickets.Status} == {
+        status.value: mapping[status.value] for status in tickets.Status
+    }
+    assert not set(tickets.PEOPLES_LINEAR_STATES) & set(mapping.values())
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

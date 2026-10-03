@@ -199,10 +199,18 @@ there gets this run's evidence rather than a second issue.
   `origin/<base>` with `git show origin/<base>:<path>` and
   `git grep <pattern> origin/<base>`. Never check out, commit to, or otherwise modify any
   checkout, and never clone. A repository with no registered checkout cannot be verified.
-- **The board.** `{{ board }}` is the plan source verified tickets are copied onto. It is
-  never listed whole: reading every item of it spends a share of GitHub's hourly allowance
-  that grows with the board, and every session on this host shares that allowance. Ask it one
-  narrowing question at a time with `{{ board_items }} --board {{ board }}`, naming at least one
+- **The board.** `{{ board }}` is the plan source verified tickets are copied onto, and the
+  root of the boards they are filed on: a ticket lands on the board its repository routes it
+  to, which `{{ plan_store }} sources route {{ board }} --repository <its repository> --json`
+  answers from configuration alone — `{{ board }}` itself, a GitHub Projects board whose
+  items are GitHub issues, or the source one of its routes names, such as Hello Patient's
+  Linear, whose Agent Follow-ups project holds a `github.com/petsinc/*` root cause's ticket as
+  a Linear issue. Every command below that takes `--board` takes `{{ board }}` and acts on each
+  ticket at its own board, and an item there is named `<its board>:<id>`. A board is never
+  listed whole: reading every item of one spends a share of its API's allowance — GitHub's
+  hourly one on `{{ board }}` — that grows with the board, and every session on this host
+  shares that allowance. Ask it one narrowing question at a time with
+  `{{ board_items }} --board {{ board }} --repository <the ticket's repository>`, naming at least one
   of `--metadata <KEY>[/<SEGMENT>…]=<VALUE>`, `--origin <qualified id>` and `--search <text>`;
   it refuses a query naming none, reads every page the store answers, and prints the result
   as one JSON document. `--status <word>`, repeated, keeps only the items at those statuses of
@@ -213,32 +221,38 @@ there gets this run's evidence rather than a second issue.
 
 ## What each board status means
 
-- **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
-  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by
-  an agent sent to pick up accepted tickets.
-- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an
-  item there: only a person, which is what accepting a ticket is. **Selected** by an agent
-  sent to pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, written `draft`: deferred for later by a person: not
-  accepted, picked up by no agent, and still taking new evidence. Who moves an item there:
-  only a person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `Queued`**, written `queued`: accepted, and claimed by a launched DAG
-  whose node has not started, so it returns to `Todo` if that work does not happen. Who
-  moves an item there: no person — a launched run's first projection, over the store's
-  `delivers` relation. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
-  an item there: a person, or a dispatch whose own task says to. Not selected by an agent
-  sent to pick up accepted tickets.
-- **Closed as completed at Status `Done`**, written `done`: accepted and finished. Who
-  moves an item there: a person, or a dispatch whose own task says to. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Closed as not planned at Status `Cancelled`**, written `cancelled`: withdrawn. Who
-  moves an item there: a follow-up run withdrawing its own ticket that nobody accepted or
-  deferred, or a person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Proposal`**, Linear state `Proposed`, written `backlog`: a proposal
+  awaiting the user's decision. Who moves an item there: a follow-up run's first copy of a
+  new ticket. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Todo`**, Linear state `Todo`, written `todo`: accepted, and not yet
+  taken up. Who moves an item there: only a person, which is what accepting a ticket is.
+  **Selected** by an agent sent to pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, Linear state `Backlog`, written `draft`: deferred for later
+  by a person: not accepted, picked up by no agent, and still taking new evidence. Who
+  moves an item there: only a person. Not selected by an agent sent to pick up accepted
+  tickets.
+- **Board status `Queued`**, Linear state `Queued`, written `queued`: accepted, and
+  claimed by a launched DAG whose node has not started, so it returns to `Todo` if that
+  work does not happen. Who moves an item there: no person — a launched run's first
+  projection, over the store's `delivers` relation. Not selected by an agent sent to pick
+  up accepted tickets.
+- **Board status `In Progress`**, Linear state `In Progress`, written `in-progress`:
+  accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
+  says to. Not selected by an agent sent to pick up accepted tickets.
+- **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
+  and finished. Who moves an item there: a person, or a dispatch whose own task says to.
+  Not selected by an agent sent to pick up accepted tickets.
+- **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
+  `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
+  ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to
+  pick up accepted tickets.
 
 A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
-else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
-closed one.
+else, on either destination: never an item at `Proposal`, `Deferred`, `Queued` or
+`In Progress` — on Linear `Proposed`, `Backlog`, `Queued` or `In Progress` — and never a
+closed one, which on Linear is one at `Done` or `Canceled`. No follow-up run writes
+Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Reviewed`,
+`Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people.
 
 ## What to do, in order
 
@@ -278,14 +292,17 @@ closed one.
    `{{ board_status }}` alone runs recovery discovery and applies the duplicate rule. Read its bound item through `{{ board_status }}` and copy onto that item.
    For an unbound ticket, ask each distinct question once, and never by origin: step 8's
    `{{ board_status }}` asks by origin, and nothing else does. Ask once by its root cause,
-   `{{ board_items }} --board {{ board }} --metadata {{ shape.record_key }}/root_cause=<root-cause>`,
-   then by text, `{{ board_items }} --board {{ board }} --search <text>`, once per distinct question about
+   `{{ board_items }} --board {{ board }} --repository <the ticket's repository> --metadata {{ shape.record_key }}/root_cause=<root-cause>`,
+   then by text, `{{ board_items }} --board {{ board }} --repository <the ticket's repository> --search <text>`, once per distinct question about
    its failing function, file, command or message. Reuse every answer tooling or an earlier
-   step already obtained in this dispatch; never repeat the same search. The
+   step already obtained in this dispatch; never repeat the same search. `--repository`
+   asks the board the ticket is filed on, and neither search is narrowed further: both answer
+   whichever repository on that board an item lives in. On a GitHub board the
    text search is GitHub's own search of the board's issues: it matches whole words before
    it confirms the text, so search for words an issue would carry rather than a fragment of
-   one, and it may not yet list an item another run wrote a few seconds ago. Neither is
-   narrowed to a repository: both answer whichever repository an item's issue lives in.
+   one, and it may not yet list an item another run wrote a few seconds ago. On Linear it is
+   Linear's own search of the project's issue titles and descriptions, matched regardless of
+   case.
    Only an unbound ticket needs these duplicate searches; nothing in this task lists the board.
    - **The same root cause.** An open item carrying this ticket's root cause is where this
      run's evidence goes, at step 9. An item at `Deferred` is open: no agent picks it up to
@@ -411,16 +428,19 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
 
 - It carries **no `project`**, so it lands on the board as a standalone item.
 - **Its `repositories` names exactly one normalized origin, its record's `repository`**:
-  the repository the root cause lives in. Its issue is created in that one repository and
-  added to the board as an item, and that repository must belong to the board's owner, as
-  `github.com/<owner>/<name>`.
+  the repository the root cause lives in, which decides the board it is filed on. On a GitHub
+  board its issue is created in that one repository and added to the board as an item, and
+  that repository must belong to the board's owner, as `github.com/<owner>/<name>`. A
+  repository one of the board's routes names — `github.com/petsinc/*`, which goes to Hello
+  Patient's Linear — is filed as an issue of the source that route names instead, whatever its
+  owner.
 - Its title is `<repository name>: <the root cause in one line>`, at most
   {{ shape.title_limit }} characters, where the repository name is the last segment of `repository`.
 - **Its status is the board's to decide.** A new ticket is `{{ shape.proposed }}`, a proposal
-  awaiting the user's decision, which the board shows as `Proposal`; a person moving it to
-  `Todo` is what accepts it. A ticket the board already holds carries the status the board
-  holds it at, so a copy never undoes that decision: a ticket the board holds at
-  `Deferred` is copied carrying `{{ shape.deferred }}`. A ticket this run withdraws is
+  awaiting the user's decision, which the board shows as `Proposal` and Linear as `Proposed`; a
+  person moving it to `Todo` is what accepts it. A ticket the board already holds carries the
+  status the board holds it at, so a copy never undoes that decision: a ticket the board
+  holds at `Deferred` (Linear's `Backlog`) is copied carrying `{{ shape.deferred }}`. A ticket this run withdraws is
   `{{ shape.withdrawn }}`, which the board holds as closed as not planned, unless the board shows it
   as accepted or deferred: this run never withdraws a deferred item or an accepted one, so
   copy nothing, leave the local ticket as it is, and report that you would have withdrawn
@@ -433,14 +453,14 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   `{{ shape.priority_field }}` as the rule above decides, which the copy carries onto the board. It exits
   {{ shape.exits.sound }} with that word; {{ shape.exits.unplaced }} when the board holds the item at a status no ticket carries;
   {{ shape.exits.protected }} for a withdrawal of an item the board shows as accepted or deferred; {{ shape.exits.outside_owner }} when
-  the ticket's repository is not one of the board's owner, before anything is asked of the
-  board; {{ shape.exits.not_accepted }} when a `{{ shape.dependency_field }}` entry does not resolve on the board as the
+  the ticket's repository is not one of the board's owner and no route of the board sends it
+  elsewhere, before anything is asked of the board; {{ shape.exits.not_accepted }} when a `{{ shape.dependency_field }}` entry does not resolve on the board as the
   dependency rule below states, naming every such entry and what the board holds; and
   {{ shape.exits.misbound }} when the ticket's board item cannot be established as its binding, as the binding
   rule below states. On any of these refusals, copy nothing and report what it printed.
 - **A refusal is reported, never worked around.** When `board-status` exits {{ shape.exits.outside_owner }}, or
-  `{{ copy }}` refuses the ticket — for a repository the token cannot see, or one GitHub will
-  not create an issue in — copy nothing for that ticket, never retry it with
+  `{{ copy }}` refuses the ticket — for a repository the token cannot see, or one the board
+  will not create an issue in — copy nothing for that ticket, never retry it with
   `repositories` removed or changed to get it filed, and report what was printed.
 - Its front matter carries the `{{ shape.record_key }}` record with every key present, and its body
   the headings {{ shape.headings }}, in that order, each with content. `created_by_run` is this
@@ -587,7 +607,9 @@ two tickets' reading rather than a re-verification of the run.
   name is answered by whatever your search path offers first, which on two real runs was
   another release — one filed its tickets as issues of the wrong repository, and one had
   every sound ticket refused by a validator reading an older record schema.
-- **The board.** Read the issue one comment sits on with
+- **The board.** Each comment below names the issue it sits on as `<its board>:<id>`: an
+  issue of the `{{ board }}` board, or of the Linear source one of its routes names. Read the
+  issue one comment sits on with
   `{{ plan_store }} task show <id> --json`, read its comments with
   `{{ plan_store }} task comment list <id>`, and add, edit or delete a comment with
   `{{ plan_store }} task comment add|edit|delete`. Read only the issues the comments below

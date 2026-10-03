@@ -2726,8 +2726,19 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         assert commented.returncode == 0, commented.stdout + commented.stderr
         (person,) = item.comments
         _GitHubFixture.requests.clear()
+        # The gathering reads every board of the family `followups` roots, and its route names
+        # Hello Patient's Linear, which no journey reaches: that route is pointed at an empty
+        # local folder, so the one board this measures is the one GitHub serves.
+        routed_root = tmp_path / "routed-followups"
+        routed_root.mkdir()
         gathering = _followups_command(
-            environment,
+            environment
+            | {
+                "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
+                "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
+                "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+                "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
+            },
             [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_comments"]
             + ["gather", "--root", str(drafts_root), "--plan", str(tmp_path / "plan.json")]
             + ["--to", follow_up_tickets.BOARD, "--since", str(person["createdAt"]), "--dry-run"],

@@ -148,6 +148,8 @@ RECIPE_PYTHON = str(REPO_ROOT / "scripts" / ".." / ".venv" / "bin" / "python3")
 #: The local store standing in for the board, spelled lowercase because it is spelled into
 #: the store's environment layer as well as onto `--to`.
 BOARD = "standin"
+#: What every search the task spells names, so it asks the board the ticket is filed on.
+ON_ITS_BOARD = "--repository <the ticket's repository>"
 #: How many items one page of the stand-in holds, set through the store's own environment
 #: layer for the setting: small enough that the board spans pages before the first pass
 #: runs, so a listing that read one page would read it as smaller than it is — the shape
@@ -1348,6 +1350,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     BOARD,
                     "--root-cause",
                     SHARED_CAUSE,
+                    "--repository",
+                    REPOSITORY,
                     "--checkout",
                     str(REPO_ROOT),
                     "--witness",
@@ -1363,6 +1367,8 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     BOARD,
                     "--search",
                     SEARCHED_TEXT,
+                    "--repository",
+                    REPOSITORY,
                     "--checkout",
                     str(REPO_ROOT),
                     "--witness",
@@ -2737,9 +2743,10 @@ def test_the_task_carries_every_instruction_and_both_contracts(
         "**Group what stands by root cause**",
         "-m orchestrator.follow_up_tickets validate <path of the ticket>",
         "Then delete the draft files that ticket consumed",
-        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} --metadata "
-        "orchestrator.follow-up/root_cause=<root-cause>`, then by text",
-        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} --search <text>`",
+        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} {ON_ITS_BOARD} "
+        "--metadata orchestrator.follow-up/root_cause=<root-cause>`, then by text",
+        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} {ON_ITS_BOARD} "
+        "--search <text>`",
         "every issue you created or updated with its URL",
         "every dropped draft with its reason",
         "every finding that should have been surfaced live",
@@ -3108,8 +3115,8 @@ def test_the_task_searches_the_board_by_root_cause_and_that_query_selects_exactl
     flat = " ".join(task.split())
     python = RECIPE_PYTHON
     assert (
-        f'`"{python}" -m orchestrator.follow_up_tickets board-items --board {BOARD} --metadata '
-        "orchestrator.follow-up/root_cause=<root-cause>`"
+        f'`"{python}" -m orchestrator.follow_up_tickets board-items --board {BOARD} '
+        f"{ON_ITS_BOARD} --metadata orchestrator.follow-up/root_cause=<root-cause>`"
     ) in flat
     spelled = re.findall(r"board-items --board [^`\s]+([^`]*)`(.{0,32})", flat)
     assert spelled, flat
@@ -3132,6 +3139,8 @@ def test_the_task_searches_the_board_by_root_cause_and_that_query_selects_exactl
         "board-items",
         "--board",
         BOARD,
+        "--repository",
+        REPOSITORY,
         "--metadata",
         tickets.root_cause_query(SHARED_CAUSE),
     ], probe["command"]
@@ -3181,6 +3190,8 @@ def test_the_duplicate_search_finds_the_open_item_past_the_stores_first_page(
         "board-items",
         "--board",
         BOARD,
+        "--repository",
+        REPOSITORY,
         "--search",
         SEARCHED_TEXT,
     ], probe["command"]

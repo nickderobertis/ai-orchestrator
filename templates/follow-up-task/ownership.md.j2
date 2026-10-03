@@ -1,8 +1,8 @@
 {#- Who owns what on the board, which both modes of `follow-up-task.md.j2` carry whole. -#}
-{% set re_estimate_command = "`" ~ re_estimate ~ " --board " ~ board ~ " <the issue's id, as `" ~ board ~ ":<id>`>`" %}
+{% set re_estimate_command = "`" ~ re_estimate ~ " --board " ~ board ~ " <the issue's id, as `<its board>:<id>`>`" %}
 ## Ownership on the board
 
-- **Ownership is by run.** An issue on `{{ board }}` belongs to the run its `{{ shape.record_key }}`
+- **Ownership is by run.** An issue on `{{ board }}`, or on a board it routes to, belongs to the run its `{{ shape.record_key }}`
   record's `created_by_run` names. A comment belongs to the run named in its **last line**,
   whichever of the two kinds below it is. This run, `{{ run }}`, may create, edit (by copying
   its ticket again) or close as not planned only issues whose `created_by_run` is `{{ run }}`,

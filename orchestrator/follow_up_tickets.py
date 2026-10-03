@@ -28,6 +28,14 @@ agent validates each ticket it writes through this module's `validate` command, 
 the status it carries through its `board-status` command, before copying it. And the
 journeys read the board back through :func:`from_store_item` and :func:`comment_owner`.
 
+**A ticket is filed on the board its repository routes it to.** `followups` is the root of a
+run's **destination family**: it and every source its `routes` send a ticket to
+(`onetaskgraph.yaml` sends a `github.com/petsinc/*` root cause to Hello Patient's Linear,
+`hellopatient-followups`). Every command taking `--board` takes that root and acts on each
+ticket at **its board** — :func:`ticket_board`, the store's own `sources route` for the
+ticket's repository — so a ticket's binding, origin search, survivor, estimate and copy all
+live where its item does, and nothing here names the routed source.
+
 **The board is the record of the user's decision, and a ticket names its machine.** A ticket
 reaches the board as a proposal and a person accepts it there, so the status a copy writes
 is read off the board item first (:func:`status_before_copy`) rather than carried over from
@@ -204,43 +212,67 @@ _MEANINGS = {
 
 
 class _Place(NamedTuple):
-    """Where the board shows a status, and who moves an item there."""
+    """Where the GitHub board shows a status, Linear's state for it, and who moves an item there."""
 
     shown: str
+    linear: str
     mover: str
 
 
+#: Each status's place on both destinations: the `followups` board's option, and the workflow
+#: state of Hello Patient's Linear the `hellopatient-followups` source writes it as.
+#: `tests/test_follow_up_tickets.py` holds the Linear names to that source's `status_mapping`.
 _PLACES = {
     Status.PROPOSED: _Place(
-        "Board status `Proposal`", "a follow-up run's first copy of a new ticket"
+        "Board status `Proposal`", "Proposed", "a follow-up run's first copy of a new ticket"
     ),
     Status.ACCEPTED: _Place(
-        "Board status `Todo`", "only a person, which is what accepting a ticket is"
+        "Board status `Todo`", "Todo", "only a person, which is what accepting a ticket is"
     ),
-    Status.DEFERRED: _Place("Board status `Deferred`", "only a person"),
+    Status.DEFERRED: _Place("Board status `Deferred`", "Backlog", "only a person"),
     Status.QUEUED: _Place(
         "Board status `Queued`",
+        "Queued",
         "no person — a launched run's first projection, over the store's `delivers` relation",
     ),
     Status.UNDER_WAY: _Place(
-        "Board status `In Progress`", "a person, or a dispatch whose own task says to"
+        "Board status `In Progress`",
+        "In Progress",
+        "a person, or a dispatch whose own task says to",
     ),
     Status.FINISHED: _Place(
-        "Closed as completed at Status `Done`", "a person, or a dispatch whose own task says to"
+        "Closed as completed at Status `Done`",
+        "Done",
+        "a person, or a dispatch whose own task says to",
     ),
     Status.WITHDRAWN: _Place(
         "Closed as not planned at Status `Cancelled`",
+        "Canceled",
         "a follow-up run withdrawing its own ticket that nobody accepted or deferred, or a person",
     ),
 }
+
+#: Linear's states no follow-up run writes: `Triage`, which has its own meaning there, and the
+#: review states, which belong to people.
+PEOPLES_LINEAR_STATES = (
+    "Triage",
+    "Ready for Review",
+    "In Review",
+    "Reviewed",
+    "Ready To Merge",
+    "Blocked",
+    "Duplicate",
+    "Cannot Reproduce",
+)
 
 
 def status_vocabulary() -> str:
     """What each board status means, as every agent and document that describes it reads it.
 
-    One bullet per :class:`Status`: where the board shows it, the store word a ticket is
-    written with, what it means, who moves an item there, and whether an agent sent to pick
-    up accepted tickets selects it — closing on what such a brief means.
+    One bullet per :class:`Status`: where the GitHub board shows it, the Linear state it is
+    there, the store word a ticket is written with, what it means, who moves an item there,
+    and whether an agent sent to pick up accepted tickets selects it — closing on what such a
+    brief means, and on the Linear states no run writes.
     """
     bullets = []
     for status in Status:
@@ -251,15 +283,29 @@ def status_vocabulary() -> str:
             else "Not selected by an agent sent to pick up accepted tickets"
         )
         bullets.append(
-            f"- **{place.shown}**, written `{status.value}`: {status.meaning}. Who moves an "
-            f"item there: {place.mover}. {selection}.\n"
+            f"- **{place.shown}**, Linear state `{place.linear}`, written `{status.value}`: "
+            f"{status.meaning}. Who moves an item there: {place.mover}. {selection}.\n"
         )
+    closed = (Status.FINISHED, Status.WITHDRAWN)
+    waiting = [one for one in Status if not one.selected and one not in closed]
+    named = [f"`{board_option(one)}`" for one in waiting]
+    linear = [f"`{linear_state(one)}`" for one in waiting]
+    peoples = [f"`{state}`" for state in PEOPLES_LINEAR_STATES]
     return (
         "".join(bullets)
         + '\nA brief to pick up "accepted" follow-up tickets means the items at `Todo` and '
-        "nothing else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, "
-        "and never a closed one.\n"
+        f"nothing else, on either destination: never an item at {', '.join(named[:-1])} or "
+        f"{named[-1]} — on Linear {', '.join(linear[:-1])} or {linear[-1]} — and never a "
+        f"closed one, which on Linear is one at `{linear_state(closed[0])}` or "
+        f"`{linear_state(closed[1])}`. No follow-up run writes Linear's {peoples[0]} or a "
+        f"review state — {', '.join(peoples[1:-1])} or {peoples[-1]}: those belong to "
+        "people.\n"
     )
+
+
+def linear_state(status: Status) -> str:
+    """The Linear workflow state ``status`` is written as, as the vocabulary shows it."""
+    return _PLACES[status].linear
 
 
 def board_option(status: Status) -> str:
@@ -293,7 +339,8 @@ WITHDRAWAL_EXCEPTION = (
     "**Never change a board item's status except by one withdrawal.** Where a quoted comment "
     "clearly says the ticket of the issue it sits on is not needed — that it is handled "
     "elsewhere, say, or will not be needed — and that issue is this run's own item at "
-    f"`{board_option(Status.PROPOSED)}`, withdraw it: run `board-status` with `--withdraw` on "
+    f"`{board_option(Status.PROPOSED)}` (`{linear_state(Status.PROPOSED)}` on Linear), withdraw "
+    "it: run `board-status` with `--withdraw` on "
     "its ticket, write the word it prints as the ticket's `status`, validate the ticket and "
     "copy it, and say in that comment's account entry that the item was withdrawn. A comment "
     "that does not clearly say so is replied to and changes nothing. No item at "
@@ -847,6 +894,13 @@ DRAFT_ID = re.compile(rf"{re.escape(SOURCE)}:(?P<run>[^/\s]+)/{re.escape(drafts.
 
 #: The last line of an evidence comment a follow-up run owns, and the visible line it opens
 #: with — byte for byte what every comment already on the board carries.
+#:
+#: **Every marker is written into a comment and read back from one, on both destinations.**
+#: Linear keeps an HTML comment in a comment's body byte for byte, and normalizes one in an
+#: issue's description as Markdown — a run id's `_x_` comes back `*x*`, a domain-like token
+#: is autolinked (onetaskgraph-linear's ruling on what Linear does to an HTML comment). So
+#: the form GitHub carries is the form Linear carries, unchanged, and no marker is ever
+#: written into a ticket's body, which becomes an issue's description.
 COMMENT_MARKER = '<!-- orchestrator:follow-up-comment run="{run}" root_cause="{root_cause}" -->'
 COMMENT_OPENING = "Additional evidence from follow-up run `{run}`."
 
@@ -1994,7 +2048,10 @@ class ProtectedFromWithdrawal(ValueError):
 
 
 class OutsideOwner(ValueError):
-    """A ticket whose repository is not one of the board's owner, so its issue is filed nowhere.
+    """A ticket whose repository no board of the family files, so its issue is filed nowhere.
+
+    A repository is filed when it is one of the root board's owner, or when one of that
+    board's `routes` sends it to another source, whose own configuration then decides it.
 
     Filing an issue in a third party's public repository is an outward action nobody asked
     for, and the store compares no owner for an item with no parent, which a ticket is.
@@ -2003,8 +2060,9 @@ class OutsideOwner(ValueError):
     def __init__(self, repository: str, owner: str) -> None:
         super().__init__(
             f"the ticket's repository {repository!r} is not a repository of the board's owner "
-            f"{owner!r} ({GITHUB}/{owner}/<name>), so its issue is filed nowhere: copy "
-            "nothing, never change `repositories` to get it filed, and report it"
+            f"{owner!r} ({GITHUB}/{owner}/<name>) and no route of the board sends it elsewhere, "
+            "so its issue is filed nowhere: copy nothing, never change `repositories` to get it "
+            "filed, and report it"
         )
 
 
@@ -2038,6 +2096,41 @@ def board_owner(board: str) -> str | None:
     return owner
 
 
+def boards(board: str) -> tuple[str, ...]:
+    """``board`` and every source its `routes` send a ticket to: a run's destination family.
+
+    Read off the store's own resolution, as :func:`plan_store.routed_sources` reads it, so a
+    route this file or an environment layer adds is a board of the family with no change here.
+    """
+    return (board, *(to for to in plan_store.routed_sources(board) if to != board))
+
+
+def ticket_board(board: str, repository: str) -> str:
+    """The board of ``board``'s family a ticket of ``repository`` is filed on.
+
+    The store's own `sources route`, which reads configuration alone: the source a route of
+    ``board`` sends the repository to, or ``board`` itself when none matches. It is where the
+    store's `task copy --to <board>` lands that ticket, so every read of its item asks there.
+    """
+    routed = plan_store.sdk(plan_store.client().sources_route(board, repository=[repository]))
+    return routed.destination.root
+
+
+def owner_refusal(
+    board: str, owner: str | None, repository: str, routed: str
+) -> OutsideOwner | None:
+    """The refusal for a ticket of ``repository`` no board of ``board``'s family files, or `None`.
+
+    ``owner`` is :func:`board_owner`'s answer for ``board`` and ``routed`` is
+    :func:`ticket_board`'s. A ticket a route sends to another source is filed there, whatever
+    its owner; one staying on ``board`` must be a repository of the owner ``board`` configures,
+    and a board configuring none bounds nothing.
+    """
+    if routed != board or owner is None or under_owner(repository, owner):
+        return None
+    return OutsideOwner(repository, owner)
+
+
 def _held_record(item: Mapping[str, object]) -> Mapping[str, object]:
     """The `orchestrator.follow-up` record a store item carries, or an empty one."""
     metadata = item.get("metadata")
@@ -2063,8 +2156,10 @@ def dependency_problems(
 ) -> list[str]:
     """Every dependency of ``ticket`` the board does not hold as the contract says.
 
-    Each edge the store reports for the ticket is resolved against ``board``: it is refused
-    when its far end names another source; when the board holds the item at a category
+    Each edge the store reports for the ticket is resolved against ``board``'s family
+    (:func:`boards`): it is refused when its far end names a source outside it, since an
+    accepted fix a ticket is written against may be filed on any board a run files on; when
+    the board holds the item at a category
     outside the accepted ones; when the item carries no `orchestrator.follow-up` record
     naming a `root_cause` slug, which is what makes a board item a follow-up ticket at
     all; when that `root_cause` is the ticket's own — an accepted item for the same root
@@ -2087,11 +2182,17 @@ def dependency_problems(
     if shaped:
         raise Refused([*shaped, "validate the ticket before asking the board about it"])
     found = []
+    family = boards(board) if edges else (board,)
     for edge in edges:
         entry = f"the `{DEPENDENCY_FIELD}` entry {edge.to!r}"
         matched = QUALIFIED_ID.fullmatch(edge.to)
-        if matched is None or matched["source"] != board:
-            found.append(f"{entry} names a source other than the board `{board}`")
+        if matched is None or matched["source"] not in family:
+            named = (
+                f"the board `{board}`"
+                if len(family) == 1
+                else "the boards " + ", ".join(f"`{one}`" for one in family)
+            )
+            found.append(f"{entry} names a source other than {named}")
             continue
         try:
             far = plan_store.task_record(edge.to)
@@ -2134,15 +2235,20 @@ def dependency_problems(
 NARROWING = ("--search", "--metadata", "--origin")
 
 
-def board_items(
+def board_items(  # noqa: PLR0913 - each narrowing is its own keyword
     board: str,
     *,
     search: str | None = None,
     metadata: Sequence[str] = (),
     origin: str | None = None,
     statuses: Sequence[str] = (),
+    repository: str | None = None,
 ) -> list[QualifiedTask]:
     """Every item of ``board`` one narrowing query selects, every page, in listing order.
+
+    ``repository`` asks the board a ticket of that repository is filed on instead —
+    :func:`ticket_board`, the root's route for it — which is where its duplicate and the
+    accepted fixes on its board are; the query is otherwise sent as it would be to ``board``.
 
     The one board query the follow-up agent is given, and never a listing of the whole board:
     reading every item of a `github-projects` board spends a share of GitHub's hourly allowance
@@ -2183,6 +2289,15 @@ def board_items(
                 "the whole board; name the text, the metadata value or the origin it looks for"
             ]
         )
+    if repository is not None:
+        if not _is_origin(repository):
+            raise Refused(
+                [
+                    f"--repository {repository!r} is not a normalized origin like "
+                    "github.com/owner/name, so it names no board to ask"
+                ]
+            )
+        board = ticket_board(board, repository)
     query: dict[str, object] = {"source": [board]}
     if search is not None:
         query["search"] = search
@@ -2239,10 +2354,11 @@ FOLLOWED = ("link", "origin")
 
 
 class Copied(NamedTuple):
-    """What one ticket's copy did, and to which item."""
+    """What one ticket's copy did, and to which item of which board."""
 
     action: CopyAction
     item: BoardItemId
+    board: str
 
 
 def _carriers(ticket: str, board: str) -> list[QualifiedTask]:
@@ -2413,7 +2529,10 @@ def correspond(
 
 
 def copy_ticket(path: Path, board: str) -> Copied:
-    """Copy the ticket at ``path`` onto ``board``, onto its bound item alone.
+    """Copy the ticket at ``path`` onto its board of ``board``'s family, onto its bound item alone.
+
+    The copy names ``board``, the family's root, and the store's route lands it on the
+    ticket's board (:func:`ticket_board`), where its binding and its link are held.
 
     Nothing is read from the board first: the store follows the ticket's own link, or the
     origin a ticket written before the store kept a link carries, with one read by id, and
@@ -2424,25 +2543,26 @@ def copy_ticket(path: Path, board: str) -> Copied:
     recorded to it.
     """
     ticket = read_ticket(path, for_copy=True)
-    bound = _followed(ticket, board)
+    routed = ticket_board(board, ticket.repository)
+    bound = _followed(ticket, routed)
     if ticket.board_item is None and bound is not None:
         raise Misbound(
-            f"the store's `{COPIES_KEY}` link names {board}:{bound} for a ticket with no "
+            f"the store's `{COPIES_KEY}` link names {routed}:{bound} for a ticket with no "
             f"`{BINDING_FIELD}` binding: run `board-status` on it, then copy it"
         )
-    if bound is not None and ticket.link(board) is None and ticket.origin != f"{board}:{bound}":
+    if bound is not None and ticket.link(routed) is None and ticket.origin != f"{routed}:{bound}":
         raise Misbound(
             f"neither the store's `{COPIES_KEY}` link nor the ticket's `{ORIGIN_KEY}` names its "
-            f"`{BINDING_FIELD}` binding {board}:{bound}, so the store's copy would go wherever "
+            f"`{BINDING_FIELD}` binding {routed}:{bound}, so the store's copy would go wherever "
             "its search finds this ticket's origin: run `board-status` on it, then copy it"
         )
     run, root_cause = located_path(path.absolute())
     report = plan_store.sdk(
         plan_store.client().task_copy([qualified_id(run, root_cause)], to=board)
     )
-    copied = copied_to(report, board, bound)
+    copied = copied_to(report, routed, bound)
     if ticket.board_item is None:
-        bind(path, board, copied.item)
+        bind(path, routed, copied.item)
     return copied
 
 
@@ -2460,7 +2580,7 @@ def copied_to(report: CopyReport, board: str, bound: BoardItemId | None) -> Copi
         raise OSError(f"the copy onto {board} answered {entries!r}, naming no item")
     match str(outcome.action):
         case "created" | "updated" | "unchanged" as action:
-            copied = Copied(action, _native(outcome.destination.root, board))
+            copied = Copied(action, _native(outcome.destination.root, board), board)
         case action:
             raise OSError(
                 f"the copy onto {board} answered {action!r} for this ticket, which is no copy of it"
@@ -2590,6 +2710,9 @@ class ReEstimated(NamedTuple):
 def re_estimate(board: str, issue: str) -> ReEstimated:
     """Recompute one board item's estimate, and persist it and the lockstep rule's decision.
 
+    ``issue`` is an item of ``board`` or of a board it routes to (:func:`boards`), qualified by
+    the board it is on, which is the one every read and write below asks.
+
     The narrow write a run makes on an item another run owns, after it comments there: the
     item is read as the board holds it, its occurrences recounted off its comments, and the
     estimate recomputed from its body's severity with the workaround and its record's
@@ -2603,8 +2726,13 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     follow-up ticket this reads.
     """
     matched = QUALIFIED_ID.fullmatch(issue)
-    if matched is None or matched["source"] != board:
-        raise Refused([f"{issue!r} is not an item of the board {board!r}, as `<board>:<id>`"])
+    if matched is None or (matched["source"] != board and matched["source"] not in boards(board)):
+        raise Refused(
+            [
+                f"{issue!r} is not an item of the board {board!r} or a board it routes to, as "
+                "`<board>:<id>`"
+            ]
+        )
     reads = BoardReads()
     item = reads.item(issue)
     held = _held_record(item)
@@ -3241,7 +3369,7 @@ def gathering_on_board(
 
 
 def gathering_problems(gathering: Gathering, feedback: Path, board: str, run: str) -> list[str]:
-    """Every way a file's own text is not a gathering of ``board``'s comments.
+    """Every way a file's own text is not a gathering of the comments of ``board``'s family.
 
     What it says about itself, read without the board; :func:`gathering_on_board` is what
     asks whether the comments it names are there.
@@ -3300,11 +3428,13 @@ def gathering_problems(gathering: Gathering, feedback: Path, board: str, run: st
         for one in dict.fromkeys(gathering.quoted)
         if gathering.quoted.count(one) > 1
     )
+    elsewhere = [one for one in gathering.quoted if not one.issue.startswith(f"{board}:")]
+    family = boards(board) if elsewhere else (board,)
     found.extend(
         f"it quotes comment {one.comment} on {one.issue}, which is not an item of the "
-        f"{board!r} board this is reading"
-        for one in gathering.quoted
-        if not one.issue.startswith(f"{board}:")
+        f"{board!r} board this is reading or of a board it routes to"
+        for one in elsewhere
+        if not any(one.issue.startswith(f"{named}:") for named in family)
     )
     return [f"{feedback.name} is not a gathering: {problem}" for problem in found]
 
@@ -3382,7 +3512,9 @@ def filed_board_problems(
 ) -> list[str]:
     """Filed causes whose bound item or evidence comment did not reach the board soundly.
 
-    Local tickets, board records and comments are shared within this check. A copied item's
+    ``board`` is the family's root, and each cause is read on its ticket's own board
+    (:func:`ticket_board`). Local tickets, board records and comments are shared within this
+    check. A copied item's
     priority still agrees with its local ticket and every carrier's estimate is recounted.
     """
     found = []
@@ -3392,21 +3524,23 @@ def filed_board_problems(
         if ticket is None:
             # The local shape was refused, so no board evidence can make this ticket sound.
             raise Refused([f"the filed root cause {cause} has no readable local ticket"])
-        carrier = _own_carrier(ticket, qualified_id(run, cause), board, reads)
+        routed = ticket_board(board, ticket.repository)
+        carrier = _own_carrier(ticket, qualified_id(run, cause), routed, reads)
         copied = carrier is not None
         if carrier is None:
             named = tuple(
                 dict.fromkeys(
                     match[0].rstrip(".,;)")
                     for detail in (details or {}).get(cause, ())
-                    for match in re.finditer(rf"(?<![\w:]){re.escape(board)}:[^\s`<>\"]+", detail)
+                    for match in re.finditer(rf"(?<![\w:-]){re.escape(routed)}:[^\s`<>\"]+", detail)
                 )
             )
-            carrier = _evidence_carrier(run, cause, board, reads, named)
+            carrier = _evidence_carrier(run, cause, routed, reads, named)
         if carrier is None:
             found.append(
                 f"the filed root cause {cause} has a local ticket but no bound item or "
-                f"evidence comment of run {run} on {board}, so its evidence did not reach the board"
+                f"evidence comment of run {run} on {routed}, so its evidence did not reach the "
+                "board"
             )
             continue
         found.extend(board_estimate_problems(carrier, reads))
@@ -4579,6 +4713,14 @@ def _parser() -> _Parser:
     )
     listing.add_argument("--board", required=True, metavar="SOURCE")
     listing.add_argument(
+        "--repository",
+        metavar="ORIGIN",
+        help=(
+            "ask the board a ticket of this repository is filed on — the root board, or the "
+            "source one of its routes sends the repository to — rather than the root board"
+        ),
+    )
+    listing.add_argument(
         "--search",
         metavar="TEXT",
         help=(
@@ -4892,6 +5034,7 @@ def _listed(arguments: argparse.Namespace) -> int:
             metadata=arguments.metadata,
             origin=arguments.origin,
             statuses=arguments.status,
+            repository=arguments.repository,
         )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
@@ -4906,20 +5049,20 @@ def _placed(arguments: argparse.Namespace) -> int:
     try:
         run, root_cause = located_path(arguments.path.absolute())
         ticket = qualified_id(run, root_cause)
-        owner = board_owner(arguments.board)
         stored = stored_ticket(arguments.path)
         item = stored.item
-        if owner is not None and not under_owner(
-            repository := ticket_repository(ticket, item), owner
-        ):
-            raise OutsideOwner(repository, owner)
+        # The owner is read before the ticket's repository is, so a board configuring an
+        # unreadable one is refused before the ticket's record is held to anything.
+        owner = board_owner(arguments.board)
+        repository = ticket_repository(ticket, item)
+        routed = ticket_board(arguments.board, repository)
+        if refusal := owner_refusal(arguments.board, owner, repository, routed):
+            raise refusal
         if unheld := dependency_problems(ticket, item, arguments.board, stored.edges):
             raise NotAccepted(unheld)
         local = ticket_from(arguments.path, stored, pending=True)
         reads = BoardReads()
-        placement = correspond(
-            arguments.path, arguments.board, pending=True, ticket=local, reads=reads
-        )
+        placement = correspond(arguments.path, routed, pending=True, ticket=local, reads=reads)
         status = status_before_copy(placement.category, withdraw=arguments.withdraw)
         if placement.item is not None:
             local = dataclasses.replace(
@@ -4927,11 +5070,11 @@ def _placed(arguments: argparse.Namespace) -> int:
                 board_item=placement.item,
                 origin=(
                     local.origin
-                    if local.link(arguments.board) == placement.item
-                    else plan_store.QualifiedTaskId(f"{arguments.board}:{placement.item}")
+                    if local.link(routed) == placement.item
+                    else plan_store.QualifiedTaskId(f"{routed}:{placement.item}")
                 ),
             )
-        estimate_before_copy(arguments.path, arguments.board, placement, local, reads)
+        estimate_before_copy(arguments.path, routed, placement, local, reads)
     except OutsideOwner as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return OUTSIDE_OWNER
@@ -4987,7 +5130,7 @@ def _copied(arguments: argparse.Namespace) -> int:
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
-    destination = f"{arguments.board}:{copied.item}"
+    destination = f"{copied.board}:{copied.item}"
     json.dump({"action": copied.action, "destination": destination}, sys.stdout)
     sys.stdout.write("\n")
     return SOUND

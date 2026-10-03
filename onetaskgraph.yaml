@@ -99,6 +99,13 @@ sources:
         high: High
         medium: Medium
         low: Low
+    # A follow-up ticket whose root cause lives in a Hello Patient (`petsinc`) repository is
+    # filed in that team's Linear, in its Agent Follow-ups project, where the team triages it;
+    # every other ticket stays on this board. Beside `plugin` and `config` for the reason the
+    # `plans` route gives, repointing none of the five values above.
+    routes:
+      - repositories: ["github.com/petsinc/*"]
+        to: hellopatient-followups
   # Hello Patient's Linear team, which a plan task of a `petsinc` repository is routed to by
   # the `plans` route above. Below `plans` and `followups` because readers here take the
   # first `owner:`, `repository:` and `project_number:` lines as `plans`'.
@@ -129,6 +136,44 @@ sources:
         # A node failed, parked or was skipped, and a person has to look.
         unknown: Needs Attention
         # Finished: the node settled done.
+        done: Done
+        # Withdrawn.
+        cancelled: Canceled
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+  # Hello Patient's Linear Agent Follow-ups project, which the `followups` route above files a
+  # `petsinc` root cause's ticket in. Not a default source, for the reason `followups` is not:
+  # a verified follow-up ticket is not a plan. Last, below the GitHub sources, for the reason
+  # `hellopatient` is below them. Linear's priority is the issue's own, so this source needs
+  # no `priority_mapping`.
+  hellopatient-followups:
+    plugin: linear
+    config:
+      # The production key, named for the reason `hellopatient` names it.
+      api_key_env: HELLOPATIENT_LINEAR_API_KEY
+      team: ENG
+      # The Agent Follow-ups project: every read and create of this source is scoped to it.
+      project: 986a467e-775a-4f8f-80dd-aca405063cf4
+      status_mapping:
+        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The same eight
+        # states as `hellopatient`, because both write the ENG team's one workflow;
+        # `tests/test_plan_source_roots.py` holds the two mappings equal. Its other party is
+        # that live workflow, which no check here may read, since that needs the production
+        # key. `Triage` and the review states — `Ready for Review`, `In Review`, `Reviewed`,
+        # `Ready To Merge`, `Blocked`, `Duplicate` and `Cannot Reproduce` — are people's, and
+        # no follow-up run writes them.
+        # A ticket a follow-up run filed, awaiting a person's decision: `Proposal` on the board.
+        backlog: Proposed
+        # Deferred by a person, picked up by no agent: `Deferred` on the board.
+        draft: Backlog
+        # Accepted by a person, and nothing has claimed it.
+        todo: Todo
+        # Claimed by a launched run through a node's `delivers`.
+        queued: Queued
+        # Taken up.
+        in-progress: In Progress
+        # A node delivering it failed, parked or was skipped.
+        unknown: Needs Attention
+        # Finished.
         done: Done
         # Withdrawn.
         cancelled: Canceled

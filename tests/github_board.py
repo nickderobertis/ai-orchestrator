@@ -46,6 +46,9 @@ LINEAR_KEY_ENV = "HELLOPATIENT_LINEAR_API_KEY"
 #: Where every board journey points that source: a loopback port nothing listens on, so a
 #: request to it is refused on this machine and never reaches the production workspace.
 UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
+#: Where the `hellopatient-followups` source's endpoint is named, which the store spells with
+#: the source name's hyphen as an underscore.
+LINEAR_FOLLOWUPS_ENDPOINT_ENV = "ONETASKGRAPH_SOURCES__HELLOPATIENT_FOLLOWUPS__CONFIG__ENDPOINT"
 
 
 @dataclass(frozen=True)
@@ -1458,6 +1461,8 @@ def _serving_board(
                 # fails on the refused connection instead of reaching the production workspace.
                 LINEAR_KEY_ENV: "fixture-linear-key",
                 "ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__ENDPOINT": UNSERVED_LINEAR,
+                # The same for the source the `followups` route names, `hellopatient-followups`.
+                LINEAR_FOLLOWUPS_ENDPOINT_ENV: UNSERVED_LINEAR,
             }
     finally:
         _GitHubFixture.refusal = None

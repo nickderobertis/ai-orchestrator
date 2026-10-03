@@ -42,6 +42,13 @@ CAUSE = "cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 PERSON = "a-reviewer"
 HOST = socket.gethostname()
+#: A second local store the stand-in board routes a `petsinc` root cause's ticket to, as the
+#: committed `followups` routes one to `hellopatient-followups`, and a ticket filed there.
+ROUTED = "commentrouted"
+ROUTED_REPOSITORY = "github.com/petsinc/hp-api"
+ROUTED_CAUSE = "intake-form-drops-a-field"
+#: The issue URL Linear reports, as onetaskgraph-linear's recorded fixture spells one.
+LINEAR_ISSUE_URL = "https://linear.app/acme/issue/ENG-1"
 
 
 def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
@@ -115,11 +122,13 @@ def _filed(
     *,
     host: str | None = HOST,
     record: bool = True,
+    repository: str | None = None,
 ) -> str:
     """Write ``run``'s ticket for ``cause`` and copy it onto the board, as the agent does.
 
     ``host`` is the machine the record says verified it, and none is written when it is
-    `None`; with ``record`` false the item carries no follow-up record at all.
+    `None`; with ``record`` false the item carries no follow-up record at all. A
+    ``repository`` is the one the item names, which a route of the board may file elsewhere.
     """
     path = tickets.ticket_path(root, run, cause)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +139,10 @@ def _filed(
         "---\n"
         f'title: "some-service: {cause}"\n'
         'status: "backlog"\n'
-        "metadata:\n" + (held if record else "  other: 1\n") + "---\n"
+        + (f'repositories: ["{repository}"]\n' if repository is not None else "")
+        + "metadata:\n"
+        + (held if record else "  other: 1\n")
+        + "---\n"
         f"{body}\n",
         encoding="utf-8",
     )
@@ -914,6 +926,7 @@ def test_a_watermark_that_cannot_be_written_is_refused_by_settle(
         json.dumps(
             {
                 "board": BOARD,
+                "boards": [BOARD],
                 "named_board": True,
                 "since": EARLY,
                 "queried_at": EARLY,
@@ -931,7 +944,9 @@ def test_a_watermark_that_cannot_be_written_is_refused_by_settle(
     status = comments.main(["settle", "--root", str(root), "--plan", str(plan)])
 
     assert status == comments.UNRUNNABLE
-    assert capsys.readouterr().err.startswith(f"{comments.PROG}: refused: ")
+    refused = capsys.readouterr().err
+    assert refused.startswith(f"{comments.PROG}: refused: ")
+    assert "is not a plan `gather` wrote" not in refused, refused
 
 
 def test_an_invocation_that_cannot_run_is_its_own_status(
@@ -983,6 +998,7 @@ def test_a_plan_or_a_launch_the_script_did_not_write_is_refused_naming_it(
     root = str(tmp_path / "root")
     written = {
         "board": BOARD,
+        "boards": [BOARD],
         "named_board": True,
         "since": EARLY,
         "queried_at": EARLY,
@@ -996,6 +1012,7 @@ def test_a_plan_or_a_launch_the_script_did_not_write_is_refused_naming_it(
     for broken in (
         "not json",
         json.dumps({key: value for key, value in written.items() if key != "runs"}),
+        json.dumps({key: value for key, value in written.items() if key != "boards"}),
         json.dumps(written | {"runs": [["not a run/id", "f.md"]]}),
         json.dumps(written | {"runs": [[RUN, "/etc/passwd"]]}),
         json.dumps(written | {"runs": [[RUN, f"/elsewhere/feedback/{RUN}/20260101T000000Z.md"]]}),
@@ -1053,6 +1070,7 @@ def test_a_plans_fields_are_the_ones_its_reader_holds_it_to() -> None:
     """The plan's record, its written document and the reader's schema are one field list."""
     plan = comments.Plan(
         board=BOARD,
+        boards=(BOARD,),
         named_board=False,
         since=datetime(2026, 1, 1, tzinfo=UTC),
         queried_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -1077,6 +1095,7 @@ def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
     feedback = root / comments.FEEDBACK_DIRECTORY / RUN / "20260101T000000Z.md"
     plan = comments.Plan(
         board=BOARD,
+        boards=(BOARD, ROUTED),
         named_board=True,
         since=datetime(2026, 1, 1, tzinfo=UTC),
         queried_at=datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
@@ -1088,7 +1107,8 @@ def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
         issues={
             f"{BOARD}:{RUN}/tickets/{CAUSE}": comments.IssueLink(
                 "https://example.invalid/issue", "/tmp/issue.md"
-            )
+            ),
+            f"{ROUTED}:{RUN}/tickets/{ROUTED_CAUSE}": comments.IssueLink(LINEAR_ISSUE_URL, None),
         },
     )
     written = json.loads(json.dumps(comments._plan_document(plan)))
@@ -1105,7 +1125,195 @@ def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
         )
         with pytest.raises(OSError, match="is not a plan `gather` wrote"):
             comments.read_plan(path, root)
+    # The boards are the family the root names first, each one source name, and every quoted
+    # issue is on one of them.
+    for boards in ([], [ROUTED, BOARD], [BOARD, "not one word"], [BOARD, 3]):
+        path.write_text(json.dumps(written | {"boards": boards}), encoding="utf-8")
+        with pytest.raises(OSError, match="is not a plan `gather` wrote"):
+            comments.read_plan(path, root)
+    path.write_text(json.dumps(written | {"boards": [BOARD]}), encoding="utf-8")
+    with pytest.raises(OSError, match="is not a plan `gather` wrote"):
+        comments.read_plan(path, root)
     # The store label is printed as the report's last line, so it is held to one.
     path.write_text(json.dumps(written | {"store": "onetaskgraph 1\nforged"}), encoding="utf-8")
     with pytest.raises(OSError, match="is not a plan `gather` wrote"):
         comments.read_plan(path, root)
+
+
+@pytest.fixture
+def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A second local store the stand-in board routes every `petsinc` repository to."""
+    root = tmp_path / "routed"
+    root.mkdir()
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__PLUGIN", WRITABLE_PLUGIN)
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__CONFIG__ROOT", str(root))
+    monkeypatch.setenv(
+        f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
+    )
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__TO", ROUTED)
+    return root
+
+
+def test_a_gathering_reads_every_board_of_the_family_each_from_its_own_watermark(
+    drafts_root: Path, routed: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One gathering answers comments on the root board and on the board it routes to.
+
+    The root board has a watermark and the routed one has none yet, so each is read from its
+    own start; a sound settlement then gives each board a watermark of its own.
+    """
+    own = _filed(drafts_root, RUN, CAUSE)
+    routed_issue = _filed(drafts_root, RUN, ROUTED_CAUSE, repository=ROUTED_REPOSITORY)
+    assert routed_issue.startswith(f"{ROUTED}:"), "the store did not route the petsinc ticket"
+    held = comments.write_watermark(drafts_root, BOARD, datetime(2026, 1, 1, tzinfo=UTC))
+    _next_second()
+    on_own = _commented(own, "Please add page 9.\n")
+    on_routed = _commented(routed_issue, "Does the intake form still drop it?\n")
+
+    report, plan = _gathered(drafts_root, capsys, since=None)
+
+    lines = report.splitlines()
+    assert lines[0] == (
+        f"read {BOARD!r} for comments since {comments.instant(held)} "
+        f"(the watermark {comments.watermark_path(drafts_root, BOARD)})"
+    )
+    assert lines[1].startswith(f"read {ROUTED!r} for comments since ")
+    assert lines[1].endswith(f"(derived from local records: run {RUN}'s ticket files' last write)")
+    assert _id_line(report, own, on_own).endswith(f"goes to run {RUN}")
+    assert _id_line(report, routed_issue, on_routed).endswith(f"goes to run {RUN}")
+    assert plan is not None and plan.boards == (BOARD, ROUTED)
+    ((_, feedback),) = plan.runs
+    quoted = tickets.quoted_comments(feedback.read_text(encoding="utf-8"))
+    assert [(one.issue, one.comment) for one in quoted] == [
+        (own, on_own),
+        (routed_issue, on_routed),
+    ]
+    replies = [_replied(own, on_own), _replied(routed_issue, on_routed, cause=ROUTED_CAUSE)]
+    tickets.responses_path(feedback).write_text(
+        json.dumps(
+            {
+                "schema": tickets.RESPONSES_SCHEMA,
+                "run": RUN,
+                "feedback": feedback.name,
+                "responses": [
+                    {
+                        "comment": one.comment,
+                        "issue": one.issue,
+                        "action": "Answered it.",
+                        "reply": reply,
+                        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
+                    }
+                    for one, reply in zip(quoted, replies, strict=True)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    said: list[str] = []
+
+    assert comments.settle(drafts_root, plan, {RUN: "follow-up-1"}, say=said.append) == (
+        comments.DONE
+    ), said
+    for named in (BOARD, ROUTED):
+        assert comments.read_watermark(drafts_root, named) == (
+            plan.queried_at - comments.OVERLAP
+        ), named
+    assert sum(line.startswith("watermark: advanced to") for line in said) == 2, said
+
+
+#: Two comments on one Linear issue as onetaskgraph-linear's recorded fixture
+#: (`tests/fixtures/comments.json`) answers them: one a person wrote, which names its author,
+#: and one an integration wrote, which Linear names no user for. Each carries the URL Linear
+#: reports for a comment.
+LINEAR_PERSON = comments.Comment(
+    comments.CommentId("c2"),
+    "ada",
+    "Second, and the newer of this page.",
+    "https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c2",
+    datetime(2026, 8, 3, 9, 30, tzinfo=UTC),
+)
+LINEAR_INTEGRATION = comments.Comment(
+    comments.CommentId("c1"),
+    None,
+    "First, written by an integration.\n",
+    "https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c1",
+    datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+)
+
+
+def test_on_linear_a_comment_naming_no_user_is_an_integrations_and_a_named_one_a_persons() -> None:
+    """Who counts as a bot follows the board's plugin, and each Linear URL is kept as reported.
+
+    On GitHub an author the board does not report is still a person's, quoted as unknown; on
+    Linear it is an integration's, left out. A Linear comment's own URL and its issue's are
+    web URLs the gathering keeps verbatim, and a reply's URL is that comment URL.
+    """
+    assert comments.is_bot(None, comments.LINEAR_PLUGIN)
+    assert not comments.is_bot("ada", comments.LINEAR_PLUGIN)
+    assert not comments.is_bot("dependabot[bot]", comments.LINEAR_PLUGIN)
+    assert comments.is_bot("dependabot[bot]", "github-projects")
+    assert not comments.is_bot(None, "github-projects")
+    assert not comments.is_bot(None)
+    issue = comments.Issue(
+        comments.QualifiedTaskId(f"{ROUTED}:ENG-1"),
+        "hp-api: the intake form drops a field",
+        tickets.RunId(RUN),
+        None,
+        comments._web_url(LINEAR_ISSUE_URL),
+        (LINEAR_INTEGRATION, LINEAR_PERSON),
+        host=HOST,
+        plugin=comments.LINEAR_PLUGIN,
+    )
+
+    selection = comments.select([issue], {}, HOST, {tickets.RunId(RUN)})
+
+    ((chosen,),) = selection.chosen.values()
+    assert (chosen.id, chosen.author, chosen.url) == ("c2", "ada", LINEAR_PERSON.url)
+    (left,) = selection.left
+    assert (left.id, left.url, left.reason) == (
+        "c1",
+        LINEAR_INTEGRATION.url,
+        f"bot author {comments.LINEAR_BOT}",
+    )
+    assert issue.url == LINEAR_ISSUE_URL
+    assert comments.comment_url_parts(issue.url, None, "c2", LINEAR_PERSON.url, str(issue.id)) == (
+        LINEAR_PERSON.url
+    )
+    assert tickets.ITEM_URL.fullmatch(LINEAR_PERSON.url or "")
+
+
+def test_a_boards_configured_plugin_decides_whether_an_unattributed_comment_is_a_persons(
+    drafts_root: Path,
+    board: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unattributed comment is a person's on the stand-in board and an integration's on Linear.
+
+    The gathering reads each board's plugin from the store's resolved configuration and hands
+    it to the author rule. The stand-in is a `local-md` folder, which no configuration can make
+    a Linear source, so the one answer naming its plugin is read as `linear` in the second
+    gathering — every other setting, the listing and the comments are the store's own — and the
+    same two comments are routed differently for that answer alone.
+    """
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    unattributed = _commented(own, "Synced from the intake integration.\n", None)
+    person = _commented(own, "Please add page 9.\n")
+
+    report, _ = _gathered(drafts_root, capsys, "--dry-run")
+
+    assert _id_line(report, own, unattributed).endswith(f"would go to run {RUN}")
+    assert _id_line(report, own, person).endswith(f"would go to run {RUN}")
+    resolved = plan_store.configured_settings()
+    assert resolved[f"sources.{BOARD}.plugin"] == WRITABLE_PLUGIN
+    monkeypatch.setattr(
+        plan_store,
+        "configured_settings",
+        lambda: {**resolved, f"sources.{BOARD}.plugin": comments.LINEAR_PLUGIN},
+    )
+
+    report, _ = _gathered(drafts_root, capsys, "--dry-run")
+
+    assert _id_line(report, own, unattributed).endswith(f": bot author {comments.LINEAR_BOT}")
+    assert _id_line(report, own, person).endswith(f"would go to run {RUN}")

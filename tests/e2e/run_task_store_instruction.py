@@ -75,6 +75,7 @@ def instruction(
     board: str | None = None,
     search: str | None = None,
     root_cause: str | None = None,
+    repository: str | None = None,
 ) -> str | None:
     """A query the task spells, as it spells it: ``run``'s drafts, or one of the board's searches.
 
@@ -86,25 +87,34 @@ def instruction(
     module's own `board-items` command, which reads every page the store answers: with
     ``root_cause``, the duplicate search by the record's root cause, whose `<root-cause>` the
     task leaves to the agent, and with ``search``, the duplicate search by text, whose
-    `<text>` it leaves the same way; this fills either in. Running each as spelled is how a
-    journey reads what that step selects.
+    `<text>` it leaves the same way; this fills either in, and the ticket's ``repository`` that
+    names the board the search asks. Running each as spelled is how a journey reads what that
+    step selects.
     """
     named = re.escape(board or "")
+    routed = re.escape(" --repository <the ticket's repository>")
     if run is not None:
         found = re.search(
             rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
         )
     elif search is not None:
-        found = re.search(rf"`([^`\n]*?board-items --board {named} --search) <text>`", task)
-        return f"{found[1]} {shlex.quote(search)}" if found else None
+        found = re.search(
+            rf"`([^`\n]*?board-items --board {named}){routed}( --search) <text>`", task
+        )
+        return f"{_routed(found, repository)} {shlex.quote(search)}" if found else None
     else:
         found = re.search(
-            rf"`([^`\n]*?board-items --board {named} --metadata [^`\s=]+/root_cause=)"
+            rf"`([^`\n]*?board-items --board {named}){routed}( --metadata [^`\s=]+/root_cause=)"
             r"<root-cause>`",
             task,
         )
-        return f"{found[1]}{shlex.quote(str(root_cause))}" if found else None
+        return f"{_routed(found, repository)}{shlex.quote(str(root_cause))}" if found else None
     return found[1] if found else None
+
+
+def _routed(found: re.Match[str], repository: str | None) -> str:
+    """A spelled search with the ticket's repository filled in where the task leaves it."""
+    return f"{found[1]} --repository {shlex.quote(str(repository))}{found[2]}"
 
 
 def _paged(
@@ -159,6 +169,9 @@ def main() -> int:
     how.add_argument(
         "--root-cause", help="with --board: run the board's search for this root cause"
     )
+    parsed.add_argument(
+        "--repository", help="with --board: the ticket's repository, naming the board asked"
+    )
     parsed.add_argument("--checkout", type=Path, required=True)
     parsed.add_argument("--witness", type=Path, required=True)
     arguments = parsed.parse_args()
@@ -181,6 +194,7 @@ def main() -> int:
             board=arguments.board,
             search=arguments.search,
             root_cause=arguments.root_cause,
+            repository=arguments.repository,
         )
         if prompts
         else None
@@ -191,11 +205,14 @@ def main() -> int:
         if arguments.run is not None:
             wanted = f"<store> task list --source drafts --project {arguments.run} --json"
         elif arguments.search is not None:
-            wanted = f"<board-items> --board {arguments.board} --search <text>"
+            wanted = (
+                f"<board-items> --board {arguments.board} --repository <the ticket's repository> "
+                "--search <text>"
+            )
         else:
             wanted = (
-                f"<board-items> --board {arguments.board} --metadata <record>/root_cause="
-                "<root-cause>"
+                f"<board-items> --board {arguments.board} --repository <the ticket's repository> "
+                "--metadata <record>/root_cause=<root-cause>"
             )
         record = _unanswered(f"the task names no `{wanted}` instruction")
     else:

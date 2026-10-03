@@ -2002,7 +2002,13 @@ commenting on another run's open issue for the same root cause instead of filing
 A ticket's issue is created in the repository its root cause lives in, as an item of the
 one board: the ticket's `repositories` names that one repository, which must be under the
 board's owner, and `board-status` refuses a ticket naming a repository outside that owner
-before anything is asked of the board, so it is reported rather than filed.
+before anything is asked of the board, so it is reported rather than filed. The one
+exception is a repository the board's route sends elsewhere: a `github.com/petsinc/*` root
+cause's ticket is filed in Hello Patient's Linear, `hellopatient-followups`, as an issue of
+its Agent Follow-ups project, where that team triages it. Every command a follow-up run
+runs takes `followups` as the root of those boards and acts on each ticket at the board
+its repository routes it to, as the store's own `sources route` answers it, and the
+comment gathering reads every one of them, from a watermark of its own.
 `orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
 ownership on that board: a run changes only the issues its own tickets created and the
 comments whose marker names it — its evidence on another run's issue, and its replies to
@@ -2075,32 +2081,38 @@ deferred, and a run never withdraws it. The module renders the whole vocabulary,
 `python -m orchestrator.follow_up_tickets statuses` prints and the follow-up agent's task
 carries, and this copy of it is held to that rendering:
 
-- **Board status `Proposal`**, written `backlog`: a proposal awaiting the user's decision.
-  Who moves an item there: a follow-up run's first copy of a new ticket. Not selected by
-  an agent sent to pick up accepted tickets.
-- **Board status `Todo`**, written `todo`: accepted, and not yet taken up. Who moves an
-  item there: only a person, which is what accepting a ticket is. **Selected** by an agent
-  sent to pick up accepted tickets, the only status that is.
-- **Board status `Deferred`**, written `draft`: deferred for later by a person: not
-  accepted, picked up by no agent, and still taking new evidence. Who moves an item there:
-  only a person. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `Queued`**, written `queued`: accepted, and claimed by a launched DAG
-  whose node has not started, so it returns to `Todo` if that work does not happen. Who
-  moves an item there: no person — a launched run's first projection, over the store's
-  `delivers` relation. Not selected by an agent sent to pick up accepted tickets.
-- **Board status `In Progress`**, written `in-progress`: accepted and taken up. Who moves
-  an item there: a person, or a dispatch whose own task says to. Not selected by an agent
-  sent to pick up accepted tickets.
-- **Closed as completed at Status `Done`**, written `done`: accepted and finished. Who
-  moves an item there: a person, or a dispatch whose own task says to. Not selected by an
-  agent sent to pick up accepted tickets.
-- **Closed as not planned at Status `Cancelled`**, written `cancelled`: withdrawn. Who
-  moves an item there: a follow-up run withdrawing its own ticket that nobody accepted or
-  deferred, or a person. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Proposal`**, Linear state `Proposed`, written `backlog`: a proposal
+  awaiting the user's decision. Who moves an item there: a follow-up run's first copy of a
+  new ticket. Not selected by an agent sent to pick up accepted tickets.
+- **Board status `Todo`**, Linear state `Todo`, written `todo`: accepted, and not yet
+  taken up. Who moves an item there: only a person, which is what accepting a ticket is.
+  **Selected** by an agent sent to pick up accepted tickets, the only status that is.
+- **Board status `Deferred`**, Linear state `Backlog`, written `draft`: deferred for later
+  by a person: not accepted, picked up by no agent, and still taking new evidence. Who
+  moves an item there: only a person. Not selected by an agent sent to pick up accepted
+  tickets.
+- **Board status `Queued`**, Linear state `Queued`, written `queued`: accepted, and
+  claimed by a launched DAG whose node has not started, so it returns to `Todo` if that
+  work does not happen. Who moves an item there: no person — a launched run's first
+  projection, over the store's `delivers` relation. Not selected by an agent sent to pick
+  up accepted tickets.
+- **Board status `In Progress`**, Linear state `In Progress`, written `in-progress`:
+  accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
+  says to. Not selected by an agent sent to pick up accepted tickets.
+- **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
+  and finished. Who moves an item there: a person, or a dispatch whose own task says to.
+  Not selected by an agent sent to pick up accepted tickets.
+- **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
+  `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
+  ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to
+  pick up accepted tickets.
 
 A brief to pick up "accepted" follow-up tickets means the items at `Todo` and nothing
-else: never an item at `Proposal`, `Deferred`, `Queued` or `In Progress`, and never a
-closed one.
+else, on either destination: never an item at `Proposal`, `Deferred`, `Queued` or
+`In Progress` — on Linear `Proposed`, `Backlog`, `Queued` or `In Progress` — and never a
+closed one, which on Linear is one at `Done` or `Canceled`. No follow-up run writes
+Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Reviewed`,
+`Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people.
 
 **Every proposal is written against the board's accepted fixes.** Before it copies
 anything, the agent lists the board's accepted items — `Todo`, `Queued`, `In Progress`,

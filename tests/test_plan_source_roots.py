@@ -437,21 +437,52 @@ HELLOPATIENT_STATES = {
 }
 #: Where the `plans` source sends a task whose repositories are all Hello Patient's.
 PLANS_ROUTES = [{"repositories": ["github.com/petsinc/*"], "to": "hellopatient"}]
+#: The values the `hellopatient-followups` Linear source is declared with, which are never
+#: repointed: every follow-up ticket of a `petsinc` root cause is filed there, and a later run
+#: finds an open ticket for its root cause by searching it, as on the `followups` board.
+#: `project` is the Agent Follow-ups project every read and create is scoped to.
+HELLOPATIENT_FOLLOWUPS = {
+    "plugin": "linear",
+    "team": "ENG",
+    "api_key_env": "HELLOPATIENT_LINEAR_API_KEY",
+    "project": "986a467e-775a-4f8f-80dd-aca405063cf4",
+}
+#: Where the `followups` board sends a ticket whose root cause is Hello Patient's.
+FOLLOWUPS_ROUTES = [{"repositories": ["github.com/petsinc/*"], "to": "hellopatient-followups"}]
+#: Each Linear source this repository writes to, with the values it is never repointed from.
+LINEAR_SOURCES = {"hellopatient": HELLOPATIENT, "hellopatient-followups": HELLOPATIENT_FOLLOWUPS}
 
 
-@pytest.mark.parametrize(("setting", "expected"), sorted(HELLOPATIENT.items()))
-def test_the_linear_source_is_left_exactly_as_it_was(setting: str, expected: str) -> None:
-    """`hellopatient` keeps its plugin, its team and the credential it names.
+@pytest.mark.parametrize(
+    ("name", "setting", "expected"),
+    [
+        (name, setting, expected)
+        for name, settings in LINEAR_SOURCES.items()
+        for setting, expected in sorted(settings.items())
+    ],
+)
+def test_the_linear_source_is_left_exactly_as_it_was(
+    name: str, setting: str, expected: str
+) -> None:
+    """Each Linear source keeps its plugin, its team, the credential it names and its scope.
 
     The credential is named by its own variable rather than the plugin's default name,
     which is onetaskgraph's test key: a source falling back to that would write a plan's
-    tasks into the test workspace.
+    tasks, or a follow-up ticket, into the test workspace.
     """
-    source = read_plan_sources(_configuration())["hellopatient"]
+    source = read_plan_sources(_configuration())[name]
     actual = source.plugin if setting == "plugin" else source.settings.get(setting)
     assert actual == expected, (
-        f"onetaskgraph.yaml's `hellopatient` source names {setting} {actual!r} where it "
+        f"onetaskgraph.yaml's `{name}` source names {setting} {actual!r} where it "
         f"carried {expected!r}; it is never repointed"
+    )
+
+
+def test_the_linear_follow_ups_source_is_no_default_source() -> None:
+    """`hellopatient-followups` is read only by a command that names it, as `followups` is."""
+    assert "hellopatient-followups" not in read_default_sources(_configuration()), (
+        "the hellopatient-followups source is among default_sources, so every plan listing "
+        "reads Hello Patient's follow-up tickets"
     )
 
 
@@ -503,23 +534,27 @@ def _schema_refusals(config: dict[str, object]) -> list[str]:
 # installed plan-store CLI, in the `reads_checkouts` tier the sibling checks of this file's
 # board sources already use, which keeps it out of every memoized tier.
 @pytest.mark.reads_checkouts
-def test_the_linear_source_resolves_its_states_endpoint_and_the_plans_route() -> None:
-    """The installed CLI resolves the eight states, Linear's endpoint and the one route.
+def test_the_linear_sources_resolve_their_states_endpoint_and_routes() -> None:
+    """The installed CLI resolves each Linear source's eight states, its endpoint, and each route.
 
     Read through the CLI's own resolution for the reason the board mappings above are.
     The endpoint is held to the schema's default and to no setting of this file's, so the
     source reaches Linear itself and never a fixture address left behind.
     """
     resolved = _resolved_configuration()
-    config = _resolved_block(resolved, "sources.hellopatient.config.")
-
-    assert config.get("status_mapping") == HELLOPATIENT_STATES, config
-    assert "endpoint" not in config, config
     properties = _linear_schema()["properties"]
     assert isinstance(properties, dict)
     assert properties["endpoint"]["default"] == LINEAR_ENDPOINT, properties["endpoint"]
+    for name in LINEAR_SOURCES:
+        config = _resolved_block(resolved, f"sources.{name}.config.")
+        assert config.get("status_mapping") == HELLOPATIENT_STATES, (name, config)
+        assert "endpoint" not in config, (name, config)
     assert resolved["sources.plans.routes"] == PLANS_ROUTES, resolved["sources.plans.routes"]
     assert plan_store.routed_sources("plans") == ("hellopatient",)
+    assert resolved["sources.followups.routes"] == FOLLOWUPS_ROUTES, resolved[
+        "sources.followups.routes"
+    ]
+    assert plan_store.routed_sources("followups") == ("hellopatient-followups",)
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -529,8 +564,9 @@ def test_the_linear_source_resolves_its_states_endpoint_and_the_plans_route() ->
 # installed plan-store CLI, in the `reads_checkouts` tier the sibling checks of this file's
 # board sources already use, which keeps it out of every memoized tier.
 @pytest.mark.reads_checkouts
-def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts() -> None:
-    """`hellopatient`'s `config` validates against the plugin's own published schema.
+@pytest.mark.parametrize("name", sorted(LINEAR_SOURCES))
+def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts(name: str) -> None:
+    """Each Linear source's `config` validates against the plugin's own published schema.
 
     The other party is Linear, which no check here may reach, so the configuration is held
     to the schema the installed store reports for its `linear` plugin: a key it does not
@@ -538,8 +574,8 @@ def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts() -> N
     write. A configuration carrying one of each is refused, which says a green here is a
     validation rather than a reader that found nothing to check.
     """
-    config = _resolved_block(_resolved_configuration(), "sources.hellopatient.config.")
-    assert config, "the installed CLI resolves no `hellopatient` configuration"
+    config = _resolved_block(_resolved_configuration(), f"sources.{name}.config.")
+    assert config, f"the installed CLI resolves no `{name}` configuration"
 
     assert _schema_refusals(config) == []
     mapping = config["status_mapping"]

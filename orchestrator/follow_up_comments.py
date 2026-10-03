@@ -8,24 +8,27 @@ the script launches `just follow-ups <run> --feedback FILE --comments` for every
 and watches them, and :func:`settle` checks each run's account and reports every reply. This
 module is the one statement of which comments are gathered; the documents point here.
 
-**What is read.** One narrowed query, `task_list(source=[<board>], commented_since=<since>)`,
-read through :func:`plan_store.every_page` to its last page, and `task comment list` for each
-item that answer holds and no other. The store's board scope is the only scope: nothing here
+**What is read.** Every board of the family `--to` roots (:func:`follow_up_tickets.boards`:
+`followups` and the source its route files a `petsinc` root cause's ticket in), each asked one
+narrowed query, `task_list(source=[<board>], commented_since=<its since>)`, read through
+:func:`plan_store.every_page` to its last page, and `task comment list` for each item that
+answer holds and no other. The store's board scope is the only scope: nothing here
 names a repository, an owner or a repository set, and no status filter is sent, because a
 comment on an item at another status is still reported, skipped with its reason. The store's
 `commented_since` keeps an item when one of its comments was created or last edited at or
 after the instant, exactly, on every source this reads, so a comment edited after its reply
 comes back through the same query.
 
-**`<since>`** is, in order: `--since` as given; else the board's **watermark**, the file
-:data:`WATERMARK` under `<drafts root>/feedback/`, holding the instant the last complete
-gathering queried at less :data:`OVERLAP`; else the earliest bound local records give a run
-that has filed tickets here — its recorded boundary, else its ticket files' last write. A run
-whose records give neither is **unbounded**, and the command refuses naming it and asking for
-`--since`, rather than ever querying from the epoch. Only an unscoped gathering that is not a
-dry run, and whose every launched run was checked sound by `check-responses` while it waited,
-moves the watermark; a `--run`, `--dry-run` or `--detach` invocation that launched anything
-leaves it byte-identical. So a comment a gathering selected that no reply answers is selected
+**`<since>`** is decided per board, in order: `--since` as given; else that board's
+**watermark**, the file :data:`WATERMARK` under `<drafts root>/feedback/`, one per board,
+holding the instant the last complete gathering queried at less :data:`OVERLAP`; else the
+earliest bound local records give a run that has filed tickets here — its recorded boundary,
+else its ticket files' last write. A run whose records give neither is **unbounded**, and the
+command refuses naming it and asking for `--since`, rather than ever querying from the epoch.
+Only an unscoped gathering that is not a dry run, and whose every launched run was checked
+sound by `check-responses` while it waited, moves the watermark of every board it read; a
+`--run`, `--dry-run` or `--detach` invocation that launched anything leaves each
+byte-identical. So a comment a gathering selected that no reply answers is selected
 again: the next query starts no later than the one that found it.
 
 **Routing.** A comment goes to the run owning the issue it sits on
@@ -37,10 +40,14 @@ either selected for that run or left out for exactly one reason, tried in this o
 * **an owning run no launch takes** — its id is outside `just follow-ups`' run-id grammar;
 * **no records for the owning run** — nothing of that run is under this drafts root;
 * **item at a status** — only an item at `Proposal` or `Deferred` (store categories `backlog`
-  and `draft`) is answered; a person who moved an item on has decided about it;
+  and `draft`; `Proposed` and `Backlog` on Linear) is answered; a person who moved an item on
+  has decided about it;
 * **marked** — a comment whose last line is any run's marker, of either kind, is not a
   person's;
-* **bot author** — `github-actions`, or a login ending `[bot]`;
+* **bot author** — on a GitHub board, `github-actions` or a login ending `[bot]`; on a Linear
+  one, a comment Linear names no user for, which an integration wrote. Linear records the user
+  whose key made the request as a comment's author, so every comment a run posts there carries
+  that user's name, and is told apart by its marker, the reason above;
 * **answered** — a reply of **any** run names the comment's id in `answers` on the same issue
   and is not older than the comment's last change; a person editing a comment after its reply
   makes it unanswered again, since a comment is dated by its last edit;
@@ -167,12 +174,17 @@ OVERLAP = timedelta(minutes=15)
 #: to one grammar.
 LAUNCHABLE_RUN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
 
-#: The store categories whose items are answered: `Proposal` and `Deferred` on the board.
+#: The store categories whose items are answered: `Proposal` and `Deferred` on the board,
+#: `Proposed` and `Backlog` on Linear.
 ANSWERED_CATEGORIES = (tickets.Status.PROPOSED.value, tickets.Status.DEFERRED.value)
 
 #: The GitHub Actions app's login, and the suffix every other app's login carries.
 BOT_LOGIN = "github-actions"
 BOT_SUFFIX = "[bot]"
+#: The plugin of a Linear board, whose comments name their author differently.
+LINEAR_PLUGIN = "linear"
+#: What a left-out Linear comment with no author is said to be.
+LINEAR_BOT = "none named: Linear names no user for an integration's comment"
 
 
 #: An RFC 3339 date-time, offset included, which is narrower than what `fromisoformat` takes.
@@ -210,6 +222,8 @@ class Issue:
     status: str = tickets.board_option(tickets.Status.PROPOSED)
     #: The machine its ticket was verified on, as its record states it.
     host: str | None = None
+    #: The plugin of the board it is on, which decides who counts as a bot there.
+    plugin: str | None = None
 
 
 class Reply(NamedTuple):
@@ -297,11 +311,12 @@ def _location_path(location: Mapping[str, object], qualified: QualifiedTaskId) -
     raise OSError(f"{qualified} reports a location path {path!r}, which is not a path")
 
 
-def commented_issues(board: str, since: datetime) -> list[Issue]:
+def commented_issues(board: str, since: datetime, plugin: str | None = None) -> list[Issue]:
     """Every item of ``board`` commented on at or after ``since``, each with its comments.
 
     The one listing of this flow: the store's own `commented_since`, read to its last page,
-    and a comment listing for each item it returned and no other.
+    and a comment listing for each item it returned and no other. ``plugin`` is the board's,
+    which decides who counts as a bot on it.
     """
     found = []
     pages = plan_store.every_page(
@@ -354,6 +369,7 @@ def commented_issues(board: str, since: datetime) -> list[Issue]:
                 category=held.item.status.category.value,
                 status=held.item.status.name,
                 host=host if isinstance(host, str) else None,
+                plugin=plugin,
             )
         )
     return found
@@ -532,8 +548,16 @@ def run_boundary(root: Path, run: str, issues: Sequence[Issue]) -> tuple[Boundar
     return computed_boundary(run, issues, written, None if first is None else first.stamp), True
 
 
-def is_bot(author: str | None) -> bool:
-    """Whether a comment's author is an app rather than a person."""
+def is_bot(author: str | None, plugin: str | None = None) -> bool:
+    """Whether a comment's author is an app rather than a person, on a board of ``plugin``.
+
+    Linear names the user whose key wrote a comment, which a person's key and an integration's
+    both are, and names none for an integration writing as itself — the one author on Linear
+    no person is (onetaskgraph-linear's ruling on a comment's author). Elsewhere the board
+    names an app's login, which carries GitHub's app suffix.
+    """
+    if plugin == LINEAR_PLUGIN:
+        return author is None
     return author is not None and (author == BOT_LOGIN or author.endswith(BOT_SUFFIX))
 
 
@@ -613,8 +637,8 @@ def _left_out(  # noqa: PLR0911, PLR0913 - one return per reason the module name
         return f"item at {issue.status}"
     if (marker := tickets.comment_owner(comment.body)) is not None:
         return f"marked by run {marker.run}"
-    if is_bot(comment.author):
-        return f"bot author {comment.author}"
+    if is_bot(comment.author, issue.plugin):
+        return f"bot author {comment.author or LINEAR_BOT}"
     answered = replied.get((issue.id, comment.id))
     if answered is not None and answered.last_changed >= comment.last_changed:
         return f"answered by reply {answered.id}"
@@ -636,7 +660,8 @@ def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | N
     after = f", each changed after {instant(since)}," if since is not None else ""
     sections = [
         f"{boundary_line(since)}\n\n"
-        f"People commented on run `{run}`'s follow-ups on the `{board}` board{after} and no "
+        f"People commented on run `{run}`'s follow-ups on the `{board}` board or a board it "
+        f"routes to{after} and no "
         "run's reply answers them yet. Gathered by `just follow-ups-answer-comments`, each "
         "is quoted verbatim below with its id, its URL, its author and when it last "
         "changed.\n\n"
@@ -647,8 +672,9 @@ def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | N
         "3. **Report** the comment's URL beside what you did about it, or why you did "
         "nothing.\n\n"
         f"{tickets.WITHDRAWAL_EXCEPTION} Never touch a ticket or an issue no comment above "
-        "names: a person's move to `Todo`, `Deferred` or `In Progress` stands whenever they "
-        "made it, and this dispatch answers these comments and nothing else.\n"
+        "names: a person's move to `Todo`, `Deferred` (Linear's `Backlog`) or `In Progress` "
+        "stands whenever they made it, and this dispatch answers these comments and nothing "
+        "else.\n"
     ]
     for number, selected in enumerate(chosen, start=1):
         issue = selected.issue
@@ -813,8 +839,12 @@ class Plan:
     """One gathering as :func:`gather` hands it to the script and to :func:`settle`."""
 
     board: str
+    #: Every board of ``board``'s family the gathering read, each of whose watermarks a sound
+    #: settlement moves.
+    boards: tuple[str, ...]
     #: Whether ``--to`` named the board, so the launches name it the same way.
     named_board: bool
+    #: The earliest instant any board was read from.
     since: datetime
     queried_at: datetime
     #: The one owning run a ``--run`` invocation is narrowed to, or ``None``.
@@ -831,6 +861,7 @@ class Plan:
 def _plan_document(plan: Plan) -> dict[str, object]:
     return {
         "board": plan.board,
+        "boards": list(plan.boards),
         "named_board": plan.named_board,
         "since": instant(plan.since),
         "queried_at": instant(plan.queried_at),
@@ -847,6 +878,7 @@ def _plan_document(plan: Plan) -> dict[str, object]:
 #: so a plan the next step cannot trust is refused before anything launches from it.
 PLAN_FIELDS: dict[str, type | tuple[type, ...]] = {
     "board": str,
+    "boards": list,
     "named_board": bool,
     "since": str,
     "queried_at": str,
@@ -903,10 +935,15 @@ def read_plan(path: Path, root: Path) -> Plan:
         or type(held["items"]) is not int
         or bool({"\n", "\r"} & set(held["store"]))
         or not RECORD_COMPONENT.fullmatch(held["board"])
+        or not held["boards"]
+        or held["boards"][0] != held["board"]
+        or not all(
+            isinstance(one, str) and RECORD_COMPONENT.fullmatch(one) for one in held["boards"]
+        )
         or not (held["scope"] is None or LAUNCHABLE_RUN.fullmatch(held["scope"]))
         or not all(_launch(one, root) for one in held["runs"])
         or not all(
-            _board_issue(issue, held["board"])
+            any(_board_issue(issue, one) for one in held["boards"])
             and _pair(link, (str, type(None)))
             and (link[0] is None or _web_url(link[0]) is not None)
             and (link[1] is None or Path(link[1]).is_absolute())
@@ -919,6 +956,7 @@ def read_plan(path: Path, root: Path) -> Plan:
         )
     return Plan(
         board=held["board"],
+        boards=tuple(held["boards"]),
         named_board=held["named_board"],
         since=moment(held["since"], str(path)),
         queried_at=moment(held["queried_at"], str(path)),
@@ -958,28 +996,41 @@ def gather(  # noqa: PLR0913 - each is one flag of the command
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     say: Say = _say,
 ) -> Plan | None:
-    """Read the board once, report every comment it returned, and write what is to launch.
+    """Read each board of the family once, report every comment returned, and write what to launch.
 
+    ``board`` roots the family (:func:`follow_up_tickets.boards`), and each board is read from
+    a start of its own: ``since``, else its watermark, else the start local records derive.
     Returns the plan the launches follow, or ``None`` for a dry run or a host no comment can
     be owed on, which have nothing to launch. :class:`Unbounded` or :class:`OSError` refuse
     before anything is written.
     """
-    if since is not None:
-        start = Start(since, "named with --since")
-    elif (held := read_watermark(root, board)) is not None:
-        start = Start(held, f"the watermark {watermark_path(root, board)}")
-    elif (derived := derived_start(root)) is not None:
-        start = derived
-    else:
-        say(
-            f"no run under {root} has filed a follow-up ticket, so no comment on {board!r} can "
-            "be owed here; nothing was read and nothing was launched"
-        )
-        return None
+    family = tickets.boards(board)
+    starts: dict[str, Start] = {}
+    derived: Start | None = None
+    for read in family:
+        if since is not None:
+            starts[read] = Start(since, "named with --since")
+        elif (held := read_watermark(root, read)) is not None:
+            starts[read] = Start(held, f"the watermark {watermark_path(root, read)}")
+        elif (derived := derived or derived_start(root)) is not None:
+            starts[read] = derived
+        else:
+            say(
+                f"no run under {root} has filed a follow-up ticket, so no comment on {board!r} "
+                "or a board it routes to can be owed here; nothing was read and nothing was "
+                "launched"
+            )
+            return None
     version = store_version()
     queried_at = now()
-    issues = commented_issues(board, start.since)
-    say(f"read {board!r} for comments since {instant(start.since)} ({start.origin})")
+    settings = plan_store.configured_settings()
+    issues = []
+    for read, start in starts.items():
+        plugin = settings.get(f"sources.{read}.plugin")
+        issues.extend(
+            commented_issues(read, start.since, plugin if isinstance(plugin, str) else None)
+        )
+        say(f"read {read!r} for comments since {instant(start.since)} ({start.origin})")
     recorded = {run for run in appearing_runs(issues) if has_records(root, run)}
     boundaries: dict[tickets.RunId, Boundary] = {}
     for run in sorted(recorded):
@@ -1003,8 +1054,9 @@ def gather(  # noqa: PLR0913 - each is one flag of the command
         say("nothing to answer: no comment was selected, so nothing was launched")
     plan = Plan(
         board=board,
+        boards=family,
         named_board=named_board,
-        since=start.since,
+        since=min(start.since for start in starts.values()),
         queried_at=queried_at,
         scope=scope,
         detach=detach,
@@ -1109,10 +1161,10 @@ def settle(
         say(f"run {run} (follow-up run {follow_up}): check-responses passed")
         for url in reply_urls(plan, feedback):
             say(f"  reply: {url}")
-    held = watermark_path(root, plan.board)
     if plan.scope is None and sound:
-        advanced = write_watermark(root, plan.board, plan.queried_at)
-        say(f"watermark: advanced to {instant(advanced)} in {held}")
+        for board in plan.boards:
+            advanced = write_watermark(root, board, plan.queried_at)
+            say(f"watermark: advanced to {instant(advanced)} in {watermark_path(root, board)}")
     elif plan.scope is not None:
         say(f"watermark: left as it was, because --run {plan.scope} gathered one run's comments")
     elif plan.detach:
