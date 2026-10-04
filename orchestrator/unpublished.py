@@ -195,20 +195,25 @@ SESSION_LABELS: tuple[str, str, str] = (LABEL_RUN, LABEL_NODE, LABEL_LAUNCHER)
 #: own bytes: the number a person acts on is the disk, and these are where it is.
 BUILD_OUTPUT_DIRECTORIES: tuple[str, ...] = ("target", "node_modules", ".venv", ".nx", "dist")
 
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate,modern_domain_modeling] Its
-# source is cited below — `Holding` in `crates/onevcs/src/session.rs` at the pinned
-# release — and this is a declaration rather than a decision: nothing branches on which
-# value it is, because `Row.in_flight` is "`onevcs` reported a `held_by` at all". So a
-# variant onevcs adds is in flight without this tuple moving, and a gate reading onevcs's
-# source would guard a list that decides nothing. What it is for is `--print-surface`,
-# which states the vocabulary a consumer reads rather than restates it.
-#: The whole of `onevcs`'s `held_by.holding` enum at the pinned release (0.30.1):
+# llmlint: ignore-block[modern_domain_modeling] A tuple of wire strings rather than an
+# enum because nothing branches on which value it is — `Row.in_flight` is "`onevcs`
+# reported a `held_by` at all", so a variant onevcs adds is in flight before this tuple
+# moves — and what it is for is `--print-surface`, which states the vocabulary a
+# consumer reads. It is a copy of another repository's declaration, so it is held to that
+# declaration: `tests/e2e/unpublished_view/test_unpublished_onevcs_vocabulary.py` reads
+# `Holding` at `config/onevcs.version`'s tag and fails when the two differ.
+#: The whole of `onevcs`'s `held_by.holding` enum at the pinned release (0.40.2):
 #: `Holding` in `crates/onevcs/src/session.rs` — `owner-running`, the process that opened
-#: the session still running, and `run-root-occupied`, that opener stale while something
-#: still holds the run root's lease. Either is a session that has not finished with its
-#: branch.
-IN_FLIGHT_HOLDINGS: tuple[str, ...] = ("owner-running", "run-root-occupied")
-# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate,modern_domain_modeling]
+#: the session still running; `run-root-occupied`, that opener stale while something
+#: still holds the run root's lease; and `publication-running`, a branch-keyed
+#: publication (`publish-branch`, `recover`) holding the branch under no session, whose
+#: `token` is `null`. Each is a branch something has not finished with.
+IN_FLIGHT_HOLDINGS: tuple[str, ...] = (
+    "owner-running",
+    "run-root-occupied",
+    "publication-running",
+)
+# llmlint: ignore-end[modern_domain_modeling]
 
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate,modern_domain_modeling] Not
 # a copy of onevcs's `landed.state` enum but this view's selection from it, and the

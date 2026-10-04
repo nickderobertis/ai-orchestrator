@@ -1,9 +1,10 @@
 """The `onevcs` vocabularies `orchestrator/unpublished.py` restates, against onevcs's source.
 
-The view reads two things `onevcs` declares and it cannot import: the lifecycle a
-session record's `state` is spelled in (:data:`~orchestrator.unpublished.HolderState`),
-and the grammar a session token is minted in (:data:`~orchestrator.unpublished.
-SESSION_TOKEN`). Each is a copy of another repository's declaration, so each is read back
+The view reads things `onevcs` declares and it cannot import: the lifecycle a session
+record's `state` is spelled in (:data:`~orchestrator.unpublished.HolderState`), the
+`held_by.holding` words it prints as in flight (:data:`~orchestrator.unpublished.
+IN_FLIGHT_HOLDINGS`), and the grammar a session token is minted in
+(:data:`~orchestrator.unpublished.SESSION_TOKEN`). Each is a copy of another repository's declaration, so each is read back
 against that declaration here rather than trusted: a lifecycle state onevcs adds, or a
 token it mints in another shape, fails this before a row is joined to the wrong record or
 a real session token is read as a manager session id — the own-sessions target.
@@ -35,6 +36,9 @@ ONEVCS_CLI = Engine("onevcs", _pinned_tag("onevcs"), "crates/onevcs/src")
 LIFECYCLE = re.compile(
     r'#\[serde\(rename_all = "kebab-case"\)\]\s*pub enum Lifecycle \{(?P<body>.*?)\n\}', re.S
 )
+HOLDING = re.compile(
+    r'#\[serde\(rename_all = "kebab-case"\)\]\s*pub enum Holding \{(?P<body>.*?)\n\}', re.S
+)
 VARIANT = re.compile(r"^\s*([A-Z]\w*),", re.M)
 SESSION_TOKEN_MINT = re.compile(
     r'pub fn session_token\(\) -> String \{\s*format!\("s-\{\}", short_digest\('
@@ -63,6 +67,29 @@ def test_the_holder_states_are_onevcs_s_session_lifecycle() -> None:
     assert wire, "`Lifecycle` declares no variant this read recognizes"
     assert wire == set(get_args(unpublished.HolderState)), (
         f"onevcs {ONEVCS_CLI.ref} spells a session's state {sorted(wire)}"
+    )
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+# llmlint: ignore-block[tests_mirror_real_usage] A drift gate for copied wire vocabulary
+# reads the producer's pinned declaration; `test_unpublished_held_publication_e2e.py`
+# beside this drives a `publication-running` holder through the real recipe.
+def test_the_in_flight_holdings_are_onevcs_s_whole_holding_enum() -> None:
+    """`IN_FLIGHT_HOLDINGS` names every `Holding` the CLI the view spawns can report.
+
+    Equality rather than containment, both ways: a holding onevcs adds is a surface
+    `--print-surface` would leave out, and one it drops is a word a consumer would wait
+    for and never see.
+    """
+    declared = HOLDING.search(_source(ONEVCS_CLI, "session.rs"))
+    assert declared is not None, f"`Holding` is no longer declared as read at {ONEVCS_CLI.ref}"
+    wire = {_kebab(variant) for variant in VARIANT.findall(declared.group("body"))}
+    assert wire, "`Holding` declares no variant this read recognizes"
+    assert wire == set(unpublished.IN_FLIGHT_HOLDINGS), (
+        f"onevcs {ONEVCS_CLI.ref} spells `held_by.holding` {sorted(wire)}, and the view's "
+        f"IN_FLIGHT_HOLDINGS reads {sorted(unpublished.IN_FLIGHT_HOLDINGS)}"
     )
 
 

@@ -3,7 +3,7 @@
 A branch a node continues whose base moved to conflict with it is merged by the
 dispatched worker, under its judge, and never by a person. `onevcs` 0.37.0 opens such a
 session with the merge left in progress and reports it as the session's `conflict`.
-onepipeline 0.60.1 dispatches the worker into it: the conflict goes under `## Planner context`, and
+onepipeline 0.60.4 dispatches the worker into it: the conflict goes under `## Planner context`, and
 `### Merge resolution` closes the task's `## Acceptance criteria`, so the worker's judge
 reviews the merge commit that concludes it. A worker that does not conclude it spends
 the node's publication budget. Only then does the node settle `failed`/`sync-conflict`

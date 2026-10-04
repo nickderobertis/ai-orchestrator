@@ -141,7 +141,7 @@ and only the real turn said so.
 
 The engine starts both sides as plain `oneharness`. `config/onejudge.base.yaml` names
 `bin: oneharness`, and a live dispatch's process tree on this host, measured against
-onepipeline 0.60.1, reads `onepipeline drive` → `oneharness run --format json --compact
+onepipeline 0.60.4, reads `onepipeline drive` → `oneharness run --format json --compact
 --events --history --config <member-scratch>/oneharness.toml` → the provider, with no
 process of this repository's between them. Which side a turn is, is which config it was
 handed: `config/onejudge.base.yaml` pins `provider.judge_config: oneharness.judge.toml`,
@@ -284,7 +284,7 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.21.1 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.21.2 is
 the adopted release. What the releases since 0.17.0 change is how a reader meets the
 CLI, and none of it moves what this host's configs select. `--config` is repeatable,
 each later file folding over the ones before it
@@ -355,7 +355,7 @@ bare reader there was what refused this adoption's first publication. A hand-run
 or `oneharness config` at a shell prints the text view, which is the point; pipe it
 into `jq` only under `--format json`, as the examples below do. The linked
 `oneharness-core` reaches a dispatch through `config/onepipeline.version` alone, and the
-engine adopted here links core 0.24.0, past the flip core 0.16.0 carried, which changes
+engine adopted here links core 0.24.1, past the flip core 0.16.0 carried, which changes
 nothing either, for the same reason: no config here leaves `run_mode` to the default. The
 adoption before this one, 0.14.0, added **how a reader asks the CLI for its output
 shape**: the `--format` flag on every verb that prints a JSON document to stdout, with
@@ -836,7 +836,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.21.1, a config's per-harness `model` **beats** the variable, while the `--model`
+0.21.2, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -973,7 +973,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.21.1, confirmed against the binary:
+candidate it ended up running — through oneharness 0.21.2, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1453,7 +1453,7 @@ the adopted release through the variant-to-base fallback every override layer ma
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.21.1, a harness selected
+do not collide: re-measured against the adopted oneharness 0.21.2, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>` — the flag
 layer outranks the environment layer, and on this release a base-id `--mock-harness`
 covers a variant too — so the
