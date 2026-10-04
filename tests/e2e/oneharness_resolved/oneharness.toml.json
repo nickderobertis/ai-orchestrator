@@ -30,6 +30,9 @@
         "value": null
       },
       "env": {
+        "BASH_MAX_TIMEOUT_MS": {
+          "value": "3600000"
+        },
         "IS_SANDBOX": {
           "value": "1"
         }
@@ -246,7 +249,10 @@
         "value": null
       },
       "args": {
-        "value": null
+        "value": [
+          "-c",
+          "background_terminal_max_timeout=3600000"
+        ]
       },
       "bin": {
         "value": null

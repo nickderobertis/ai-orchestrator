@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from command_ceiling import CODEX_CEILING_ARGS
 from harness_configs import copied_with_its_parents
 from waits import timeout as e2e_timeout
 
@@ -36,8 +37,10 @@ CONTROL_ARGV = ("--input-format", "stream-json")
 #: What a streamed turn puts there: normalized events on stdout as they occur.
 STREAM_ARGV = ("--output-format", "stream-json")
 #: codex's mechanism is a whole different process, not a flag on a one-shot turn:
-#: `codex-app-server` speaks its protocol over stdio, so the argv IS the server.
-CODEX_CONTROL_ARGV = ("codex", "app-server")
+#: `codex-app-server` speaks its protocol over stdio, so the argv IS the server — followed
+#: by the worker role's `[harness.codex] args`, the one-hour command ceiling, which reaches
+#: a controlled turn's server exactly as it reaches a one-shot `exec`.
+CODEX_CONTROL_ARGV = ("codex", "app-server", *CODEX_CEILING_ARGS)
 #: The prompt every plan below is rendered for. A controlled turn moves it off argv.
 PROMPT = "hi"
 

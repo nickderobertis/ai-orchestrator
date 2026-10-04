@@ -46,6 +46,27 @@ harnesses = [
 # Inspect the effective, fully layered config (and where each value came from)
 # with `oneharness config`.
 
+# **One shell command may run for an hour, on both harnesses**, so a worker runs a long
+# check as one command and is held only to finishing it inside its turn
+# (`templates/dispatch-appendix.md`). Two roles carry it: this file, the node-scope
+# worker's agent side, and `oneharness.follow-up.toml`. Both settings sit at the harness
+# level, never on a variant, as `oneharness.dispatch.toml` explains; docs/onejudge-integration.md
+# has the merge rules and the real turns that proved it.
+#
+# Claude Code: `BASH_MAX_TIMEOUT_MS` is the ceiling on the `timeout` one Bash tool call
+# may ask for. `BASH_DEFAULT_TIMEOUT_MS` is deliberately left unset, so the model asks for
+# a long timeout and a hung command does not block for an hour by default.
+[harness.claude-code]
+env = { BASH_MAX_TIMEOUT_MS = "3600000" }
+
+# Codex: `background_terminal_max_timeout` bounds how long ONE `write_stdin` poll waits
+# on a running `exec_command` process — not the process's lifetime, so a long command is
+# one `exec_command` plus one wait of up to an hour. Passed as
+# a `[harness.codex]` argument rather than a trailing passthrough, which would reach
+# Claude Code as `--continue` (`oneharness.llmlint.toml` says why).
+[harness.codex]
+args = ["-c", "background_terminal_max_timeout=3600000"]
+
 # The plan store's credentials — the board token and the Linear key — are the store's,
 # and this role never reaches the store, so they stop here rather than travelling to the provider. Stated per role rather than in the
 # shared parent because it is a per-role policy and a parent's mask is one no child can

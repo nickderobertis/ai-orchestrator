@@ -13,7 +13,9 @@
 #     `followups` board through `onetaskgraph`.
 #     Every other mask is kept;
 #   * its turns stream to the views, so a manager can watch the verification as it goes;
-#   * the turn runs in `bypass` mode, which the judge file does not declare at all.
+#   * the turn runs in `bypass` mode, which the judge file does not declare at all;
+#   * one shell command may run for an hour on either harness, because this is a
+#     dispatched worker that runs checks and a judge runs none.
 #
 # `tests/e2e/test_oneharness_timeout_e2e.py` holds the chain, the pins, the deadline, the
 # streaming and the mode against the judge file's effective values,
@@ -36,9 +38,10 @@ extends = "oneharness.dispatch.toml"
 mode = "bypass"
 
 # A bounded job — read the drafts, verify each against the trees, write and copy the
-# tickets — whose size grows with the run's drafts, so an hour rather than the pacemaker's
-# four minutes.
-timeout = 3600
+# tickets — whose size grows with the run's drafts, so two hours rather than the
+# pacemaker's four minutes: one verifying command may itself take the hour the command
+# ceiling below allows, and the turn needs room past it to set up and report.
+timeout = 7200
 
 # Streamed, so the tool transcript reaches the views as it happens rather than after a
 # turn that runs for many minutes.
@@ -58,6 +61,16 @@ harnesses = [
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
+
+# The worker's one-hour shell-command ceiling, as `oneharness.toml` states and explains
+# it: this role runs checks like a worker, where the judge whose routing it otherwise
+# mirrors runs none, so `tests/e2e/test_oneharness_timeout_e2e.py` names it an intended
+# difference from that file.
+[harness.claude-code]
+env = { BASH_MAX_TIMEOUT_MS = "3600000" }
+
+[harness.codex]
+args = ["-c", "background_terminal_max_timeout=3600000"]
 
 # **Each variant below restates a whole `unset_env` to leave `GH_PROJECTS_TOKEN`
 # and `HELLOPATIENT_LINEAR_API_KEY` travelling, which is this role's whole point** — the board credential is this role's deliverable and a masked one writes no ticket. A child replaces the parent's

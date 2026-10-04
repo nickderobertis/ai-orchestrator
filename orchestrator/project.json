@@ -8,6 +8,7 @@
     "lang:python"
   ],
   "implicitDependencies": [
+    "support-command-ceiling",
     "support-conftest",
     "support-credential-dialect",
     "support-criteria-examples",

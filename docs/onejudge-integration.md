@@ -685,6 +685,94 @@ verdict on the wrong input rather than an error. The grant now lives in
 identities and no Claude one. `tests/test_llmlint_oneharness_wrapper.py` proves
 that at the real oneharness boundary.
 
+### How long one shell command may run on a dispatched worker
+
+A dispatched worker may run one shell command for up to an hour, on both harnesses. The
+rule a worker is held to is that a check finishes inside the turn that started it
+(`templates/dispatch-appendix.md`), and a provider's ten-minute default made workers
+split long suites to fit one tool call instead. Two dispatched worker roles carry it:
+`oneharness.toml`, the node-scope worker's agent side, and `oneharness.follow-up.toml`,
+whose turn deadline is 7200 s so a one-hour command fits inside it. The judge carries
+neither setting, because a dispatched judge runs no shell command. Nor do the monitor,
+the pacemaker, the drafter, the plan reviewer, the design-doc pair or the lint tier.
+
+| Harness | Setting | What it bounds |
+| --- | --- | --- |
+| Claude Code | `BASH_MAX_TIMEOUT_MS`, in `[harness.claude-code] env` | the `timeout` one Bash tool call may ask for |
+| Codex | `background_terminal_max_timeout`, in `[harness.codex] args` | how long one `write_stdin` poll waits on a running `exec_command` process |
+
+The role files hold the values, and the test named below reads them back off a turn.
+`BASH_DEFAULT_TIMEOUT_MS` is left unset, so the model has to ask for a long timeout and
+a hung command does not block for an hour by default. The Codex setting bounds a wait,
+not the process. Both settings sit at the
+harness level, never on a variant, for the reporting reason [`unset_env`'s merge
+rule](#how-unset_env-merges-and-the-one-mask-a-parent-cannot-hold) gives. `env` merges
+key by key, so `IS_SANDBOX` stands beside the ceiling. `args` replaces an inherited list
+whole, and neither shared parent declares one.
+`tests/e2e/test_dispatch_environment_e2e.py` reads both settings off a real turn on every
+identity of both worker roles, and their absence on every other role's.
+
+**No release adoption was needed.** Both providers already read these settings in the
+releases this host installs. In those releases the values left unset were 600000 ms and
+300000 ms, `exec_command` returned within 30 s and left its process running, and that
+process had no runtime cap but the end of its turn. oneharness already passes a
+harness's `env` and `args` through, so no library's code changed and no pin moved. The two turns below are the
+evidence. Each ran under `oneharness.toml` as committed, with the chain narrowed to one
+identity by `--harness`, in `bypass` mode. The one other override was a turn deadline
+of `--timeout 1800`. `oneharness.toml` sets no deadline, and this one was added so a
+stuck turn could not run on unwatched. It bounds the turn, not the command, so it only
+had to be longer than the 660 s command and changes nothing the turn proves. The control
+turn below ran under the same override. Each had the dispatch environment
+`scripts/dispatch-env.sh` exports, a fresh node scratch directory as
+`ONEPIPELINE_NODE_SCRATCH_DIR`, and history recorded with `--history`. Both ran on
+oneharness 0.21.1, one shell command each, and the command was
+`start=$(date +%s); sleep 660; end=$(date +%s); echo "<marker> elapsed=$((end-start))s"`.
+<!-- dated-claim: incident the two smoke turns that proved the raised ceilings on 2026-10-04, kept as evidence of what those releases did rather than as a claim about later ones; tests/e2e/test_dispatch_environment_e2e.py is what re-takes the configuration on every run -->
+
+**Claude Code** (`claude-code:alternate`, Claude Code 2.1.286, `claude-opus-5-5`) relied
+on `BASH_MAX_TIMEOUT_MS`. It made one Bash tool call with `timeout: 900000` that blocked
+until the command exited, 660348 ms later, and printed
+`LONGCMD-claude-1791119283-2688486 elapsed=660s`. The oneharness history session was
+`this-is-a-test-of-how-20261004T130807Z-2688804` (history id
+`01a10707-6455-75a2-a466-81029a5fc036`). The excerpt shows the call and its completed
+output:
+
+```json
+{"event": {"kind": "tool_call", "name": "Bash", "input": {"command": "start=$(date +%s); sleep 660; end=$(date +%s); echo \"LONGCMD-claude-1791119283-2688486 elapsed=$((end-start))s\"", "timeout": 900000}, "tool_call_id": "toolu_01VFXUE9Aeypmerpm71Pms36", "duration_ms": 660348, "status": "completed"}}
+{"event": {"kind": "tool_result", "output": "LONGCMD-claude-1791119283-2688486 elapsed=660s", "tool_call_id": "toolu_01VFXUE9Aeypmerpm71Pms36"}}
+```
+
+**Codex** (`codex:primary`, codex-cli 0.159.2, `gpt-6.1-sol`) relied on
+`background_terminal_max_timeout`. On this model Codex drives its shell tools from a
+code-mode `exec` cell. The cell made one `exec_command`, which returned after 1 s with
+the process still running as session 90372. A second cell made one `write_stdin` on
+session 90372 with empty `chars` and `yield_time_ms: 900000`. That single poll waited
+655.28 s and returned exit code 0 with the marker
+`LONGCMD-codex-1791119283-2688486 elapsed=660s`; the history record measures the
+command at 659867 ms. The model's own `wait` calls on the running cell are a separate,
+model-chosen yield and bound nothing here. The oneharness history session was
+`this-is-a-test-of-how-20261004T130807Z-2688803` (history id
+`01a10707-6455-73e1-b032-e1e16cd183b8`). oneharness normalizes the process into one
+`command_execution`, and Codex's own rollout for thread
+`01a10707-659a-76a2-af4c-042ba55da555` shows the two calls:
+
+```json
+{"event": {"kind": "tool_call", "name": "command_execution", "input": {"command": "/bin/bash -lc 'start=$(date +%s); sleep 660; end=$(date +%s); echo \"LONGCMD-codex-1791119283-2688486 elapsed=$((end-start))s\"'", "exit_code": 0}, "output": "LONGCMD-codex-1791119283-2688486 elapsed=660s\n", "duration_ms": 659867, "status": "completed"}}
+```
+
+```text
+exec  const r = await tools.exec_command({cmd:'start=$(date +%s); sleep 660; …', yield_time_ms:1000});
+  ->  {"wall_time_seconds":1.000752862,"session_id":90372,"output":""}
+exec  text(await tools.write_stdin({session_id:90372, chars:"", yield_time_ms:900000}));
+  ->  {"wall_time_seconds":655.280199767,"exit_code":0,"output":"LONGCMD-codex-1791119283-2688486 elapsed=660s\n"}
+```
+
+A control turn showed that the setting, not code mode, is what let that poll wait. It
+was the same identity and prompt with `sleep 400`, under a child config restating
+`background_terminal_max_timeout=300000`, the unset value. Its single `write_stdin` with
+`yield_time_ms: 900000` returned at `wall_time_seconds` 300.000778181, with no exit code
+and the process still running.
+
 ### Choosing a harness per side
 
 The two sides are different jobs, and the providers are not equally good at them. An

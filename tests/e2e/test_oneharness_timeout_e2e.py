@@ -15,6 +15,21 @@ host pairs Claude on the side that works with Codex on the side that supervises
 everywhere else, and that one role reverses it — so a chain quietly restored to the
 ordinary order would leave the graph, the personas catalog and the prose all describing
 a reversal the files no longer carry.
+
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The whole module spends
+about seven seconds and no paid turn: two journeys drive the stand-in harness
+`tests/e2e/timeout_harness.py` through a real `oneharness run`, about five seconds and
+one, and the rest read `oneharness config` and `oneharness list`, each sub-second. What
+it reads is this repository's own `oneharness*.toml` and `graphs/`, which the root
+project's `codeWorkspace` key already covers, so a project of this module's own would be
+keyed on less than the module reads, or on the same workspace twice.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] These are pytest journeys over the
+real `oneharness` CLI rather than a shell test suite, and their cost is the line above.
+
+llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] No marker selects a tier
+here: the module carries none, and the split it declines is the project one, for the
+reason above.
 """
 
 from __future__ import annotations
@@ -27,6 +42,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from command_ceiling import CEILING_MS, CLAUDE_CODE_CEILING, CODEX_CEILING_ARGS
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -148,14 +164,16 @@ ANTHROPIC_SELECTORS = [
 PLAN_STORE_SIDES = {"design-doc writer", "design-doc reviewer", "follow-up"}
 
 #: The follow-up agent's graph and its one single-sided member, whose config is the judge's
-#: routing verbatim — chain order and every identity's model — with four chosen
+#: routing verbatim — chain order and every identity's model — with five chosen
 #: differences: a finite deadline, because it runs after settlement with nothing watching
-#: it; streaming, so its turns reach the views; no mask on the plan-store credentials,
-#: since its whole deliverable is the `followups` board; and `bypass` mode, because its working
-#: directory is no repository. `oneharness.follow-up.toml` says why.
+#: it, and two hours of it so a one-hour command fits with room to set up and report;
+#: streaming, so its turns reach the views; no mask on the plan-store credentials, since its
+#: whole deliverable is the `followups` board; `bypass` mode, because its working directory
+#: is no repository; and the dispatched worker's one-hour shell-command ceiling, which a
+#: judge, running no shell command, does not carry. `oneharness.follow-up.toml` says why.
 FOLLOW_UP_GRAPH = REPO_ROOT / "graphs" / "follow-up.yaml"
 FOLLOW_UP_MEMBER = "worker"
-FOLLOW_UP_DEADLINE_SECONDS = 3600
+FOLLOW_UP_DEADLINE_SECONDS = 7200
 
 #: The credentials that config alone leaves unmasked — the board token and the production
 #: Linear key — and the one field besides the four above it may differ from the judge's in:
@@ -259,6 +277,26 @@ def _unmasked(node: Any, names: list[str]) -> Any:
             return {key: _unmasked(value, names) for key, value in node.items()}
         case _:
             return node
+
+
+def _with_command_ceiling(harness: dict[str, Any]) -> dict[str, Any]:
+    """``harness`` (a source-stripped `harness` table) with the worker's command ceiling added.
+
+    Claude Code's ceiling merges into the harness's `env` beside what it already holds;
+    Codex's arguments are the whole `args` list, since a child's list replaces a parent's.
+    Typed `Any` like every effective configuration in this module: it is `oneharness`'s
+    JSON, whose schema that CLI owns and validates, and only these two keys are read.
+    """
+    claude_code = harness["claude-code"]
+    codex = harness["codex"]
+    return {
+        **harness,
+        "claude-code": {
+            **claude_code,
+            "env": {**claude_code["env"], CLAUDE_CODE_CEILING: {"value": CEILING_MS}},
+        },
+        "codex": {**codex, "args": {"value": list(CODEX_CEILING_ARGS)}},
+    }
 
 
 def _assert_descendant_stopped(tick_file: Path) -> None:
@@ -566,15 +604,18 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "deadline, streaming, labels, mode and plan-store credential masks changed; these "
         f"also differ: {sorted(differing - FOLLOW_UP_DIFFERENCES)}"
     )
-    # The judge's Codex arguments switch the ChatGPT-app connector tools off, which is a
-    # setting of the supervisory roles alone; the follow-up agent is a worker, so it is
-    # compared with the judge's routing as it stands without them.
-    judge_harness = _unmasked(judge_routing["harness"], PLAN_STORE_CREDENTIALS)
-    judge_harness["codex"]["args"] = {"value": None}
-    assert judge_harness == follow_up_routing["harness"], (
+    assert _with_command_ceiling(judge_routing["harness"]) != judge_routing["harness"], (
+        "oneharness.judge.toml carries the worker's shell-command ceiling itself, so the "
+        "follow-up role's copy of it is no difference from the judge at all"
+    )
+    assert (
+        _with_command_ceiling(_unmasked(judge_routing["harness"], PLAN_STORE_CREDENTIALS))
+        == follow_up_routing["harness"]
+    ), (
         "every identity of oneharness.follow-up.toml must carry oneharness.judge.toml's model, "
-        "environment and masks exactly, less the masks on the plan-store credentials and the "
-        "judge's connector switch alone"
+        "environment and masks exactly, less the masks on the plan-store credentials and with "
+        "the worker's one-hour shell-command ceiling as its Codex arguments in place of the "
+        "judge's connector switch, which only the supervisory roles carry"
     )
     still_masked = [
         name for name in PLAN_STORE_CREDENTIALS if name in json.dumps(follow_up_routing["harness"])

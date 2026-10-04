@@ -48,6 +48,13 @@ from typing import NamedTuple
 
 import pytest
 import short_state
+from command_ceiling import (
+    CEILING_MS,
+    CLAUDE_CODE_CEILING,
+    CLAUDE_CODE_DEFAULT,
+    CODEX_CEILING_ARGS,
+    CODEX_CEILING_KEY,
+)
 from harness_configs import harness_routing
 from harness_indirections import established_indirections
 from waits import timeout as e2e_timeout
@@ -85,6 +92,11 @@ def _configs_named_by(graph: str) -> tuple[str, ...]:
     assert named, f"{graph} names no oneharness config, so nothing can be derived from it"
     return tuple(dict.fromkeys(named))
 
+
+#: How a two-sided member names the config its AGENT side reads, as distinct from its judge's.
+NAMED_AGENT_SIDE_CONFIG = re.compile(
+    r"^\s*agent:\s*\n\s*oneharness_config:\s*\.\./(\S+\.toml)\s*$", re.MULTILINE
+)
 
 #: The configs a node dispatch's own conversation runs under — the two sides
 #: `graphs/node-scope.yaml` names. These are the sides that run a target repository's
@@ -172,6 +184,30 @@ ALL_CANDIDATES = _candidates(ROLE_CONFIGS)
 #: and so must be handed each identity's own bypass argument.
 FOLLOW_UP_CANDIDATES = _candidates(_configs_named_by("graphs/follow-up.yaml"))
 
+
+#: The dispatched worker roles, whose turns run a target repository's checks and so may run
+#: one shell command for an hour: the node-scope worker's agent side — never its judge's,
+#: which runs no shell command — and the follow-up agent. Read off the graphs, so a graph
+#: pointing a worker at another config moves the ceiling's subject with it.
+def _agent_side_of(graph: str) -> tuple[str, ...]:
+    """The config `graph`'s two-sided member runs its agent side under, and not its judge's."""
+    named = NAMED_AGENT_SIDE_CONFIG.findall((REPO_ROOT / graph).read_text(encoding="utf-8"))
+    assert named, f"{graph} names no agent-side oneharness config"
+    return tuple(named)
+
+
+WORKER_CONFIGS = (
+    *_agent_side_of("graphs/node-scope.yaml"),
+    *_configs_named_by("graphs/follow-up.yaml"),
+)
+WORKER_CANDIDATES = _candidates(WORKER_CONFIGS)
+
+#: Every other role — the judge, monitor, pacemaker, drafter, plan reviewer, design-doc
+#: pair and lint tier — which keeps its provider's own command limits.
+UNRAISED_CANDIDATES = _candidates(
+    tuple(name for name in ROLE_CONFIGS if name not in WORKER_CONFIGS)
+)
+
 #: What `bypass` is spelled as on each provider's command line, as `oneharness` builds it:
 #: codex's one flag, and Claude Code's permission mode. Each is the whole of that
 #: provider's answer to an untrusted directory or an unapproved tool.
@@ -240,7 +276,14 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
     scratch.mkdir()
     front = tmp_path / "bin"
     environment = {
-        **{name: value for name, value in os.environ.items() if not name.startswith("ONEHARNESS_")},
+        **{
+            name: value
+            for name, value in os.environ.items()
+            # The ceiling's own names are dropped too, so what a turn is handed of them is
+            # the config's alone rather than whatever the shell running this suite exports.
+            if not name.startswith("ONEHARNESS_")
+            and name not in (CLAUDE_CODE_CEILING, CLAUDE_CODE_DEFAULT)
+        },
         **_indirections(tmp_path),
         # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
         **_provider(front, record),
@@ -371,6 +414,71 @@ def test_the_follow_up_agent_hands_every_identity_its_own_bypass_argument(
         f"{candidate.config} handed {candidate.identity} {argv[1:-1]} with no {expected}; "
         f"its turn runs in a scratch directory that is no repository, where {provider} "
         "without bypass refuses the turn or denies it its tools"
+    )
+
+
+def _recorded_argv(tmp_path: Path) -> list[str]:
+    # llmlint: ignore[boundary_inputs_validated] The recorder's own JSON, written by this
+    # module's provider; each element read out of it is compared against a literal.
+    argv: list[str] = json.loads((tmp_path / "argv.json").read_text(encoding="utf-8"))
+    return argv
+
+
+def _windows(argv: list[str], width: int) -> list[tuple[str, ...]]:
+    return [tuple(argv[at : at + width]) for at in range(len(argv))]
+
+
+@pytest.mark.parametrize("candidate", WORKER_CANDIDATES, ids=_identifiers(WORKER_CANDIDATES))
+def test_a_dispatched_worker_may_run_one_shell_command_for_an_hour(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """Read off what the provider was handed, on every identity of each worker role.
+
+    The settings sit at the harness level, so one stated on a variant instead would reach
+    one identity and leave the rest at ten minutes — and the identity reached once the
+    others are spent is the one nobody watches. Claude Code reads its ceiling from the
+    environment, with the default per-call timeout left alone; Codex reads its wait bound
+    from its command line.
+    """
+    recorded = _turn(tmp_path, oneharness_bin, candidate)
+    argv = _recorded_argv(tmp_path)
+    provider = Path(argv[0]).name
+
+    if provider == "claude":
+        assert recorded.get(CLAUDE_CODE_CEILING) == CEILING_MS, (
+            f"{candidate.config} handed {candidate.identity} {CLAUDE_CODE_CEILING}="
+            f"{recorded.get(CLAUDE_CODE_CEILING)!r}, not {CEILING_MS}; one Bash call there "
+            "is capped at ten minutes and a long check has to be split to fit"
+        )
+        assert CLAUDE_CODE_DEFAULT not in recorded, (
+            f"{candidate.config} handed {candidate.identity} {CLAUDE_CODE_DEFAULT}; the "
+            "default per-call timeout stays the provider's, so a hung command does not "
+            "block for an hour unless the model asked for that"
+        )
+    else:
+        assert CODEX_CEILING_ARGS in _windows(argv, len(CODEX_CEILING_ARGS)), (
+            f"{candidate.config} handed {candidate.identity} {argv[1:]} with no "
+            f"{CODEX_CEILING_ARGS}; each `write_stdin` wait there stops at five minutes"
+        )
+
+
+@pytest.mark.parametrize("candidate", UNRAISED_CANDIDATES, ids=_identifiers(UNRAISED_CANDIDATES))
+def test_a_role_that_is_no_dispatched_worker_keeps_its_providers_command_limits(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """The other direction: the ceiling was raised for the workers and nobody else.
+
+    A shared parent is the tidy-looking place to state it, and it would reach the judge,
+    the monitor, the drafter and the lint tier along with the two workers.
+    """
+    recorded = _turn(tmp_path, oneharness_bin, candidate)
+    argv = _recorded_argv(tmp_path)
+
+    carried = [name for name in (CLAUDE_CODE_CEILING, CLAUDE_CODE_DEFAULT) if name in recorded]
+    carried.extend(word for word in argv if CODEX_CEILING_KEY in word)
+    assert not carried, (
+        f"{candidate.config} handed {candidate.identity} {carried}; only the dispatched "
+        "worker roles raise a shell command's limit"
     )
 
 

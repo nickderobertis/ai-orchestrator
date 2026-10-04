@@ -101,6 +101,10 @@ class TurnEvent(TypedDict):
 #: What a launch answers when no journey scripted one.
 DEFAULT_ANSWER = "smoke-ok"
 
+#: The options codex reads a configuration override from, each taking the next word;
+#: `tests/test_command_ceiling_providers.py` holds both to the installed codex's parser.
+CONFIG_OPTIONS = ("-c", "--config")
+
 
 def answer(launches: int | None) -> str:
     """The text this launch returns, from the scripted answers if a journey set any.
@@ -154,7 +158,7 @@ def record_launch() -> int | None:
 #: `tests/e2e/test_fake_codex_reads_each_roles_prompt_e2e.py` holds this set to the argv the
 #: pinned oneharness builds for every role here, so an option it starts passing fails there.
 VALUED_OPTIONS = frozenset(
-    ("-c", "--config", "-m", "--model", "-s", "--sandbox", "-C", "--cd", "-p", "--profile")
+    (*CONFIG_OPTIONS, "-m", "--model", "-s", "--sandbox", "-C", "--cd", "-p", "--profile")
 )
 
 
