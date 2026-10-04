@@ -355,7 +355,7 @@ bare reader there was what refused this adoption's first publication. A hand-run
 or `oneharness config` at a shell prints the text view, which is the point; pipe it
 into `jq` only under `--format json`, as the examples below do. The linked
 `oneharness-core` reaches a dispatch through `config/onepipeline.version` alone, and the
-engine adopted here links core 0.24.0, past the flip core 0.16.0 carried, which changes
+engine adopted here links core 0.24.1, past the flip core 0.16.0 carried, which changes
 nothing either, for the same reason: no config here leaves `run_mode` to the default. The
 adoption before this one, 0.14.0, added **how a reader asks the CLI for its output
 shape**: the `--format` flag on every verb that prints a JSON document to stdout, with

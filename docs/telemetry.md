@@ -19,7 +19,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.60.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.60.4 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -284,9 +284,10 @@ byte-identical between onejudge v0.14.0 and v0.17.0, whose report schema moves f
 `oneharness-core-v0.19.0` and `oneharness-core-v0.24.0`, the core `oneharness-cli` 0.21.1
 is compiled against, with history `SCHEMA_VERSION` `1.9` at both. The onejudge half
 then moved to 0.17.1 on the same terms: `usage.rs` is byte-identical between v0.17.0
-and v0.17.1, a release linking the `oneharness-core` 0.24.0 whose history never scans. The engine wheel, `onejudge-cli`
-0.17.1 and `oneagentgraph-cli` 0.5.5 all link `oneharness-core` 0.24.0, read off each
-wheel's own SBOM.
+and v0.17.1, a release linking the `oneharness-core` 0.24.0 whose history never scans.
+`onejudge-cli` 0.17.1 and `oneagentgraph-cli` 0.5.5 link `oneharness-core` 0.24.0 and
+the engine wheel links 0.24.1, read off each wheel's own SBOM; `domain/usage.rs` is
+byte-identical between `oneharness-core-v0.24.0` and `oneharness-core-v0.24.1`.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
@@ -382,7 +383,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.23.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.23.2**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

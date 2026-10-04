@@ -39,6 +39,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple, cast
 
@@ -335,11 +336,26 @@ def test_the_note_is_delivered_when_the_turn_ends_and_then_shown(journey: Journe
         None,
     )
     assert shown is not None and committed < shown, kinds
-    # And the delivery waited for the busy turn to end, rather than overtaking it.
-    first_turn_ended = next(
-        index
-        for index, event in enumerate(journey.journal)
+    # llmlint: ignore-block[shell_test_tiers_stay_split] This block changes only how an
+    # existing assertion orders two journal records; it adds no test and moves none, so the
+    # module's tier, which this edit leaves as it was, is not what these lines decide.
+    # And the delivery waited for the busy turn to end, rather than overtaking it. The
+    # turn's end is relayed from the member's stream and the commit is the driver's own
+    # record, so their places in the journal race under load; what orders them is when
+    # each happened, and which turn the note was shown in.
+    first_turn = next(
+        cast(dict[str, object], event["payload"])
+        for event in journey.journal
         if event.get("kind") == "turn-completed"
         and cast(dict[str, object], event.get("labels", {})).get("node") == NODE_ID
     )
-    assert first_turn_ended < committed, kinds
+    assert _instant(cast(str, first_turn["finished_at"])) <= _instant(
+        cast(str, journey.journal[committed]["ts"])
+    ), (first_turn, journey.journal[committed])
+    shown_payload = cast(dict[str, object], journey.journal[shown]["payload"])
+    assert cast(int, shown_payload["turn"]) > cast(int, first_turn["turn"]), shown_payload
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+def _instant(stamp: str) -> datetime:
+    return datetime.fromisoformat(stamp)

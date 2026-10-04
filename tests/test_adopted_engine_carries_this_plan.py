@@ -695,6 +695,44 @@ RUN_ENDING_LIVENESS_LANDINGS = (
     ),
 )
 
+#: The five engine-side nodes of the accepted-follow-ups plan `accepted-followups-1002`.
+#: `op-parked-liveness` is recorded a second time, under this plan's landing #714, because
+#: the node id was reused for the published-hold reading after the run-ending-liveness
+#: plan's #701. `tests/e2e/test_parked_run_is_driven_e2e.py` drives the parked reading
+#: through the recipes on this host.
+ACCEPTED_FOLLOW_UPS_1002_LANDINGS = (
+    Landing(
+        node="op-payload-schemas",
+        change_request=709,
+        commit="23a65912ca444439a7ea41a5cc945a1885f28b57",
+        did="publish every pipeline payload schema and its registry",
+    ),
+    Landing(
+        node="op-publication-cancellation",
+        change_request=717,
+        commit="bffe2c72b79057d3c9c770143fb74cc27933e3f9",
+        did="let a cancel or retry interrupt a publication watch",
+    ),
+    Landing(
+        node="op-parked-liveness",
+        change_request=714,
+        commit="17c805a2f6406aa29f5355284546b482dbecc08f",
+        did="read a run held only on a published-release wait as parked and still driven",
+    ),
+    Landing(
+        node="op-link-libraries",
+        change_request=724,
+        commit="082af15c4b559a39bfecbcbb9007946fa71830d7",
+        did="link the onevcs and onetaskgraph releases with this plan's fixes",
+    ),
+    Landing(
+        node="op-death-guidance",
+        change_request=726,
+        commit="a794deed64ac5aa6d80678ff16133e57a40d99db",
+        did="name a died dispatch's landing, not its retired branch",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -729,6 +767,7 @@ LANDINGS = (
     *SESSION_OPEN_CONFLICT_LANDINGS,
     *RUN_ENDING_LIVENESS_LANDINGS,
     *CORRELATED_RULING_LANDINGS,
+    *ACCEPTED_FOLLOW_UPS_1002_LANDINGS,
 )
 
 

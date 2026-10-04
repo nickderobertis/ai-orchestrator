@@ -182,7 +182,8 @@ there was none — that checkout's branches, its `main` against `origin/main`, t
 repository's open change requests — because a worker dispatched without a worktree
 works wherever it can see. A node that settled
 `failed` may still have published: `task-failed-change-open` carries the URL, and
-re-running that work duplicates a change already waiting to be read. A node settled
+re-running that work duplicates a change already waiting to be read; a `dispatch-died`
+or `provider-failed` node whose work landed says *landed on its base* with the commit. A node settled
 `done` can be unlanded by design, its dependents proceeding: `change-draft` is a draft
 the plan asked for, and `change-review-draft` is a change whose required checks are green,
 on a `change-open` identity whose approvals are required, kept as a draft for its user's
@@ -197,7 +198,8 @@ carries a tree the merge path would not pass, and has been worked several times 
 as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
 committed work with the refusal still standing. **A conflict between a continued branch
 and its moved base is the dispatched worker's to resolve, under its judge**: the session
-opens with the merge in progress and the task hands it over. A blocking
+opens with the merge in progress and the task hands it over — a `change-auto` change
+request the host reports conflicting included, which returns at once as `sync-conflict`. A blocking
 `session-conflict` finding means the worker was dispatched into it until the node's
 publication budget was spent and did not converge, so decide how the node goes on — a
 `retry` with an amended task, say — and never merge it by hand. A `push-rejected` whose merge path
@@ -829,8 +831,8 @@ question about your own task, and `amend` before the judge answers it.
 **One execution path per deliverable.** When a path fails, diagnose and fix that path
 or escalate with evidence; never launch a duplicate parallel path — a manager-driven
 integrate or recovery beside a live node delivering it counts — without explicit
-operator approval. `cancel` idles a redundant or misdirected node and `requeue` resumes
-it.
+operator approval. `cancel` idles a redundant or misdirected node — interrupting a
+publication it waits on, branch and change request left open — and `requeue` resumes it.
 
 Keep the user informed at each milestone and never let thirty minutes pass between
 updates; a completion report for a node that published includes the change request's

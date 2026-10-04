@@ -1809,7 +1809,7 @@ class DocumentPrice(NamedTuple):
 #: The plan-store CLI release every request bound below was measured on, held to
 #: `onetaskgraph --version`. Each bound is one named constant so a later release is
 #: re-measured one step at a time.
-BUDGET_MEASURED_ON = "onetaskgraph 0.2.57"
+BUDGET_MEASURED_ON = "onetaskgraph 0.2.58"
 #: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
 #: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
 #: with the board rather than one a single item hides.
@@ -1862,11 +1862,12 @@ REALISTIC_BOARD_CHECK_POINTS = 40
 REALISTIC_WRITE_POINTS = 144
 #: How many other items the realistic run's board holds before the run starts.
 REALISTIC_OTHER_ITEMS = 400
-#: What the realistic run measured on :data:`BUDGET_MEASURED_ON`, per phase and in total.
+#: What the realistic run measured on :data:`BUDGET_MEASURED_ON`, per phase and in total. On
+#: onetaskgraph 0.2.57 the write path, the board check and the total were 144, 40 and 208.
 REALISTIC_MEASURED_SEARCH_POINTS = 24
-REALISTIC_MEASURED_WRITE_POINTS = 144
-REALISTIC_MEASURED_BOARD_CHECK_POINTS = 40
-REALISTIC_MEASURED_RUN_POINTS = 208
+REALISTIC_MEASURED_WRITE_POINTS = 116
+REALISTIC_MEASURED_BOARD_CHECK_POINTS = 20
+REALISTIC_MEASURED_RUN_POINTS = 160
 
 
 #: The source's PRICES entries used by the fixture's operations, each priced upstream at

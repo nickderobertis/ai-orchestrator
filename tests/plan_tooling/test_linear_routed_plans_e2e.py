@@ -122,6 +122,10 @@ POLL_SECONDS = 0.2
 #: What the board fixture hands a journey for the tracked Linear source, which the copy's
 #: folder stand-in takes none of.
 LINEAR_ENVIRONMENT = (LINEAR_KEY_ENV, f"ONETASKGRAPH_SOURCES__{LINEAR.upper()}__CONFIG__ENDPOINT")
+#: The store's environment layer for the tracked Linear source. A host's `.env` may set a key
+#: of it, such as the team, and the layer merges that into the copy's folder stand-in, whose
+#: plugin refuses every Linear key, so none is inherited from the process running the suite.
+LINEAR_LAYER = f"ONETASKGRAPH_SOURCES__{LINEAR.upper()}__"
 
 #: What a journey building a copy of this checkout reads: everything git tracks.
 COPIES_THE_TRACKED_TREE = pytest.mark.reads_docs
@@ -177,6 +181,8 @@ def _bench(tmp_path: Path, oneharness_bin: str, remote: Mapping[str, str]) -> Be
     # The copy provisions its own `.venv`, so this checkout's is not the active one there.
     for name in (*INHERITED_ENVIRONMENT, "VIRTUAL_ENV"):
         environment.pop(name, None)
+    for name in [name for name in environment if name.startswith(LINEAR_LAYER)]:
+        del environment[name]
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEVCS_HOME"] = str(identity.home)
     environment.update(identity.environment)

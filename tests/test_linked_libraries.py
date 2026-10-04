@@ -609,11 +609,11 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Re-measured 2026-10-01 on this host's installed
+#: between them would mean anything. Re-measured 2026-10-04 on this host's installed
 #: wheels: `config/oneharness.version` reads 0.21.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.24.0, and the engine wheel links 0.24.0 too — as do the sibling
-#: `oneagentgraph-cli` and `onejudge-cli` wheels, which is the pairing
+#: against as 0.24.0, while the engine wheel links 0.24.1 for every dependent — and the
+#: sibling `oneagentgraph-cli` and `onejudge-cli` wheels keep 0.24.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
 #: number and the crate's **differ on this adoption**, as they have on most adoptions
@@ -632,9 +632,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.5", core="0.24.0"),
-    LinkedCore(dependent="onejudge", dependent_version="0.17.1", core="0.24.0"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.60.1", core="0.24.0"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.5", core="0.24.1"),
+    LinkedCore(dependent="onejudge", dependent_version="0.17.1", core="0.24.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.60.4", core="0.24.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -1002,10 +1002,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     `oneagentgraph` and `onejudge` a dispatch runs are compiled *into the engine wheel*,
     and this host also installs each of them as a standalone CLI whose wheel resolved its
     own `oneharness-core`. Those two numbers are free to differ, and have on every
-    adoption recorded here until this one — so a reader who measured the sibling's own
-    wheel would be measuring an artifact no dispatch loads. On this adoption they
-    coincide at 0.24.0, which is a coincidence and not a contract: it is the reason the
-    pairing below is written out rather than asserted as an inequality.
+    adoption recorded here but one — so a reader who measured the sibling's own wheel
+    would be measuring an artifact no dispatch loads. They coincided at 0.24.0 on the
+    adoption before this one, a coincidence and not a contract, and parted again when
+    the engine moved to 0.24.1: it is the reason the pairing below is written out rather
+    than asserted as an inequality.
 
     Written as the pairing rather than as an inequality. An inequality would go green on
     a build where both moved together, which is the reading it exists to deny, and would
@@ -1022,8 +1023,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.24.0", "0.24.0"),
-        "onejudge-cli": ("0.24.0", "0.24.0"),
+        "oneagentgraph-cli": ("0.24.0", "0.24.1"),
+        "onejudge-cli": ("0.24.0", "0.24.1"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "
