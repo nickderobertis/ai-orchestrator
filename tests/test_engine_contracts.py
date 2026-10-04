@@ -12,7 +12,7 @@ onevcs 0.10.0 names that failure and onepipeline 0.10.0 settles a node on it —
 is the other direction this gate reads: a denial goes stale exactly as a description
 does, and it went stale here first.
 
-So the prose is reconciled rather than trusted, in five shapes:
+So the prose is reconciled rather than trusted, in six shapes:
 
 * **The outcome table**, against every settlement site in `onepipeline` — the
   `Settlement::plain(…, Some(…))` calls, the `failed(node, …)` helper, and
@@ -33,6 +33,9 @@ So the prose is reconciled rather than trusted, in five shapes:
   several declarations rather than any one of them: the outcome table's
   status-to-outcome pairings, and the telemetry phase machine's event-to-bucket
   table and its tie-break order.
+* **The `onevcs` CLI's exit codes** the lifecycle passage states, against
+  `FailureKind::exit_code`'s mapping, exactly: each kind's code, how many kinds share
+  exit 1, and nothing on one side alone.
 
 These gates are why the surrounding prose may state any of this at all.
 
@@ -48,6 +51,8 @@ which is what a *dispatch* publishes through, and is not `config/onevcs.version`
 Reading the CLI pin for both is the mistake `tests/test_linked_libraries.py` exists
 over, so the linked version comes from that module rather than from a second copy of
 the reasoning.
+The one `onevcs` read at `config/onevcs.version` is its exit codes, because those are
+the installed CLI's surface rather than anything a dispatch links.
 """
 
 from __future__ import annotations
@@ -1726,6 +1731,173 @@ def test_every_quoted_engine_constant_is_the_engines_own(constant: Constant) -> 
     )
 
 
+#: The `onevcs` CLI a caller reads `$?` from — the one this host installs, at
+#: `config/onevcs.version` — rather than the copy the engine links: an exit code is the
+#: CLI's published surface, and `FailureKind::exit_code` is where that CLI declares it.
+ONEVCS_CLI = Engine("onevcs", _pinned_tag("onevcs"), "crates/onevcs/src")
+#: The declaration of every publication failure's exit code, one match arm per code.
+EXIT_CODE_MATCH = re.compile(r"pub fn exit_code\(self\) -> u8 \{.*?\n    \}", re.DOTALL)
+EXIT_CODE_ARM = re.compile(r"((?:\s*\|?\s*FailureKind::[A-Z][A-Za-z]*)+)\s*=>\s*(\d+)")
+#: The lifecycle passage stating those codes, up to the dash that ends the clause.
+EXIT_CODE_PASSAGE = re.compile(r"which the CLI reports as (.*?) — ", re.DOTALL)
+#: The one code the passage gives a counted group of kinds rather than naming them.
+EXIT_CODE_SHARED = re.compile(r"exit (\d+) for the (\w+) verification failures")
+#: Each code the passage gives one named kind.
+EXIT_CODE_NAMED = re.compile(r"(\d+) for `([a-z][a-z-]*)`")
+COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
+
+
+def _declared_exit_codes(source: str) -> dict[str, int]:
+    """Each failure kind's exit code, as `FailureKind::exit_code` maps it.
+
+    Spelled the way the passage spells a kind — the enum's own serde `rename_all` — so
+    the two sides compare as one mapping rather than through a translation table that
+    could drift on its own. Comments are dropped first, because the arms carry them.
+    """
+    enum = re.search(r"(?:#\[[^\]]*\]\s*)*pub enum FailureKind \{", source)
+    assert enum is not None, "onevcs no longer declares `FailureKind` where this gate reads it"
+    renamed = RENAME_ALL.search(enum.group(0))
+    region = EXIT_CODE_MATCH.search(source)
+    assert region is not None, (
+        "onevcs no longer declares `FailureKind::exit_code` where this gate reads it; "
+        "the exit codes the lifecycle passage states are now unreconciled"
+    )
+    arms = re.sub(r"//[^\n]*", "", region.group(0))
+    declared: dict[str, int] = {}
+    for variants, code in EXIT_CODE_ARM.findall(arms):
+        for variant in re.findall(r"FailureKind::([A-Z][A-Za-z]*)", variants):
+            declared[_wire_spelling(variant, renamed.group(1) if renamed else None)] = int(code)
+    assert declared, "`FailureKind::exit_code` maps no kind this gate can read"
+    return declared
+
+
+class StatedExitCodes(NamedTuple):
+    """The exit codes the lifecycle passage states, in the two forms it states them."""
+
+    #: Each kind the passage names, with the code it gives that kind.
+    named: dict[str, int]
+    #: The one code the passage gives the verification failures as a counted group.
+    shared_code: int
+    #: How many kinds the passage says exit :attr:`shared_code`.
+    shared_count: int
+
+
+def _stated_exit_codes(document: str) -> StatedExitCodes:
+    """What the lifecycle passage says the CLI exits: named kinds, and the shared group.
+
+    The passage names most kinds with their code and gives the rest one code by count
+    ("exit 1 for the six verification failures"), so both halves are read: the named
+    mapping, the shared code and how many kinds the passage says share it.
+    """
+    passage = EXIT_CODE_PASSAGE.search(document)
+    assert passage is not None, (
+        f"{LIFECYCLE.name} no longer states onevcs's exit codes where this gate reads them"
+    )
+    text = re.sub(r"\s+", " ", passage.group(1))
+    shared = EXIT_CODE_SHARED.search(text)
+    assert shared is not None and shared.group(2) in COUNT_WORDS, (
+        f"{LIFECYCLE.name} no longer states the code the verification failures share "
+        f"as this gate reads it: {text!r}"
+    )
+    named = {kind: int(code) for code, kind in EXIT_CODE_NAMED.findall(text)}
+    return StatedExitCodes(
+        named=named, shared_code=int(shared.group(1)), shared_count=COUNT_WORDS[shared.group(2)]
+    )
+
+
+def _exit_code_drift(source: str, document: str) -> list[str]:
+    """Every way the passage's exit codes and onevcs's mapping disagree, each side named.
+
+    Exact in both directions: each kind the passage names exits the code onevcs maps
+    it to; every other kind onevcs maps exits the shared code, and there are exactly as
+    many as the passage counts; and no kind or code is on one side alone.
+    """
+    declared = _declared_exit_codes(source)
+    stated = _stated_exit_codes(document)
+    named, shared_code, shared_count = stated.named, stated.shared_code, stated.shared_count
+    where = f"{ONEVCS_CLI.crate} {ONEVCS_CLI.ref} `FailureKind::exit_code`"
+    drift = [
+        f"{LIFECYCLE.name} states `{kind}` exits {code}; {where} maps it to "
+        f"{declared.get(kind, 'nothing — it declares no such kind')}"
+        for kind, code in sorted(named.items())
+        if declared.get(kind) != code
+    ]
+    rest = {kind: code for kind, code in declared.items() if kind not in named}
+    off_group = sorted(kind for kind, code in rest.items() if code != shared_code)
+    if off_group:
+        drift.append(
+            f"{where} maps {', '.join(f'`{kind}` to {rest[kind]}' for kind in off_group)}; "
+            f"{LIFECYCLE.name} names no code for it, so it reads as one of the "
+            f"verification failures exiting {shared_code}"
+        )
+    in_group = sorted(kind for kind, code in rest.items() if code == shared_code)
+    if len(in_group) != shared_count:
+        drift.append(
+            f"{LIFECYCLE.name} states {shared_count} verification failures exit "
+            f"{shared_code}; {where} maps {len(in_group)} unnamed kinds to it: {in_group}"
+        )
+    return drift
+
+
+def test_the_exit_codes_the_lifecycle_states_are_onevcss_own() -> None:
+    """The exit code a caller reads `$?` for, against the CLI's own mapping.
+
+    A number nothing reconciles goes stale silently, and a caller branching on `$?` is
+    exactly the reader who acts on a stale one: 75 exists so a cancellation is never
+    read as a verdict.
+    """
+    drift = _exit_code_drift(_source(ONEVCS_CLI, "publish.rs"), LIFECYCLE.read_text("utf-8"))
+    assert not drift, "; ".join(drift)
+
+
+@pytest.mark.parametrize(
+    ("side", "before", "after", "names"),
+    [
+        ("document", "75 for `cancelled`", "76 for `cancelled`", "`cancelled` exits 76"),
+        (
+            "source",
+            "FailureKind::SyncConflict => 3,",
+            "FailureKind::SyncConflict => 4,",
+            "maps it to 4",
+        ),
+        (
+            "source",
+            "FailureKind::Cancelled => 75,",
+            "FailureKind::Cancelled => 75,\n            FailureKind::Frozen => 76,",
+            "`frozen` to 76",
+        ),
+        (
+            "source",
+            "FailureKind::Cancelled => 75,",
+            "FailureKind::Cancelled => 75,\n            FailureKind::Frozen => 1,",
+            "maps 7 unnamed kinds",
+        ),
+    ],
+    ids=("doc-code-altered", "arm-code-altered", "kind-added", "kind-added-to-shared-code"),
+)
+def test_the_exit_code_gate_goes_red_on_either_side_moving(
+    side: str, before: str, after: str, names: str
+) -> None:
+    """The comparison above fails, naming what each side states, when either one moves.
+
+    Run over the real passage and the real pinned source with one edit applied, so what
+    goes red is the gate itself rather than a model of it.
+    """
+    source = _source(ONEVCS_CLI, "publish.rs")
+    document = LIFECYCLE.read_text("utf-8")
+    assert before in (document if side == "document" else source), (
+        f"the {side} no longer carries {before!r}, so this case proves nothing; "
+        "re-point it at what the side now says"
+    )
+    if side == "document":
+        document = document.replace(before, after)
+    else:
+        source = source.replace(before, after)
+    drift = _exit_code_drift(source, document)
+    assert drift, f"editing the {side} to {after!r} left the exit-code gate green"
+    assert names in "; ".join(drift), drift
+
+
 @pytest.mark.parametrize("semantic", SHUTDOWN_SEMANTICS, ids=lambda semantic: semantic.label)
 def test_every_shutdown_behaviour_the_prose_restates_is_the_engines_own(
     semantic: Semantic,
@@ -1749,9 +1921,16 @@ def test_every_shutdown_behaviour_the_prose_restates_is_the_engines_own(
         )
 
 
+#: The denials in a stable order, typed here rather than inside the parametrize call,
+#: where the call's own `object` parameter would erase the key's type.
+ABSENT_SYMBOL_SITES: list[tuple[Path, tuple[Engine, ...]]] = sorted(
+    ABSENT_SYMBOLS, key=lambda key: key[0].name
+)
+
+
 @pytest.mark.parametrize(
     ("document", "engines"),
-    sorted(ABSENT_SYMBOLS, key=lambda key: key[0].name),
+    ABSENT_SYMBOL_SITES,
     ids=lambda item: item.name if isinstance(item, Path) else "+".join(e.crate for e in item),
 )
 def test_every_symbol_a_document_calls_gone_is_still_gone(

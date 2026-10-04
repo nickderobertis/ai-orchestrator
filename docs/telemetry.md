@@ -152,7 +152,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.21.1/0.17.1 upgrade (`config/oneharness.version` and
+after the 0.21.2/0.17.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -284,10 +284,13 @@ byte-identical between onejudge v0.14.0 and v0.17.0, whose report schema moves f
 `oneharness-core-v0.19.0` and `oneharness-core-v0.24.0`, the core `oneharness-cli` 0.21.1
 is compiled against, with history `SCHEMA_VERSION` `1.9` at both. The onejudge half
 then moved to 0.17.1 on the same terms: `usage.rs` is byte-identical between v0.17.0
-and v0.17.1, a release linking the `oneharness-core` 0.24.0 whose history never scans.
-`onejudge-cli` 0.17.1 and `oneagentgraph-cli` 0.5.5 link `oneharness-core` 0.24.0 and
-the engine wheel links 0.24.1, read off each wheel's own SBOM; `domain/usage.rs` is
-byte-identical between `oneharness-core-v0.24.0` and `oneharness-core-v0.24.1`.
+and v0.17.1, a release linking the `oneharness-core` 0.24.0 whose history never scans. The
+oneharness half then moved to 0.21.2 on the same terms: `domain/usage.rs` is byte-identical
+between `oneharness-core-v0.24.0` and `oneharness-core-v0.24.1`, the core `oneharness-cli`
+0.21.2 is compiled against, with history `SCHEMA_VERSION` `1.9` at both. `onejudge-cli`
+0.17.1 and `oneagentgraph-cli` 0.5.5 link `oneharness-core` 0.24.0, while the engine wheel
+links 0.24.1 for itself, onejudge 0.17.1 and oneagentgraph 0.5.5, read off each wheel's own
+SBOM.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.

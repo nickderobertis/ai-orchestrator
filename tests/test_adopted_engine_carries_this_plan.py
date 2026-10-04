@@ -695,6 +695,34 @@ RUN_ENDING_LIVENESS_LANDINGS = (
     ),
 )
 
+#: The engine-side nodes of the accepted-follow-ups plan that relinked onevcs and the
+#: harness core: an out-of-band landing published under its owning node's title rather
+#: than the last fix's subject, a live note holding back only the commands naming its
+#: node, and the relink onto the onevcs that holds, resumes and releases publications
+#: and the `oneharness-core` that marks a failed Claude tool call.
+#: `tests/e2e/unpublished_view/test_unpublished_held_publication_e2e.py` drives the
+#: onevcs half's `held_by` reading on this host.
+TICKET_FIXES_LANDINGS = (
+    Landing(
+        node="op-616",
+        change_request=723,
+        commit="4d2ab8dd41bb6eccbbfa2236fe0a205428bf7ee7",
+        did="publish an out-of-band landing under its owning node's title",
+    ),
+    Landing(
+        node="op-320",
+        change_request=725,
+        commit="09ea3f8f4082eabd09fc8c2988b707a44abd0ac9",
+        did="hold behind a live note only the commands that name its node",
+    ),
+    Landing(
+        node="op-relink",
+        change_request=731,
+        commit="4473bd35be3d081327e361be029dd4141aa7d728",
+        did="link the onevcs and harness core that hold, resume and release publications",
+    ),
+)
+
 #: The five engine-side nodes of the accepted-follow-ups plan `accepted-followups-1002`.
 #: `op-parked-liveness` is recorded a second time, under this plan's landing #714, because
 #: the node id was reused for the published-hold reading after the run-ending-liveness
@@ -767,6 +795,7 @@ LANDINGS = (
     *SESSION_OPEN_CONFLICT_LANDINGS,
     *RUN_ENDING_LIVENESS_LANDINGS,
     *CORRELATED_RULING_LANDINGS,
+    *TICKET_FIXES_LANDINGS,
     *ACCEPTED_FOLLOW_UPS_1002_LANDINGS,
 )
 

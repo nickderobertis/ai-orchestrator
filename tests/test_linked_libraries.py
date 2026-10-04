@@ -180,6 +180,20 @@ CHAIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 1)
 #: `tests/e2e/test_claude_identity_routing_e2e.py` drives the linked classifier through
 #: a single-sided node graph and holds the host-visible verdict to that distinction.
 CLAUDE_LOGIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 2)
+#: The accepted-follow-ups plan's linked onevcs work, read at the tag of each release:
+#: https://github.com/nickderobertis/onevcs/pull/292 (`c2747424`), first cut as 0.40.0,
+#: adds `session::Holding::PublicationRunning`, the `held_by` a running out-of-band
+#: publication puts on its branch with no session token;
+#: https://github.com/nickderobertis/onevcs/pull/294 (`98ff92c`), cut as 0.40.1, has
+#: `sweep` release a finished publication's workspace and stop its processes; and
+#: https://github.com/nickderobertis/onevcs/pull/296 (`7409671`), cut as 0.40.2, resumes
+#: an already verified open change at its hosted checks (`home::verified_dir`).
+HELD_PUBLICATION_ONEVCS_FLOOR = Release(0, 40, 2)
+#: oneharness https://github.com/nickderobertis/oneharness/pull/1412 (`4882062e`), first
+#: cut as `oneharness-core` 0.24.1 and `oneharness-cli` 0.21.2: a Claude tool result
+#: marked an error normalizes to `ToolCallStatus::Failed`, and the text stream draws one
+#: `✗ <tool>  failed` line for it.
+FAILED_TOOL_CALL_CORE_FLOOR = Release(0, 24, 1)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -610,10 +624,11 @@ class LinkedCore(NamedTuple):
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
 #: between them would mean anything. Re-measured 2026-10-04 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.21.1 and names the `oneharness-cli`
+#: wheels: `config/oneharness.version` reads 0.21.2 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.24.0, while the engine wheel links 0.24.1 for every dependent — and the
-#: sibling `oneagentgraph-cli` and `onejudge-cli` wheels keep 0.24.0, which is the pairing
+#: against as 0.24.1, and the engine wheel links 0.24.1 for every dependent too — while
+#: the sibling `oneagentgraph-cli` and `onejudge-cli` wheels still declare 0.24.0, which
+#: is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
 #: number and the crate's **differ on this adoption**, as they have on most adoptions
@@ -805,7 +820,7 @@ def _ui_api_linked_engine() -> str:
     )
     document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
     declared = {
-        component["version"]
+        str(component["version"])
         for component in document["components"]
         if component["name"] == "onepipeline"
     }
@@ -983,7 +998,7 @@ def _sibling_core(distribution: str) -> str:
     )
     document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
     declared = {
-        component["version"]
+        str(component["version"])
         for component in document["components"]
         if component["name"] == UNRECONCILABLE_PIN.crate
     }
@@ -1003,10 +1018,12 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     and this host also installs each of them as a standalone CLI whose wheel resolved its
     own `oneharness-core`. Those two numbers are free to differ, and have on every
     adoption recorded here but one — so a reader who measured the sibling's own wheel
-    would be measuring an artifact no dispatch loads. They coincided at 0.24.0 on the
-    adoption before this one, a coincidence and not a contract, and parted again when
-    the engine moved to 0.24.1: it is the reason the pairing below is written out rather
-    than asserted as an inequality.
+    would be measuring an artifact no dispatch loads. On this adoption they differ
+    again: each sibling wheel resolved 0.24.0 while the engine links 0.24.1 for it, the
+    core carrying the failed-tool-call status. They coincided once, at 0.24.0, on an
+    earlier adoption, and parted when the engine moved to 0.24.1 — a coincidence and not
+    a contract: it is the reason the pairing below is written out rather than asserted
+    as an inequality.
 
     Written as the pairing rather than as an inequality. An inequality would go green on
     a build where both moved together, which is the reading it exists to deny, and would
@@ -1051,8 +1068,26 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             CLAUDE_LOGIN_CLASSIFICATION_CORE_FLOOR,
             "classifies a Claude login refusal as authentication rather than rate limiting",
         ),
+        (
+            "onevcs",
+            HELD_PUBLICATION_ONEVCS_FLOOR,
+            "holds a branch for its out-of-band publication, releases its finished "
+            "workspace and resumes a verified open change at its hosted checks",
+        ),
+        (
+            UNRECONCILABLE_PIN.crate,
+            FAILED_TOOL_CALL_CORE_FLOOR,
+            "marks a failed Claude tool call `failed` in its normalized status",
+        ),
     ],
-    ids=("onevcs", "oneagentgraph", "onejudge", UNRECONCILABLE_PIN.crate),
+    ids=(
+        "onevcs",
+        "oneagentgraph",
+        "onejudge",
+        UNRECONCILABLE_PIN.crate,
+        "onevcs-held-publication",
+        f"{UNRECONCILABLE_PIN.crate}-failed-tool-call",
+    ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(
     crate: str, floor: Release, carries: str

@@ -116,8 +116,8 @@ table above rather than a word to look for and never find.
 that decides what happens next. `PublishOutcome::Failed` carries a `kind` — `gate`,
 `invalid`, `sync-conflict`, `not-implemented`, `checks-failed`, `checks-unsettled`,
 `push-rejected`, `pushed-unverified`, `host-prerequisite`, or `cancelled`, which the CLI reports as exit 1 for the six
-verification failures, 2 for `invalid`, 3 for `sync-conflict`, and 70 for
-`not-implemented`, with `cancelled` on a status of its own — a human-readable `reason`, and a `retained` saying whether the branch was
+verification failures, 2 for `invalid`, 3 for `sync-conflict`, 70 for
+`not-implemented`, and 75 for `cancelled`, a status of its own — a human-readable `reason`, and a `retained` saying whether the branch was
 `handed-back` to a registered checkout or `refused` by it.
 
 `onepipeline`'s `vcs::failure_of` sorts those ten kinds arm by arm rather than by a
@@ -147,18 +147,19 @@ missing tool before this arm existed. A refused push carrying no such line is
 it stands and said no, `invalid` was refused at a trust boundary, and
 `not-implemented` has nothing behind it, so all three settle the residual
 `publication-failed` — the word every publication failure used to settle on, kept
-for exactly the endings no continuation follows from. `cancelled` is the tenth, and is a
-decision rather than a failure: the linked `onevcs`
-(https://github.com/nickderobertis/onevcs/pull/284) lets its caller cancel a publication
+for exactly the endings no continuation follows from. `cancelled` is the tenth, which
+onevcs 0.38.0 added (https://github.com/nickderobertis/onevcs/pull/284), and is a
+decision rather than a failure: the linked `onevcs` lets its caller cancel a publication
 while it waits — on the host's checks, on a merge the host was armed to perform, or on
 the merge queue — and the adopted engine
 (https://github.com/nickderobertis/onepipeline/pull/717) hands it the node's own token, so
 a `cancel`, `drop` or `retry` of the node **interrupts the publication's watch** rather
-than waiting out its bound. The node settles `cancelled`, the status every stopped
-dispatch settles under, and is not re-dispatched: nothing is undone, so the branch stays
-on its remote, any change request stays open, and the session is released. A `retry`'s
-replacement is dispatched only once that settlement has happened, and continues the same
-branch in a session nothing else holds.
+than waiting out its bound. The node settles under the status every stopped dispatch
+settles under, `cancelled`, re-dispatching nobody and reporting no failure, because the
+stop is a decision about the node rather than a verdict on its tree: nothing is undone,
+so the branch stays on its remote, any change request stays open, and the session is
+released. A `retry`'s replacement is dispatched only once that settlement has happened,
+and continues the same branch in a session nothing else holds.
 
 A preserving failure whose branch `onevcs` handed back is **not settled at all on
 the first attempt**: the node is dispatched again onto that same branch, carrying
@@ -676,7 +677,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.60.1 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.60.4 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the

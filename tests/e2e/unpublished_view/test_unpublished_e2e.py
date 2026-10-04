@@ -791,6 +791,10 @@ def test_print_surface_prints_the_vocabulary_through_the_wrapper() -> None:
     assert [line for line in lines if line.startswith("build-output ")] == [
         f"build-output {name}" for name in ("target", "node_modules", ".venv", ".nx", "dist")
     ]
+    assert [line for line in lines if line.startswith("in-flight ")] == [
+        f"in-flight {holding}"
+        for holding in ("owner-running", "run-root-occupied", "publication-running")
+    ]
     assert [line for line in lines if line.startswith("counts ")] == [
         f"counts {state}" for state in ("no", "unknown", "in-part")
     ]
