@@ -566,11 +566,15 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "deadline, streaming, labels, mode and plan-store credential masks changed; these "
         f"also differ: {sorted(differing - FOLLOW_UP_DIFFERENCES)}"
     )
-    assert (
-        _unmasked(judge_routing["harness"], PLAN_STORE_CREDENTIALS) == follow_up_routing["harness"]
-    ), (
+    # The judge's Codex arguments switch the ChatGPT-app connector tools off, which is a
+    # setting of the supervisory roles alone; the follow-up agent is a worker, so it is
+    # compared with the judge's routing as it stands without them.
+    judge_harness = _unmasked(judge_routing["harness"], PLAN_STORE_CREDENTIALS)
+    judge_harness["codex"]["args"] = {"value": None}
+    assert judge_harness == follow_up_routing["harness"], (
         "every identity of oneharness.follow-up.toml must carry oneharness.judge.toml's model, "
-        "environment and masks exactly, less the masks on the plan-store credentials alone"
+        "environment and masks exactly, less the masks on the plan-store credentials and the "
+        "judge's connector switch alone"
     )
     still_masked = [
         name for name in PLAN_STORE_CREDENTIALS if name in json.dumps(follow_up_routing["harness"])

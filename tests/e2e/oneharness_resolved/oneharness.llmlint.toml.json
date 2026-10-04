@@ -236,7 +236,9 @@
       "args": {
         "value": [
           "-c",
-          "sandbox_permissions=[\"disk-full-read-access\",\"network-full-access\"]"
+          "sandbox_permissions=[\"disk-full-read-access\",\"network-full-access\"]",
+          "-c",
+          "features.apps=false"
         ]
       },
       "bin": {

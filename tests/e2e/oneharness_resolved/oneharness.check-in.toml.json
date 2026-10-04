@@ -234,7 +234,10 @@
         "value": null
       },
       "args": {
-        "value": null
+        "value": [
+          "-c",
+          "features.apps=false"
+        ]
       },
       "bin": {
         "value": null

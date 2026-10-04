@@ -53,7 +53,15 @@ harnesses = [
 # what costs a mask on the released oneharness.
 # llmlint: ignore[least_privilege_grants] Codex exposes only coarse disk/network grants; llmlint needs repository reads and its model endpoint, with the outer container as boundary.
 [harness.codex]
-args = ["-c", 'sandbox_permissions=["disk-full-read-access","network-full-access"]']
+# The second pair switches the ChatGPT-app connector tools off, for the reason
+# `oneharness.judge.toml` states at the same table; it is appended, so the sandbox grant
+# above it stands.
+args = [
+    "-c",
+    'sandbox_permissions=["disk-full-read-access","network-full-access"]',
+    "-c",
+    "features.apps=false",
+]
 
 # The plan store's credentials — the board token and the Linear key — are the store's,
 # and this role never reaches the store, so they stop here rather than travelling to the provider. Stated per role rather than in the

@@ -147,21 +147,42 @@ def record_launch() -> int | None:
     return len(path.read_text(encoding="utf-8").splitlines())
 
 
+#: The codex options oneharness passes that take a value as the next word. A role's own
+#: `[harness.codex] args` are appended *after* the prompt — `exec --json <prompt> -c
+#: features.apps=false` — and codex accepts an option on either side of its positional,
+#: so the prompt is the last word that is neither an option nor an option's value.
+#: `tests/e2e/test_fake_codex_reads_each_roles_prompt_e2e.py` holds this set to the argv the
+#: pinned oneharness builds for every role here, so an option it starts passing fails there.
+VALUED_OPTIONS = frozenset(
+    ("-c", "--config", "-m", "--model", "-s", "--sandbox", "-C", "--cd", "-p", "--profile")
+)
+
+
 def read_prompt(argv: list[str]) -> str | None:
     """The prompt this launch was given, or None when a journey asked for no reading of it.
 
     codex takes its prompt as the last positional word of `exec --json <prompt>`,
     which is the argv oneharness builds and `tests/e2e/test_orchestrate_launch_e2e.py`
-    reads back; nothing is inferred from flags this stand-in does not implement. The
-    one other spelling codex accepts is `-`, which says the prompt is on stdin — what
-    oneharness hands over when a prompt outgrows a command line, as a plan reviewed
-    whole does — so that word is read through rather than taken as the prompt. Read
-    once, because stdin can be read once, and only when something reads the prompt.
+    reads back, followed by any `args` the role's config appends; each option in
+    `VALUED_OPTIONS` is skipped with its value. The one other spelling codex accepts
+    is `-`, which says the prompt is on stdin — what oneharness hands over when a
+    prompt outgrows a command line, as a plan reviewed whole does — so that word is
+    read through rather than taken as the prompt. Read once, because stdin can be read
+    once, and only when something reads the prompt.
     """
     wanted = ("FAKE_CODEX_PROMPT_LOG", "FAKE_CODEX_RUN_ON_MARKER")
     if not argv or not any(os.environ.get(name) for name in wanted):
         return None
-    return sys.stdin.read() if argv[-1] == "-" else argv[-1]
+    positional: list[str] = []
+    words = iter(argv)
+    for word in words:
+        if word in VALUED_OPTIONS:
+            next(words, None)
+        elif word == "-" or not word.startswith("-"):
+            positional.append(word)
+    if not positional:
+        return None
+    return sys.stdin.read() if positional[-1] == "-" else positional[-1]
 
 
 def record_prompt(prompt: str | None) -> None:

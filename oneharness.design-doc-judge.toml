@@ -17,6 +17,11 @@
 # tests/e2e/test_oneharness_timeout_e2e.py reads both sides back from the real CLI.
 extends = "oneharness.identities.toml"
 
+# mode: the permission mode this reviewer runs in, for the reason
+# `oneharness.judge.toml` states at the same key — without it a Codex candidate here is
+# framed read-only and cannot read the document it reviews.
+mode = "plan"
+
 # timeout: the per-turn deadline in seconds. Stated rather than inherited, for the
 # reason the writer's is: this role is a bounded job, so the unbounded default would
 # only ever mean a wedged turn that never ends. Shorter than the writer's because the
@@ -47,6 +52,11 @@ harnesses = [
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
+
+# The ChatGPT-app connector tools are switched off for this supervisory role, for the
+# reason `oneharness.judge.toml` states at the same table.
+[harness.codex]
+args = ["-c", "features.apps=false"]
 
 # **Each variant below restates a whole `unset_env` to leave `GH_PROJECTS_TOKEN`
 # and `HELLOPATIENT_LINEAR_API_KEY` travelling, which is this role's whole point** — it supervises a turn whose task reads the plan out of the store. A child replaces the parent's

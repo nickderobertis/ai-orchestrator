@@ -66,6 +66,9 @@ harnesses = [
 # the intent silently unmet.
 [harness.codex]
 model = "gpt-6-astra"
+# The ChatGPT-app connector tools are switched off for this supervisory role, for the
+# reason `oneharness.judge.toml` states at the same table.
+args = ["-c", "features.apps=false"]
 
 # Restates `unset_env` because it names `model`: the mask is inherited correctly, but
 # `oneharness config` reports an inherited one as `[]` once the child mentions the

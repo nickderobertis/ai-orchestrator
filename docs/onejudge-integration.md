@@ -152,6 +152,30 @@ member gets both files; a single-sided one gets only the agent's, which is how
 `tests/e2e/fake_backend.py` — the double for the paid model at that seam — tells a
 pacemaker turn from a two-party agent turn, and a judge turn from either.
 
+### The mode a judge runs in, and the tools a supervisory Codex turn is offered
+
+onejudge frames every evaluator call by the oneharness mode its judge resolves, and how
+that mode is resolved and recorded is onejudge's to state, in its
+`crates/onejudge/src/oneharness/posture.rs`. Its read-only framing leaves a Codex judge, which has no
+file-reading tool beside its shell, nothing to read the worktree with. So both judge
+sides onejudge frames here, `oneharness.judge.toml` and
+`oneharness.design-doc-judge.toml`, state `mode = "plan"` at their own top level: Codex
+runs it in its read-only sandbox with oneharness's plan instruction, and Claude Code in
+its plan mode, which may write a plan under the identity's own config directory and
+nothing in the worktree. It is not in a shared parent, because `oneharness.dispatch.toml`
+is also the worker's. Ten Codex judge turns, each asked a question only a file in the
+worktree could answer, ran no command before the change and all answered that no tool
+could read the file; after it, all ten read the file with a shell command and answered
+correctly.
+
+Every supervisory Codex role — both judges, the monitor, the pacemaker, the plan
+reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
+its `[harness.codex]` args, which removes the ChatGPT-app connector tools
+(`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The worker
+roles and the shared parents carry neither setting.
+`tests/e2e/test_supervisory_codex_posture_e2e.py` holds both to what the real CLI
+resolves and to the argv a dry run builds per identity.
+
 ### The judge side may be a list of judges
 
 The pinned onejudge accepts a judge side that is a **list** of judges rather than one:

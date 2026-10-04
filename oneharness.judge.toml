@@ -8,6 +8,12 @@
 # identities run on.
 extends = "oneharness.dispatch.toml"
 
+# mode: the posture onejudge frames this judge by, so it may read the tree it judges.
+# Here rather than in `oneharness.dispatch.toml`, which is also the worker's parent,
+# because it is a decision about the judging role. docs/onejudge-integration.md, "The
+# mode a judge runs in".
+mode = "plan"
+
 # history_labels: the counterpart to the agent config's `role = "agent"` — this is
 # the side that supervises. Stamping it makes "show me the judge's view of this
 # node" a filter rather than a guess from the session name (`JUDGE_PREFIXES`).
@@ -31,6 +37,17 @@ harnesses = [
     "claude-code:primary-backup",
     "claude-code:primary",
 ]
+
+# Codex's ChatGPT-app connector tools (`mcp__codex_apps__…`) are switched off: left on,
+# a Codex turn here is offered some 260 of them — about 19,000 tokens — that no
+# supervisory turn uses, sitting between the model and the shell it reads the tree with.
+# `features.apps` is codex-cli's own switch for them. Declared at the harness level, the
+# way `oneharness.llmlint.toml` passes its sandbox permissions: both Codex identities take
+# it, no Claude candidate can (`-c` is claude's `--continue`), and this role's variants —
+# with their credential masks — stay untouched. Only the supervisory Codex roles carry it;
+# a worker's own `args` would replace a parent's, so no shared parent does.
+[harness.codex]
+args = ["-c", "features.apps=false"]
 
 # The cheaper supervisor tier, and the one thing this role changes about the
 # identities themselves. Codex matches the agent side's GPT-5.6 Sol, inherited

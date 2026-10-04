@@ -226,7 +226,10 @@
         "value": null
       },
       "args": {
-        "value": null
+        "value": [
+          "-c",
+          "features.apps=false"
+        ]
       },
       "bin": {
         "value": null
@@ -359,7 +362,7 @@
     "value": null
   },
   "mode": {
-    "value": null
+    "value": "plan"
   },
   "model": {
     "value": null
