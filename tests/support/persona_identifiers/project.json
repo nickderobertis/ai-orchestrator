@@ -5,7 +5,9 @@
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [],
+  "implicitDependencies": [
+    "support-registered-checkouts"
+  ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/persona_identifiers.py"

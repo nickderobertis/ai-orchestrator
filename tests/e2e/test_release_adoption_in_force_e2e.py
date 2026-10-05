@@ -57,18 +57,23 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
 import pytest
 from onevcs_state_snapshot import host_registry_environment, host_root
 from project_fixtures import local_project
-from registered_checkouts import registered_checkouts
+from sibling_facts import (
+    RELEASES,
+    declaring_identities,
+    default_target_complaint,
+    override_default_targets,
+    registered_checkouts,
+    settle_drift,
+)
 from test_linked_libraries import LINKED_IN_BINARY, Release
 from waits import timeout as e2e_timeout
 
-from orchestrator.host_installs import by_producer
 from orchestrator.root import REPO_ROOT
 
 #: The release that added `onevcs release` and the release-target document behind it,
@@ -113,56 +118,6 @@ RELEASE_SUBCOMMANDS = (
     "acknowledge",
     "declaration",
 )
-
-#: Which registered identities carry their own `release-targets.toml`, and how many
-#: targets each declares. First measured on the adopted onevcs 0.16.2, which is the
-#: release that started reading a repository's own declaration beside the host's — under
-#: which six of this host's registered repositories began declaring targets without
-#: anybody configuring anything here. `onetaskgraph` is the seventh and arrived the same
-#: way: its declaration landed as `f42cccc feat: declare the release targets this
-#: repository publishes (#127)` on that repository's own base, and this gate is what
-#: brought it due here — the publication of an unrelated branch was refused for it,
-#: which is the mechanism working rather than a cost of it.
-#:
-#: Held as the whole mapping rather than as "at least one", for the reason
-#: `LINKED_HARNESS_CORES` is: what a reader of `AGENTS.md` acts on is *which* repository
-#: has a release to await, and a set that only had to be non-empty would go on passing
-#: while the one they care about dropped out. `AGENTS.md`'s "Sequencing a node behind a
-#: release" names this same list, so a change upstream comes due in the prose as well.
-#:
-#: Asserted against each checkout's **fetched remote base** rather than against what
-#: `onevcs` answers here now, and the difference is the whole reason this constant is
-#: usable at all. `onevcs release targets` reads the publication checkout's working
-#: tree, which several managers share: a checkout sitting on somebody's branch answers
-#: `unreadable`, and one whose base is simply behind its origin answers `undeclared` —
-#: indistinguishable, from here, from a repository that declares nothing. Taken that
-#: way this same list measured six declaring identities in one run, one in the next, and
-#: none in the publication that was refused for it, while nothing upstream had moved.
-#: A remote-tracking ref moves only when somebody fetches, never when a worktree is
-#: checked out or reset, so reading the declaration there is a reading of the repository
-#: rather than of what another manager's dispatch happens to be doing.
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The tier this constant
-# is asserted in is the one the block above already justifies; it declares no marker of
-# its own and adds no tier.
-DECLARING_IDENTITIES = {
-    "github.com/nickderobertis/llmlint": 2,
-    "github.com/nickderobertis/oneagentgraph": 3,
-    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
-    "github.com/nickderobertis/onebudgetspec": 5,
-    "github.com/nickderobertis/oneharness": 6,
-    "github.com/nickderobertis/onejudge": 3,
-    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
-    "github.com/nickderobertis/onemessagebus": 5,
-    "github.com/nickderobertis/onepipeline": 3,
-    "github.com/nickderobertis/onepipeline-ui": 4,
-    "github.com/nickderobertis/onetaskgraph": 5,
-    "github.com/nickderobertis/onevcs": 4,
-    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
-    "github.com/nickderobertis/printobserver": 17,
-    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
-    "github.com/nickderobertis/skilltest": 6,
-}
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 #: How the recipes reach the CLI whose version `config/onevcs.version` pins — the same
 #: `uv run` every manager verb in the justfile is a wrapper over, so what this journey
@@ -216,14 +171,6 @@ DEFAULT_TARGET_UNREADABLE = "naming default_target"
 #: company from the moment a registration lands in `config/` until `just repos-apply`
 #: installs it — so a listed identity can be one no `onevcs` verb can resolve at all.
 NOT_REGISTERED = "is not a registered repository"
-
-DECLARATION = "release-targets.toml"
-
-#: How a checkout's fetched base is resolved. `origin/HEAD` is what a clone records
-#: when it was made, and is asked first because it is the remote's own answer; the two
-#: fallbacks are for a checkout that never recorded one — three of this host's do not —
-#: and are tried rather than guessed, since a ref that does not resolve is skipped.
-REMOTE_BASES = ("origin/HEAD", "origin/main", "origin/master")
 
 
 class Declaration(TypedDict):
@@ -319,52 +266,6 @@ def _registry_identities() -> frozenset[str]:
     )
 
 
-def _git(checkout: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(checkout), *arguments],
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(120),
-        check=False,
-    )
-
-
-def _fetched_base(checkout: Path) -> str | None:
-    """The remote-tracking ref standing for `checkout`'s base branch, or None.
-
-    A remote-tracking ref is the one thing about a shared checkout that a concurrent
-    dispatch does not move: it advances when somebody fetches and at no other time, so
-    it says what the repository last published rather than what a worktree is currently
-    sitting on.
-    """
-    for candidate in REMOTE_BASES:
-        resolved = _git(checkout, "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}")
-        if resolved.returncode == 0:
-            return candidate
-    return None
-
-
-def _declared_at_fetched_base(checkout: Path) -> int | None:
-    """How many targets `checkout`'s repository declares at its fetched base.
-
-    None where it declares none — which covers a repository with no declaration at all
-    and one whose base this host holds no fetched copy of, because a release this host
-    has never fetched the declaration of is one it could not await either.
-
-    The document is handed to a TOML parser rather than scanned, so a `[[target]]`
-    inside a comment or a string is not counted and a malformed document fails here
-    rather than being silently read as declaring nothing.
-    """
-    base = _fetched_base(checkout)
-    if base is None:
-        return None
-    shown = _git(checkout, "show", f"{base}:{DECLARATION}")
-    if shown.returncode != 0:
-        return None
-    declared = tomllib.loads(shown.stdout).get("target", [])
-    return len(declared) or None
-
-
 def _plan(tmp_path: Path, name: str, tasks: list[dict[str, object]]) -> str:
     """A local project the engine's own loader will read, and nothing will dispatch.
 
@@ -456,46 +357,42 @@ def test_the_cli_the_manager_verbs_run_carries_the_release_surface() -> None:
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# This journey's tier is the module's, for the reason the block around `pytestmark` gives: its
+# subject is the installed `onevcs` and this host's checkouts, outside every key, so it runs in
+# the uncached `orchestrator:test-checkouts` and a project edge would only memoize it. It is a
+# pytest journey over a published CLI, not a shell test suite.
 def test_which_registered_repositories_declare_a_release_target() -> None:
     """The section's opening claims, measured rather than assumed.
 
     "In force" and "in use" are different, and this is the one that decides what a run
     actually does: with no target declared for a repository, a dependency landing there
-    earns no reference row and no hold, whatever mode a node resolves to. That used to
-    be true of every repository registered here, and onevcs 0.16.x ended it without
-    anybody configuring anything — a repository's own `release-targets.toml` is now read
-    beside the host's document, and six of this host's siblings ship one. So the claim
-    the section makes is narrower than it was and this journey measures it as such:
-    `ai-orchestrator` declares none, and exactly `DECLARING_IDENTITIES` do.
+    earns no reference row and no hold, whatever mode a node resolves to. Which of this
+    host's siblings declare targets, and how many, is theirs to decide and is derived by
+    `declaring_identities` every time rather than restated: a producer gaining or losing
+    a target is normal development in its own repository and fails nothing here. What
+    this repository decides, and what is held, is that `ai-orchestrator` itself declares
+    none — the sentence `AGENTS.md` makes about a plan of it awaiting nothing as a
+    producer.
 
     What this host's tracked override *configures* over those declarations — the half
     that makes a `published` node of this repository able to finish — is the next
     journey's, because it is inside the claim only once the override is in force here.
 
-    Asked of **every** registered identity rather than of this repository alone,
-    because that is the breadth of the claim. A version of this that asked only about
-    `ai-orchestrator` would pass while a sibling repository silently gained or lost a
-    target and a `published` node's wait changed under a section that still described
-    the old set.
-
     "Registered here" is the `onevcs` registry rather than `config/onevcs.checkouts`,
     and the difference is load-bearing between a registration landing in `config/` and
     `just repos-apply` installing it: the tracked list names the identity, the registry
     cannot resolve it, and no plan can dispatch against it either. Such an identity is
-    outside the claim rather than an answer this journey declined to get — but that is
-    *proven* against the registry's own listing below, not assumed from a refusal,
-    because a refusal misread is exactly how an identity that does declare a target
-    would go unasked.
+    outside the claim, *proven* against the registry's own listing below rather than
+    assumed from a refusal.
 
-    The declaring set itself is read from each checkout's fetched base and the live
-    `onevcs` answer is cross-checked against it, for the reason `DECLARING_IDENTITIES`
-    records: several managers share these checkouts, so the working tree `onevcs`
-    reads is whatever the last dispatch left there, and the identical question
-    answered six, then one, then none across three runs of this journey while nothing
-    upstream had moved. What the cross-check keeps is the half a git read cannot give
-    — that the surface really does find and count a declaration — and it is made over
-    the checkouts that can answer today rather than over all of them, because an
-    identity whose checkout is on somebody's branch is reporting on that branch.
+    The live `onevcs` answer is cross-checked against the declarations at each fetched
+    base, which keeps the half a git read cannot give — that the surface really does
+    find and count a declaration — over the checkouts that can answer today, since an
+    identity whose checkout is on somebody's branch is reporting on that branch. Its
+    subject is the siblings' live state, so a disagreement is settled by
+    `tests/sibling_facts.py`: it refuses a change that edits the registration and is
+    reported for any other.
     """
     identities = registered_checkouts()
     assert identities, (
@@ -505,17 +402,12 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
     )
 
     held = _registry_identities()
-    declaring: dict[str, int] = {}
+    read = declaring_identities()
+    declaring = read.counts
     answered_live: dict[str, int] = {}
     unreadable: dict[str, object] = {}
     unregistered: dict[str, str] = {}
-    for identity, checkout in sorted(identities.items()):
-        # The declaring set is a git read of the held checkout, made before the registry
-        # is asked anything: which repositories declare a target is a fact about their
-        # bases, and one this host has not registered yet declares no less for it.
-        at_base = _declared_at_fetched_base(checkout)
-        if at_base is not None:
-            declaring[identity] = at_base
+    for identity in sorted(identities):
         reported = _onevcs(RELEASE_VERB, "targets", identity, "--json")
         if reported.returncode != 0 and NOT_REGISTERED in reported.stderr:
             assert identity not in held, (
@@ -545,14 +437,6 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
         f"set; run `just repos-apply`. Awaiting registration: {sorted(unregistered)}"
     )
 
-    assert declaring == DECLARING_IDENTITIES, (
-        f"the registered repositories declaring a release target are {declaring}, and "
-        f"this repository is written against {DECLARING_IDENTITIES}. "
-        f"{GUIDANCE_SECTION!r} in AGENTS.md names that same list and says which of them "
-        "a dependency can be awaited in; re-read it against what is really declared. "
-        "This is read from each checkout's fetched base, so an identity missing here "
-        "either stopped declaring or has not been fetched since it started"
-    )
     assert THIS_REPOSITORY_IDENTITY not in declaring, (
         f"{THIS_REPOSITORY_IDENTITY} now declares a release target, so a plan of this "
         f"repository can hold on one. {GUIDANCE_SECTION!r} in AGENTS.md says it declares "
@@ -568,19 +452,24 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
         for identity, found in answered_live.items()
         if found != declaring.get(identity)
     }
-    assert not disagreed, (
-        f"`onevcs {RELEASE_VERB} targets` counted {{identity: (it found, the fetched base "
-        f"declares)}} {disagreed}. Where it can read a checkout at all, the surface and "
-        "the repository have to agree: a count only one of them has is either a "
-        "declaration onevcs mis-parses or one that reached the working tree without "
-        "reaching the base"
+    settle_drift(
+        [
+            *read.unreadable,
+            *(
+                f"`onevcs {RELEASE_VERB} targets` counted {found} targets for {identity}, and "
+                f"its fetched base declares {at_base}: a count only one of them has is either "
+                "a declaration onevcs mis-parses or one that reached the working tree without "
+                "reaching the base"
+                for identity, (found, at_base) in sorted(disagreed.items())
+            ),
+        ]
     )
-    assert answered_live or unreadable, (
-        "no registered checkout answered a declaration at all, so nothing here proves "
-        f"`onevcs {RELEASE_VERB} targets` reads one; every identity it could reach "
-        "reported declaring nothing while the fetched bases say "
-        f"{sorted(DECLARING_IDENTITIES)} do"
-    )
+    if declaring:
+        assert answered_live or unreadable, (
+            "no registered checkout answered a declaration at all, so nothing here proves "
+            f"`onevcs {RELEASE_VERB} targets` reads one; every identity it could reach "
+            f"reported declaring nothing while the fetched bases say {sorted(declaring)} do"
+        )
 
     # And the refusal an operator meets when they ask anyway, which is what tells them
     # where to declare one. Named in AGENTS.md, so it is read from the CLI rather than
@@ -591,6 +480,14 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
     assert "release-targets file" in asked.stderr, asked.stderr
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split]  # noqa: E501
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# This journey's tier is the module's, for the reason the block around `pytestmark` gives: its
+# subject is the installed `onevcs` and this host's checkouts, outside every key, so it runs in
+# the uncached `orchestrator:test-checkouts` and a project edge would only memoize it. It is a
+# pytest journey over a published CLI, not a shell test suite.
 def test_this_host_resolves_what_the_tracked_override_configures() -> None:
     """The override's answer on this host, once `just repos-apply` has put it in force.
 
@@ -653,20 +550,15 @@ def test_this_host_resolves_what_the_tracked_override_configures() -> None:
             "plan says otherwise; the installed override is the tracked one, so the pinned "
             "onevcs is not resolving config/onevcs.releases.yml as that file states"
         )
-        installed = by_producer(identity)
-        if installed is None:
-            assert "default_target" not in declared, (
-                f"{identity} resolves the default target {declared.get('default_target')!r} "
-                "while orchestrator/host_installs.py says this host installs nothing from "
-                "it; the override names a producer the table does not"
-            )
-        else:
-            assert declared.get("default_target") == installed.target, (
-                f"{identity} resolves the default target {declared.get('default_target')!r} "
-                f"rather than {installed.target!r}, which is the wheel this host installs "
-                f"({installed.artifact}); a `published` node depending on it would wait on "
-                "the wrong artifact, or on nothing"
-            )
+        complaint = default_target_complaint(
+            identity,
+            declared.get("default_target"),
+            override_default_targets(RELEASES.read_text(encoding="utf-8")),
+        )
+        assert complaint is None, complaint
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split]  # noqa: E501
 
 
 def test_the_engine_a_dispatch_runs_links_an_onevcs_that_can_resolve_a_release() -> None:

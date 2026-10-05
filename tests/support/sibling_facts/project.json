@@ -1,17 +1,18 @@
 {
-  "name": "support-persona-recipes",
+  "name": "support-sibling-facts",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "tags": [
     "type:test-support"
   ],
   "implicitDependencies": [
-    "support-registered-checkouts",
-    "support-sibling-facts"
+    "support-registered-checkouts"
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/persona_recipes.py"
+      "{workspaceRoot}/tests/sibling_facts.py",
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/scripts/comparison-base.sh"
     ]
   },
   "targets": {

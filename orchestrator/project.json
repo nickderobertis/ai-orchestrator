@@ -1,4 +1,5 @@
 {
+  "//": "llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The suite's tier keying (tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach) requires each support project a tier of this project reads to be an implicit dependency of it, so every support-* edge below is required rather than chosen; splitting the suite into projects behind their own edges is a separate change. JSON has no comment to scope this to the one list.",
   "name": "orchestrator",
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
@@ -38,6 +39,7 @@
     "support-persona-identifiers",
     "support-persona-probe",
     "support-persona-recipes",
+    "support-persona-stand-in",
     "support-plan-root-variable",
     "support-plan-sources",
     "support-plan-store-pin",
@@ -53,6 +55,7 @@
     "support-served-recipe",
     "support-shared-dispatch-bar",
     "support-short-state",
+    "support-sibling-facts",
     "support-unpublished-registry",
     "support-waits",
     "support-watch-rule"

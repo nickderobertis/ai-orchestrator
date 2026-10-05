@@ -36,11 +36,12 @@ notice.
 from __future__ import annotations
 
 import re
-import subprocess
 from fnmatch import fnmatch
 from functools import cache
 from pathlib import Path
 from typing import NamedTuple
+
+from registered_checkouts import UnreadableSibling, sibling_git
 
 from orchestrator.root import REPO_ROOT
 
@@ -175,17 +176,14 @@ def tracked_names(checkout: Path) -> frozenset[str]:
     Git's own index is what a repository *has*: a build artifact or a stray local file is
     not something a persona may name, and an ignored one is not something a reader of that
     repository would find. Directory prefixes are included because a persona names
-    directories (`expected/`) as readily as files.
+    directories (`expected/`) as readily as files. Raises :class:`UnreadableSibling`
+    where `checkout` cannot be read at all.
     """
-    listed = subprocess.run(
-        ["git", "-C", str(checkout), "ls-files", "-z"],
-        text=True,
-        capture_output=True,
-    )
+    listed = sibling_git(checkout, "ls-files", "-z")
     if listed.returncode != 0:
         return frozenset()
     found: set[str] = set()
-    for entry in listed.stdout.split("\0"):
+    for entry in listed.stdout.decode("utf-8", "replace").split("\0"):
         if not entry:
             continue
         found.add(entry)
@@ -228,32 +226,58 @@ def _braced_body(source: str, opening: int) -> str | None:
     return None
 
 
-def declarations_of(checkout: Path, type_name: str) -> tuple[Declaration, ...]:
+class Declarations(NamedTuple):
+    """The declarations of one type a repository tracks, and each one that could not be read."""
+
+    found: tuple[Declaration, ...]
+    #: A finding for each declaring file the search or the read could not get at, naming
+    #: it: a declaration nobody read is no evidence either way about the fields it holds.
+    unreadable: tuple[str, ...]
+
+
+def declarations_of(checkout: Path, type_name: str) -> Declarations:
     """Every brace-delimited declaration of `type_name` the repository tracks.
 
     `git grep` narrows which tracked files are worth reading — a corpus repository holds
     tens of thousands of them — and the parse below is what actually decides, since the
-    search is a plain-text one and cannot tell a declaration from a mention of it.
+    search is a plain-text one and cannot tell a declaration from a mention of it. A file
+    the search could not read, or the read could not open or decode, is named in
+    ``unreadable`` whatever the others declare. Raises :class:`UnreadableSibling` where
+    `checkout` cannot be read at all.
     """
     pattern = DECLARATION_SEARCH.format(type=re.escape(type_name))
-    found = subprocess.run(
-        ["git", "-C", str(checkout), "grep", "-lIE", pattern],
-        text=True,
-        capture_output=True,
-    )
+    found = sibling_git(checkout, "grep", "-lIE", pattern)
+    unreadable: list[str] = []
+    # git skips a tracked file it cannot read, says so on stderr, and still exits 0 when
+    # another file matched, so its diagnostics are findings rather than noise.
+    complaint = found.stderr.decode("utf-8", "replace").strip()
+    if complaint:
+        unreadable.append(
+            f"`git grep` could not search every tracked file of {checkout} for `{type_name}`: "
+            + "; ".join(sorted(set(complaint.splitlines())))
+        )
     if found.returncode != 0:
-        return ()
+        return Declarations((), tuple(unreadable))
     opening = re.compile(DECLARATION.format(type=re.escape(type_name)))
     declarations: list[Declaration] = []
-    for relative in sorted(filter(None, found.stdout.splitlines())):
-        source = (checkout / relative).read_text(encoding="utf-8", errors="replace")
+    for relative in sorted(filter(None, found.stdout.decode("utf-8", "replace").splitlines())):
+        try:
+            source = (checkout / relative).read_bytes().decode("utf-8")
+        except OSError as error:
+            unreadable.append(
+                f"{relative} cannot be read in {checkout} ({error.strerror or error})"
+            )
+            continue
+        except UnicodeDecodeError as error:
+            unreadable.append(f"{relative} is not UTF-8 in {checkout} ({error})")
+            continue
         for match in opening.finditer(source):
             body = _braced_body(source, match.end() - 1)
             if body is None:
                 continue
             line = source.count("\n", 0, match.start()) + 1
             declarations.append(Declaration(where=f"{relative}:{line}", fields=fields_in(body)))
-    return tuple(declarations)
+    return Declarations(tuple(declarations), tuple(unreadable))
 
 
 def undefined_identifiers(identifiers: NamedIdentifiers, checkout: Path) -> str | None:
@@ -263,7 +287,10 @@ def undefined_identifiers(identifiers: NamedIdentifiers, checkout: Path) -> str 
     investigation: what made the demand, which name it used, and where that name was
     looked for — the checkout, and for a field the declaration site that answered.
     """
-    tracked = tracked_names(checkout)
+    try:
+        tracked = tracked_names(checkout)
+    except UnreadableSibling as error:
+        return f"{error}, so {identifiers.named} could not be reconciled against it at all"
     if not tracked:
         return (
             f"`git ls-files` listed nothing in {checkout}, so {identifiers.named} could "
@@ -276,7 +303,10 @@ def undefined_identifiers(identifiers: NamedIdentifiers, checkout: Path) -> str 
         if not resolves(named, tracked)
     ]
     for literal in identifiers.literals:
-        findings.extend(_undeclared_fields(identifiers.named, literal, checkout))
+        try:
+            findings.extend(_undeclared_fields(identifiers.named, literal, checkout))
+        except UnreadableSibling as error:
+            findings.append(str(error))
     if not findings:
         return None
     return "\n".join(
@@ -291,17 +321,22 @@ def undefined_identifiers(identifiers: NamedIdentifiers, checkout: Path) -> str 
 
 def _undeclared_fields(named: str, literal: Literal, checkout: Path) -> list[str]:
     """What `literal` names that no declaration of its type in `checkout` declares."""
-    declarations = declarations_of(checkout, literal.type_name)
+    read = declarations_of(checkout, literal.type_name)
+    declarations = read.found
     if not declarations:
         return [
+            *read.unreadable,
             f"{named} writes a `{literal.type_name} {{ … }}` literal, and the registered "
-            f"checkout {checkout} declares no brace-delimited `{literal.type_name}` at all"
+            f"checkout {checkout} declares no brace-delimited `{literal.type_name}` at all",
         ]
     declared: frozenset[str] = frozenset().union(*(found.fields for found in declarations))
     sites = ", ".join(found.where for found in declarations)
     return [
-        f"{named} writes `{literal.type_name} {{ {field}: … }}`, which the "
-        f"`{literal.type_name}` declared at {sites} in the registered checkout {checkout} "
-        f"does not declare — it declares: {', '.join(sorted(declared))}"
-        for field in sorted(literal.fields - declared)
+        *read.unreadable,
+        *(
+            f"{named} writes `{literal.type_name} {{ {field}: … }}`, which the "
+            f"`{literal.type_name}` declared at {sites} in the registered checkout {checkout} "
+            f"does not declare — it declares: {', '.join(sorted(declared))}"
+            for field in sorted(literal.fields - declared)
+        ),
     ]

@@ -2,34 +2,43 @@
 
 `orchestrator/host_installs.py` states, per producer, which wheel this host installs,
 what the producer's own declaration calls it, and which `config/<pin>.version` it
-governs. Four other places carry a piece of that same answer — `pyproject.toml`'s pinned
-distributions, the `config/*.version` files, `config/onevcs.releases.yml`'s
-``default_target`` per producer, and each producer's own `release-targets.toml` — and a
-piece that moved in one of them without the table is the drift a `published` node would
-then wait on: the wrong artifact, or one no release carries.
+governs. Three other places this repository writes carry a piece of that same answer —
+`pyproject.toml`'s pinned distributions, the `config/*.version` files, and
+`config/onevcs.releases.yml`'s ``default_target`` per producer — and a piece that moved
+in one of them without the table is the drift a `published` node would then wait on:
+the wrong artifact, or one no release carries. Those are reconciled in the cached tier.
 
-The first three are this workspace's, reconciled in the cached tier. The fourth lives in
-another repository's checkout, so its reconciliation is `reads_checkouts` — the uncached
-tier, for the reason that marker exists: a memo keyed on this workspace would replay a
-green straight across the day a producer renames a target. The fixtures under
-`tests/fixtures/release-targets/` are copies of those declarations, one per producer,
-standing in for them in the registry-apply journey; each is held whole to the
-declaration it copies in that same tier, so the journey's scratch producers keep
-declaring what the real ones do.
+The fourth piece is each producer's own `release-targets.toml`, which is the producer's
+to change and is never copied here. What the table and the override claim of it is read
+against the declaration itself, at its fetched base, by `tests/sibling_facts.py`: the
+readers are driven against scratch producer checkouts in the cached tier, and against
+this host's checkouts in `reads_checkouts`, where a true contradiction refuses only a
+change that edits the registration and is reported, not failed, for any other.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
-import json
-import re
-import subprocess
 import tomllib
+import warnings
 from pathlib import Path
 
-import onevcs_state_snapshot
 import pytest
-from registered_checkouts import RepoIdentity, registered_checkouts
+from registered_checkouts import RepoIdentity
+from sibling_facts import (
+    RELEASE_RULE,
+    SiblingDrift,
+    advance,
+    declaration,
+    declared_targets,
+    held_checkouts,
+    override_default_targets,
+    read_declarations,
+    registered_checkouts,
+    release_contradictions,
+    scratch_checkout,
+    settle_drift,
+)
 
 from orchestrator.host_installs import (
     AWAITING_FIRST_ADOPTION,
@@ -99,20 +108,6 @@ EXPECTED_ROWS = (
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 VERSION_FILES = REPO_ROOT / "config"
 RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
-#: One stand-in `release-targets.toml` per producer, named by the producer's repository
-#: name, which `tests/e2e/test_repo_registry_apply_e2e.py` commits at a scratch
-#: producer's base so `onevcs release targets` has a declaration to resolve the
-#: override's `default_target` against.
-FIXTURES = REPO_ROOT / "tests" / "fixtures" / "release-targets"
-
-#: One rule of the override, as the tracked file writes every rule: a one-line flow
-#: `match` naming the repository, then its fields one per indented line up to the next
-#: rule. Read as text because this package ships no YAML parser; a rule spelled any
-#: other way is not found, which fails the reconciliation below rather than passing it.
-RELEASE_RULE = re.compile(
-    r"- match: \{host: (?P<host>[^,]+), owner: (?P<owner>[^,]+), name: (?P<name>[^}]+)\}\n"
-    r"(?P<fields>(?:    \S.*\n)*)"
-)
 
 #: The one installed wheel no dependency in the project lock carries: `llmlint-cli`, which
 #: `scripts/setup-llmlint.sh` installs as a `uv tool`, capped by `config/oneharness.version`
@@ -271,19 +266,7 @@ def test_pinned_wheels_are_rows_and_rows_are_pinned_or_a_stated_exception() -> N
 
 def _override_default_targets() -> dict[RepoIdentity, str]:
     """Each producer's `default_target` as `config/onevcs.releases.yml` writes it."""
-    text = RELEASES.read_text(encoding="utf-8")
-    rules = list(RELEASE_RULE.finditer(text))
-    assert len(rules) == text.count("- match:"), (
-        "config/onevcs.releases.yml no longer writes every rule's match as a one-line flow "
-        f"mapping, so only {len(rules)} of {text.count('- match:')} rules were read back"
-    )
-    defaults: dict[RepoIdentity, str] = {}
-    for rule in rules:
-        identity = f"{rule['host']}/{rule['owner']}/{rule['name']}"
-        named = re.search(r"^    default_target: (\S+)$", rule["fields"], re.MULTILINE)
-        if named is not None:
-            defaults[identity] = named.group(1)
-    return defaults
+    return override_default_targets(RELEASES.read_text(encoding="utf-8"))
 
 
 #: The producers whose override rule precedes their first adoption, stated here in full
@@ -412,77 +395,187 @@ def test_no_rule_in_the_override_restates_a_producers_targets() -> None:
         assert "declaration: ignore" not in rule["fields"], rule.group(0)
 
 
-#: How `onevcs` refuses a repository its registry does not hold.
-NOT_REGISTERED = "is not a registered repository"
-REMOTE_BASES = ("origin/HEAD", "origin/main", "origin/master")
+def _scratch_producers(root: Path) -> Path:
+    """A checkout list of one scratch producer per rule of the tracked override.
 
-
-def _declared_ids_at_fetched_base(checkout: Path) -> dict[str, str] | None:
-    """Each target's id by name, from the declaration at ``checkout``'s fetched base.
-
-    The read `onevcs` makes is of the publication checkout's own base branch, which
-    several managers share and any dispatch may leave on a branch of its own; the
-    remote-tracking ref moves only when somebody fetches, so it says what the
-    repository declares rather than what the checkout happens to be sitting on.
+    Each declares only what this repository decides of it: a row's target under the
+    row's artifact, and for a producer awaiting its first adoption the override's
+    default target under an id of its own, since nothing here names that artifact yet.
     """
-    for candidate in REMOTE_BASES:
-        shown = subprocess.run(
-            ["git", "-C", str(checkout), "show", f"{candidate}:release-targets.toml"],
-            text=True,
-            capture_output=True,
-            check=False,
+    rows = {row.producer: row for row in INSTALLED}
+    paths = [
+        scratch_checkout(
+            root / producer.rpartition("/")[2],
+            producer,
+            {
+                "release-targets.toml": declaration(
+                    {
+                        target: rows[producer].artifact
+                        if producer in rows
+                        else f"pypi:{producer.rpartition('/')[2]}-cli"
+                    }
+                )
+            },
         )
-        if shown.returncode == 0:
-            declared = tomllib.loads(shown.stdout).get("target", [])
-            return {target["name"]: target["id"] for target in declared}
-    return None
+        for producer, target in _override_default_targets().items()
+    ]
+    manifest = root / "checkouts.list"
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    return manifest
 
 
-def _producer_declaration(
-    producer: RepoIdentity, *, declared_yet: bool = True
-) -> tuple[dict[str, str], str] | None:
-    """Each target's id by name as ``producer`` declares it, and where that was read.
+def _contradictions(manifest: Path) -> list[str]:
+    """What the readers find, over the checkouts ``manifest`` lists, against the tracked files."""
+    declarations = {
+        identity: declared_targets(paths[0]) for identity, paths in held_checkouts(manifest).items()
+    }
+    return release_contradictions(
+        _override_default_targets(), declarations, INSTALLED, AWAITING_FIRST_ADOPTION
+    )
 
-    Read through `onevcs release targets --json`, which is the read a dispatch makes.
-    A checkout `onevcs` cannot read a declaration out of right now — another manager's
-    dispatch has it on a branch — is read at its fetched base instead, and the second
-    value says which read answered so a failure can name it. A producer awaiting its
-    first adoption — ``declared_yet`` false — may not have declared anything yet, which
-    answers None rather than failing.
+
+def _checkout(manifest: Path, producer: RepoIdentity) -> Path:
+    return held_checkouts(manifest)[producer][0]
+
+
+def test_producers_declaring_what_this_repository_decides_contradict_nothing(
+    tmp_path: Path,
+) -> None:
+    manifest = _scratch_producers(tmp_path)
+
+    assert set(held_checkouts(manifest)) == set(_override_default_targets())
+    assert _contradictions(manifest) == []
+
+
+def test_a_producer_gaining_targets_and_a_language_since_registration_contradicts_nothing(
+    tmp_path: Path,
+) -> None:
+    """Normal development in the producer's own repository fails no check here."""
+    manifest = _scratch_producers(tmp_path)
+    row = INSTALLED[0]
+    advance(
+        _checkout(manifest, row.producer),
+        {
+            "release-targets.toml": declaration(
+                {row.target: row.artifact, "crate": "crate:scratch", "npm": "npm:@scratch/cli"}
+            ),
+            "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n',
+        },
+    )
+
+    assert declared_targets(_checkout(manifest, row.producer)) == {
+        row.target: row.artifact,
+        "crate": "crate:scratch",
+        "npm": "npm:@scratch/cli",
+    }
+    assert _contradictions(manifest) == []
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SiblingDrift)
+        settle_drift(_contradictions(manifest))
+
+
+def test_a_producer_dropping_the_overrides_default_target_contradicts_it_by_name(
+    tmp_path: Path,
+) -> None:
+    manifest = _scratch_producers(tmp_path)
+    row = next(row for row in INSTALLED if row.target == "cli")
+    advance(
+        _checkout(manifest, row.producer),
+        {"release-targets.toml": declaration({"crate": "crate:onejudge", "sdk": "pypi:onejudge"})},
+    )
+
+    assert _contradictions(manifest) == [
+        f"{row.producer} no longer declares the default target 'cli' "
+        "config/onevcs.releases.yml names for it; it declares ['crate', 'sdk']"
+    ]
+
+
+def test_a_producer_renaming_the_artifact_a_row_installs_contradicts_the_table(
+    tmp_path: Path,
+) -> None:
+    manifest = _scratch_producers(tmp_path)
+    row = INSTALLED[1]
+    advance(
+        _checkout(manifest, row.producer),
+        {"release-targets.toml": declaration({row.target: "pypi:renamed-cli"})},
+    )
+
+    assert _contradictions(manifest) == [
+        f"{row.producer} declares its {row.target!r} target as 'pypi:renamed-cli', and "
+        f"orchestrator/host_installs.py says this host installs {row.artifact!r} under it"
+    ]
+
+
+def test_an_installed_producer_declaring_no_release_target_contradicts_the_override(
+    tmp_path: Path,
+) -> None:
+    manifest = _scratch_producers(tmp_path)
+    row = INSTALLED[2]
+    advance(_checkout(manifest, row.producer), {"release-targets.toml": None})
+
+    assert declared_targets(_checkout(manifest, row.producer)) is None
+    assert _contradictions(manifest) == [
+        f"{row.producer} declares no release targets at its base, and "
+        f"config/onevcs.releases.yml names {row.target!r} as its default target"
+    ]
+
+
+def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Path) -> None:
+    """The state the override names a producer in ahead of its first release is valid.
+
+    No install row, a resolved default target, and a declaration that may carry that
+    target among others — or nothing at all yet, before the producer declares.
     """
-    checkouts = registered_checkouts()
-    assert producer in checkouts, (
-        f"{producer} has no checkout on this host among those "
-        "`config/onevcs.checkouts` lists, so its declaration cannot be reconciled here"
+    (producer,) = EXPECTED_AWAITING
+    target = _override_default_targets()[producer]
+    manifest = _scratch_producers(tmp_path)
+    assert by_producer(producer) is None
+    assert _contradictions(manifest) == []
+
+    advance(
+        _checkout(manifest, producer),
+        {
+            "release-targets.toml": declaration(
+                {"crate": "crate:onebudgetspec", target: "pypi:onebudgetspec-cli"}
+            ),
+            "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n',
+        },
     )
-    asked = subprocess.run(
-        ["uv", "run", "onevcs", "release", "targets", producer, "--json"],
-        cwd=REPO_ROOT,
-        # The producer is one this host registers, which only the suite's registry copy
-        # names: `tests/onevcs_state_snapshot.py`.
-        env=onevcs_state_snapshot.host_registry_environment(),
-        text=True,
-        capture_output=True,
-        check=False,
+    assert _contradictions(manifest) == []
+
+    advance(_checkout(manifest, producer), {"release-targets.toml": None})
+    assert _contradictions(manifest) == []
+
+
+def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_its_target(
+    tmp_path: Path,
+) -> None:
+    (producer,) = EXPECTED_AWAITING
+    target = _override_default_targets()[producer]
+    manifest = _scratch_producers(tmp_path)
+    advance(
+        _checkout(manifest, producer),
+        {"release-targets.toml": declaration({"crate": "crate:onebudgetspec"})},
     )
-    assert asked.returncode == 0 or NOT_REGISTERED not in asked.stderr, (
-        f"{producer} is not registered in this host's onevcs registry; run "
-        f"`just repos-apply`: {asked.stderr}"
+
+    assert _contradictions(manifest) == [
+        f"{producer} no longer declares the default target {target!r} "
+        "config/onevcs.releases.yml names for it; it declares ['crate']"
+    ]
+
+
+def test_a_repository_the_override_names_no_default_for_is_never_judged(tmp_path: Path) -> None:
+    """A registered repository declaring targets the override says nothing of is its business."""
+    manifest = _scratch_producers(tmp_path)
+    other = scratch_checkout(
+        tmp_path / "printobserver",
+        "github.com/nickderobertis/printobserver",
+        {"release-targets.toml": declaration({"crate": "crate:printobserver"})},
     )
-    if asked.returncode == 0:
-        declaration = json.loads(asked.stdout)["declaration"]
-        if declaration["state"] == "declared":
-            return {
-                target["name"]: target["id"] for target in declaration["declared"]["target"]
-            }, f"`onevcs release targets {producer} --json`"
-    declared = _declared_ids_at_fetched_base(checkouts[producer])
-    if declared is None and not declared_yet:
-        return None
-    assert declared is not None, (
-        f"{producer}'s declaration could not be read through onevcs "
-        f"({asked.stdout or asked.stderr}) or at {checkouts[producer]}'s fetched base"
-    )
-    return declared, f"{checkouts[producer]}'s fetched base"
+    manifest.write_text(manifest.read_text(encoding="utf-8") + f"{other}\n", encoding="utf-8")
+
+    assert "github.com/nickderobertis/printobserver" in held_checkouts(manifest)
+    assert _contradictions(manifest) == []
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This marker is not a
@@ -492,60 +585,48 @@ def _producer_declaration(
 # needs, because its subject is a producer checkout outside the workspace and a memo keyed
 # on this workspace would replay whatever that checkout declared when it was recorded.
 @pytest.mark.reads_checkouts
-@pytest.mark.parametrize("row", INSTALLED, ids=lambda row: row.producer)
-def test_each_rows_artifact_is_what_the_producer_declares_under_that_target_name(
-    row: Installed,
-) -> None:
-    """The row's artifact is the id the producer's own declaration gives the row's target.
+def test_a_held_producers_contradiction_fails_only_a_change_editing_the_registration() -> None:
+    """The same readers over this host's own producer checkouts, settled by what the change edits.
 
-    The declared target carrying the row's name has to carry the row's artifact as its
-    id, or a node waiting on the override's default target waits on something else.
+    A producer this host holds no checkout of is not judged, since there is nothing here
+    to read; one it holds is read at its fetched base. A contradiction, or a declaration
+    that will not parse, refuses a change that edits the registration and is reported as
+    drift for every other.
     """
-    read = _producer_declaration(row.producer)
-    assert read is not None
-    declared, declared_by = read
-    assert declared.get(row.target) == row.artifact, (
-        f"{row.producer} declares {declared} at {declared_by}, and the table says its "
-        f"`{row.target}` target is `{row.artifact}`; if the producer moved, that is a "
-        "finding to report rather than a row to edit"
+    held = registered_checkouts()
+    defaults = _override_default_targets()
+    read = read_declarations(
+        {producer: held[producer] for producer in defaults if producer in held}
     )
 
-
-@pytest.mark.reads_checkouts
-@pytest.mark.parametrize(
-    "producer",
-    [*(row.producer for row in INSTALLED), *sorted(AWAITING_FIRST_ADOPTION)],
-)
-def test_each_producers_fixture_declares_the_targets_the_producer_declares(
-    producer: RepoIdentity,
-) -> None:
-    """The stand-in declaration names every target the producer does, by id, and no other.
-
-    The registry-apply journey registers a scratch producer per row with this fixture
-    at its base, and what it proves about the override is only as true as the
-    fixture's likeness to the declaration: a default target resolved among targets the
-    producer no longer declares is proven against a repository that does not exist. So
-    the whole map is held, not only the row's target — and a producer that moved is a
-    fixture to refresh from its base, since the fixture is a copy and not a contract.
-
-    A producer awaiting its first adoption is held the same way from the moment its
-    base declares anything; before then its fixture is the contract its plan states,
-    with no declaration yet to drift from, and that is the skip's reason.
-    """
-    read = _producer_declaration(producer, declared_yet=producer not in AWAITING_FIRST_ADOPTION)
-    if read is None:
-        pytest.skip(f"{producer} declares no release targets at its base yet")
-    declared, declared_by = read
-    fixture = FIXTURES / f"{producer.rpartition('/')[2]}.toml"
-    stand_in = {
-        target["name"]: target["id"]
-        for target in tomllib.loads(fixture.read_text(encoding="utf-8"))["target"]
-    }
-    assert stand_in == declared, (
-        f"{fixture.relative_to(REPO_ROOT)} declares {stand_in}, and {producer} "
-        f"declares {declared} at {declared_by}; refresh the fixture's target ids and "
-        "names from the producer's base"
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
+    # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
+    # refuses only a push changing one of the five registration files and reports the drift
+    # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and
+    # `tests/test_sibling_drift.py` drives both pushes through it.
+    settle_drift(
+        [
+            *read.unreadable,
+            *release_contradictions(defaults, read.found, INSTALLED, AWAITING_FIRST_ADOPTION),
+        ]
     )
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+def test_a_declaration_whose_schema_names_no_target_is_counted_by_its_ids(
+    tmp_path: Path,
+) -> None:
+    """A sibling's later schema is its own business, and never reads as declaring less."""
+    checkout = scratch_checkout(
+        tmp_path / "printobserver",
+        "github.com/nickderobertis/printobserver",
+        {
+            "release-targets.toml": 'schema_version = 2\n\n[[target]]\nid = "crate:a"\n\n'
+            '[[target]]\nid = "pypi:b"\n'
+        },
+    )
+
+    assert declared_targets(checkout) == {"crate:a": "crate:a", "pypi:b": "pypi:b"}

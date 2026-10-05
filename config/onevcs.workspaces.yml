@@ -62,9 +62,11 @@
 # ## The Rust identities
 #
 # Every rule carrying `maintain` names an identity whose registered checkout carries a
-# `Cargo.toml` at its root — read off this host's checkouts, not assumed, and held to
-# them by `tests/test_workspaces_file.py`'s `reads_checkouts` tier, which fails by name
-# for a Rust identity this file gives no rule, so the rules below are the list.
+# `Cargo.toml` at its root — read off this host's checkouts, not assumed, by
+# `tests/test_workspaces_file.py`'s `reads_checkouts` tier. A Rust identity this file
+# gives no rule is reported there by name as drift and never fails: a sibling becoming
+# Rust in its own repository is not a defect here, and the rule-less maintenance that
+# would follow it is `onevcs`'s to derive, so the rules below are the list.
 # `cargo sweep --time 7` removes build artifacts a week unused, which is what keeps a
 # warm `target/` from turning the disk-wear fix into a disk-space problem.
 version: 1

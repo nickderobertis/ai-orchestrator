@@ -116,7 +116,7 @@ from plan_store_pin import (
 )
 from project_fixtures import budgeted, designed, no_budgets, reviewed
 from published_tools import ONETASKGRAPH_BIN
-from registered_checkouts import registered_checkouts
+from sibling_facts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 

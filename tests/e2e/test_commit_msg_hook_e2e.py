@@ -21,6 +21,14 @@ from pathlib import Path
 
 import pytest
 from project_fixtures import local_project
+from sibling_facts import (
+    SiblingDrift,
+    commit_change,
+    published_clone,
+    registered_checkouts,
+    scratch_checkout,
+    settle_drift,
+)
 
 from orchestrator.root import REPO_ROOT
 
@@ -92,16 +100,17 @@ ABANDONED_MESSAGE = "\n# Please enter the commit message for your changes.\n"
 #: copy here would agree with the hook by construction and prove nothing about either.
 SUBJECT_LIMIT_DECLARATION = re.compile(r"^SUBJECT_LIMIT=(\d+)$", re.MULTILINE)
 
-#: The registered checkouts this host tracks, and the origin whose provenance subjects
-#: the hook exempts. Which checkout of it a host holds is per-host, so it is resolved
-#: from that list rather than named here.
-TRACKED_CHECKOUTS = REPO_ROOT / "config/onevcs.checkouts"
+#: The origin whose provenance subjects the hook exempts. Which checkout of it a host
+#: holds is per-host, so it is resolved from `config/onevcs.checkouts` rather than
+#: named here.
 ONEVCS_ORIGIN = "nickderobertis/onevcs"
 
 #: Where `onevcs` declares the subjects it writes, and how. The exemptions above are
 #: this repository's copy of those two constants, so this is the file they are
 #: reconciled against.
 ONEVCS_PROVENANCE = Path("crates/onevcs/src/provenance.rs")
+#: A file a change leaving this repository's registration alone edits.
+PERSONA = "personas/crozier/crozier-corpus.yaml"
 PROVENANCE_SUBJECT = re.compile(
     r"^pub\(crate\) const (?P<name>ATTESTATION_SUBJECT|INCOMPLETE_SUFFIX): "
     r'&str = "(?P<value>[^"]*)";$',
@@ -120,23 +129,10 @@ def _onevcs_checkout() -> Path | None:
     """Whichever registered checkout of `onevcs` this host actually holds, if any.
 
     The tracked list carries both host layouts, so the path is resolved by asking git
-    which origin a checkout really has rather than by trusting a directory name.
+    which origin a checkout really has rather than by trusting a directory name; a listed
+    checkout whose origin cannot be read is settled as drift by `tests/sibling_facts.py`.
     """
-    for line in TRACKED_CHECKOUTS.read_text(encoding="utf-8").splitlines():
-        entry = line.partition("#")[0].strip()
-        path = Path(entry).expanduser() if entry else None
-        if path is None or not (path / ".git").exists():
-            continue
-        origin = subprocess.run(
-            ["git", "-C", str(path), "remote", "get-url", "origin"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        resolved = origin.stdout.strip().removesuffix("/").removesuffix(".git")
-        if origin.returncode == 0 and resolved.endswith(ONEVCS_ORIGIN):
-            return path
-    return None
+    return registered_checkouts().get(f"github.com/{ONEVCS_ORIGIN}")
 
 
 def _run_hook_on(content: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
@@ -398,6 +394,68 @@ def test_a_publication_subject_is_judged_exactly_as_a_local_commit_is(
         )
 
 
+def _provenance_findings(checkout: Path, tmp_path: Path) -> list[str]:
+    """Every way ``checkout``'s provenance subjects disagree with what this hook exempts.
+
+    A file gone from ``checkout`` — removed or renamed in onevcs — is a finding like any
+    other rather than an exception, so it is settled with the rest.
+    """
+    provenance = checkout / ONEVCS_PROVENANCE
+    if not provenance.is_file():
+        return [
+            f"{checkout} has no {ONEVCS_PROVENANCE}, so the provenance subjects this hook "
+            "exempts cannot be read off the engine that authors them: find where onevcs "
+            "moved them and point ONEVCS_PROVENANCE there"
+        ]
+    # Decoded strictly: a replaced byte can leave both constants intact, reading a file
+    # onevcs no longer writes as UTF-8 as one nothing is wrong with.
+    try:
+        source = provenance.read_bytes().decode("utf-8")
+    except OSError as error:
+        return [
+            f"{provenance} cannot be read ({error.strerror or error}), so the provenance "
+            "subjects this hook exempts cannot be read off the engine that authors them"
+        ]
+    except UnicodeDecodeError as error:
+        return [
+            f"{provenance} is not UTF-8 ({error}), so the provenance subjects this hook "
+            "exempts cannot be read off the engine that authors them"
+        ]
+    declared = {found["name"]: found["value"] for found in PROVENANCE_SUBJECT.finditer(source)}
+    if declared.keys() != {"ATTESTATION_SUBJECT", "INCOMPLETE_SUFFIX"}:
+        return [
+            f"{provenance} no longer declares the provenance subjects this hook exempts, "
+            f"so nothing here is reconciled: {sorted(declared)}"
+        ]
+    # A marker's suffix is appended to a subject the policy would otherwise refuse, so
+    # only the suffix can be what exempts it.
+    onevcs_writes = (
+        declared["ATTESTATION_SUBJECT"],
+        f"chore: land the drafting graph {declared['INCOMPLETE_SUFFIX']}",
+    )
+    findings: list[str] = []
+    for subject in onevcs_writes:
+        exempted = _run_hook(subject, tmp_path)
+        if exempted.returncode != 0:
+            findings.append(
+                f"onevcs writes {subject!r} through this hook and the hook refuses it, so "
+                f"every recovery in this repository is a refused commit: {exempted.stderr}"
+            )
+    return findings
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split, expensive_tests_stay_behind_their_own_edge, contracts_have_one_source_or_a_drift_gate] `reads_checkouts`  # noqa: E501
+# is this repository's uncached tier: `orchestrator:test-checkouts` runs exactly `-m
+# reads_checkouts` and `just check` includes it. A project of its own, so `nx affected` can skip it,
+# is the opposite of what this needs, because its subject is a sibling's checkout outside the
+# workspace and a memo keyed on this workspace would replay what that checkout said when it was
+# recorded. It is a reconciliation of copied literals, not a shell suite: the hook is run only to
+# read its verdict on the subjects onevcs writes. Not expensive: it takes under a second (`pytest
+# --durations`) and spends no paid turn, no launch and no network. Settled rather than asserted
+# because ai-orchestrator#1529 rules, and this check's task states as a criterion, that a check
+# whose subject is a sibling's live state refuses only a push changing one of the five registration
+# files and reports the drift otherwise; `tests/sibling_facts.py`'s `settle_drift` is the one place
+# that is decided, and `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.reads_checkouts
 def test_the_provenance_subjects_the_hook_exempts_are_the_ones_onevcs_writes(
     tmp_path: Path,
@@ -415,33 +473,18 @@ def test_the_provenance_subjects_the_hook_exempts_are_the_ones_onevcs_writes(
     repository's checkout, which no `nx.json` key covers, so a memoized green would
     be a verdict on whatever `onevcs` said when it was recorded. A host holding no
     checkout of it resolves nothing and reports that rather than passing.
+
+    What that checkout holds is onevcs's live state, so a disagreement is settled by
+    `tests/sibling_facts.py` rather than asserted: failed for a change editing a
+    registration file, reported as `SiblingDrift` for any other.
     """
     checkout = _onevcs_checkout()
     if checkout is None:
         pytest.skip("this host holds no registered checkout of onevcs to reconcile against")
-    declared = {
-        found["name"]: found["value"]
-        for found in PROVENANCE_SUBJECT.finditer(
-            (checkout / ONEVCS_PROVENANCE).read_text(encoding="utf-8")
-        )
-    }
-    assert declared.keys() == {"ATTESTATION_SUBJECT", "INCOMPLETE_SUFFIX"}, (
-        f"{checkout / ONEVCS_PROVENANCE} no longer declares the provenance subjects "
-        f"this hook exempts, so nothing here is reconciled: {sorted(declared)}"
-    )
+    settle_drift(_provenance_findings(checkout, tmp_path))
 
-    # A marker's suffix is appended to a subject the policy would otherwise refuse, so
-    # only the suffix can be what exempts it.
-    onevcs_writes = (
-        declared["ATTESTATION_SUBJECT"],
-        f"chore: land the drafting graph {declared['INCOMPLETE_SUFFIX']}",
-    )
-    for subject in onevcs_writes:
-        exempted = _run_hook(subject, tmp_path)
-        assert exempted.returncode == 0, (
-            f"onevcs writes {subject!r} through this hook and the hook refuses it, so "
-            f"every recovery in this repository is a refused commit: {exempted.stderr}"
-        )
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split, expensive_tests_stay_behind_their_own_edge, contracts_have_one_source_or_a_drift_gate]  # noqa: E501
 
 
 def test_the_hook_is_activated_by_the_mechanism_that_activates_the_pre_push_gate() -> None:
@@ -454,3 +497,100 @@ def test_the_hook_is_activated_by_the_mechanism_that_activates_the_pre_push_gate
     assert os.access(COMMIT_MSG_HOOK, os.X_OK), (
         f"{COMMIT_MSG_HOOK} is not executable, so git would skip it without saying so"
     )
+
+
+def test_a_provenance_file_onevcs_dropped_fails_a_change_editing_a_registration_file(
+    tmp_path: Path,
+) -> None:
+    checkout = scratch_checkout(
+        tmp_path / "onevcs", f"github.com/{ONEVCS_ORIGIN}", {"README.md": "moved\n"}
+    )
+    clone = published_clone(tmp_path / "gated")
+    commit_change(clone, "config/onevcs.rules.yml")
+
+    with pytest.raises(pytest.fail.Exception) as failed:
+        settle_drift(_provenance_findings(checkout, tmp_path), root=clone, comparison={})
+
+    assert "this change edits config/onevcs.rules.yml" in str(failed.value)
+    assert f"{checkout} has no {ONEVCS_PROVENANCE}" in str(failed.value)
+
+
+def test_a_provenance_file_onevcs_dropped_is_reported_for_a_persona_only_change(
+    tmp_path: Path,
+) -> None:
+    checkout = scratch_checkout(
+        tmp_path / "onevcs", f"github.com/{ONEVCS_ORIGIN}", {"README.md": "moved\n"}
+    )
+    clone = published_clone(tmp_path / "gated", (PERSONA,))
+    commit_change(clone, PERSONA)
+
+    with pytest.warns(SiblingDrift) as reported:
+        settle_drift(_provenance_findings(checkout, tmp_path), root=clone, comparison={})
+
+    assert f"{checkout} has no {ONEVCS_PROVENANCE}" in str(reported[0].message)
+
+
+#: onevcs's provenance subjects as it declares them, every one the hook exempts, followed by
+#: bytes that are not UTF-8: replacing those would leave a file nothing seems wrong with.
+NOT_UTF_8_PROVENANCE = (
+    b'pub(crate) const ATTESTATION_SUBJECT: &str = "chore: attest verified recovery of '
+    b'preserved work";\n'
+    b'pub(crate) const INCOMPLETE_SUFFIX: &str = "(incomplete step)";\n'
+    b"// \xff\xfe\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("changed", "settles"),
+    [("config/onevcs.rules.yml", "fails"), (PERSONA, "reports")],
+)
+def test_a_provenance_file_that_is_not_utf_8_is_settled_though_every_subject_is_intact(
+    tmp_path: Path, changed: str, settles: str
+) -> None:
+    checkout = scratch_checkout(
+        tmp_path / "onevcs",
+        f"github.com/{ONEVCS_ORIGIN}",
+        {ONEVCS_PROVENANCE.as_posix(): NOT_UTF_8_PROVENANCE},
+    )
+    clone = published_clone(tmp_path / "gated", (PERSONA,))
+    commit_change(clone, changed)
+
+    findings = _provenance_findings(checkout, tmp_path)
+    assert len(findings) == 1 and f"{ONEVCS_PROVENANCE} is not UTF-8" in findings[0], findings
+
+    if settles == "fails":
+        with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}"):
+            settle_drift(findings, root=clone, comparison={})
+    else:
+        with pytest.warns(SiblingDrift, match="is not UTF-8"):
+            settle_drift(findings, root=clone, comparison={})
+
+
+@pytest.mark.parametrize(
+    ("changed", "settles"),
+    [("config/onevcs.rules.yml", "fails"), (PERSONA, "reports")],
+)
+def test_a_provenance_file_that_cannot_be_read_is_settled_rather_than_raised(
+    tmp_path: Path, changed: str, settles: str
+) -> None:
+    checkout = scratch_checkout(
+        tmp_path / "onevcs",
+        f"github.com/{ONEVCS_ORIGIN}",
+        {ONEVCS_PROVENANCE.as_posix(): 'pub(crate) const ATTESTATION_SUBJECT: &str = "x";\n'},
+    )
+    (checkout / ONEVCS_PROVENANCE).chmod(0)
+    clone = published_clone(tmp_path / "gated", (PERSONA,))
+    commit_change(clone, changed)
+
+    findings = _provenance_findings(checkout, tmp_path)
+    assert findings == [
+        f"{checkout / ONEVCS_PROVENANCE} cannot be read (Permission denied), so the provenance "
+        "subjects this hook exempts cannot be read off the engine that authors them"
+    ]
+
+    if settles == "fails":
+        with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}"):
+            settle_drift(findings, root=clone, comparison={})
+    else:
+        with pytest.warns(SiblingDrift, match="cannot be read"):
+            settle_drift(findings, root=clone, comparison={})

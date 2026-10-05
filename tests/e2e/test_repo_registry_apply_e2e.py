@@ -39,6 +39,7 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
 import pytest
 from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
 from scratch_identity import seeded
+from sibling_facts import declaration, default_target_complaint, override_default_targets
 
 from orchestrator.host_installs import AWAITING_FIRST_ADOPTION, INSTALLED, Installed, by_producer
 from orchestrator.root import REPO_ROOT
@@ -67,12 +68,6 @@ SHARED_OVERFLOW = "unlimited"
 #: at scratch, so the host this suite runs on says nothing into a registry a journey
 #: is asserting the tracked file alone reached.
 HOST_OVERLAY = Path("ai-orchestrator") / "workspaces.yml"
-#: One stand-in `release-targets.toml` per producer this host installs, carrying the
-#: target ids and names the producer's own declaration carries — read from here rather
-#: than from this host's producer checkouts, which a test may not depend on the state
-#: of. `tests/test_host_installs.py`'s `reads_checkouts` tier holds the rows to the real
-#: declarations; this directory holds what a journey registers.
-RELEASE_DECLARATIONS = REPO_ROOT / "tests" / "fixtures" / "release-targets"
 #: The identity `config/onevcs.releases.yml` gives the one non-default rung, and the
 #: rung: a node of this repository waits for a producer's release rather than adopting
 #: its branch.
@@ -219,14 +214,20 @@ def checkout(directory: Path, origin: str) -> Path:
     return directory
 
 
-def declaring_checkout(directory: Path, origin: str, declaration: Path) -> Path:
-    """A checkout of `origin` whose base carries `declaration` as its `release-targets.toml`.
+def declaring_checkout(directory: Path, origin: str, targets: dict[str, str]) -> Path:
+    """A checkout of `origin` whose base declares each ``name: id`` of ``targets``.
 
     Committed on `main` rather than left in the working tree, because `onevcs` reads a
-    producer's declaration at the publication checkout's base and nowhere else.
+    producer's declaration at the publication checkout's base and nowhere else. What it
+    declares is what this repository decides of the producer — the target the override
+    names, under the artifact the table installs — beside one target nothing here names,
+    because a producer declares more than this host consumes; never a copy of the real
+    producer's declaration, which is that repository's to move.
     """
     directory = checkout(directory, origin)
-    shutil.copyfile(declaration, directory / "release-targets.toml")
+    (directory / "release-targets.toml").write_text(
+        declaration({**targets, "crate": f"crate:{directory.name}"}), encoding="utf-8"
+    )
     committer = ["-c", "user.email=t@example.com", "-c", "user.name=Test"]
     subprocess.run(["git", "add", "-A"], cwd=directory, check=True)
     subprocess.run(
@@ -497,9 +498,9 @@ class Producers(NamedTuple):
 # module is not the change that makes it.
 @pytest.fixture(scope="module")
 def producers(tmp_path_factory: pytest.TempPathFactory) -> Producers:
-    """Every producer identity, declaring what the real one declares, plus this repository.
+    """Every producer identity, declaring the target this host installs, plus this repository.
 
-    Registered from checkouts whose base carries a stand-in declaration, because what
+    Registered from checkouts whose base carries a scratch declaration, because what
     `onevcs release targets` answers for a `default_target` depends on the producer
     declaring that target: a producer whose declaration cannot be read is *refused*
     for naming one, not answered without it, so a registry of empty checkouts would
@@ -510,7 +511,7 @@ def producers(tmp_path_factory: pytest.TempPathFactory) -> Producers:
         declaring_checkout(
             root / "checkouts" / row.producer.rpartition("/")[2],
             f"https://{row.producer}.git",
-            RELEASE_DECLARATIONS / f"{row.producer.rpartition('/')[2]}.toml",
+            {row.target: row.artifact},
         )
         for row in INSTALLED
     ]
@@ -1416,8 +1417,8 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_its_wheel_befor
     to answer the wheel this host will install as its default target while the table
     holds no row for it, because a `published` node adopting its first release names no
     `consumes` and would otherwise wait on a target nothing resolves. The scratch
-    checkout carries the producer's origin and a stand-in declaration of the target
-    names its plan contracts, committed at its base, where `onevcs` reads it.
+    checkout carries the producer's origin and a scratch declaration of the target the
+    override names for it, committed at its base, where `onevcs` reads it.
     """
     assert by_producer(ONEBUDGETSPEC) is None
     assert ONEBUDGETSPEC in AWAITING_FIRST_ADOPTION
@@ -1427,7 +1428,7 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_its_wheel_befor
     path = declaring_checkout(
         tmp_path / "checkouts" / Path(entries[0]).name,
         f"https://{ONEBUDGETSPEC}.git",
-        RELEASE_DECLARATIONS / "onebudgetspec.toml",
+        {ONEBUDGETSPEC_TARGET: ONEBUDGETSPEC_ARTIFACT},
     )
     manifest = tmp_path / "checkouts.list"
     manifest.write_text(f"{path}\n", encoding="utf-8")
@@ -1455,6 +1456,16 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_its_wheel_befor
     assert answer["adoption"] == GLOBAL_RUNG, answer
     declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
     assert declared[ONEBUDGETSPEC_TARGET] == ONEBUDGETSPEC_ARTIFACT, declared
+    # The resolution `tests/e2e/test_release_adoption_in_force_e2e.py` reads off this
+    # host, taken here off a real one: a resolved default target and no row is valid.
+    assert (
+        default_target_complaint(
+            ONEBUDGETSPEC,
+            answer.get("default_target"),
+            override_default_targets(TRACKED_RELEASES.read_text(encoding="utf-8")),
+        )
+        is None
+    )
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501

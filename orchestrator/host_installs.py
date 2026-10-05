@@ -13,8 +13,9 @@ answer are held to: the producer, the short target name the override names, the
 registry-qualified artifact the producer's own declaration gives that name, and the
 ``config/<pin>.version`` file the installed wheel governs — or, where no pin governs it,
 the script that installs it. `tests/test_host_installs.py`
-reconciles the table against `pyproject.toml`, `config/`, and the override; the
-`reads_checkouts` tier reconciles each artifact against the producer's own declaration.
+reconciles the table against `pyproject.toml`, `config/`, and the override; its
+`reads_checkouts` tier reads each producer's own declaration for a contradiction of a
+row, which refuses a change that edits this registration and is reported for any other.
 
 ``governs_dispatch`` is true for one row and the distinction is the reason the table
 exists. Every ``config/*.version`` names one adopted release, but they do not all answer

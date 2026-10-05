@@ -34,11 +34,20 @@ re-registration it exists to catch.
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 import pytest
-from registered_checkouts import Disagreement, publication_resolutions
+from registered_checkouts import Disagreement, publication_resolutions, resolution_findings
 from scratch_identity import seeded
+from sibling_facts import (
+    REGISTRATION_FILES,
+    SiblingDrift,
+    commit_change,
+    published_clone,
+    settle_drift,
+)
 
 #: A hosted scratch identity with two checkouts, as this host's own pairs are registered.
 ORIGIN = "github.com/scratchowner/paired"
@@ -101,20 +110,95 @@ def test_a_publication_alias_that_sorts_after_the_safety_clone_is_named_with_bot
 def test_every_identity_this_host_holds_several_checkouts_of_publishes_from_the_first() -> None:
     """The live registry: the origin form and the first listed alias select one checkout.
 
-    An identity this registry does not hold both spellings of is reported rather than
-    counted either way, because a registry that cannot answer is not evidence about how
-    it selects.
+    Which checkouts this host holds, and how the registry over them answers, move with no
+    change here, so every finding — a disagreement, an identity a spelling could not be
+    resolved for, a checkout whose identity could not be read — is settled by
+    `tests/sibling_facts.py`: failed for a change editing a registration file, reported as
+    drift for any other.
     """
-    resolved = publication_resolutions()
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
+    # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
+    # refuses only a push changing one of the five registration files and reports the drift
+    # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
+    # fixture tests drive both pushes through it.
+    settle_drift(resolution_findings(publication_resolutions()))
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-    assert resolved.disagreeing == (), "\n".join(
-        f"{found.identity}: `onevcs resolve {found.identity}` publishes from "
-        f"{found.by_origin}, while its first listed checkout {found.first_alias!r} is "
-        f"{found.by_first_alias}; a checkout registered under a name that sorts earlier "
-        f"has redirected this identity's publications"
-        for found in resolved.disagreeing
-    )
-    assert not resolved.unresolved, resolved.unresolved
+
+#: The two changes the live comparison's findings are settled for below: one editing a
+#: registration file, which fails, and one editing only a persona, which is reported.
+PERSONA = "personas/crozier/crozier-corpus.yaml"
+PUSHES = ("config/onevcs.checkouts", PERSONA)
+
+
+def _settle(tmp_path: Path, findings: list[str], said: str, changed: str) -> None:
+    """Settle ``findings`` for a change editing ``changed``, failing or reporting as it should."""
+    assert findings, "the fixture produced nothing to settle"
+    clone = published_clone(tmp_path / "gated", (PERSONA,))
+    commit_change(clone, changed)
+    if changed in REGISTRATION_FILES:
+        with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}") as failed:
+            settle_drift(findings, root=clone, comparison={})
+        assert said in str(failed.value)
+    else:
+        with pytest.warns(SiblingDrift) as reported:
+            settle_drift(findings, root=clone, comparison={})
+        assert said in str(reported[0].message)
+
+
+@pytest.mark.parametrize("changed", PUSHES)
+def test_a_redirected_publication_is_settled_by_what_the_change_touches(
+    tmp_path: Path, changed: str
+) -> None:
+    """The disagreement the live comparison exists to catch, settled both ways."""
+    manifest, home = _controlled(tmp_path / "registry", "zcheckout")
+
+    findings = resolution_findings(publication_resolutions(manifest, home))
+
+    _settle(tmp_path, findings, "first listed checkout 'zcheckout'", changed)
+
+
+#: `onevcs resolve` stand-ins, one per way its answer cannot be read, each with what the
+#: finding says. `None` is a CLI present but not executable, which no process can run.
+UNREADABLE_ANSWERS = {
+    "no-answer": ("echo 'no such checkout' >&2; exit 1", "answered no publication checkout"),
+    "os-error": (None, "could not run"),
+    "not-utf-8": ("printf '\\377\\n'", "not UTF-8"),
+    "not-json": ("echo 'publication checkout: here'", "not JSON"),
+    "misshapen": ("echo '{\"checkouts\": []}'", "naming no `publication_checkout`"),
+}
+
+
+@pytest.mark.parametrize("changed", PUSHES)
+@pytest.mark.parametrize(("body", "said"), UNREADABLE_ANSWERS.values(), ids=UNREADABLE_ANSWERS)
+def test_an_answer_that_cannot_be_read_is_settled_rather_than_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str | None, said: str, changed: str
+) -> None:
+    """Each way `onevcs resolve` fails to answer is a finding naming the identity."""
+    manifest, home = _controlled(tmp_path / "registry", "checkout")
+    stand_in = tmp_path / "bin" / "onevcs"
+    stand_in.parent.mkdir()
+    if body is None:
+        # A process searches past a file it cannot execute, so the PATH holds no other
+        # `onevcs` to find: only `git`, which reading the manifest's identities needs.
+        git = shutil.which("git")
+        assert git is not None
+        (stand_in.parent / "git").symlink_to(git)
+        stand_in.write_text("#!/bin/sh\n", encoding="utf-8")
+        stand_in.chmod(0o644)
+        path = str(stand_in.parent)
+    else:
+        stand_in.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        stand_in.chmod(0o755)
+        path = f"{stand_in.parent}:{os.environ['PATH']}"
+
+    with monkeypatch.context() as patched:
+        patched.setenv("PATH", path)
+        resolved = publication_resolutions(manifest, home)
+
+    assert list(resolved.unresolved) == [ORIGIN], resolved
+    assert said in resolved.unresolved[ORIGIN], resolved.unresolved
+    _settle(tmp_path, resolution_findings(resolved), said, changed)
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

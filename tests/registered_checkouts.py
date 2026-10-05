@@ -71,37 +71,104 @@ def normalized_identity(origin: str) -> RepoIdentity:
     return remainder.removesuffix(".git").removesuffix("/")
 
 
-def held_checkouts(manifest: Path = TRACKED_CHECKOUTS) -> dict[RepoIdentity, list[Path]]:
+class UnreadableSibling(ValueError):
+    """A registered sibling's live state could not be read at all.
+
+    Its message is the finding — which checkout, what was asked of it, and why it could
+    not answer — for the caller to settle as drift: what a sibling's checkout holds is
+    that repository's own to move, so failing to read it is no defect of this one.
+    """
+
+
+def sibling_git(checkout: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+    """``git *arguments`` run inside ``checkout``; :class:`UnreadableSibling` where it cannot run.
+
+    Run in the checkout rather than pointed at it with `-C`, so a checkout this process
+    cannot enter is an OS error naming it, rather than an exit status indistinguishable
+    from git answering that a ref or a file is absent. Bytes, because decoding what a
+    sibling holds is each reader's own question.
+    """
+    try:
+        return subprocess.run(
+            ["git", *arguments], cwd=checkout, capture_output=True, timeout=120, check=False
+        )
+    except OSError as error:
+        raise UnreadableSibling(
+            f"{checkout} cannot be read: `git {arguments[0]}` could not run there ({error})"
+        ) from error
+
+
+class Discovery(NamedTuple):
+    """The checkouts a list names that this host holds, and a finding for each it could not read."""
+
+    #: Each identity's held checkouts, in the order listed.
+    held: dict[RepoIdentity, list[Path]]
+    #: A listed checkout this host has but could not resolve an identity for, each with
+    #: its path and why — for the caller to settle as drift rather than drop.
+    unreadable: tuple[str, ...]
+
+
+#: An identity as `onevcs` files one: a host, then an owner, then a name, any of them
+#: further nested, with no whitespace. An origin normalizing to anything else names no
+#: repository this host could register.
+IDENTITY = re.compile(r"^[^/\s]+(?:/[^/\s]+){2,}$")
+
+
+def _identity_of(path: Path) -> RepoIdentity | str:
+    """``path``'s identity from its own `origin`, or raises :class:`UnreadableSibling`."""
+    origin = sibling_git(path, "remote", "get-url", "origin")
+    if origin.returncode != 0:
+        raise UnreadableSibling(
+            f"{path} is a listed git checkout that answered no origin "
+            f"({origin.stderr.decode('utf-8', 'replace').strip()}); an identity is read off "
+            "its origin, so give it one or drop it from config/onevcs.checkouts"
+        )
+    try:
+        url = origin.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise UnreadableSibling(
+            f"{path}'s origin is not UTF-8 ({error}), so it names no identity; correct "
+            "that checkout's `remote.origin.url`"
+        ) from error
+    identity = normalized_identity(url)
+    if not IDENTITY.match(identity):
+        raise UnreadableSibling(
+            f"{path}'s origin {url!r} names no host/owner/name identity; correct that "
+            "checkout's `remote.origin.url`"
+        )
+    return identity
+
+
+def discover_checkouts(manifest: Path = TRACKED_CHECKOUTS) -> Discovery:
     """Every checkout ``manifest`` lists that this host holds, grouped by identity, in order.
 
     Git is asked which identity a checkout really is rather than the path being
     trusted to say, so a directory named after one repository but cloned from another
-    resolves to what it is. A path this host does not have is left out, for the reason
-    the recipe skips it: the list names both layouts this repository dispatches from.
+    resolves to what it is. A path this host does not have — or has as no git checkout —
+    is left out, for the reason the recipe skips it: the list names both layouts this
+    repository dispatches from. A checkout this host has but cannot enter, run git in, or
+    read an identity off is named in ``unreadable`` instead, and every other is kept.
     """
     found: dict[RepoIdentity, list[Path]] = {}
+    unreadable: list[str] = []
     for path in listed_checkout_paths(manifest):
-        if not (path / ".git").exists():
+        try:
+            (path / ".git").stat()
+        except (FileNotFoundError, NotADirectoryError):
             continue
-        origin = subprocess.run(
-            ["git", "-C", str(path), "remote", "get-url", "origin"],
-            text=True,
-            capture_output=True,
-        )
-        if origin.returncode != 0:
+        except OSError as error:
+            unreadable.append(
+                f"{path} cannot be read ({error.strerror or error}), so which repository it "
+                "checks out is unknown; restore this process's access to it"
+            )
             continue
-        found.setdefault(normalized_identity(origin.stdout), []).append(path)
-    return found
-
-
-def registered_checkouts() -> dict[RepoIdentity, Path]:
-    """Each identity this host actually holds a checkout of, and where.
-
-    The first listed checkout of each, which is the one a reconciliation searches. A
-    host holding none of them resolves nothing, which is what each caller reports rather
-    than asserts on.
-    """
-    return {identity: paths[0] for identity, paths in held_checkouts().items()}
+        try:
+            identity = _identity_of(path)
+        except UnreadableSibling as error:
+            unreadable.append(str(error))
+            continue
+        found.setdefault(identity, []).append(path)
+    return Discovery(found, tuple(unreadable))
 
 
 class Disagreement(NamedTuple):
@@ -125,10 +192,18 @@ class Resolutions(NamedTuple):
     #: be resolved for, each with why. Reported rather than counted either way: an
     #: identity this registry does not hold is not evidence about how it selects.
     unresolved: dict[RepoIdentity, str]
+    #: Listed checkouts whose identity could not be read at all, as discovery names them.
+    unreadable: tuple[str, ...] = ()
 
 
-def _resolved_publication_checkout(repo: str, home: Path | None) -> Path | None:
-    """The publication checkout `onevcs resolve` answers for ``repo``, or ``None``."""
+def _resolved_publication_checkout(repo: str, home: Path | None) -> Path:
+    """The publication checkout `onevcs resolve` answers for ``repo``.
+
+    Raises :class:`UnreadableSibling` naming why for every way the answer cannot be read —
+    no answer, a CLI that cannot run, bytes that are not UTF-8, a document that does not
+    parse or one of a shape this reader does not know — so each is a finding for the caller
+    to settle rather than an exception or a silent miss.
+    """
     # The host's identities are only in the registry copy, which the suite exports to no
     # process: `tests/onevcs_state_snapshot.py` says why.
     environment: Mapping[str, str] = (
@@ -136,24 +211,35 @@ def _resolved_publication_checkout(repo: str, home: Path | None) -> Path | None:
         if home is None
         else {**os.environ, "ONEVCS_HOME": str(home)}
     )
-    asked = subprocess.run(
-        ["onevcs", "resolve", repo],
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if asked.returncode != 0:
-        return None
+    asked_for = f"`onevcs resolve {repo}`"
     try:
-        answer = json.loads(asked.stdout)
-    except ValueError:
-        return None
+        asked = subprocess.run(
+            ["onevcs", "resolve", repo], env=environment, capture_output=True, check=False
+        )
+    except OSError as error:
+        raise UnreadableSibling(f"{asked_for} could not run ({error})") from error
+    if asked.returncode != 0:
+        raise UnreadableSibling(
+            f"{asked_for} answered no publication checkout "
+            f"({asked.stderr.decode('utf-8', 'replace').strip()})"
+        )
+    try:
+        answer = json.loads(asked.stdout.decode("utf-8"))
+    except UnicodeDecodeError as error:
+        raise UnreadableSibling(
+            f"{asked_for} answered bytes that are not UTF-8 ({error})"
+        ) from error
+    except ValueError as error:
+        raise UnreadableSibling(
+            f"{asked_for} answered a document that is not JSON ({error})"
+        ) from error
     match answer:
         case {"publication_checkout": str(checkout)} if checkout:
             return Path(checkout).resolve()
         case _:
-            return None
+            raise UnreadableSibling(
+                f"{asked_for} answered a document naming no `publication_checkout`: {answer!r}"
+            )
 
 
 def publication_resolutions(
@@ -177,23 +263,46 @@ def publication_resolutions(
     agreeing: list[RepoIdentity] = []
     disagreeing: list[Disagreement] = []
     unresolved: dict[RepoIdentity, str] = {}
-    for identity, paths in held_checkouts(manifest).items():
+    discovered = discover_checkouts(manifest)
+    for identity, paths in discovered.held.items():
         if len(paths) < 2:
             continue
         first_alias = paths[0].name
-        by_origin = _resolved_publication_checkout(identity, home)
-        by_first_alias = _resolved_publication_checkout(first_alias, home)
-        if by_origin is None:
-            unresolved[identity] = f"`onevcs resolve {identity}` answered no publication checkout"
-        elif by_first_alias is None:
-            unresolved[identity] = (
-                f"`onevcs resolve {first_alias}` answered no publication checkout"
-            )
-        elif by_origin == by_first_alias:
+        try:
+            by_origin = _resolved_publication_checkout(identity, home)
+            by_first_alias = _resolved_publication_checkout(first_alias, home)
+        except UnreadableSibling as error:
+            unresolved[identity] = str(error)
+            continue
+        if by_origin == by_first_alias:
             agreeing.append(identity)
         else:
             disagreeing.append(Disagreement(identity, by_origin, first_alias, by_first_alias))
-    return Resolutions(tuple(agreeing), tuple(disagreeing), unresolved)
+    return Resolutions(tuple(agreeing), tuple(disagreeing), unresolved, discovered.unreadable)
+
+
+def resolution_findings(resolved: Resolutions) -> list[str]:
+    """Every way ``resolved`` shows the live registry selecting other than its first alias.
+
+    A disagreement, an identity one spelling or the other could not be resolved for, and a
+    listed checkout whose identity could not be read: each is a finding about the checkouts
+    this host holds and the registry over them, worded for a reader to act on alone, for
+    the caller to settle with `tests/sibling_facts.py`'s `settle_drift`.
+    """
+    return [
+        *(
+            f"{found.identity}: `onevcs resolve {found.identity}` publishes from "
+            f"{found.by_origin}, while its first listed checkout {found.first_alias!r} is "
+            f"{found.by_first_alias}; a checkout registered under a name that sorts earlier "
+            "has redirected this identity's publications"
+            for found in resolved.disagreeing
+        ),
+        *(
+            f"{identity}: {why}, so which of its checkouts publishes cannot be compared"
+            for identity, why in sorted(resolved.unresolved.items())
+        ),
+        *resolved.unreadable,
+    ]
 
 
 class Recipes(NamedTuple):
@@ -203,6 +312,9 @@ class Recipes(NamedTuple):
     #: evidence of anything and a reconciliation must report rather than assert.
     readable: bool
     names: frozenset[str]
+    #: Why the recipes could not be read where the runner could not run there at all;
+    #: empty where it ran and refused or answered in a shape this reader does not know.
+    unreadable: str = ""
 
 
 def defined_recipes(root: Path) -> Recipes:
@@ -213,16 +325,33 @@ def defined_recipes(root: Path) -> Recipes:
     is the set a `just <recipe>` run there would really resolve against — aliases and
     imports included, comments and documentation already gone.
     """
-    dumped = subprocess.run(
-        ["just", "--dump", "--dump-format", "json"],
-        cwd=root,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        dumped = subprocess.run(
+            ["just", "--dump", "--dump-format", "json"],
+            cwd=root,
+            text=True,
+            errors="replace",
+            capture_output=True,
+        )
+    except OSError as error:
+        return Recipes(
+            readable=False,
+            names=frozenset(),
+            unreadable=f"{root} cannot be read: `just --dump` could not run there ({error})",
+        )
     if dumped.returncode != 0:
         return Recipes(readable=False, names=frozenset())
-    document = json.loads(dumped.stdout)
-    return Recipes(
-        readable=True,
-        names=frozenset(document["recipes"]) | frozenset(document.get("aliases") or {}),
-    )
+    # The dump is the sibling's justfile as the runner parses it, so a document of a shape
+    # this reader does not know is unreadable like a justfile `just` refuses, not a crash.
+    try:
+        document = json.loads(dumped.stdout)
+    except ValueError:
+        return Recipes(readable=False, names=frozenset())
+    match document:
+        case {"recipes": dict(recipes)} if isinstance(document.get("aliases") or {}, dict):
+            return Recipes(
+                readable=True,
+                names=frozenset(recipes) | frozenset(document.get("aliases") or {}),
+            )
+        case _:
+            return Recipes(readable=False, names=frozenset())

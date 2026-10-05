@@ -3,20 +3,24 @@
 `config/onevcs.workspaces.yml` is installed by `just repos-apply` as
 `$ONEVCS_HOME/workspaces.yml`, and two of its claims are about this host rather than
 about the file. Every rule carrying a `maintain` command names an identity whose
-registered checkout is a Rust one, and a Rust identity the file gives no such rule is a
-warm `target/` that is never swept — so the file is reconciled against the checkouts
-this host holds, by identity, and fails by name for each one it leaves out. And every
-`maintain.command` is spawned with no shell in an idle slot's worktree on every idle
-tick the engine sweeps the pool on, so a first word that does not resolve on `PATH`
-would fail on every one of those ticks; `scripts/session-setup.sh` installs the one
-command the file names today, pinned in one place, and the installed binary is held to
-that pin here.
+registered checkout is a Rust one; and every `maintain.command` is spawned with no shell
+in an idle slot's worktree on every idle tick the engine sweeps the pool on, so a first
+word that does not resolve on `PATH` would fail on every one of those ticks.
+`scripts/session-setup.sh` installs the one command the file names today, pinned in one
+place, and the installed binary is held to that pin here.
+
+Which identities are Rust is each repository's to decide, and is read off the checkouts
+this host holds, at their fetched base, by `tests/sibling_facts.py` — never kept as a
+list. A Rust identity the file gives no `maintain` rule is upkeep this host is missing,
+and is reported by name as `SiblingDrift` rather than failed: a sibling becoming Rust in
+its own repository is not a defect here, and what would keep its slots swept without a
+rule written for it is a maintenance default `onevcs` does not yet derive. A `maintain`
+rule for an identity no held checkout makes Rust is a contradiction of the file itself,
+and refuses a change that edits the registration.
 
 The gates that read this host — its checkouts, its `PATH`, the binary it installed —
-carry `reads_checkouts` and run in the uncached tier: a memoized verdict about which
-checkouts carry a `Cargo.toml` would replay green across the registration that adds a
-Rust identity, which is the drift this exists to catch. The gates about the file's own
-shape are keyed on the file and stay in the memoized tier.
+carry `reads_checkouts` and run in the uncached tier; the same readers are driven over
+scratch checkouts in the memoized one, as are the gates about the file's own shape.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] This
 repository runs one Nx project and splits its tiers by pytest marker over four
@@ -29,14 +33,33 @@ of its own would need a key over the same nothing.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from registered_checkouts import RepoIdentity, held_checkouts
+from registered_checkouts import (
+    TRACKED_CHECKOUTS,
+    RepoIdentity,
+    UnreadableSibling,
+    discover_checkouts,
+)
+from sibling_facts import (
+    CARGO_MANIFEST,
+    ENCLOSING_COMPARISON,
+    SiblingDrift,
+    advance,
+    commit_change,
+    is_rust,
+    published_clone,
+    scratch_checkout,
+    settle_drift,
+)
 
 from orchestrator.root import REPO_ROOT
 
@@ -57,8 +80,6 @@ DELETED_ON_RETURN = '[".logs/"]'
 #: The maintenance every Rust identity's rule carries, exactly as the file spells it:
 #: the argv `onevcs pool maintain` spawns with no shell, and its bound.
 RUST_MAINTENANCE = '{command: ["cargo", "sweep", "--time", "7"], timeout: 30m}'
-#: What makes a registered checkout a Rust one for this file's purposes.
-CARGO_MANIFEST = "Cargo.toml"
 
 #: One rule of the file: its one-line `match:` flow mapping and the indented fields
 #: under it, comments between them included, read from the text the way
@@ -114,18 +135,93 @@ def default() -> dict[str, str]:
     }
 
 
-def rust_identities() -> dict[RepoIdentity, Path]:
-    """Each identity this host holds a checkout of whose root carries a `Cargo.toml`.
+class RustIdentities(NamedTuple):
+    """Which held identities are Rust, and a finding for each checkout that could not say."""
+
+    found: dict[RepoIdentity, Path]
+    unreadable: tuple[str, ...]
+
+
+def rust_identities(manifest: Path = TRACKED_CHECKOUTS) -> RustIdentities:
+    """Each identity ``manifest`` lists a held checkout of that is a Rust repository.
 
     Every held checkout of an identity is asked, not only the first listed: a
     publication checkout and its execution clone are one identity, and a `Cargo.toml`
-    in either is the same repository being Rust.
+    at either's base is the same repository being Rust. A checkout that cannot be read —
+    its identity or its language — answers neither way, and is a finding in
+    ``unreadable`` rather than a `no`.
     """
-    return {
-        identity: next(path for path in paths if (path / CARGO_MANIFEST).is_file())
-        for identity, paths in held_checkouts().items()
-        if any((path / CARGO_MANIFEST).is_file() for path in paths)
-    }
+    discovered = discover_checkouts(manifest)
+    found: dict[RepoIdentity, Path] = {}
+    unreadable: list[str] = list(discovered.unreadable)
+    for identity, paths in discovered.held.items():
+        for path in paths:
+            try:
+                rust = is_rust(path)
+            except UnreadableSibling as error:
+                unreadable.append(f"{identity}: {error}")
+                continue
+            if rust:
+                found.setdefault(identity, path)
+    return RustIdentities(found, tuple(unreadable))
+
+
+class Upkeep(NamedTuple):
+    """How the file's `maintain` rules stand against what the held checkouts are."""
+
+    #: Rust identities the file gives no `maintain` rule: upkeep this host is missing.
+    unmaintained: list[str]
+    #: Identities held as something other than Rust that a `maintain` rule names.
+    not_rust: list[str]
+    #: Held checkouts that could not be asked whether they are Rust, each with why.
+    unreadable: tuple[str, ...] = ()
+
+
+def upkeep(manifest: Path = TRACKED_CHECKOUTS) -> Upkeep:
+    """The file's `maintain` rules, read against the checkouts ``manifest`` lists."""
+    maintained = {rule.identity for rule in rules() if "maintain" in rule.fields}
+    rust = rust_identities(manifest)
+    held = discover_checkouts(manifest).held
+    return Upkeep(
+        unmaintained=[
+            f"{identity} ({path}/{CARGO_MANIFEST}) is a Rust identity "
+            "config/onevcs.workspaces.yml gives no `maintain` rule, so its warm slots "
+            "are never swept"
+            for identity, path in sorted(rust.found.items())
+            if identity not in maintained
+        ],
+        not_rust=[
+            f"config/onevcs.workspaces.yml maintains {identity} with `cargo sweep`, and "
+            f"no held checkout of it carries a root {CARGO_MANIFEST}"
+            for identity in sorted(maintained)
+            if identity in held and identity not in rust.found
+        ],
+        unreadable=rust.unreadable,
+    )
+
+
+def report_upkeep(
+    found: Upkeep,
+    *,
+    root: Path = REPO_ROOT,
+    comparison: Mapping[str, str] = ENCLOSING_COMPARISON,
+) -> None:
+    """Report missing upkeep as drift, and settle the rest as drift is settled.
+
+    A rule for a non-Rust identity, and a checkout that could not be asked, each fail a
+    change editing the registration and are reported for any other.
+    """
+    if found.unmaintained:
+        warnings.warn(
+            SiblingDrift(
+                "these Rust identities have no slot upkeep: "
+                + "; ".join(found.unmaintained)
+                + ". onevcs derives no maintenance default from a checkout, so each needs "
+                f"a rule carrying `maintain: {RUST_MAINTENANCE}` until it does"
+            ),
+            stacklevel=2,
+        )
+    settle_drift([*found.not_rust, *found.unreadable], root=root, comparison=comparison)
 
 
 def pinned_cargo_sweep() -> str:
@@ -194,37 +290,70 @@ def test_the_cargo_sweep_pin_is_held_in_one_place() -> None:
     assert pinned_cargo_sweep() == PINNED_CARGO_SWEEP
 
 
+#: A Cargo workspace root, as a scratch repository that became Rust carries it.
+CARGO_WORKSPACE = '[workspace]\nmembers = ["crates/*"]\n'
+
+
+def _listed(manifest: Path, *paths: Path) -> Path:
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    return manifest
+
+
+def test_a_rust_identity_with_its_rule_is_maintained(tmp_path: Path) -> None:
+    llmlint = scratch_checkout(
+        tmp_path / "llmlint", "github.com/nickderobertis/llmlint", {"Cargo.toml": CARGO_WORKSPACE}
+    )
+
+    found = upkeep(_listed(tmp_path / "checkouts", llmlint))
+
+    assert found == Upkeep(unmaintained=[], not_rust=[])
+
+
+def test_a_producer_that_became_rust_since_registration_is_reported_never_failed(
+    tmp_path: Path,
+) -> None:
+    """A sibling gaining a language is drift to report, whatever the change touches."""
+    identity = "github.com/nickderobertis/unruled-producer"
+    producer = scratch_checkout(tmp_path / "unruled-producer", identity, {"README.md": "x\n"})
+    manifest = _listed(tmp_path / "checkouts", producer)
+    assert upkeep(manifest) == Upkeep(unmaintained=[], not_rust=[])
+
+    advance(producer, {"Cargo.toml": CARGO_WORKSPACE})
+    found = upkeep(manifest)
+
+    assert rust_identities(manifest) == RustIdentities({identity: producer}, ())
+    assert found.not_rust == []
+    assert [line.split(" ", 1)[0] for line in found.unmaintained] == [identity]
+    with pytest.warns(SiblingDrift, match=identity):
+        report_upkeep(found)
+
+
+def test_a_maintain_rule_for_an_identity_held_as_not_rust_is_a_contradiction(
+    tmp_path: Path,
+) -> None:
+    identity = "github.com/nickderobertis/onevcs"
+    onevcs = scratch_checkout(tmp_path / "onevcs", identity, {"Cargo.toml": CARGO_WORKSPACE})
+    manifest = _listed(tmp_path / "checkouts", onevcs)
+    advance(onevcs, {"Cargo.toml": None, "package.json": "{}\n"})
+
+    assert upkeep(manifest) == Upkeep(
+        unmaintained=[],
+        not_rust=[
+            f"config/onevcs.workspaces.yml maintains {identity} with `cargo sweep`, and "
+            f"no held checkout of it carries a root {CARGO_MANIFEST}"
+        ],
+    )
+
+
 @pytest.mark.reads_checkouts
-def test_every_rust_identity_this_host_holds_has_a_maintain_rule() -> None:
-    """Each registered identity with a root `Cargo.toml` is maintained, by name.
+def test_every_rust_identity_this_host_holds_is_maintained_or_reported() -> None:
+    """The readers over this host's own checkouts.
 
-    Read off the checkouts this host holds rather than off a list, so a Rust
-    repository registered after the file was written fails here — naming the identity
-    and the checkout that makes it Rust — instead of keeping a warm `target/` that
-    nothing ever sweeps. The reverse is held too: a `maintain` rule for an identity
-    this host holds as something other than Rust is a command that will fail on its
-    first idle tick.
+    A Rust identity left without a rule is named as drift and never fails; a rule for an
+    identity no held checkout makes Rust is a command that fails on its first idle tick,
+    and refuses a change that edits the registration.
     """
-    maintained = {rule.identity for rule in rules() if "maintain" in rule.fields}
-    rust = rust_identities()
-    held = held_checkouts()
-
-    unmaintained = {identity: path for identity, path in rust.items() if identity not in maintained}
-    assert not unmaintained, (
-        "config/onevcs.workspaces.yml gives no `maintain` rule to these Rust identities, "
-        "whose warm slots would never be swept: "
-        + ", ".join(
-            f"{identity} ({path}/{CARGO_MANIFEST})" for identity, path in unmaintained.items()
-        )
-        + f". Add a rule carrying `maintain: {RUST_MAINTENANCE}` for each"
-    )
-    not_rust = sorted(
-        identity for identity in maintained if identity in held and identity not in rust
-    )
-    assert not not_rust, (
-        f"config/onevcs.workspaces.yml maintains {not_rust} with `cargo sweep`, and no "
-        f"held checkout of theirs carries a root {CARGO_MANIFEST}"
-    )
+    report_upkeep(upkeep())
 
 
 @pytest.mark.reads_checkouts
@@ -268,3 +397,68 @@ def test_the_installed_cargo_sweep_is_the_pinned_release() -> None:
         f"{binary} answers {answered.stdout.strip()!r}, not the pinned "
         f"{pinned_cargo_sweep()}; `just session-setup` reinstalls the pinned release"
     )
+
+
+@pytest.mark.parametrize(
+    "changed", ["config/onevcs.workspaces.yml", "personas/crozier/crozier-corpus.yaml"]
+)
+def test_a_checkout_whose_language_cannot_be_read_is_settled_rather_than_read_as_not_rust(
+    tmp_path: Path, changed: str
+) -> None:
+    """An OS error asking a checkout whether it is Rust is a finding, never a `no`."""
+    if os.geteuid() == 0:
+        pytest.skip("root enters a directory whatever its mode, so none is unenterable")
+    checkout = scratch_checkout(
+        tmp_path / "llmlint", "github.com/nickderobertis/llmlint", {"Cargo.toml": CARGO_WORKSPACE}
+    )
+    checkout.chmod(0)
+    try:
+        with pytest.raises(ValueError, match=f"{checkout} cannot be read") as raised:
+            is_rust(checkout)
+    finally:
+        checkout.chmod(0o755)
+    found = Upkeep(unmaintained=[], not_rust=[], unreadable=(str(raised.value),))
+    clone = published_clone(tmp_path / "gated", (changed,))
+    commit_change(clone, changed)
+
+    if changed == "config/onevcs.workspaces.yml":
+        with pytest.raises(pytest.fail.Exception, match=f"{checkout} cannot be read"):
+            report_upkeep(found, root=clone, comparison={})
+    else:
+        with pytest.warns(SiblingDrift, match=f"{checkout} cannot be read"):
+            report_upkeep(found, root=clone, comparison={})
+
+
+@pytest.mark.parametrize(
+    "changed", ["config/onevcs.workspaces.yml", "personas/crozier/crozier-corpus.yaml"]
+)
+def test_a_listed_checkout_whose_identity_cannot_be_read_is_settled_by_the_upkeep_check(
+    tmp_path: Path, changed: str
+) -> None:
+    """Upkeep keeps the readable Rust identity and names the checkout it could not resolve."""
+    if os.geteuid() == 0:
+        pytest.skip("root enters a directory whatever its mode, so none is unenterable")
+    identity = "github.com/nickderobertis/llmlint"
+    llmlint = scratch_checkout(tmp_path / "llmlint", identity, {"Cargo.toml": CARGO_WORKSPACE})
+    blocked = scratch_checkout(
+        tmp_path / "onevcs", "github.com/nickderobertis/onevcs", {"Cargo.toml": CARGO_WORKSPACE}
+    )
+    manifest = _listed(tmp_path / "checkouts", blocked, llmlint)
+    clone = published_clone(tmp_path / "gated", (changed,))
+    commit_change(clone, changed)
+
+    blocked.chmod(0)
+    try:
+        found = upkeep(manifest)
+        rust = rust_identities(manifest)
+    finally:
+        blocked.chmod(0o755)
+
+    assert rust.found == {identity: llmlint}
+    assert len(found.unreadable) == 1 and f"{blocked} cannot be read" in found.unreadable[0]
+    if changed == "config/onevcs.workspaces.yml":
+        with pytest.raises(pytest.fail.Exception, match=f"{blocked} cannot be read"):
+            report_upkeep(found, root=clone, comparison={})
+    else:
+        with pytest.warns(SiblingDrift, match=f"{blocked} cannot be read"):
+            report_upkeep(found, root=clone, comparison={})

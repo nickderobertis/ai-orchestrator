@@ -6,20 +6,40 @@ whose task's body crosses the limit, one between the thresholds, and one below, 
 design document past each threshold. What is here is the composition itself — held to the
 plugin's `compose_body` in the registered `onetaskgraph` checkout, for a task and for a
 design document — and the faces of the reading the recipes reach it through.
+
+The plugin's source is read at the release `config/onetaskgraph.version` pins, or at the
+head of a checkout that has not fetched that tag. Either way it is read from the sibling's
+checkout, whose tags and tree move with no change here, so every disagreement and every
+read that fails — a file gone, unreadable, not UTF-8 or no longer spelling what is held —
+is settled by `tests/sibling_facts.py`: failed for a change editing a registration file,
+reported as `SiblingDrift` for any other.
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from plan_store_pin import adopted_release
-from registered_checkouts import registered_checkouts
+from registered_checkouts import UnreadableSibling, sibling_git
+from sibling_facts import (
+    ENCLOSING_COMPARISON,
+    REGISTRATION_FILES,
+    SiblingDrift,
+    commit_change,
+    published_clone,
+    registered_checkouts,
+    scratch_checkout,
+    settle_drift,
+)
 
 from orchestrator import plan_store, task_body
 from orchestrator.publication_guard import Refusal
+from orchestrator.root import REPO_ROOT
 
 #: The plugin whose `compose_body` this module mirrors, the file that spells the slot, and
 #: the plugin-api file that spells the keys its `slot_metadata` adds or drops.
@@ -220,13 +240,88 @@ def test_a_document_over_the_limit_is_refused_and_one_from_the_threshold_warned_
     assert task_body.document_warnings([below]) == []
 
 
-def _plugin_source(source: Path = PLUGIN_SOURCE) -> tuple[str, str]:
-    """One file of the plugin's source and where it was read; a skip where the checkout is absent.
+class PluginSource(NamedTuple):
+    """One file of the plugin's source, and where it was read."""
 
-    At the tag `config/onetaskgraph.version` pins where the checkout has fetched it, and
-    at the checkout's own head otherwise — a checkout that has not fetched the tag is
-    still evidence about the encoding, and the second value says which was read.
+    text: str
+    read_from: str
+
+
+def plugin_source_at(
+    checkout: Path,
+    tag: str,
+    source: Path,
+    *,
+    root: Path = REPO_ROOT,
+    comparison: Mapping[str, str] = ENCLOSING_COMPARISON,
+) -> PluginSource | None:
+    """``source`` in ``checkout``: at ``tag`` where it is fetched, at the head otherwise.
+
+    The pin is this repository's, but what its tag holds in a host's checkout is the
+    sibling's live state like its head is, so a file gone from either, unreadable or not
+    UTF-8 — and a checkout that cannot be read at all — is settled by
+    `tests/sibling_facts.py` against the change at ``root`` and answers None, which ends
+    the comparison with nothing to compare. Decoded strictly rather than with replacement,
+    because a replaced byte can leave every line the comparison looks for intact.
     """
+
+    def settled(finding: str) -> None:
+        settle_drift([finding], root=root, comparison=comparison)
+
+    try:
+        tagged = sibling_git(checkout, "rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}")
+        shown = (
+            sibling_git(checkout, "show", f"{tag}:{source.as_posix()}")
+            if tagged.returncode == 0
+            else None
+        )
+    except UnreadableSibling as error:
+        settled(f"{error}, so the plugin's {source.as_posix()} cannot be reconciled")
+        return None
+    if shown is not None:
+        pinned = f"{checkout} at {tag}, the release config/onetaskgraph.version pins,"
+        if shown.returncode != 0:
+            settled(
+                f"{pinned} has no {source.as_posix()} "
+                f"({shown.stderr.decode('utf-8', 'replace').strip()}), so "
+                "orchestrator/task_body.py's issue-body composition cannot be reconciled with "
+                "the plugin's: point the reconciliation at where that release keeps the file"
+            )
+            return None
+        try:
+            return PluginSource(shown.stdout.decode("utf-8"), f"{checkout} at {tag}")
+        except UnicodeDecodeError as error:
+            settled(
+                f"{pinned} holds a {source.as_posix()} that is not UTF-8 ({error}), so "
+                "orchestrator/task_body.py's issue-body composition cannot be reconciled with "
+                "the plugin's"
+            )
+            return None
+    head = checkout / source
+    try:
+        text = head.read_bytes().decode("utf-8")
+    except OSError as error:
+        # Gone, renamed, turned into a directory or unreadable: each is the head moving in
+        # the sibling's own repository, so each is settled rather than raised.
+        settled(
+            f"{checkout} has not fetched {tag} and its head's {source.as_posix()} cannot "
+            f"be read ({error.strerror or error}), so orchestrator/task_body.py's "
+            "issue-body composition cannot be reconciled with the plugin's: fetch "
+            f"{tag} there, or find where the plugin moved the file"
+        )
+        return None
+    except UnicodeDecodeError as error:
+        settled(
+            f"{checkout} has not fetched {tag} and its head's {source.as_posix()} is not "
+            f"UTF-8 ({error}), so orchestrator/task_body.py's issue-body composition cannot "
+            f"be reconciled with the plugin's: fetch {tag} there"
+        )
+        return None
+    return PluginSource(text, f"{checkout} at its head")
+
+
+def _plugin_source(source: Path = PLUGIN_SOURCE) -> PluginSource | None:
+    """One file of the registered plugin's source; a skip where the checkout is absent."""
     checkout = registered_checkouts().get(PLUGIN_REPOSITORY)
     if checkout is None:
         pytest.skip(
@@ -234,16 +329,7 @@ def _plugin_source(source: Path = PLUGIN_SOURCE) -> tuple[str, str]:
             f"`config/onevcs.checkouts` lists, so the slot's delimiters cannot be "
             f"reconciled here"
         )
-    tag = f"v{adopted_release()}"
-    shown = subprocess.run(
-        ["git", "-C", str(checkout), "show", f"{tag}:{source.as_posix()}"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if shown.returncode == 0:
-        return shown.stdout, f"{checkout} at {tag}"
-    return (checkout / source).read_text(encoding="utf-8"), f"{checkout} at its head"
+    return plugin_source_at(checkout, f"v{adopted_release()}", source)
 
 
 #: The lines of the plugin's `compose_body` that decide what `task_body.compose` mirrors
@@ -278,12 +364,27 @@ def test_the_slot_delimiters_and_composition_are_the_ones_the_plugin_spells() ->
     way, and the composition around the three is held line by line, because a slot
     placed or encoded differently measures a different body under the same delimiters.
     """
-    source, read_from = _plugin_source()
-    for line in COMPOSITION:
-        assert line in source, (
-            f"{read_from} no longer composes an issue body the way orchestrator/task_body.py "
-            f"mirrors; it lacks:\n{line}"
-        )
+    found = _plugin_source()
+    if found is None:
+        return
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
+    # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
+    # refuses only a push changing one of the five registration files and reports the drift
+    # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
+    # fixture tests drive both pushes through it.
+    settle_drift(composition_findings(found))
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+def composition_findings(found: PluginSource) -> list[str]:
+    """Every way ``found`` composes an issue body other than `task_body.compose` mirrors."""
+    source, read_from = found
+    findings = [
+        f"{read_from} no longer composes an issue body the way orchestrator/task_body.py "
+        f"mirrors; it lacks:\n{line}"
+        for line in COMPOSITION
+        if line not in source
+    ]
     spelled = {
         found["name"]: found["value"]
         for found in re.finditer(
@@ -291,13 +392,20 @@ def test_the_slot_delimiters_and_composition_are_the_ones_the_plugin_spells() ->
             source,
         )
     }
-    decoded = {name: value.encode().decode("unicode_escape") for name, value in spelled.items()}
+    try:
+        decoded = {name: value.encode().decode("unicode_escape") for name, value in spelled.items()}
+    except UnicodeDecodeError:
+        decoded = spelled  # an escape Python cannot read is a spelling that differs below
 
-    assert decoded == {
+    if decoded != {
         "METADATA_OPEN": task_body.METADATA_OPEN,
         "METADATA_CLOSE": task_body.METADATA_CLOSE,
         "METADATA_SEPARATOR": task_body.METADATA_SEPARATOR,
-    }, f"{read_from} spells the slot as {spelled}, and orchestrator/task_body.py does not"
+    }:
+        findings.append(
+            f"{read_from} spells the slot as {spelled}, and orchestrator/task_body.py does not"
+        )
+    return findings
 
 
 #: The lines of the plugin's `slot_metadata` that add or drop the keys
@@ -324,15 +432,26 @@ def test_the_keys_the_measurement_leaves_out_are_the_ones_the_plugin_adds_or_dro
     writing dependency edges into the slot, fails here rather than leaving every refusal
     describing a figure it no longer is.
     """
-    read: dict[Path, tuple[str, str]] = {}
-    for source, line in EXCLUSIONS:
-        if source not in read:
-            read[source] = _plugin_source(source)
-        text, read_from = read[source]
-        assert line in text, (
-            f"{read_from} no longer spells what orchestrator/task_body.py says the "
-            f"measurement leaves out; it lacks:\n{line}"
-        )
+    read: dict[Path, PluginSource] = {}
+    for source in dict.fromkeys(source for source, _ in EXCLUSIONS):
+        found = _plugin_source(source)
+        if found is None:
+            return
+        read[source] = found
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
+    # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
+    # refuses only a push changing one of the five registration files and reports the drift
+    # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
+    # fixture tests drive both pushes through it.
+    settle_drift(
+        [
+            f"{read[source].read_from} no longer spells what orchestrator/task_body.py "
+            f"says the measurement leaves out; it lacks:\n{line}"
+            for source, line in EXCLUSIONS
+            if line not in read[source].text
+        ]
+    )
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
     spelled = {key for _, line in EXCLUSIONS for key in task_body.UNMEASURED_KEYS if key in line}
     assert spelled == set(task_body.UNMEASURED_KEYS), (
         f"UNMEASURED_KEYS names {set(task_body.UNMEASURED_KEYS) - spelled}, which no held "
@@ -369,12 +488,207 @@ def test_a_document_s_body_is_composed_by_the_plugin_exactly_as_a_task_s_is() ->
     reached the board some other way — its own composer, a slot of its own, content
     re-rendered on the way — would be measured here against a body it never becomes.
     """
-    source, read_from = _plugin_source()
-    for line in DOCUMENT_COMPOSITION:
-        assert line in source, (
-            f"{read_from} no longer writes a design document's body the way "
+    found = _plugin_source()
+    if found is None:
+        return
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
+    # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
+    # refuses only a push changing one of the five registration files and reports the drift
+    # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
+    # fixture tests drive both pushes through it.
+    settle_drift(
+        [
+            f"{found.read_from} no longer writes a design document's body the way "
             f"orchestrator/task_body.py measures it; it lacks:\n{line}"
-        )
+            for line in DOCUMENT_COMPOSITION
+            if line not in found.text
+        ]
+    )
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The tag a fixture checkout of the plugin is read at, as the pin names a release.
+FIXTURE_TAG = "v0.0.1"
+
+
+def _plugin_fixture(tmp_path: Path, files: Mapping[str, str | bytes]) -> Path:
+    """A real checkout of the plugin's repository whose tree carries ``files`` alone."""
+    return scratch_checkout(tmp_path / "onetaskgraph", PLUGIN_REPOSITORY, files)
+
+
+def test_a_plugin_file_gone_from_an_untagged_head_fails_a_registration_change(
+    tmp_path: Path,
+) -> None:
+    checkout = _plugin_fixture(tmp_path, {"README.md": "moved\n"})
+    clone = published_clone(tmp_path / "gated")
+    commit_change(clone, "config/onevcs.checkouts")
+
+    with pytest.raises(pytest.fail.Exception) as failed:
+        plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={})
+
+    assert "this change edits config/onevcs.checkouts" in str(failed.value)
+    assert f"has not fetched {FIXTURE_TAG}" in str(failed.value)
+    assert PLUGIN_SOURCE.as_posix() in str(failed.value)
+    assert str(checkout) in str(failed.value)
+
+
+def test_a_plugin_file_gone_from_an_untagged_head_is_reported_for_a_persona_only_change(
+    tmp_path: Path,
+) -> None:
+    checkout = _plugin_fixture(tmp_path, {"README.md": "moved\n"})
+    clone = published_clone(tmp_path / "gated", ("personas/crozier/crozier-corpus.yaml",))
+    commit_change(clone, "personas/crozier/crozier-corpus.yaml")
+
+    with pytest.warns(SiblingDrift) as reported:
+        found = plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={})
+
+    assert found is None
+    assert PLUGIN_SOURCE.as_posix() in str(reported[0].message)
+
+
+def test_a_plugin_file_present_at_an_untagged_head_is_read_as_live(tmp_path: Path) -> None:
+    checkout = _plugin_fixture(tmp_path, {PLUGIN_SOURCE.as_posix(): "fn compose_body() {}\n"})
+
+    found = plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE)
+
+    assert found == PluginSource("fn compose_body() {}\n", f"{checkout} at its head")
+
+
+#: The two changes every reading of the plugin's checkout is settled for below: one editing
+#: a registration file, which fails, and one editing only a persona, which is reported.
+PERSONA = "personas/crozier/crozier-corpus.yaml"
+PUSHES = ("config/onevcs.checkouts", PERSONA)
+
+
+def _pinned_fixture(tmp_path: Path, files: Mapping[str, str | bytes]) -> Path:
+    """A plugin checkout whose fetched :data:`FIXTURE_TAG` carries ``files`` alone."""
+    checkout = _plugin_fixture(tmp_path, files)
+    subprocess.run(["git", "-C", str(checkout), "tag", FIXTURE_TAG], check=True)
+    return checkout
+
+
+def _settled(tmp_path: Path, changed: str, said: str, read: Callable[..., object]) -> object:
+    """``read(root=, comparison=)`` against a change editing ``changed``, settled as it should be.
+
+    Answers what ``read`` returned where the change edits no registration file and the
+    finding was reported; None where it failed.
+    """
+    clone = published_clone(tmp_path / "gated", (PERSONA,))
+    commit_change(clone, changed)
+    if changed in REGISTRATION_FILES:
+        with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}") as failed:
+            read(root=clone, comparison={})
+        assert said in str(failed.value)
+        return None
+    with pytest.warns(SiblingDrift) as reported:
+        answered = read(root=clone, comparison={})
+    assert said in str(reported[0].message)
+    return answered
+
+
+@pytest.mark.parametrize("changed", PUSHES)
+def test_a_pinned_release_lacking_the_file_is_settled_by_what_the_change_touches(
+    tmp_path: Path, changed: str
+) -> None:
+    """What the pinned tag holds in this host's checkout is the sibling's, like its head."""
+    checkout = _pinned_fixture(tmp_path, {"README.md": "moved\n"})
+
+    found = _settled(
+        tmp_path,
+        changed,
+        f"at {FIXTURE_TAG}, the release config/onetaskgraph.version pins, has no "
+        f"{PLUGIN_SOURCE.as_posix()}",
+        lambda **settle: plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, **settle),
+    )
+
+    assert found is None
+
+
+@pytest.mark.parametrize("changed", PUSHES)
+def test_a_pinned_release_composing_otherwise_is_settled_by_what_the_change_touches(
+    tmp_path: Path, changed: str
+) -> None:
+    """A release at the pin that stopped spelling the composition is a finding, not a raise."""
+    checkout = _pinned_fixture(tmp_path, {PLUGIN_SOURCE.as_posix(): "fn compose_body() {}\n"})
+    found = plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE)
+    assert found == PluginSource("fn compose_body() {}\n", f"{checkout} at {FIXTURE_TAG}")
+    findings = composition_findings(found)
+
+    _settled(
+        tmp_path,
+        changed,
+        f"{checkout} at {FIXTURE_TAG} no longer composes an issue body",
+        lambda **settle: settle_drift(findings, **settle),
+    )
+
+
+#: A plugin source whose head is not UTF-8, though every line `COMPOSITION` holds it to is
+#: intact: what replacing the bad bytes would read as a source nothing is wrong with.
+NOT_UTF_8 = "\n".join(COMPOSITION).encode() + b"\n// \xff\xfe\n"
+
+
+@pytest.mark.parametrize(
+    ("changed", "settles"),
+    [("config/onevcs.checkouts", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
+)
+def test_a_plugin_head_that_is_not_utf_8_is_settled_though_every_line_is_intact(
+    tmp_path: Path, changed: str, settles: str
+) -> None:
+    checkout = _plugin_fixture(tmp_path, {PLUGIN_SOURCE.as_posix(): NOT_UTF_8})
+    clone = published_clone(tmp_path / "gated", ("personas/crozier/crozier-corpus.yaml",))
+    commit_change(clone, changed)
+
+    if settles == "fails":
+        with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}") as failed:
+            plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={})
+        assert f"{PLUGIN_SOURCE.as_posix()} is not UTF-8" in str(failed.value)
+    else:
+        with pytest.warns(SiblingDrift, match=f"{PLUGIN_SOURCE.as_posix()} is not UTF-8"):
+            found = plugin_source_at(
+                checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={}
+            )
+        assert found is None
+
+
+@pytest.mark.parametrize("changed", PUSHES)
+def test_a_pinned_release_whose_file_is_not_utf_8_is_settled_by_what_the_change_touches(
+    tmp_path: Path, changed: str
+) -> None:
+    checkout = _pinned_fixture(tmp_path, {PLUGIN_SOURCE.as_posix(): NOT_UTF_8})
+
+    found = _settled(
+        tmp_path,
+        changed,
+        f"holds a {PLUGIN_SOURCE.as_posix()} that is not UTF-8",
+        lambda **settle: plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, **settle),
+    )
+
+    assert found is None
+
+
+@pytest.mark.parametrize(
+    ("changed", "settles"),
+    [("config/onevcs.checkouts", "fails"), ("personas/crozier/crozier-corpus.yaml", "reports")],
+)
+def test_a_plugin_head_that_cannot_be_read_is_settled_rather_than_raised(
+    tmp_path: Path, changed: str, settles: str
+) -> None:
+    """A read failing with an OS error is the sibling's live state, settled like any drift."""
+    checkout = _plugin_fixture(tmp_path, {PLUGIN_SOURCE.as_posix(): "fn compose_body() {}\n"})
+    (checkout / PLUGIN_SOURCE).chmod(0)
+    clone = published_clone(tmp_path / "gated", ("personas/crozier/crozier-corpus.yaml",))
+    commit_change(clone, changed)
+
+    if settles == "fails":
+        with pytest.raises(pytest.fail.Exception, match=f"this change edits {changed}") as failed:
+            plugin_source_at(checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={})
+        assert "Permission denied" in str(failed.value)
+    else:
+        with pytest.warns(SiblingDrift, match="Permission denied"):
+            found = plugin_source_at(
+                checkout, FIXTURE_TAG, PLUGIN_SOURCE, root=clone, comparison={}
+            )
+        assert found is None

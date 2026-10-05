@@ -1,17 +1,18 @@
 {
-  "name": "support-persona-recipes",
+  "name": "support-persona-stand-in",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "tags": [
     "type:test-support"
   ],
   "implicitDependencies": [
-    "support-registered-checkouts",
+    "support-persona-identifiers",
+    "support-persona-recipes",
     "support-sibling-facts"
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/persona_recipes.py"
+      "{workspaceRoot}/tests/persona_stand_in.py"
     ]
   },
   "targets": {

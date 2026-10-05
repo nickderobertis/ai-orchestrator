@@ -23,7 +23,8 @@ from functools import cache
 from pathlib import Path
 from typing import NamedTuple
 
-from registered_checkouts import defined_recipes, registered_checkouts
+from registered_checkouts import defined_recipes
+from sibling_facts import registered_checkouts
 
 from orchestrator.root import REPO_ROOT
 
@@ -119,8 +120,8 @@ def undefined_recipes(persona: RepoPersona, checkout: Path) -> str | None:
     defined = defined_recipes(checkout)
     if not defined.readable:
         return (
-            f"`just --dump` could not parse the recipes of {checkout}, so "
-            f"{persona.named} could not be reconciled against it at all"
+            f"{defined.unreadable or f'`just --dump` could not parse the recipes of {checkout}'}"
+            f", so {persona.named} could not be reconciled against it at all"
         )
     missing = sorted(persona.recipes - defined.names)
     if not missing:

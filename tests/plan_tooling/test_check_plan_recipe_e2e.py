@@ -3153,11 +3153,10 @@ def test_the_two_paths_report_the_same_adoption_refusal(tmp_path: Path) -> None:
         assert "held: adoption: this node adopts `published`" in reported.stderr, reported.stderr
 
 
-#: The tracked override and its producers' stand-in declarations, which the journeys below
-#: register under the producers' real origins so the rules they are read against are this
-#: host's own rather than a scratch copy of them.
+#: The tracked override, which the journeys below install over producers registered under
+#: their real origins so the rules they are read against are this host's own rather than a
+#: scratch copy of them.
 TRACKED_RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
-RELEASE_DECLARATIONS = REPO_ROOT / "tests" / "fixtures" / "release-targets"
 LLMLINT = "github.com/nickderobertis/llmlint"
 #: A producer the tracked override has no rule for, declaring a wheel, so a `published`
 #: node behind it has a release to wait on and no target to wait for.
@@ -3195,8 +3194,9 @@ def _hosted_checkout(root: Path, origin: str, declaration: str | None = None) ->
 def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
     """A scratch registry under the tracked override, holding every producer by its origin.
 
-    Each producer `host_installs` names, and llmlint whatever it names, declares what its
-    fixture says the real one does,
+    Each producer `host_installs` names, and llmlint whatever it names, declares its
+    row's target and a crate beside it — a stand-in built from the table rather than a
+    committed copy of the producer's own declaration, which only the producer decides —
     beside a producer no rule names, this repository, and one more repository of the same
     owner; `just repos-apply` installs `config/onevcs.releases.yml` itself, because no
     `--releases` is named — so every rung and default target below is the tracked file's.
@@ -3207,16 +3207,7 @@ def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]
     # its row still registers the producer and the journeys below read that as a refusal
     # rather than missing it as a repository this host cannot answer for.
     producers = sorted({LLMLINT, *(row.producer for row in host_installs.INSTALLED)})
-    checkouts = [
-        _hosted_checkout(
-            root,
-            producer,
-            (RELEASE_DECLARATIONS / f"{producer.rpartition('/')[2]}.toml").read_text(
-                encoding="utf-8"
-            ),
-        )
-        for producer in producers
-    ]
+    checkouts = [_hosted_checkout(root, producer, _stand_in(producer)) for producer in producers]
     checkouts.append(
         _hosted_checkout(root, UNRULED, _declaring(("pypi", "pypi:unruled-producer-cli")))
     )
@@ -3240,6 +3231,16 @@ def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]
     assert applied.returncode == 0, applied.stdout + applied.stderr
     assert (home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
     return _in_registry(home)
+
+
+def _stand_in(producer: str) -> str:
+    """``producer``'s declaration as the table has it: its row's target, and a crate."""
+    name = producer.rpartition("/")[2]
+    row = host_installs.by_producer(producer)
+    declared = [("crate", f"crate:{name}")]
+    if row is not None:
+        declared.append((row.target, row.artifact))
+    return _declaring(*declared)
 
 
 def _behind(producer: str, **fields: object) -> tuple[dict[str, object], dict[str, object]]:

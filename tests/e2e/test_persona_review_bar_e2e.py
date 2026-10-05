@@ -49,6 +49,15 @@ the old framing back rather than a third recipe.
 `tests/test_persona_recipe_drift.py` and `tests/test_persona_identifier_drift.py` ask this
 of the tracked files for every repo-specific persona, which is the cheap gate; this asks it
 of the prose a supervisor was handed, which is the thing that actually fails work.
+
+What crozier's registered checkout answers is a sibling's live state, so the passing
+case's reconciliation against it is settled by `tests/sibling_facts.py` — failed for a
+change editing a registration file, reported as `SiblingDrift` for any other — while
+what the delivered bar is (its recipes against the file's, its width) is this
+repository's own and stays asserted. The failure path proves the readers report what a
+supervisor was handed, so it reconciles against a stand-in checkout
+(`tests/persona_stand_in.py`) whose tree it controls, and a commit in crozier can never
+move it.
 """
 
 from __future__ import annotations
@@ -73,6 +82,8 @@ from persona_probe import (
     started_member,
 )
 from persona_recipes import RepoPersona, checkout_of, named_recipes, persona_at, undefined_recipes
+from persona_stand_in import stand_in_for
+from sibling_facts import settle_drift
 from test_shared_dispatch_bar import NO_PROJECT_WIDE_DEMAND
 
 from orchestrator.root import REPO_ROOT
@@ -211,7 +222,7 @@ def _delivered_bar(tmp_path: Path, oneharness_bin: str, persona: Path) -> Delive
 
 @pytest.fixture(scope="module")
 def crozier_checkout() -> Path:
-    """crozier's own registered checkout, which owns the fact these journeys read."""
+    """crozier's own registered checkout, which owns the fact the passing case reads."""
     found = checkout_of(CROZIER_PERSONA.parent.name)
     if found is None:
         pytest.skip(
@@ -221,6 +232,23 @@ def crozier_checkout() -> Path:
     return found
 
 
+@pytest.fixture
+def crozier_stand_in(tmp_path: Path) -> Path:
+    """A stand-in for crozier tracking every path and defining every recipe the file names."""
+    return stand_in_for(CROZIER_PERSONA, tmp_path / "stand-in", {})
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge, contracts_have_one_source_or_a_drift_gate] `reads_checkouts`  # noqa: E501
+# is this repository's uncached tier: `orchestrator:test-checkouts` runs exactly `-m
+# reads_checkouts` and `just check` includes it. A project of its own, so `nx affected` can skip it,
+# is the opposite of what this needs, because its subject is a sibling's checkout outside the
+# workspace and a memo keyed on this workspace would replay what that checkout said when it was
+# recorded. Not expensive: it takes under a second (`pytest --durations`) and spends no paid turn,
+# no launch and no network. Settled rather than asserted because ai-orchestrator#1529 rules, and
+# this check's task states as a criterion, that a check whose subject is a sibling's live state
+# refuses only a push changing one of the five registration files and reports the drift otherwise;
+# `tests/sibling_facts.py`'s `settle_drift` is the one place that is decided, and
+# `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.reads_checkouts
 @pytest.mark.xdist_group("persona-review-bar")
 def test_the_delivered_crozier_bar_demands_and_names_only_what_that_repository_has(
@@ -257,9 +285,6 @@ def test_the_delivered_crozier_bar_demands_and_names_only_what_that_repository_h
             f"anyway:\n{bar.prose}"
         )
 
-    report = undefined_recipes(delivered, crozier_checkout)
-    assert report is None, report
-
     # The other half of the same bar: what it names *of* crozier rather than what it asks
     # crozier to run. A supervisor pointed at a file that repository does not have holds a
     # worker to prose only this host wrote, exactly as a dead recipe does.
@@ -267,25 +292,33 @@ def test_the_delivered_crozier_bar_demands_and_names_only_what_that_repository_h
         "the delivered bar no longer points its supervisor at the file crozier registers "
         f"every corpus in, so this reconciliation reads nothing: {sorted(named.paths)}"
     )
-    assert undefined_identifiers(named, crozier_checkout) is None, undefined_identifiers(
-        named, crozier_checkout
+
+    reports = (
+        undefined_recipes(delivered, crozier_checkout),
+        undefined_identifiers(named, crozier_checkout),
     )
+    settle_drift([report for report in reports if report is not None])
 
 
-@pytest.mark.reads_checkouts
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge, contracts_have_one_source_or_a_drift_gate]  # noqa: E501
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Not expensive: it takes under a
+# second (`pytest --durations`) and spends no paid turn, no launch and no network. It reconciles
+# against a stand-in checkout it builds, so it reads nothing outside the workspace.
 @pytest.mark.xdist_group("persona-review-bar")
 def test_a_delivered_bar_demanding_or_naming_what_crozier_lacks_is_reported(
-    tmp_path: Path, oneharness_bin: str, crozier_checkout: Path
+    tmp_path: Path, oneharness_bin: str, crozier_stand_in: Path
 ) -> None:
     """The failure path, driven the same way: one drift of each kind in one dispatched copy.
 
     A copy of the tracked persona is dispatched for real with `just gate` put back into
     its proof clause and the file crozier registers every corpus in renamed to one that
     repository does not track, and what its supervisor is handed is reconciled against
-    the same checkout by both reconciliations. This is the regression each correction was
-    made for, so both are driven rather than described — and each report is read for all
-    three facts a reader needs, because one saying only that something drifted sends them
-    back through the whole investigation.
+    a stand-in holding what the tracked file names of crozier, by both reconciliations.
+    This is the regression each correction was made for, so both are driven rather than
+    described — and each report is read for all three facts a reader needs, because one
+    saying only that something drifted sends them back through the whole investigation.
     """
     catalog = tmp_path / "personas" / CROZIER_PERSONA.parent.name
     catalog.mkdir(parents=True)
@@ -331,14 +364,14 @@ def test_a_delivered_bar_demanding_or_naming_what_crozier_lacks_is_reported(
         f"about the failure path: {sorted(delivered.recipes)}"
     )
 
-    report = undefined_recipes(delivered, crozier_checkout)
+    report = undefined_recipes(delivered, crozier_stand_in)
     assert report is not None, (
-        f"a bar demanding `just {DRIFTED_RECIPE}` was accepted against {crozier_checkout}, "
+        f"a bar demanding `just {DRIFTED_RECIPE}` was accepted against {crozier_stand_in}, "
         "which defines no such recipe"
     )
     assert str(drifted) in report
     assert f"`just {DRIFTED_RECIPE}`" in report
-    assert str(crozier_checkout) in report
+    assert str(crozier_stand_in) in report
 
     # The same journey drives the identifier drift, because a bar carries both kinds of
     # name and one report must not stand in for the other.
@@ -346,11 +379,14 @@ def test_a_delivered_bar_demanding_or_naming_what_crozier_lacks_is_reported(
         "the drifted path did not reach the supervisor, so the identifier half of this "
         f"journey proves nothing: {sorted(named.paths)}"
     )
-    named_report = undefined_identifiers(named, crozier_checkout)
+    named_report = undefined_identifiers(named, crozier_stand_in)
     assert named_report is not None, (
         f"a bar pointing its supervisor at `{DRIFTED_REGISTRY}` was accepted against "
-        f"{crozier_checkout}, which tracks no such path"
+        f"{crozier_stand_in}, which tracks no such path"
     )
     assert str(drifted) in named_report
     assert f"`{DRIFTED_REGISTRY}`" in named_report
-    assert str(crozier_checkout) in named_report
+    assert str(crozier_stand_in) in named_report
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

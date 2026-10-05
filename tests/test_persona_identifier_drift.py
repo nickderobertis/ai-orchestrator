@@ -14,6 +14,13 @@ This belongs to the uncached tier for the reason the recipe reconciliation does.
 is a registered checkout outside this workspace, which no `nx.json` key covers, so a
 memoized green would be a verdict on whatever that repository declared when it was
 recorded — and a field changing meaning is precisely what it exists to catch.
+
+What the reconciliation finds is that repository's live state, so it is settled by
+`tests/sibling_facts.py`: a change editing a registration file fails for it, and any
+other change — a persona's own edit included — has it reported as `SiblingDrift`. The
+journeys proving the reader reports each kind of drift drive it against a stand-in
+checkout (`tests/persona_stand_in.py`) rather than crozier's, so a commit in crozier moves
+the reconciliation's verdict and never the proof that the reader works.
 """
 
 from __future__ import annotations
@@ -23,6 +30,8 @@ from pathlib import Path
 import pytest
 from persona_identifiers import NamedIdentifiers, identifiers_at, undefined_identifiers
 from persona_recipes import PERSONA_ROOT, checkout_of, repo_specific_persona_files
+from persona_stand_in import stand_in_for
+from sibling_facts import settle_drift
 
 from orchestrator.root import REPO_ROOT
 
@@ -34,6 +43,17 @@ CROZIER_PERSONA = REPO_ROOT / "personas" / "crozier" / "crozier-corpus.yaml"
 #: own prose often enough that only the declaration can settle it.
 DRIFTED_FIELD = "matched"
 CORRECT_FIELD = "unmatched"
+
+#: The declaration the stand-in for crozier carries: its `Corpus` registry type, in the
+#: file the persona names as where every corpus is registered, with the field crozier
+#: declares and the one beside it a literal never names.
+CORPUS_REGISTRY = "tests/e2e.rs"
+CORPUS_DECLARATION = (
+    "pub struct Corpus {\n"
+    "    pub name: &'static str,\n"
+    f"    pub {CORRECT_FIELD}: &'static [&'static str],\n"
+    "}\n"
+)
 
 
 def _identifiers(personas: tuple[Path, ...]) -> list[NamedIdentifiers]:
@@ -66,6 +86,16 @@ def test_the_catalog_still_holds_a_repo_specific_persona_that_names_an_identifie
     )
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, contracts_have_one_source_or_a_drift_gate] `reads_checkouts`  # noqa: E501
+# is this repository's uncached tier: `orchestrator:test-checkouts` runs exactly `-m
+# reads_checkouts` and `just check` includes it. A project of its own, so `nx affected` can skip it,
+# is the opposite of what this needs, because its subject is a sibling's checkout outside the
+# workspace and a memo keyed on this workspace would replay what that checkout said when it was
+# recorded. Settled rather than asserted because ai-orchestrator#1529 rules, and this check's task
+# states as a criterion, that a check whose subject is a sibling's live state refuses only a push
+# changing one of the five registration files and reports the drift otherwise;
+# `tests/sibling_facts.py`'s `settle_drift` is the one place that is decided, and
+# `tests/test_sibling_drift.py` drives both pushes through it.
 @pytest.mark.reads_checkouts
 @pytest.mark.parametrize(
     "identifiers", _identifiers(repo_specific_persona_files()), ids=lambda named: named.named
@@ -73,7 +103,10 @@ def test_the_catalog_still_holds_a_repo_specific_persona_that_names_an_identifie
 def test_a_repo_specific_persona_only_names_identifiers_its_repository_has(
     identifiers: NamedIdentifiers,
 ) -> None:
-    """The drift gate: a persona's prose, against the tree that owns the fact."""
+    """The drift gate: a persona's prose, against the tree that owns the fact.
+
+    Settled rather than asserted, for the reason the module docstring gives.
+    """
     checkout = checkout_of(identifiers.repository)
     if checkout is None:
         pytest.skip(
@@ -82,29 +115,27 @@ def test_a_repo_specific_persona_only_names_identifiers_its_repository_has(
         )
 
     report = undefined_identifiers(identifiers, checkout)
-    assert report is None, report
+    settle_drift([report] if report is not None else [])
 
 
-@pytest.fixture(scope="module")
-def crozier_checkout() -> Path:
-    """crozier's own registered checkout, which owns the facts these journeys read."""
-    found = checkout_of(CROZIER_PERSONA.parent.name)
-    if found is None:
-        pytest.skip(
-            f"this host holds no registered checkout of {CROZIER_PERSONA.parent.name}, so "
-            "the identifiers its persona names cannot be reconciled against it here"
-        )
-    return found
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker, contracts_have_one_source_or_a_drift_gate]  # noqa: E501
 
 
-@pytest.mark.reads_checkouts
+@pytest.fixture
+def crozier_stand_in(tmp_path: Path) -> Path:
+    """A stand-in for crozier holding what the tracked persona names of it."""
+    return stand_in_for(
+        CROZIER_PERSONA, tmp_path / "stand-in", {CORPUS_REGISTRY: CORPUS_DECLARATION}
+    )
+
+
 def test_the_inverted_corpus_field_is_reported_before_the_corrected_file_passes(
-    tmp_path: Path, crozier_checkout: Path
+    tmp_path: Path, crozier_stand_in: Path
 ) -> None:
     """The regression this check was written from, driven rather than described.
 
     A real copy of the tracked persona with the pre-correction `Corpus { .., matched: &[] }`
-    put back is reconciled against crozier's own registered checkout, and the report is
+    put back is reconciled against a stand-in declaring crozier's `Corpus`; the report is
     read for all three facts a reader needs — one saying only that something drifted sends
     them back through the whole investigation. The corrected file is then reconciled
     against the same checkout, in that order, so the green below is a green this drift
@@ -119,27 +150,26 @@ def test_the_inverted_corpus_field_is_reported_before_the_corrected_file_passes(
     drifted.parent.mkdir(parents=True)
     drifted.write_text(corrected.replace(CORRECT_FIELD, DRIFTED_FIELD), encoding="utf-8")
 
-    report = undefined_identifiers(identifiers_at(drifted), crozier_checkout)
+    report = undefined_identifiers(identifiers_at(drifted), crozier_stand_in)
     assert report is not None, (
         f"a persona registering a corpus with `{DRIFTED_FIELD}` was accepted against "
-        f"{crozier_checkout}, whose `Corpus` declares no such field"
+        f"{crozier_stand_in}, whose `Corpus` declares no such field"
     )
     assert str(drifted) in report
     assert f"Corpus {{ {DRIFTED_FIELD}: … }}" in report
     assert "tests/e2e.rs:" in report, (
         f"the report does not say where it looked, so a reader cannot check it: {report}"
     )
-    assert str(crozier_checkout) in report
+    assert str(crozier_stand_in) in report
     assert CORRECT_FIELD in report, (
         f"the report does not name the field crozier actually declares: {report}"
     )
 
-    assert undefined_identifiers(identifiers_at(CROZIER_PERSONA), crozier_checkout) is None
+    assert undefined_identifiers(identifiers_at(CROZIER_PERSONA), crozier_stand_in) is None
 
 
-@pytest.mark.reads_checkouts
 def test_a_persona_naming_a_path_its_repository_dropped_is_reported(
-    tmp_path: Path, crozier_checkout: Path
+    tmp_path: Path, crozier_stand_in: Path
 ) -> None:
     """The other class, driven the same way: a file the reviewed repository does not track.
 
@@ -157,19 +187,18 @@ def test_a_persona_naming_a_path_its_repository_dropped_is_reported(
     )
     persona.write_text(tracked.replace("tests/e2e.rs", renamed), encoding="utf-8")
 
-    report = undefined_identifiers(identifiers_at(persona), crozier_checkout)
+    report = undefined_identifiers(identifiers_at(persona), crozier_stand_in)
     assert report is not None, (
-        f"a persona naming `{renamed}` was accepted against {crozier_checkout}, which "
+        f"a persona naming `{renamed}` was accepted against {crozier_stand_in}, which "
         "tracks no such path"
     )
     assert str(persona) in report
     assert f"`{renamed}`" in report
-    assert str(crozier_checkout) in report
+    assert str(crozier_stand_in) in report
 
 
-@pytest.mark.reads_checkouts
 def test_a_persona_naming_a_type_its_repository_never_declares_is_reported(
-    tmp_path: Path, crozier_checkout: Path
+    tmp_path: Path, crozier_stand_in: Path
 ) -> None:
     """A literal whose type is gone is reported, never quietly resolved as having no fields.
 
@@ -184,11 +213,11 @@ def test_a_persona_naming_a_type_its_repository_never_declares_is_reported(
         encoding="utf-8",
     )
 
-    report = undefined_identifiers(identifiers_at(persona), crozier_checkout)
+    report = undefined_identifiers(identifiers_at(persona), crozier_stand_in)
     assert report is not None, (
         f"a persona writing a `Fixture {{ … }}` literal was accepted against "
-        f"{crozier_checkout}, which declares no such type"
+        f"{crozier_stand_in}, which declares no such type"
     )
     assert str(persona) in report
     assert "`Fixture`" in report
-    assert str(crozier_checkout) in report
+    assert str(crozier_stand_in) in report
