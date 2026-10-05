@@ -790,6 +790,7 @@ def test_the_plan_reviewer_is_asked_both_questions_and_told_the_pass_case() -> N
         "reachable from the producer's node through `deps`",
         "waits `published`",
         "names that row's `config/<pin>.version` in its acceptance criteria",
+        "or, for a row naming no pin, the script that row says installs the wheel",
         "names no version, commit or branch of its own",
         "reaches a dispatch only through `config/onepipeline.version`, via an `onepipeline` "
         "node that links the crate",
@@ -824,6 +825,18 @@ def test_the_rungs_the_plan_reviewer_is_told_are_the_overrides_own() -> None:
     assert f"every other repository's rung is `{default.group(1)}`" in plan_review.RUNGS
 
 
+def test_both_reviewers_read_the_installer_a_pinless_row_names_in_place_of_a_pin() -> None:
+    """The row the no-pin clause is about reaches both prompts naming its installer.
+
+    Both reviewers are told a row naming no pin names the script that installs it; that
+    is only answerable if the table they read says which script, and says no pin moves.
+    """
+    (pinless,) = [row for row in host_installs.INSTALLED if row.pin is None]
+    stated = f"`{pinless.artifact}`, which `{pinless.installer}` installs with no `config/` pin"
+    assert stated in plan_review._prompt("P", _task(content="Adopt it.")), stated
+    assert stated in plan_review._plan_prompt({"tasks": [{"id": "bare"}]}), stated
+
+
 def test_the_task_reviewer_is_asked_the_pin_path_question_in_both_halves() -> None:
     """The per-task half: name the pin, name no version — and read the repository directly."""
     asked = " ".join(plan_review.REVIEW_PROMPT.split())
@@ -831,6 +844,7 @@ def test_the_task_reviewer_is_asked_the_pin_path_question_in_both_halves() -> No
         "**It names the pin it moves.**",
         "must name, in its `## Acceptance criteria`, the `config/<pin>.version` the table's "
         "row gives",
+        "or, for a row naming no pin, the script that row says installs it",
         "adopts nothing a dispatch runs",
         "by comparing the header's `repo` with the origin stated below — never by inferring "
         "it from the prose",

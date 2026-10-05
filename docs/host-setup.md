@@ -445,8 +445,9 @@ just repos-apply
   `$ONEVCS_HOME/releases.yml`. It decides how a node waits on another repository's
   release: this repository's nodes resolve the `published` rung, so one that depends
   on a producer's node waits for the release carrying that work rather than adopting
-  its branch, and each producer this host installs — the seven `pyproject.toml` and
-  `config/*.version` pin — names the wheel this host installs as its `default_target`,
+  its branch, and each producer this host installs — those `pyproject.toml` and
+  `config/*.version` pin, and `llmlint`, whose wheel `scripts/setup-llmlint.sh`
+  installs with no pin — names the wheel this host installs as its `default_target`,
   which is what a consumer naming no `consumes` waits for. Every rule merges the
   producer's own `release-targets.toml` and restates no target of its own, and the
   file's header says why this repository's rung is `published`. The candidate is

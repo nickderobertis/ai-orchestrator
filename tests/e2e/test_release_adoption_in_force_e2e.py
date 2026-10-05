@@ -147,6 +147,8 @@ RELEASE_SUBCOMMANDS = (
 DECLARING_IDENTITIES = {
     "github.com/nickderobertis/llmlint": 2,
     "github.com/nickderobertis/oneagentgraph": 3,
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test
+    "github.com/nickderobertis/onebudgetspec": 5,
     "github.com/nickderobertis/oneharness": 6,
     "github.com/nickderobertis/onejudge": 3,
     # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] one map entry, not a new test

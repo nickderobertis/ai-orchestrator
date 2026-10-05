@@ -367,7 +367,9 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   one `config/oneharness.version` admits — the highest `llmlint-cli` whose declared
   `oneharness-cli` requirement that pin satisfies — which
   `tests/test_llmlint_release_pin.py` holds on the installed distribution's own
-  metadata. `llmlint --help`; https://github.com/nickderobertis/llmlint.
+  metadata. Its row in `orchestrator/host_installs.py` names that script in place of a
+  pin, so a node here awaits its `cli` release like any other producer's. `llmlint
+  --help`; https://github.com/nickderobertis/llmlint.
 
 ## Which pin governs a dispatch
 

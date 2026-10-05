@@ -43,8 +43,8 @@ from orchestrator.root import REPO_ROOT
 
 #: The rows this table is fixed to, stated here in full rather than derived from the
 #: module: a test that read them out of the code under test would hold the module to
-#: itself. Eight producers, the override's order, and the engine wheel alone marked as
-#: what a dispatch runs.
+#: itself. Nine producers, the override's order, the engine wheel alone marked as what a
+#: dispatch runs, and `llmlint` alone governed by no pin, naming its installer instead.
 EXPECTED_ROWS = (
     Installed(
         "github.com/nickderobertis/onepipeline", "pypi", "pypi:onepipeline-cli", "onepipeline", True
@@ -86,6 +86,14 @@ EXPECTED_ROWS = (
         "onemessagebus",
         False,
     ),
+    Installed(
+        "github.com/nickderobertis/llmlint",
+        "cli",
+        "pypi:llmlint-cli",
+        None,
+        False,
+        "scripts/setup-llmlint.sh",
+    ),
 )
 
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -106,8 +114,11 @@ RELEASE_RULE = re.compile(
     r"(?P<fields>(?:    \S.*\n)*)"
 )
 
-#: Every installed CLI now arrives from a dependency in the project lock.
-INSTALLED_OUTSIDE_PYPROJECT = frozenset()
+#: The one installed wheel no dependency in the project lock carries: `llmlint-cli`, which
+#: `scripts/setup-llmlint.sh` installs as a `uv tool`, capped by `config/oneharness.version`
+#: rather than pinned. Stated here rather than read off the rows' ``installer`` so that a
+#: row gaining an installer it does not need is refused below instead of admitted.
+INSTALLED_OUTSIDE_PYPROJECT = frozenset({"llmlint-cli"})
 #: The pinned distributions that are libraries this package imports rather than a
 #: producer's wheel: nothing on this host runs them as a tool, no `config/*.version`
 #: governs them, and no release target of a repository this host dispatches against
@@ -149,7 +160,7 @@ def test_by_artifact_answers_none_for_an_artifact_no_row_names(unknown: str) -> 
 
 
 @pytest.mark.parametrize(
-    "unknown", ["github.com/nickderobertis/llmlint", "onepipeline", "", "github.com/x/onepipeline"]
+    "unknown", ["github.com/nickderobertis/unruled", "onepipeline", "", "github.com/x/onepipeline"]
 )
 def test_by_producer_answers_none_for_a_producer_no_row_names(unknown: str) -> None:
     assert by_producer(unknown) is None
@@ -162,9 +173,31 @@ def test_rendered_names_every_rows_four_names_and_marks_the_one_a_dispatch_runs(
         assert row.producer in line
         assert f"`{row.target}`" in line
         assert f"`{row.artifact}`" in line
-        assert f"config/{row.pin}.version" in line
+        if row.pin is None:
+            assert f"`{row.installer}` installs with no `config/` pin" in line, line
+            assert "config/None" not in line, line
+        else:
+            assert f"config/{row.pin}.version" in line
         assert ("every dispatched node runs" in line) == row.governs_dispatch, line
     assert rendered().endswith("\n")
+
+
+def test_a_row_names_a_pin_or_an_installer_and_never_both() -> None:
+    """Exactly one of the two says how a release of the row's wheel reaches this host.
+
+    A pinned wheel arrives through `pyproject.toml` and the lock, so an installer beside
+    its pin would be a second account of one install; a row with neither is a wheel
+    nothing here says how to adopt. The installer is a script this repository carries,
+    so the row cannot name one that is not there.
+    """
+    for row in INSTALLED:
+        assert (row.pin is None) != (row.installer is None), row
+        if row.installer is not None:
+            assert (REPO_ROOT / row.installer).is_file(), row
+            assert not row.governs_dispatch, row
+    assert {
+        _distribution(row) for row in INSTALLED if row.installer is not None
+    } == INSTALLED_OUTSIDE_PYPROJECT
 
 
 def _pinned_distributions() -> dict[str, str]:
@@ -188,16 +221,16 @@ def _distribution(row: Installed) -> str:
     return name
 
 
-def test_every_pin_file_has_a_row_and_every_row_a_pin_file() -> None:
+def test_every_pin_file_has_a_row_and_every_pinned_row_a_pin_file() -> None:
     pins = {path.stem for path in VERSION_FILES.glob("*.version")}
-    rows = {row.pin for row in INSTALLED}
+    rows = {row.pin for row in INSTALLED if row.pin is not None}
     assert pins == rows, (
         f"config/*.version names {sorted(pins - rows)} with no row, and the table names "
         f"{sorted(rows - pins)} with no such file"
     )
 
 
-def test_every_pinned_distribution_is_a_rows_wheel_and_every_rows_wheel_is_pinned() -> None:
+def test_pinned_wheels_are_rows_and_rows_are_pinned_or_a_stated_exception() -> None:
     """`pyproject.toml` and the table name the same wheels, both ways round.
 
     A pinned distribution no row names is one this host installs without saying what

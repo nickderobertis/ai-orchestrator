@@ -484,7 +484,7 @@ class Producers(NamedTuple):
     result: subprocess.CompletedProcess[str]
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Eight `git init`s and
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Nine `git init`s and
 # one registry apply — the cost class of the `applied` and `ruled` fixtures above, which
 # register thirteen and twenty-five — in the module every journey of this recipe lives
 # in; the project edge those would all sit behind is the module docstring's follow-up.

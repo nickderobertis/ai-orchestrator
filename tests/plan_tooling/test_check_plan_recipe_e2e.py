@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from conftest import git
 from criteria_examples import (
     PUBLICATION_COPULAS,
     PUBLICATION_IN_PROSE,
@@ -45,7 +46,7 @@ from criteria_examples import (
     STATES_THE_PROPERTY_INSTEAD,
 )
 from project_fixtures import project_from_plan, reviewed
-from scratch_identity import registered, seeded
+from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import host_installs, plan_store, task_body
@@ -3151,6 +3152,184 @@ def test_the_two_paths_report_the_same_adoption_refusal(tmp_path: Path) -> None:
         assert reported.returncode == 1, reported.stdout + reported.stderr
         assert "held: adoption: this node adopts `published`" in reported.stderr, reported.stderr
 
+
+#: The tracked override and its producers' stand-in declarations, which the journeys below
+#: register under the producers' real origins so the rules they are read against are this
+#: host's own rather than a scratch copy of them.
+TRACKED_RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
+RELEASE_DECLARATIONS = REPO_ROOT / "tests" / "fixtures" / "release-targets"
+LLMLINT = "github.com/nickderobertis/llmlint"
+#: A producer the tracked override has no rule for, declaring a wheel, so a `published`
+#: node behind it has a release to wait on and no target to wait for.
+UNRULED = "github.com/nickderobertis/unruled-producer"
+#: A repository of this owner that is neither this one nor a producer: a node elsewhere.
+ELSEWHERE = "github.com/nickderobertis/service"
+
+
+def _hosted_checkout(root: Path, origin: str, declaration: str | None = None) -> Path:
+    """A checkout of ``origin`` whose base carries ``declaration``, as `onevcs` reads one.
+
+    Committed on `main` rather than left in the working tree, because `onevcs` reads a
+    producer's declaration at the publication checkout's base and nowhere else; the
+    origin is never fetched, so naming the real one reaches no host.
+    """
+    directory = root / origin.rpartition("/")[2]
+    git("init", "-q", "-b", "main", str(directory))
+    (directory / "README.md").write_text("seed\n", encoding="utf-8")
+    if declaration is not None:
+        (directory / "release-targets.toml").write_text(declaration, encoding="utf-8")
+    git("add", "-A", cwd=directory)
+    git(*GIT_IDENTITY, "commit", "-qm", "chore: seed", cwd=directory)
+    git("remote", "add", "origin", f"https://{origin}.git", cwd=directory)
+    return directory
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These journeys are the
+# cost class of the R2–R7 journeys above — one registry apply and a `just check-plan` per
+# case — in the project cut out for host-tool journeys, and what decides their answers is
+# exactly that project's breadth: the guard in `orchestrator/adoption_guard.py` and the
+# table in `orchestrator/host_installs.py`, `scripts/plan-check.sh`, and the tracked
+# `config/onevcs.releases.yml`. An edge narrower than `scripts/**`, `config/**` and
+# `orchestrator/**` would replay a green across a change to one of those.
+@pytest.fixture(scope="module")
+def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
+    """A scratch registry under the tracked override, holding every producer by its origin.
+
+    Each producer `host_installs` names, and llmlint whatever it names, declares what its
+    fixture says the real one does,
+    beside a producer no rule names, this repository, and one more repository of the same
+    owner; `just repos-apply` installs `config/onevcs.releases.yml` itself, because no
+    `--releases` is named — so every rung and default target below is the tracked file's.
+    Every identity publishes `local-direct`, as this repository really does.
+    """
+    root = tmp_path_factory.mktemp("tracked-override")
+    # llmlint is named outright rather than only through the table, so a table that lost
+    # its row still registers the producer and the journeys below read that as a refusal
+    # rather than missing it as a repository this host cannot answer for.
+    producers = sorted({LLMLINT, *(row.producer for row in host_installs.INSTALLED)})
+    checkouts = [
+        _hosted_checkout(
+            root,
+            producer,
+            (RELEASE_DECLARATIONS / f"{producer.rpartition('/')[2]}.toml").read_text(
+                encoding="utf-8"
+            ),
+        )
+        for producer in producers
+    ]
+    checkouts.append(
+        _hosted_checkout(root, UNRULED, _declaring(("pypi", "pypi:unruled-producer-cli")))
+    )
+    checkouts += [_hosted_checkout(root, THIS_REPOSITORY), _hosted_checkout(root, ELSEWHERE)]
+    manifest = root / "onevcs.checkouts"
+    manifest.write_text("".join(f"{path}\n" for path in checkouts), encoding="utf-8")
+    rules = root / "onevcs.rules.yml"
+    rules.write_text(rules_for_hosted("github.com", "nickderobertis"), encoding="utf-8")
+    home = root / "onevcs"
+    config_home = root / "xdg-config"
+    config_home.mkdir()
+    applied = subprocess.run(
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEVCS_HOME": str(home), "XDG_CONFIG_HOME": str(config_home)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert (home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
+    return _in_registry(home)
+
+
+def _behind(producer: str, **fields: object) -> tuple[dict[str, object], dict[str, object]]:
+    """A node releasing in ``producer``, and a node of this repository depending on it.
+
+    The consumer names no `adoption` and no `consumes` unless ``fields`` does, so the rung
+    it waits on and the target it waits for are what the tracked override resolves.
+    """
+    released = {"id": "released", "title": "feat: release the change", "repo": producer}
+    adopting = {
+        "id": "adopting",
+        "title": "feat: adopt the release",
+        "repo": THIS_REPOSITORY,
+        "deps": ["released"],
+        **fields,
+    }
+    return released, adopting
+
+
+def _adoption_refusals(checked: subprocess.CompletedProcess[str]) -> list[str]:
+    """Every line the registered check printed, which is every refusal it made."""
+    return [
+        line
+        for line in checked.stderr.splitlines()
+        if line.startswith("check-plan: scripts/plan-check.sh: ")
+    ]
+
+
+def test_a_node_of_this_repository_awaits_llmlints_wheel_with_no_refusal(
+    tmp_path: Path, tracked_override: dict[str, str]
+) -> None:
+    """The wait the llmlint rule exists for: `published`, no `consumes`, nothing refused.
+
+    The node states neither its rung nor its target, so it waits `published` because
+    the tracked override says this repository does, on `cli` because the override says
+    that is llmlint's default, which is the `llmlint-cli` wheel `host_installs` names.
+    """
+    checked = _adoption_check(tmp_path, *_behind(LLMLINT), environment=tracked_override)
+
+    assert _adoption_refusals(checked) == [], checked.stderr
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "2 dispatched node(s)" in checked.stdout, checked.stdout
+
+
+def test_the_same_wait_behind_a_producer_with_no_rule_is_held_for_ever(
+    tmp_path: Path, tracked_override: dict[str, str]
+) -> None:
+    """Without a rule in the override there is no target to wait for, and that is refused."""
+    checked = _adoption_check(tmp_path, *_behind(UNRULED), environment=tracked_override)
+
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    (refused,) = _adoption_refusals(checked)
+    assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: adoption:"), refused
+    assert "held for ever" in refused, refused
+    assert "no `default_target`" in refused, refused
+
+
+def test_a_node_of_this_repository_waiting_on_llmlints_crate_is_still_refused(
+    tmp_path: Path, tracked_override: dict[str, str]
+) -> None:
+    """The llmlint row admits its wheel and nothing else that producer releases."""
+    checked = _adoption_check(
+        tmp_path,
+        *_behind(LLMLINT, merge_policy="change-open", consumes={"released": "crate"}),
+        environment=tracked_override,
+    )
+
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    (refused,) = _adoption_refusals(checked)
+    assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: consumes:"), refused
+    assert "`crate:llmlint`" in refused, refused
+    assert "`pypi:llmlint-cli`" in refused, refused
+
+
+@pytest.mark.parametrize("row", host_installs.INSTALLED, ids=lambda row: row.producer)
+def test_a_node_elsewhere_taking_any_producers_default_target_is_still_refused(
+    tmp_path: Path, tracked_override: dict[str, str], row: host_installs.Installed
+) -> None:
+    """Every default the tracked override sets is this host's, llmlint's among them."""
+    released, adopting = _behind(row.producer, repo=ELSEWHERE, adoption="published")
+
+    checked = _adoption_check(tmp_path, released, adopting, environment=tracked_override)
+
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    (refused,) = _adoption_refusals(checked)
+    assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: consumes:"), refused
+    assert f"`default_target` ({row.target!r})" in refused, refused
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
 

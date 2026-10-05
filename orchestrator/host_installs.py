@@ -1,16 +1,18 @@
 """What this host installs from each producer it depends on, and the pin each wheel governs.
 
-Eight repositories publish the tools this harness configures, and each publishes
+Nine repositories publish the tools this harness configures, and each publishes
 several artifacts — a crate, a wheel, an npm launcher, an SDK — of which this host
 installs exactly one: the wheel `pyproject.toml` pins, or, for `onejudge` and
 `onetaskgraph`, the CLI wheel the pinned SDK carries from `uv.lock` at its own version,
-which is the one `config/onetaskgraph.version` names. A node waiting on a release
+which is the one `config/onetaskgraph.version` names, or, for `llmlint`, the wheel its
+row's ``installer`` puts in place with no pin of its own. A node waiting on a release
 has to say *which* artifact it waits for, because "the crate is out" and "the wheel is
 out" are different waits, and `config/onevcs.releases.yml` says it once per producer as
 that producer's ``default_target``. This module is the one table the pieces of that
 answer are held to: the producer, the short target name the override names, the
 registry-qualified artifact the producer's own declaration gives that name, and the
-``config/<pin>.version`` file the installed wheel governs. `tests/test_host_installs.py`
+``config/<pin>.version`` file the installed wheel governs — or, where no pin governs it,
+the script that installs it. `tests/test_host_installs.py`
 reconciles the table against `pyproject.toml`, `config/`, and the override; the
 `reads_checkouts` tier reconciles each artifact against the producer's own declaration.
 
@@ -23,13 +25,18 @@ pin governs only the host's own commands. Reading the wrong pin has produced a w
 diagnosis here twice, both times with every pin looking current while a real run came
 out empty; `AGENTS.md`'s "Which pin governs a dispatch" is the account of it.
 
-Two things this host runs are deliberately not rows. `llmlint` is installed by
-`scripts/setup-llmlint.sh` from its own repository with no `config/` pin and no entry in
-`pyproject.toml`, so there is no installed artifact here to name and no pin for a release
-to move. `oneharness-core` is a *crate* the engine links on its own account, published
-from the `oneharness` repository on a cadence of its own: the wheel this host installs
-from that repository is the CLI, and the engine's SBOM — not this table — is what says
-which core a dispatch runs.
+`llmlint` is the one row with no pin. `scripts/setup-llmlint.sh` installs its
+`llmlint-cli` wheel with `uv tool`, outside `pyproject.toml`, taking the newest release
+whose declared `oneharness-cli` requirement `config/oneharness.version` admits — so its
+``pin`` is None and its ``installer`` names that script, and a release of it is adopted
+by that script's next run rather than by moving a pin. It is still a row because a
+`published` node of this repository waits on that wheel like any other: without it, the
+override would name a ``default_target`` nothing here installs.
+
+One thing this host runs is deliberately not a row. `oneharness-core` is a *crate* the
+engine links on its own account, published from the `oneharness` repository on a
+cadence of its own: the wheel this host installs from that repository is the CLI, and
+the engine's SBOM — not this table — is what says which core a dispatch runs.
 """
 
 from __future__ import annotations
@@ -61,10 +68,14 @@ class Installed(NamedTuple):
     #: The registry-qualified id the producer's declaration gives that target,
     #: ``<registry>:<distribution>``; its distribution is what `pyproject.toml` pins.
     artifact: str
-    #: The stem of the ``config/<pin>.version`` file this wheel governs.
-    pin: str
+    #: The stem of the ``config/<pin>.version`` file this wheel governs, or None for a
+    #: wheel no pin governs, which names its ``installer`` instead.
+    pin: str | None
     #: Whether a dispatched node runs this artifact: true for the engine wheel alone.
     governs_dispatch: bool
+    #: The script that installs a wheel no pin governs, from this repository's root;
+    #: None for every pinned wheel, which `pyproject.toml` and `uv.lock` install.
+    installer: str | None = None
 
 
 # llmlint: ignore-end[modern_domain_modeling]
@@ -128,6 +139,14 @@ INSTALLED: tuple[Installed, ...] = (
         pin="onemessagebus",
         governs_dispatch=False,
     ),
+    Installed(
+        producer="github.com/nickderobertis/llmlint",
+        target="cli",
+        artifact="pypi:llmlint-cli",
+        pin=None,
+        governs_dispatch=False,
+        installer="scripts/setup-llmlint.sh",
+    ),
 )
 
 
@@ -161,13 +180,21 @@ def rendered() -> str:
     """The table as prose, one line per row, for a prompt a judge reads.
 
     Each line names the producer, the target name a consumer waits on, the artifact
-    that target is, and the pin it moves; the one row a dispatch runs says so, because
-    that is the distinction a reader deciding which pin to move has to hold.
+    that target is, and the pin it moves — or, for a row no pin governs, the script
+    that installs it and that no pin is moved; the one row a dispatch runs says so,
+    because that is the distinction a reader deciding which pin to move has to hold.
     """
-    return "".join(
-        f"- {row.producer} releases its `{row.target}` target as `{row.artifact}`, "
-        f"which `config/{row.pin}.version` pins"
-        + (" and which every dispatched node runs" if row.governs_dispatch else "")
-        + ".\n"
-        for row in INSTALLED
+    return "".join(f"- {_governed(row)}.\n" for row in INSTALLED)
+
+
+def _governed(row: Installed) -> str:
+    """One row's line of :func:`rendered`, without its bullet and full stop."""
+    released = f"{row.producer} releases its `{row.target}` target as `{row.artifact}`"
+    if row.pin is None:
+        return (
+            f"{released}, which `{row.installer}` installs with no `config/` pin, so "
+            f"adopting a release of it moves no pin and names that script instead"
+        )
+    return f"{released}, which `config/{row.pin}.version` pins" + (
+        " and which every dispatched node runs" if row.governs_dispatch else ""
     )

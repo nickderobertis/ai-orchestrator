@@ -64,12 +64,7 @@
 # Every rule carrying `maintain` names an identity whose registered checkout carries a
 # `Cargo.toml` at its root — read off this host's checkouts, not assumed, and held to
 # them by `tests/test_workspaces_file.py`'s `reads_checkouts` tier, which fails by name
-# for a Rust identity this file gives no rule. The identities that reading found when
-# this file was written, and the rules below name: llmlint, oneagentgraph, oneharness,
-# oneharness-ui, onejudge, onemessagebus, onepipeline, onepipeline-ui, onevcs,
-# allowlister, allowlister-remote, crozier, onetaskgraph, printobserver, screencomp,
-# notignored, and petsinc's hellopatient; allowlister-terminal-approval-plugin,
-# github-secrets and skilltest were added when their checkouts reached this host.
+# for a Rust identity this file gives no rule, so the rules below are the list.
 # `cargo sweep --time 7` removes build artifacts a week unused, which is what keeps a
 # warm `target/` from turning the disk-wear fix into a disk-space problem.
 version: 1
@@ -119,6 +114,8 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: github-secrets}
     maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
   - match: {host: github.com, owner: nickderobertis, name: skilltest}
+    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
+  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
     maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
   - match: {host: github.com, owner: petsinc, name: hellopatient}
     maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}

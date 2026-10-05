@@ -241,8 +241,9 @@ each producer it depends on and the `config/<pin>.version` file each wheel gover
 and then this host's own repository, stated as the origin the header's `repo` is
 compared with. A node of this host's own repository adopting a wheel that table names
 must name, in its `## Acceptance criteria`, the `config/<pin>.version` the table's row
-gives for that wheel: a task that adopts one and names none adopts nothing a dispatch
-runs, so refuse it naming the criterion that should carry the path. Decide whether the
+gives for that wheel — or, for a row naming no pin, the script that row says installs
+it: a task that adopts one and names none adopts nothing a dispatch runs, so refuse it
+naming the criterion that should carry the path. Decide whether the
 node is one of this host's own repository **directly**, by comparing the header's
 `repo` with the origin stated below — never by inferring it from the prose — and read
 which wheel it adopts from the task's own content and the header's `adoption` and
@@ -1047,7 +1048,8 @@ producer's node through `deps`; waits `published` — stated on the node, or res
 this repository's own rung, stated under the table — rather than `fast` against the
 branch; waits on the wheel this host installs, which is the table's row for that
 producer, and so names no `consumes` of its own; names that row's
-`config/<pin>.version` in its acceptance criteria; and names no version, commit or
+`config/<pin>.version` in its acceptance criteria — or, for a row naming no pin, the
+script that row says installs the wheel; and names no version, commit or
 branch of its own, because the engine renders the released version into the task when
 the hold releases. One rule decides which pin is the right one for a fix: a fix in a
 crate the engine links — the version-control, agent-graph, judging and harness

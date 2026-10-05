@@ -26,6 +26,9 @@
 #     `declaration: merge` keeps the producer's declaration as the source of its
 #     targets, and no rule carries `targets:` of its own, because a target restated
 #     here replaces the producer's whole and stops matching it the day it moves.
+#     `llmlint` is one of them though no `config/` pin governs it: its `cli` is the
+#     `llmlint-cli` wheel `scripts/setup-llmlint.sh` installs, and its row in
+#     `orchestrator/host_installs.py` names that script in place of a pin.
 #
 #   - A producer this host will install but has not yet adopted may carry its rule
 #     ahead of its first release, so a node adopting that release waits for the right
@@ -64,3 +67,6 @@ repositories:
   - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
     declaration: merge
     default_target: pypi
+  - match: {host: github.com, owner: nickderobertis, name: llmlint}
+    declaration: merge
+    default_target: cli
